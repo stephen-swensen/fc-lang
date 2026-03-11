@@ -28,4 +28,4 @@ For code examples, see the full language specification in `spec/fc-spec.html`.
 
 ## License
 
-TBD
+BSD 2-Clause. See [LICENSE](LICENSE).
