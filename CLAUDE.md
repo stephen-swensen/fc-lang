@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This is an early-stage compiler project for **FC** (version 0.4 draft), a systems programming language that transpiles to C11. Currently, the repository contains only the language specification (`spec/fc-spec.html`). No compiler code exists yet.
+This is an early-stage compiler project for **FC** (version 0.5 draft), a systems programming language that transpiles to C11. Currently, the repository contains only the language specification (`spec/fc-spec.html`). No compiler code exists yet.
 
 ## Git Workflow
 
