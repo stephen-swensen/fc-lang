@@ -1,0 +1,3383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FC Language Specification v0.4</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Fraunces:ital,wght@0,300;0,600;1,300&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+  :root {
+    --bg: #0d0f12;
+    --bg2: #13161b;
+    --bg3: #1a1e25;
+    --border: #2a2f3a;
+    --accent: #e8935a;
+    --accent2: #5ab4e8;
+    --accent3: #7de8a0;
+    --text: #c8d0dc;
+    --text-dim: #6b7585;
+    --text-bright: #eef1f5;
+    --code-bg: #0a0c0f;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 300;
+    line-height: 1.75;
+    font-size: 16px;
+  }
+
+  .layout {
+    display: flex;
+    min-height: 100vh;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  nav {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    width: 280px;
+    min-width: 280px;
+    overflow-y: auto;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    padding: 2.5rem 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  nav::-webkit-scrollbar { width: 4px; }
+  nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .nav-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding: 0 1.75rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+  }
+
+  .nav-title span {
+    display: block;
+    font-size: 1.1rem;
+    letter-spacing: 0.05em;
+    color: var(--text-bright);
+    margin-top: 0.4rem;
+    font-weight: 600;
+  }
+
+  #nav-links a {
+    display: block;
+    padding: 0.3rem 1.75rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    transition: color 0.15s, background 0.15s;
+    border-left: 2px solid transparent;
+    line-height: 1.5;
+  }
+
+  #nav-links a:hover {
+    color: var(--text-bright);
+    background: var(--bg3);
+    border-left-color: var(--accent);
+  }
+
+  #nav-links a.nav-part {
+    color: var(--text-bright);
+    font-size: 0.75rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    opacity: 1;
+  }
+
+  #nav-links a.nav-part:first-child {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0.3rem;
+  }
+
+  #nav-links a.nav-part:hover {
+    color: var(--text-bright);
+    background: var(--bg3);
+    border-left-color: var(--accent);
+  }
+
+  #nav-links a.nav-h2 {
+    margin-top: 0.1rem;
+  }
+
+  #nav-links a.nav-h3 {
+    padding-left: 2.5rem;
+    font-size: 0.68rem;
+    opacity: 0.85;
+  }
+
+  #nav-links a.nav-h4 {
+    padding-left: 3.25rem;
+    font-size: 0.65rem;
+    opacity: 0.7;
+  }
+
+  main {
+    flex: 1;
+    padding: 4rem 5rem;
+    max-width: 860px;
+    min-width: 0;
+  }
+
+  .doc-header {
+    margin-bottom: 4rem;
+    padding-bottom: 2.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .doc-header .label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1rem;
+  }
+
+  .doc-header h1 {
+    font-size: 3rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    line-height: 1.15;
+    margin-bottom: 1rem;
+  }
+
+  .doc-header .subtitle {
+    color: var(--text-dim);
+    font-size: 1.05rem;
+    font-style: italic;
+    max-width: 540px;
+  }
+
+  .doc-header .meta {
+    margin-top: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    display: flex;
+    gap: 2rem;
+  }
+
+  .meta span { color: var(--accent2); }
+
+  #content h1 {
+    font-size: 2.4rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    font-family: 'Fraunces', Georgia, serif;
+    margin: 6rem 0 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid var(--accent);
+    line-height: 1.2;
+  }
+
+  #content h1:first-child { margin-top: 0; }
+
+  #content h2 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin: 2.5rem 0 1.25rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #content h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent2);
+    margin: 2rem 0 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.03em;
+  }
+
+  #content h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 1.5rem 0 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  #content p { margin-bottom: 1rem; color: var(--text); }
+
+  #content ul, #content ol {
+    padding-left: 1.5rem;
+    margin-bottom: 1rem;
+  }
+
+  #content li { margin-bottom: 0.3rem; }
+
+  #content pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 1.25rem 1.5rem;
+    margin: 1.25rem 0;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    line-height: 1.7;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  #content pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 1em;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  #content code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+    background: var(--bg3);
+    color: var(--accent2);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+
+  #content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+  }
+
+  #content th {
+    text-align: left;
+    padding: 0.6rem 1rem;
+    background: var(--bg3);
+    color: var(--accent);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #content td {
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+  }
+
+  #content td:first-child { color: var(--accent2); }
+  #content tr:last-child td { border-bottom: none; }
+  #content tr:hover td { background: var(--bg3); }
+
+  #content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 3rem 0;
+  }
+
+  #content blockquote {
+    background: var(--bg3);
+    border-left: 3px solid var(--accent3);
+    border-radius: 0 6px 6px 0;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+
+  #content blockquote p { margin: 0 0 0.5rem; }
+  #content blockquote p:last-child { margin: 0; }
+
+  #content blockquote strong {
+    color: var(--accent3);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .sec-num {
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8em;
+    font-weight: 600;
+    margin-right: 0.3em;
+    opacity: 0.7;
+  }
+
+  .nav-num {
+    color: var(--accent);
+    opacity: 0.6;
+    font-size: 0.82em;
+    margin-right: 0.3em;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .hljs { background: transparent; color: var(--text); }
+
+  * {
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "calt" 0;
+  }
+  .hljs-keyword { color: #e87070; }
+  .hljs-type    { color: #e8c15a; }
+  .hljs-title   { color: #5ab4e8; }
+  .hljs-comment { color: #4a5568; font-style: italic; }
+  .hljs-string  { color: #7de8a0; }
+  .hljs-number  { color: #e8935a; }
+  .hljs-operator { color: #b07de8; }
+  .hljs-built_in { color: #e8c15a; }
+  .hljs-literal  { color: #e87070; }
+  .nav-toggle {
+    display: none;
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    z-index: 1000;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.65rem;
+    cursor: pointer;
+    color: var(--text-bright);
+    font-size: 1.1rem;
+    line-height: 1;
+  }
+
+  .nav-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 998;
+  }
+
+  .nav-overlay.open { display: block; }
+
+  @media (max-width: 768px) {
+    .nav-toggle { display: block; }
+
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      z-index: 999;
+      transform: translateX(-100%);
+      transition: transform 0.2s ease;
+    }
+
+    nav.open { transform: translateX(0); }
+
+    .layout { display: block; }
+
+    main { padding: 4rem 1.5rem 2rem; }
+
+    pre { font-size: 0.75rem; }
+  }
+
+</style>
+<script id="spec-markdown" type="text/markdown">
+# PART 1 — Foundations
+
+## Philosophy
+
+FC compiles directly to C as its backend, making it highly compatible with existing C code and toolchains. The language follows C's memory management philosophy — manual, no garbage collector, no borrow checker — while cleaning up C's syntax and fixing well-known footguns. FC supports parametric polymorphism through monomorphized generics — generic functions and types are resolved entirely at compile time, producing concrete C output with no runtime overhead.
+
+Every feature in FC should transpile to clean, readable C. This is a core design constraint. When a feature cannot be expressed as straightforward C output, that is a signal to reconsider the feature.
+
+The guiding principles are:
+
+- No null in the language — null is not expressible in FC code; option types replace all intentionally nullable values. Raw pointer fields in zero-initialized structs may physically contain null if the programmer does not initialize them — FC does not prevent this, but does not provide null as a value either.
+- No uninitialized bindings — all bindings must be initialized at declaration
+- No explicit type annotations on bindings — types are always inferred; the same principle extends to generics, where type variables are implicit and instantiation is always inferred at the call site
+- Explicit numeric widths throughout — implicit widening conversions are allowed only where no information can be lost (see §Operators & Access)
+- Indentation-based lexical scoping
+- A clean statement / expression divide — top-level declarations are statements, everything inside an expression context is an expression with a type
+- One way to do things — minimize redundant syntax
+- Zero-cost abstractions — generics, modules, and option types produce no runtime representation in the generated C; safety and structure are compile-time concepts
+- Small performance and memory cost acceptable for safety improvements (fat pointers, bounds checking). Where performance is critical and the programmer is willing to take responsibility, escape mechanisms are available — raw pointer arithmetic and pointer-based array iteration opt out of bounds checking without undermining the rest of the type system.
+
+### Type inference as a design theorem
+
+FC's "no explicit type annotations on bindings" principle is not merely an ergonomic choice — it is a theorem about the language, and the rest of the design is carefully shaped to make that theorem hold.
+
+FC uses local, directional type inference. Every expression's type is derived bottom-up from its sub-expressions: the type of a binary expression follows from the types of its operands, the type of a function call follows from the function's parameter types and its body, and so on. This is a deterministic tree walk — there is no global constraint solving, no unification, and no backtracking. The compiler never needs to look at how a value is *used* to determine what *type* it has.
+
+This works because of four mutually reinforcing design decisions:
+
+- **Explicit parameter types** are the anchor. Every function has a fully specified input signature, so the body can always be type-checked directionally from the leaves upward. Return types follow from bodies; they never need to be declared.
+- **No function overloading** means a name always resolves to exactly one function. The type at any call site is always unambiguous. If multiple candidates existed for a name, the compiler would need to resolve the ambiguity by examining context — introducing exactly the kind of global constraint solving the inference model is designed to avoid.
+- **No implicit coercions beyond safe widening** means an expression's type is never context-dependent. The type flows up; context never changes it.
+- **Monomorphized generics** means type variables are pinned at call sites by concrete arguments, not resolved by global unification. A call to `map` with a `(int32) -> float64` function argument immediately determines both type variables — no constraint propagation required.
+
+**A note on numeric operators** — `+`, `*`, and friends work across all numeric types, which might appear to be a form of overloading. It is not. When the compiler encounters `a + b`, both `a` and `b` are already fully typed by their own bottom-up inference before the operator is consulted. Operator resolution is a post-inference step — a type-indexed dispatch table, not a constraint to be solved. The implicit widening rule (`int32 + int64` widens the narrower operand) is the one bounded exception: it is applied after both operands are independently typed, flows only in one direction (narrow to wide), and never reinterprets a literal. The type of `42` is always `int32` regardless of what it is added to. This is why integer-to-float conversion is always an explicit cast in FC — allowing `42` to silently become `float64` based on context would be a genuine violation of the directional model.
+
+Other languages with more powerful type systems — Haskell, ML, Rust — require global inference or bidirectional checking because features like type classes, trait resolution, and lifetime inference create dependencies that flow *downward* from context as well as upward from structure. FC is deliberately designed to avoid those features, not because inference power is undesirable but because the language is more predictable, more understandable, and easier to implement correctly when the inference algorithm is a single directional pass.
+
+The one nuance is mutually recursive top-level functions: since the first compiler pass collects names without evaluating bodies, two functions that call each other must be type-checked as a system. In practice the base cases anchor the types and the mutual calls are consistent with them — the compiler resolves mutually recursive groups together. This is a bounded technical complexity, not a crack in the model.
+
+---
+
+### Why C as a target
+
+Targeting C is a deliberate strength of the design, not a limitation. Every platform that matters already has a C compiler — GCC, Clang, avr-gcc for Arduino, xtensa-gcc for ESP32, arm-none-eabi-gcc for bare metal ARM. By targeting C, FC inherits all of these backends for free, including niche embedded toolchains that have no LLVM backend. The generated C is also human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
+
+FC targets **C11** specifically. C11 adoption is broad including most embedded toolchains. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output) and `_Static_assert` (compiler-generated sanity checks in emitted code). FC avoids C11 features with known gaps in embedded compiler support.
+
+---
+
+## Indentation and Layout
+
+FC uses indentation to delimit scopes and blocks. There is no `{` / `}` syntax. The rules follow the offside principle — the same model used by languages like F# and Python, though with stricter whitespace requirements.
+
+### The Offside Rule
+
+A block is established by the column position of its first token. That column becomes the **block column**. The rule is then:
+
+- A token at the **same column** as the block column is a new peer in the current block — a new statement or expression in the same scope.
+- A token to the **right** of the block column belongs to the current item — either a new nested block or a continuation.
+- A token to the **left** of the block column ends the current block and returns to an enclosing scope.
+
+The specific number of spaces used does not matter — only the relative column positions of tokens are significant.
+
+### Blocks
+
+A **block** is a sequence of peer expressions at the same column, introduced after a block-forming construct. Blocks are the fundamental unit of sequencing and scoping in FC:
+
+- Expressions in a block are evaluated top to bottom.
+- The value of the block is its last expression. All preceding expressions are evaluated for their side effects — non-void values may be discarded without warning. FC is a systems language where side effects are not discouraged.
+- A `let` binding is visible to all subsequent expressions in the same block and in any nested blocks within those expressions. It is not visible before its declaration or outside the enclosing block.
+
+These three rules replace the need for any explicit sequencing or scoping syntax. There is no `;` sequencing operator and no `in` scoping keyword (as found in ML-style languages) — both concepts fall out directly from the block model.
+
+### New Blocks
+
+After a block-forming construct (`->`, `=` in let/module/struct/union bodies, `with`, `loop`, `for`, `then`, `else`), if the next token is on a new line, a new block is established at that token's column. All tokens at that column are peers — statements or expressions in the same scope. The final expression in the block is the block's value.
+
+```fc
+let f = (x: int32) ->
+    let a = x + 1       // block column = 4, peer 1
+    let b = a * 2       // block column = 4, peer 2
+    b                   // block column = 4, peer 3 — value of f
+```
+
+```fc
+let result =
+    let a = 1           // block column = 4, peer 1
+    let b = 2           // block column = 4, peer 2
+    if a > b then a     // block column = 4, peer 3 — value of result
+    else b
+```
+
+```fc
+match shape with
+| circle(r)    -> r * r      // block column = 0, arm 1
+| rectangle(d) ->
+    d.width * d.height       // new block inside this arm, block column = 4
+| point        -> 0.0        // block column = 0, arm 3
+```
+
+### Continuation
+
+A continuation occurs when a single expression spills onto the next line, indented strictly further than the current block column, without a block-forming construct having appeared. The parser treats this as the remainder of the current expression — not a new statement, and not a new block.
+
+```fc
+let total = first_value
+    + second_value      // continuation — part of the same expression
+    + third_value
+```
+
+The distinction between a new block and a continuation is unambiguous from context: a new block only opens after a block-forming construct. In any other case, a more-indented line is a continuation of the previous expression.
+
+### Spaces Only
+
+Tabs are not permitted in indentation. Using a tab character at the start of a line is a compile error. This avoids the class of bugs where mixed tab/space indentation causes layout to differ between editors and compilers.
+
+### Block Contexts
+
+The offside rule applies uniformly across all block-forming constructs:
+
+| Construct | Block contains |
+|-----------|---------------|
+| Function body (after `->`) | Expressions in the function |
+| `let` body (after `=`, when body is on the next line) | The block expression assigned to the binding |
+| `module` body (after `=`) | Declarations in the module |
+| `struct` body (after `=`) | Field declarations |
+| `union` body (after `=`) | Variant declarations |
+| `match` arms (after `with`) | Pattern arms |
+| `loop` body | Loop body expressions |
+| `for` body | Loop body expressions |
+| `then` / `else` body | Branch expressions |
+
+---
+
+## Lexical Rules
+
+### Comments
+
+FC supports two forms of comments:
+
+- **Line comments** — `//` through end of line
+- **Block comments** — `/* ... */`, which may be nested
+
+```fc
+// this is a line comment
+
+/* this is a block comment */
+
+/* block comments /* can nest */ and the compiler tracks depth */
+```
+
+Nesting is useful for commenting out regions of code that already contain block comments. Unterminated block comments are a compile error.
+
+### Identifiers
+
+An identifier begins with a letter (`a`–`z`, `A`–`Z`) or underscore (`_`), followed by zero or more letters, digits (`0`–`9`), or underscores. Identifiers are ASCII-only — non-ASCII characters are not permitted in identifier positions.
+
+Type variable names begin with an apostrophe (`'`) followed by one or more letters, digits, or underscores. The apostrophe is a dedicated sigil — concrete type names never begin with `'`.
+
+The following are **reserved words** and may not be used as identifiers:
+
+`let`, `mut`, `struct`, `union`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `some`, `true`, `false`, `none`, `void`
+
+The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
+
+`alloc`, `free`, `sizeof`, `default`
+
+The following are **built-in type names** and may not be used as user-defined type names or binding names:
+
+`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, `bool`, `char`, `str`, `str32`, `cstr`
+
+---
+
+## Primitive Types, Literals & Casting
+
+### Primitive Types
+
+| Type | Description | C equivalent |
+|------|-------------|--------------|
+| int8 | Signed 8-bit integer | int8_t |
+| int16 | Signed 16-bit integer | int16_t |
+| int32 | Signed 32-bit integer (default integer) | int32_t |
+| int64 | Signed 64-bit integer | int64_t |
+| uint8 | Unsigned 8-bit integer | uint8_t |
+| uint16 | Unsigned 16-bit integer | uint16_t |
+| uint32 | Unsigned 32-bit integer | uint32_t |
+| uint64 | Unsigned 64-bit integer | uint64_t |
+| float32 | 32-bit IEEE 754 float | float |
+| float64 | 64-bit IEEE 754 float (default float) | double |
+| bool | Boolean — true or false | bool (stdbool.h) |
+| char | Alias for `uint8`. Represents a single ASCII/UTF-8 byte. Supports character literal syntax. | uint8_t |
+| void | Non-instantiable type. Used by the compiler for type inference and control flow analysis. May appear in function type signatures (`() -> void`) but never as a value in expression positions — `void` cannot be assigned to a let binding or passed as an argument. | void |
+| any* | Opaque pointer — a raw address with no associated type. Cannot be dereferenced. Used for C interop and unsafe pointer casts. See §any* — opaque pointers. | void* |
+| str | Alias for `uint8[]`. An FC string — fat pointer with length. | — |
+| str32 | Alias for `uint32[]`. A unicode codepoint string. | — |
+| cstr | Alias for `uint8*`. A null-terminated C string pointer. Use for C interop only. | char* |
+
+Implicit widening conversions are allowed in binary expressions and comparisons where no information can be lost — see §Operators & Access. All other numeric conversions require an explicit cast. `if` conditions must be `bool` typed — numeric values do not implicitly coerce to bool.
+
+### Literals
+
+| Literal | Type |
+|---------|------|
+| 42 | int32 (default) |
+| 42i8, 42i16, 42i64 | int8, int16, int64 |
+| 42u8, 42u16, 42u32, 42u64 | uint8, uint16, uint32, uint64 |
+| 42i32 | int32 (explicit, same as default) |
+| 3.14 | float64 (default) |
+| 3.14f32, 3.14f64 | float32, float64 |
+| true, false | bool |
+| 'a', '\\n', '\\x41' | char (alias for uint8) |
+| "hello" | str |
+| c"hello" | cstr — null-terminated C string pointer |
+
+Suffixed integer literals are range-checked at compile time. A literal whose value does not fit in the specified type is a compile error:
+
+```fc
+let a = 999i8       // compile error — 999 exceeds int8 range (-128..127)
+let b = 256u8       // compile error — 256 exceeds uint8 range (0..255)
+let c = 127i8       // ok
+let d = 255u8       // ok
+```
+
+The same rule applies to `char` literals, which are aliases for `uint8`.
+
+### Escape Sequences
+
+The following escape sequences are valid in `str`, `cstr`, and `char` literals:
+
+| Escape | Meaning |
+|--------|---------|
+| `\\n` | newline (0x0A) |
+| `\\t` | horizontal tab (0x09) |
+| `\\r` | carriage return (0x0D) |
+| `\\\\` | backslash |
+| `\\"` | double quote (in string literals) |
+| `\\'` | single quote (in char literals) |
+| `\\0` | null byte (0x00) |
+| `\\xNN` | arbitrary byte value, exactly two hex digits |
+
+All three literal forms share the same escape set. An unrecognized escape sequence is a compile error.
+
+### Casting
+
+Explicit casts use C-style prefix cast syntax: `(T) expr`. All conversions not covered by the implicit widening rules require an explicit cast.
+
+**Numeric casts** — any numeric type to any other numeric type:
+
+```fc
+let x = (float64) 32        // int32 to float64
+let y = (int32) 3.14        // float64 to int32, truncates toward zero
+let z = (uint8) some_int32  // narrowing cast, programmer responsible
+```
+
+**Pointer-to-pointer casts** — any pointer type to any other pointer type, including `any*`. Unsafe — the programmer is responsible for correctness:
+
+```fc
+let p = (any*) &my_state         // T* to any* — erase type for C interop
+let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer responsible
+let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
+```
+
+**Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
+
+```fc
+let addr = (uint64) some_ptr          // pointer to integer — raw address value
+let reg = (uint32*) 0x40001000u64     // integer to pointer — memory-mapped register
+```
+
+Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `float32` as `uint32`) is not supported via cast syntax — use explicit pointer casts through a temporary if needed.
+
+---
+
+## let and let mut
+
+| Keyword | Terminology | Reassignable | Addressable | Capturable in closure |
+|---------|-------------|---------|-------------|-----------------------|
+| let | let binding | no | no | yes — captured by copy |
+| let mut | mutable let binding | yes | yes | no |
+
+All bindings must be initialized at declaration. Types are always inferred — there are no explicit type annotations on bindings.
+
+```fc
+let x = 42
+let mut y = 42
+
+y = y + 1           // ok — reassigning a mutable let binding
+x = x + 1           // compile error — x is a let binding, cannot be reassigned
+```
+
+### Binding reassignment vs. content mutation
+
+`let` vs `let mut` controls only whether the **binding itself** can be reassigned — whether you can make it refer to a new value entirely. It says nothing about whether the *contents* of the bound value can be mutated.
+
+Struct field assignment and slice element assignment are valid on both `let` and `let mut` bindings, because they mutate the contents of the value, not the binding:
+
+```fc
+let p = point { x = 1.0, y = 2.0 }
+p.x = 3.0               // ok — mutating a field, not reassigning p
+
+let buf = int32[4] { 0, 1, 2, 3 }
+buf[2] = 99             // ok — mutating an element, not reassigning buf
+
+let mut q = point { x = 1.0, y = 2.0 }
+q = point { x = 5.0, y = 6.0 }   // ok — reassigning q to a new value
+```
+
+This is consistent with the pointer rule — writing through a `let` binding pointer (`*px = 99`) is valid because you are not changing the pointer, you are changing what it points to.
+
+### Statements vs. expressions
+
+At the top level of a file or module, `let`, `let mut`, `struct`, `union`, `module`, and `import` are **statements** — they are processed by the first compiler pass, have no type, and produce no value.
+
+Inside any expression context, `let` and `let mut` introduce bindings within a block. The binding is visible to all subsequent expressions in the same block — scoping and sequencing both follow directly from the block model:
+
+```fc
+let x = foo()
+let y = bar(x)    // x is in scope here
+x + y             // value of the block — both x and y in scope
+```
+
+Bindings nest naturally across block depth:
+
+```fc
+let result =
+    let a = 1
+    let b = 2
+    if a > b then a
+    else b
+```
+
+### Struct destructuring in bindings
+
+Structs can be destructured directly in `let` and `let mut` bindings using the same `{ field = name }` syntax as match arm patterns. Fields omitted from the destructuring are simply not bound.
+
+```fc
+let { center = c, radius = r } = green_circle    // c and r are let bindings
+let mut { radius = r } = green_circle            // r is a mutable let binding
+```
+
+Destructuring can be nested:
+
+```fc
+let { center = { x = cx, y = cy }, radius = r } = green_circle
+```
+
+### Shadowing
+
+Any binding can shadow any other binding of the same name, regardless of mutability:
+
+```fc
+let x = int32.none
+let x = some(32)       // let shadows let
+
+let mut y = 42
+let mut y = y + 1      // let mut shadows let mut
+
+let mut z = 42
+let z = z              // let shadows let mut — z is now immutable
+z = z + 1              // compile error — z is now a let binding
+```
+
+Shadowing a `let mut` binding with a `let` binding is a useful pattern for "freezing" a mutable value at a point in time.
+
+---
+
+## Type Inference
+
+FC uses simple right-to-left (inside-out) inference. The type of a binding is always inferred from the expression on the right-hand side. There are no explicit type annotations on bindings. There is no global unification or Hindley-Milner inference.
+
+- Parameter types on lambdas are always required — there is nothing to infer them from
+- Return types of functions are inferred from the body expression
+- Binding types are always inferred — never annotated
+
+```fc
+let double = (x: int32) -> x * 2    // return type inferred as int32
+let n = alloc(node)!                 // inferred as node*
+let x = int32.none                   // inferred as int32?
+let x = some(42)                     // inferred as int32?
+```
+
+### Two-Pass Compilation
+
+The two compiler passes correspond directly to the statement / expression divide. The first pass processes all top-level statements — collecting names, types, struct layouts, and module structure — without evaluating any expressions. The second pass type-checks all expressions with the full top-level environment available.
+
+This means top-level bindings can reference each other regardless of declaration order, and mutual recursion requires no special syntax. Inner bindings inside function bodies do not benefit from this — they are resolved left-to-right in the second pass, so a local binding can only reference bindings that appear before it in the same block.
+
+---
+
+## Operators & Access
+
+### Precedence and Associativity
+
+Operators are listed from highest to lowest precedence. Operators at the same level share the same precedence and associativity.
+
+| Level | Operators | Associativity | Notes |
+|-------|-----------|---------------|-------|
+| 1 | `x!` &nbsp; `x[i]` &nbsp; `x.f` &nbsp; `x->f` | left | postfix — unwrap, index, member access |
+| 2 | `-x` &nbsp; `!x` &nbsp; `~x` &nbsp; `&x` &nbsp; `*x` &nbsp; `(T)x` | right | unary prefix |
+| 3 | `*` &nbsp; `/` &nbsp; `%` | left | multiplicative |
+| 4 | `+` &nbsp; `-` | left | additive |
+| 5 | `<<` &nbsp; `>>` | left | bitwise shift |
+| 6 | `&` | left | bitwise AND |
+| 7 | `^` | left | bitwise XOR |
+| 8 | `\|` | left | bitwise OR |
+| 9 | `==` &nbsp; `!=` &nbsp; `<` &nbsp; `>` &nbsp; `<=` &nbsp; `>=` | left | comparison — produce `bool`; `<` `>` `<=` `>=` also valid on pointers |
+| 10 | `&&` | left | logical AND |
+| 11 | `\|\|` | left | logical OR |
+| 12 | `=` | right | assignment — mutable let bindings only |
+
+> **Note**
+> Bitwise operators (`&`, `^`, `|`) bind more tightly than comparison operators. This fixes C's well-known wart where `x & mask == 0` parses as `x & (mask == 0)`. In FC, `x & mask == 0` parses as `(x & mask) == 0`.
+
+> **Note**
+> Compound assignment operators (`+=`, `-=`, `*=`, `<<=`, etc.) are not supported. All assignment is plain `=`. This is a deliberate consequence of "one way to do things" — `x = x + 1` is the only way to write an increment. The redundancy in common loop patterns is a known cost, traded for a simpler grammar and a single assignment form.
+
+### Binary Operators
+
+| Operator | Valid on | Result type |
+|----------|----------|-------------|
+| `+` `-` `*` `/` | integer types, float types | same as operands (after widening) |
+| `%` | integer types | same as operands (after widening) |
+| `<<` `>>` | integer types | left operand type |
+| `&` `^` `\|` | integer types | same as operands (after widening) |
+| `==` `!=` | primitives, structs, unions, options, slices | `bool` |
+| `<` `>` `<=` `>=` | integer types, float types, pointer types | `bool` |
+| `&&` `\|\|` | `bool` only | `bool` |
+
+Integer division truncates toward zero. `%` produces the remainder with the sign of the dividend.
+
+### Integer overflow
+
+Unsigned integer overflow wraps modulo 2ⁿ — this is C's existing guarantee and FC inherits it directly.
+
+Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`int8`, `int16`, `int32`, `int64`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely.
+
+In generated C, signed arithmetic is emitted as a cast through the unsigned equivalent for each type:
+
+```c
+// FC: let x = a + b   (a, b: int32)
+int32_t x = (int32_t)((uint32_t)a + (uint32_t)b);
+
+// FC: let x = a + b   (a, b: int64)
+int64_t x = (int64_t)((uint64_t)a + (uint64_t)b);
+```
+
+Each signed type casts through its same-width unsigned counterpart — `int8` through `uint8_t`, `int16` through `uint16_t`, and so on. All signed integer types share the same two's complement layout as their unsigned counterparts — the cast is a reinterpretation of bits, not a computation. Unsigned addition is guaranteed to wrap in C, so the result is fully defined behavior on any C11 compiler with no additional flags required.
+
+The consequences of wrapping are predictable and consistent:
+
+- `int32.max + 1` → `int32.min`
+- `int32.min - 1` → `int32.max`
+- `int32.min * -1` → `int32.min` (the one asymmetry of two's complement)
+
+> **Transpilation**
+> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on signed integer types. Division, comparison, and bitwise operators are unaffected — their signed and unsigned semantics already agree or overflow is not applicable.
+
+### Shift semantics
+
+When the shift amount equals or exceeds the bit width of the left operand, FC defines the result by masking the shift amount to the bit width — the shift amount is taken modulo the number of bits. This eliminates another class of C undefined behavior at zero runtime cost, since the masking matches what x86 and ARM hardware already do for variable shifts.
+
+| Left operand width | Mask | Effect |
+|---------------------|------|--------|
+| 8-bit | `& 7` | shift amount mod 8 |
+| 16-bit | `& 15` | shift amount mod 16 |
+| 32-bit | `& 31` | shift amount mod 32 |
+| 64-bit | `& 63` | shift amount mod 64 |
+
+```fc
+let a = 1i32 << 33     // equivalent to 1i32 << 1 — result is 2
+let b = 1i32 << 32     // equivalent to 1i32 << 0 — result is 1
+let c = 1i64 << 65     // equivalent to 1i64 << 1 — result is 2
+```
+
+> **Transpilation**
+> The compiler emits an explicit mask on the shift amount: `a << (b & 31)` for 32-bit types, `a << (b & 63)` for 64-bit types, and so on. On targets where the hardware already masks, the C compiler's optimizer will typically eliminate the redundant mask.
+
+### Structural Equality
+
+`==` and `!=` work on all FC types using structural equality — values are compared by their contents, not by identity or address. The rules per type:
+
+| Type | `==` behaviour |
+|------|----------------|
+| Primitives | value comparison |
+| `T*` pointers | address comparison — pointed-to value is not dereferenced |
+| `T?` options | both `none` → equal; one `none` → not equal; both `some` → compare inner values |
+| Structs | field-by-field recursively, in declaration order |
+| Unions | compare tags first; if tags match, compare the active variant's payload |
+| Slices | compare `len` first; if equal, compare element-by-element |
+| Function types | compare `fn_ptr` and `ctx` — both fields must be equal |
+
+The unifying principle is that each type is compared by what it *represents* to the programmer. Value-like types (primitives, structs, unions, options, slices) compare contents. Reference-like types (`T*` pointers, function values) compare identity. A slice is a sequence of values — comparing two slices asks "are these the same sequence?" and follows the pointer to check element-by-element. A `T*` is an explicit indirection — comparing two pointers asks "do these refer to the same location?" and does not follow the pointer.
+
+The compiler emits a comparison function for each struct and union type where `==` is used. For slices this is O(n) in the number of elements — equality on slice-containing types is not free.
+
+**Float equality** — `==` on `float32` and `float64` follows IEEE 754 semantics: `NaN != NaN` (even for identical bit patterns) and `+0.0 == -0.0` (despite different bit patterns). This applies transitively — a struct containing a `float64` field uses IEEE 754 comparison for that field. As a consequence, equality for types containing float fields cannot be implemented as raw byte comparison; the compiler generates field-by-field comparison functions that use C's `==` for each primitive field.
+
+**Pointer fields** — a `T*` field inside a struct is compared by address. Two structs whose `T*` fields point to different allocations containing identical data will compare as not-equal. This is intentional — following pointers arbitrarily would be untenable for circular structures. If you need deep equality across pointer boundaries, write an explicit comparison function.
+
+**Function value equality** — two function values are equal if and only if they have the same `fn_ptr` and the same `ctx` pointer. This means two references to the same non-capturing lambda are equal (same `fn_ptr`, both null `ctx`), but two independently written lambdas with identical bodies are not — they compile to different C functions and therefore have different `fn_ptr` values. This is consistent with how pointer equality works elsewhere in FC — identity, not structural content.
+
+```fc
+let a = point { x = 1.0, y = 2.0 }
+let b = point { x = 1.0, y = 2.0 }
+a == b      // true — field-by-field
+
+let s1 = "hello"
+let s2 = "hello"
+s1 == s2    // true — element-by-element
+
+let a = shape.circle(3.14)
+let b = shape.circle(3.14)
+a == b      // true — tag and payload match
+
+let p = alloc(shape.circle(3.14))!
+*p == shape.circle(3.14)    // true — dereferences p, copies value, then compares
+```
+
+### Unary Operators
+
+| Operator | Syntax | Valid on | Result type |
+|----------|--------|----------|-------------|
+| Negation | `-x` | signed integer types, float types | same type |
+| Boolean not | `!x` | `bool` only | `bool` |
+| Bitwise not | `~x` | integer types | same type |
+| Address-of | `&x` | `let mut` bindings only | `T*` |
+| Dereference | `*x` | `T*` | `T` |
+| Cast | `(T)x` | numeric types | `T` |
+| Unwrap | `x!` | `T?` | `T` — crashes at runtime if `none` |
+
+### Implicit Widening
+
+FC allows implicit widening conversions in binary expressions and comparisons where no information can be lost. When operands have different types, the narrower type is widened to match the wider:
+
+| From | To |
+|------|----|
+| `int8` | `int16`, `int32`, `int64` |
+| `int16` | `int32`, `int64` |
+| `int32` | `int64` |
+| `uint8` | `uint16`, `uint32`, `uint64`, `int16`, `int32`, `int64` |
+| `uint16` | `uint32`, `uint64`, `int32`, `int64` |
+| `uint32` | `uint64`, `int64` |
+| `float32` | `float64` |
+
+All other mixed-type expressions require an explicit cast. Integer-to-float conversions are always explicit — `int32` to `float64` is safe in range but can lose precision for large values.
+
+```fc
+let x = 42i32
+let y = 100i64
+let z = x + y           // x widened to int64, z is int64
+
+let a = 10u8
+let b = 200i32
+let c = a + b           // a widened to int32, c is int32
+
+let p = 1000000i32
+let q = 3.14f64
+let r = p + q           // compile error — explicit cast required
+```
+
+### Overloaded Tokens
+
+Several tokens have multiple meanings distinguished by context:
+
+| Token | Context | Meaning |
+|-------|---------|---------|
+| `*` | type context (suffix) | pointer type — `int32*` |
+| `*` | expression context (prefix) | dereference — `*px` |
+| `*` | expression context (binary) | multiplication — `a * b` |
+| `&` | expression context (prefix) | address-of — `&x` |
+| `&` | expression context (binary) | bitwise AND — `a & b` |
+| `!` | expression context (prefix) | boolean not — `!flag` |
+| `!` | expression context (postfix) | option unwrap — `val!` |
+| `->` | expression context | pointer field access — `ptr->field` |
+| `->` | type context | function type arrow — `(int32) -> int32` |
+| `->` | match arm | match arm separator — `\| some(x) -> ...` |
+| `..` | slice indexing | sub-slice range — `s[i..j]` |
+| `..` | `for` range | iteration range — `for i in 0..n` |
+
+## Runtime Failures
+
+Several operations in FC can fail at runtime with no meaningful recovery path. These are **hard failures** — the program aborts immediately.
+
+| Failure | Cause |
+|---------|-------|
+| Bounds check | Slice index or sub-slice range out of bounds |
+| Option unwrap | `x!` on a `none` value |
+| Division by zero | Integer division or remainder with a zero divisor |
+
+All hard failures call `abort()` from the C standard library, which terminates the process immediately without unwinding, without running cleanup functions, and without flushing output buffers. On embedded targets where `abort()` is unavailable, the compiler emits a target-appropriate trap instruction (infinite loop, CPU halt, or equivalent).
+
+There is no exception handling, no panic-with-message, and no recoverable failure path for these operations in this version of FC. If a more sophisticated failure mechanism is added in future (diagnostic output, configurable panic handlers), it will be specified as a separate feature and will not change the semantics of existing code — hard failures will remain hard failures.
+
+**Division by zero** — integer division (`/`) and remainder (`%`) by zero are hard failures. This diverges from C, where integer division by zero is undefined behavior. FC makes it defined: the program aborts. Float division by zero follows IEEE 754 and produces `inf` or `nan` — it is not a hard failure.
+
+> **Transpilation**
+> Bounds checks emit a conditional `abort()` before the access. Option unwrap emits a tag check before the value read. Division by zero emits a divisor check before the division. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).
+
+---
+
+# PART 2 — Control Flow
+
+## Control Flow Expressions
+
+All control flow transfer mechanisms in FC — `return`, `return expr`, `break`, `break expr`, and `continue` — are expressions of type `void`. This is true even for `return expr` and `break expr`, which carry a value: the carried value determines the type of the *outer* construct they transfer control to (the enclosing function or loop), but the transfer expression itself is void within the block where it appears, because it never produces a local value — it exits.
+
+This principle is what allows control flow transfers to appear in expression positions without disrupting the type system:
+
+```fc
+let f = (x: int32) ->
+    if x > 0 then return "early exit"    // no else required — return is void
+    do_something(x)
+    "normal exit"
+```
+
+Here `return "early exit"` is void-typed within the `then` branch. Since void branches do not require `else`, the `if` expression is valid without one. The string `"early exit"` determines the return type of `f`, not the type of the `if` expression.
+
+The same principle applies to `break value` in loops:
+
+```fc
+let result = loop
+    if done() then break 42    // break 42 is void-typed here
+    do_work()                   // void — side effect
+```
+
+`break 42` is void within the loop body — it does not produce a value in the local block. The `42` determines the type of the `loop` expression at the call site.
+
+| Expression | Type within enclosing block | Determines type of |
+|------------|---------------------------|-------------------|
+| `return` | `void` | — |
+| `return expr` | `void` | enclosing function |
+| `break` | `void` | — |
+| `break expr` | `void` | enclosing `loop` expression |
+| `continue` | `void` | — |
+
+---
+
+## If Expressions
+
+`if` is an expression. Both branches must return the same type. The `else` branch is required when the `if` expression produces a non-void value. When both branches are void-typed — or when there is no `else` — the expression is void. Branches are introduced at a deeper indentation level than the `if` keyword.
+
+```fc
+let max = if a > b then a else b
+
+let label =
+    if score >= 90 then "excellent"
+    else if score >= 70 then "good"
+    else "needs work"
+
+if condition then
+    do_something()     // void — no else required
+```
+
+---
+
+## Match Expressions
+
+`match` is an expression. The compiler enforces exhaustiveness — all variants must be covered. Inside a match, variant names may be used unqualified since the type is known from the match subject. All arms must return the same type. Match arms are introduced at a deeper indentation level than the `match` keyword.
+
+```fc
+match s with
+| circle(r)    -> 3.14159 * r * r
+| rectangle(d) -> d.width * d.height
+| point        -> 0.0
+
+match opt with
+| some(x) -> x + 1
+| none    -> 0
+```
+
+### Wildcard patterns
+
+`_` matches anything without binding it. It can appear at any pattern position, or as a catch-all arm that satisfies exhaustiveness checking:
+
+```fc
+match s with
+| circle(_) -> "it's a circle"
+| _         -> "it's not a circle"
+```
+
+### Nested patterns
+
+Patterns are recursive — any pattern position can contain a nested pattern:
+
+```fc
+match opt_shape with
+| some(circle(r))       -> r * r * 3.14159
+| some(rectangle(dims)) -> dims.width * dims.height
+| some(_)               -> 0.0
+| none                  -> 0.0
+```
+
+### Struct destructuring in patterns
+
+Structs can be destructured in pattern position using `{ field = pattern }` syntax. Fields omitted from the pattern match anything:
+
+```fc
+match some_node with
+| some({ value = 0 }) -> "found zero"
+| some({ value = v }) -> "found other"
+| none                -> "empty"
+
+match some_node with
+| some({ value = 0, next = none }) -> "zero with no next"
+| some({ value = 0, next = _   }) -> "zero with a next"
+| some({ value = v             }) -> "other value"
+| none                            -> "empty"
+
+match some_node with
+| some({}) -> "it's a node"
+| none     -> "empty"
+```
+
+### Pattern summary
+
+| Pattern | Meaning |
+|---------|---------|
+| `_` | wildcard — matches anything, binds nothing |
+| `name` | matches anything, binds value to name |
+| `0`, `-1`, `42i64`, etc. | matches that exact integer literal value |
+| `'a'`, `'\\n'` | matches that exact char value |
+| `true`, `false` | matches that exact bool value |
+| `"hello"` | matches a `str` value using structural (element-by-element) equality |
+| `variant(pattern)` | matches variant, applies inner pattern to payload |
+| `{ field = pattern }` | struct destructuring, omitted fields match anything |
+| `{}` | matches any struct, binds nothing |
+
+Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
+
+Float literals and `cstr` literals are not valid in pattern position. Float equality is unreliable under IEEE 754 — a float literal pattern is almost certainly a bug. `cstr` equality is pointer comparison, not content comparison, so a `cstr` literal pattern would rarely do what the programmer intended. Both are compile errors.
+
+```fc
+// integer and bool literals
+match status with
+| -1   -> "error"
+| 0    -> "ok"
+| 1    -> "warning"
+| _    -> "unknown"
+
+match flag with
+| true  -> do_thing()
+| false -> skip()
+
+// string literals — uses structural equality
+match command with
+| "help"    -> show_help()
+| "quit"    -> exit()
+| "version" -> show_version()
+| _         -> unknown_command()
+```
+
+---
+
+## Loops
+
+FC has two looping constructs: `loop` and `for`.
+
+### loop
+
+`loop` is the primary looping construct. It is an expression and produces a value via `break value`. A loop with no value-producing break is void-typed.
+
+```fc
+// void loop — side effects only
+loop
+    if done then break
+    do_work()
+
+// loop as expression — type inferred from break value
+let mut i = 0
+let result = loop
+    if i >= data.len then break int32.none
+    if matches(data[i]) then break some(i)
+    i = i + 1
+```
+
+A loop produces a value only via `break value`. Everything else in the loop body — including expressions with non-void return values — is evaluated for side effects, and any value is discarded. Fall-through at the bottom of the loop body simply begins the next iteration; it never produces a value.
+
+`break value` is void-typed within the loop body (see §Control Flow Expressions) — the carried value determines the type of the `loop` expression at the call site, not the type of the `break` expression itself. All `break value` paths in a loop must agree on a type, and that type becomes the type of the loop expression.
+
+### for
+
+`for` iterates over slices and ranges. It is always void-returning — if a value needs to be produced from an iteration, use `loop` with `break value` instead. `for` is syntactic sugar — everything it can do can also be done with `loop`. It is the more convenient choice when a common iteration pattern applies cleanly.
+
+Three forms are supported:
+
+**Element iteration** — iterates over a slice, binding each element as a `let` binding:
+
+```fc
+for p in points
+    process(p)
+```
+
+**Range iteration** — iterates over an integer range, exclusive of the upper bound:
+
+```fc
+for i in 0..10
+    process(data[i])
+```
+
+The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is inferred from the range endpoints using the standard widening rules. `0..10` gives `int32` (both default). `0..points.len` gives `uint64` (`int32` widens to `uint64`). Both endpoints must be integer types — float ranges are a compile error.
+
+If the start exceeds or equals the end, the body executes zero times. This handles signed endpoints naturally — `for i in -5..5` iterates from -5 to 4.
+
+The `..` syntax is only valid in `for` position and slice indexing position — it is not a general-purpose range expression and does not produce a value of any type.
+
+**Index-element iteration** — iterates over a slice, binding both the index and the element:
+
+```fc
+for i, p in points
+    if p.x == 0.0 then libc.printf(c"zero at index %d\n", i)
+```
+
+The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `uint64`. The element is a copy, same as plain element iteration.
+
+#### Copy semantics
+
+Element iteration and index-element iteration copy the current element into the loop binding on each iteration. For slices of large structs, this copy may be significant. When per-element copies are undesirable — for example, when only one field of a large struct is needed — use range iteration with indexed access, or `loop` for full control:
+
+```fc
+// range iteration — no element copy
+for i in 0..readings.len
+    if readings[i].flags == 0u32 then continue
+    process(readings[i])
+```
+
+#### Closures in `for` bodies
+
+Closures created inside a `for` body may capture loop bindings. Since each binding is a fresh `let` per iteration and capture is by copy, each closure receives its own independent copy — there is no aliasing between iterations.
+
+### Control flow
+
+`break`, `break value`, and `continue` work in both `loop` and `for`, with one exception: `break value` is a compile error inside a `for` loop since `for` is always void-returning.
+
+| Keyword | In `loop` | In `for` |
+|---------|-----------|----------|
+| `break` | exit loop, no value | exit loop early |
+| `break value` | exit with value | compile error |
+| `continue` | skip to next iteration | skip to next iteration |
+
+```fc
+// continue in loop — skip even numbers
+let mut i = 0
+loop
+    i = i + 1
+    if i % 2 == 0 then continue
+    process(i)
+    if i >= 9 then break
+
+// break and continue in for
+let mut result = point.none
+for p in points
+    if p.x < 0.0 then continue       // skip negative x
+    if p.x == 0.0 then
+        result = some(p)
+        break                         // exit early
+```
+
+### Other loop forms
+
+`while`, `do ... while`, and C-style `for(int i = 0; i < len; i++)` loops are not supported. FC's `for` covers common iteration patterns over slices and integer ranges. `loop` covers everything else — conditional loops, non-uniform steps, and any pattern that needs to produce a value:
+
+```fc
+// while-style
+loop
+    if not_ready() then break
+    do_work()
+
+// do-while-style
+loop
+    do_work()
+    if done() then break
+
+// non-uniform step — for only supports step-by-one
+let buf = alloc(uint8[256])!
+let mut i = 0
+loop
+    if i >= buf.len then break
+    if buf[i] == 0u8 then break    // stop at null byte
+    process(buf[i])
+    i = i + 2                      // advance by two
+```
+
+> **Transpilation**
+> All three `for` forms transpile to standard C `for` loops:
+> ```c
+> // for p in points (element iteration)
+> for (size_t _i = 0; _i < points.len; _i++) {
+>     point p = points.ptr[_i];
+>     // body
+> }
+>
+> // for i in 0..n (range iteration)
+> for (int32_t i = 0; i < n; i++) {
+>     // body
+> }
+>
+> // for i, p in points (index-element iteration)
+> for (uint64_t i = 0; i < points.len; i++) {
+>     point p = points.ptr[i];
+>     // body
+> }
+> ```
+> For element iteration, `size_t` is used for the internal loop counter as a compiler optimization — it is the natural width for array indexing on the target platform. This does not affect FC semantics. For range and index-element iteration, the counter is the user-visible binding `i`, typed according to the widening rules.
+> `loop` transpiles to a C `while(1)` with `break` and `continue` mapping directly.
+
+# PART 3 — Functions
+
+## Defining Functions
+
+Functions are `let` statements (at the top level) or let binding expressions (when nested) whose value is a lambda. There is no separate `fn` or `def` keyword.
+
+Function overloading — multiple functions sharing the same name with different parameter types — is not supported. Each name resolves to exactly one function. This is not an arbitrary restriction: FC's directional type inference depends on call sites being unambiguous. If multiple candidates existed for a name, the compiler would need to resolve the ambiguity by examining how the result is used or what the arguments are, introducing the kind of global constraint solving the inference model is designed to avoid. See §Type inference as a design theorem.
+
+A lambda is written as `(params) ->` followed by a body expression. For multi-line bodies the body is the indented block on the following lines — the return type is always inferred from the body expression, never annotated.
+
+```fc
+// single line — body follows -> on same line
+let double = (x: int32) -> x * 2
+
+// multi-line — body is the indented block following ->
+let abs = (x: int32) ->
+    if x < 0 then -x else x
+
+// match body
+let describe = (s: shape) ->
+    match s with
+    | circle(r)    -> "circle"
+    | rectangle(_) -> "rectangle"
+    | point        -> "point"
+
+// sequence of let bindings — final expression is the return value
+let hypotenuse = (a: float64, b: float64) ->
+    let a2 = a * a
+    let b2 = b * b
+    sqrt(a2 + b2)
+```
+
+### Parameters are let bindings
+
+Function parameters are let bindings — immutable and non-addressable within the function body. If you need a mutable local copy of a parameter, shadow it with a mutable let binding:
+
+```fc
+let factorial = (n: int32) ->
+    let mut n = n          // shadow parameter with mutable let binding
+    let mut result = 1
+    loop
+        if n <= 1 then break result
+        result = result * n
+        n = n - 1
+```
+
+### Early return
+
+`return` exits the function immediately. For value-returning functions, `return expr` supplies the return value. For void-returning functions, bare `return` exits without a value — this is the idiomatic way to write a no-op function body or to exit early from a void function:
+
+```fc
+let find = (haystack: str, needle: str) ->
+    if needle.len > haystack.len then return str.none
+    // ... rest of body
+    str.none
+
+let log_nop = (msg: str) -> return     // void — does nothing
+
+let validate = (data: uint8[]) ->      // void — early exit on error
+    if data.len == 0 then return
+    process(data)
+```
+
+In all cases `return` is only needed for early exits — the normal return value of a value-returning function is the final expression of the body. A void function with no early exit needs no `return` at all; the body just ends.
+
+### Entry point
+
+```fc
+let main = () ->
+    0
+```
+
+`main` at the top level of any file in the build is the program entry point, equivalent to C's `main`. It must return `int32`. If more than one file defines a top-level `main`, that is a compile error. `main` is not required — library code and partial builds compile without one.
+
+### Stack frames and lifetime
+
+All local bindings in a function body — regardless of their lexical nesting depth — share a single stack frame that lives for the duration of the function call. Lexical scope controls name visibility, not memory lifetime.
+
+```fc
+let f = () ->
+    let px =
+        let mut x = 42
+        &x          // &x is valid here — x lives in f's stack frame
+    *px             // still valid — f has not returned yet
+```
+
+A pointer to a local binding is valid for the entire function call. It must not escape the function — storing it in a heap-allocated struct, returning it, or passing it to something that outlives the call will result in a dangling pointer. Use heap allocation for data that must outlive a function call.
+
+---
+
+## Closures & Capture
+
+Lambdas may capture immutable `let` bindings from the enclosing scope by copy. `let mut` bindings cannot be captured.
+
+```fc
+let threshold = 10
+let above = (x: int32) -> x > threshold    // captures threshold by copy
+
+let mut counter = 0
+let f = () -> counter + 1                  // compile error — cannot capture mutable let binding
+```
+
+Capturing a pointer value (a `let` binding that holds a pointer) is allowed. The programmer is responsible for ensuring the pointed-to memory remains live for the lifetime of the closure.
+
+If you want to mutate a mutable let binding from another function, there are two approaches. The first passes a pointer as an explicit parameter — this is a plain function, not a closure:
+
+```fc
+let mut x = 3
+let modify = (px: int32*) ->
+    *px = 4
+
+modify(&x)
+// x is now 4
+```
+
+The second captures a pointer to the mutable binding, producing a true closure:
+
+```fc
+let mut x = 3
+let px = &x
+let modify = () ->
+    *px = 4
+
+modify()
+// x is now 4
+```
+
+Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. The copied pointer still points at `x`, and writing through it mutates `x`. The programmer is responsible for ensuring `x` remains live for the lifetime of the closure.
+
+> **Transpilation**
+> All function values in FC use a uniform **fat-pointer representation** — a two-word struct containing a C function pointer and a `void*` context pointer. The general form for a function type `(A) -> R` is:
+> ```c
+> typedef struct {
+>     R (*fn_ptr)(A, void*);
+>     void* ctx;
+> } fc_fn_A_R;
+> ```
+> Every function value of a given function type has the same size and layout, regardless of what it captures. This uniformity is what makes function values composable — a `list<() -> int32>` works correctly because every element is the same two-word struct.
+>
+> **Capturing lambdas** — the compiler generates a context struct containing copies of the captured values and allocates it on the **stack frame of the function that creates the lambda**. For example, given this FC code:
+> ```fc
+> let threshold = 10
+> let above = (x: int32) -> x > threshold
+> ```
+> The compiler emits:
+> ```c
+> // context struct — one field per captured value
+> typedef struct { int32_t threshold; } _ctx_above;
+>
+> // generated function — receives context as void*
+> bool _above_impl(int32_t x, void* _ctx) {
+>     return x > ((_ctx_above*)_ctx)->threshold;
+> }
+>
+> // in the creating function's body:
+> _ctx_above _above_ctx = { .threshold = threshold };
+> fc_fn_int32_bool above = { .fn_ptr = _above_impl, .ctx = &_above_ctx };
+> ```
+>
+> **Non-capturing lambdas** set the context pointer to null. No context struct is generated.
+>
+> **Call sites** — the compiler emits `closure.fn_ptr(arg, closure.ctx)` uniformly for all function values, whether capturing or not. The generated function ignores the null context pointer in the non-capturing case.
+>
+> **Lifetime** — the context struct lives on the stack frame of the function that creates the capturing lambda. A capturing closure is valid for the duration of that function call and must not outlive it. The lifetime rules are identical to stack slices and pointers to local bindings:
+>
+> - Passing a capturing closure as an argument to a function call: safe — the callee returns before the creator's frame is popped.
+> - Returning a capturing closure from the function that created it: **compile error** — the context pointer would dangle.
+> - Storing a capturing closure into heap memory that outlives the creating function: **undefined behavior** — not currently detected.
+> - Non-capturing closures have no lifetime restriction — the null context pointer is always valid.
+>
+> The safe rule: a capturing closure must not outlive the function that created it. If captured state must outlive the creating function, heap-allocate the data explicitly and capture the pointer — a `let` binding holding a pointer has no lifetime restriction on the closure itself, only the usual programmer responsibility to keep the pointed-to memory live.
+>
+> **`extern` function pointer parameters** — when a function type appears as a parameter in an `extern` declaration, the compiler maps it to a plain C function pointer at the C boundary. The programmer passes a non-capturing lambda directly; the compiler extracts the `fn_ptr` field from the fat struct automatically. Passing a capturing lambda to an `extern` function pointer parameter is a compile error.
+>
+> The compiler may elide the fat-pointer wrapping when it can prove a function value is never used in a first-class manner — never stored, never passed as a `() -> T` parameter. This is an implementation quality optimization, not a language guarantee. Correct code is always generated without it.
+>
+> To obtain a raw C function pointer for direct use (e.g. storing in a C struct field), use `&f` on a non-capturing `let mut` binding — see §Address-of.
+
+# PART 4 — Type System
+
+## Structs
+
+```fc
+struct point =
+    x: float64
+    y: float64
+
+struct node =
+    value: int32
+    next: node*?       // self-referential via pointer
+```
+
+Mutually recursive struct definitions are allowed — two structs may reference each other via pointer fields. Since all top-level declarations are collected in the first compiler pass, declaration order does not matter:
+
+```fc
+struct tree_node =
+    value: int32
+    parent: tree_node*?
+    children: child_list*?
+
+struct child_list =
+    node: tree_node*
+    next: child_list*?
+```
+
+The same rules apply to generic structs — a generic type may reference itself or another generic type via pointer fields. The monomorphizer follows the same pointer rule: it only needs the layout of a type to emit a pointer to it, so the instantiation graph never cycles. A direct recursive field without a pointer — `struct foo = value: foo<'a>` — would be an infinitely-sized type and is a compile error, exactly as for non-generic structs.
+
+### Construction
+
+Struct literals use named fields. Fields may appear in any order, and fields may be omitted — omitted fields are zero-initialized to their default value.
+
+```fc
+let p = point { x = 1.0, y = 2.0 }           // all fields
+let p = point3d { z = 1, x = 3 }             // partial — y defaults to 0
+let p = point3d { }                           // all fields defaulted
+```
+
+> **Transpilation**
+> Struct literals transpile to C11 designated initializers. Unspecified fields are zero-initialized by C's rules:
+> ```c
+> point3d p = { .x = 3, .z = 1 };   // y == 0
+> ```
+
+### Field access
+
+```fc
+p.x        // direct field access
+ptr->x     // pointer field access
+```
+
+Structs may be allocated on the stack or heap. Memory layout is identical to the equivalent C struct in declaration order — FC defers entirely to the C compiler for field alignment and padding. This means FC structs and their C equivalents are always ABI-compatible.
+
+### Local struct definitions
+
+`struct` may also appear inside a function body as a scoped definition, following the same lexical scoping rules as `let` bindings. The struct type is only visible within the expressions that follow it in the same block.
+
+```fc
+let process = (data: uint8[]) ->
+    struct result =
+        value: int32
+        success: bool
+
+    let make_result = (v: int32, s: bool) ->
+        result { value = v, success = s }
+
+    let r = make_result(42, true)
+    r
+```
+
+A local struct type may be used as the return type of nested functions defined within the same scope. It may not be used as the return type of the enclosing function — that would allow the type name to escape its lexical scope, which is a compile error. This applies to explicit returns and to the implicit case: if a function body's final expression infers to a locally-defined type, the compiler treats that as a compile error even though the type is never written by name — the type cannot be named by callers and so cannot be a valid return type.
+
+---
+
+## Union Types
+
+Union types are tagged unions — each value carries a variant tag and an optional payload. The compiler enforces exhaustive pattern matching.
+
+```fc
+union parse_outcome =
+    | success(int32)
+    | failure(str)
+
+union shape =
+    | circle(float64)
+    | rectangle(rect_dims)   // multi-field variants use a struct
+    | point                  // no payload
+```
+
+### Variant rules
+
+- Each variant carries zero or one type
+- Multiple values require a named struct
+- Variant names are scoped to their union type
+
+### Construction
+
+Outside a match context, use the qualified variant name:
+
+```fc
+let s = shape.circle(3.14)
+let r = parse_outcome.success(42)
+```
+
+> **Transpilation**
+> Union types transpile to a C tagged struct using a C11 anonymous union for the payload. For example:
+> ```c
+> typedef enum { SHAPE_CIRCLE = 0, SHAPE_RECTANGLE, SHAPE_POINT } shape_tag;
+> typedef struct {
+>     shape_tag tag;
+>     union { double circle; rect_dims rectangle; };
+> } shape;
+> ```
+> The anonymous union means payload fields are accessed directly on the struct (`s.circle`) rather than through a named payload field (`s.payload.circle`), producing cleaner generated code. Variant tags are assigned integer values in declaration order starting from 0. This means zero-initialized memory is always a valid union value — the tag field 0 corresponds to the first declared variant, and the payload bytes are zero.
+
+### Local union definitions
+
+Like structs, `union` may appear inside a function body as a scoped definition. The union type is only visible within the expressions that follow it in the same block, and may not be used as the return type of the enclosing function — whether explicitly or via inference.
+
+```fc
+let parse = (input: str) ->
+    union parse_result =
+        | success(int32)
+        | failure(str)
+
+    let interpret = (r: parse_result) ->
+        match r with
+        | success(n) -> n
+        | failure(msg) -> 0
+
+    let r = if valid(input) then parse_result.success(42)
+            else parse_result.failure("bad input")
+    interpret(r)
+```
+
+---
+
+## Option Types
+
+Option is a built-in generic type (see §Generics). Null is not expressible in FC — option is the only way to intentionally express the absence of a value. The `?` suffix creates an option type: `T?` is sugar for `option<T>`.
+
+```fc
+int32?      // optional int32
+str?        // optional string
+node*?      // optional pointer to node
+```
+
+### Constructing options
+
+```fc
+some(x)     // wrap a value — type inferred from x
+T.none      // typed none — see §Static Type Properties
+```
+
+### Unwrapping
+
+```fc
+let n = alloc(node)!    // unwrap — crashes if none
+```
+
+Use `x!` when you are certain a value is present and want to crash loudly if not. For safe unwrapping, use a `match` expression.
+
+> **Transpilation**
+> Option types transpile differently depending on whether the underlying type is a pointer:
+>
+> **Pointer options** (`T*?`) transpile to a plain C pointer `T*`. Null represents `none`, any non-null pointer represents `some`. No struct or tag is needed — null is a valid pointer sentinel that FC's own type system keeps permanently available, since raw `T*` is never null. This means `T*?` is directly ABI-compatible with C functions that return nullable pointers.
+>
+> **All other options** (`int32?`, `float64?`, `str?`, `point?`, etc.) transpile to a C struct with a value field and a boolean tag:
+> ```c
+> typedef struct { int32_t value; bool has_value; } fc_option_int32;
+> ```
+> Non-pointer types have no spare bit pattern that can safely serve as a sentinel — every bit pattern is a valid value — so an explicit tag is required.
+
+---
+
+## Pointers
+
+Pointers in FC are intended to always be valid — a value of type `T*` should always point to a live `T`. There is no null literal and no null comparison in FC — null is not expressible in FC code. If a pointer may legitimately be absent, use the option type `T*?`.
+
+This is a convention enforced by the language surface, not a hard guarantee at the memory level. A struct with a raw `T*` field that is zero-initialized will physically contain a zero pointer. Dereferencing it will crash. FC trusts the programmer to initialize raw pointer fields before use — the same responsibility as in C, but with null removed as an expressible value so it can never appear through normal code paths.
+
+```fc
+int32*       // pointer to int32, always valid
+int32*?      // optional pointer, may be none
+node**       // pointer to pointer to node
+```
+
+### Pointer width
+
+A pointer is its own type — `T*` — and its storage width is a property of the pointer itself, not of `T`. All pointer types in FC, regardless of what they point to, are exactly one native word wide: 32 bits on a 32-bit target, 64 bits on a 64-bit target, and so on for any architecture FC targets. The element type `T` only matters when the pointer is dereferenced — it tells the compiler how many bytes to read and what type the result has. The pointer value itself, the address, is always one word.
+
+This is why `any*` is a valid and faithful representation of an opaque C handle: it is a full-width address, indistinguishable in size from `FILE*` or `sqlite3*` or any other pointer type. See §any* — opaque pointers.
+
+### Address-of
+
+Only `let mut` bindings have addresses. You cannot take the address of a `let` binding.
+
+```fc
+let mut x = 42
+let px = &x    // ok — x is a mutable let binding, px inferred as int32*
+
+let y = 42
+let py = &y    // compile error — y is a let binding
+```
+
+**Taking the address of a function** — `&f` on a function binding is valid if and only if the lambda is non-capturing. All function values use a fat-pointer representation internally, but a non-capturing lambda has a null context pointer, so the compiler can safely extract the raw `fn_ptr` field and produce a plain C-compatible function pointer.
+
+In practice, `&f` is rarely needed. When a function type appears in an `extern` parameter declaration, the compiler handles the C function pointer mapping automatically — the programmer passes a non-capturing lambda directly without `&`. See §C Interop.
+
+The main remaining use case for `&f` is a C struct that contains a function pointer field, accessed by FC via a raw pointer, where no `extern` function mediates the assignment:
+
+```fc
+// storing a function pointer into a C struct field directly
+let mut handler = (x: int32) -> process(x)
+some_c_struct->callback = &handler
+```
+
+Taking the address of a capturing lambda is always a compile error:
+
+```fc
+let threshold = 10
+let mut above = (x: int32) -> x > threshold   // captures threshold
+let p = &above    // compile error — capturing lambda
+```
+
+### Dereferencing
+
+```fc
+let val = *px        // explicit dereference, copies value
+px->field            // pointer field access, no struct copy
+(*px).field          // same as above — compiler does not copy struct
+```
+
+### Mutating through a pointer
+
+The dereference operator on the left-hand side of `=` writes through the pointer:
+
+```fc
+let mut x = 42
+let px = &x
+*px = 99        // x is now 99
+px->field = 1   // write through pointer to struct field
+```
+
+`px` itself is a let binding — its value (the address it holds) cannot change. What changes is the value at that address. Reassigning `px` to point somewhere else would require `px` to be a mutable let binding.
+
+### Pointer arithmetic
+
+```fc
+let next = px + 1      // advance pointer by one element
+let val = *(px + 1)    // dereference at offset
+```
+
+> **Note**
+> `*ptr` in a field access context does not copy the struct. A copy only occurs when `*ptr` is used in a value position, such as `let x = *ptr` where the binding type is a struct.
+
+---
+
+## Slices & Strings
+
+A slice is a fat pointer — a struct containing a raw pointer and a length. It is passed and stored by value; there is no extra level of indirection. Slices are first-class types. Indexing is bounds-checked.
+
+The slice type suffix `[]` follows the element type:
+
+```fc
+uint8[]     // slice of uint8
+int32[]     // slice of int32
+int32?[]    // slice of optional int32
+int32[]?    // optional slice of int32
+int32?[]?   // optional slice of optional int32
+str         // built-in alias for uint8[]
+str32       // built-in alias for uint32[], for unicode codepoints
+```
+
+### Representation
+
+A slice transpiles to a C struct with two fields:
+
+```c
+typedef struct { int32_t* ptr; uint64_t len; } fc_slice_int32;
+```
+
+The struct is two words. Passing a slice to a function copies those two words — cheap, and no heap involvement.
+
+### Allocation
+
+Slices can be stack-allocated using literal initialization syntax, or heap-allocated with `alloc`. See §Memory Management for the full treatment. Slice-specific forms:
+
+```fc
+let mut buf = int32[128] { }          // stack slice — zero-initialized
+let rgb = uint8[3] { 255, 0, 128 }   // stack slice — exhaustive element list
+let buf = alloc(int32[128])           // heap slice — returns int32[]?
+let buf = alloc(int32[128])!          // heap slice — unwrap, crash on failure
+```
+
+Two initialization forms for stack slices:
+
+- `{ }` — all elements set to their default value, equivalent to zero-initializing the backing memory
+- `{ v1, v2, ... }` — exhaustive element list, count must match declared length exactly — compile error otherwise
+
+There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
+
+`free` accepts a slice directly — the compiler emits `free(buf.ptr)`. Only free slices returned by `alloc`. Freeing a stack-allocated slice, a sub-slice, or a slice into string literal memory is undefined behavior.
+
+```fc
+free(buf)       // free heap-allocated slice
+free(buf.ptr)   // equivalent, explicit
+```
+
+### Slice operations
+
+```fc
+s.ptr       // raw pointer to first element
+s.len       // number of elements — uint64
+s[i]        // bounds-checked index — compile error if i is not an integer type
+s[i..j]     // sub-slice from i up to but not including j
+s[..j]      // sub-slice from start up to but not including j
+s[i..]      // sub-slice from i to end
+```
+
+`s.len` is always `uint64`. This is a deliberate design choice: a platform-native length type would leak the target architecture into the type system, making struct layouts, arithmetic, and stored lengths all implicitly platform-dependent — reintroducing one of the footguns FC is designed to eliminate. The cost of `uint64` on 32-bit and smaller targets is real but acceptable; programmers who need tight inner loops on constrained hardware can drop to raw pointer arithmetic, which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
+
+Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
+
+### String literals and null termination
+
+FC string literals are guaranteed to be null-terminated in memory. The `len` field does not include the null byte — it reflects the number of usable characters. This means a literal's `.ptr` is always safe to pass to C string functions.
+
+String literal memory lives in static read-only storage — the compiler emits the bytes into the binary's read-only data section, and the `str` fat pointer is constructed with `.ptr` pointing to that static data. This has two consequences:
+
+- **Mutating a string literal element is undefined behavior.** Writing to a string literal (`s[0] = 65u8`) writes to read-only memory. On platforms with memory protection this will crash; on embedded platforms without an MMU it may silently corrupt the binary's data section.
+- **Freeing a string literal is undefined behavior.** `free(s)` on a string literal passes a static address to `free`, which expects a heap address.
+
+These are the same hazards as in C for string literals. FC does not currently distinguish read-only slices from mutable slices at the type level — introducing such a distinction would require a const/mut qualifier system with significant type system implications. The hazard is narrow in practice: most code reads string literals, and the failure mode is a crash on most targets.
+
+```fc
+let s = "hello"          // s.ptr points to static read-only memory
+s[0] = 72u8              // undefined behavior — writing to read-only memory
+free(s)                  // undefined behavior — freeing static memory
+
+let mut buf = alloc(uint8[5])!
+buf[0] = 72u8            // ok — heap-allocated, mutable
+free(buf)                // ok — heap-allocated
+```
+
+Sub-slices obtained via `s[i..j]` make no null-termination guarantee. Passing a sub-slice's `.ptr` to a C string function is the programmer's responsibility.
+
+```fc
+let s = "hello"     // stored as h e l l o \0 in memory, s.len == 5
+let sub = s[1..3]   // fat pointer into same memory — NOT null-terminated
+```
+
+### Slice construction from raw pointer
+
+When interoperating with C, a slice can be constructed from a raw pointer and a known length using struct literal syntax:
+
+```fc
+let s = str { ptr = cs, len = libc.strlen(cs) }
+let buf = uint8[] { ptr = some_ptr, len = 128 }
+```
+
+The resulting slice shares memory with the original pointer — no allocation occurs. The programmer is responsible for ensuring the pointer remains live for the lifetime of the slice.
+
+### C interop
+
+Pass `.ptr` to C functions expecting a raw pointer. For string functions, ensure null termination first:
+
+```fc
+libc.puts(s.ptr)             // safe only if s is null-terminated
+libc.printf(c"hello\n")     // cstr literal — always safe
+```
+
+### Embedded targets and raw pointer arrays
+
+On memory-constrained embedded targets, the slice fat pointer — a pointer plus a `uint64` length — may be undesirable. `uint64` arithmetic is expensive on 8-bit and 16-bit hardware, and bounds checking adds overhead that may be unacceptable in tight loops.
+
+The programmer can drop down to raw pointer style by discarding the slice after allocation:
+
+```fc
+let buf = alloc(uint8[128])!.ptr    // uint8* — 128 bytes allocated, slice header discarded
+```
+
+The underlying heap allocation is identical — `calloc(128, sizeof(uint8))`. The fat pointer is constructed momentarily on the stack and then discarded; there is no heap overhead. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C.
+
+On bare-metal targets where `alloc` is unavailable, take the pointer from a stack slice:
+
+```fc
+let mut arr = uint8[128] { }
+let buf = arr.ptr               // uint8* into stack memory — no fat pointer, no bounds checking
+```
+
+From this point the programmer is responsible for tracking the length and staying within bounds — the same responsibility as in C.
+
+---
+
+## Function Types
+
+```fc
+(int32, int32) -> int32           // takes two int32, returns int32
+(str) -> bool                     // takes str, returns bool
+() -> void                        // no parameters, returns void
+(int32) -> (int32) -> int32       // returns a function
+```
+
+Function types transpile to C function pointers. When the function type appears in a position that may receive a closure (such as a function parameter), the compiler uses a fat function pointer — a function pointer paired with a `void*` context pointer. See §Closures & Capture for the full transpilation treatment.
+
+> **Aside — function values and slices as fat pointers**
+> Both slices and function values are two-word structs at the representation level. The similarity ends there.
+>
+> Slices are **transparent** about their internals — `.ptr` and `.len` are directly accessible, slices can be constructed from raw parts using struct literal syntax, and the fat pointer representation *is* the type from the programmer's perspective.
+>
+> Function values are **opaque** — the compiler never exposes `.fn_ptr` or `.ctx` as accessible fields. The only operation that matters is calling. This is intentional: a function value's internal layout is an implementation detail, and exposing it would be noise for the overwhelming majority of use cases and unsafe for the rest. Constructing a function value from raw parts is not supported.
+>
+> The one place this opacity is pierced is `&f` on a non-capturing function binding, which extracts the raw C function pointer for interop. This is not "address of the function value struct" — it reaches inside and pulls out a field — which means `&f` and `&s` are subtly different operations despite using the same syntax. `&f` is a narrow C interop escape hatch and rarely appears in FC code.
+
+---
+
+## Static Type Properties
+
+Every type in FC has built-in static properties accessible via dot notation on the type name. These replace C's inconsistent collection of macros.
+
+The dot notation `T.something` is not a special "static property" feature — it is simply module access syntax. The compiler implicitly provides a built-in module for each primitive type pre-populated with universal and type-specific properties. User-defined static properties on structs are just a module sharing the type's name (see §Module System).
+
+A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. `str` is `uint8[]` and `str.none` is therefore valid for the same reason `uint8[].none` would be. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
+
+### Compiler-provided universals
+
+Available on every type:
+
+```fc
+int32.none      // int32? with no value
+node.none       // node? with no value
+str.none        // str? with no value
+```
+
+### Type-specific built-ins
+
+Available only on the types where they make sense — using them on other types is a compile error:
+
+```fc
+int32.min       // minimum representable value
+int32.max       // maximum representable value
+uint8.min       // 0
+uint8.max       // 255
+float64.nan     // not-a-number
+float64.inf     // positive infinity
+float32.nan
+float32.inf
+```
+
+> **Transpilation**
+> `T.min` / `T.max` transpile to the appropriate `INT32_MIN` / `INT32_MAX` style constants from `stdint.h`.
+
+# PART 5 — Memory Management
+
+## Memory Management
+
+FC's memory model is manual — no garbage collector, no borrow checker. Memory lives either on the stack or the heap, and the programmer is responsible for managing heap allocations explicitly.
+
+Four built-in compile-time operators handle memory-related operations that require compiler participation to resolve:
+
+| Operator | Description |
+|----------|-------------|
+| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. When `T` is a slice type `T[N]`, allocates `N` elements and returns `T[]?`. Also accepts a value expression — `alloc(expr)` — inferring the type from the expression and initializing the allocated memory with that value. |
+| `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
+| `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
+| `sizeof(T)` | Return the size in bytes of type `T` as a `uint64`. |
+
+These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
+
+`alloc`, `free`, `sizeof`, and `default` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
+
+The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
+
+---
+
+## Default Values
+
+Every FC type has a well-defined default value, produced by zero-initializing its memory. This is what both `default(T)` on the stack and `alloc(T)` on the heap produce.
+
+```fc
+let x = default(int32)     // 0
+let f = default(float64)   // 0.0
+let b = default(bool)      // false
+let s = default(str)       // empty slice — { ptr = null, len = 0 }
+let p = default(point)     // point { x = 0.0, y = 0.0 }
+let o = default(int32?)    // int32.none
+let n = sizeof(int32)      // 4 — uint64
+```
+
+Default values by type category:
+
+| Type | Default |
+|------|---------|
+| Integer types | `0` |
+| Float types | `0.0` |
+| `bool` | `false` |
+| `T?` | `none` |
+| `T*?` | `none` |
+| Slices (`T[]`) | Empty slice — `{ ptr = null, len = 0 }`. Safe because bounds checking prevents indexing into a zero-length slice. |
+| Structs | Zero bytes across all fields — each field holds whatever zero means for its type at its memory offset. No construction occurs. |
+| Unions | Zero bytes — tag field is 0, which maps to the first declared variant. Payload bytes are also zero. The resulting value is a valid union of the first variant with zeroed payload memory. |
+| `T*` | Zero bytes — physically null. The programmer is responsible for initializing raw pointer fields before use. |
+| Function types | Zero bytes — null `fn_ptr` and null `ctx`. Calling a zero-initialized function value will crash. The programmer is responsible for initializing function-typed fields before calling them. |
+
+> **Note on unions**
+> The first-variant convention means the programmer controls what `default(T)` produces for a union by ordering variants intentionally. If no variant is a sensible default, the programmer should avoid relying on `default` for that union and initialize explicitly instead.
+
+**Raw pointer and function-typed fields** — both `default(T)` and `alloc(T)` are zero-initialization under the hood. For types containing raw `T*` fields or function-typed fields, zero-init produces physically null bytes. The programmer is responsible for writing valid values to those fields before dereferencing or calling them, regardless of whether the value lives on the stack or the heap.
+
+---
+
+## Stack Allocation
+
+Stack memory is allocated implicitly when a binding is declared. All stack bindings must be initialized at declaration — FC never emits an uninitialized C local variable.
+
+```fc
+let x = 42                           // stack int32, initialized to 42
+let p = point { x = 1.0, y = 2.0 }  // stack struct, explicitly initialized
+let p = default(point)               // stack struct, zero-initialized
+let buf = int32[128] { }             // stack slice, zero-initialized
+let rgb = uint8[3] { 255, 0, 128 }  // stack slice, exhaustive element list
+```
+
+Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
+
+`N` in `T[N]` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N])`), `N` may be a runtime value since `calloc` accepts a runtime count.
+
+> **Transpilation**
+> `int32[128] { }` transpiles to `int32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
+
+**Lifetime** — all local bindings share the stack frame of their enclosing function. A pointer or slice into stack memory is valid for the duration of the function call and must not escape it. Returning a stack-allocated pointer or slice, or storing it in heap memory that outlives the call, produces a dangling pointer. Use heap allocation for data that must outlive a function call.
+
+> **Warning — stack slice escape**
+> Stack slices are particularly prone to silent escape bugs because a slice is a value type — it can be passed to functions, stored in structs, and returned, all without any syntactic indication that it contains a pointer into stack memory. Returning a stack-allocated slice is a compile error. Other escape paths — storing a stack slice into heap memory, wrapping it in an option that outlives the function — are not currently detected and are undefined behavior:
+> ```fc
+> let buf = int32[128] { }
+> return buf                    // compile error — stack slice cannot be returned
+> heap_struct->data = buf       // undefined behavior — not detected
+> some(buf)                     // undefined behavior if result outlives function — not detected
+> ```
+> The safe rule: a stack-allocated slice must not outlive the function that created it. If you need a slice to outlive the function, use `alloc`.
+
+---
+
+## Heap Allocation
+
+```fc
+let n = alloc(node)          // returns node*? — may fail
+let n = alloc(node)!         // unwrap — crash on failure
+let buf = alloc(node[128])   // heap-allocated slice of 128 nodes, returns node[]?
+free(ptr)                    // free a heap-allocated pointer
+free(buf)                    // free a heap-allocated slice — compiler emits free(buf.ptr)
+```
+
+`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N])` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
+
+`alloc` and `free` require a hosted environment or an embedded target with a heap allocator. They are unavailable on bare-metal targets and are a compile error if used there. See §Build Targets.
+
+### Initialized alloc
+
+`alloc` also accepts a value expression instead of a bare type name. The type is inferred from the expression, memory is allocated and zero-initialized, then the value is written in. This combines allocation and initialization into a single expression.
+
+**Struct literal** — partial construction allowed, unspecified fields remain zero:
+
+```fc
+let p = alloc(point3d { x = 2, y = 3, z = 4 })!
+let p = alloc(point3d { x = 2, z = 4 })!        // y defaults to 0
+```
+
+**Union variant:**
+
+```fc
+let s = alloc(shape.circle(3.14))!
+let r = alloc(parse_outcome.success(42))!
+```
+
+**Slice literal** — same rules as stack slice initialization. Length is always required and the element count must match exactly:
+
+```fc
+let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
+let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
+```
+
+In all cases the return type is the same as the zero-init form — `T*?` for structs and unions, `T[]?` for slices.
+
+> **Transpilation**
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
+
+### Initialization after alloc
+
+When using the zero-init form, there are two idiomatic ways to initialize fields afterward.
+
+**Field-by-field** — useful when only some fields differ from their defaults:
+
+```fc
+let p = alloc(point3d)!
+p->x = 2
+p->z = 4
+// y remains 0 — already zero-initialized by alloc
+```
+
+**Whole-struct assignment** — write a struct literal through the pointer with `*p = ...`:
+
+```fc
+let p = alloc(point3d)!
+*p = point3d { x = 2, y = 3, z = 4 }
+
+// partial construction also works — unspecified fields default to 0
+*p = point3d { x = 2, z = 4 }
+```
+
+> **Transpilation**
+> `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d){ .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
+
+# PART 6 — Program Structure
+
+## Module System & Visibility
+
+Modules are logical organizational units, fully contained within a single file. Multiple modules may exist in one file. The same module name may not be declared more than once within the same namespace across the build.
+
+```fc
+// file: geometry.fc
+
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+module shapes =
+    struct point =
+        x: float64
+        y: float64
+
+// top-level — file-scoped private, not importable
+let helper = (x: int32) -> x * 2
+```
+
+Module names are flat — `module math` inside any file declares a module named `math`. The filename has no effect on module naming.
+
+### Namespaces
+
+A file may optionally declare a namespace as its first line, before any `import` or `module` declarations. Namespaces group modules across files and prevent name collisions between independently developed code.
+
+```fc
+namespace acme::
+namespace acme::graphics::
+namespace acme::graphics::rendering::
+```
+
+A namespace name consists of one or more `::` separated segments and always ends with a trailing `::`. The trailing `::` is what syntactically distinguishes a namespace from a module everywhere it appears. Namespace names may be arbitrarily deep, though shallow is idiomatic — a company or product name is usually sufficient.
+
+**Files with no namespace declaration are in `global::`** — the implicit default namespace. This is the normal case for application code. Vendor libraries should always declare a namespace to avoid collisions.
+
+Namespaces have no presence in code beyond import and namespace declarations — they are purely an organizational and disambiguation mechanism. You cannot access a namespace by name in an expression.
+
+### Visibility
+
+Everything declared inside a module is public by default. Use `private` to hide a symbol from importers.
+
+```fc
+module math =
+    let add = (a: int32, b: int32) -> a + b    // public
+
+    private let clamp = (x: int32, lo: int32, hi: int32) ->
+        if x < lo then lo
+        else if x > hi then hi
+        else x
+```
+
+Top-level declarations outside any module block are always file-scoped private. The `private` keyword is not needed or meaningful there.
+
+`private` applies to all declarable things — functions, structs, union types, and nested modules.
+
+### Importing
+
+The `from` clause locates the source of the import. Its right-hand side is either a bare namespace (ending in `::`) or a qualified module name (namespace path followed by a module, optionally dotted into submodules). `global::` is the implicit namespace when no `from` clause is given or when `from global::` is written explicitly.
+
+The left-hand side is what comes into scope — a module, submodule, or symbol — with an optional `as` alias. The namespace is consumed at the import site and never appears in code.
+
+**Same-namespace imports** — `global::` is implicit, no qualification needed:
+
+```fc
+import module_a                                       // imports module_a from global::
+import module_a from global::                         // equivalent
+import module_a as m_a                                // alias
+import func_a from module_a                           // symbol from global::module_a
+import func_a from global::module_a                   // equivalent
+import func_a as f_a, func_b as f_b from module_a    // multiple with aliases
+import module_a.module_b                              // submodule — available as module_b
+import module_b from module_a                         // equivalent
+import * from module_a                                // everything public in module_a
+```
+
+**Cross-namespace imports** — namespace path required in `from`:
+
+```fc
+import module_a from acme::graphics::                 // module from named namespace
+import module_b from acme::graphics::module_a         // submodule
+import acme::graphics::module_a.module_b              // equivalent — available as module_b
+import module_a as m_a from acme::graphics::          // alias
+import func_a from acme::graphics::module_a           // symbol from named module
+```
+
+**Syntax rules:**
+- `::` separates namespace segments and terminates a namespace path
+- `.` navigates into modules and submodules — module territory only
+- A path ending in `::` is a namespace; a path not ending in `::` is a module or symbol
+- `import *` works on modules only — you cannot wildcard-import from a bare namespace
+
+`import T from M` brings both the type `T` and the module `T` (if it exists) into scope together. There is no need to import them separately.
+
+Circular imports are not allowed — if module A imports module B, module B may not import module A, directly or transitively. The compiler detects cycles during the first pass and reports them as compile errors.
+
+### Type-associated modules
+
+A module may share a name with a type defined in the same scope. This is the idiomatic way to define static properties and constructors for a type — there is no separate language feature for this. The dot notation `vec2.zero` is simply module access.
+
+```fc
+module geometry =
+
+    struct vec2 =
+        x: float64
+        y: float64
+
+    module vec2 =
+        let zero = vec2 { x = 0.0, y = 0.0 }
+        let from_angle = (angle: float64) -> vec2 { x = cos(angle), y = sin(angle) }
+```
+
+Inside `module vec2`, the `vec2` struct is visible because it was defined in the enclosing lexical scope. Outside, `vec2 { ... }` is unambiguously struct construction and `vec2.zero` is unambiguously module access — the parser distinguishes these by context.
+
+### Multi-file builds
+
+All `.fc` files involved in a build are passed to the compiler together. The compiler accepts individual files, glob patterns, or directories (non-recursive):
+
+```
+fc build main.fc
+fc build src/*.fc
+fc build src/
+fc build src/*.fc vendor/acme/*.fc vendor/widget/*.fc
+```
+
+The first compiler pass scans all provided files, collects every namespace and module declaration, and builds a global module map before any type-checking occurs. This means modules can reference each other regardless of file order, and mutual recursion across files requires no special syntax.
+
+**Duplicate module names** within the same namespace across different files are a compile error. Module names in different namespaces never conflict — `acme::graphics::` and `widget::ui::` can both contain a module named `renderer` without collision.
+
+**Vendor libraries** are distributed as source — `.fc` files with a namespace declaration. They are included in the build the same way as any other file. The namespace prevents their module names from colliding with application code or other vendors:
+
+```
+fc build src/*.fc vendor/acme/graphics/*.fc vendor/widget/ui/*.fc
+```
+
+### Transpilation note
+
+The entire module and namespace system is a compiler-time concept — none of it has any runtime representation in the generated C output. This is an important guiding principle for compiler implementation:
+
+- **Namespaces** — erased entirely. They exist only in the compiler's module map during the first pass.
+- **Modules** — become C symbol prefixes. `vec2.add(a, b)` transpiles to a call like `geom_vectors_vec2_add(a, b)`. The dot notation is purely a source-level convenience.
+- **`import`** — becomes nothing in the output. It informs the compiler which declarations are in scope; the transpiled C either uses `#include` for extern declarations or assumes all generated code compiles together as a single translation unit.
+- **`private`** — module-private symbols become `static` in C where file scope allows it, or are simply excluded from generated headers. Top-level file-private declarations are already `static` by nature.
+- **Type-associated modules** — pure naming convention in the C output. `vec2.zero` is a prefixed global constant; `vec2.add` is a prefixed function. No vtable, no struct, no indirection.
+
+The result is that FC provides enforced module structure, namespace isolation, visibility control, and type-associated namespacing at zero runtime cost. The C compiler sees well-named, flat, idiomatic C. This property should be preserved in all future work on the module system — any new feature that would require a runtime representation in C needs strong justification.
+
+---
+
+## Conditional Compilation
+
+FC supports compile-time conditional compilation via `#if`, `#else if`, `#else`, and `#end` directives. These allow code to be included or excluded at compile time based on named flags, without resorting to a text-substitution preprocessor.
+
+### Directives
+
+Directives always appear at **column 0**, regardless of the surrounding indentation level. This keeps them visually distinct from regular code and avoids ambiguity with the offside rule.
+
+```
+#if flag_name
+#else if other_flag
+#else
+#end
+```
+
+### Flags
+
+Flags are simple names — either set or not set. There are no valued flags. Two categories:
+
+**Built-in target flags** — automatically set by the compiler based on the build target:
+
+| Flag | Set when |
+|------|----------|
+| `target_hosted` | Building for hosted target (default) |
+| `target_embedded` | Building for embedded target with allocator |
+| `target_bare_metal` | Building for bare-metal target |
+
+**User-defined flags** — passed on the command line:
+
+```
+fc build --flag debug main.fc
+fc build --flag feature_x --flag debug main.fc
+```
+
+### Usage
+
+`#if` works at both top-level scope and inside expression blocks. Inactive branches are parsed and syntax-checked but not type-checked — structural errors in inactive branches are caught, but type errors are not.
+
+Top-level usage — conditionally including declarations, imports, and definitions:
+
+```fc
+#if target_hosted
+import libc
+#end
+
+#if debug
+let log = (msg: str) -> libc.printf(msg.ptr)
+#else
+let log = (msg: str) -> return
+#end
+```
+
+Expression-level usage — conditionally including statements inside a function body:
+
+```fc
+let process = (data: uint8[]) ->
+#if debug
+    libc.printf(c"processing\n")
+#end
+    do_work(data)    // still in function body — same indentation level as the #if block contents
+```
+
+Chaining with `#else if`:
+
+```fc
+#if target_hosted
+let platform = "hosted"
+#else if target_embedded
+let platform = "embedded"
+#else
+let platform = "bare-metal"
+#end
+```
+
+### Rules
+
+- Directives must always be at column 0 — a directive at any other column is a compile error.
+- `#if` and `#end` must be matched. An unclosed `#if` is a compile error.
+- `#else` and `#else if` must appear between a matching `#if` and `#end`.
+- Nesting is allowed — `#if` blocks may contain other `#if` blocks.
+- Inactive branches are syntax-checked but not type-checked.
+
+---
+
+## Build Targets
+
+FC is designed to support multiple deployment targets beyond standard hosted environments. The build target determines what runtime facilities are available to the program, and automatically sets the corresponding built-in conditional compilation flag (see §Conditional Compilation).
+
+**Hosted** (default) — the standard target for desktop, server, and general-purpose programs. Full libc is available. `alloc` and `free` work automatically. `import libc` exposes the full C standard library. `alloc` uses `calloc`, guaranteeing zero-initialized heap memory. Sets the `target_hosted` flag.
+
+```
+fc build src/
+fc build src/*.fc vendor/acme/*.fc
+```
+
+**Embedded with allocator** — targets like Arduino Uno and ESP32 where `malloc` and `free` are available but the rest of libc is absent or limited. `alloc` and `free` still work. `import libc` only exposes functions available on the target — the compiler warns if unavailable functions are used. Where `calloc` is available, `alloc` uses it directly. Where it is not, the compiler emits `malloc` + `memset` to achieve the same zero-initialization guarantee. On these targets heap allocations are typically small and infrequent, so the `memset` overhead is negligible. Sets the `target_embedded` flag.
+
+```
+fc build --target arduino-uno src/*.fc
+fc build --target esp32 src/*.fc
+```
+
+**Bare metal / no allocator** — targets like ATtiny or custom hardware where no heap allocator is available and memory is severely constrained. `alloc` and `free` are unavailable — using them is a compile error. Programs must be entirely stack-based. Stack allocation is always zero-initialized via C declaration syntax, which works identically on all targets and requires no runtime support. This is analogous to Rust's `no_std` mode. Sets the `target_bare_metal` flag.
+
+```
+fc build --target bare-metal src/*.fc
+```
+
+Target definitions specify the available libc subset, pointer width, endianness, and other platform characteristics. The compiler uses this to enforce correct usage at compile time rather than producing code that fails silently at runtime.
+
+# PART 7 — C Interop
+
+## C Interop
+
+C library bindings are declared using `extern` inside a module that names the C library source. The programmer is responsible for correct type mapping.
+
+> **Note on `from` in module declarations**
+> The `from "..."` in `module libc from "libc.so"` is distinct from the `from` used in import statements. Here `from` binds the module to a C library source — a string literal naming the shared library or object file. It is only valid in module declarations containing `extern` bindings. It has nothing to do with namespace-qualified imports.
+
+```fc
+module libc from "libc.so" =
+    extern printf:  (cstr, ...) -> int32
+    extern free as c_free: (any*) -> void
+    extern malloc:  (uint64) -> any*?        // uint64 used for size_t — see below
+    extern memcpy:  (uint8*, uint8*, uint64) -> void
+    extern strlen:  (cstr) -> uint64         // uint64 used for size_t — see below
+    extern fopen:   (cstr, cstr) -> any*?
+```
+
+> **Note on the libc module**
+> The declarations above are illustrative. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. `memcpy` uses `uint8*` for its buffer parameters because those genuinely point to byte data, not opaque handles. The `uint64` parameters for `malloc`, `memcpy`, and `strlen` stand in for C's `size_t` — the compiler emits casts at these boundaries as described in §Slices & Strings. In practice, common libc bindings ship with the FC compiler as pre-written `extern` declarations and most programs only need to `import libc`.
+
+### Reserved identifiers and `extern as`
+
+FC reserves `alloc`, `free`, `sizeof`, and `default` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.
+
+The `extern as` form resolves this by binding the C function under a different name in the FC module:
+
+```fc
+module libc from "libc.so" =
+    extern free as c_free: (any*) -> void   // C's free, available as libc.c_free
+```
+
+The string after `as` becomes the FC-visible name. The original C symbol name is used in the generated C output. This follows the same `as` aliasing convention already used in import statements.
+
+In practice, `extern free as c_free` is essentially never needed. FC's built-in `free` operator emits C's `free()` in the generated output and works on any heap pointer regardless of whether it was allocated via FC's `alloc` or `libc.malloc` — at the C level it is the same allocator. If a C API requires `free` as a function pointer value, a wrapper lambda suffices:
+
+```fc
+let mut free_fn = (ptr: any*) -> free(ptr)   // (any*) -> void — addressable, passable
+```
+
+The `extern as` form is shown here for completeness and is more relevant when a C library has a function named `alloc`, `sizeof`, or `default`.
+
+### Variadic C functions
+
+Some C functions accept a variable number of arguments — `printf`, `sprintf`, `fprintf` being the most common. FC has no variadic functions and cannot define them: the directional inference model requires every parameter to have a declared type, which variadics by definition cannot provide.
+
+For C interop, variadic C functions are declared using `...` as a terminal parameter:
+
+```fc
+module libc from "libc.so" =
+    extern printf:  (cstr, ...) -> int32
+    extern sprintf: (cstr, cstr, ...) -> int32
+    extern fprintf: (any*, cstr, ...) -> int32
+```
+
+At a call site, arguments beyond the declared typed parameters are passed through without type-checking — the same trust-the-programmer stance FC takes on all C interop sharp edges:
+
+```fc
+libc.printf(c"value: %d\n", x)
+libc.printf(c"%s has %d items\n", name.ptr, count)
+```
+
+FC-defined functions cannot use `...`. If a programmer needs a variable number of arguments in FC code, the idiomatic approach is a slice parameter:
+
+```fc
+let log = (parts: str[]) ->
+    for p in parts
+        libc.printf(c"%.*s", p.len, p.ptr)
+    libc.printf(c"\n")
+
+log(str[2] { "value is: ", int_to_str(x) })
+```
+
+This is fully type-safe and consistent with the inference model.
+
+### Null return values from C
+
+C functions that can return null must be declared with a `?` return type. This keeps null out of FC's type system — the programmer is forced to handle the absent case explicitly before using the value:
+
+```fc
+let buf = libc.malloc(1024)    // type is any*?
+let ptr = buf!                 // unwrap — crash on null
+// or
+match buf with
+| none     -> handle_failure()
+| some(p)  -> use(p)
+```
+
+The programmer is responsible for correctly declaring which C functions can return null. Getting this wrong (declaring a nullable return as non-nullable) is the same class of bug as in C itself.
+
+For C functions that signal failure via a sentinel integer value (such as `-1`), declare the return type as a plain integer and check the sentinel directly — do not use `?`:
+
+```fc
+module libc from "libc.so" =
+    extern open: (cstr, int32) -> int32    // returns -1 on failure, not null
+
+let fd = libc.open(c"file.txt", 0)
+if fd == -1 then handle_error()
+```
+
+### Null arguments to C
+
+If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `T.none` or `some(ptr)` at the call site:
+
+```fc
+module libc from "libc.so" =
+    extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
+    // thread function: (any*) -> any*? — receives and returns the user-data pointer
+```
+
+### Passing FC values to C
+
+Higher-level FC types must be explicitly lowered at C call sites:
+
+- `str` — pass `s.ptr` to get a `cstr`. Programmer is responsible for ensuring null termination.
+- `cstr` — pass directly. Use `c"..."` literals for constant strings.
+- `T?` — unwrap with `x!` or `match` before passing
+- Structs — memory-compatible with C structs if declared in the same field order
+
+### Mapping C enums
+
+C enums are integer constants. In pure FC, use union types for sum types. When interoperating with a C API that uses an enum, model it as a module of `int32` constants and declare the extern function with an `int32` parameter:
+
+```fc
+module af =                    // address family constants (from sys/socket.h)
+    let inet  = 2
+    let inet6 = 10
+
+module sock =                  // socket type constants
+    let stream = 1
+    let dgram  = 2
+    let raw    = 3
+
+module libc from "libc.so" =
+    extern socket: (int32, int32, int32) -> int32    // returns fd or -1
+
+let fd = libc.socket(af.inet, sock.stream, 0)
+if fd == -1 then handle_error()
+```
+
+For bit flag enums, the same pattern applies and values combine naturally with bitwise operators:
+
+```fc
+module file_mode =
+    let read  = 1
+    let write = 2
+    let exec  = 4
+
+let mode = file_mode.read | file_mode.write
+```
+
+### `any*` — opaque pointers
+
+`any*` is FC's opaque pointer type — a raw address with no associated element type. It maps directly to C's `void*` in generated code. Unlike C's `void*`, the name is unambiguous: `void` already has a specific meaning in FC (the non-instantiable return type), so reusing it for an unrelated pointer concept would be confusing. `any*` says what it means.
+
+`any*` cannot be dereferenced — the compiler has no type information to read through it. It can only be stored, passed, returned, and cast to a typed pointer when the programmer knows the concrete type.
+
+**C interop — opaque handles**
+
+Many C libraries use opaque pointer types — `FILE*`, `sqlite3*`, `pthread_t*` — where the internal struct is hidden. FC code never constructs or inspects these; it receives them from C and passes them back. `any*` is the correct type for all such handles:
+
+```fc
+module sqlite from "libsqlite3.so" =
+    extern sqlite3_open:  (cstr, any*?) -> int32
+    extern sqlite3_exec:  (any*, cstr, (any*, int32, any*, any*) -> int32, any*?, any*?) -> int32
+    extern sqlite3_close: (any*) -> int32
+
+module libc from "libc.so" =
+    extern fopen:  (cstr, cstr) -> any*?
+    extern fclose: (any*) -> int32
+    extern fread:  (uint8*, uint64, uint64, any*) -> uint64
+    extern fwrite: (uint8*, uint64, uint64, any*) -> uint64
+    extern malloc: (uint64) -> any*?
+    extern free:   (any*) -> void
+```
+
+Note that `fread` and `fwrite` take a `uint8*` for their data buffer — a real byte array — and `any*` for the `FILE*` handle. These are genuinely different things and are typed accordingly.
+
+The programmer is responsible for passing handles to the correct functions — FC's type system does not distinguish a `sqlite3*` from a `FILE*` at the `any*` level. This is an acceptable tradeoff for a narrow interop case.
+
+**C interop — function pointer parameters**
+
+When a function type appears as a parameter in an `extern` declaration, the compiler maps it to a C function pointer at the boundary. The programmer passes a non-capturing lambda directly — no `&` required:
+
+```fc
+module libc from "libc.so" =
+    extern qsort: (any*, uint64, uint64, (any*, any*) -> int32) -> void
+
+// pass a non-capturing lambda directly — compiler handles C function pointer mapping
+libc.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
+    *(int32*) a - *(int32*) b)
+```
+
+Passing a capturing lambda to a C function pointer parameter is a compile error — the fat-pointer representation cannot be expressed as a plain C function pointer.
+
+**C interop — FFI callbacks with user-data**
+
+C APIs commonly pass a `void*` user_data alongside a function pointer so the callback can recover its context. Declare the callback parameter as an FC function type and the user-data as `any*`:
+
+```fc
+module libc from "libc.so" =
+    extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
+
+let my_cb = (data: any*) ->
+    let s = (my_state*) data
+    // use s->...
+    any*.none
+
+let mut state = my_state { ... }
+pthread_create(any*.none, any*.none, my_cb, some((any*) &state))
+```
+
+`my_cb` is non-capturing so it passes cleanly to `pthread_create`. The `any*` user-data is cast to the concrete type inside the callback.
+
+**`any*` vs `void*` in C — a note on naming**
+
+C uses `void` to mean two unrelated things: the absence of a return value (`void` as a return type) and the absence of a pointer's element type (`void*`). The only unifying thread is "absence of type information" — a stretch that has confused C programmers for decades. Rust faced the same problem and solved it by introducing `c_void` as a separate FFI-specific type, explicitly noting in its documentation that `c_void` is unrelated to Rust's unit type `()`.
+
+FC avoids the problem entirely: `void` means what it always means, and `any*` is its own named concept.
+
+**Where `any*` is not needed in FC**
+
+In C, `void*` is frequently used for patterns that FC handles at the language level. FC programmers should reach for these before `any*`:
+
+- **Heterogeneous collections** — in C, a `void*[]` holds mixed types. In FC, use a tagged union: `union shape = | circle(circle) | rect(rect)`. The type system tracks what's in each slot; no unsafe cast required.
+- **Generic algorithms** — in C, `qsort` takes `void*` because it cannot be parameterized by element type. In FC, generic functions handle this directly: `let sort = (arr: 'a[], cmp: ('a, 'a) -> int32) -> ...`.
+- **Stateful callbacks** — in C, a `void*` user_data accompanies every callback to carry context. In FC, closures capture their environment as a fat pointer internally — no manual user_data threading needed.
+
+`any*` exists for C interop and for the rare low-level cases (memory-mapped registers, custom allocators) that genuinely have no type at the FC level. In pure FC code, reaching for `any*` is a signal to consider whether a generic type or union would be more appropriate.
+
+---
+
+### Converting between str and cstr
+
+`str` to `cstr` — use `.ptr`. Programmer is responsible for null termination:
+
+```fc
+let cs = s.ptr    // type: cstr — only safe if s is null-terminated
+```
+
+`cstr` to `str` — construct a slice from the raw pointer and length:
+
+```fc
+let s = str { ptr = cs, len = libc.strlen(cs) }
+```
+
+The resulting `str` shares memory with the original C string — no allocation occurs. The programmer is responsible for ensuring the C string remains live for the lifetime of the FC slice.
+
+# PART 8 — Generics
+
+## Overview
+
+FC supports parametric polymorphism through type variables. A type variable is a placeholder for any concrete type — the compiler produces a separate concrete instantiation for each unique combination of types a generic function or type is used with. This is **monomorphization**: there is no runtime type information, no boxing, and no dispatch overhead. Every generic use site compiles down to code that is identical in structure to what you would have written by hand for that specific type.
+
+This is the same model as C++ templates, but specified at the language level rather than as a text-substitution mechanism. The compiler resolves all type variables before emitting any C output — the generated C contains only concrete, fully-typed code.
+
+---
+
+## Type Variables
+
+A type variable is written as an apostrophe followed by a name: `'a`, `'b`, `'elem`, `'Key`, `'Val`. The apostrophe is a dedicated sigil — concrete type names never begin with `'`, so there is no ambiguity.
+
+Type variables are **implicit** — they are never declared separately. Any `'a` appearing in a function signature, struct body, or union body is automatically treated as a type variable. Multiple occurrences of the same name within the same scope refer to the same type variable and constrain the types at those positions to be identical.
+
+---
+
+## Generic Functions
+
+A function is generic if one or more type variables appear in its parameter or return types. The type variables are resolved at each call site by the compiler — no explicit instantiation syntax is required.
+
+```fc
+let identity = (x: 'a) -> x
+
+let fst = (a: 'a, b: 'b) -> a
+
+let map = (s: 'a[], f: ('a) -> 'b) ->
+    let mut result = alloc('b[s.len])!
+    let mut i = 0
+    loop
+        if i >= s.len then break result
+        result[i] = f(s[i])
+        i = i + 1
+
+let swap = (p: pair<'a, 'b>) ->
+    pair { first = p.second, second = p.first }
+```
+
+When the same type variable appears more than once, the compiler unifies the types at those positions:
+
+```fc
+let eq_first = (a: 'a, b: 'a) -> a == b    // both arguments must be the same type
+```
+
+`==` is valid here without any constraint because FC defines structural equality for all types (see §Structural Equality). This is one of the benefits of FC's universal equality model — unconstrained type variables can always use `==` and `!=`.
+
+Return types are always inferred — if the body expression resolves to a concrete type, that becomes the return type after type variable substitution.
+
+### Implicit and explicit type arguments
+
+In the normal case, type variables are resolved entirely from the function's arguments — no explicit type annotation is needed at the call site:
+
+```fc
+let x = identity(42)                          // 'a = int32, inferred from argument
+let z = map(points, (p: point) -> p.x)        // 'a = point, 'b = float64, inferred
+```
+
+However, some functions introduce type variables that do not appear in any parameter. The most common case is a constructor or factory function where the element type is not given by any argument:
+
+```fc
+// 'a cannot be inferred from any argument — it only appears in the return type
+let make = <'a>() ->
+    list { data = alloc('a[4])!, len = 0 }
+```
+
+The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
+
+```fc
+let mut nums = list.make<int32>()
+let mut strs = list.make<str>()
+```
+
+Multiple explicit type variables are separated by commas:
+
+```fc
+let make_pair = <'a, 'b>() ->
+    pair { first = default('a), second = default('b) }
+
+let p = make_pair<int32, str>()
+```
+
+**The rule:** a type variable belongs in `<>` if and only if it does not appear in any parameter type. If a type variable appears in a parameter, it is always inferred from the argument — declaring it in `<>` as well is a compile error:
+
+```fc
+// compile error — 'a appears in a parameter, cannot also be declared explicit
+let bad = <'a>(x: 'a) -> x
+```
+
+This keeps the explicit syntax minimal — it only appears when genuinely necessary, and a `<>` declaration is a clear signal to the reader that the type cannot be derived from the arguments.
+
+**Inside a generic function body**, a `<>` type variable may be satisfied by a type variable already in scope from the enclosing function's own parameters — no explicit `<type>` annotation is needed at internal call sites:
+
+```fc
+let map = (l: list<'a>, f: ('a) -> 'b) ->
+    let mut result = list.make<'b>()    // 'b is in scope — explicit but no concrete type needed
+    for x in l.data[..l.len]
+        list.add(&result, f(x))
+    result
+```
+
+The explicit `<type>` syntax is only required when calling from a non-generic context where no type variable is in scope.
+
+**Passing generic functions as arguments** — `<type>` syntax is only valid in call position, never as a standalone expression. A generic function cannot be passed as a value directly — it has no single concrete type until instantiated. The idiomatic pattern is a wrapper lambda that instantiates at the required type:
+
+```fc
+let factory = <'a>() -> default('a)
+
+// wrapper lambda instantiates factory at a specific type
+let str_factory = () -> factory<str>()
+
+let l = list.repeat<str>(5, str_factory)
+
+// or inline
+let l = list.repeat<str>(5, () -> factory<str>())
+```
+
+The wrapper is a plain concrete `() -> str` — no new language mechanism required. This covers all practical factory and callback patterns without rank-2 polymorphism.
+
+**Rank-2 polymorphism is not supported** — a function parameter typed as "a generic function that works for any type" (e.g. `f: <'a>() -> 'a`) would require the callee to invoke `f` at multiple different types, which implies runtime type information or a constraint system. FC has neither, and this pattern is explicitly out of scope. The wrapper lambda approach covers all realistic cases without it.
+
+**Parsing** — `name<type>()` is always parsed as a generic call, never as a comparison expression. This is unambiguous in FC because type names (`int32`, `str`, `point`, `'a`) are syntactically distinct from value expressions in all positions where they may appear. No disambiguation sigil (such as Rust's `::<>` turbofish) is required.
+
+---
+
+## Generic Structs and Unions
+
+Structs and unions become generic by using type variables in their field or variant definitions. The type parameters are inferred from the body — no explicit parameter list is required on the type name.
+
+```fc
+struct pair =
+    first:  'a
+    second: 'b
+
+struct box =
+    value: 'a
+
+union result =
+    | ok('a)
+    | err('b)
+```
+
+The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. When used in type positions or constructed, the type arguments are supplied by context:
+
+```fc
+let p = pair { first = 42, second = "hello" }    // pair<int32, str>
+let b = box { value = 3.14 }                     // box<float64>
+let r = result.ok(42)                            // result<int32, 'b> — 'b unconstrained until used
+```
+
+Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
+
+```fc
+let map_fst = (p: pair<'a, 'b>, f: ('a) -> 'c) ->
+    pair { first = f(p.first), second = p.second }
+```
+
+### Type-associated modules on generic types
+
+A module sharing a generic type's name works the same as for concrete types. Type variables in scope within the type definition are available within the associated module:
+
+```fc
+struct box =
+    value: 'a
+
+module box =
+    let wrap = (x: 'a) -> box { value = x }
+    let unwrap = (b: box<'a>) -> b.value
+    let map = (b: box<'a>, f: ('a) -> 'b) -> box { value = f(b.value) }
+```
+
+Static type properties such as `.none`, `default(T)`, `sizeof(T)`, and module member access follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
+
+```fc
+let make_default = (x: 'a) -> default('a)     // ok — checked at call site
+let size_of_val  = (x: 'a) -> sizeof('a)       // ok — checked at call site
+let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type has .min
+```
+
+A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
+
+Static property access extends naturally to parameterized type expressions — `node<'b>.none` is valid because `node<'b>` is a type and `.none` is a universal property on all types. No special syntax rule is needed; the parser treats `T<args>` as a type expression and `.property` as property access on that type. This is the same form used in expressions like `list.make<int32>()` — the `<args>` resolves the type, and the `.` navigates into the associated module or property.
+
+---
+
+## option
+
+`option` is a built-in generic union:
+
+```fc
+union option =
+    | none
+    | some('a)
+```
+
+`none` is declared first so that zero-initialized memory is always a valid `none` — consistent with the union default value rules (see §Default Values). `'a?` is syntactic sugar for `option<'a>` — the two are interchangeable in all type positions. The existing `.none` and `some(x)` construction syntax, pattern matching, and `!` unwrapping all apply unchanged.
+
+The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
+
+---
+
+## Monomorphization
+
+For each unique combination of concrete types a generic function or type is used with, the compiler produces a distinct concrete instantiation. This happens entirely before C code is emitted — the generated C contains no type variables, no generic machinery, and no runtime type information.
+
+```fc
+let x = identity(42)        // produces: identity instantiated at int32
+let y = identity(3.14)      // produces: identity instantiated at float64
+let z = identity("hello")   // produces: identity instantiated at str
+
+let p1 = pair { first = 1,     second = true  }   // produces: pair<int32, bool>
+let p2 = pair { first = "hi",  second = 3.14  }   // produces: pair<str, float64>
+```
+
+Each instantiation becomes a distinct C type or function. The compiler derives C names from the generic name and the concrete type arguments — for example, `pair<int32, bool>` might emit as `pair_int32_bool` and `identity` at `int32` as `identity_int32`. The exact naming scheme is a compiler implementation detail; what matters is that names are unique, derived deterministically from the types, and human-readable enough to be identifiable in debugger output and compiler errors.
+
+Two uses of the same generic at the same concrete types share a single instantiation — the compiler deduplicates across the entire build.
+
+> **Transpilation**
+> A generic struct transpiles to a C struct per instantiation:
+> ```c
+> typedef struct { int32_t first; bool second; } pair_int32_bool;
+> typedef struct { fc_slice_uint8 first; double second; } pair_str_float64;
+> ```
+> A generic function transpiles to a C function per unique call signature:
+> ```c
+> int32_t identity_int32(int32_t x) { return x; }
+> double  identity_float64(double x) { return x; }
+> ```
+> `option<'a>` follows the existing option transpilation rules per instantiation — pointer types use the null-sentinel form, all others use the tagged struct form.
+
+### Errors at monomorphization
+
+FC has no constraint system in this version. Type variables are unconstrained — any concrete type may be substituted. If a generic function uses an operation that the concrete type does not support, the compiler reports an error at the **call site** where the unsupported instantiation was requested, identifying the type variable substitution that caused the problem. Errors are not reported inside the generic definition itself.
+
+This means generic functions work naturally across numeric types without any annotation:
+
+```fc
+let add = (a: 'a, b: 'a) -> a + b
+
+add(1, 2)           // ok — int32 supports +
+add(1.0, 2.0)       // ok — float64 supports +
+add("x", "y")       // compile error at this call site — str does not support +
+```
+
+The error message identifies the call site and the substitution: something like "when calling `add` with `'a = str`, operator `+` is not defined for `str`." This makes it straightforward to diagnose in practice, even without a formal constraint declaration in the source.
+
+---
+
+# Appendix
+
+## Full Examples
+
+### Linked List
+
+Demonstrates generics, structs, pointers, options, recursion, higher-order functions, and manual memory management. Note that the cleanup function is named `drop` rather than `free` — `free` is a reserved identifier in FC.
+
+```fc
+struct node =
+    value: 'a
+    next:  node<'a>*?
+
+module node =
+    let make = (value: 'a) ->
+        alloc(node { value = value })!
+
+    let prepend = (head: node<'a>*?, value: 'a) ->
+        let n = node.make(value)
+        n->next = head
+        n
+
+    let map = (head: node<'a>*?, f: ('a) -> 'b) ->
+        match head with
+        | none      -> node<'b>.none
+        | some(ptr) ->
+            let n = node.make(f(ptr->value))
+            n->next = node.map(ptr->next, f)
+            some(n)
+
+    let drop = (head: node<'a>*?) ->
+        let mut current = head
+        loop
+            match current with
+            | none      -> break
+            | some(ptr) ->
+                let next = ptr->next
+                free(ptr)
+                current = next
+
+let main = () ->
+    let list = some(node.prepend(some(node.prepend(node.none, 1)), 2))
+    let doubled = node.map(list, (x: int32) -> x * 2)
+    node.drop(list)
+    node.drop(doubled)
+    0
+```
+
+### String Search
+
+Demonstrates slice operations, loops, and early return.
+
+```fc
+import libc
+
+let find_substring = (haystack: str, needle: str) ->
+    if needle.len > haystack.len then return str.none
+    let mut i = 0
+    loop
+        // safe: needle.len <= haystack.len guaranteed by early return above
+        if i > haystack.len - needle.len then break str.none
+        let candidate = haystack[i .. i + needle.len]
+        if candidate == needle then break some(candidate)
+        i = i + 1
+
+let main = () ->
+    let haystack = "the quick brown fox"
+    let needle = "brown"
+    match find_substring(haystack, needle) with
+    | some(_) -> libc.printf(c"found\n")
+    | none    -> libc.printf(c"not found\n")
+    0
+```
+
+---
+
+### Resizable List
+
+Demonstrates generics, type-associated modules, heap growth, and idiomatic functional operations over a generic container. `data.len` is the allocated capacity; `len` is the number of live elements.
+
+```fc
+struct list =
+    data: 'a[]
+    len:  uint64
+
+module list =
+
+    private let grow = (l: list<'a>*) ->
+        let new_cap = l->data.len * 2
+        let mut new_data = alloc('a[new_cap])!
+        for i in 0..l->len
+            new_data[i] = l->data[i]
+        free(l->data)
+        l->data = new_data
+
+    let make = <'a>() ->
+        list { data = alloc('a[4])!, len = 0 }
+
+    let drop = (l: list<'a>) ->
+        free(l.data)
+
+    let add = (l: list<'a>*, value: 'a) ->
+        if l->len == l->data.len then list.grow(l)
+        l->data[l->len] = value
+        l->len = l->len + 1
+
+    let insert = (l: list<'a>*, index: uint64, value: 'a) ->
+        if l->len == l->data.len then list.grow(l)
+        let mut i = l->len
+        loop
+            if i <= index then break
+            l->data[i] = l->data[i - 1]
+            i = i - 1
+        l->data[index] = value
+        l->len = l->len + 1
+
+    let get = (l: list<'a>, index: uint64) ->
+        l.data[..l.len][index]
+
+    let update = (l: list<'a>*, index: uint64, value: 'a) ->
+        l->data[..l->len][index] = value
+
+    let iter = (l: list<'a>, f: ('a) -> void) ->
+        for x in l.data[..l.len]
+            f(x)
+
+    let map = (l: list<'a>, f: ('a) -> 'b) ->
+        let mut result = list.make<'b>()
+        for x in l.data[..l.len]
+            list.add(&result, f(x))
+        result
+
+    let filter = (l: list<'a>, pred: ('a) -> bool) ->
+        let mut result = list.make<'a>()
+        for x in l.data[..l.len]
+            if pred(x) then list.add(&result, x)
+        result
+
+    let fold = (l: list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+        let mut acc = init
+        for x in l.data[..l.len]
+            acc = f(acc, x)
+        acc
+
+    let reduce = (l: list<'a>, f: ('a, 'a) -> 'a) ->
+        if l.len == 0 then 'a.none
+        else
+            let mut acc = l.data[0]
+            for x in l.data[1..l.len]
+                acc = f(acc, x)
+            some(acc)
+
+    let scan = (l: list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+        let mut result = list.make<'b>()
+        list.add(&result, init)
+        let mut acc = init
+        for x in l.data[..l.len]
+            acc = f(acc, x)
+            list.add(&result, acc)
+        result
+
+    let try_find = (l: list<'a>, pred: ('a) -> bool) ->
+        let mut i = 0
+        loop
+            if i >= l.len then break 'a.none
+            if pred(l.data[i]) then break some(l.data[i])
+            i = i + 1
+
+    let find = (l: list<'a>, pred: ('a) -> bool) ->
+        list.try_find(l, pred)!
+
+let main = () ->
+    let mut nums = list.make<int32>()
+    list.add(&nums, 1)
+    list.add(&nums, 2)
+    list.add(&nums, 3)
+    list.add(&nums, 4)
+    list.add(&nums, 5)
+    list.insert(&nums, 2, 99)
+    // nums = [1, 2, 99, 3, 4, 5]
+    list.update(&nums, 0, 10)
+    // nums = [10, 2, 99, 3, 4, 5]
+
+    let doubled     = list.map(nums, (x: int32) -> x * 2)
+    let evens       = list.filter(nums, (x: int32) -> x % 2 == 0)
+    let sum         = list.fold(nums, 0, (acc: int32, x: int32) -> acc + x)
+    let product     = list.reduce(nums, (a: int32, b: int32) -> a * b)
+    let running_sum = list.scan(nums, 0, (acc: int32, x: int32) -> acc + x)
+    let first_big   = list.try_find(nums, (x: int32) -> x > 10)   // some(99)
+    let big         = list.find(nums, (x: int32) -> x > 10)       // 99
+
+    list.drop(nums)
+    list.drop(doubled)
+    list.drop(evens)
+    list.drop(running_sum)
+    0
+```
+
+---
+
+
+
+### Namespaces & Imports
+
+A vendor geometry library used by a 2D simulation. Demonstrates namespace declarations, same-namespace imports within a vendor library, cross-namespace imports in application code, type-associated modules, and a multi-file build.
+
+**`vendor/geom/vec.fc`** — defines `vec2` with a type-associated module, exported via `module vectors`:
+
+```fc
+namespace geom::
+
+module vectors =
+    struct vec2 =
+        x: float64
+        y: float64
+
+    module vec2 =
+        let zero     = vec2 { }
+        let unit_x   = vec2 { x = 1.0 }
+        let unit_y   = vec2 { y = 1.0 }
+
+        let add = (a: vec2, b: vec2) ->
+            vec2 { x = a.x + b.x, y = a.y + b.y }
+
+        let scale = (v: vec2, s: float64) ->
+            vec2 { x = v.x * s, y = v.y * s }
+
+        let dot = (a: vec2, b: vec2) ->
+            a.x * b.x + a.y * b.y
+```
+
+**`vendor/geom/shapes.fc`** — defines shape types; imports `vec2` from the same namespace without qualification:
+
+```fc
+namespace geom::
+
+import vec2 from vectors                // same namespace — vec2 type and module in scope
+
+module shapes =
+    struct rect_bounds =                // multi-field variant requires a named struct
+        min: vec2
+        max: vec2
+
+    union shape =
+        | circle(float64)               // radius
+        | rect(rect_bounds)             // min corner, max corner
+
+    module shape =
+        let area = (s: shape) ->
+            match s with
+            | circle(r) -> 3.14159 * r * r
+            | rect(b)   ->
+                let w = b.max.x - b.min.x
+                let h = b.max.y - b.min.y
+                w * h
+```
+
+**`src/world.fc`** — application module; imports from `geom::`:
+
+```fc
+import vec2 from geom::vectors          // cross-namespace — vec2 type and module in scope
+import shape from geom::shapes          // cross-namespace — shape type and module in scope
+
+module world =
+    struct body =
+        position: vec2
+        velocity: vec2
+        bounds:   shape
+
+    let step = (b: body, dt: float64) ->
+        let new_pos = vec2.add(b.position, vec2.scale(b.velocity, dt))
+        body { position = new_pos, velocity = b.velocity, bounds = b.bounds }
+```
+
+**`src/main.fc`** — entry point; imports `world` from the same namespace and the needed types from `geom::`:
+
+```fc
+import world                            // same namespace — global:: implicit
+import vec2 from geom::vectors          // needed to construct vec2 literals
+import shape from geom::shapes          // needed to construct shape variants
+
+let main = () ->
+    let mut b = world.body {
+        position = vec2 { x = 0.0, y = 0.0 },
+        velocity = vec2 { x = 1.0, y = 0.5 },
+        bounds   = shape.circle(1.0)
+    }
+    let mut i = 0
+    loop
+        if i >= 100 then break 0
+        b = world.step(b, 0.016)
+        i = i + 1
+```
+
+**Build:**
+
+```
+fc build src/*.fc vendor/geom/*.fc
+```
+
+The compiler's first pass collects all four files, registers `geom::` as a namespace containing `vectors` and `shapes`, and resolves all imports before type-checking. The two `global::` files see each other's modules without qualification; `src/world.fc` must use the full `from geom::vectors` and `from geom::shapes` forms to reach across the namespace boundary. `src/main.fc` does the same to bring `vec2` and `shape` into scope for constructing the `world.body` literal — importing `world` alone is not sufficient, since re-exporting imported names is not automatic.
+
+---
+
+## Road to Implementation
+
+This section outlines the major work items between this design specification and a working FC compiler. The items are roughly ordered by dependency — earlier items inform later ones.
+
+### Formal grammar
+
+A complete formal grammar (PEG or BNF) is the natural first step. The design spec describes syntax through prose and examples, which is sufficient for language design but insufficient for parser implementation. Writing the grammar will surface ambiguities and edge cases not yet visible in prose — particularly around the interaction between indentation-based layout, continuation lines, and expression-level constructs like `match` and `if`.
+
+Key areas that will need careful attention in the grammar:
+
+- The offside rule and how it interacts with multi-line expressions, match arms, and nested blocks
+- Disambiguation of overloaded tokens (`*`, `&`, `!`, `->`) across type and expression contexts
+- Negative literals in patterns vs. unary negation in expressions
+- `T<args>` in call position vs. comparison operators
+- The boundary between type expressions and value expressions
+
+### Lexer
+
+A whitespace-sensitive lexer that tracks column positions and emits synthetic indent/dedent tokens (or equivalent layout information). The lexer must handle nested block comments, all escape sequences, suffixed numeric literals with compile-time range checking, and the tab prohibition.
+
+### Two-pass compiler front end
+
+The spec describes a two-pass architecture: a first pass that collects top-level declarations (names, types, struct layouts, module structure) and a second pass that type-checks all expressions. This maps to a concrete implementation:
+
+- **Pass 1** — scan all files, build the global module map, resolve namespaces and imports, detect circular imports, collect struct/union layouts, and register function signatures (parameter types inferred from annotations, return types deferred).
+- **Pass 2** — type-check all expression bodies with the full environment available. Resolve type variables at generic call sites. Detect monomorphization errors. Enforce capture rules on closures.
+
+### Monomorphizer
+
+After type-checking, the monomorphizer walks every generic call site and produces concrete instantiations. This is a fixpoint process — a generic function may call another generic function, requiring transitive instantiation. The monomorphizer must detect and deduplicate identical instantiations across the build.
+
+### C code emitter
+
+The backend emits C11 source from the typed, monomorphized AST. Most of the transpilation patterns are already specified in this document — the emitter is largely a mechanical translation. Key areas requiring care:
+
+- Name mangling for monomorphized generics, module-qualified names, and collision avoidance
+- The cast-through-unsigned pattern for signed arithmetic
+- Shift amount masking
+- Fat pointer representation for closures and slices
+- Tagged union layout with C11 anonymous unions
+- Bounds check and division-by-zero guard insertion
+- Option type specialization (null-sentinel for pointer options, tagged struct for value options)
+- Conditional compilation directive handling
+
+### Runtime support
+
+FC has minimal runtime needs — no garbage collector, no scheduler, no standard library beyond what C provides. The compiler may need to emit a small set of support functions:
+
+- `abort()`-based trap functions for bounds check, unwrap, and division-by-zero failures
+- Generated equality functions for structs and unions where `==` is used
+- Platform-specific trap instructions for bare-metal targets
+
+### Test infrastructure
+
+A test suite covering the major areas of the spec: type inference edge cases, generic monomorphization, closure capture and lifetime rules, operator semantics (overflow wrapping, shift masking, implicit widening), bounds checking, pattern matching exhaustiveness, module visibility, and C interop. Each transpilation note in this spec is effectively a test case.
+
+
+
+</script>
+
+<script>
+hljs.registerLanguage('fc', function(hljs) {
+  return {
+    name: 'FC',
+    aliases: ['fc'],
+    disableAutodetect: true,
+    keywords: {},
+    contains: [
+      hljs.COMMENT('//', '$'),
+      { className: 'keyword', begin: '^#(if|else|end)\\b' },
+      { className: 'string', begin: 'c"', end: '"' },
+      hljs.QUOTE_STRING_MODE,
+      {
+        className: 'number',
+        variants: [
+          { begin: '\\b\\d+\\.\\d+(f32|f64)?\\b' },
+          { begin: '\\b\\d+(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64)?\\b' }
+        ],
+        relevance: 0
+      },
+      {
+        className: 'keyword',
+        begin: '\\b(let|mut|struct|union|module|namespace|import|from|as|extern|private|match|with|if|then|else|for|in|loop|break|continue|return|default|some|alloc|free|sizeof)\\b'
+      },
+      { className: 'literal', begin: '\\b(true|false|none|void)\\b' }
+    ]
+  };
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
+<div class="nav-overlay" id="nav-overlay"></div>
+<nav id="sidebar">
+  <div class="nav-title">
+    spec v0.4
+    <span>FC Language</span>
+  </div>
+  <div id="nav-links"></div>
+</nav>
+
+<main>
+  <div class="doc-header">
+    <div class="label">Language Specification</div>
+    <h1>FC</h1>
+    <div class="subtitle">Functional C — a systems language that compiles to C, combining manual memory management with functional syntax and a stronger type system.</div>
+    <div class="meta">
+      <div>version <span>0.4-draft</span></div>
+      <div>target <span>C11</span></div>
+      <div>extension <span>.fc</span></div>
+    </div>
+  </div>
+  <div id="content"></div>
+</main>
+
+</div>
+
+<script>
+  marked.setOptions({ breaks: false, gfm: true, smartypants: false, mangle: false, headerIds: false });
+
+  const md = document.getElementById('spec-markdown').textContent;
+  document.getElementById('content').innerHTML = marked.parse(md);
+
+  document.querySelectorAll('pre code').forEach(block => {
+    hljs.highlightElement(block);
+  });
+
+  function slugify(text) {
+    return text
+      .toLowerCase()
+      .replace(/[—–]/g, '-')
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+  }
+
+  const navContainer = document.getElementById('nav-links');
+  let h1c = 0, h2c = 0, h3c = 0, h4c = 0;
+
+  document.querySelectorAll('#content h1, #content h2, #content h3, #content h4').forEach(h => {
+    let numText;
+
+    if (h.tagName === 'H1') {
+      h1c++; h2c = 0; h3c = 0; h4c = 0;
+      numText = h1c + '.';
+    } else if (h.tagName === 'H2') {
+      h2c++; h3c = 0; h4c = 0;
+      numText = h1c + '.' + h2c;
+    } else if (h.tagName === 'H3') {
+      h3c++; h4c = 0;
+      numText = h1c + '.' + h2c + '.' + h3c;
+    } else if (h.tagName === 'H4') {
+      h4c++;
+      numText = h1c + '.' + h2c + '.' + h3c + '.' + h4c;
+    }
+
+    const numSlug = numText.replace(/\./g, '-').replace(/-$/, '');
+    const titleSlug = slugify(h.textContent);
+    const id = numSlug + '-' + titleSlug;
+    h.id = id;
+
+    const numSpan = document.createElement('span');
+    numSpan.className = 'sec-num';
+    numSpan.textContent = numText + ' ';
+    h.prepend(numSpan);
+
+    const a = document.createElement('a');
+    a.href = '#' + id;
+
+    const navNum = document.createElement('span');
+    navNum.className = 'nav-num';
+    navNum.textContent = numText + ' ';
+    a.appendChild(navNum);
+    a.appendChild(document.createTextNode(h.textContent.replace(numText + ' ', '')));
+
+    if (h.tagName === 'H1') a.classList.add('nav-part');
+    else if (h.tagName === 'H2') a.classList.add('nav-h2');
+    else if (h.tagName === 'H3') a.classList.add('nav-h3');
+    else if (h.tagName === 'H4') a.classList.add('nav-h4');
+
+    navContainer.appendChild(a);
+  });
+</script>
+
+<script>
+  const toggle = document.getElementById('nav-toggle');
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('nav-overlay');
+
+  function openNav() {
+    sidebar.classList.add('open');
+    overlay.classList.add('open');
+  }
+  function closeNav() {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('open');
+  }
+
+  toggle.addEventListener('click', () => {
+    sidebar.classList.contains('open') ? closeNav() : openNav();
+  });
+  overlay.addEventListener('click', closeNav);
+
+  // Close nav when a link is tapped on mobile
+  document.querySelectorAll('#nav-links a').forEach(a => {
+    a.addEventListener('click', () => {
+      if (window.innerWidth <= 768) closeNav();
+    });
+  });
+</script>
+</body>
+</html>
