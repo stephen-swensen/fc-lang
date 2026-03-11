@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is an early-stage compiler project for **FC** (version 0.4 draft), a systems programming language that transpiles to C11. Currently, the repository contains only the language specification (`spec/fc-spec.html`). No compiler code exists yet.
 
+## Git Workflow
+
+- **Never auto-commit** — only commit when explicitly asked
+- When asked to commit, look at `git diff` and `git log` to write an accurate message reflecting what changed since the last commit
+- Default branch is `main`; experimental work may happen in other branches — always check the current branch before acting
+- Working changes may be discarded and branches may be abandoned — follow the user's lead
+- No `Co-Authored-By` attribution in commit messages
+
 ## Language Overview
 
 FC is a C-targeting language with these core design constraints:
