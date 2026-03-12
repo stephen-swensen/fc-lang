@@ -1447,7 +1447,7 @@ Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. T
 >     void* ctx;
 > } fc_fn_A_R;
 > ```
-> Every function value of a given function type has the same size and layout, regardless of what it captures. This uniformity is what makes function values composable — a `list<() -> int32>` works correctly because every element is the same two-word struct.
+> Every function value of a given function type has the same size and layout, regardless of what it captures. This uniformity is what makes function values composable — an `arraylist<() -> int32>` works correctly because every element is the same two-word struct.
 >
 > **Capturing lambdas** — the compiler generates a context struct containing copies of the captured values and allocates it on the **stack frame of the function that creates the lambda**. For example, given this FC code:
 > ```fc
@@ -2682,14 +2682,14 @@ However, some functions introduce type variables that do not appear in any param
 ```fc
 // 'a cannot be inferred from any argument — it only appears in the return type
 let make = <'a>() ->
-    list { data = alloc('a[4])!, len = 0 }
+    arraylist { data = alloc('a[4])!, len = 0 }
 ```
 
 The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
 
 ```fc
-let mut nums = list.make<int32>()
-let mut strs = list.make<str>()
+let mut nums = arraylist.make<int32>()
+let mut strs = arraylist.make<str>()
 ```
 
 Multiple explicit type variables are separated by commas:
@@ -2713,10 +2713,10 @@ This keeps the explicit syntax minimal — it only appears when genuinely necess
 **Inside a generic function body**, a `<>` type variable may be satisfied by a type variable already in scope from the enclosing function's own parameters — no explicit `<type>` annotation is needed at internal call sites:
 
 ```fc
-let map = (l: list<'a>, f: ('a) -> 'b) ->
-    let mut result = list.make<'b>()    // 'b is in scope — explicit but no concrete type needed
+let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
+    let mut result = arraylist.make<'b>()    // 'b is in scope — explicit but no concrete type needed
     for x in l.data[..l.len]
-        list.add(&result, f(x))
+        arraylist.add(&result, f(x))
     result
 ```
 
@@ -2730,10 +2730,10 @@ let factory = <'a>() -> default('a)
 // wrapper lambda instantiates factory at a specific type
 let str_factory = () -> factory<str>()
 
-let l = list.repeat<str>(5, str_factory)
+let l = arraylist.repeat<str>(5, str_factory)
 
 // or inline
-let l = list.repeat<str>(5, () -> factory<str>())
+let l = arraylist.repeat<str>(5, () -> factory<str>())
 ```
 
 The wrapper is a plain concrete `() -> str` — no new language mechanism required. This covers all practical factory and callback patterns without rank-2 polymorphism.
@@ -2800,7 +2800,7 @@ let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type 
 
 A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
 
-Static property access extends naturally to parameterized type expressions — `node<'b>.none` is valid because `node<'b>` is a type and `.none` is a universal property on all types. No special syntax rule is needed; the parser treats `T<args>` as a type expression and `.property` as property access on that type. This is the same form used in expressions like `list.make<int32>()` — the `<args>` resolves the type, and the `.` navigates into the associated module or property.
+Static property access extends naturally to parameterized type expressions — `node<'b>.none` is valid because `node<'b>` is a type and `.none` is a universal property on all types. No special syntax rule is needed; the parser treats `T<args>` as a type expression and `.property` as property access on that type. This is the same form used in expressions like `arraylist.make<int32>()` — the `<args>` resolves the type, and the `.` navigates into the associated module or property.
 
 ---
 
@@ -2944,18 +2944,18 @@ let main = () ->
 
 ---
 
-### Resizable List
+### Resizable Array List
 
 Demonstrates generics, type-associated modules, heap growth, and idiomatic functional operations over a generic container. `data.len` is the allocated capacity; `len` is the number of live elements.
 
 ```fc
-struct list =
+struct arraylist =
     data: 'a[]
     len:  int64
 
-module list =
+module arraylist =
 
-    private let grow = (l: list<'a>*) ->
+    private let grow = (l: arraylist<'a>*) ->
         let new_cap = l->data.len * 2
         let mut new_data = alloc('a[new_cap])!
         for i in 0..l->len
@@ -2964,18 +2964,18 @@ module list =
         l->data = new_data
 
     let make = <'a>() ->
-        list { data = alloc('a[4])!, len = 0 }
+        arraylist { data = alloc('a[4])!, len = 0 }
 
-    let drop = (l: list<'a>) ->
+    let drop = (l: arraylist<'a>) ->
         free(l.data)
 
-    let add = (l: list<'a>*, value: 'a) ->
-        if l->len == l->data.len then list.grow(l)
+    let add = (l: arraylist<'a>*, value: 'a) ->
+        if l->len == l->data.len then arraylist.grow(l)
         l->data[l->len] = value
         l->len = l->len + 1
 
-    let insert = (l: list<'a>*, index: int64, value: 'a) ->
-        if l->len == l->data.len then list.grow(l)
+    let insert = (l: arraylist<'a>*, index: int64, value: 'a) ->
+        if l->len == l->data.len then arraylist.grow(l)
         let mut i = l->len
         loop
             if i <= index then break
@@ -2984,35 +2984,35 @@ module list =
         l->data[index] = value
         l->len = l->len + 1
 
-    let get = (l: list<'a>, index: int64) ->
+    let get = (l: arraylist<'a>, index: int64) ->
         l.data[..l.len][index]
 
-    let update = (l: list<'a>*, index: int64, value: 'a) ->
+    let update = (l: arraylist<'a>*, index: int64, value: 'a) ->
         l->data[..l->len][index] = value
 
-    let iter = (l: list<'a>, f: ('a) -> void) ->
+    let iter = (l: arraylist<'a>, f: ('a) -> void) ->
         for x in l.data[..l.len]
             f(x)
 
-    let map = (l: list<'a>, f: ('a) -> 'b) ->
-        let mut result = list.make<'b>()
+    let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
+        let mut result = arraylist.make<'b>()
         for x in l.data[..l.len]
-            list.add(&result, f(x))
+            arraylist.add(&result, f(x))
         result
 
-    let filter = (l: list<'a>, pred: ('a) -> bool) ->
-        let mut result = list.make<'a>()
+    let filter = (l: arraylist<'a>, pred: ('a) -> bool) ->
+        let mut result = arraylist.make<'a>()
         for x in l.data[..l.len]
-            if pred(x) then list.add(&result, x)
+            if pred(x) then arraylist.add(&result, x)
         result
 
-    let fold = (l: list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+    let fold = (l: arraylist<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
         let mut acc = init
         for x in l.data[..l.len]
             acc = f(acc, x)
         acc
 
-    let reduce = (l: list<'a>, f: ('a, 'a) -> 'a) ->
+    let reduce = (l: arraylist<'a>, f: ('a, 'a) -> 'a) ->
         if l.len == 0 then 'a.none
         else
             let mut acc = l.data[0]
@@ -3020,49 +3020,49 @@ module list =
                 acc = f(acc, x)
             some(acc)
 
-    let scan = (l: list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut result = list.make<'b>()
-        list.add(&result, init)
+    let scan = (l: arraylist<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+        let mut result = arraylist.make<'b>()
+        arraylist.add(&result, init)
         let mut acc = init
         for x in l.data[..l.len]
             acc = f(acc, x)
-            list.add(&result, acc)
+            arraylist.add(&result, acc)
         result
 
-    let try_find = (l: list<'a>, pred: ('a) -> bool) ->
+    let try_find = (l: arraylist<'a>, pred: ('a) -> bool) ->
         let mut i = 0
         loop
             if i >= l.len then break 'a.none
             if pred(l.data[i]) then break some(l.data[i])
             i = i + 1
 
-    let find = (l: list<'a>, pred: ('a) -> bool) ->
-        list.try_find(l, pred)!
+    let find = (l: arraylist<'a>, pred: ('a) -> bool) ->
+        arraylist.try_find(l, pred)!
 
 let main = () ->
-    let mut nums = list.make<int32>()
-    list.add(&nums, 1)
-    list.add(&nums, 2)
-    list.add(&nums, 3)
-    list.add(&nums, 4)
-    list.add(&nums, 5)
-    list.insert(&nums, 2, 99)
+    let mut nums = arraylist.make<int32>()
+    arraylist.add(&nums, 1)
+    arraylist.add(&nums, 2)
+    arraylist.add(&nums, 3)
+    arraylist.add(&nums, 4)
+    arraylist.add(&nums, 5)
+    arraylist.insert(&nums, 2, 99)
     // nums = [1, 2, 99, 3, 4, 5]
-    list.update(&nums, 0, 10)
+    arraylist.update(&nums, 0, 10)
     // nums = [10, 2, 99, 3, 4, 5]
 
-    let doubled     = list.map(nums, (x: int32) -> x * 2)
-    let evens       = list.filter(nums, (x: int32) -> x % 2 == 0)
-    let sum         = list.fold(nums, 0, (acc: int32, x: int32) -> acc + x)
-    let product     = list.reduce(nums, (a: int32, b: int32) -> a * b)
-    let running_sum = list.scan(nums, 0, (acc: int32, x: int32) -> acc + x)
-    let first_big   = list.try_find(nums, (x: int32) -> x > 10)   // some(99)
-    let big         = list.find(nums, (x: int32) -> x > 10)       // 99
+    let doubled     = arraylist.map(nums, (x: int32) -> x * 2)
+    let evens       = arraylist.filter(nums, (x: int32) -> x % 2 == 0)
+    let sum         = arraylist.fold(nums, 0, (acc: int32, x: int32) -> acc + x)
+    let product     = arraylist.reduce(nums, (a: int32, b: int32) -> a * b)
+    let running_sum = arraylist.scan(nums, 0, (acc: int32, x: int32) -> acc + x)
+    let first_big   = arraylist.try_find(nums, (x: int32) -> x > 10)   // some(99)
+    let big         = arraylist.find(nums, (x: int32) -> x > 10)       // 99
 
-    list.drop(nums)
-    list.drop(doubled)
-    list.drop(evens)
-    list.drop(running_sum)
+    arraylist.drop(nums)
+    arraylist.drop(doubled)
+    arraylist.drop(evens)
+    arraylist.drop(running_sum)
     0
 ```
 
