@@ -570,7 +570,7 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `default`
+`alloc`, `free`, `sizeof`, `default`, `print`, `eprint`, `fprint`, `sprint`
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
@@ -597,7 +597,7 @@ The following are **built-in type names** and may not be used as user-defined ty
 | bool | Boolean — true or false | bool (stdbool.h) |
 | char | Alias for `uint8`. Represents a single ASCII/UTF-8 byte. Supports character literal syntax. | uint8_t |
 | void | Non-instantiable type. Used by the compiler for type inference and control flow analysis. May appear in function type signatures (`() -> void`) but never as a value in expression positions — `void` cannot be assigned to a let binding or passed as an argument. | void |
-| any* | Opaque pointer — a raw address with no associated type. Cannot be dereferenced. Used for C interop and unsafe pointer casts. See §any* — opaque pointers. | void* |
+| any* | Opaque pointer — a raw address with no associated type. Cannot be dereferenced. Used for C interop — wrapping opaque C handles (file handles, database connections, etc.) and pointer casts. See §any* — opaque pointers. | void* |
 | str | Alias for `uint8[]`. An FC string — fat pointer with length. | — |
 | str32 | Alias for `uint32[]`. A unicode codepoint string. | — |
 | cstr | Alias for `uint8*`. A null-terminated C string pointer. Use for C interop only. | char* |
@@ -2108,7 +2108,210 @@ let p = alloc(point3d)!
 > **Transpilation**
 > `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d){ .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
 
-# PART 6 — Program Structure
+# PART 6 — I/O & Formatting
+
+## std::io — File I/O
+
+`std::io` is a standard library module written in regular FC. It provides file I/O operations using `any*` handles — file handles are not a special type in FC, they are opaque pointers like any other C resource (database connections, thread handles, etc.).
+
+```fc
+import io from std::
+```
+
+### Constants
+
+| Constant | Type | Description | C equivalent |
+|----------|------|-------------|--------------|
+| `io.stdout` | `any*` | Standard output stream | `(void*)stdout` |
+| `io.stderr` | `any*` | Standard error stream | `(void*)stderr` |
+
+### Operations
+
+```fc
+io.open(path: str, mode: str) -> any*?
+io.close(f: any*) -> void
+io.read(f: any*, buf: uint8[]) -> str
+io.write(f: any*, data: str) -> int64
+io.flush(f: any*) -> void
+```
+
+**`io.open`** — opens a file at the given path with the given mode. Returns `any*?` — `none` on failure. Mode strings follow C conventions: `"r"` (read), `"w"` (write/truncate), `"a"` (append), `"rb"` (read binary), etc. Both arguments accept `str` — the compiler ensures null-termination at the C boundary (see transpilation note below).
+
+Since `any*?` uses null-sentinel optimization (same as `T*?`), the option wrapper is zero-cost — `none` is just a null pointer.
+
+```fc
+import io from std::
+
+let f = io.open("data.txt", "r")
+match f with
+| none    -> eprint("failed to open file\n")
+| some(f) ->
+    // use f
+    io.close(f)
+```
+
+**`io.close`** — closes the file. Using a file handle after closing it is undefined behavior.
+
+**`io.read`** — reads up to `buf.len` bytes from the file into the provided buffer. Returns a `str` sub-slice of `buf` covering the bytes actually read. An empty slice (length 0) indicates end-of-file or error.
+
+```fc
+let mut buf = uint8[1024] { }
+let data = io.read(f, buf)
+if data.len == 0 then
+    eprint("EOF or error\n")
+```
+
+**`io.write`** — writes the contents of `data` to the file. Returns the number of bytes written as `int64`. A short write (return value less than `data.len`) indicates an error.
+
+```fc
+io.write(f, "hello world\n")
+```
+
+**`io.flush`** — flushes buffered output to the underlying file. Relevant for files opened in buffered mode. `stdout` is line-buffered by default; `stderr` is unbuffered.
+
+> **Transpilation**
+> All `io` handles are `any*` in FC and cast to/from `FILE*` at the C boundary.
+>
+> When a `str` argument must be passed to a C function that expects a null-terminated string, the compiler emits a stack copy with a null terminator appended. The copy is unconditional — reading past the slice boundary to check for an existing null byte would be unsafe (the memory may not be owned, and even if it is, another thread could mutate it). For functions like `io.open` the cost of a small `memcpy` is negligible next to the underlying syscall.
+>
+> This only applies to arguments that become C strings (`char*`) — namely the `path` and `mode` parameters to `io.open`. Data-oriented operations like `io.read` and `io.write` use length-based C functions (`fread`/`fwrite`) that take a pointer and a byte count directly, so `str` arguments pass through with no copy and no null-termination overhead, regardless of size.
+> ```c
+> // io.open(path, mode) — path and mode are str
+> // compiler emits null-terminated stack copies:
+> char _path_buf[/*path.len+1*/];
+> memcpy(_path_buf, path.ptr, path.len);
+> _path_buf[path.len] = '\0';
+> // (same pattern for mode)
+> void* f = (void*)fopen(_path_buf, _mode_buf);
+>
+> // io.read(f, buf) — reads into buf, returns sub-slice
+> size_t _n = fread(buf.ptr, 1, buf.len, (FILE*)f);
+> // result is (fc_slice_uint8){ .ptr = buf.ptr, .len = (int64_t)_n }
+>
+> // io.write(f, data)
+> size_t _n = fwrite(data.ptr, 1, data.len, (FILE*)f);
+>
+> // io.close(f)
+> fclose((FILE*)f);
+>
+> // io.flush(f)
+> fflush((FILE*)f);
+>
+> // io.stdout / io.stderr
+> void* io_stdout = (void*)stdout;
+> void* io_stderr = (void*)stderr;
+> ```
+
+> **Note on `print`/`eprint`**
+> The `print` and `eprint` operators write to stdout and stderr directly — they do not require importing `std::io`. They are reserved compiler operators, not `io` module functions.
+
+---
+
+## Formatted Output
+
+Four built-in operators provide type-safe formatted output using printf-style format strings. These are compile-time operators — like `alloc` and `sizeof`, they are resolved by the compiler, cannot be stored in bindings, and cannot be passed as arguments.
+
+| Operator | Destination | Returns |
+|----------|-------------|---------|
+| `print(fmt, args...)` | `stdout` | `void` |
+| `eprint(fmt, args...)` | `stderr` | `void` |
+| `fprint(f, fmt, args...)` | an `any*` file handle | `void` |
+| `sprint(buf, fmt, args...)` | caller-provided `uint8[]` buffer | `str` — sub-slice of bytes written |
+
+The format string `fmt` is a `str` value (not `cstr`). All standard printf format specifiers are supported — `%d`, `%x`, `%04d`, `%.2f`, `%s`, `%%`, and so on.
+
+```fc
+print("hello %s, you are %d years old\n", name, age)
+eprint("error: %s\n", msg)
+
+import io from std::
+let f = io.open("log.txt", "w")!
+fprint(f, "event %d: %s\n", id, description)
+io.close(f)
+
+let mut buf = uint8[256] { }
+let msg = sprint(buf, "x = %d, y = %d", x, y)
+```
+
+### Compile-time format checking
+
+The compiler parses the format string at compile time and validates each format specifier against the corresponding argument's type. A mismatch is a compile error:
+
+```fc
+let x = 42
+print("value: %s\n", x)    // compile error — %s expects str or cstr, got int32
+print("value: %d\n", x)    // ok
+```
+
+The compiler checks:
+
+| Specifier | Valid argument types |
+|-----------|-------------------|
+| `%d`, `%i` | all integer types |
+| `%u`, `%x`, `%X`, `%o` | all integer types |
+| `%f`, `%e`, `%E`, `%g`, `%G` | `float32`, `float64` |
+| `%s` | `str`, `cstr` |
+| `%c` | `char` |
+| `%p` | any pointer type (`T*`, `any*`) |
+| `%%` | — (literal percent, no argument consumed) |
+
+Width, precision, and flag modifiers (`%04d`, `%-20s`, `%.2f`) are passed through to the C format string unchanged. The compiler validates the base specifier only.
+
+### Transparent str handling
+
+When `%s` is used with a `str` argument, the compiler automatically expands it to `%.*s` and passes the length and pointer — no manual `.ptr` or null-termination required:
+
+```fc
+let name = "world"
+print("hello %s\n", name)
+// compiler emits: printf("hello %.*s\n", (int)name.len, name.ptr)
+```
+
+When `%s` is used with a `cstr` argument, the compiler emits plain `%s`:
+
+```fc
+let name = c"world"
+print("hello %s\n", name)
+// compiler emits: printf("hello %s\n", name)
+```
+
+This means `%s` always does the right thing regardless of which string type is passed.
+
+### sprint
+
+`sprint` writes formatted output into a caller-provided `uint8[]` buffer and returns a `str` sub-slice covering the bytes actually written (not including the null terminator). If the output exceeds the buffer size, it is truncated — matching `snprintf` behavior.
+
+```fc
+let mut buf = uint8[64] { }
+let msg = sprint(buf, "point(%d, %d)", x, y)
+// msg is a sub-slice of buf — no allocation occurred
+```
+
+The returned sub-slice shares memory with `buf`. The programmer is responsible for the buffer's lifetime. To detect truncation, compare `msg.len` against `buf.len - 1` — if equal, the output may have been clipped.
+
+> **Transpilation**
+> The four operators map to C's printf family:
+> ```c
+> // print("x = %d\n", x) — str format string
+> printf("x = %d\n", x);
+>
+> // eprint("error: %s\n", msg) — msg is str
+> fprintf(stderr, "error: %.*s\n", (int)msg.len, msg.ptr);
+>
+> // fprint(f, "event %d\n", id) — f is any*
+> fprintf((FILE*)f, "event %d\n", id);
+>
+> // sprint(buf, "x = %d", x)
+> int _n = snprintf(buf.ptr, buf.len, "x = %d", x);
+> if (_n < 0) _n = 0;
+> if (_n > buf.len - 1) _n = buf.len - 1;
+> // result is (fc_slice_uint8){ .ptr = buf.ptr, .len = (int64_t)_n }
+> ```
+> The format string itself is always emitted as a C string literal or passed via `.ptr` — the compiler ensures null termination for the format string argument at the C boundary. Format specifiers for `str` arguments are rewritten from `%s` to `%.*s` with the corresponding length and pointer arguments inserted.
+
+---
+
+# PART 7 — Program Structure
 
 ## Module System & Visibility
 
@@ -2370,7 +2573,7 @@ fc build --target bare-metal src/*.fc
 
 Target definitions specify the available libc subset, pointer width, endianness, and other platform characteristics. The compiler uses this to enforce correct usage at compile time rather than producing code that fails silently at runtime.
 
-# PART 7 — C Interop
+# PART 8 — C Interop
 
 ## C Interop
 
@@ -2530,7 +2733,9 @@ let mode = file_mode.read | file_mode.write
 
 **C interop — opaque handles**
 
-Many C libraries use opaque pointer types — `FILE*`, `sqlite3*`, `pthread_t*` — where the internal struct is hidden. FC code never constructs or inspects these; it receives them from C and passes them back. `any*` is the correct type for all such handles:
+`any*` exists because C libraries expose opaque pointer types — `FILE*`, `sqlite3*`, `pthread_t*` — where the struct definition is hidden. FC has no struct definition to attach to these pointers, so they are represented as `any*`. Standard library modules like `std::io` wrap C's stdio and therefore return `any*` handles — the type propagates from the C boundary through the wrapper.
+
+FC code that receives `any*` handles never constructs or inspects them; it passes them to functions that know how to operate on them:
 
 ```fc
 module sqlite from "libsqlite3.so" =
@@ -2549,9 +2754,9 @@ module libc from "libc.so" =
 
 Note that `fread` and `fwrite` take `any*` for both the data buffer and the `FILE*` handle — both are `void*` in C. `int64` maps C's `size_t` parameters using the same principle as elsewhere: a reasonable signed upper bound that lets FC lengths pass through without casts.
 
-The programmer is responsible for passing handles to the correct functions — FC's type system does not distinguish a `sqlite3*` from a `FILE*` at the `any*` level. This is an acceptable tradeoff for a narrow interop case.
+The programmer is responsible for passing handles to the correct functions — FC's type system does not distinguish a `sqlite3*` from a `FILE*` at the `any*` level. This is an acceptable tradeoff: opaque handles are passed to a small number of known functions, and mixing them up is no more likely than passing the wrong integer argument.
 
-**C interop — function pointer parameters**
+**Function pointer parameters in C interop**
 
 When a function type appears as a parameter in an `extern` declaration, the compiler maps it to a C function pointer at the boundary. The programmer passes a non-capturing lambda directly — no `&` required:
 
@@ -2598,8 +2803,9 @@ In C, `void*` is frequently used for patterns that FC handles at the language le
 - **Heterogeneous collections** — in C, a `void*[]` holds mixed types. In FC, use a tagged union: `union shape = | circle(circle) | rect(rect)`. The type system tracks what's in each slot; no unsafe cast required.
 - **Generic algorithms** — in C, `qsort` takes `void*` because it cannot be parameterized by element type. In FC, generic functions handle this directly: `let sort = (arr: 'a[], cmp: ('a, 'a) -> int32) -> ...`.
 - **Stateful callbacks** — in C, a `void*` user_data accompanies every callback to carry context. In FC, closures capture their environment as a fat pointer internally — no manual user_data threading needed.
+- **Opaque types within FC** — in C, hiding a struct's internals requires forward-declaring it in a header and exposing only `void*`. In FC, module-level `private` fields achieve the same thing with a typed pointer — the caller holds a `connection*` but cannot access its fields. No type erasure needed.
 
-`any*` exists for C interop and for the rare low-level cases (memory-mapped registers, custom allocators) that genuinely have no type at the FC level. In pure FC code, reaching for `any*` is a signal to consider whether a generic type or union would be more appropriate.
+`any*` appears in everyday FC code — file handles from `std::io`, database handles from C wrapper libraries — but it always originates from a C boundary. Pure FC modules that want to hide their internals should use private struct fields and typed pointers, not `any*`.
 
 ---
 
@@ -2619,7 +2825,7 @@ let s = str { ptr = cs, len = libc.strlen(cs) }
 
 The resulting `str` shares memory with the original C string — no allocation occurs. The programmer is responsible for ensuring the C string remains live for the lifetime of the FC slice.
 
-# PART 8 — Generics
+# PART 9 — Generics
 
 ## Overview
 

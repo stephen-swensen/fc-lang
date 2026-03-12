@@ -74,4 +74,10 @@ FC is a C-targeting language with these core design constraints:
 The full specification lives in `spec/fc-spec.html`. It is a self-contained HTML file with embedded markdown rendered by `marked.js`. Open it in a browser to read it. Sections are organized as:
 - Part 1 — Foundations (types, literals, operators, let/mut, inference)
 - Part 2 — Control flow (if, match, loop, for)
-- Additional parts cover structs, unions, generics, modules, closures, memory, and C interop
+- Part 3 — Functions (lambdas, closures, capture)
+- Part 4 — Type system (structs, unions, options, pointers, slices, function types)
+- Part 5 — Memory management (alloc, free, stack/heap)
+- Part 6 — I/O & formatting (std::io module, print/eprint/fprint/sprint)
+- Part 7 — Program structure (modules, namespaces, imports, conditional compilation)
+- Part 8 — C interop (extern, any*, variadics)
+- Part 9 — Generics (type variables, monomorphization)
