@@ -1378,11 +1378,27 @@ In all cases `return` is only needed for early exits — the normal return value
 ### Entry point
 
 ```fc
-let main = () ->
+let main = (args: str[]) ->
+    print("program: %s\n", args[0])
     0
 ```
 
-`main` at the top level of any file in the build is the program entry point, equivalent to C's `main`. It must return `int32`. If more than one file defines a top-level `main`, that is a compile error. `main` is not required — library code and partial builds compile without one.
+`main` at the top level of any file in the build is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `int32`. If more than one file defines a top-level `main`, that is a compile error. `main` is not required — library code and partial builds compile without one.
+
+> **Transpilation**
+> The compiler generates a C `main` wrapper that converts `argc`/`argv` into a `str[]` slice:
+> ```c
+> int main(int argc, char** argv) {
+>     fc_slice_uint8* _args = (fc_slice_uint8*)alloca(argc * sizeof(fc_slice_uint8));
+>     for (int i = 0; i < argc; i++) {
+>         _args[i].ptr = (uint8_t*)argv[i];
+>         _args[i].len = (int64_t)strlen(argv[i]);
+>     }
+>     fc_slice_slice_uint8 args = { .ptr = _args, .len = (int64_t)argc };
+>     return fc_main(args);
+> }
+> ```
+> Each `argv[i]` becomes a `str` (fat pointer) with its length computed via `strlen`. The slice itself is stack-allocated — no heap allocation occurs.
 
 ### Stack frames and lifetime
 
@@ -2204,6 +2220,78 @@ io.write(f, "hello world\n")
 
 > **Note on `print`/`eprint`**
 > The `print` and `eprint` operators write to stdout and stderr directly — they do not require importing `std::io`. They are reserved compiler operators, not `io` module functions.
+
+---
+
+## std::sys — System Operations
+
+`std::sys` is a standard library module providing access to environment variables, process control, and time. Like `std::io`, it is written in regular FC and wraps C standard library functions.
+
+```fc
+import sys from std::
+```
+
+### Operations
+
+```fc
+sys.env(name: str) -> str?
+sys.exit(code: int32) -> void
+sys.time() -> int64
+sys.sleep(ms: int64) -> void
+```
+
+**`sys.env`** — reads the environment variable with the given name. Returns `str?` — `none` if the variable is not set. The returned `str` is a view into process memory (from C's `getenv`), valid for the lifetime of the process unless the environment is modified. The `name` argument receives the same null-termination treatment as `io.open`'s path argument — an unconditional stack copy with a null byte appended.
+
+```fc
+import sys from std::
+
+match sys.env("HOME") with
+| none       -> eprint("HOME not set\n")
+| some(home) -> print("home: %s\n", home)
+```
+
+**`sys.exit`** — terminates the process immediately with the given exit code. The return type is `void` but the function never returns. After `sys.exit`, no destructors, deferred operations, or further code execute.
+
+```fc
+if fatal_error then sys.exit(1)
+```
+
+**`sys.time`** — returns the current wall-clock time as milliseconds since the Unix epoch (`int64`). Wraps `clock_gettime(CLOCK_REALTIME)` on POSIX systems.
+
+```fc
+let start = sys.time()
+do_work()
+let elapsed = sys.time() - start
+print("took %d ms\n", elapsed)
+```
+
+**`sys.sleep`** — pauses execution for the given number of milliseconds. Wraps `nanosleep` on POSIX systems.
+
+```fc
+sys.sleep(1000)    // sleep for 1 second
+```
+
+> **Transpilation**
+> ```c
+> // sys.env(name) — name is str, stack-copy for null termination
+> char _name_buf[/*name.len+1*/];
+> memcpy(_name_buf, name.ptr, name.len);
+> _name_buf[name.len] = '\0';
+> char* _val = getenv(_name_buf);
+> // result: _val == NULL → none, otherwise some({ .ptr = (uint8_t*)_val, .len = strlen(_val) })
+>
+> // sys.exit(code)
+> exit(code);
+>
+> // sys.time()
+> struct timespec _ts;
+> clock_gettime(CLOCK_REALTIME, &_ts);
+> int64_t _ms = (int64_t)_ts.tv_sec * 1000 + (int64_t)_ts.tv_nsec / 1000000;
+>
+> // sys.sleep(ms)
+> struct timespec _req = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
+> nanosleep(&_req, NULL);
+> ```
 
 ---
 
@@ -3114,7 +3202,7 @@ module node =
                 free(ptr)
                 current = next
 
-let main = () ->
+let main = (args: str[]) ->
     let list = some(node.prepend(some(node.prepend(node.none, 1)), 2))
     let doubled = node.map(list, (x: int32) -> x * 2)
     node.drop(list)
@@ -3139,7 +3227,7 @@ let find_substring = (haystack: str, needle: str) ->
         if candidate == needle then break some(candidate)
         i = i + 1
 
-let main = () ->
+let main = (args: str[]) ->
     let haystack = "the quick brown fox"
     let needle = "brown"
     match find_substring(haystack, needle) with
@@ -3245,7 +3333,7 @@ module arraylist =
     let find = (l: arraylist<'a>, pred: ('a) -> bool) ->
         arraylist.try_find(l, pred)!
 
-let main = () ->
+let main = (args: str[]) ->
     let mut nums = arraylist.make<int32>()
     arraylist.add(&nums, 1)
     arraylist.add(&nums, 2)
@@ -3355,7 +3443,7 @@ import world                            // same namespace — global:: implicit
 import vec2 from geom::vectors          // needed to construct vec2 literals
 import shape from geom::shapes          // needed to construct shape variants
 
-let main = () ->
+let main = (args: str[]) ->
     let mut b = world.body {
         position = vec2 { x = 0.0, y = 0.0 },
         velocity = vec2 { x = 1.0, y = 0.5 },

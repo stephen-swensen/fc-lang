@@ -9,8 +9,8 @@ Open design questions and topics for future discussion.
 ### Namespace and structure
 - Standard library will live in a `std::` namespace (distinct from `global::` used by application code)
 - Flat module structure — one module per file, no nesting — because FC does not allow cross-file module definitions, so nested submodules would have to live in a single file
-- Defined modules: `io` (file I/O — see spec §std::io)
-- Likely modules: `sys` (memory/process), `text`, `math`, plus others TBD
+- Defined modules: `io` (file I/O — see spec §std::io), `sys` (system operations — see spec §std::sys)
+- Likely modules: `text`, `math`, plus others TBD
 - Import pattern: `import io from std::`, `import sys from std::`, etc.
 - Open: does stdlib require explicit import per file, or is any of it pre-imported?
 
