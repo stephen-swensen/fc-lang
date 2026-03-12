@@ -1204,7 +1204,7 @@ for i in 0..10
     process(data[i])
 ```
 
-The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is inferred from the range endpoints using the standard widening rules. `0..10` gives `int32` (both default). `0..points.len` gives `uint64` (`int32` widens to `uint64`). Both endpoints must be integer types — float ranges are a compile error.
+The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is inferred from the range endpoints using the standard widening rules. `0..10` gives `int32` (both default). `0..points.len` gives `int64` (`int32` widens to `int64`). Both endpoints must be integer types — float ranges are a compile error.
 
 If the start exceeds or equals the end, the body executes zero times. This handles signed endpoints naturally — `for i in -5..5` iterates from -5 to 4.
 
@@ -1217,7 +1217,7 @@ for i, p in points
     if p.x == 0.0 then libc.printf(c"zero at index %d\n", i)
 ```
 
-The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `uint64`. The element is a copy, same as plain element iteration.
+The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration.
 
 #### Copy semantics
 
@@ -1302,7 +1302,7 @@ loop
 > }
 >
 > // for i, p in points (index-element iteration)
-> for (uint64_t i = 0; i < points.len; i++) {
+> for (int64_t i = 0; i < points.len; i++) {
 >     point p = points.ptr[i];
 >     // body
 > }
@@ -1768,7 +1768,7 @@ str32       // built-in alias for uint32[], for unicode codepoints
 A slice transpiles to a C struct with two fields:
 
 ```c
-typedef struct { int32_t* ptr; uint64_t len; } fc_slice_int32;
+typedef struct { int32_t* ptr; int64_t len; } fc_slice_int32;
 ```
 
 The struct is two words. Passing a slice to a function copies those two words — cheap, and no heap involvement.
@@ -1802,14 +1802,18 @@ free(buf.ptr)   // equivalent, explicit
 
 ```fc
 s.ptr       // raw pointer to first element
-s.len       // number of elements — uint64
+s.len       // number of elements — int64
 s[i]        // bounds-checked index — compile error if i is not an integer type
 s[i..j]     // sub-slice from i up to but not including j
 s[..j]      // sub-slice from start up to but not including j
 s[i..]      // sub-slice from i to end
 ```
 
-`s.len` is always `uint64`. This is a deliberate design choice: a platform-native length type would leak the target architecture into the type system, making struct layouts, arithmetic, and stored lengths all implicitly platform-dependent — reintroducing one of the footguns FC is designed to eliminate. The cost of `uint64` on 32-bit and smaller targets is real but acceptable; programmers who need tight inner loops on constrained hardware can drop to raw pointer arithmetic, which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
+`s.len` is always `int64`. This is a deliberate design choice with two motivations. First, a platform-native length type would leak the target architecture into the type system, making struct layouts, arithmetic, and stored lengths all implicitly platform-dependent — reintroducing one of the footguns FC is designed to eliminate. Second, a signed length means `int32` — the default integer type — widens to `int64` naturally, so common patterns like `0..slice.len`, `i < slice.len`, and `slice.len - 1` all work without explicit casts. An unsigned `uint64` length would not widen from `int32` (since negative values would change meaning), forcing casts at nearly every slice boundary. A signed length also avoids the well-known C bug class where `a.len - b.len` underflows to a huge positive number — signed subtraction produces a negative result, which is almost always what the programmer intended.
+
+The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), which exceeds the addressable memory of any current or foreseeable hardware.
+
+The cost of `int64` on 32-bit and smaller targets is real but acceptable; programmers who need tight inner loops on constrained hardware can drop to raw pointer arithmetic, which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
 
 Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
@@ -1863,7 +1867,7 @@ libc.printf(c"hello\n")     // cstr literal — always safe
 
 ### Embedded targets and raw pointer arrays
 
-On memory-constrained embedded targets, the slice fat pointer — a pointer plus a `uint64` length — may be undesirable. `uint64` arithmetic is expensive on 8-bit and 16-bit hardware, and bounds checking adds overhead that may be unacceptable in tight loops.
+On memory-constrained embedded targets, the slice fat pointer — a pointer plus an `int64` length — may be undesirable. `int64` arithmetic is expensive on 8-bit and 16-bit hardware, and bounds checking adds overhead that may be unacceptable in tight loops.
 
 The programmer can drop down to raw pointer style by discarding the slice after allocation:
 
@@ -1955,7 +1959,7 @@ Four built-in compile-time operators handle memory-related operations that requi
 | `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. When `T` is a slice type `T[N]`, allocates `N` elements and returns `T[]?`. Also accepts a value expression — `alloc(expr)` — inferring the type from the expression and initializing the allocated memory with that value. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
-| `sizeof(T)` | Return the size in bytes of type `T` as a `uint64`. |
+| `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
 
 These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
 
@@ -1976,7 +1980,7 @@ let b = default(bool)      // false
 let s = default(str)       // empty slice — { ptr = null, len = 0 }
 let p = default(point)     // point { x = 0.0, y = 0.0 }
 let o = default(int32?)    // int32.none
-let n = sizeof(int32)      // 4 — uint64
+let n = sizeof(int32)      // 4 — int64
 ```
 
 Default values by type category:
@@ -2379,14 +2383,14 @@ C library bindings are declared using `extern` inside a module that names the C 
 module libc from "libc.so" =
     extern printf:  (cstr, ...) -> int32
     extern free as c_free: (any*) -> void
-    extern malloc:  (uint64) -> any*?        // uint64 used for size_t — see below
-    extern memcpy:  (uint8*, uint8*, uint64) -> void
-    extern strlen:  (cstr) -> uint64         // uint64 used for size_t — see below
+    extern malloc:  (int64) -> any*?
+    extern memcpy:  (any*, any*, int64) -> any*
+    extern strlen:  (cstr) -> int64
     extern fopen:   (cstr, cstr) -> any*?
 ```
 
 > **Note on the libc module**
-> The declarations above are illustrative. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. `memcpy` uses `uint8*` for its buffer parameters because those genuinely point to byte data, not opaque handles. The `uint64` parameters for `malloc`, `memcpy`, and `strlen` stand in for C's `size_t` — the compiler emits casts at these boundaries as described in §Slices & Strings. In practice, common libc bindings ship with the FC compiler as pre-written `extern` declarations and most programs only need to `import libc`.
+> The declarations above are illustrative. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `int64` parameters for `malloc`, `memcpy`, and `strlen` map C's `size_t` — the principle is to use a reasonable signed upper bound that is never incorrect, so that FC's `int64` lengths pass through without casts. The compiler emits casts to `size_t` at the C boundary. In practice, common libc bindings ship with the FC compiler as pre-written `extern` declarations and most programs only need to `import libc`.
 
 ### Reserved identifiers and `extern as`
 
@@ -2537,13 +2541,13 @@ module sqlite from "libsqlite3.so" =
 module libc from "libc.so" =
     extern fopen:  (cstr, cstr) -> any*?
     extern fclose: (any*) -> int32
-    extern fread:  (uint8*, uint64, uint64, any*) -> uint64
-    extern fwrite: (uint8*, uint64, uint64, any*) -> uint64
-    extern malloc: (uint64) -> any*?
+    extern fread:  (any*, int64, int64, any*) -> int64
+    extern fwrite: (any*, int64, int64, any*) -> int64
+    extern malloc: (int64) -> any*?
     extern free:   (any*) -> void
 ```
 
-Note that `fread` and `fwrite` take a `uint8*` for their data buffer — a real byte array — and `any*` for the `FILE*` handle. These are genuinely different things and are typed accordingly.
+Note that `fread` and `fwrite` take `any*` for both the data buffer and the `FILE*` handle — both are `void*` in C. `int64` maps C's `size_t` parameters using the same principle as elsewhere: a reasonable signed upper bound that lets FC lengths pass through without casts.
 
 The programmer is responsible for passing handles to the correct functions — FC's type system does not distinguish a `sqlite3*` from a `FILE*` at the `any*` level. This is an acceptable tradeoff for a narrow interop case.
 
@@ -2553,7 +2557,7 @@ When a function type appears as a parameter in an `extern` declaration, the comp
 
 ```fc
 module libc from "libc.so" =
-    extern qsort: (any*, uint64, uint64, (any*, any*) -> int32) -> void
+    extern qsort: (any*, int64, int64, (any*, any*) -> int32) -> void
 
 // pass a non-capturing lambda directly — compiler handles C function pointer mapping
 libc.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
@@ -2947,7 +2951,7 @@ Demonstrates generics, type-associated modules, heap growth, and idiomatic funct
 ```fc
 struct list =
     data: 'a[]
-    len:  uint64
+    len:  int64
 
 module list =
 
@@ -2970,7 +2974,7 @@ module list =
         l->data[l->len] = value
         l->len = l->len + 1
 
-    let insert = (l: list<'a>*, index: uint64, value: 'a) ->
+    let insert = (l: list<'a>*, index: int64, value: 'a) ->
         if l->len == l->data.len then list.grow(l)
         let mut i = l->len
         loop
@@ -2980,10 +2984,10 @@ module list =
         l->data[index] = value
         l->len = l->len + 1
 
-    let get = (l: list<'a>, index: uint64) ->
+    let get = (l: list<'a>, index: int64) ->
         l.data[..l.len][index]
 
-    let update = (l: list<'a>*, index: uint64, value: 'a) ->
+    let update = (l: list<'a>*, index: int64, value: 'a) ->
         l->data[..l->len][index] = value
 
     let iter = (l: list<'a>, f: ('a) -> void) ->
