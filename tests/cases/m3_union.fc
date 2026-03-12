@@ -1,0 +1,13 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+
+let area = (s: shape) ->
+    match s with
+        | circle(r) -> r * r
+        | square(side) -> side * side
+
+let main = (args: int32) ->
+    let s = shape.circle(3)
+    let a = area(s)
+    a - 2

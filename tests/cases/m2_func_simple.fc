@@ -1,0 +1,4 @@
+let twice = (x: int32) -> x * 2
+
+let main = (args: int32) ->
+    twice(21)

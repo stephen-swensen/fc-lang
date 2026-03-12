@@ -1,0 +1,7 @@
+let compute = (x: int32, y: int32) ->
+    let a = x + y
+    let b = a * 2
+    b - 1
+
+let main = (args: int32) ->
+    compute(3, 4)
