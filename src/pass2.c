@@ -46,9 +46,6 @@ typedef struct {
     Arena *arena;
     Type **loop_break_type;  /* non-NULL when inside a loop; points to break value type */
     bool in_for;             /* true when inside a for loop (break value forbidden) */
-    Expr ***loop_breaks;     /* pointer to array of break exprs in current loop */
-    int *loop_break_count;
-    int *loop_break_cap;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -60,18 +57,6 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
         last = check_expr(ctx, stmts[i]);
     }
     return last;
-}
-
-/* Try to reconcile two types where one might be an unresolved none (option(void)).
- * Returns the reconciled type, or NULL if incompatible. */
-static Type *reconcile_option_types(Type *a, Type *b) {
-    if (type_eq(a, b)) return a;
-    /* If both are options and one has void inner (unresolved none), use the other */
-    if (a->kind == TYPE_OPTION && b->kind == TYPE_OPTION) {
-        if (a->option.inner && a->option.inner->kind == TYPE_VOID) return b;
-        if (b->option.inner && b->option.inner->kind == TYPE_VOID) return a;
-    }
-    return NULL;
 }
 
 /* Resolve a named type stub (TYPE_STRUCT with no fields) to the actual type from symtab */
@@ -358,18 +343,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *tt = check_expr(ctx, e->if_expr.then_body);
         if (e->if_expr.else_body) {
             Type *et = check_expr(ctx, e->if_expr.else_body);
-            Type *reconciled = reconcile_option_types(tt, et);
-            if (reconciled) {
-                /* Propagate reconciled type to both branches (fixes none's type) */
-                e->if_expr.then_body->type = reconciled;
-                e->if_expr.else_body->type = reconciled;
-                e->type = reconciled;
-            } else if (!type_eq(tt, et)) {
+            if (!type_eq(tt, et)) {
                 diag_fatal(e->loc, "if branches have different types: %s vs %s",
                     type_name(tt), type_name(et));
-            } else {
-                e->type = tt;
             }
+            e->type = tt;
         } else {
             /* No else → void */
             e->type = type_void();
@@ -576,10 +554,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_NONE: {
-        /* none without context — type must be resolved from assignment/return context.
-         * For now, create an option with void inner; it will be resolved at use site. */
-        e->type = type_option(ctx->arena, type_void());
-        return e->type;
+        if (e->none_expr.target) {
+            /* T.none form: resolve any type stubs */
+            e->type = resolve_type(ctx, e->none_expr.target);
+            if (e->type->kind == TYPE_OPTION)
+                e->type->option.inner = resolve_type(ctx, e->type->option.inner);
+            return e->type;
+        }
+        diag_fatal(e->loc, "bare 'none' is not allowed in expressions; use T.none (e.g. int32.none)");
     }
 
     case EXPR_LOOP: {
@@ -591,35 +573,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *break_type = NULL;
         Type **saved_break = ctx->loop_break_type;
         bool saved_in_for = ctx->in_for;
-        Expr **breaks = NULL;
-        int break_count = 0, break_cap = 0;
-        Expr ***saved_breaks = ctx->loop_breaks;
-        int *saved_bc = ctx->loop_break_count;
-        int *saved_bcap = ctx->loop_break_cap;
         ctx->loop_break_type = &break_type;
         ctx->in_for = false;
-        ctx->loop_breaks = &breaks;
-        ctx->loop_break_count = &break_count;
-        ctx->loop_break_cap = &break_cap;
 
         check_block(ctx, e->loop_expr.body, e->loop_expr.body_count);
-
-        /* Fix up all break value types to match the reconciled type */
-        if (break_type) {
-            for (int i = 0; i < break_count; i++) {
-                if (breaks[i]->break_expr.value) {
-                    breaks[i]->break_expr.value->type = break_type;
-                }
-            }
-        }
-        free(breaks);
 
         ctx->scope = saved;
         ctx->loop_break_type = saved_break;
         ctx->in_for = saved_in_for;
-        ctx->loop_breaks = saved_breaks;
-        ctx->loop_break_count = saved_bc;
-        ctx->loop_break_cap = saved_bcap;
 
         /* Loop type comes from break values; void if no break-with-value */
         e->type = break_type ? break_type : type_void();
@@ -688,20 +649,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (ctx->in_for)
                 diag_fatal(e->loc, "break with value is not allowed in for loops");
             Type *vt = check_expr(ctx, e->break_expr.value);
-            /* Track this break expression for later fixup */
-            if (ctx->loop_breaks) {
-                DA_APPEND(*ctx->loop_breaks, *ctx->loop_break_count, *ctx->loop_break_cap, e);
-            }
             if (*ctx->loop_break_type == NULL) {
                 *ctx->loop_break_type = vt;
             } else if (!type_eq(*ctx->loop_break_type, vt)) {
-                Type *reconciled = reconcile_option_types(*ctx->loop_break_type, vt);
-                if (reconciled) {
-                    *ctx->loop_break_type = reconciled;
-                } else {
-                    diag_fatal(e->loc, "break type mismatch: expected %s, got %s",
-                        type_name(*ctx->loop_break_type), type_name(vt));
-                }
+                diag_fatal(e->loc, "break type mismatch: expected %s, got %s",
+                    type_name(*ctx->loop_break_type), type_name(vt));
             }
         }
         e->type = type_void();
@@ -808,13 +760,8 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         if (!result_type) {
             result_type = arm_type;
         } else if (!type_eq(result_type, arm_type)) {
-            Type *reconciled = reconcile_option_types(result_type, arm_type);
-            if (reconciled) {
-                result_type = reconciled;
-            } else {
-                diag_fatal(arm->loc, "match arms have different types: %s vs %s",
-                    type_name(result_type), type_name(arm_type));
-            }
+            diag_fatal(arm->loc, "match arms have different types: %s vs %s",
+                type_name(result_type), type_name(arm_type));
         }
     }
 
@@ -832,9 +779,6 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
         .arena = &arena,
         .loop_break_type = NULL,
         .in_for = false,
-        .loop_breaks = NULL,
-        .loop_break_count = NULL,
-        .loop_break_cap = NULL,
     };
 
     for (int i = 0; i < prog->decl_count; i++) {

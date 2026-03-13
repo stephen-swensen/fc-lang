@@ -672,12 +672,8 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
-    case TOK_NONE: {
-        advance_p(p);
-        Expr *e = alloc_expr(p, EXPR_NONE, loc);
-        e->none_expr.target = NULL; /* resolved by pass2 from context */
-        return e;
-    }
+    /* TOK_NONE removed: bare 'none' is not valid in expression context.
+     * Use T.none (e.g. int32.none) instead — handled in DOT infix. */
 
     case TOK_LOOP: {
         advance_p(p);
@@ -754,6 +750,28 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_DOT: {
+        /* T.none: qualified none expression */
+        if (check(p, TOK_NONE)) {
+            advance_p(p); /* consume 'none' */
+            /* left must be an identifier (the type name) */
+            if (left->kind != EXPR_IDENT)
+                diag_fatal(loc, "qualified none requires a type name before '.'");
+            const char *tname = left->ident.name;
+            /* Look up as built-in type first */
+            Type *inner = type_from_name(tname, (int)strlen(tname));
+            if (!inner) {
+                /* User-defined type — create a stub */
+                inner = arena_alloc(p->arena, sizeof(Type));
+                inner->kind = TYPE_STRUCT;
+                inner->struc.name = tname;
+                inner->struc.fields = NULL;
+                inner->struc.field_count = 0;
+            }
+            Type *opt = type_option(p->arena, inner);
+            Expr *e = alloc_expr(p, EXPR_NONE, loc);
+            e->none_expr.target = opt;
+            return e;
+        }
         Token *field = expect(p, TOK_IDENT);
         Expr *e = alloc_expr(p, EXPR_FIELD, loc);
         e->field.object = left;

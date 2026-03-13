@@ -1,7 +1,7 @@
 let find_first = (s: int32[], target: int32) ->
     let mut i = 0
     loop
-        if i >= (int32)s.len then break none
+        if i >= (int32)s.len then break int32.none
         if s.ptr[i] == target then break some(i)
         i = i + 1
 
