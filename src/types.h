@@ -101,5 +101,11 @@ bool type_is_numeric(Type *t);
 bool type_eq(Type *a, Type *b);
 const char *type_name(Type *t);
 
+/* Implicit widening: can 'from' widen to 'to' without explicit cast? */
+bool type_can_widen(Type *from, Type *to);
+
+/* Find the common (wider) numeric type for two types, or NULL if no widening possible */
+Type *type_common_numeric(Type *a, Type *b);
+
 /* Map a type suffix string (e.g., "i8", "u64") to a type, or NULL */
 Type *type_from_int_suffix(const char *suffix, int len);

@@ -84,6 +84,17 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     return t;
 }
 
+/* Wrap an expression in an implicit widening cast */
+static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
+    Expr *cast = arena_alloc(a, sizeof(Expr));
+    cast->kind = EXPR_CAST;
+    cast->loc = e->loc;
+    cast->type = target;
+    cast->cast.target = target;
+    cast->cast.operand = e;
+    return cast;
+}
+
 static Type *check_match(CheckCtx *ctx, Expr *e);
 
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
@@ -147,8 +158,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (!type_is_numeric(lt) || !type_is_numeric(rt))
                 diag_fatal(e->loc, "arithmetic requires numeric operands, got %s and %s",
                     type_name(lt), type_name(rt));
-            if (!type_eq(lt, rt))
-                diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+            if (!type_eq(lt, rt)) {
+                Type *common = type_common_numeric(lt, rt);
+                if (!common)
+                    diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
+                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
+                lt = rt = common;
+            }
             e->type = lt;
             return e->type;
         }
@@ -157,16 +174,27 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (!type_is_numeric(lt) || !type_is_numeric(rt))
                 diag_fatal(e->loc, "arithmetic requires numeric operands, got %s and %s",
                     type_name(lt), type_name(rt));
-            if (!type_eq(lt, rt))
-                diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+            if (!type_eq(lt, rt)) {
+                Type *common = type_common_numeric(lt, rt);
+                if (!common)
+                    diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
+                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
+                lt = rt = common;
+            }
             e->type = lt;
             return e->type;
         }
 
         if (op == TOK_EQEQ || op == TOK_BANGEQ || op == TOK_LT ||
             op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
-            if (!type_eq(lt, rt))
-                diag_fatal(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+            if (!type_eq(lt, rt)) {
+                Type *common = type_common_numeric(lt, rt);
+                if (!common)
+                    diag_fatal(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
+                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
+            }
             e->type = type_bool();
             return e->type;
         }
@@ -181,8 +209,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET) {
             if (!type_is_integer(lt) || !type_is_integer(rt))
                 diag_fatal(e->loc, "bitwise operator requires integer operands");
-            if (!type_eq(lt, rt))
-                diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+            if (!type_eq(lt, rt)) {
+                Type *common = type_common_numeric(lt, rt);
+                if (!common)
+                    diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
+                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
+                lt = rt = common;
+            }
             e->type = lt;
             return e->type;
         }
@@ -304,9 +338,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 ft->func.param_count, e->call.arg_count);
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *at = check_expr(ctx, e->call.args[i]);
-            if (!type_eq(at, ft->func.param_types[i]))
-                diag_fatal(e->call.args[i]->loc, "argument %d: expected %s, got %s",
-                    i + 1, type_name(ft->func.param_types[i]), type_name(at));
+            if (!type_eq(at, ft->func.param_types[i])) {
+                if (type_can_widen(at, ft->func.param_types[i])) {
+                    e->call.args[i] = wrap_widen(ctx->arena, e->call.args[i], ft->func.param_types[i]);
+                } else {
+                    diag_fatal(e->call.args[i]->loc, "argument %d: expected %s, got %s",
+                        i + 1, type_name(ft->func.param_types[i]), type_name(at));
+                }
+            }
         }
         e->type = ft->func.return_type;
         return e->type;
@@ -366,8 +405,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_ASSIGN: {
         Type *lt = check_expr(ctx, e->assign.target);
         Type *vt = check_expr(ctx, e->assign.value);
-        if (!type_eq(lt, vt))
-            diag_fatal(e->loc, "assignment type mismatch: %s vs %s", type_name(lt), type_name(vt));
+        if (!type_eq(lt, vt)) {
+            if (type_can_widen(vt, lt)) {
+                e->assign.value = wrap_widen(ctx->arena, e->assign.value, lt);
+            } else {
+                diag_fatal(e->loc, "assignment type mismatch: %s vs %s", type_name(lt), type_name(vt));
+            }
+        }
         e->type = type_void();
         return e->type;
     }

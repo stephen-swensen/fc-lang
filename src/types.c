@@ -136,6 +136,39 @@ const char *type_name(Type *t) {
     }
 }
 
+bool type_can_widen(Type *from, Type *to) {
+    if (type_eq(from, to)) return true;
+    TypeKind f = from->kind, t = to->kind;
+
+    /* int8 → int16, int32, int64 */
+    if (f == TYPE_INT8)   return t == TYPE_INT16 || t == TYPE_INT32 || t == TYPE_INT64;
+    /* int16 → int32, int64 */
+    if (f == TYPE_INT16)  return t == TYPE_INT32 || t == TYPE_INT64;
+    /* int32 → int64 */
+    if (f == TYPE_INT32)  return t == TYPE_INT64;
+
+    /* uint8 → uint16, uint32, uint64, int16, int32, int64 */
+    if (f == TYPE_UINT8)  return t == TYPE_UINT16 || t == TYPE_UINT32 || t == TYPE_UINT64 ||
+                                 t == TYPE_INT16  || t == TYPE_INT32  || t == TYPE_INT64;
+    /* uint16 → uint32, uint64, int32, int64 */
+    if (f == TYPE_UINT16) return t == TYPE_UINT32 || t == TYPE_UINT64 ||
+                                 t == TYPE_INT32  || t == TYPE_INT64;
+    /* uint32 → uint64, int64 */
+    if (f == TYPE_UINT32) return t == TYPE_UINT64 || t == TYPE_INT64;
+
+    /* float32 → float64 */
+    if (f == TYPE_FLOAT32) return t == TYPE_FLOAT64;
+
+    return false;
+}
+
+Type *type_common_numeric(Type *a, Type *b) {
+    if (type_eq(a, b)) return a;
+    if (type_can_widen(a, b)) return b;
+    if (type_can_widen(b, a)) return a;
+    return NULL;
+}
+
 Type *type_from_int_suffix(const char *suffix, int len) {
     if (!suffix || len == 0) return type_int32();
 

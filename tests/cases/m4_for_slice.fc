@@ -5,5 +5,5 @@ let main = (args: int32) ->
     data.ptr[2] = 30
     let mut sum = 0
     for i, x in data
-        if i == 1i64 then sum = sum + x
+        if i == 1 then sum = sum + x
     sum
