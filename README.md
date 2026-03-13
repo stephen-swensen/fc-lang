@@ -21,7 +21,7 @@ The compiler is under active development, targeting the v0.5 draft spec. Progres
 | M1 | Arithmetic, literals, unary ops, type inference | Done |
 | M2 | Functions, control flow (`if`/`else`), blocks | Done |
 | M3 | Structs, unions, match expressions, patterns | Done |
-| M4 | Pointers, slices, options, loops | Planned |
+| M4 | Pointers, slices, options, loops | Done |
 | M5 | Memory (`alloc`, `free`, `sizeof`, `default`) | Planned |
 | M6 | Modules, imports, namespaces | Planned |
 | M7 | Closures, capture analysis | Planned |

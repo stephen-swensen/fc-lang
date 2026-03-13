@@ -26,6 +26,7 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_VOID:    fprintf(out, "void");      break;
     case TYPE_STR:     fprintf(out, "fc_str");    break;
     case TYPE_CSTR:    fprintf(out, "const char*"); break;
+    case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_POINTER:
         emit_type(t->pointer.pointee, out);
         fprintf(out, "*");
@@ -33,6 +34,16 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_SLICE:
         fprintf(out, "fc_slice_");
         emit_type(t->slice.elem, out);
+        break;
+    case TYPE_OPTION:
+        if (t->option.inner && t->option.inner->kind == TYPE_POINTER) {
+            /* T*? → plain pointer (null = none) */
+            emit_type(t->option.inner, out);
+        } else {
+            fprintf(out, "fc_option_");
+            if (t->option.inner) emit_type(t->option.inner, out);
+            else fprintf(out, "void");
+        }
         break;
     case TYPE_STRUCT:
         fprintf(out, "%s", t->struc.name);
@@ -46,6 +57,27 @@ static void emit_type(Type *t, FILE *out) {
     }
 }
 
+/* Emit a C type name suitable for use in identifiers (slice/option typedef names) */
+static void emit_type_ident(Type *t, FILE *out) {
+    switch (t->kind) {
+    case TYPE_INT8:    fprintf(out, "int8_t");    break;
+    case TYPE_INT16:   fprintf(out, "int16_t");   break;
+    case TYPE_INT32:   fprintf(out, "int32_t");   break;
+    case TYPE_INT64:   fprintf(out, "int64_t");   break;
+    case TYPE_UINT8:   fprintf(out, "uint8_t");   break;
+    case TYPE_UINT16:  fprintf(out, "uint16_t");  break;
+    case TYPE_UINT32:  fprintf(out, "uint32_t");  break;
+    case TYPE_UINT64:  fprintf(out, "uint64_t");  break;
+    case TYPE_FLOAT32: fprintf(out, "float");     break;
+    case TYPE_FLOAT64: fprintf(out, "double");    break;
+    case TYPE_BOOL:    fprintf(out, "bool");      break;
+    case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
+    case TYPE_STRUCT:  fprintf(out, "%s", t->struc.name); break;
+    case TYPE_UNION:   fprintf(out, "%s", t->unio.name);  break;
+    default:           fprintf(out, "unknown");   break;
+    }
+}
+
 static void emit_expr(Expr *e, FILE *out);
 
 static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return) {
@@ -56,10 +88,17 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
         emit_indent(out);
 
         if (s->kind == EXPR_LET) {
-            emit_type(s->let_expr.let_type, out);
-            fprintf(out, " %s = ", s->let_expr.let_name);
-            emit_expr(s->let_expr.let_init, out);
-            fprintf(out, ";\n");
+            if (s->let_expr.let_is_mut) {
+                emit_type(s->let_expr.let_type, out);
+                fprintf(out, " %s = ", s->let_expr.let_name);
+                emit_expr(s->let_expr.let_init, out);
+                fprintf(out, ";\n");
+            } else {
+                emit_type(s->let_expr.let_type, out);
+                fprintf(out, " %s = ", s->let_expr.let_name);
+                emit_expr(s->let_expr.let_init, out);
+                fprintf(out, ";\n");
+            }
         } else if (s->kind == EXPR_RETURN) {
             if (s->return_expr.value) {
                 fprintf(out, "return ");
@@ -73,6 +112,27 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
             fprintf(out, " = ");
             emit_expr(s->assign.value, out);
             fprintf(out, ";\n");
+        } else if (s->kind == EXPR_BREAK) {
+            if (s->break_expr.value) {
+                /* break with value — assign to loop result temp, then break */
+                fprintf(out, "_loop_result = ");
+                emit_expr(s->break_expr.value, out);
+                fprintf(out, "; break;\n");
+            } else {
+                fprintf(out, "break;\n");
+            }
+        } else if (s->kind == EXPR_CONTINUE) {
+            fprintf(out, "continue;\n");
+        } else if (s->kind == EXPR_IF && (!s->type || s->type->kind == TYPE_VOID)) {
+            /* void-typed if → emit as C if statement */
+            emit_expr(s, out);
+            fprintf(out, "\n");
+        } else if (s->kind == EXPR_FOR) {
+            emit_expr(s, out);
+            fprintf(out, "\n");
+        } else if (s->kind == EXPR_LOOP && (!s->type || s->type->kind == TYPE_VOID)) {
+            emit_expr(s, out);
+            fprintf(out, "\n");
         } else if (is_last && as_return && s->type && s->type->kind != TYPE_VOID) {
             fprintf(out, "return ");
             emit_expr(s, out);
@@ -80,6 +140,46 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
         } else {
             emit_expr(s, out);
             fprintf(out, ";\n");
+        }
+    }
+}
+
+static void emit_if_stmt(Expr *e, FILE *out) {
+    /* Emit if as a C statement (not expression) */
+    fprintf(out, "if (");
+    emit_expr(e->if_expr.cond, out);
+    fprintf(out, ") {\n");
+    indent_level++;
+    if (e->if_expr.then_body->kind == EXPR_BLOCK) {
+        emit_block_stmts(e->if_expr.then_body->block.stmts,
+            e->if_expr.then_body->block.count, out, false);
+    } else {
+        emit_indent(out);
+        emit_expr(e->if_expr.then_body, out);
+        fprintf(out, ";\n");
+    }
+    indent_level--;
+    emit_indent(out);
+    fprintf(out, "}");
+    if (e->if_expr.else_body) {
+        if (e->if_expr.else_body->kind == EXPR_IF &&
+            (!e->if_expr.else_body->type || e->if_expr.else_body->type->kind == TYPE_VOID)) {
+            fprintf(out, " else ");
+            emit_if_stmt(e->if_expr.else_body, out);
+        } else {
+            fprintf(out, " else {\n");
+            indent_level++;
+            if (e->if_expr.else_body->kind == EXPR_BLOCK) {
+                emit_block_stmts(e->if_expr.else_body->block.stmts,
+                    e->if_expr.else_body->block.count, out, false);
+            } else {
+                emit_indent(out);
+                emit_expr(e->if_expr.else_body, out);
+                fprintf(out, ";\n");
+            }
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "}");
         }
     }
 }
@@ -106,6 +206,10 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "%s", e->bool_lit.value ? "true" : "false");
         break;
 
+    case EXPR_CHAR_LIT:
+        fprintf(out, "'\\x%02x'", e->char_lit.value);
+        break;
+
     case EXPR_STRING_LIT:
         fprintf(out, "((fc_str){(uint8_t*)\"%.*s\", %d})",
             e->string_lit.length, e->string_lit.value, e->string_lit.length);
@@ -126,7 +230,7 @@ static void emit_expr(Expr *e, FILE *out) {
         case TOK_MINUS:    op_str = "-";  break;
         case TOK_STAR:     op_str = "*";  break;
         case TOK_SLASH:    op_str = "/";  break;
-        case TOK_PERCENT:  op_str = "%%"; break;
+        case TOK_PERCENT:  op_str = "%"; break;
         case TOK_EQEQ:    op_str = "=="; break;
         case TOK_BANGEQ:  op_str = "!="; break;
         case TOK_LT:      op_str = "<";  break;
@@ -166,6 +270,32 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_UNARY_POSTFIX: {
+        if (e->unary_postfix.op == TOK_BANG) {
+            /* Option unwrap: check has_value, abort if none */
+            Type *opt_type = e->unary_postfix.operand->type;
+            if (opt_type && opt_type->kind == TYPE_OPTION &&
+                opt_type->option.inner && opt_type->option.inner->kind == TYPE_POINTER) {
+                /* T*? → plain pointer, unwrap = null check */
+                fprintf(out, "({ ");
+                emit_type(opt_type->option.inner, out);
+                int tid = temp_counter++;
+                fprintf(out, " _uw%d = ", tid);
+                emit_expr(e->unary_postfix.operand, out);
+                fprintf(out, "; if (!_uw%d) abort(); _uw%d; })", tid, tid);
+            } else {
+                /* Non-pointer option: check .has_value */
+                fprintf(out, "({ ");
+                emit_type(opt_type, out);
+                int tid = temp_counter++;
+                fprintf(out, " _uw%d = ", tid);
+                emit_expr(e->unary_postfix.operand, out);
+                fprintf(out, "; if (!_uw%d.has_value) abort(); _uw%d.value; })", tid, tid);
+            }
+        }
+        break;
+    }
+
     case EXPR_CALL: {
         /* Check if this is a variant constructor: type is union and func is EXPR_FIELD */
         if (e->type && e->type->kind == TYPE_UNION &&
@@ -189,8 +319,10 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_IF: {
-        /* Simple branches → ternary; block branches → statement expression */
-        if (e->if_expr.else_body && e->type && e->type->kind != TYPE_VOID) {
+        if (e->type && e->type->kind == TYPE_VOID) {
+            /* Void-typed if → C if statement */
+            emit_if_stmt(e, out);
+        } else if (e->if_expr.else_body && e->type && e->type->kind != TYPE_VOID) {
             /* Expression if/then/else → ternary */
             fprintf(out, "(");
             emit_expr(e->if_expr.cond, out);
@@ -200,16 +332,10 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->if_expr.else_body, out);
             fprintf(out, ")");
         } else {
-            /* Statement if — use statement expression for expression context */
+            /* Fallback: statement expression */
             fprintf(out, "({");
             indent_level++;
             fprintf(out, "\n");
-            int tid = temp_counter++;
-            if (e->type && e->type->kind != TYPE_VOID && e->if_expr.else_body) {
-                emit_indent(out);
-                emit_type(e->type, out);
-                fprintf(out, " _if%d;\n", tid);
-            }
             emit_indent(out);
             fprintf(out, "if (");
             emit_expr(e->if_expr.cond, out);
@@ -254,7 +380,6 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "({\n");
         indent_level++;
         emit_block_stmts(e->block.stmts, e->block.count, out, false);
-        /* Last stmt is the value */
         indent_level--;
         emit_indent(out);
         fprintf(out, "})");
@@ -283,10 +408,112 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_INDEX: {
-        emit_expr(e->index.object, out);
-        fprintf(out, "[");
-        emit_expr(e->index.index, out);
+        /* Bounds check for slices */
+        Type *obj_type = e->index.object->type;
+        if (obj_type && (obj_type->kind == TYPE_SLICE || obj_type->kind == TYPE_STR)) {
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            emit_type(obj_type, out);
+            fprintf(out, " _s%d = ", tid);
+            emit_expr(e->index.object, out);
+            fprintf(out, "; int64_t _i%d = (int64_t)", tid);
+            emit_expr(e->index.index, out);
+            fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) abort(); _s%d.ptr[_i%d]; })",
+                tid, tid, tid, tid, tid);
+        } else {
+            /* Pointer indexing — no bounds check */
+            emit_expr(e->index.object, out);
+            fprintf(out, "[");
+            emit_expr(e->index.index, out);
+            fprintf(out, "]");
+        }
+        break;
+    }
+
+    case EXPR_SLICE: {
+        /* Subslice: s[lo..hi] */
+        int tid = temp_counter++;
+        Type *obj_type = e->slice.object->type;
+        fprintf(out, "({ ");
+        emit_type(obj_type, out);
+        fprintf(out, " _s%d = ", tid);
+        emit_expr(e->slice.object, out);
+        fprintf(out, "; int64_t _lo%d = ", tid);
+        if (e->slice.lo) {
+            fprintf(out, "(int64_t)");
+            emit_expr(e->slice.lo, out);
+        } else {
+            fprintf(out, "0");
+        }
+        fprintf(out, "; int64_t _hi%d = ", tid);
+        if (e->slice.hi) {
+            fprintf(out, "(int64_t)");
+            emit_expr(e->slice.hi, out);
+        } else {
+            fprintf(out, "_s%d.len", tid);
+        }
+        fprintf(out, "; if (_lo%d < 0 || _hi%d > _s%d.len || _lo%d > _hi%d) abort(); ",
+            tid, tid, tid, tid, tid);
+        fprintf(out, "(");
+        emit_type(obj_type, out);
+        fprintf(out, "){ .ptr = _s%d.ptr + _lo%d, .len = _hi%d - _lo%d }; })",
+            tid, tid, tid, tid);
+        break;
+    }
+
+    case EXPR_SOME: {
+        Type *opt_type = e->type;
+        if (opt_type && opt_type->kind == TYPE_OPTION &&
+            opt_type->option.inner && opt_type->option.inner->kind == TYPE_POINTER) {
+            /* T*? → plain pointer, some(x) = x */
+            emit_expr(e->some_expr.value, out);
+        } else {
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .value = ");
+            emit_expr(e->some_expr.value, out);
+            fprintf(out, ", .has_value = true }");
+        }
+        break;
+    }
+
+    case EXPR_NONE: {
+        Type *opt_type = e->type;
+        if (opt_type && opt_type->kind == TYPE_OPTION &&
+            opt_type->option.inner && opt_type->option.inner->kind == TYPE_POINTER) {
+            /* T*? → plain pointer, none = NULL */
+            fprintf(out, "NULL");
+        } else {
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .has_value = false }");
+        }
+        break;
+    }
+
+    case EXPR_ARRAY_LIT: {
+        /* Stack array literal → C array + slice struct */
+        int tid = temp_counter++;
+        fprintf(out, "({ ");
+        emit_type(e->array_lit.elem_type, out);
+        fprintf(out, " _arr%d[", tid);
+        emit_expr(e->array_lit.size_expr, out);
         fprintf(out, "]");
+        if (e->array_lit.elem_count == 0) {
+            fprintf(out, " = {0}");
+        } else {
+            fprintf(out, " = { ");
+            for (int i = 0; i < e->array_lit.elem_count; i++) {
+                if (i > 0) fprintf(out, ", ");
+                emit_expr(e->array_lit.elems[i], out);
+            }
+            fprintf(out, " }");
+        }
+        fprintf(out, "; (");
+        emit_type(e->type, out);
+        fprintf(out, "){ .ptr = _arr%d, .len = ", tid);
+        emit_expr(e->array_lit.size_expr, out);
+        fprintf(out, " }; })");
         break;
     }
 
@@ -298,6 +525,90 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->struct_lit.fields[i].value, out);
         }
         fprintf(out, " }");
+        break;
+    }
+
+    case EXPR_LOOP: {
+        if (e->type && e->type->kind != TYPE_VOID) {
+            /* Loop as expression: produces value via break */
+            fprintf(out, "({\n");
+            indent_level++;
+            emit_indent(out);
+            emit_type(e->type, out);
+            fprintf(out, " _loop_result;\n");
+            emit_indent(out);
+            fprintf(out, "while (1) {\n");
+            indent_level++;
+            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false);
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "}\n");
+            emit_indent(out);
+            fprintf(out, "_loop_result;\n");
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "})");
+        } else {
+            /* Void loop */
+            fprintf(out, "while (1) {\n");
+            indent_level++;
+            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false);
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "}");
+        }
+        break;
+    }
+
+    case EXPR_FOR: {
+        if (e->for_expr.range_end) {
+            /* Range iteration: for i in lo..hi */
+            Type *var_type = e->for_expr.iter->type;
+            fprintf(out, "for (");
+            emit_type(var_type, out);
+            fprintf(out, " %s = ", e->for_expr.var);
+            emit_expr(e->for_expr.iter, out);
+            fprintf(out, "; %s < ", e->for_expr.var);
+            emit_expr(e->for_expr.range_end, out);
+            fprintf(out, "; %s++) {\n", e->for_expr.var);
+        } else {
+            /* Collection iteration */
+            int tid = temp_counter++;
+            Type *iter_type = e->for_expr.iter->type;
+
+            fprintf(out, "for (int64_t _fi%d = 0; _fi%d < ", tid, tid);
+            emit_expr(e->for_expr.iter, out);
+            fprintf(out, ".len; _fi%d++) {\n", tid);
+            indent_level++;
+
+            /* Element binding */
+            emit_indent(out);
+            Type *elem_type = (iter_type->kind == TYPE_STR) ? type_uint8() : iter_type->slice.elem;
+            emit_type(elem_type, out);
+            fprintf(out, " %s = ", e->for_expr.var);
+            emit_expr(e->for_expr.iter, out);
+            fprintf(out, ".ptr[_fi%d];\n", tid);
+
+            /* Index binding if present */
+            if (e->for_expr.index_var) {
+                emit_indent(out);
+                fprintf(out, "int64_t %s = _fi%d;\n", e->for_expr.index_var, tid);
+            }
+
+            /* Body (already indented by indent_level++) */
+            emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false);
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "}");
+            break;
+        }
+
+        /* Body for range iteration */
+        indent_level++;
+        emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false);
+        indent_level--;
+        emit_indent(out);
+        fprintf(out, "}");
         break;
     }
 
@@ -327,13 +638,10 @@ static void emit_expr(Expr *e, FILE *out) {
 
             if (i > 0) fprintf(out, "else ");
 
-            bool needs_condition = true;
-
             switch (pat->kind) {
             case PAT_WILDCARD:
             case PAT_BINDING:
                 /* Always matches — this is the else branch */
-                needs_condition = false;
                 fprintf(out, "{\n");
                 break;
             case PAT_INT_LIT:
@@ -342,6 +650,24 @@ static void emit_expr(Expr *e, FILE *out) {
             case PAT_BOOL_LIT:
                 fprintf(out, "if (_subj%d == %s) {\n", subj_id,
                     pat->bool_lit.value ? "true" : "false");
+                break;
+            case PAT_SOME:
+                if (e->match_expr.subject->type->kind == TYPE_OPTION &&
+                    e->match_expr.subject->type->option.inner &&
+                    e->match_expr.subject->type->option.inner->kind == TYPE_POINTER) {
+                    fprintf(out, "if (_subj%d != NULL) {\n", subj_id);
+                } else {
+                    fprintf(out, "if (_subj%d.has_value) {\n", subj_id);
+                }
+                break;
+            case PAT_NONE:
+                if (e->match_expr.subject->type->kind == TYPE_OPTION &&
+                    e->match_expr.subject->type->option.inner &&
+                    e->match_expr.subject->type->option.inner->kind == TYPE_POINTER) {
+                    fprintf(out, "if (_subj%d == NULL) {\n", subj_id);
+                } else {
+                    fprintf(out, "if (!_subj%d.has_value) {\n", subj_id);
+                }
                 break;
             case PAT_VARIANT:
                 fprintf(out, "if (_subj%d.tag == %s_tag_%s) {\n", subj_id,
@@ -359,6 +685,18 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_indent(out);
                 emit_type(e->match_expr.subject->type, out);
                 fprintf(out, " %s = _subj%d;\n", pat->binding.name, subj_id);
+            } else if (pat->kind == PAT_SOME && pat->some_pat.inner &&
+                       pat->some_pat.inner->kind == PAT_BINDING) {
+                emit_indent(out);
+                Type *inner_type = e->match_expr.subject->type->option.inner;
+                emit_type(inner_type, out);
+                if (inner_type->kind == TYPE_POINTER) {
+                    fprintf(out, " %s = _subj%d;\n",
+                        pat->some_pat.inner->binding.name, subj_id);
+                } else {
+                    fprintf(out, " %s = _subj%d.value;\n",
+                        pat->some_pat.inner->binding.name, subj_id);
+                }
             } else if (pat->kind == PAT_VARIANT && pat->variant.payload &&
                        pat->variant.payload->kind == PAT_BINDING) {
                 /* Find the payload type */
@@ -399,8 +737,6 @@ static void emit_expr(Expr *e, FILE *out) {
             indent_level--;
             emit_indent(out);
             fprintf(out, "}\n");
-
-            (void)needs_condition;
         }
 
         emit_indent(out);
@@ -411,6 +747,41 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "})");
         break;
     }
+
+    case EXPR_BREAK:
+        if (e->break_expr.value) {
+            fprintf(out, "_loop_result = ");
+            emit_expr(e->break_expr.value, out);
+            fprintf(out, "; break");
+        } else {
+            fprintf(out, "break");
+        }
+        break;
+
+    case EXPR_CONTINUE:
+        fprintf(out, "continue");
+        break;
+
+    case EXPR_RETURN:
+        if (e->return_expr.value) {
+            fprintf(out, "return ");
+            emit_expr(e->return_expr.value, out);
+        } else {
+            fprintf(out, "return");
+        }
+        break;
+
+    case EXPR_ASSIGN:
+        emit_expr(e->assign.target, out);
+        fprintf(out, " = ");
+        emit_expr(e->assign.value, out);
+        break;
+
+    case EXPR_LET:
+        emit_type(e->let_expr.let_type, out);
+        fprintf(out, " %s = ", e->let_expr.let_name);
+        emit_expr(e->let_expr.let_init, out);
+        break;
 
     default:
         fprintf(out, "/* TODO: expr kind %d */", e->kind);
@@ -500,11 +871,199 @@ static void emit_union_typedef(Decl *d, FILE *out) {
     fprintf(out, " }; } %s;\n", name);
 }
 
+/* ---- Collect used slice/option types for typedef generation ---- */
+
+typedef struct {
+    Type **types;
+    int count;
+    int cap;
+} TypeSet;
+
+static bool typeset_contains(TypeSet *ts, Type *t) {
+    for (int i = 0; i < ts->count; i++) {
+        if (type_eq(ts->types[i], t)) return true;
+    }
+    return false;
+}
+
+static void typeset_add(TypeSet *ts, Type *t) {
+    if (!typeset_contains(ts, t)) {
+        DA_APPEND(ts->types, ts->count, ts->cap, t);
+    }
+}
+
+static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options);
+
+static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options) {
+    if (!t) return;
+    if (t->kind == TYPE_SLICE) {
+        typeset_add(slices, t);
+    } else if (t->kind == TYPE_OPTION) {
+        /* Only non-pointer options need typedefs */
+        if (!t->option.inner || t->option.inner->kind != TYPE_POINTER) {
+            typeset_add(options, t);
+        }
+    }
+}
+
+static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options) {
+    if (!e) return;
+    collect_types_in_type(e->type, slices, options);
+
+    switch (e->kind) {
+    case EXPR_BINARY:
+        collect_types_expr(e->binary.left, slices, options);
+        collect_types_expr(e->binary.right, slices, options);
+        break;
+    case EXPR_UNARY_PREFIX:
+        collect_types_expr(e->unary_prefix.operand, slices, options);
+        break;
+    case EXPR_UNARY_POSTFIX:
+        collect_types_expr(e->unary_postfix.operand, slices, options);
+        break;
+    case EXPR_CALL:
+        collect_types_expr(e->call.func, slices, options);
+        for (int i = 0; i < e->call.arg_count; i++)
+            collect_types_expr(e->call.args[i], slices, options);
+        break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        collect_types_expr(e->field.object, slices, options);
+        break;
+    case EXPR_INDEX:
+        collect_types_expr(e->index.object, slices, options);
+        collect_types_expr(e->index.index, slices, options);
+        break;
+    case EXPR_SLICE:
+        collect_types_expr(e->slice.object, slices, options);
+        if (e->slice.lo) collect_types_expr(e->slice.lo, slices, options);
+        if (e->slice.hi) collect_types_expr(e->slice.hi, slices, options);
+        break;
+    case EXPR_IF:
+        collect_types_expr(e->if_expr.cond, slices, options);
+        collect_types_expr(e->if_expr.then_body, slices, options);
+        if (e->if_expr.else_body) collect_types_expr(e->if_expr.else_body, slices, options);
+        break;
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            collect_types_expr(e->block.stmts[i], slices, options);
+        break;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.body_count; i++)
+            collect_types_expr(e->func.body[i], slices, options);
+        /* Also check param types */
+        for (int i = 0; i < e->func.param_count; i++)
+            collect_types_in_type(e->func.params[i].type, slices, options);
+        break;
+    case EXPR_LET:
+        collect_types_in_type(e->let_expr.let_type, slices, options);
+        collect_types_expr(e->let_expr.let_init, slices, options);
+        break;
+    case EXPR_RETURN:
+        if (e->return_expr.value) collect_types_expr(e->return_expr.value, slices, options);
+        break;
+    case EXPR_ASSIGN:
+        collect_types_expr(e->assign.target, slices, options);
+        collect_types_expr(e->assign.value, slices, options);
+        break;
+    case EXPR_CAST:
+        collect_types_in_type(e->cast.target, slices, options);
+        collect_types_expr(e->cast.operand, slices, options);
+        break;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            collect_types_expr(e->struct_lit.fields[i].value, slices, options);
+        break;
+    case EXPR_SOME:
+        collect_types_expr(e->some_expr.value, slices, options);
+        break;
+    case EXPR_ARRAY_LIT:
+        collect_types_in_type(e->array_lit.elem_type, slices, options);
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            collect_types_expr(e->array_lit.elems[i], slices, options);
+        break;
+    case EXPR_MATCH:
+        collect_types_expr(e->match_expr.subject, slices, options);
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                collect_types_expr(e->match_expr.arms[i].body[j], slices, options);
+        }
+        break;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            collect_types_expr(e->loop_expr.body[i], slices, options);
+        break;
+    case EXPR_FOR:
+        collect_types_expr(e->for_expr.iter, slices, options);
+        if (e->for_expr.range_end) collect_types_expr(e->for_expr.range_end, slices, options);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            collect_types_expr(e->for_expr.body[i], slices, options);
+        break;
+    case EXPR_BREAK:
+        if (e->break_expr.value) collect_types_expr(e->break_expr.value, slices, options);
+        break;
+    default:
+        break;
+    }
+}
+
 void codegen_emit(Program *prog, FILE *out) {
     /* Preamble */
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stdbool.h>\n");
     fprintf(out, "#include <inttypes.h>\n");
+    fprintf(out, "#include <stdlib.h>\n");
+    fprintf(out, "\n");
+
+    /* Always emit fc_str (alias for uint8 slice) */
+    fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
+
+    /* Collect all slice and option types used in the program */
+    TypeSet slices = {0};
+    TypeSet options = {0};
+
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_LET) {
+            collect_types_in_type(d->let.resolved_type, &slices, &options);
+            collect_types_expr(d->let.init, &slices, &options);
+        }
+        /* Check struct field types */
+        if (d->kind == DECL_STRUCT) {
+            for (int j = 0; j < d->struc.field_count; j++)
+                collect_types_in_type(d->struc.fields[j].type, &slices, &options);
+        }
+        if (d->kind == DECL_UNION) {
+            for (int j = 0; j < d->unio.variant_count; j++)
+                collect_types_in_type(d->unio.variants[j].payload, &slices, &options);
+        }
+    }
+
+    /* Emit slice typedefs (skip str which is already emitted) */
+    for (int i = 0; i < slices.count; i++) {
+        Type *s = slices.types[i];
+        /* str is already defined above */
+        if (type_eq(s->slice.elem, type_uint8())) continue;
+        fprintf(out, "typedef struct { ");
+        emit_type(s->slice.elem, out);
+        fprintf(out, "* ptr; int64_t len; } fc_slice_");
+        emit_type_ident(s->slice.elem, out);
+        fprintf(out, ";\n");
+    }
+
+    /* Emit option typedefs */
+    for (int i = 0; i < options.count; i++) {
+        Type *o = options.types[i];
+        fprintf(out, "typedef struct { ");
+        emit_type(o->option.inner, out);
+        fprintf(out, " value; bool has_value; } fc_option_");
+        emit_type_ident(o->option.inner, out);
+        fprintf(out, ";\n");
+    }
+
+    free(slices.types);
+    free(options.types);
+
     fprintf(out, "\n");
 
     /* Emit struct and union type definitions */
@@ -524,7 +1083,7 @@ void codegen_emit(Program *prog, FILE *out) {
     for (int i = 0; i < prog->decl_count; i++) {
         if (is_func_decl(prog->decls[i])) {
             if (strcmp(prog->decls[i]->let.name, "main") == 0) has_main = true;
-        } else {
+        } else if (prog->decls[i]->kind == DECL_LET) {
             has_non_func = true;
         }
     }

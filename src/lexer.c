@@ -330,6 +330,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
 
     bool saw_decl_keyword = false;    /* let, struct, union, module on current line */
     bool saw_for = false;             /* for on current line (before in) */
+    bool saw_for_in = false;          /* saw 'for ... in' — line is block-former */
     TokenKind last_kind = TOK_EOF;    /* last non-NEWLINE token emitted */
 
     for (int i = 0; i < raw_count; i++) {
@@ -351,12 +352,13 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
             bool block_former = is_always_block_former(last_kind);
             if (!block_former && last_kind == TOK_EQ && saw_decl_keyword)
                 block_former = true;
-            if (!block_former && last_kind == TOK_IN && saw_for)
+            if (!block_former && saw_for_in)
                 block_former = true;
 
             /* Reset line-local state */
             saw_decl_keyword = false;
             saw_for = false;
+            saw_for_in = false;
 
             if (block_former && next_col > indent_stack[indent_depth]) {
                 /* Start new block */
@@ -413,6 +415,9 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
         }
         if (t.kind == TOK_FOR) {
             saw_for = true;
+        }
+        if (t.kind == TOK_IN && saw_for) {
+            saw_for_in = true;
         }
     }
 

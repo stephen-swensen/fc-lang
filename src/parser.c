@@ -308,15 +308,15 @@ static Expr **parse_block(Parser *p, int *count) {
     return arena_stmts;
 }
 
-/* Parse either a block (if INDENT) or a single expression */
+/* Parse either a block (if INDENT) or a single statement/expression */
 static Expr **parse_body(Parser *p, int *count) {
     if (check(p, TOK_INDENT)) {
         return parse_block(p, count);
     }
-    /* Single expression */
+    /* Single statement/expression (may be break, continue, return, let, or expr) */
     *count = 1;
     Expr **stmts = arena_alloc(p->arena, sizeof(Expr*));
-    stmts[0] = parse_expr(p, PREC_NONE + 1);
+    stmts[0] = parse_block_item(p);
     return stmts;
 }
 
@@ -454,6 +454,25 @@ static Expr *parse_block_item(Parser *p) {
         return e;
     }
 
+    if (check(p, TOK_BREAK)) {
+        SrcLoc loc = loc_from_token(current(p));
+        advance_p(p);
+        Expr *value = NULL;
+        if (!check(p, TOK_NEWLINE) && !check(p, TOK_DEDENT) && !at_end_p(p)) {
+            value = parse_expr(p, PREC_NONE + 1);
+        }
+        Expr *e = alloc_expr(p, EXPR_BREAK, loc);
+        e->break_expr.value = value;
+        return e;
+    }
+
+    if (check(p, TOK_CONTINUE)) {
+        SrcLoc loc = loc_from_token(current(p));
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_CONTINUE, loc);
+        return e;
+    }
+
     return parse_expr(p, PREC_NONE + 1);
 }
 
@@ -525,6 +544,62 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_IDENT: {
         const char *name = tok_intern(p, t);
+
+        /* Check for array literal: type_name[size] { ... } */
+        if (is_type_name(t->start, t->length) && peek_at(p, 1)->kind == TOK_LBRACKET) {
+            /* Look ahead: type[expr] { — the { after ] means array literal */
+            int save = p->pos;
+            advance_p(p);  /* consume ident */
+            advance_p(p);  /* consume [ */
+            /* Skip tokens until we find matching ] */
+            int depth = 1;
+            while (depth > 0 && !at_end_p(p)) {
+                if (check(p, TOK_LBRACKET)) depth++;
+                if (check(p, TOK_RBRACKET)) depth--;
+                advance_p(p);
+            }
+            bool is_array_lit = check(p, TOK_LBRACE);
+            /* Restore position */
+            p->pos = save;
+
+            if (is_array_lit) {
+                advance_p(p);  /* consume ident */
+                Type *elem_type = type_from_name(t->start, t->length);
+                if (!elem_type) {
+                    /* User-defined type — create stub */
+                    elem_type = arena_alloc(p->arena, sizeof(Type));
+                    elem_type->kind = TYPE_STRUCT;
+                    elem_type->struc.name = name;
+                    elem_type->struc.fields = NULL;
+                    elem_type->struc.field_count = 0;
+                }
+                expect(p, TOK_LBRACKET);
+                Expr *size_expr = parse_expr(p, PREC_NONE + 1);
+                expect(p, TOK_RBRACKET);
+                expect(p, TOK_LBRACE);
+
+                Expr **elems = NULL;
+                int elem_count = 0, elem_cap = 0;
+                if (!check(p, TOK_RBRACE)) {
+                    do {
+                        Expr *elem = parse_expr(p, PREC_NONE + 1);
+                        DA_APPEND(elems, elem_count, elem_cap, elem);
+                        if (!check(p, TOK_COMMA)) break;
+                        advance_p(p);
+                    } while (!check(p, TOK_RBRACE));
+                }
+                expect(p, TOK_RBRACE);
+
+                Expr *e = alloc_expr(p, EXPR_ARRAY_LIT, loc);
+                e->array_lit.elem_type = elem_type;
+                e->array_lit.size_expr = size_expr;
+                e->array_lit.elems = arena_copy_exprs(p, elems, elem_count);
+                e->array_lit.elem_count = elem_count;
+                free(elems);
+                return e;
+            }
+        }
+
         /* Check for struct literal: name { field = expr, ... }
          * Disambiguate from block: peek past { for IDENT = or } */
         if (peek_at(p, 1)->kind == TOK_LBRACE) {
@@ -586,6 +661,62 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_MATCH:
         return parse_match_expr(p);
+
+    case TOK_SOME: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *val = parse_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_SOME, loc);
+        e->some_expr.value = val;
+        return e;
+    }
+
+    case TOK_NONE: {
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_NONE, loc);
+        e->none_expr.target = NULL; /* resolved by pass2 from context */
+        return e;
+    }
+
+    case TOK_LOOP: {
+        advance_p(p);
+        int body_count;
+        Expr **body = parse_block(p, &body_count);
+        Expr *e = alloc_expr(p, EXPR_LOOP, loc);
+        e->loop_expr.body = body;
+        e->loop_expr.body_count = body_count;
+        return e;
+    }
+
+    case TOK_FOR: {
+        advance_p(p);
+        const char *var = tok_intern(p, expect(p, TOK_IDENT));
+        const char *index_var = NULL;
+        if (check(p, TOK_COMMA)) {
+            advance_p(p);
+            /* first was index, second is element */
+            index_var = var;
+            var = tok_intern(p, expect(p, TOK_IDENT));
+        }
+        expect(p, TOK_IN);
+        Expr *iter = parse_expr(p, PREC_NONE + 1);
+        Expr *range_end = NULL;
+        if (check(p, TOK_DOTDOT)) {
+            advance_p(p);
+            range_end = parse_expr(p, PREC_NONE + 1);
+        }
+        int body_count;
+        Expr **body = parse_body(p, &body_count);
+        Expr *e = alloc_expr(p, EXPR_FOR, loc);
+        e->for_expr.var = var;
+        e->for_expr.index_var = index_var;
+        e->for_expr.iter = iter;
+        e->for_expr.range_end = range_end;
+        e->for_expr.body = body;
+        e->for_expr.body_count = body_count;
+        return e;
+    }
 
     /* Prefix unary operators: - ! ~ & * */
     case TOK_MINUS:
@@ -717,6 +848,16 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
 static Pattern *parse_pattern(Parser *p) {
     Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
     pat->loc = loc_from_token(current(p));
+
+    /* Negative integer pattern: -42 */
+    if (check(p, TOK_MINUS) && peek_at(p, 1)->kind == TOK_INT_LIT) {
+        advance_p(p); /* consume - */
+        Token *t = advance_p(p);
+        pat->kind = PAT_INT_LIT;
+        pat->int_lit.value = -parse_int_value(t->start, t->length);
+        pat->int_lit.lit_type = parse_int_type(t->start, t->length);
+        return pat;
+    }
 
     if (check(p, TOK_INT_LIT)) {
         Token *t = advance_p(p);

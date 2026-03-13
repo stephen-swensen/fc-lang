@@ -127,7 +127,8 @@ struct Expr {
         struct {
             const char *var;
             const char *index_var;  /* NULL if not i,x form */
-            Expr *iter;
+            Expr *iter;             /* collection expr, or range start */
+            Expr *range_end;        /* non-NULL for range iteration (lo..hi) */
             Expr **body;
             int body_count;
         } for_expr;
