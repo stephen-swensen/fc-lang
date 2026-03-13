@@ -120,7 +120,13 @@ Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
 
 ## Spec Reference
 
-The full specification lives in `spec/fc-spec.html`. It is a self-contained HTML file with embedded markdown rendered by `marked.js`. Open it in a browser to read it. Sections are organized as:
+The `spec/` folder contains:
+- **`fc-spec.html`** — Full language specification. Self-contained HTML with embedded markdown rendered by `marked.js`. Open in a browser to read.
+- **`grammar.bnf`** — BNF grammar for the language syntax.
+- **`fc-compiler-plan.md`** — Milestone-based compiler implementation roadmap (M1–M10).
+- **`TODO.md`** — Outstanding spec/compiler tasks.
+
+Spec sections are organized as:
 - Part 1 — Foundations (types, literals, operators, let/mut, inference)
 - Part 2 — Control flow (if, match, loop, for)
 - Part 3 — Functions (lambdas, closures, capture)
