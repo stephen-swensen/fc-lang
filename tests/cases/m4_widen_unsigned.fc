@@ -1,0 +1,11 @@
+let main = (args: int32) ->
+    let a = 10u8
+    let b = 20u16
+    let c = 30u32
+    let d = 40u64
+    let ab = a + b
+    let bc = b + c
+    let cd = c + d
+    let mut result = 0u64
+    if cd == 70u64 then result = ab + bc + cd
+    result
