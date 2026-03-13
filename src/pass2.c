@@ -1,11 +1,13 @@
 #include "pass2.h"
 #include "diag.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ---- Scope for local bindings ---- */
 
 typedef struct {
     const char *name;
+    const char *codegen_name;   /* unique C name for shadowing */
     Type *type;
     bool is_mut;
 } LocalBinding;
@@ -24,17 +26,23 @@ static Scope *scope_new(Arena *a, Scope *parent) {
     return s;
 }
 
-static void scope_add(Scope *s, const char *name, Type *type, bool is_mut) {
-    LocalBinding b = { name, type, is_mut };
+static int local_id_counter = 0;
+
+static void scope_add(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut) {
+    LocalBinding b = { name, codegen_name, type, is_mut };
     DA_APPEND(s->locals, s->local_count, s->local_cap, b);
 }
 
-static Type *scope_lookup(Scope *s, const char *name) {
+static Type *scope_lookup(Scope *s, const char *name, const char **out_codegen_name) {
     for (Scope *sc = s; sc; sc = sc->parent) {
-        for (int i = 0; i < sc->local_count; i++) {
-            if (sc->locals[i].name == name) return sc->locals[i].type;
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].name == name) {
+                if (out_codegen_name) *out_codegen_name = sc->locals[i].codegen_name;
+                return sc->locals[i].type;
+            }
         }
     }
+    if (out_codegen_name) *out_codegen_name = NULL;
     return NULL;
 }
 
@@ -110,8 +118,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_IDENT: {
         /* Check local scope first */
-        Type *t = scope_lookup(ctx->scope, e->ident.name);
+        const char *cg_name = NULL;
+        Type *t = scope_lookup(ctx->scope, e->ident.name, &cg_name);
         if (t) {
+            e->ident.codegen_name = cg_name;
             e->type = t;
             return t;
         }
@@ -269,7 +279,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         for (int i = 0; i < pc; i++) {
             ptypes[i] = e->func.params[i].type;
-            scope_add(inner, e->func.params[i].name, ptypes[i], false);
+            scope_add(inner, e->func.params[i].name, e->func.params[i].name, ptypes[i], false);
         }
 
         /* Type-check body in inner scope */
@@ -367,7 +377,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_LET: {
         Type *t = check_expr(ctx, e->let_expr.let_init);
         e->let_expr.let_type = t;
-        scope_add(ctx->scope, e->let_expr.let_name, t, e->let_expr.let_is_mut);
+        int id = local_id_counter++;
+        char buf[128];
+        snprintf(buf, sizeof(buf), "_l_%s_%d", e->let_expr.let_name, id);
+        char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
+        memcpy(cg, buf, strlen(buf) + 1);
+        e->let_expr.codegen_name = cg;
+        scope_add(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut);
         e->type = type_void();
         return e->type;
     }
@@ -618,18 +634,18 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (iter_type->kind < end_type->kind) var_type = end_type;
                 else var_type = iter_type;
             }
-            scope_add(ctx->scope, e->for_expr.var, var_type, false);
+            scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, var_type, false);
         } else {
             /* Collection iteration: for x in slice */
             if (iter_type->kind == TYPE_SLICE) {
-                scope_add(ctx->scope, e->for_expr.var, iter_type->slice.elem, false);
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, iter_type->slice.elem, false);
                 if (e->for_expr.index_var) {
-                    scope_add(ctx->scope, e->for_expr.index_var, type_int64(), false);
+                    scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
                 }
             } else if (iter_type->kind == TYPE_STR) {
-                scope_add(ctx->scope, e->for_expr.var, type_uint8(), false);
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_uint8(), false);
                 if (e->for_expr.index_var) {
-                    scope_add(ctx->scope, e->for_expr.index_var, type_int64(), false);
+                    scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
                 }
             } else {
                 diag_fatal(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
@@ -713,7 +729,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
             break;
         case PAT_BINDING:
             /* Bind the subject value to a name */
-            scope_add(ctx->scope, pat->binding.name, subj_type, false);
+            scope_add(ctx->scope, pat->binding.name, pat->binding.name, subj_type, false);
             break;
         case PAT_INT_LIT:
             if (!type_is_integer(subj_type))
@@ -728,7 +744,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
                 diag_fatal(pat->loc, "some pattern on non-option type %s", type_name(subj_type));
             Type *inner_type = subj_type->option.inner;
             if (pat->some_pat.inner->kind == PAT_BINDING) {
-                scope_add(ctx->scope, pat->some_pat.inner->binding.name, inner_type, false);
+                scope_add(ctx->scope, pat->some_pat.inner->binding.name, pat->some_pat.inner->binding.name, inner_type, false);
             }
             break;
         }
@@ -749,7 +765,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
                         Type *payload_type = resolve_type(ctx, subj_type->unio.variants[v].payload);
                         if (pat->variant.payload->kind == PAT_BINDING) {
                             scope_add(ctx->scope, pat->variant.payload->binding.name,
-                                payload_type, false);
+                                pat->variant.payload->binding.name, payload_type, false);
                         }
                     }
                     break;
@@ -801,7 +817,7 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
             Symbol *sym = symtab_lookup(symtab, d->let.name);
             if (sym) sym->type = t;
             /* Add to global scope so later decls can reference it */
-            scope_add(ctx.scope, d->let.name, t, d->let.is_mut);
+            scope_add(ctx.scope, d->let.name, d->let.name, t, d->let.is_mut);
             break;
         }
         default:

@@ -1,0 +1,7 @@
+let get_len = (s: str) ->
+    s.len
+
+let main = (args: int32) ->
+    let s = "hello"
+    let n = get_len(s)
+    (int32)n

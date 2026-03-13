@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This is an early-stage compiler project for **FC** (version 0.5 draft), a systems programming language that transpiles to C11. Currently, the repository contains only the language specification (`spec/fc-spec.html`). No compiler code exists yet.
+This is an early-stage compiler project for **FC** (version 0.5 draft), a systems programming language that transpiles to C11. The compiler (`./fc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`.
+
+## Build & Run
+
+- **`make`** — Build the compiler (produces `./fc` in the project root)
+- **`make test`** — Build and run all tests
+- **`make clean`** — Remove build artifacts
+- **`./fc input.fc -o output.c`** — Compile a single FC file to C
+
+The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g`. Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean.
 
 ## Git Workflow
 
@@ -22,6 +31,24 @@ FC is a C-targeting language with these core design constraints:
 - **Syntax**: Indentation-based (offside rule, spaces only — tabs are a compile error)
 - **Type inference**: Directional (bottom-up, inside-out), never global unification
 - **Generics**: Monomorphized at compile time, zero runtime cost
+
+## Compiler Architecture
+
+The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → codegen → C file**.
+
+### Source files (`src/`)
+
+- **`main.c`** — Entry point. Reads input file, runs the pipeline, writes output.
+- **`lexer.c/h`** — Tokenizer. Scans source into tokens, then runs a layout pass that converts indentation into `INDENT`/`DEDENT`/`NEWLINE` tokens (offside rule). Also handles same-level match blocks where `|` acts as a delimiter.
+- **`token.c/h`** — Token types and interning. All identifier/keyword strings are interned for pointer-equality comparison.
+- **`parser.c/h`** — Pratt parser. Produces an AST of `Expr` and `Decl` nodes. Handles expressions (12 precedence levels), statements, patterns, and declarations.
+- **`ast.h`** — AST node definitions. `Expr` (expressions, including `let` bindings), `Pattern` (match patterns), `Decl` (top-level declarations), `Program` (root).
+- **`pass1.c/h`** — First pass. Walks declarations to collect top-level names, struct/union layouts, and function signatures into a `SymbolTable`. Enables forward references.
+- **`pass2.c/h`** — Second pass (type checker). Walks expressions with a scope chain, infers types bottom-up, resolves identifiers, checks type compatibility, validates casts and widening. Assigns unique codegen names to local bindings for shadowing support.
+- **`codegen.c/h`** — C code emitter. Walks the typed AST and emits C11 source. Handles typedef generation for slices/options, function declarations, struct/union definitions, and expression emission.
+- **`types.c/h`** — Type representation and utilities. Defines `Type` (int8–uint64, float32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
+- **`diag.c/h`** — Diagnostics. `diag_fatal()` prints an error with source location and exits.
+- **`common.c/h`** — Shared utilities. Arena allocator, dynamic array macro (`DA_APPEND`).
 
 ## Key Language Design Decisions
 
@@ -68,6 +95,28 @@ FC is a C-targeting language with these core design constraints:
 - Bitwise operators bind tighter than comparison (fixes C's `x & mask == 0` wart)
 - `!` is postfix option-unwrap AND prefix boolean-not (context-dependent)
 - `->` means: pointer field access, function type arrow, OR match arm separator (context-dependent)
+
+## Testing
+
+Tests live in `tests/cases/`. Each test is an `.fc` file plus one of:
+- `.expected_exit` — expected exit code (0–255); the test compiles and runs
+- `.error` — substring expected in compiler stderr; the test must fail to compile
+
+Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`.
+
+### Naming convention
+
+Tests are prefixed by milestone: `m1_` (expressions/operators), `m2_` (control flow/functions), `m3_` (structs/unions/match), `m4_` (types: options, slices, pointers, casts, widening).
+
+### Test coverage philosophy
+
+Strive for tests that cover every corner of the spec and compiler implementation. When adding a feature or fixing a bug, add tests that exercise:
+- The happy path (feature works as specified)
+- Edge cases and boundary conditions
+- Error cases (invalid input produces a clear compile error)
+- Interactions between features (e.g., shadowing + mutability, match + options + unions)
+
+Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
 
 ## Spec Reference
 

@@ -85,7 +85,7 @@ struct Expr {
         struct { const char *value; int length; } cstring_lit;
 
         /* EXPR_IDENT */
-        struct { const char *name; } ident;
+        struct { const char *name; const char *codegen_name; } ident;
 
         /* EXPR_BINARY */
         struct { TokenKind op; Expr *left; Expr *right; } binary;
@@ -205,6 +205,7 @@ struct Expr {
         /* EXPR_LET (block-local) */
         struct {
             const char *let_name;
+            const char *codegen_name;   /* unique C name for shadowing */
             bool let_is_mut;
             Expr *let_init;
             Type *let_type;     /* filled by pass2 */

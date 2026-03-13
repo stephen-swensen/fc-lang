@@ -88,17 +88,11 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
         emit_indent(out);
 
         if (s->kind == EXPR_LET) {
-            if (s->let_expr.let_is_mut) {
-                emit_type(s->let_expr.let_type, out);
-                fprintf(out, " %s = ", s->let_expr.let_name);
-                emit_expr(s->let_expr.let_init, out);
-                fprintf(out, ";\n");
-            } else {
-                emit_type(s->let_expr.let_type, out);
-                fprintf(out, " %s = ", s->let_expr.let_name);
-                emit_expr(s->let_expr.let_init, out);
-                fprintf(out, ";\n");
-            }
+            const char *vname = s->let_expr.codegen_name ? s->let_expr.codegen_name : s->let_expr.let_name;
+            emit_type(s->let_expr.let_type, out);
+            fprintf(out, " %s = ", vname);
+            emit_expr(s->let_expr.let_init, out);
+            fprintf(out, ";\n");
         } else if (s->kind == EXPR_RETURN) {
             if (s->return_expr.value) {
                 fprintf(out, "return ");
@@ -220,7 +214,7 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_IDENT:
-        fprintf(out, "%s", e->ident.name);
+        fprintf(out, "%s", e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
         break;
 
     case EXPR_BINARY: {
@@ -777,11 +771,13 @@ static void emit_expr(Expr *e, FILE *out) {
         emit_expr(e->assign.value, out);
         break;
 
-    case EXPR_LET:
+    case EXPR_LET: {
+        const char *vname = e->let_expr.codegen_name ? e->let_expr.codegen_name : e->let_expr.let_name;
         emit_type(e->let_expr.let_type, out);
-        fprintf(out, " %s = ", e->let_expr.let_name);
+        fprintf(out, " %s = ", vname);
         emit_expr(e->let_expr.let_init, out);
         break;
+    }
 
     default:
         fprintf(out, "/* TODO: expr kind %d */", e->kind);

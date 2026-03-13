@@ -788,6 +788,18 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_LBRACKET: {
+        if (check(p, TOK_DOTDOT)) {
+            /* s[..hi] */
+            advance_p(p);
+            Expr *hi = NULL;
+            if (!check(p, TOK_RBRACKET)) hi = parse_expr(p, PREC_NONE + 1);
+            expect(p, TOK_RBRACKET);
+            Expr *e = alloc_expr(p, EXPR_SLICE, loc);
+            e->slice.object = left;
+            e->slice.lo = NULL;
+            e->slice.hi = hi;
+            return e;
+        }
         Expr *index = parse_expr(p, PREC_NONE + 1);
         if (check(p, TOK_DOTDOT)) {
             advance_p(p);
