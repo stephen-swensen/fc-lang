@@ -1,0 +1,13 @@
+let sum_slice = (s: int32[]) ->
+    let mut total = 0
+    for x in s
+        total = total + x
+    total
+
+let main = (args: int32) ->
+    let mut buf = int32[4] { }
+    buf.ptr[0] = 1
+    buf.ptr[1] = 2
+    buf.ptr[2] = 3
+    buf.ptr[3] = 4
+    sum_slice(buf)

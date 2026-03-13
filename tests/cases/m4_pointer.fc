@@ -1,0 +1,6 @@
+let main = (args: int32) ->
+    let mut x = 10
+    let px = &x
+    *px = 20
+    let y = *px + 5
+    y
