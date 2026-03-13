@@ -395,8 +395,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_CAST: {
-        check_expr(ctx, e->cast.operand);
-        e->type = e->cast.target;
+        Type *from = check_expr(ctx, e->cast.operand);
+        Type *to = e->cast.target;
+        bool from_num = type_is_numeric(from);
+        bool to_num = type_is_numeric(to);
+        bool from_ptr = (from->kind == TYPE_POINTER || from->kind == TYPE_ANY_PTR || from->kind == TYPE_CSTR);
+        bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR || to->kind == TYPE_CSTR);
+        bool from_int = type_is_integer(from);
+        bool to_int = type_is_integer(to);
+        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer */
+        if (!((from_num && to_num) || (from_ptr && to_ptr) ||
+              (from_ptr && to_int) || (from_int && to_ptr)))
+            diag_fatal(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
+        e->type = to;
         return e->type;
     }
 
