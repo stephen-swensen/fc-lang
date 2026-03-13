@@ -4,8 +4,8 @@ union shape =
 
 let area = (s: shape) ->
     match s with
-        | circle(r) -> r * r
-        | square(side) -> side * side
+    | circle(r) -> r * r
+    | square(side) -> side * side
 
 let main = (args: int32) ->
     let s = shape.circle(3)

@@ -325,8 +325,10 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     int olen = 0, ocap = 0;
 
     int indent_stack[MAX_INDENT];
+    bool is_match_block[MAX_INDENT]; /* true if this level is a same-level match block */
     int indent_depth = 0;
     indent_stack[indent_depth] = 1;  /* base column */
+    is_match_block[indent_depth] = false;
 
     bool saw_decl_keyword = false;    /* let, struct, union, module on current line */
     bool saw_for = false;             /* for on current line (before in) */
@@ -360,6 +362,16 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
             saw_for = false;
             saw_for_in = false;
 
+            /* Close same-level match blocks when next line doesn't start with | */
+            while (indent_depth > 0 && is_match_block[indent_depth] &&
+                   next_col <= indent_stack[indent_depth]) {
+                if (next_col == indent_stack[indent_depth] && raw[j].kind == TOK_PIPE)
+                    break; /* still in match block — peer arm */
+                indent_depth--;
+                Token dedent = make_layout_token(TOK_DEDENT, t.line, t.col);
+                DA_APPEND(out, olen, ocap, dedent);
+            }
+
             if (block_former && next_col > indent_stack[indent_depth]) {
                 /* Start new block */
                 indent_depth++;
@@ -367,6 +379,19 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                     diag_fatal_simple("indentation too deep");
                 }
                 indent_stack[indent_depth] = next_col;
+                is_match_block[indent_depth] = false;
+                Token indent_tok = make_layout_token(TOK_INDENT, raw[j].line, raw[j].col);
+                DA_APPEND(out, olen, ocap, indent_tok);
+            } else if (last_kind == TOK_WITH &&
+                       next_col == indent_stack[indent_depth] &&
+                       raw[j].kind == TOK_PIPE) {
+                /* Match block at same indentation level (F#-style) */
+                indent_depth++;
+                if (indent_depth >= MAX_INDENT) {
+                    diag_fatal_simple("indentation too deep");
+                }
+                indent_stack[indent_depth] = next_col;
+                is_match_block[indent_depth] = true;
                 Token indent_tok = make_layout_token(TOK_INDENT, raw[j].line, raw[j].col);
                 DA_APPEND(out, olen, ocap, indent_tok);
             } else if (next_col == indent_stack[indent_depth]) {
@@ -381,6 +406,15 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                     indent_depth--;
                     Token dedent = make_layout_token(TOK_DEDENT, t.line, t.col);
                     DA_APPEND(out, olen, ocap, dedent);
+                }
+                /* After dedent, close any match block we landed on */
+                while (indent_depth > 0 && is_match_block[indent_depth] &&
+                       next_col <= indent_stack[indent_depth]) {
+                    if (next_col == indent_stack[indent_depth] && raw[j].kind == TOK_PIPE)
+                        break;
+                    indent_depth--;
+                    Token dedent2 = make_layout_token(TOK_DEDENT, t.line, t.col);
+                    DA_APPEND(out, olen, ocap, dedent2);
                 }
                 if (next_col != indent_stack[indent_depth]) {
                     SrcLoc loc = { .line = raw[j].line, .col = raw[j].col };

@@ -7,5 +7,5 @@ let find_first_positive = (a: int32, b: int32, c: int32) ->
 let main = (args: int32) ->
     let result = find_first_positive(-1, 42, 99)
     match result with
-        | some(v) -> v
-        | none -> 0
+    | some(v) -> v
+    | none -> 0

@@ -1,7 +1,7 @@
 let check = (x: int32?) ->
     match x with
-        | some(v) -> v
-        | none -> 0
+    | some(v) -> v
+    | none -> 0
 
 let main = (args: int32) ->
     let a = check(int32.none)
