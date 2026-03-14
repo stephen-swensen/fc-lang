@@ -1,0 +1,9 @@
+let mut counter = 0
+
+let increment = (n: int32) ->
+    counter = counter + n
+    counter
+
+let main = (args: int32) ->
+    increment(20)
+    increment(22)

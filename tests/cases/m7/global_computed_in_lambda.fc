@@ -1,0 +1,8 @@
+let base = 20
+let offset = base + 1
+
+let apply = (f: (int32) -> int32, x: int32) -> f(x)
+
+let main = (args: int32) ->
+    let add_offset = (n: int32) -> n + offset
+    apply(add_offset, 21)

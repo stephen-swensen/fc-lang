@@ -1,0 +1,2 @@
+let main = (args: int32) ->
+    alpha.add(alpha.value, beta.value) + beta.add(3, 3)

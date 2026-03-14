@@ -1,0 +1,5 @@
+let a = 10
+let b = a + 5
+
+let main = (args: int32) ->
+    a + b + 17
