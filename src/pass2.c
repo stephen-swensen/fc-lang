@@ -18,6 +18,16 @@ struct Scope {
     LocalBinding *locals;
     int local_count;
     int local_cap;
+    bool is_lambda_boundary;
+    bool is_global;          /* true for root scope — bindings here are not captures */
+};
+
+typedef struct LambdaCtx LambdaCtx;
+struct LambdaCtx {
+    LambdaCtx *parent;
+    Capture *entries;
+    int count;
+    int cap;
 };
 
 static Scope *scope_new(Arena *a, Scope *parent) {
@@ -33,16 +43,32 @@ static void scope_add(Scope *s, const char *name, const char *codegen_name, Type
     DA_APPEND(s->locals, s->local_count, s->local_cap, b);
 }
 
-static Type *scope_lookup(Scope *s, const char *name, const char **out_codegen_name) {
+/* Scope lookup with lambda boundary crossing and mutability tracking.
+   Boundary crossings are counted when moving FROM a boundary scope to its parent,
+   so bindings within the boundary scope itself are not treated as captures. */
+static Type *scope_lookup_capture(Scope *s, const char *name,
+    const char **out_codegen_name, bool *out_is_mut, int *out_crossings,
+    bool *out_is_global)
+{
+    int crossings = 0;
     for (Scope *sc = s; sc; sc = sc->parent) {
         for (int i = sc->local_count - 1; i >= 0; i--) {
             if (sc->locals[i].name == name) {
                 if (out_codegen_name) *out_codegen_name = sc->locals[i].codegen_name;
+                if (out_is_mut) *out_is_mut = sc->locals[i].is_mut;
+                /* Global scope bindings are never captures */
+                if (out_crossings) *out_crossings = sc->is_global ? 0 : crossings;
+                if (out_is_global) *out_is_global = sc->is_global;
                 return sc->locals[i].type;
             }
         }
+        /* Count boundary when leaving this scope to search parent */
+        if (sc->is_lambda_boundary) crossings++;
     }
     if (out_codegen_name) *out_codegen_name = NULL;
+    if (out_is_mut) *out_is_mut = false;
+    if (out_crossings) *out_crossings = 0;
+    if (out_is_global) *out_is_global = false;
     return NULL;
 }
 
@@ -57,6 +83,8 @@ typedef struct {
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
     const char *current_ns;      /* current namespace for namespace isolation */
     Type *recursive_ret;         /* non-NULL placeholder when resolving a recursive function */
+    LambdaCtx *lambda_ctx;       /* capture tracking for lambdas, NULL outside lambdas */
+    bool is_top_level_init;      /* true when checking the init of a top-level DECL_LET */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -180,9 +208,40 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_IDENT: {
         /* Check local scope first */
         const char *cg_name = NULL;
-        Type *t = scope_lookup(ctx->scope, e->ident.name, &cg_name);
+        bool is_mut = false;
+        int boundary_crossings = 0;
+        bool is_global_binding = false;
+        Type *t = scope_lookup_capture(ctx->scope, e->ident.name,
+            &cg_name, &is_mut, &boundary_crossings, &is_global_binding);
         if (t) {
+            if (boundary_crossings > 0) {
+                if (is_mut) {
+                    diag_error(e->loc, "cannot capture mutable binding '%s'",
+                        e->ident.name);
+                    e->type = type_error();
+                    return e->type;
+                }
+                /* Add capture to each lambda_ctx level */
+                LambdaCtx *lc = ctx->lambda_ctx;
+                for (int bc = 0; bc < boundary_crossings && lc; bc++) {
+                    bool found = false;
+                    for (int j = 0; j < lc->count; j++) {
+                        if (lc->entries[j].codegen_name == cg_name) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        Capture cap = { .name = e->ident.name,
+                                        .codegen_name = cg_name,
+                                        .type = t };
+                        DA_APPEND(lc->entries, lc->count, lc->cap, cap);
+                    }
+                    lc = lc->parent;
+                }
+            }
             e->ident.codegen_name = cg_name;
+            e->ident.is_local = !is_global_binding;
             e->type = t;
             return t;
         }
@@ -429,6 +488,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_FUNC: {
+        bool is_top = ctx->is_top_level_init;
+        ctx->is_top_level_init = false;
+
         /* Create function type from params */
         int pc = e->func.param_count;
         Type **ptypes = NULL;
@@ -436,19 +498,50 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             ptypes = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)pc);
         }
 
-        /* Create inner scope for function body */
+        /* Create inner scope for function body with lambda boundary */
         Scope *inner = scope_new(ctx->arena, ctx->scope);
+        inner->is_lambda_boundary = true;
         for (int i = 0; i < pc; i++) {
             ptypes[i] = resolve_type(ctx, e->func.params[i].type);
             e->func.params[i].type = ptypes[i];
             scope_add(inner, e->func.params[i].name, e->func.params[i].name, ptypes[i], false);
         }
 
+        /* Push lambda context for capture tracking */
+        LambdaCtx lctx = { .parent = ctx->lambda_ctx };
+        LambdaCtx *saved_lambda = ctx->lambda_ctx;
+        ctx->lambda_ctx = &lctx;
+
         /* Type-check body in inner scope */
         Scope *saved = ctx->scope;
         ctx->scope = inner;
         Type *ret = check_block(ctx, e->func.body, e->func.body_count);
         ctx->scope = saved;
+
+        /* Pop lambda context */
+        ctx->lambda_ctx = saved_lambda;
+
+        /* Transfer captures to AST node */
+        e->func.captures = lctx.entries;
+        e->func.capture_count = lctx.count;
+
+        /* Generate lifted_name for lambdas (non-top-level functions) */
+        if (!is_top) {
+            int id = local_id_counter++;
+            char buf[64];
+            snprintf(buf, sizeof(buf), "_fn_%d", id);
+            char *ln = arena_alloc(ctx->arena, strlen(buf) + 1);
+            memcpy(ln, buf, strlen(buf) + 1);
+            e->func.lifted_name = ln;
+        }
+
+        /* Check if last expression returns a capturing closure */
+        if (e->func.body_count > 0) {
+            Expr *last = e->func.body[e->func.body_count - 1];
+            if (last->kind == EXPR_FUNC && last->func.capture_count > 0) {
+                diag_error(last->loc, "cannot return a capturing closure");
+            }
+        }
 
         /* Build function type */
         Type *ft = arena_alloc(ctx->arena, sizeof(Type));
@@ -527,6 +620,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
         }
         if (arg_error) { e->type = type_error(); return e->type; }
+
+        /* Determine call mode: direct vs indirect */
+        e->call.is_indirect = true;  /* default to indirect for function-type callees */
+        if (e->call.func->kind == EXPR_IDENT && !e->call.func->ident.is_local) {
+            e->call.is_indirect = false;  /* global function → direct */
+        } else if (e->call.func->kind == EXPR_FIELD && e->call.func->field.codegen_name) {
+            e->call.is_indirect = false;  /* module function → direct */
+        }
+
         e->type = ft->func.return_type;
         return e->type;
     }
@@ -657,6 +759,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_RETURN: {
         if (e->return_expr.value) {
             check_expr(ctx, e->return_expr.value);
+            /* Check if returning a capturing closure */
+            if (e->return_expr.value->kind == EXPR_FUNC &&
+                e->return_expr.value->func.capture_count > 0) {
+                diag_error(e->loc, "cannot return a capturing closure");
+            }
         }
         e->type = type_void();
         return e->type;
@@ -1406,10 +1513,15 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
         sym->type = ft;
     }
 
+    bool saved_top = ctx->is_top_level_init;
+    if (d->let.init && d->let.init->kind == EXPR_FUNC)
+        ctx->is_top_level_init = true;
+
     Type *saved_recursive_ret = ctx->recursive_ret;
     ctx->recursive_ret = recursive_ret;
     Type *t = check_expr(ctx, d->let.init);
     ctx->recursive_ret = saved_recursive_ret;
+    ctx->is_top_level_init = saved_top;
 
     /* If we pre-registered a recursive function type, patch the return type */
     if (recursive_ret) {
@@ -1428,15 +1540,20 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
     Arena arena;
     arena_init(&arena);
 
+    Scope *root_scope = scope_new(&arena, NULL);
+    root_scope->is_global = true;
+
     CheckCtx ctx = {
         .symtab = symtab,
-        .scope = scope_new(&arena, NULL),
+        .scope = root_scope,
         .arena = &arena,
         .loop_break_type = NULL,
         .in_for = false,
         .module_symtab = NULL,
         .current_ns = NULL,
         .recursive_ret = NULL,
+        .lambda_ctx = NULL,
+        .is_top_level_init = false,
     };
 
     /* First pass: type-check all module member decls (including nested submodules) */

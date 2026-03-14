@@ -103,6 +103,11 @@ bool type_eq(Type *a, Type *b) {
     case TYPE_OPTION:  return type_eq(a->option.inner, b->option.inner);
     case TYPE_STRUCT:  return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
+    case TYPE_FUNC:
+        if (a->func.param_count != b->func.param_count) return false;
+        for (int i = 0; i < a->func.param_count; i++)
+            if (!type_eq(a->func.param_types[i], b->func.param_types[i])) return false;
+        return type_eq(a->func.return_type, b->func.return_type);
     default: return true;   /* primitives match by kind */
     }
 }
@@ -137,7 +142,19 @@ const char *type_name(Type *t) {
     case TYPE_POINTER: return "T*";
     case TYPE_SLICE:   return "T[]";
     case TYPE_OPTION:  return "T?";
-    case TYPE_FUNC:    return "(fn)";
+    case TYPE_FUNC: {
+        static char bufs[2][256];
+        static int bidx = 0;
+        char *buf = bufs[bidx & 1]; bidx++;
+        int pos = 0;
+        pos += snprintf(buf + pos, 256 - (size_t)pos, "(");
+        for (int i = 0; i < t->func.param_count; i++) {
+            if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->func.param_types[i]));
+        }
+        pos += snprintf(buf + pos, 256 - (size_t)pos, ") -> %s", type_name(t->func.return_type));
+        return buf;
+    }
     case TYPE_STRUCT:  return t->struc.name;
     case TYPE_UNION:   return t->unio.name;
     case TYPE_ERROR:  return "<error>";

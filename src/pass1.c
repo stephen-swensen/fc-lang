@@ -260,6 +260,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             } else {
                 symtab_add(symtab, d->let.name, DECL_LET, d);
             }
+            /* Mangle non-main top-level function names to avoid C namespace collisions */
+            if (strcmp(d->let.name, "main") != 0 && !d->let.codegen_name &&
+                d->let.init && d->let.init->kind == EXPR_FUNC) {
+                d->let.codegen_name = make_mangled(intern, "fc", d->let.name);
+            }
             break;
         }
         case DECL_STRUCT: {

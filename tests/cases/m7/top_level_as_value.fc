@@ -1,0 +1,6 @@
+let twice = (x: int32) -> x * 2
+
+let apply = (f: (int32) -> int32, x: int32) -> f(x)
+
+let main = (args: int32) ->
+    apply(twice, 21)

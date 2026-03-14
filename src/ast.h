@@ -57,6 +57,12 @@ struct Param {
     SrcLoc loc;
 };
 
+typedef struct {
+    const char *name;           /* FC source name */
+    const char *codegen_name;   /* C codegen name from outer scope */
+    Type *type;
+} Capture;
+
 struct FieldInit {
     const char *name;
     Expr *value;
@@ -92,7 +98,7 @@ struct Expr {
         struct { const char *value; int length; } cstring_lit;
 
         /* EXPR_IDENT */
-        struct { const char *name; const char *codegen_name; } ident;
+        struct { const char *name; const char *codegen_name; bool is_local; } ident;
 
         /* EXPR_BINARY */
         struct { TokenKind op; Expr *left; Expr *right; } binary;
@@ -110,6 +116,7 @@ struct Expr {
             int arg_count;
             Type **type_args;
             int type_arg_count;
+            bool is_indirect;     /* callee is a function value (fat pointer) */
         } call;
 
         /* EXPR_FIELD, EXPR_DEREF_FIELD */
@@ -155,6 +162,9 @@ struct Expr {
             int param_count;
             Expr **body;
             int body_count;
+            Capture *captures;      /* filled by pass2, NULL if non-capturing */
+            int capture_count;
+            const char *lifted_name; /* C function name for lambdas in expression position */
         } func;
 
         /* EXPR_STRUCT_LIT */

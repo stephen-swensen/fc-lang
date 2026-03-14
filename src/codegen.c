@@ -10,6 +10,9 @@ static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
 
+/* Emit the identifier portion of a function type typedef name */
+static void emit_fn_type_suffix(Type *t, FILE *out);
+
 static void emit_type(Type *t, FILE *out) {
     switch (t->kind) {
     case TYPE_INT8:    fprintf(out, "int8_t");    break;
@@ -51,6 +54,13 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_UNION:
         fprintf(out, "%s", t->unio.name);
         break;
+    case TYPE_FUNC:
+        fprintf(out, "fc_fn_");
+        emit_fn_type_suffix(t, out);
+        break;
+    case TYPE_ANY_PTR:
+        fprintf(out, "void*");
+        break;
     default:
         fprintf(out, "/* TODO: type %d */", t->kind);
         break;
@@ -82,7 +92,38 @@ static void emit_type_ident(Type *t, FILE *out) {
         emit_type_ident(t->pointer.pointee, out);
         fprintf(out, "_ptr");
         break;
+    case TYPE_FUNC:
+        fprintf(out, "fc_fn_");
+        emit_fn_type_suffix(t, out);
+        break;
+    case TYPE_OPTION:
+        fprintf(out, "fc_option_");
+        if (t->option.inner) emit_type_ident(t->option.inner, out);
+        else fprintf(out, "void");
+        break;
+    case TYPE_VOID:
+        fprintf(out, "void");
+        break;
     default:           fprintf(out, "unknown");   break;
+    }
+}
+
+/* Emit the identifier suffix for function type typedef names.
+   E.g., for (int32, int32) -> bool: "int32_t_int32_t__bool" */
+static void emit_fn_type_suffix(Type *t, FILE *out) {
+    if (t->func.param_count == 0) {
+        fprintf(out, "v");
+    } else {
+        for (int i = 0; i < t->func.param_count; i++) {
+            if (i > 0) fprintf(out, "_");
+            emit_type_ident(t->func.param_types[i], out);
+        }
+    }
+    fprintf(out, "__");
+    if (t->func.return_type->kind == TYPE_VOID) {
+        fprintf(out, "void");
+    } else {
+        emit_type_ident(t->func.return_type, out);
     }
 }
 
@@ -375,7 +416,16 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_IDENT:
-        fprintf(out, "%s", e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
+        if (e->type && e->type->kind == TYPE_FUNC &&
+            !e->ident.is_local) {
+            /* Top-level function used as a value — wrap in fat pointer */
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
+                e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
+        } else {
+            fprintf(out, "%s", e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
+        }
         break;
 
     case EXPR_BINARY: {
@@ -463,13 +513,53 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, " }");
             break;
         }
-        emit_expr(e->call.func, out);
-        fprintf(out, "(");
-        for (int i = 0; i < e->call.arg_count; i++) {
-            if (i > 0) fprintf(out, ", ");
-            emit_expr(e->call.args[i], out);
+
+        if (e->call.is_indirect) {
+            /* Indirect call through fat pointer */
+            int tid = temp_counter++;
+            Type *ft = e->call.func->type;
+            fprintf(out, "({ ");
+            emit_type(ft, out);
+            fprintf(out, " _cf%d = ", tid);
+            emit_expr(e->call.func, out);
+            fprintf(out, "; _cf%d.fn_ptr(", tid);
+            for (int i = 0; i < e->call.arg_count; i++) {
+                if (i > 0) fprintf(out, ", ");
+                emit_expr(e->call.args[i], out);
+            }
+            if (e->call.arg_count > 0) fprintf(out, ", ");
+            fprintf(out, "_cf%d.ctx); })", tid);
+        } else {
+            /* Direct call — emit function name directly (not via emit_expr
+               to avoid fat-pointer wrapping) and append NULL for _ctx */
+            Expr *callee = e->call.func;
+            const char *fn_name = NULL;
+            if (callee->kind == EXPR_IDENT) {
+                fn_name = callee->ident.codegen_name
+                    ? callee->ident.codegen_name : callee->ident.name;
+            } else if (callee->kind == EXPR_FIELD && callee->field.codegen_name) {
+                fn_name = callee->field.codegen_name;
+            }
+
+            if (fn_name) {
+                fprintf(out, "%s(", fn_name);
+                for (int i = 0; i < e->call.arg_count; i++) {
+                    if (i > 0) fprintf(out, ", ");
+                    emit_expr(e->call.args[i], out);
+                }
+                if (e->call.arg_count > 0) fprintf(out, ", ");
+                fprintf(out, "NULL)");
+            } else {
+                /* Fallback: emit normally (e.g., extern functions) */
+                emit_expr(e->call.func, out);
+                fprintf(out, "(");
+                for (int i = 0; i < e->call.arg_count; i++) {
+                    if (i > 0) fprintf(out, ", ");
+                    emit_expr(e->call.args[i], out);
+                }
+                fprintf(out, ")");
+            }
         }
-        fprintf(out, ")");
         break;
     }
 
@@ -553,7 +643,15 @@ static void emit_expr(Expr *e, FILE *out) {
     case EXPR_FIELD: {
         /* Module member access: emit mangled name directly */
         if (e->field.codegen_name) {
-            fprintf(out, "%s", e->field.codegen_name);
+            if (e->type && e->type->kind == TYPE_FUNC) {
+                /* Module function used as a value — wrap in fat pointer */
+                fprintf(out, "(");
+                emit_type(e->type, out);
+                fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
+                    e->field.codegen_name);
+            } else {
+                fprintf(out, "%s", e->field.codegen_name);
+            }
             break;
         }
         /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
@@ -1030,6 +1128,31 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_FUNC: {
+        /* Lambda in expression position — emit fat pointer */
+        if (e->func.capture_count > 0) {
+            /* Capturing lambda: use compound literal for context (block-scope lifetime) */
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .fn_ptr = %s, .ctx = &(_ctx_%s){ ",
+                e->func.lifted_name, e->func.lifted_name);
+            for (int i = 0; i < e->func.capture_count; i++) {
+                if (i > 0) fprintf(out, ", ");
+                fprintf(out, ".%s = %s",
+                    e->func.captures[i].codegen_name,
+                    e->func.captures[i].codegen_name);
+            }
+            fprintf(out, " } }");
+        } else {
+            /* Non-capturing lambda: NULL context */
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
+                e->func.lifted_name);
+        }
+        break;
+    }
+
     default:
         fprintf(out, "/* TODO: expr kind %d */", e->kind);
         break;
@@ -1060,7 +1183,9 @@ static void emit_func_decl(Decl *d, FILE *out) {
             emit_type(fn->func.params[i].type, out);
             fprintf(out, " %s", fn->func.params[i].name);
         }
-        fprintf(out, ") {\n");
+        if (fn->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx) {\n");
+        fprintf(out, "    (void)_ctx;\n");
     }
 
     indent_level = 1;
@@ -1158,9 +1283,9 @@ static void typeset_add(TypeSet *ts, Type *t) {
     }
 }
 
-static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options);
+static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeSet *fns);
 
-static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options) {
+static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, TypeSet *fns) {
     if (!t) return;
     if (t->kind == TYPE_SLICE) {
         typeset_add(slices, t);
@@ -1170,118 +1295,238 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options) {
             typeset_add(options, t);
         }
         /* Recurse into inner type (e.g., T[]? needs slice typedef too) */
-        collect_types_in_type(t->option.inner, slices, options);
+        collect_types_in_type(t->option.inner, slices, options, fns);
+    } else if (t->kind == TYPE_FUNC) {
+        /* Recurse into param/return types FIRST so dependencies are emitted before this type */
+        for (int i = 0; i < t->func.param_count; i++)
+            collect_types_in_type(t->func.param_types[i], slices, options, fns);
+        collect_types_in_type(t->func.return_type, slices, options, fns);
+        typeset_add(fns, t);
     }
 }
 
-static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options) {
+static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeSet *fns) {
     if (!e) return;
-    collect_types_in_type(e->type, slices, options);
+    collect_types_in_type(e->type, slices, options, fns);
 
     switch (e->kind) {
     case EXPR_BINARY:
-        collect_types_expr(e->binary.left, slices, options);
-        collect_types_expr(e->binary.right, slices, options);
+        collect_types_expr(e->binary.left, slices, options, fns);
+        collect_types_expr(e->binary.right, slices, options, fns);
         break;
     case EXPR_UNARY_PREFIX:
-        collect_types_expr(e->unary_prefix.operand, slices, options);
+        collect_types_expr(e->unary_prefix.operand, slices, options, fns);
         break;
     case EXPR_UNARY_POSTFIX:
-        collect_types_expr(e->unary_postfix.operand, slices, options);
+        collect_types_expr(e->unary_postfix.operand, slices, options, fns);
         break;
     case EXPR_CALL:
-        collect_types_expr(e->call.func, slices, options);
+        collect_types_expr(e->call.func, slices, options, fns);
         for (int i = 0; i < e->call.arg_count; i++)
-            collect_types_expr(e->call.args[i], slices, options);
+            collect_types_expr(e->call.args[i], slices, options, fns);
         break;
     case EXPR_FIELD:
     case EXPR_DEREF_FIELD:
-        collect_types_expr(e->field.object, slices, options);
+        collect_types_expr(e->field.object, slices, options, fns);
         break;
     case EXPR_INDEX:
-        collect_types_expr(e->index.object, slices, options);
-        collect_types_expr(e->index.index, slices, options);
+        collect_types_expr(e->index.object, slices, options, fns);
+        collect_types_expr(e->index.index, slices, options, fns);
         break;
     case EXPR_SLICE:
-        collect_types_expr(e->slice.object, slices, options);
-        if (e->slice.lo) collect_types_expr(e->slice.lo, slices, options);
-        if (e->slice.hi) collect_types_expr(e->slice.hi, slices, options);
+        collect_types_expr(e->slice.object, slices, options, fns);
+        if (e->slice.lo) collect_types_expr(e->slice.lo, slices, options, fns);
+        if (e->slice.hi) collect_types_expr(e->slice.hi, slices, options, fns);
         break;
     case EXPR_IF:
-        collect_types_expr(e->if_expr.cond, slices, options);
-        collect_types_expr(e->if_expr.then_body, slices, options);
-        if (e->if_expr.else_body) collect_types_expr(e->if_expr.else_body, slices, options);
+        collect_types_expr(e->if_expr.cond, slices, options, fns);
+        collect_types_expr(e->if_expr.then_body, slices, options, fns);
+        if (e->if_expr.else_body) collect_types_expr(e->if_expr.else_body, slices, options, fns);
         break;
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
-            collect_types_expr(e->block.stmts[i], slices, options);
+            collect_types_expr(e->block.stmts[i], slices, options, fns);
         break;
     case EXPR_FUNC:
         for (int i = 0; i < e->func.body_count; i++)
-            collect_types_expr(e->func.body[i], slices, options);
+            collect_types_expr(e->func.body[i], slices, options, fns);
         /* Also check param types */
         for (int i = 0; i < e->func.param_count; i++)
-            collect_types_in_type(e->func.params[i].type, slices, options);
+            collect_types_in_type(e->func.params[i].type, slices, options, fns);
         break;
     case EXPR_LET:
-        collect_types_in_type(e->let_expr.let_type, slices, options);
-        collect_types_expr(e->let_expr.let_init, slices, options);
+        collect_types_in_type(e->let_expr.let_type, slices, options, fns);
+        collect_types_expr(e->let_expr.let_init, slices, options, fns);
         break;
     case EXPR_RETURN:
-        if (e->return_expr.value) collect_types_expr(e->return_expr.value, slices, options);
+        if (e->return_expr.value) collect_types_expr(e->return_expr.value, slices, options, fns);
         break;
     case EXPR_ASSIGN:
-        collect_types_expr(e->assign.target, slices, options);
-        collect_types_expr(e->assign.value, slices, options);
+        collect_types_expr(e->assign.target, slices, options, fns);
+        collect_types_expr(e->assign.value, slices, options, fns);
         break;
     case EXPR_CAST:
-        collect_types_in_type(e->cast.target, slices, options);
-        collect_types_expr(e->cast.operand, slices, options);
+        collect_types_in_type(e->cast.target, slices, options, fns);
+        collect_types_expr(e->cast.operand, slices, options, fns);
         break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            collect_types_expr(e->struct_lit.fields[i].value, slices, options);
+            collect_types_expr(e->struct_lit.fields[i].value, slices, options, fns);
         break;
     case EXPR_SOME:
-        collect_types_expr(e->some_expr.value, slices, options);
+        collect_types_expr(e->some_expr.value, slices, options, fns);
         break;
     case EXPR_ARRAY_LIT:
-        collect_types_in_type(e->array_lit.elem_type, slices, options);
+        collect_types_in_type(e->array_lit.elem_type, slices, options, fns);
         for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_types_expr(e->array_lit.elems[i], slices, options);
+            collect_types_expr(e->array_lit.elems[i], slices, options, fns);
         break;
     case EXPR_MATCH:
-        collect_types_expr(e->match_expr.subject, slices, options);
+        collect_types_expr(e->match_expr.subject, slices, options, fns);
         for (int i = 0; i < e->match_expr.arm_count; i++) {
             for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                collect_types_expr(e->match_expr.arms[i].body[j], slices, options);
+                collect_types_expr(e->match_expr.arms[i].body[j], slices, options, fns);
         }
         break;
     case EXPR_LOOP:
         for (int i = 0; i < e->loop_expr.body_count; i++)
-            collect_types_expr(e->loop_expr.body[i], slices, options);
+            collect_types_expr(e->loop_expr.body[i], slices, options, fns);
         break;
     case EXPR_FOR:
-        collect_types_expr(e->for_expr.iter, slices, options);
-        if (e->for_expr.range_end) collect_types_expr(e->for_expr.range_end, slices, options);
+        collect_types_expr(e->for_expr.iter, slices, options, fns);
+        if (e->for_expr.range_end) collect_types_expr(e->for_expr.range_end, slices, options, fns);
         for (int i = 0; i < e->for_expr.body_count; i++)
-            collect_types_expr(e->for_expr.body[i], slices, options);
+            collect_types_expr(e->for_expr.body[i], slices, options, fns);
         break;
     case EXPR_BREAK:
-        if (e->break_expr.value) collect_types_expr(e->break_expr.value, slices, options);
+        if (e->break_expr.value) collect_types_expr(e->break_expr.value, slices, options, fns);
         break;
     case EXPR_ALLOC:
-        if (e->alloc_expr.size_expr) collect_types_expr(e->alloc_expr.size_expr, slices, options);
-        if (e->alloc_expr.init_expr) collect_types_expr(e->alloc_expr.init_expr, slices, options);
+        if (e->alloc_expr.size_expr) collect_types_expr(e->alloc_expr.size_expr, slices, options, fns);
+        if (e->alloc_expr.init_expr) collect_types_expr(e->alloc_expr.init_expr, slices, options, fns);
         break;
     case EXPR_FREE:
-        collect_types_expr(e->free_expr.operand, slices, options);
+        collect_types_expr(e->free_expr.operand, slices, options, fns);
         break;
     case EXPR_SIZEOF:
-        collect_types_in_type(e->sizeof_expr.target, slices, options);
+        collect_types_in_type(e->sizeof_expr.target, slices, options, fns);
         break;
     case EXPR_DEFAULT:
-        collect_types_in_type(e->default_expr.target, slices, options);
+        collect_types_in_type(e->default_expr.target, slices, options, fns);
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- Lambda collection ---- */
+
+typedef struct {
+    Expr **exprs;
+    int count;
+    int cap;
+} LambdaSet;
+
+static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
+    if (!e) return;
+    if (e->kind == EXPR_FUNC && e->func.lifted_name) {
+        DA_APPEND(ls->exprs, ls->count, ls->cap, e);
+    }
+    switch (e->kind) {
+    case EXPR_BINARY:
+        collect_lambdas_expr(e->binary.left, ls);
+        collect_lambdas_expr(e->binary.right, ls);
+        break;
+    case EXPR_UNARY_PREFIX:
+        collect_lambdas_expr(e->unary_prefix.operand, ls);
+        break;
+    case EXPR_UNARY_POSTFIX:
+        collect_lambdas_expr(e->unary_postfix.operand, ls);
+        break;
+    case EXPR_CALL:
+        collect_lambdas_expr(e->call.func, ls);
+        for (int i = 0; i < e->call.arg_count; i++)
+            collect_lambdas_expr(e->call.args[i], ls);
+        break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        collect_lambdas_expr(e->field.object, ls);
+        break;
+    case EXPR_INDEX:
+        collect_lambdas_expr(e->index.object, ls);
+        collect_lambdas_expr(e->index.index, ls);
+        break;
+    case EXPR_SLICE:
+        collect_lambdas_expr(e->slice.object, ls);
+        if (e->slice.lo) collect_lambdas_expr(e->slice.lo, ls);
+        if (e->slice.hi) collect_lambdas_expr(e->slice.hi, ls);
+        break;
+    case EXPR_IF:
+        collect_lambdas_expr(e->if_expr.cond, ls);
+        collect_lambdas_expr(e->if_expr.then_body, ls);
+        if (e->if_expr.else_body) collect_lambdas_expr(e->if_expr.else_body, ls);
+        break;
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            collect_lambdas_expr(e->block.stmts[i], ls);
+        break;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.body_count; i++)
+            collect_lambdas_expr(e->func.body[i], ls);
+        break;
+    case EXPR_LET:
+        collect_lambdas_expr(e->let_expr.let_init, ls);
+        break;
+    case EXPR_LET_DESTRUCT:
+        collect_lambdas_expr(e->let_destruct.init, ls);
+        break;
+    case EXPR_RETURN:
+        if (e->return_expr.value) collect_lambdas_expr(e->return_expr.value, ls);
+        break;
+    case EXPR_ASSIGN:
+        collect_lambdas_expr(e->assign.target, ls);
+        collect_lambdas_expr(e->assign.value, ls);
+        break;
+    case EXPR_CAST:
+        collect_lambdas_expr(e->cast.operand, ls);
+        break;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            collect_lambdas_expr(e->struct_lit.fields[i].value, ls);
+        break;
+    case EXPR_SOME:
+        collect_lambdas_expr(e->some_expr.value, ls);
+        break;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            collect_lambdas_expr(e->array_lit.elems[i], ls);
+        break;
+    case EXPR_MATCH:
+        collect_lambdas_expr(e->match_expr.subject, ls);
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                collect_lambdas_expr(e->match_expr.arms[i].body[j], ls);
+        }
+        break;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            collect_lambdas_expr(e->loop_expr.body[i], ls);
+        break;
+    case EXPR_FOR:
+        collect_lambdas_expr(e->for_expr.iter, ls);
+        if (e->for_expr.range_end) collect_lambdas_expr(e->for_expr.range_end, ls);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            collect_lambdas_expr(e->for_expr.body[i], ls);
+        break;
+    case EXPR_BREAK:
+        if (e->break_expr.value) collect_lambdas_expr(e->break_expr.value, ls);
+        break;
+    case EXPR_ALLOC:
+        if (e->alloc_expr.size_expr) collect_lambdas_expr(e->alloc_expr.size_expr, ls);
+        if (e->alloc_expr.init_expr) collect_lambdas_expr(e->alloc_expr.init_expr, ls);
+        break;
+    case EXPR_FREE:
+        collect_lambdas_expr(e->free_expr.operand, ls);
         break;
     default:
         break;
@@ -1325,23 +1570,24 @@ void codegen_emit(Program *prog, FILE *out) {
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
-    /* Collect all slice and option types used in the program */
+    /* Collect all slice, option, and function types used in the program */
     TypeSet slices = {0};
     TypeSet options = {0};
+    TypeSet fns = {0};
 
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET) {
-            collect_types_in_type(d->let.resolved_type, &slices, &options);
-            collect_types_expr(d->let.init, &slices, &options);
+            collect_types_in_type(d->let.resolved_type, &slices, &options, &fns);
+            collect_types_expr(d->let.init, &slices, &options, &fns);
         }
         if (d->kind == DECL_STRUCT) {
             for (int j = 0; j < d->struc.field_count; j++)
-                collect_types_in_type(d->struc.fields[j].type, &slices, &options);
+                collect_types_in_type(d->struc.fields[j].type, &slices, &options, &fns);
         }
         if (d->kind == DECL_UNION) {
             for (int j = 0; j < d->unio.variant_count; j++)
-                collect_types_in_type(d->unio.variants[j].payload, &slices, &options);
+                collect_types_in_type(d->unio.variants[j].payload, &slices, &options, &fns);
         }
     }
 
@@ -1423,8 +1669,25 @@ void codegen_emit(Program *prog, FILE *out) {
     }
     free(opt_emitted);
 
+    /* Emit function type typedefs */
+    for (int i = 0; i < fns.count; i++) {
+        Type *f = fns.types[i];
+        fprintf(out, "typedef struct { ");
+        emit_type(f->func.return_type, out);
+        fprintf(out, " (*fn_ptr)(");
+        for (int j = 0; j < f->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(f->func.param_types[j], out);
+        }
+        if (f->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void*); void* ctx; } ");
+        emit_type(f, out);
+        fprintf(out, ";\n");
+    }
+
     free(slices.types);
     free(options.types);
+    free(fns.types);
 
     fprintf(out, "\n");
 
@@ -1439,7 +1702,7 @@ void codegen_emit(Program *prog, FILE *out) {
         }
     }
 
-    /* Emit forward declarations for functions */
+    /* Emit forward declarations for functions (with void* _ctx) */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (is_func_decl(d) && strcmp(d->let.name, "main") != 0) {
@@ -1453,10 +1716,89 @@ void codegen_emit(Program *prog, FILE *out) {
                 emit_type(fn->func.params[j].type, out);
                 fprintf(out, " %s", fn->func.params[j].name);
             }
-            fprintf(out, ");\n");
+            if (fn->func.param_count > 0) fprintf(out, ", ");
+            fprintf(out, "void* _ctx);\n");
         }
     }
     fprintf(out, "\n");
+
+    /* Collect lambdas from all declarations */
+    LambdaSet lambdas = {0};
+    for (int i = 0; i < all_count; i++) {
+        if (all_decls[i]->kind == DECL_LET && all_decls[i]->let.init) {
+            collect_lambdas_expr(all_decls[i]->let.init, &lambdas);
+        }
+    }
+
+    /* Emit context structs for capturing lambdas */
+    for (int i = 0; i < lambdas.count; i++) {
+        Expr *lam = lambdas.exprs[i];
+        if (lam->func.capture_count > 0) {
+            fprintf(out, "typedef struct {");
+            for (int j = 0; j < lam->func.capture_count; j++) {
+                fprintf(out, " ");
+                emit_type(lam->func.captures[j].type, out);
+                fprintf(out, " %s;", lam->func.captures[j].codegen_name);
+            }
+            fprintf(out, " } _ctx_%s;\n", lam->func.lifted_name);
+        }
+    }
+
+    /* Emit forward declarations for lifted lambdas */
+    for (int i = 0; i < lambdas.count; i++) {
+        Expr *lam = lambdas.exprs[i];
+        Type *ft = lam->type;
+        fprintf(out, "static ");
+        emit_type(ft->func.return_type, out);
+        fprintf(out, " %s(", lam->func.lifted_name);
+        for (int j = 0; j < lam->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(lam->func.params[j].type, out);
+            fprintf(out, " %s", lam->func.params[j].name);
+        }
+        if (lam->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx);\n");
+    }
+    fprintf(out, "\n");
+
+    /* Emit lifted lambda function definitions */
+    for (int i = 0; i < lambdas.count; i++) {
+        Expr *lam = lambdas.exprs[i];
+        Type *ft = lam->type;
+        fprintf(out, "static ");
+        emit_type(ft->func.return_type, out);
+        fprintf(out, " %s(", lam->func.lifted_name);
+        for (int j = 0; j < lam->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(lam->func.params[j].type, out);
+            fprintf(out, " %s", lam->func.params[j].name);
+        }
+        if (lam->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx) {\n");
+
+        indent_level = 1;
+        if (lam->func.capture_count > 0) {
+            /* Extract captures from context struct */
+            emit_indent(out);
+            fprintf(out, "_ctx_%s* _c = (_ctx_%s*)_ctx;\n",
+                lam->func.lifted_name, lam->func.lifted_name);
+            for (int j = 0; j < lam->func.capture_count; j++) {
+                emit_indent(out);
+                emit_type(lam->func.captures[j].type, out);
+                fprintf(out, " %s = _c->%s;\n",
+                    lam->func.captures[j].codegen_name,
+                    lam->func.captures[j].codegen_name);
+            }
+        } else {
+            emit_indent(out);
+            fprintf(out, "(void)_ctx;\n");
+        }
+
+        emit_block_stmts(lam->func.body, lam->func.body_count, out, true);
+        indent_level = 0;
+        fprintf(out, "}\n\n");
+    }
+    free(lambdas.exprs);
 
     /* Emit non-function global variable definitions (module values) */
     for (int i = 0; i < all_count; i++) {

@@ -1,0 +1,5 @@
+let call_it = (f: () -> int32) -> f()
+
+let main = (args: int32) ->
+    let answer = () -> 42
+    call_it(answer)
