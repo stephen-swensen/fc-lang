@@ -305,6 +305,7 @@ struct Decl {
         /* DECL_MODULE */
         struct {
             const char *name;
+            const char *ns_prefix;  /* namespace prefix (mangled, e.g. "acme_graphics"), NULL = global */
             const char *from_lib;   /* NULL unless module X from "lib" */
             Decl **decls;
             int decl_count;

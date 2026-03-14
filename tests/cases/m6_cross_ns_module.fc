@@ -1,4 +1,4 @@
 import math from acme::
 
 let main = (args: int32) ->
-    math.add(math.mul(3, 4), 5)
+    math.add(20, 5)

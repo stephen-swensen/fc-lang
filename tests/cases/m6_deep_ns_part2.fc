@@ -1,0 +1,3 @@
+import shader from acme::graphics::rendering::
+
+let main = (args: int32) -> shader.compile(5)

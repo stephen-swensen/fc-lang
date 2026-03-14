@@ -7,6 +7,7 @@ typedef struct SymbolTable SymbolTable;
 
 typedef struct {
     const char *name;
+    const char *ns_prefix;  /* namespace prefix (mangled), NULL = global */
     DeclKind kind;
     Decl *decl;
     Type *type;             /* NULL until pass2 resolves it */
@@ -22,6 +23,8 @@ struct SymbolTable {
 
 void symtab_init(SymbolTable *t);
 Symbol *symtab_lookup(SymbolTable *t, const char *name);
+Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind);
+Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix);
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
 
 /* Run pass 1: collect top-level declarations into symbol table */

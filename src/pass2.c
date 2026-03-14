@@ -55,9 +55,11 @@ typedef struct {
     Type **loop_break_type;  /* non-NULL when inside a loop; points to break value type */
     bool in_for;             /* true when inside a for loop (break value forbidden) */
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
+    const char *current_ns;      /* current namespace for namespace isolation */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
+static void check_decl_let(CheckCtx *ctx, Decl *d);
 
 static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
     if (count == 0) return type_void();
@@ -157,8 +159,17 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = sym->type;
             return e->type;
         }
-        /* Module names resolve to a sentinel — handled in EXPR_FIELD */
+        /* Module names resolve to a sentinel — handled in EXPR_FIELD.
+         * Use namespace-aware lookup: prefer same-namespace entry. */
         if (sym->kind == DECL_MODULE) {
+            Symbol *ns_mod = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
+            if (!ns_mod && ctx->current_ns) {
+                ns_mod = symtab_lookup_module(ctx->symtab, e->ident.name, NULL);
+            }
+            if (!ns_mod) {
+                diag_fatal(e->loc, "module '%s' is in a different namespace; use 'import' to access it",
+                    e->ident.name);
+            }
             e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
             return e->type;
         }
@@ -497,32 +508,96 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_FIELD: {
         Type *obj_type = check_expr(ctx, e->field.object);
 
-        /* Module member access: module.member */
+        /* Try to resolve the object as a module reference (handles nested chains).
+         * For EXPR_IDENT "math", find module "math".
+         * For EXPR_FIELD "geometry.shapes", recursively find submodule "shapes" in "geometry".
+         * Also handles type-associated modules (same name as struct/union). */
+        Symbol *mod_sym = NULL;
         if (e->field.object->kind == EXPR_IDENT) {
-            Symbol *sym = symtab_lookup(ctx->symtab, e->field.object->ident.name);
-            if (sym && sym->kind == DECL_MODULE) {
-                Symbol *member = symtab_lookup(sym->members, e->field.name);
-                if (!member)
-                    diag_fatal(e->loc, "module '%s' has no member '%s'",
-                        e->field.object->ident.name, e->field.name);
-                if (member->is_private)
-                    diag_fatal(e->loc, "cannot access private member '%s' of module '%s'",
-                        e->field.name, e->field.object->ident.name);
-                /* For struct/union type members, return the type */
-                if (member->kind == DECL_STRUCT || member->kind == DECL_UNION) {
-                    e->type = member->type;
-                    return e->type;
+            const char *name = e->field.object->ident.name;
+            /* Namespace-aware module lookup: try current namespace first, then global */
+            mod_sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+            if (!mod_sym && ctx->current_ns)
+                mod_sym = symtab_lookup_module(ctx->symtab, name, NULL);
+            /* Also check module symtab for within-module references */
+            if (!mod_sym && ctx->module_symtab)
+                mod_sym = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
+        } else if (e->field.object->kind == EXPR_FIELD && e->field.object->type &&
+                   e->field.object->type->kind == TYPE_VOID) {
+            /* Object is a field expression that resolved to void (submodule sentinel).
+             * We stored a module_ref tag to help find it. Walk the chain. */
+            /* Use the codegen_name we set as a breadcrumb to the submodule */
+        }
+
+        /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
+         * try to find the module by walking the EXPR_FIELD chain. */
+        if (!mod_sym && e->field.object->kind == EXPR_FIELD) {
+            /* Walk up the nested EXPR_FIELD chain to find the deepest module. */
+            /* We need to re-resolve: the object is already type-checked and set to void.
+             * Walk the chain from root to find the module. */
+            Expr *chain[32];
+            int depth = 0;
+            Expr *cur = e->field.object;
+            while (cur->kind == EXPR_FIELD && depth < 31) {
+                chain[depth++] = cur;
+                cur = cur->field.object;
+            }
+            if (cur->kind == EXPR_IDENT) {
+                Symbol *root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
+                if (!root && ctx->current_ns)
+                    root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
+                if (!root && ctx->module_symtab)
+                    root = symtab_lookup_kind(ctx->module_symtab, cur->ident.name, DECL_MODULE);
+                if (root && root->members) {
+                    Symbol *walk = root;
+                    for (int k = depth - 1; k >= 0; k--) {
+                        Symbol *next = symtab_lookup_kind(walk->members, chain[k]->field.name, DECL_MODULE);
+                        if (!next) { walk = NULL; break; }
+                        walk = next;
+                    }
+                    if (walk) mod_sym = walk;
                 }
-                /* For let members, set codegen_name and return the type */
-                if (member->decl && member->decl->kind == DECL_LET) {
-                    e->field.codegen_name = member->decl->let.codegen_name;
-                }
-                if (!member->type)
-                    diag_fatal(e->loc, "use of '%s.%s' before its type is resolved",
-                        e->field.object->ident.name, e->field.name);
+            }
+        }
+
+        if (mod_sym && mod_sym->members) {
+            Symbol *member = symtab_lookup(mod_sym->members, e->field.name);
+            if (!member)
+                diag_fatal(e->loc, "module '%s' has no member '%s'",
+                    mod_sym->name, e->field.name);
+            if (member->is_private)
+                diag_fatal(e->loc, "cannot access private member '%s' of module '%s'",
+                    e->field.name, mod_sym->name);
+            /* Submodule access: return void sentinel for further chaining */
+            if (member->kind == DECL_MODULE) {
+                e->type = type_void();
+                return e->type;
+            }
+            /* Struct/union type member */
+            if (member->kind == DECL_STRUCT || member->kind == DECL_UNION) {
                 e->type = member->type;
                 return e->type;
             }
+            /* Let member: set codegen_name */
+            if (member->decl && member->decl->kind == DECL_LET) {
+                e->field.codegen_name = member->decl->let.codegen_name;
+            }
+            if (!member->type && member->decl && member->decl->kind == DECL_LET) {
+                /* On-demand type-check: target module member hasn't been processed yet.
+                 * This is safe because pass1 phase 4 already detected circular deps. */
+                SymbolTable *saved_mod = ctx->module_symtab;
+                Scope *saved_scope = ctx->scope;
+                ctx->module_symtab = mod_sym->members;
+                ctx->scope = scope_new(ctx->arena, NULL);
+                check_decl_let(ctx, member->decl);
+                ctx->scope = saved_scope;
+                ctx->module_symtab = saved_mod;
+            }
+            if (!member->type)
+                diag_fatal(e->loc, "use of '%s.%s' before its type is resolved",
+                    mod_sym->name, e->field.name);
+            e->type = member->type;
+            return e->type;
         }
 
         /* If the object is an IDENT referencing a union type, this is variant construction */
@@ -955,51 +1030,78 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
         .loop_break_type = NULL,
         .in_for = false,
         .module_symtab = NULL,
+        .current_ns = NULL,
     };
 
-    /* First pass: type-check all module member decls */
+    /* First pass: type-check all module member decls (including nested submodules) */
+    const char *ns_tracker = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
+        if (d->kind == DECL_NAMESPACE) {
+            ns_tracker = d->ns.name;
+            continue;
+        }
         if (d->kind != DECL_MODULE) continue;
-        Symbol *mod_sym = symtab_lookup(symtab, d->module.name);
+        Symbol *mod_sym = symtab_lookup_module(symtab, d->module.name,
+            d->module.ns_prefix ? d->module.ns_prefix : ns_tracker);
         if (!mod_sym || !mod_sym->members) continue;
+        ctx.current_ns = mod_sym->ns_prefix;
         SymbolTable *saved_mod = ctx.module_symtab;
         ctx.module_symtab = mod_sym->members;
+        /* Type-check all let decls in this module, recursing into submodules */
         for (int j = 0; j < d->module.decl_count; j++) {
             Decl *child = d->module.decls[j];
             if (child->kind == DECL_LET) {
                 check_decl_let(&ctx, child);
+            } else if (child->kind == DECL_MODULE) {
+                /* Nested submodule: type-check with submodule's symtab */
+                Symbol *sub_sym = symtab_lookup_kind(mod_sym->members, child->module.name, DECL_MODULE);
+                if (sub_sym && sub_sym->members) {
+                    SymbolTable *saved_inner = ctx.module_symtab;
+                    ctx.module_symtab = sub_sym->members;
+                    for (int k = 0; k < child->module.decl_count; k++) {
+                        if (child->module.decls[k]->kind == DECL_LET) {
+                            check_decl_let(&ctx, child->module.decls[k]);
+                        }
+                    }
+                    ctx.module_symtab = saved_inner;
+                }
             }
         }
         ctx.module_symtab = saved_mod;
     }
 
     /* Update imported symbols' types from resolved module members */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
-        if (d->kind != DECL_IMPORT) continue;
-        if (!d->import.from_module) continue;
-        Symbol *mod_sym = symtab_lookup(symtab, d->import.from_module);
-        if (!mod_sym || !mod_sym->members) continue;
-        if (d->import.is_wildcard) {
-            for (int j = 0; j < mod_sym->members->count; j++) {
-                Symbol *msym = &mod_sym->members->symbols[j];
-                if (msym->is_private) continue;
-                Symbol *gsym = symtab_lookup(symtab, msym->name);
-                if (gsym && !gsym->type && msym->type) gsym->type = msym->type;
+    for (int i = 0; i < symtab->count; i++) {
+        Symbol *gsym = &symtab->symbols[i];
+        /* Skip non-imported symbols (those with no decl or that aren't DECL_LET from a module) */
+        if (!gsym->decl) continue;
+        if (gsym->kind == DECL_LET && !gsym->type && gsym->decl->let.codegen_name) {
+            /* This is likely an imported let that needs its type resolved */
+            /* Find it in any module's member table */
+            for (int j = 0; j < symtab->count; j++) {
+                Symbol *mod = &symtab->symbols[j];
+                if (mod->kind != DECL_MODULE || !mod->members) continue;
+                for (int k = 0; k < mod->members->count; k++) {
+                    Symbol *msym = &mod->members->symbols[k];
+                    if (msym->decl == gsym->decl && msym->type) {
+                        gsym->type = msym->type;
+                        goto next_sym;
+                    }
+                }
             }
-        } else {
-            Symbol *msym = symtab_lookup(mod_sym->members, d->import.name);
-            if (!msym) continue;
-            const char *import_name = d->import.alias ? d->import.alias : d->import.name;
-            Symbol *gsym = symtab_lookup(symtab, import_name);
-            if (gsym && !gsym->type && msym->type) gsym->type = msym->type;
+            next_sym:;
         }
     }
 
     /* Second pass: type-check top-level (non-module) decls */
+    ctx.current_ns = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
+        if (d->kind == DECL_NAMESPACE) {
+            ctx.current_ns = d->ns.name;
+            continue;
+        }
         if (d->kind == DECL_LET) {
             check_decl_let(&ctx, d);
         }

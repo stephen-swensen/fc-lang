@@ -1,0 +1,3 @@
+import add from nonexistent
+
+let main = (args: int32) -> 0

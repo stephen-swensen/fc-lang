@@ -1,0 +1,3 @@
+import * from acme::
+
+let main = (args: int32) -> 0

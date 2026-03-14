@@ -20,10 +20,30 @@ Symbol *symtab_lookup(SymbolTable *t, const char *name) {
     return NULL;
 }
 
+Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
+    for (int i = 0; i < t->count; i++) {
+        if (t->symbols[i].name == name && t->symbols[i].kind == kind) {
+            return &t->symbols[i];
+        }
+    }
+    return NULL;
+}
+
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
-    Symbol sym = { .name = name, .kind = kind, .decl = decl, .type = NULL,
-                   .members = NULL, .is_private = false };
+    Symbol sym = { .name = name, .ns_prefix = NULL, .kind = kind, .decl = decl,
+                   .type = NULL, .members = NULL, .is_private = false };
     DA_APPEND(t->symbols, t->count, t->capacity, sym);
+}
+
+/* Find a module symbol by name and namespace prefix */
+Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix) {
+    for (int i = 0; i < t->count; i++) {
+        Symbol *s = &t->symbols[i];
+        if (s->kind != DECL_MODULE) continue;
+        if (s->name != name) continue;
+        if (ns_prefix == s->ns_prefix) return s;  /* both NULL or same interned ptr */
+    }
+    return NULL;
 }
 
 /* Build a mangled name: prefix_name */
@@ -59,43 +79,167 @@ static Type *register_union_sym(SymbolTable *tab, Decl *d) {
     return ut;
 }
 
-void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
-    /* Determine namespace prefix (from first DECL_NAMESPACE, if any) */
-    const char *ns_prefix = NULL;
-    for (int i = 0; i < prog->decl_count; i++) {
-        if (prog->decls[i]->kind == DECL_NAMESPACE) {
-            ns_prefix = prog->decls[i]->ns.name;
+/* Register module members: compute mangled names, populate sub-symtab */
+static void register_module_members(Decl *d, const char *mangle_prefix,
+                                    SymbolTable *members, InternTable *intern,
+                                    SymbolTable *global_symtab) {
+    const char *mod_name = d->module.name;
+    for (int j = 0; j < d->module.decl_count; j++) {
+        Decl *child = d->module.decls[j];
+        switch (child->kind) {
+        case DECL_LET: {
+            const char *src_name = child->let.name;
+            const char *mangled = make_mangled(intern, mangle_prefix, src_name);
+            child->let.codegen_name = mangled;
+            if (symtab_lookup(members, src_name)) {
+                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                    src_name, mod_name);
+            } else {
+                symtab_add(members, src_name, DECL_LET, child);
+                Symbol *msym = symtab_lookup(members, src_name);
+                msym->is_private = child->is_private;
+            }
+            break;
+        }
+        case DECL_STRUCT: {
+            const char *src_name = child->struc.name;
+            const char *mangled = make_mangled(intern, mangle_prefix, src_name);
+            child->struc.name = mangled;
+            if (symtab_lookup(members, src_name)) {
+                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                    src_name, mod_name);
+            } else {
+                symtab_add(members, src_name, DECL_STRUCT, child);
+                Symbol *msym = symtab_lookup(members, src_name);
+                msym->is_private = child->is_private;
+                Type *st = malloc(sizeof(Type));
+                st->kind = TYPE_STRUCT;
+                st->struc.name = mangled;
+                st->struc.fields = child->struc.fields;
+                st->struc.field_count = child->struc.field_count;
+                msym->type = st;
+            }
+            break;
+        }
+        case DECL_UNION: {
+            const char *src_name = child->unio.name;
+            const char *mangled = make_mangled(intern, mangle_prefix, src_name);
+            child->unio.name = mangled;
+            if (symtab_lookup(members, src_name)) {
+                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                    src_name, mod_name);
+            } else {
+                symtab_add(members, src_name, DECL_UNION, child);
+                Symbol *msym = symtab_lookup(members, src_name);
+                msym->is_private = child->is_private;
+                Type *ut = malloc(sizeof(Type));
+                ut->kind = TYPE_UNION;
+                ut->unio.name = mangled;
+                ut->unio.variants = child->unio.variants;
+                ut->unio.variant_count = child->unio.variant_count;
+                msym->type = ut;
+            }
+            break;
+        }
+        case DECL_MODULE: {
+            /* Nested submodule: register as a module member */
+            const char *sub_name = child->module.name;
+            const char *sub_prefix = make_mangled(intern, mangle_prefix, sub_name);
+
+            Symbol *existing = symtab_lookup(members, sub_name);
+            if (existing && (existing->kind == DECL_STRUCT || existing->kind == DECL_UNION)) {
+                /* Type-associated module: struct/union with same name already registered.
+                 * Add a second entry with kind=DECL_MODULE under the same name.
+                 * Use symtab_lookup_kind to distinguish. */
+                symtab_add(members, sub_name, DECL_MODULE, child);
+                Symbol *sub_sym = &members->symbols[members->count - 1];
+                sub_sym->is_private = child->is_private;
+                SymbolTable *sub_members = malloc(sizeof(SymbolTable));
+                symtab_init(sub_members);
+                sub_sym->members = sub_members;
+                register_module_members(child, sub_prefix, sub_members, intern, global_symtab);
+                break;
+            }
+            if (existing) {
+                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                    sub_name, mod_name);
+                break;
+            }
+            symtab_add(members, sub_name, DECL_MODULE, child);
+            Symbol *sub_sym = &members->symbols[members->count - 1];
+            sub_sym->is_private = child->is_private;
+            SymbolTable *sub_members = malloc(sizeof(SymbolTable));
+            symtab_init(sub_members);
+            sub_sym->members = sub_members;
+            register_module_members(child, sub_prefix, sub_members, intern, global_symtab);
+            break;
+        }
+        default:
             break;
         }
     }
+}
 
-    /* Phase 1: Register modules */
+void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
+    /* Phase 1: Register modules.
+     * Track current namespace as we iterate — DECL_NAMESPACE resets it. */
+    const char *current_ns = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
+
+        if (d->kind == DECL_NAMESPACE) {
+            current_ns = d->ns.name;
+            continue;
+        }
+
         if (d->kind != DECL_MODULE) continue;
 
         const char *mod_name = d->module.name;
+        const char *ns_prefix = d->module.ns_prefix ? d->module.ns_prefix : current_ns;
+        d->module.ns_prefix = ns_prefix;
 
         /* Build mangling prefix: [namespace_]module */
         const char *mangle_prefix;
         if (ns_prefix) {
-            char buf[512];
-            snprintf(buf, sizeof(buf), "%s_%s", ns_prefix, mod_name);
-            mangle_prefix = intern_cstr(intern, buf);
+            mangle_prefix = make_mangled(intern, ns_prefix, mod_name);
         } else {
             mangle_prefix = mod_name;
         }
 
-        /* Check for duplicate module name */
-        if (symtab_lookup(symtab, mod_name)) {
-            diag_error(d->loc, "redefinition of module '%s'", mod_name);
-            continue;
+        /* Check for duplicate module name within the same namespace */
+        Symbol *existing = symtab_lookup_module(symtab, mod_name, ns_prefix);
+        if (existing) {
+            /* Type-associated module: allow struct/union + module with same name */
+            if (existing->kind == DECL_STRUCT || existing->kind == DECL_UNION) {
+                /* Register the module alongside the type.
+                 * The type is already in the symtab. We need a separate symbol
+                 * for the module. Use a special mangled key for the symtab,
+                 * but the user accesses it by the original name (context-dependent). */
+                /* Store as a secondary entry with kind DECL_MODULE */
+                symtab_add(symtab, mod_name, DECL_MODULE, d);
+                Symbol *mod_sym = symtab_lookup(symtab, mod_name);
+                /* symtab_lookup returns the first match (the struct/union).
+                 * We need the new one — find it at the end. */
+                mod_sym = &symtab->symbols[symtab->count - 1];
+                mod_sym->is_private = d->is_private;
+                mod_sym->ns_prefix = ns_prefix;
+                SymbolTable *members = malloc(sizeof(SymbolTable));
+                symtab_init(members);
+                mod_sym->members = members;
+                register_module_members(d, mangle_prefix, members, intern, symtab);
+                continue;
+            }
+            if (existing->kind == DECL_MODULE) {
+                diag_error(d->loc, "redefinition of module '%s'", mod_name);
+                continue;
+            }
         }
 
         /* Register module in global symtab */
         symtab_add(symtab, mod_name, DECL_MODULE, d);
-        Symbol *mod_sym = symtab_lookup(symtab, mod_name);
+        Symbol *mod_sym = &symtab->symbols[symtab->count - 1];
         mod_sym->is_private = d->is_private;
+        mod_sym->ns_prefix = ns_prefix;
 
         /* Create sub-symbol table for module members */
         SymbolTable *members = malloc(sizeof(SymbolTable));
@@ -103,71 +247,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         mod_sym->members = members;
 
         /* Walk child decls, compute mangled names, register in members */
-        for (int j = 0; j < d->module.decl_count; j++) {
-            Decl *child = d->module.decls[j];
-            switch (child->kind) {
-            case DECL_LET: {
-                const char *src_name = child->let.name;
-                const char *mangled = make_mangled(intern, mangle_prefix, src_name);
-                child->let.codegen_name = mangled;
-                if (symtab_lookup(members, src_name)) {
-                    diag_error(child->loc, "redefinition of '%s' in module '%s'",
-                        src_name, mod_name);
-                } else {
-                    symtab_add(members, src_name, DECL_LET, child);
-                    Symbol *msym = symtab_lookup(members, src_name);
-                    msym->is_private = child->is_private;
-                }
-                break;
-            }
-            case DECL_STRUCT: {
-                const char *src_name = child->struc.name;
-                const char *mangled = make_mangled(intern, mangle_prefix, src_name);
-                /* Mangle the struct name in the Decl and Type */
-                child->struc.name = mangled;
-                if (symtab_lookup(members, src_name)) {
-                    diag_error(child->loc, "redefinition of '%s' in module '%s'",
-                        src_name, mod_name);
-                } else {
-                    symtab_add(members, src_name, DECL_STRUCT, child);
-                    Symbol *msym = symtab_lookup(members, src_name);
-                    msym->is_private = child->is_private;
-                    /* Create type with mangled name */
-                    Type *st = malloc(sizeof(Type));
-                    st->kind = TYPE_STRUCT;
-                    st->struc.name = mangled;
-                    st->struc.fields = child->struc.fields;
-                    st->struc.field_count = child->struc.field_count;
-                    msym->type = st;
-                }
-                break;
-            }
-            case DECL_UNION: {
-                const char *src_name = child->unio.name;
-                const char *mangled = make_mangled(intern, mangle_prefix, src_name);
-                /* Mangle the union name in the Decl */
-                child->unio.name = mangled;
-                if (symtab_lookup(members, src_name)) {
-                    diag_error(child->loc, "redefinition of '%s' in module '%s'",
-                        src_name, mod_name);
-                } else {
-                    symtab_add(members, src_name, DECL_UNION, child);
-                    Symbol *msym = symtab_lookup(members, src_name);
-                    msym->is_private = child->is_private;
-                    /* Create type with mangled name */
-                    Type *ut = malloc(sizeof(Type));
-                    ut->kind = TYPE_UNION;
-                    ut->unio.name = mangled;
-                    ut->unio.variants = child->unio.variants;
-                    ut->unio.variant_count = child->unio.variant_count;
-                    msym->type = ut;
-                }
-                break;
-            }
-            default:
-                break;
-            }
-        }
+        register_module_members(d, mangle_prefix, members, intern, symtab);
     }
 
     /* Phase 2: Register top-level (non-module) decls */
@@ -183,7 +263,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             break;
         }
         case DECL_STRUCT: {
-            if (symtab_lookup(symtab, d->struc.name)) {
+            Symbol *existing = symtab_lookup(symtab, d->struc.name);
+            if (existing) {
                 diag_error(d->loc, "redefinition of '%s'", d->struc.name);
             } else {
                 register_struct_sym(symtab, d);
@@ -191,7 +272,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             break;
         }
         case DECL_UNION: {
-            if (symtab_lookup(symtab, d->unio.name)) {
+            Symbol *existing = symtab_lookup(symtab, d->unio.name);
+            if (existing) {
                 diag_error(d->loc, "redefinition of '%s'", d->unio.name);
             } else {
                 register_union_sym(symtab, d);
@@ -204,23 +286,81 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
     }
 
     /* Phase 3: Process imports */
+    current_ns = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
-        if (d->kind != DECL_IMPORT) continue;
 
-        const char *mod_name = d->import.from_module;
-
-        if (!mod_name) {
-            /* import MODULE (whole module import — no-op, module already accessible) */
-            const char *name = d->import.name;
-            Symbol *sym = symtab_lookup(symtab, name);
-            if (!sym || sym->kind != DECL_MODULE)
-                diag_error(d->loc, "unknown module '%s'", name);
+        if (d->kind == DECL_NAMESPACE) {
+            current_ns = d->ns.name;
             continue;
         }
 
-        /* Look up the source module */
-        Symbol *mod_sym = symtab_lookup(symtab, mod_name);
+        if (d->kind != DECL_IMPORT) continue;
+
+        const char *mod_name = d->import.from_module;
+        const char *from_ns = d->import.from_namespace;
+
+        if (!mod_name && !from_ns) {
+            /* import MODULE [as ALIAS] — whole module import */
+            const char *name = d->import.name;
+            /* Look up module, trying current namespace first, then global */
+            Symbol *sym = symtab_lookup_module(symtab, name, current_ns);
+            if (!sym) sym = symtab_lookup_module(symtab, name, NULL);
+            if (!sym || sym->kind != DECL_MODULE) {
+                diag_error(d->loc, "unknown module '%s'", name);
+                continue;
+            }
+            if (d->import.alias) {
+                /* import MODULE as ALIAS: add alias to symtab */
+                const char *alias = d->import.alias;
+                if (symtab_lookup(symtab, alias)) {
+                    diag_error(d->loc, "import '%s' conflicts with existing name", alias);
+                } else {
+                    symtab_add(symtab, alias, DECL_MODULE, sym->decl);
+                    Symbol *alias_sym = &symtab->symbols[symtab->count - 1];
+                    alias_sym->members = sym->members;
+                    alias_sym->type = sym->type;
+                    alias_sym->ns_prefix = current_ns;
+                }
+            }
+            continue;
+        }
+
+        if (from_ns && !mod_name) {
+            /* Wildcard import from bare namespace is invalid per spec */
+            if (d->import.is_wildcard) {
+                diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
+                continue;
+            }
+            /* import MODULE from namespace:: — cross-namespace whole module import */
+            const char *name = d->import.name;
+            Symbol *sym = symtab_lookup_module(symtab, name, from_ns);
+            if (!sym || sym->kind != DECL_MODULE) {
+                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, from_ns);
+                continue;
+            }
+            const char *import_name = d->import.alias ? d->import.alias : name;
+            /* Check for existing entry in importer's namespace */
+            Symbol *existing = symtab_lookup_module(symtab, import_name, current_ns);
+            if (existing) {
+                if (existing->decl != sym->decl) {
+                    diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
+                }
+            } else {
+                /* Add entry accessible from importer's namespace */
+                symtab_add(symtab, import_name, DECL_MODULE, sym->decl);
+                Symbol *new_sym = &symtab->symbols[symtab->count - 1];
+                new_sym->members = sym->members;
+                new_sym->type = sym->type;
+                new_sym->ns_prefix = current_ns;
+            }
+            continue;
+        }
+
+        /* Have a from_module — look up the source module */
+        const char *lookup_ns = from_ns ? from_ns : current_ns;
+        Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
+        if (!mod_sym) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
         if (!mod_sym || mod_sym->kind != DECL_MODULE) {
             diag_error(d->loc, "unknown module '%s'", mod_name);
             continue;
@@ -237,8 +377,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                     diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
                 } else {
                     symtab_add(symtab, import_name, msym->kind, msym->decl);
-                    Symbol *new_sym = symtab_lookup(symtab, import_name);
+                    Symbol *new_sym = &symtab->symbols[symtab->count - 1];
                     new_sym->type = msym->type;
+                    new_sym->members = msym->members;
                 }
             }
         } else {
@@ -259,9 +400,168 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                 diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
             } else {
                 symtab_add(symtab, import_name, msym->kind, msym->decl);
-                Symbol *new_sym = symtab_lookup(symtab, import_name);
+                Symbol *new_sym = &symtab->symbols[symtab->count - 1];
                 new_sym->type = msym->type;
+                new_sym->members = msym->members;
+            }
+            /* Type-associated module: if importing a type, also import the
+             * associated module (if any) under the same name.
+             * Per spec: "import T from M brings both the type T and the module T
+             * (if it exists) into scope together." */
+            if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+                Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members, d->import.name, DECL_MODULE);
+                if (assoc_mod && !assoc_mod->is_private) {
+                    symtab_add(symtab, import_name, DECL_MODULE, assoc_mod->decl);
+                    Symbol *mod_entry = &symtab->symbols[symtab->count - 1];
+                    mod_entry->members = assoc_mod->members;
+                    mod_entry->type = assoc_mod->type;
+                }
             }
         }
+    }
+
+    /* Phase 4: Detect circular references between modules.
+     * Scan module member expressions for EXPR_FIELD on other modules,
+     * build a dependency graph, and detect cycles with DFS. */
+    int mod_count = 0;
+    for (int i = 0; i < symtab->count; i++)
+        if (symtab->symbols[i].kind == DECL_MODULE) mod_count++;
+
+    if (mod_count >= 2) {
+        /* Collect module decl pointers */
+        Decl **mods = malloc(sizeof(Decl*) * (size_t)mod_count);
+        int mi = 0;
+        for (int i = 0; i < symtab->count; i++)
+            if (symtab->symbols[i].kind == DECL_MODULE)
+                mods[mi++] = symtab->symbols[i].decl;
+
+        /* Build adjacency: deps[i*mod_count + j] = true if mod i references mod j */
+        bool *deps = calloc((size_t)(mod_count * mod_count), sizeof(bool));
+
+        for (int i = 0; i < mod_count; i++) {
+            /* Scan all expressions in module i for IDENT references to other modules */
+            for (int d = 0; d < mods[i]->module.decl_count; d++) {
+                Decl *child = mods[i]->module.decls[d];
+                if (child->kind != DECL_LET || !child->let.init) continue;
+                /* Walk expression tree looking for EXPR_IDENT matching other module names */
+                Expr *stack[256];
+                int sp = 0;
+                stack[sp++] = child->let.init;
+                while (sp > 0) {
+                    Expr *ex = stack[--sp];
+                    if (!ex) continue;
+                    if (ex->kind == EXPR_IDENT) {
+                        /* Check if this ident refers to another module */
+                        for (int j = 0; j < mod_count; j++) {
+                            if (j == i) continue;
+                            if (ex->ident.name == mods[j]->module.name) {
+                                deps[i * mod_count + j] = true;
+                            }
+                        }
+                    }
+                    /* Push children to stack */
+                    switch (ex->kind) {
+                    case EXPR_BINARY: stack[sp++] = ex->binary.left; stack[sp++] = ex->binary.right; break;
+                    case EXPR_UNARY_PREFIX: stack[sp++] = ex->unary_prefix.operand; break;
+                    case EXPR_UNARY_POSTFIX: stack[sp++] = ex->unary_postfix.operand; break;
+                    case EXPR_CALL:
+                        stack[sp++] = ex->call.func;
+                        for (int a = 0; a < ex->call.arg_count; a++) stack[sp++] = ex->call.args[a];
+                        break;
+                    case EXPR_FIELD: case EXPR_DEREF_FIELD: stack[sp++] = ex->field.object; break;
+                    case EXPR_INDEX: stack[sp++] = ex->index.object; stack[sp++] = ex->index.index; break;
+                    case EXPR_IF:
+                        stack[sp++] = ex->if_expr.cond;
+                        stack[sp++] = ex->if_expr.then_body;
+                        if (ex->if_expr.else_body) { stack[sp++] = ex->if_expr.else_body; }
+                        break;
+                    case EXPR_BLOCK:
+                        for (int s = 0; s < ex->block.count; s++) { stack[sp++] = ex->block.stmts[s]; }
+                        break;
+                    case EXPR_FUNC:
+                        for (int s = 0; s < ex->func.body_count; s++) { stack[sp++] = ex->func.body[s]; }
+                        break;
+                    case EXPR_LET: stack[sp++] = ex->let_expr.let_init; break;
+                    case EXPR_ASSIGN: stack[sp++] = ex->assign.target; stack[sp++] = ex->assign.value; break;
+                    case EXPR_RETURN:
+                        if (ex->return_expr.value) { stack[sp++] = ex->return_expr.value; }
+                        break;
+                    case EXPR_BREAK:
+                        if (ex->break_expr.value) { stack[sp++] = ex->break_expr.value; }
+                        break;
+                    case EXPR_LOOP:
+                        for (int s = 0; s < ex->loop_expr.body_count; s++) { stack[sp++] = ex->loop_expr.body[s]; }
+                        break;
+                    case EXPR_FOR:
+                        stack[sp++] = ex->for_expr.iter;
+                        for (int s = 0; s < ex->for_expr.body_count; s++) { stack[sp++] = ex->for_expr.body[s]; }
+                        break;
+                    case EXPR_MATCH:
+                        stack[sp++] = ex->match_expr.subject;
+                        for (int a = 0; a < ex->match_expr.arm_count; a++) {
+                            for (int s = 0; s < ex->match_expr.arms[a].body_count; s++) {
+                                stack[sp++] = ex->match_expr.arms[a].body[s];
+                            }
+                        }
+                        break;
+                    case EXPR_CAST: stack[sp++] = ex->cast.operand; break;
+                    case EXPR_SOME: stack[sp++] = ex->some_expr.value; break;
+                    case EXPR_STRUCT_LIT:
+                        for (int f = 0; f < ex->struct_lit.field_count; f++) { stack[sp++] = ex->struct_lit.fields[f].value; }
+                        break;
+                    case EXPR_SLICE:
+                        stack[sp++] = ex->slice.object;
+                        if (ex->slice.lo) { stack[sp++] = ex->slice.lo; }
+                        if (ex->slice.hi) { stack[sp++] = ex->slice.hi; }
+                        break;
+                    case EXPR_ALLOC:
+                        if (ex->alloc_expr.size_expr) { stack[sp++] = ex->alloc_expr.size_expr; }
+                        if (ex->alloc_expr.init_expr) { stack[sp++] = ex->alloc_expr.init_expr; }
+                        break;
+                    case EXPR_FREE: stack[sp++] = ex->free_expr.operand; break;
+                    default: break;
+                    }
+                }
+            }
+        }
+
+        /* DFS cycle detection */
+        int *color = calloc((size_t)mod_count, sizeof(int)); /* 0=white, 1=gray, 2=black */
+        bool found_cycle = false;
+        for (int start = 0; start < mod_count && !found_cycle; start++) {
+            if (color[start] != 0) continue;
+            int dfs_stack[256];
+            int dsp = 0;
+            dfs_stack[dsp++] = start;
+            color[start] = 1;
+            while (dsp > 0 && !found_cycle) {
+                int u = dfs_stack[dsp - 1];
+                bool pushed = false;
+                for (int v = 0; v < mod_count; v++) {
+                    if (!deps[u * mod_count + v]) continue;
+                    if (color[v] == 1) {
+                        diag_error(mods[u]->loc,
+                            "circular reference between modules '%s' and '%s'",
+                            mods[u]->module.name, mods[v]->module.name);
+                        found_cycle = true;
+                        break;
+                    }
+                    if (color[v] == 0) {
+                        color[v] = 1;
+                        dfs_stack[dsp++] = v;
+                        pushed = true;
+                        break;
+                    }
+                }
+                if (!pushed && !found_cycle) {
+                    color[u] = 2;
+                    dsp--;
+                }
+            }
+        }
+
+        free(mods);
+        free(deps);
+        free(color);
     }
 }

@@ -1,0 +1,4 @@
+import add from acme_graphics::math
+
+let main = (args: int32) ->
+    add(20, 5)

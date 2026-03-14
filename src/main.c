@@ -95,19 +95,34 @@ int main(int argc, char **argv) {
         programs[i] = parse_program(&parser);
     }
 
-    /* Merge all programs into one */
+    /* Merge all programs into one.
+     * Insert DECL_NAMESPACE(NULL) sentinel at the start of each file's decls
+     * if the file doesn't begin with a DECL_NAMESPACE, so that the namespace
+     * resets to global:: between files during pass1 iteration. */
     Program *prog;
     if (input_count == 1) {
         prog = programs[0];
     } else {
         int total_decls = 0;
         for (int i = 0; i < input_count; i++)
-            total_decls += programs[i]->decl_count;
+            total_decls += programs[i]->decl_count + 1; /* +1 for possible sentinel */
 
         prog = arena_alloc(&arena, sizeof(Program));
         prog->decls = arena_alloc(&arena, sizeof(Decl*) * (size_t)total_decls);
         prog->decl_count = 0;
         for (int i = 0; i < input_count; i++) {
+            /* Check if this file starts with a DECL_NAMESPACE */
+            bool has_ns = (programs[i]->decl_count > 0 &&
+                           programs[i]->decls[0]->kind == DECL_NAMESPACE);
+            if (!has_ns) {
+                /* Inject a namespace-reset sentinel (global::) */
+                Decl *sentinel = arena_alloc(&arena, sizeof(Decl));
+                sentinel->kind = DECL_NAMESPACE;
+                sentinel->loc = (SrcLoc){0};
+                sentinel->is_private = false;
+                sentinel->ns.name = NULL;
+                prog->decls[prog->decl_count++] = sentinel;
+            }
             for (int j = 0; j < programs[i]->decl_count; j++) {
                 prog->decls[prog->decl_count++] = programs[i]->decls[j];
             }

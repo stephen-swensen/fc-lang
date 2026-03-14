@@ -12,6 +12,9 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->arena = arena;
     p->intern = intern;
     p->filename = NULL;
+    p->pending_decls = NULL;
+    p->pending_count = 0;
+    p->pending_cap = 0;
 }
 
 /* ---- Token access ---- */
@@ -1257,8 +1260,12 @@ static Decl *parse_module_decl(Parser *p) {
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
-        Decl *d = parse_decl(p);
-        DA_APPEND(decls, count, cap, d);
+        Decl *child = parse_decl(p);
+        DA_APPEND(decls, count, cap, child);
+        /* Drain any pending decls from multi-symbol imports */
+        while (p->pending_count > 0) {
+            DA_APPEND(decls, count, cap, p->pending_decls[--p->pending_count]);
+        }
         skip_newlines(p);
     }
     expect(p, TOK_DEDENT);
@@ -1268,6 +1275,7 @@ static Decl *parse_module_decl(Parser *p) {
     d->loc = loc;
     d->is_private = false;
     d->module.name = name;
+    d->module.ns_prefix = NULL;
     d->module.from_lib = NULL;
     d->module.decl_count = count;
     if (count > 0) {
@@ -1280,41 +1288,160 @@ static Decl *parse_module_decl(Parser *p) {
     return d;
 }
 
+/* Parse a from clause: from [namespace::path::]module
+ * Sets *out_ns and *out_mod. */
+static void parse_from_clause(Parser *p, const char **out_ns, const char **out_mod) {
+    /* Parse IDENT [:: IDENT [:: ...]]
+     * If path ends with ::, last part is namespace; out_mod is the next IDENT (or NULL for bare ns).
+     * If path does NOT end with ::, last IDENT is the module name. */
+    const char *first = tok_intern(p, expect(p, TOK_IDENT));
+
+    if (!check(p, TOK_COLONCOLON)) {
+        /* Simple: from module_name */
+        *out_ns = NULL;
+        *out_mod = first;
+        return;
+    }
+
+    /* Build namespace path: ident::ident::... */
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s", first);
+
+    while (check(p, TOK_COLONCOLON)) {
+        advance_p(p); /* consume :: */
+        if (check(p, TOK_IDENT)) {
+            const char *part = tok_intern(p, expect(p, TOK_IDENT));
+            if (!check(p, TOK_COLONCOLON)) {
+                /* This IDENT is NOT followed by ::, so it's the module name */
+                *out_ns = intern_cstr(p->intern, buf);
+                *out_mod = part;
+                return;
+            }
+            /* More :: follows — this is still namespace */
+            size_t cur = strlen(buf);
+            snprintf(buf + cur, sizeof(buf) - cur, "_%s", part);
+        } else {
+            /* Bare namespace ending: from acme:: or from acme::graphics:: */
+            *out_ns = intern_cstr(p->intern, buf);
+            *out_mod = NULL;
+            return;
+        }
+    }
+
+    /* Shouldn't reach here, but just in case */
+    *out_ns = intern_cstr(p->intern, buf);
+    *out_mod = NULL;
+}
+
 static Decl *parse_import_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
     expect(p, TOK_IMPORT);
 
-    /* import * from MODULE */
+    /* import * from [ns::]MODULE */
     if (check(p, TOK_STAR)) {
         advance_p(p);
         expect(p, TOK_FROM);
-        const char *mod_name = tok_intern(p, expect(p, TOK_IDENT));
+        const char *from_ns = NULL, *from_mod = NULL;
+        parse_from_clause(p, &from_ns, &from_mod);
         Decl *d = arena_alloc(p->arena, sizeof(Decl));
         d->kind = DECL_IMPORT;
         d->loc = loc;
         d->is_private = false;
         d->import.name = NULL;
         d->import.alias = NULL;
-        d->import.from_module = mod_name;
-        d->import.from_namespace = NULL;
+        d->import.from_module = from_mod;
+        d->import.from_namespace = from_ns;
         d->import.is_wildcard = true;
         return d;
     }
 
-    /* import NAME [as ALIAS] [from MODULE] */
+    /* Parse first name [as alias] */
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
     const char *alias = NULL;
-    const char *from_module = NULL;
+
+    /* Check for import module.submodule syntax */
+    if (check(p, TOK_DOT) && !check(p, TOK_AS) && !check(p, TOK_FROM) && !check(p, TOK_COMMA)) {
+        /* import module_a.module_b → equivalent to import module_b from module_a */
+        advance_p(p); /* consume . */
+        const char *sub = tok_intern(p, expect(p, TOK_IDENT));
+        Decl *d = arena_alloc(p->arena, sizeof(Decl));
+        d->kind = DECL_IMPORT;
+        d->loc = loc;
+        d->is_private = false;
+        d->import.name = sub;
+        d->import.alias = NULL;
+        d->import.from_module = name;
+        d->import.from_namespace = NULL;
+        d->import.is_wildcard = false;
+        return d;
+    }
 
     if (check(p, TOK_AS)) {
         advance_p(p);
         alias = tok_intern(p, expect(p, TOK_IDENT));
     }
 
+    /* Check for multi-symbol import: name1 [as a1], name2 [as a2], ... from mod */
+    if (check(p, TOK_COMMA)) {
+        /* Collect all name/alias pairs */
+        typedef struct { const char *n; const char *a; } ImportItem;
+        ImportItem *items = NULL;
+        int item_count = 0, item_cap = 0;
+
+        ImportItem first = { name, alias };
+        DA_APPEND(items, item_count, item_cap, first);
+
+        while (check(p, TOK_COMMA)) {
+            advance_p(p);
+            const char *n = tok_intern(p, expect(p, TOK_IDENT));
+            const char *a = NULL;
+            if (check(p, TOK_AS)) {
+                advance_p(p);
+                a = tok_intern(p, expect(p, TOK_IDENT));
+            }
+            ImportItem it = { n, a };
+            DA_APPEND(items, item_count, item_cap, it);
+        }
+
+        expect(p, TOK_FROM);
+        const char *from_ns = NULL, *from_mod = NULL;
+        parse_from_clause(p, &from_ns, &from_mod);
+
+        /* Create import decl for item 0 (returned), push rest to pending */
+        for (int i = 1; i < item_count; i++) {
+            Decl *extra = arena_alloc(p->arena, sizeof(Decl));
+            extra->kind = DECL_IMPORT;
+            extra->loc = loc;
+            extra->is_private = false;
+            extra->import.name = items[i].n;
+            extra->import.alias = items[i].a;
+            extra->import.from_module = from_mod;
+            extra->import.from_namespace = from_ns;
+            extra->import.is_wildcard = false;
+            DA_APPEND(p->pending_decls, p->pending_count, p->pending_cap, extra);
+        }
+
+        Decl *d = arena_alloc(p->arena, sizeof(Decl));
+        d->kind = DECL_IMPORT;
+        d->loc = loc;
+        d->is_private = false;
+        d->import.name = items[0].n;
+        d->import.alias = items[0].a;
+        d->import.from_module = from_mod;
+        d->import.from_namespace = from_ns;
+        d->import.is_wildcard = false;
+        free(items);
+        return d;
+    }
+
+    /* Single import with optional from clause */
+    const char *from_module = NULL;
+    const char *from_ns = NULL;
+
     if (check(p, TOK_FROM)) {
         advance_p(p);
-        from_module = tok_intern(p, expect(p, TOK_IDENT));
+        parse_from_clause(p, &from_ns, &from_module);
     }
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
@@ -1324,7 +1451,7 @@ static Decl *parse_import_decl(Parser *p) {
     d->import.name = name;
     d->import.alias = alias;
     d->import.from_module = from_module;
-    d->import.from_namespace = NULL;
+    d->import.from_namespace = from_ns;
     d->import.is_wildcard = false;
     return d;
 }
@@ -1382,10 +1509,19 @@ static Decl *parse_decl(Parser *p) {
 Program *parse_program(Parser *p) {
     Decl **decls = NULL;
     int count = 0, cap = 0;
+    bool seen_non_ns = false;
     skip_newlines(p);
     while (!at_end_p(p)) {
         Decl *d = parse_decl(p);
+        if (d->kind == DECL_NAMESPACE && seen_non_ns) {
+            diag_fatal(d->loc, "namespace declaration must be the first line of the file");
+        }
+        if (d->kind != DECL_NAMESPACE) seen_non_ns = true;
         DA_APPEND(decls, count, cap, d);
+        /* Drain any pending decls from multi-symbol imports */
+        while (p->pending_count > 0) {
+            DA_APPEND(decls, count, cap, p->pending_decls[--p->pending_count]);
+        }
         skip_newlines(p);
     }
     Program *prog = arena_alloc(p->arena, sizeof(Program));

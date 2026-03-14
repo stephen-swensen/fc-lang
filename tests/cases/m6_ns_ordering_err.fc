@@ -1,0 +1,6 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+namespace acme::
+
+let main = (args: int32) -> math.add(1, 2)

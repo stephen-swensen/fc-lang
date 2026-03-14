@@ -1,0 +1,8 @@
+module alpha =
+    let compute = (x: int32) -> beta.transform(x) + 1
+
+module beta =
+    let transform = (x: int32) -> x * 2
+
+let main = (args: int32) ->
+    alpha.compute(5)

@@ -1,0 +1,8 @@
+module math =
+    let value = 42
+
+import value from math
+
+let main = (args: int32) ->
+    let value = 100
+    value

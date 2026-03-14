@@ -120,11 +120,14 @@ For tests that compile multiple `.fc` files together, use a `_part2.fc` suffix f
 
 ### Test coverage philosophy
 
-Strive for tests that cover every corner of the spec and compiler implementation. When adding a feature or fixing a bug, add tests that exercise:
+Strive for near-complete code coverage. Every feature described in the spec must have corresponding tests. When adding a feature or fixing a bug, add tests that exercise:
 - The happy path (feature works as specified)
+- All syntax forms and variations (e.g., every import form the spec defines)
 - Edge cases and boundary conditions
 - Error cases (invalid input produces a clear compile error)
 - Interactions between features (e.g., shadowing + mutability, match + options + unions)
+
+Each milestone must fully implement all spec features for that area — no deferring aspects to later milestones.
 
 Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
 

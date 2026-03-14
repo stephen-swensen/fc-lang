@@ -1,0 +1,8 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+    let mul = (a: int32, b: int32) -> a * b
+
+import math as m
+
+let main = (args: int32) ->
+    m.add(m.mul(3, 4), 5)

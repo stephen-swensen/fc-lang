@@ -1209,19 +1209,22 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options) {
 }
 
 /* Collect all top-level decls plus module child decls into a flat array */
+/* Recursively flatten module decls into a single array */
+static void flatten_decls(Decl **decls, int decl_count, Decl ***out, int *count, int *cap) {
+    for (int i = 0; i < decl_count; i++) {
+        Decl *d = decls[i];
+        if (d->kind == DECL_MODULE) {
+            flatten_decls(d->module.decls, d->module.decl_count, out, count, cap);
+        } else {
+            DA_APPEND(*out, *count, *cap, d);
+        }
+    }
+}
+
 static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) {
     Decl **all = NULL;
     int count = 0, cap = 0;
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
-        if (d->kind == DECL_MODULE) {
-            for (int j = 0; j < d->module.decl_count; j++) {
-                DA_APPEND(all, count, cap, d->module.decls[j]);
-            }
-        } else {
-            DA_APPEND(all, count, cap, d);
-        }
-    }
+    flatten_decls(prog->decls, prog->decl_count, &all, &count, &cap);
     *out_decls = all;
     *out_count = count;
 }

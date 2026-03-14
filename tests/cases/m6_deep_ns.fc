@@ -1,0 +1,4 @@
+namespace acme::graphics::rendering::
+
+module shader =
+    let compile = (x: int32) -> x + 1

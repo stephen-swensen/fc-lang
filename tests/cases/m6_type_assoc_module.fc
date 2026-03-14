@@ -1,0 +1,16 @@
+module geometry =
+    struct vec2 =
+        x: int32
+        y: int32
+
+    module vec2 =
+        let zero = vec2 { x = 0, y = 0 }
+        let add = (a: vec2, b: vec2) -> vec2 { x = a.x + b.x, y = a.y + b.y }
+
+import vec2 from geometry
+
+let main = (args: int32) ->
+    let a = vec2 { x = 3, y = 4 }
+    let b = vec2 { x = 10, y = 20 }
+    let c = vec2.add(a, b)
+    c.x + c.y

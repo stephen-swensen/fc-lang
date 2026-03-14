@@ -1,0 +1,10 @@
+module geometry =
+    module shapes =
+        let area = (w: int32, h: int32) -> w * h
+
+    let scale = (x: int32) -> x * 2
+
+let main = (args: int32) ->
+    let a = geometry.shapes.area(3, 4)
+    let s = geometry.scale(5)
+    a + s
