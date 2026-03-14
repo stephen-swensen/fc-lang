@@ -11,88 +11,87 @@ passed=0
 failed=0
 errors=""
 
-for fc_file in "$TESTDIR"/*.fc; do
+for fc_file in $(find "$TESTDIR" -name "*.fc" ! -name "*_part2.fc" | sort); do
     test_name=$(basename "$fc_file" .fc)
+    test_dir=$(dirname "$fc_file")
 
-    # Skip _part2 files — they're companion files for multi-file tests
-    if [[ "$test_name" == *_part2 ]]; then
-        continue
-    fi
+    # Display name: path relative to TESTDIR, without .fc extension
+    test_display=$(realpath --relative-to="$TESTDIR" "$fc_file" | sed 's/\.fc$//')
 
-    c_file="$TMPDIR/${test_name}.c"
-    bin_file="$TMPDIR/${test_name}"
+    c_file="$TMPDIR/${test_display//\//_}.c"
+    bin_file="$TMPDIR/${test_display//\//_}"
 
     # Check for companion files (multi-file test)
     fc_files="$fc_file"
-    if [ -f "$TESTDIR/${test_name}_part2.fc" ]; then
-        fc_files="$fc_file $TESTDIR/${test_name}_part2.fc"
+    if [ -f "$test_dir/${test_name}_part2.fc" ]; then
+        fc_files="$fc_file $test_dir/${test_name}_part2.fc"
     fi
 
     # Compile FC -> C
-    if ! $FC $fc_files -o "$c_file" 2>"$TMPDIR/${test_name}.stderr"; then
+    if ! $FC $fc_files -o "$c_file" 2>"$TMPDIR/${test_display//\//_}.stderr"; then
         # Check if this is an expected error test
-        if [ -f "$TESTDIR/${test_name}.error" ]; then
-            expected_error=$(cat "$TESTDIR/${test_name}.error")
-            actual_error=$(cat "$TMPDIR/${test_name}.stderr")
+        if [ -f "$test_dir/${test_name}.error" ]; then
+            expected_error=$(cat "$test_dir/${test_name}.error")
+            actual_error=$(cat "$TMPDIR/${test_display//\//_}.stderr")
             if echo "$actual_error" | grep -qF "$expected_error"; then
-                echo "  PASS  $test_name (expected error)"
+                echo "  PASS  $test_display (expected error)"
                 passed=$((passed + 1))
                 continue
             else
-                echo "  FAIL  $test_name (wrong error)"
+                echo "  FAIL  $test_display (wrong error)"
                 echo "    expected: $expected_error"
                 echo "    got: $actual_error"
                 failed=$((failed + 1))
-                errors="$errors  $test_name\n"
+                errors="$errors  $test_display\n"
                 continue
             fi
         fi
-        echo "  FAIL  $test_name (fc compilation failed)"
-        cat "$TMPDIR/${test_name}.stderr"
+        echo "  FAIL  $test_display (fc compilation failed)"
+        cat "$TMPDIR/${test_display//\//_}.stderr"
         failed=$((failed + 1))
-        errors="$errors  $test_name\n"
+        errors="$errors  $test_display\n"
         continue
     fi
 
     # Compile C -> binary
-    if ! "$CC" -std=c11 -Wall -Werror -o "$bin_file" "$c_file" 2>"$TMPDIR/${test_name}.cc_stderr"; then
-        echo "  FAIL  $test_name (C compilation failed)"
-        cat "$TMPDIR/${test_name}.cc_stderr"
+    if ! "$CC" -std=c11 -Wall -Werror -o "$bin_file" "$c_file" 2>"$TMPDIR/${test_display//\//_}.cc_stderr"; then
+        echo "  FAIL  $test_display (C compilation failed)"
+        cat "$TMPDIR/${test_display//\//_}.cc_stderr"
         failed=$((failed + 1))
-        errors="$errors  $test_name\n"
+        errors="$errors  $test_display\n"
         continue
     fi
 
     # Check expected exit code
-    if [ -f "$TESTDIR/${test_name}.expected_exit" ]; then
-        expected_exit=$(cat "$TESTDIR/${test_name}.expected_exit" | tr -d '[:space:]')
+    if [ -f "$test_dir/${test_name}.expected_exit" ]; then
+        expected_exit=$(cat "$test_dir/${test_name}.expected_exit" | tr -d '[:space:]')
         set +e
-        "$bin_file" > "$TMPDIR/${test_name}.stdout" 2>&1
+        "$bin_file" > "$TMPDIR/${test_display//\//_}.stdout" 2>&1
         actual_exit=$?
         set -e
         if [ "$actual_exit" != "$expected_exit" ]; then
-            echo "  FAIL  $test_name (exit code: expected $expected_exit, got $actual_exit)"
+            echo "  FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
             failed=$((failed + 1))
-            errors="$errors  $test_name\n"
+            errors="$errors  $test_display\n"
             continue
         fi
     fi
 
     # Check expected stdout
-    if [ -f "$TESTDIR/${test_name}.expected" ]; then
+    if [ -f "$test_dir/${test_name}.expected" ]; then
         set +e
-        "$bin_file" > "$TMPDIR/${test_name}.stdout" 2>&1
+        "$bin_file" > "$TMPDIR/${test_display//\//_}.stdout" 2>&1
         set -e
-        if ! diff -u "$TESTDIR/${test_name}.expected" "$TMPDIR/${test_name}.stdout" > "$TMPDIR/${test_name}.diff" 2>&1; then
-            echo "  FAIL  $test_name (output mismatch)"
-            cat "$TMPDIR/${test_name}.diff"
+        if ! diff -u "$test_dir/${test_name}.expected" "$TMPDIR/${test_display//\//_}.stdout" > "$TMPDIR/${test_display//\//_}.diff" 2>&1; then
+            echo "  FAIL  $test_display (output mismatch)"
+            cat "$TMPDIR/${test_display//\//_}.diff"
             failed=$((failed + 1))
-            errors="$errors  $test_name\n"
+            errors="$errors  $test_display\n"
             continue
         fi
     fi
 
-    echo "  PASS  $test_name"
+    echo "  PASS  $test_display"
     passed=$((passed + 1))
 done
 

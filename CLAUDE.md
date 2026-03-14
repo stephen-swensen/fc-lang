@@ -104,19 +104,25 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 
 ## Testing
 
-Tests live in `tests/cases/`. Each test is an `.fc` file plus one of:
+Tests live in `tests/cases/`, organized into subdirectories by milestone:
+
+- `m1/` — expressions, operators
+- `m2/` — control flow, functions
+- `m3/` — structs, unions, match
+- `m4/` — types: options, slices, pointers, casts, widening
+- `m5/` — memory: alloc, free, sizeof, default
+- `m6/` — modules, imports, namespaces (single-file)
+- `m6/multi/` — multi-file compilation scenarios (namespaces, cross-namespace imports, etc.)
+
+Each test is an `.fc` file plus one of:
 - `.expected_exit` — expected exit code (0–255); the test compiles and runs
 - `.error` — substring expected in compiler stderr; the test must fail to compile
 
-Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`.
-
-### Naming convention
-
-Tests are prefixed by milestone: `m1_` (expressions/operators), `m2_` (control flow/functions), `m3_` (structs/unions/match), `m4_` (types: options, slices, pointers, casts, widening), `m5_` (memory: alloc, free, sizeof, default), `m6_` (modules, imports, namespaces, multi-file).
+Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/multi/cross_ns_import`, etc.
 
 ### Multi-file tests
 
-For tests that compile multiple `.fc` files together, use a `_part2.fc` suffix for companion files. The test runner automatically pairs `foo.fc` with `foo_part2.fc` when both exist. Only the base file should have `.expected_exit` or `.error`.
+Multi-file tests live in `m6/multi/`. For tests that compile multiple `.fc` files together, use a `_part2.fc` suffix for companion files. The test runner automatically pairs `foo.fc` with `foo_part2.fc` when both exist. Only the base file should have `.expected_exit` or `.error`.
 
 ### Test coverage philosophy
 
