@@ -614,6 +614,7 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_MATCH: {
         /* Emit as statement expression with if-else chain */
+        bool match_is_void = (e->type && e->type->kind == TYPE_VOID);
         fprintf(out, "({\n");
         indent_level++;
 
@@ -625,11 +626,14 @@ static void emit_expr(Expr *e, FILE *out) {
         emit_expr(e->match_expr.subject, out);
         fprintf(out, ";\n");
 
-        /* Emit result variable */
-        int res_id = temp_counter++;
-        emit_indent(out);
-        emit_type(e->type, out);
-        fprintf(out, " _match%d;\n", res_id);
+        /* Emit result variable (skip for void matches) */
+        int res_id = -1;
+        if (!match_is_void) {
+            res_id = temp_counter++;
+            emit_indent(out);
+            emit_type(e->type, out);
+            fprintf(out, " _match%d;\n", res_id);
+        }
 
         for (int i = 0; i < e->match_expr.arm_count; i++) {
             MatchArm *arm = &e->match_expr.arms[i];
@@ -714,7 +718,9 @@ static void emit_expr(Expr *e, FILE *out) {
             }
 
             /* Emit arm body */
-            if (arm->body_count == 1) {
+            if (match_is_void) {
+                emit_block_stmts(arm->body, arm->body_count, out, false);
+            } else if (arm->body_count == 1) {
                 emit_indent(out);
                 fprintf(out, "_match%d = ", res_id);
                 emit_expr(arm->body[0], out);
@@ -739,8 +745,10 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "}\n");
         }
 
-        emit_indent(out);
-        fprintf(out, "_match%d;\n", res_id);
+        if (!match_is_void) {
+            emit_indent(out);
+            fprintf(out, "_match%d;\n", res_id);
+        }
 
         indent_level--;
         emit_indent(out);
