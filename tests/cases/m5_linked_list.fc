@@ -13,20 +13,20 @@ let sum_list = (head: node*?) ->
     let mut cur = head
     loop
         match cur with
-            | none -> break
-            | some(n) ->
-                sum = sum + n->value
-                cur = n->next
+        | none -> break
+        | some(n) ->
+            sum = sum + n->value
+            cur = n->next
     sum
 
 let free_list = (head: node*?) ->
     let mut cur = head
     loop
         match cur with
-            | none -> break
-            | some(n) ->
-                cur = n->next
-                free(n)
+        | none -> break
+        | some(n) ->
+            cur = n->next
+            free(n)
 
 let main = (args: int32) ->
     let mut list = default(node*?)

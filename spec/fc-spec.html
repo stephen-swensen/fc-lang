@@ -3164,6 +3164,135 @@ The error message identifies the call site and the substitution: something like 
 
 ---
 
+# PART 10 — Style Guidelines
+
+## Formatting
+
+### Indentation Width
+
+Use **4 spaces** per indentation level. The language requires spaces only (tabs are a compile error), and while the offside rule technically permits any consistent width, 4 spaces is the standard. This follows the conventions established by F# and Python, both of which use the same indentation-based layout model.
+
+```fc
+let main = (args: str[]) ->
+    let x = 42
+    let y = x + 1
+    y
+```
+
+### Match Arm Alignment
+
+Match arms should be aligned at the **same column** as the `match` keyword. The language permits deeper indentation, but same-level alignment is the standard style:
+
+```fc
+// preferred
+match s with
+| circle(r) -> r * r
+| square(w) -> w * w
+
+// allowed but not preferred
+match s with
+    | circle(r) -> r * r
+    | square(w) -> w * w
+```
+
+When a match arm body spans multiple lines, the body is indented one level from the `|`:
+
+```fc
+match opt with
+| some(x) ->
+    let y = x + 1
+    y * 2
+| none -> 0
+```
+
+### Operator Spacing
+
+Use spaces around binary operators. No space between unary operators and their operands:
+
+```fc
+let x = a + b * c          // spaces around binary operators
+let y = -x                  // no space after unary -
+let z = !flag               // no space after unary !
+let p = *ptr                // no space after unary *
+```
+
+No spaces in field access, pointer access, or indexing:
+
+```fc
+p.x
+node->next
+data[i]
+s[1..10]
+```
+
+### Declarations
+
+Struct and union declarations place the body on the next line, indented one level. Each field or variant is on its own line:
+
+```fc
+struct point =
+    x: float64
+    y: float64
+
+union shape =
+    | circle(float64)
+    | rectangle(dims)
+    | point
+```
+
+No space between field name and colon in struct fields and function parameters:
+
+```fc
+struct rect =
+    w: int32
+    h: int32
+
+let area = (r: rect) -> r.w * r.h
+```
+
+### Function Definitions
+
+Short functions may be written on a single line. Longer functions place the body on the next line:
+
+```fc
+let double = (x: int32) -> x * 2
+
+let abs = (x: int32) ->
+    if x < 0 then -x else x
+```
+
+## Naming Conventions
+
+FC uses **lowercase with underscores** (snake_case) for all identifiers. There is no PascalCase, camelCase, or UPPER_CASE convention in the language.
+
+| Element | Convention | Examples |
+|---------|------------|----------|
+| Variables | snake_case | `x`, `sum`, `cur_node`, `total_count` |
+| Functions | snake_case | `area`, `sum_list`, `free_list`, `find_substring` |
+| Struct names | snake_case | `point`, `node`, `array_list` |
+| Union names | snake_case | `shape`, `result`, `color` |
+| Variant names | snake_case | `circle`, `ok`, `err`, `red` |
+| Field names | snake_case | `x`, `width`, `next`, `value` |
+| Module names | snake_case | `math`, `shapes`, `io` |
+| Namespace names | snake_case | `acme::`, `geom::graphics::` |
+| Type variables | `'` + lowercase | `'a`, `'b`, `'elem` |
+
+This convention is deliberate. FC is a systems language where types are not syntactically distinct from values — there is no reason to distinguish them visually. Struct and union names are lowercase because they are used in the same positions as primitive type names (`int32`, `float64`, `bool`), and user-defined types should not look foreign beside them.
+
+## Comments
+
+Use `//` line comments for brief annotations. Use `/* */` block comments for larger sections. Block comments may be nested:
+
+```fc
+// single-line comment
+
+/* block comment */
+
+/* outer /* nested */ still in outer */
+```
+
+---
+
 # Appendix
 
 ## Full Examples

@@ -1,9 +1,9 @@
 let main = (args: int32) ->
     let p = alloc(int32)
     match p with
-        | some(ptr) ->
-            *ptr = 99
-            let r = *ptr
-            free(ptr)
-            r
-        | none -> 0
+    | some(ptr) ->
+        *ptr = 99
+        let r = *ptr
+        free(ptr)
+        r
+    | none -> 0
