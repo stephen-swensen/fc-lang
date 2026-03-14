@@ -3263,21 +3263,16 @@ let abs = (x: int32) ->
 
 ## Naming Conventions
 
-FC uses **lowercase with underscores** (snake_case) for all identifiers. There is no PascalCase, camelCase, or UPPER_CASE convention in the language.
+FC uses **snake_case** for all identifiers — variables, functions, types, fields, variants, modules, and namespaces. Type variables use an apostrophe prefix (`'a`, `'elem`). There is no PascalCase, camelCase, or UPPER_CASE convention in the language.
 
-| Element | Convention | Examples |
-|---------|------------|----------|
-| Variables | snake_case | `x`, `sum`, `cur_node`, `total_count` |
-| Functions | snake_case | `area`, `sum_list`, `free_list`, `find_substring` |
-| Struct names | snake_case | `point`, `node`, `array_list` |
-| Union names | snake_case | `shape`, `result`, `color` |
-| Variant names | snake_case | `circle`, `ok`, `err`, `red` |
-| Field names | snake_case | `x`, `width`, `next`, `value` |
-| Module names | snake_case | `math`, `shapes`, `io` |
-| Namespace names | snake_case | `acme::`, `geom::graphics::` |
-| Type variables | `'` + lowercase | `'a`, `'b`, `'elem` |
-
-This convention is deliberate. FC is a systems language where types are not syntactically distinct from values — there is no reason to distinguish them visually. Struct and union names are lowercase because they are used in the same positions as primitive type names (`int32`, `float64`, `bool`), and user-defined types should not look foreign beside them.
+| Element | Examples |
+|---------|----------|
+| Variables | `x`, `sum`, `cur_node` |
+| Functions | `area`, `sum_list`, `find_substring` |
+| Types (struct/union) | `point`, `shape`, `node` |
+| Fields and variants | `width`, `next`, `circle`, `ok` |
+| Modules and namespaces | `math`, `io`, `geom::` |
+| Type variables | `'a`, `'b`, `'elem` |
 
 ## Comments
 
