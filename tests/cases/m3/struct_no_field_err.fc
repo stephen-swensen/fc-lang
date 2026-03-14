@@ -1,0 +1,7 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: int32) ->
+    let p = point { x = 1, z = 2 }
+    p.x

@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let x = true
+    match x with
+    | 1 -> 10
+    | _ -> 0

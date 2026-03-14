@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let x = 5
+    match x with
+    | circle(r) -> r
+    | _ -> 0
