@@ -44,33 +44,29 @@ static char *change_extension(const char *path, const char *new_ext) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: fc <input.fc> [-o output.c]\n");
+        fprintf(stderr, "usage: fc <input.fc> [input2.fc ...] [-o output.c]\n");
         return 1;
     }
 
-    const char *input_path = NULL;
+    const char **input_paths = NULL;
+    int input_count = 0, input_cap = 0;
     const char *output_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_path = argv[++i];
         } else if (argv[i][0] != '-') {
-            input_path = argv[i];
+            DA_APPEND(input_paths, input_count, input_cap, argv[i]);
         } else {
             fprintf(stderr, "fc: unknown option '%s'\n", argv[i]);
             return 1;
         }
     }
 
-    if (!input_path) {
+    if (input_count == 0) {
         fprintf(stderr, "fc: no input file\n");
         return 1;
     }
-
-    diag_set_filename(input_path);
-
-    /* Read source */
-    char *source = read_file(input_path);
 
     /* Initialize memory */
     Arena arena;
@@ -79,21 +75,56 @@ int main(int argc, char **argv) {
     InternTable intern_table;
     intern_init(&intern_table, &arena);
 
-    /* Lex */
-    Lexer lexer;
-    lexer_init(&lexer, source, &intern_table);
-    int token_count;
-    Token *tokens = lexer_tokenize(&lexer, &token_count);
+    /* Lex, parse each input file and collect Programs */
+    Program **programs = malloc(sizeof(Program*) * (size_t)input_count);
+    char **sources = malloc(sizeof(char*) * (size_t)input_count);
+    Token **all_tokens = malloc(sizeof(Token*) * (size_t)input_count);
 
-    /* Parse */
-    Parser parser;
-    parser_init(&parser, tokens, token_count, &arena, &intern_table);
-    Program *prog = parse_program(&parser);
+    for (int i = 0; i < input_count; i++) {
+        diag_set_filename(input_paths[i]);
+        sources[i] = read_file(input_paths[i]);
+
+        Lexer lexer;
+        lexer_init(&lexer, sources[i], &intern_table);
+        int token_count;
+        all_tokens[i] = lexer_tokenize(&lexer, &token_count);
+
+        Parser parser;
+        parser_init(&parser, all_tokens[i], token_count, &arena, &intern_table);
+        parser.filename = (input_count > 1) ? input_paths[i] : NULL;
+        programs[i] = parse_program(&parser);
+    }
+
+    /* Merge all programs into one */
+    Program *prog;
+    if (input_count == 1) {
+        prog = programs[0];
+    } else {
+        int total_decls = 0;
+        for (int i = 0; i < input_count; i++)
+            total_decls += programs[i]->decl_count;
+
+        prog = arena_alloc(&arena, sizeof(Program));
+        prog->decls = arena_alloc(&arena, sizeof(Decl*) * (size_t)total_decls);
+        prog->decl_count = 0;
+        for (int i = 0; i < input_count; i++) {
+            for (int j = 0; j < programs[i]->decl_count; j++) {
+                prog->decls[prog->decl_count++] = programs[i]->decls[j];
+            }
+        }
+    }
+
+    /* Set filename for diagnostics during later passes */
+    if (input_count == 1) {
+        diag_set_filename(input_paths[0]);
+    } else {
+        diag_set_filename("<merged>");
+    }
 
     /* Pass 1: collect declarations */
     SymbolTable symtab;
     symtab_init(&symtab);
-    pass1_collect(prog, &symtab);
+    pass1_collect(prog, &symtab, &intern_table);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
@@ -110,7 +141,7 @@ int main(int argc, char **argv) {
 
     /* Code generation */
     if (!output_path) {
-        output_path = change_extension(input_path, ".c");
+        output_path = change_extension(input_paths[0], ".c");
     }
 
     FILE *out = fopen(output_path, "w");
@@ -122,9 +153,15 @@ int main(int argc, char **argv) {
     fclose(out);
 
     /* Cleanup */
-    free(tokens);
+    for (int i = 0; i < input_count; i++) {
+        free(all_tokens[i]);
+        free(sources[i]);
+    }
+    free(programs);
+    free(sources);
+    free(all_tokens);
+    free(input_paths);
     free(symtab.symbols);
-    free(source);
     arena_free(&arena);
 
     return 0;

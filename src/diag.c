@@ -11,7 +11,8 @@ void diag_set_filename(const char *filename) {
 }
 
 void diag_error(SrcLoc loc, const char *fmt, ...) {
-    fprintf(stderr, "%s:%d:%d: error: ", g_filename, loc.line, loc.col);
+    const char *fn = loc.filename ? loc.filename : g_filename;
+    fprintf(stderr, "%s:%d:%d: error: ", fn, loc.line, loc.col);
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -21,7 +22,8 @@ void diag_error(SrcLoc loc, const char *fmt, ...) {
 }
 
 _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...) {
-    fprintf(stderr, "%s:%d:%d: error: ", g_filename, loc.line, loc.col);
+    const char *fn = loc.filename ? loc.filename : g_filename;
+    fprintf(stderr, "%s:%d:%d: error: ", fn, loc.line, loc.col);
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);

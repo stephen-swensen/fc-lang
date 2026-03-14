@@ -13,11 +13,23 @@ errors=""
 
 for fc_file in "$TESTDIR"/*.fc; do
     test_name=$(basename "$fc_file" .fc)
+
+    # Skip _part2 files — they're companion files for multi-file tests
+    if [[ "$test_name" == *_part2 ]]; then
+        continue
+    fi
+
     c_file="$TMPDIR/${test_name}.c"
     bin_file="$TMPDIR/${test_name}"
 
+    # Check for companion files (multi-file test)
+    fc_files="$fc_file"
+    if [ -f "$TESTDIR/${test_name}_part2.fc" ]; then
+        fc_files="$fc_file $TESTDIR/${test_name}_part2.fc"
+    fi
+
     # Compile FC -> C
-    if ! "$FC" "$fc_file" -o "$c_file" 2>"$TMPDIR/${test_name}.stderr"; then
+    if ! $FC $fc_files -o "$c_file" 2>"$TMPDIR/${test_name}.stderr"; then
         # Check if this is an expected error test
         if [ -f "$TESTDIR/${test_name}.error" ]; then
             expected_error=$(cat "$TESTDIR/${test_name}.error")

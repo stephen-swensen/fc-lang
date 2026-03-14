@@ -54,6 +54,7 @@ typedef struct {
     Arena *arena;
     Type **loop_break_type;  /* non-NULL when inside a loop; points to break value type */
     bool in_for;             /* true when inside a for loop (break value forbidden) */
+    SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -71,6 +72,11 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t) return t;
     if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.fields == NULL && t->struc.name) {
+        /* Check module symtab first (for within-module type references) */
+        if (ctx->module_symtab) {
+            Symbol *sym = symtab_lookup(ctx->module_symtab, t->struc.name);
+            if (sym && sym->type) return sym->type;
+        }
         Symbol *sym = symtab_lookup(ctx->symtab, t->struc.name);
         if (sym && sym->type) return sym->type;
     }
@@ -125,6 +131,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = t;
             return t;
         }
+        /* Check module symtab (for within-module sibling references) */
+        if (ctx->module_symtab) {
+            Symbol *msym = symtab_lookup(ctx->module_symtab, e->ident.name);
+            if (msym) {
+                if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+                    e->type = msym->type;
+                    return e->type;
+                }
+                /* Use the mangled codegen_name */
+                if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name) {
+                    e->ident.codegen_name = msym->decl->let.codegen_name;
+                }
+                if (!msym->type) diag_fatal(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+                e->type = msym->type;
+                return e->type;
+            }
+        }
         /* Check global symbol table */
         Symbol *sym = symtab_lookup(ctx->symtab, e->ident.name);
         if (!sym) diag_fatal(e->loc, "undefined name '%s'", e->ident.name);
@@ -134,7 +157,16 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = sym->type;
             return e->type;
         }
+        /* Module names resolve to a sentinel — handled in EXPR_FIELD */
+        if (sym->kind == DECL_MODULE) {
+            e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
+            return e->type;
+        }
         if (!sym->type) diag_fatal(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+        /* Propagate codegen_name from imported/module symbols */
+        if (sym->decl && sym->decl->kind == DECL_LET && sym->decl->let.codegen_name) {
+            e->ident.codegen_name = sym->decl->let.codegen_name;
+        }
         e->type = sym->type;
         return e->type;
     }
@@ -278,7 +310,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* Create inner scope for function body */
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         for (int i = 0; i < pc; i++) {
-            ptypes[i] = e->func.params[i].type;
+            ptypes[i] = resolve_type(ctx, e->func.params[i].type);
+            e->func.params[i].type = ptypes[i];
             scope_add(inner, e->func.params[i].name, e->func.params[i].name, ptypes[i], false);
         }
 
@@ -464,6 +497,34 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_FIELD: {
         Type *obj_type = check_expr(ctx, e->field.object);
 
+        /* Module member access: module.member */
+        if (e->field.object->kind == EXPR_IDENT) {
+            Symbol *sym = symtab_lookup(ctx->symtab, e->field.object->ident.name);
+            if (sym && sym->kind == DECL_MODULE) {
+                Symbol *member = symtab_lookup(sym->members, e->field.name);
+                if (!member)
+                    diag_fatal(e->loc, "module '%s' has no member '%s'",
+                        e->field.object->ident.name, e->field.name);
+                if (member->is_private)
+                    diag_fatal(e->loc, "cannot access private member '%s' of module '%s'",
+                        e->field.name, e->field.object->ident.name);
+                /* For struct/union type members, return the type */
+                if (member->kind == DECL_STRUCT || member->kind == DECL_UNION) {
+                    e->type = member->type;
+                    return e->type;
+                }
+                /* For let members, set codegen_name and return the type */
+                if (member->decl && member->decl->kind == DECL_LET) {
+                    e->field.codegen_name = member->decl->let.codegen_name;
+                }
+                if (!member->type)
+                    diag_fatal(e->loc, "use of '%s.%s' before its type is resolved",
+                        e->field.object->ident.name, e->field.name);
+                e->type = member->type;
+                return e->type;
+            }
+        }
+
         /* If the object is an IDENT referencing a union type, this is variant construction */
         if (e->field.object->kind == EXPR_IDENT) {
             Symbol *sym = symtab_lookup(ctx->symtab, e->field.object->ident.name);
@@ -471,6 +532,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = sym->type;
                 return e->type;
             }
+        }
+
+        /* If the object resolved to a union type (e.g., module.UnionType.Variant) */
+        if (obj_type->kind == TYPE_UNION) {
+            e->type = obj_type;
+            return e->type;
         }
 
         obj_type = resolve_type(ctx, obj_type);
@@ -859,6 +926,24 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     return e->type;
 }
 
+static void check_decl_let(CheckCtx *ctx, Decl *d) {
+    Type *t = check_expr(ctx, d->let.init);
+    d->let.resolved_type = t;
+    /* Update symbol in the appropriate table */
+    const char *lookup_name = d->let.name;
+    Symbol *sym = NULL;
+    if (ctx->module_symtab) {
+        sym = symtab_lookup(ctx->module_symtab, lookup_name);
+    }
+    if (!sym) {
+        sym = symtab_lookup(ctx->symtab, lookup_name);
+    }
+    if (sym) sym->type = t;
+    /* Add to scope so later decls can reference it */
+    const char *cg_name = d->let.codegen_name ? d->let.codegen_name : d->let.name;
+    scope_add(ctx->scope, d->let.name, cg_name, t, d->let.is_mut);
+}
+
 void pass2_check(Program *prog, SymbolTable *symtab) {
     Arena arena;
     arena_init(&arena);
@@ -869,22 +954,54 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
         .arena = &arena,
         .loop_break_type = NULL,
         .in_for = false,
+        .module_symtab = NULL,
     };
 
+    /* First pass: type-check all module member decls */
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
-        switch (d->kind) {
-        case DECL_LET: {
-            Type *t = check_expr(&ctx, d->let.init);
-            d->let.resolved_type = t;
-            Symbol *sym = symtab_lookup(symtab, d->let.name);
-            if (sym) sym->type = t;
-            /* Add to global scope so later decls can reference it */
-            scope_add(ctx.scope, d->let.name, d->let.name, t, d->let.is_mut);
-            break;
+        if (d->kind != DECL_MODULE) continue;
+        Symbol *mod_sym = symtab_lookup(symtab, d->module.name);
+        if (!mod_sym || !mod_sym->members) continue;
+        SymbolTable *saved_mod = ctx.module_symtab;
+        ctx.module_symtab = mod_sym->members;
+        for (int j = 0; j < d->module.decl_count; j++) {
+            Decl *child = d->module.decls[j];
+            if (child->kind == DECL_LET) {
+                check_decl_let(&ctx, child);
+            }
         }
-        default:
-            break;
+        ctx.module_symtab = saved_mod;
+    }
+
+    /* Update imported symbols' types from resolved module members */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind != DECL_IMPORT) continue;
+        if (!d->import.from_module) continue;
+        Symbol *mod_sym = symtab_lookup(symtab, d->import.from_module);
+        if (!mod_sym || !mod_sym->members) continue;
+        if (d->import.is_wildcard) {
+            for (int j = 0; j < mod_sym->members->count; j++) {
+                Symbol *msym = &mod_sym->members->symbols[j];
+                if (msym->is_private) continue;
+                Symbol *gsym = symtab_lookup(symtab, msym->name);
+                if (gsym && !gsym->type && msym->type) gsym->type = msym->type;
+            }
+        } else {
+            Symbol *msym = symtab_lookup(mod_sym->members, d->import.name);
+            if (!msym) continue;
+            const char *import_name = d->import.alias ? d->import.alias : d->import.name;
+            Symbol *gsym = symtab_lookup(symtab, import_name);
+            if (gsym && !gsym->type && msym->type) gsym->type = msym->type;
+        }
+    }
+
+    /* Second pass: type-check top-level (non-module) decls */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_LET) {
+            check_decl_let(&ctx, d);
         }
     }
 

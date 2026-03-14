@@ -1,0 +1,9 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+module util =
+    let double = (x: int32) -> math.add(x, x)
+
+let main = (args: int32) ->
+    let x = math.add(3, 4)
+    util.double(x)

@@ -405,9 +405,13 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_FIELD: {
+        /* Module member access: emit mangled name directly */
+        if (e->field.codegen_name) {
+            fprintf(out, "%s", e->field.codegen_name);
+            break;
+        }
         /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
-        if (e->type && e->type->kind == TYPE_UNION &&
-            e->field.object->kind == EXPR_IDENT) {
+        if (e->type && e->type->kind == TYPE_UNION) {
             const char *union_name = e->type->unio.name;
             fprintf(out, "(%s){ .tag = %s_tag_%s }",
                 union_name, union_name, e->field.name);
@@ -535,7 +539,10 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_STRUCT_LIT: {
-        fprintf(out, "(%s){ ", e->struct_lit.type_name);
+        /* Use the resolved type name (handles mangled module types) */
+        const char *sname = (e->type && e->type->kind == TYPE_STRUCT) ?
+            e->type->struc.name : e->struct_lit.type_name;
+        fprintf(out, "(%s){ ", sname);
         for (int i = 0; i < e->struct_lit.field_count; i++) {
             if (i > 0) fprintf(out, ", ");
             fprintf(out, ".%s = ", e->struct_lit.fields[i].name);
@@ -957,6 +964,7 @@ static bool is_func_decl(Decl *d) {
 static void emit_func_decl(Decl *d, FILE *out) {
     Expr *fn = d->let.init;
     Type *ft = d->let.resolved_type;
+    const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
     bool is_main = strcmp(d->let.name, "main") == 0;
 
     if (is_main) {
@@ -966,7 +974,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
     } else {
         /* Emit return type */
         emit_type(ft->func.return_type, out);
-        fprintf(out, " %s(", d->let.name);
+        fprintf(out, " %s(", cname);
         for (int i = 0; i < fn->func.param_count; i++) {
             if (i > 0) fprintf(out, ", ");
             emit_type(fn->func.params[i].type, out);
@@ -1200,6 +1208,24 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options) {
     }
 }
 
+/* Collect all top-level decls plus module child decls into a flat array */
+static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) {
+    Decl **all = NULL;
+    int count = 0, cap = 0;
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_MODULE) {
+            for (int j = 0; j < d->module.decl_count; j++) {
+                DA_APPEND(all, count, cap, d->module.decls[j]);
+            }
+        } else {
+            DA_APPEND(all, count, cap, d);
+        }
+    }
+    *out_decls = all;
+    *out_count = count;
+}
+
 void codegen_emit(Program *prog, FILE *out) {
     /* Preamble */
     fprintf(out, "#include <stdint.h>\n");
@@ -1211,22 +1237,27 @@ void codegen_emit(Program *prog, FILE *out) {
     /* Always emit fc_str (alias for uint8 slice) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
 
+    /* Flatten module decls into a single array */
+    Decl **all_decls;
+    int all_count;
+    collect_all_decls(prog, &all_decls, &all_count);
+
     /* Emit forward declarations for all structs and unions */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
         if (d->kind == DECL_STRUCT) emit_struct_forward(d, out);
         else if (d->kind == DECL_UNION) emit_union_forward(d, out);
     }
 
     /* Emit union tag enums (must come before full definitions) */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
         if (d->kind == DECL_UNION) emit_union_tag_enum(d, out);
     }
 
     /* Emit full struct and union definitions */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
         if (d->kind == DECL_STRUCT) emit_struct_def(d, out);
         else if (d->kind == DECL_UNION) emit_union_def(d, out);
     }
@@ -1235,8 +1266,8 @@ void codegen_emit(Program *prog, FILE *out) {
     TypeSet slices = {0};
     TypeSet options = {0};
 
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
         if (d->kind == DECL_LET) {
             collect_types_in_type(d->let.resolved_type, &slices, &options);
             collect_types_expr(d->let.init, &slices, &options);
@@ -1282,21 +1313,22 @@ void codegen_emit(Program *prog, FILE *out) {
     /* Check if we have a main function */
     bool has_main = false;
     bool has_non_func = false;
-    for (int i = 0; i < prog->decl_count; i++) {
-        if (is_func_decl(prog->decls[i])) {
-            if (strcmp(prog->decls[i]->let.name, "main") == 0) has_main = true;
-        } else if (prog->decls[i]->kind == DECL_LET) {
+    for (int i = 0; i < all_count; i++) {
+        if (is_func_decl(all_decls[i])) {
+            if (strcmp(all_decls[i]->let.name, "main") == 0) has_main = true;
+        } else if (all_decls[i]->kind == DECL_LET) {
             has_non_func = true;
         }
     }
 
     /* Emit forward declarations for functions */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
         if (is_func_decl(d) && strcmp(d->let.name, "main") != 0) {
+            const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             Type *ft = d->let.resolved_type;
             emit_type(ft->func.return_type, out);
-            fprintf(out, " %s(", d->let.name);
+            fprintf(out, " %s(", cname);
             Expr *fn = d->let.init;
             for (int j = 0; j < fn->func.param_count; j++) {
                 if (j > 0) fprintf(out, ", ");
@@ -1308,10 +1340,23 @@ void codegen_emit(Program *prog, FILE *out) {
     }
     fprintf(out, "\n");
 
+    /* Emit non-function global variable definitions (module values) */
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
+        if (d->kind == DECL_LET && !is_func_decl(d) && d->let.codegen_name) {
+            const char *cname = d->let.codegen_name;
+            emit_type(d->let.resolved_type, out);
+            fprintf(out, " %s = ", cname);
+            emit_expr(d->let.init, out);
+            fprintf(out, ";\n");
+        }
+    }
+    fprintf(out, "\n");
+
     /* Emit function definitions */
-    for (int i = 0; i < prog->decl_count; i++) {
-        if (is_func_decl(prog->decls[i])) {
-            emit_func_decl(prog->decls[i], out);
+    for (int i = 0; i < all_count; i++) {
+        if (is_func_decl(all_decls[i])) {
+            emit_func_decl(all_decls[i], out);
         }
     }
 
@@ -1319,23 +1364,25 @@ void codegen_emit(Program *prog, FILE *out) {
     if (!has_main && has_non_func) {
         fprintf(out, "int main(void) {\n");
         indent_level = 1;
-        for (int i = 0; i < prog->decl_count; i++) {
-            Decl *d = prog->decls[i];
+        for (int i = 0; i < all_count; i++) {
+            Decl *d = all_decls[i];
             if (d->kind == DECL_LET && !is_func_decl(d)) {
+                const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
                 emit_indent(out);
                 emit_type(d->let.resolved_type, out);
-                fprintf(out, " %s = ", d->let.name);
+                fprintf(out, " %s = ", cname);
                 emit_expr(d->let.init, out);
                 fprintf(out, ";\n");
             }
         }
         /* Return last binding's value */
-        for (int i = prog->decl_count - 1; i >= 0; i--) {
-            Decl *d = prog->decls[i];
+        for (int i = all_count - 1; i >= 0; i--) {
+            Decl *d = all_decls[i];
             if (d->kind == DECL_LET && !is_func_decl(d)) {
+                const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
                 if (type_is_integer(d->let.resolved_type) || type_eq(d->let.resolved_type, type_bool())) {
                     emit_indent(out);
-                    fprintf(out, "return (int)%s;\n", d->let.name);
+                    fprintf(out, "return (int)%s;\n", cname);
                 } else {
                     emit_indent(out);
                     fprintf(out, "return 0;\n");
@@ -1346,4 +1393,6 @@ void codegen_emit(Program *prog, FILE *out) {
         indent_level = 0;
         fprintf(out, "}\n");
     }
+
+    free(all_decls);
 }

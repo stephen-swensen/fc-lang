@@ -96,6 +96,12 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - `!` is postfix option-unwrap AND prefix boolean-not (context-dependent)
 - `->` means: pointer field access, function type arrow, OR match arm separator (context-dependent)
 
+### Naming Conventions (FC code)
+- All user-defined names use **lowercase snake_case**: `let my_func`, `struct my_point`, `union my_shape`, `module my_module`
+- This applies to struct names, union names, variant names, function names, module names, variable names
+- Type keywords are lowercase: `int32`, `float64`, `bool`, `str`
+- Test `.fc` files must follow these conventions
+
 ## Testing
 
 Tests live in `tests/cases/`. Each test is an `.fc` file plus one of:
@@ -106,7 +112,11 @@ Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C wit
 
 ### Naming convention
 
-Tests are prefixed by milestone: `m1_` (expressions/operators), `m2_` (control flow/functions), `m3_` (structs/unions/match), `m4_` (types: options, slices, pointers, casts, widening).
+Tests are prefixed by milestone: `m1_` (expressions/operators), `m2_` (control flow/functions), `m3_` (structs/unions/match), `m4_` (types: options, slices, pointers, casts, widening), `m5_` (memory: alloc, free, sizeof, default), `m6_` (modules, imports, namespaces, multi-file).
+
+### Multi-file tests
+
+For tests that compile multiple `.fc` files together, use a `_part2.fc` suffix for companion files. The test runner automatically pairs `foo.fc` with `foo_part2.fc` when both exist. Only the base file should have `.expected_exit` or `.error`.
 
 ### Test coverage philosophy
 

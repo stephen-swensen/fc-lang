@@ -11,6 +11,7 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->pos = 0;
     p->arena = arena;
     p->intern = intern;
+    p->filename = NULL;
 }
 
 /* ---- Token access ---- */
@@ -106,6 +107,7 @@ static Prec infix_prec(TokenKind kind) {
 static Expr *alloc_expr(Parser *p, ExprKind kind, SrcLoc loc) {
     Expr *e = arena_alloc(p->arena, sizeof(Expr));
     e->kind = kind;
+    loc.filename = p->filename;
     e->loc = loc;
     return e;
 }
@@ -1113,8 +1115,11 @@ static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc) 
 
 /* ---- Top-level declaration parsing ---- */
 
+static Decl *parse_decl(Parser *p);
+
 static Decl *parse_let_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
     expect(p, TOK_LET);
 
     bool is_mut = false;
@@ -1153,6 +1158,7 @@ static Decl *parse_let_decl(Parser *p) {
 
 static Decl *parse_struct_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
     expect(p, TOK_STRUCT);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
     expect(p, TOK_EQ);
@@ -1192,6 +1198,7 @@ static Decl *parse_struct_decl(Parser *p) {
 
 static Decl *parse_union_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
     expect(p, TOK_UNION);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
     expect(p, TOK_EQ);
@@ -1234,12 +1241,138 @@ static Decl *parse_union_decl(Parser *p) {
     return d;
 }
 
+static Decl *parse_module_decl(Parser *p) {
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    expect(p, TOK_MODULE);
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    expect(p, TOK_EQ);
+
+    /* Parse body: INDENT { decl } DEDENT */
+    expect(p, TOK_INDENT);
+
+    Decl **decls = NULL;
+    int count = 0, cap = 0;
+
+    while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
+        skip_newlines(p);
+        if (check(p, TOK_DEDENT)) break;
+        Decl *d = parse_decl(p);
+        DA_APPEND(decls, count, cap, d);
+        skip_newlines(p);
+    }
+    expect(p, TOK_DEDENT);
+
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_MODULE;
+    d->loc = loc;
+    d->is_private = false;
+    d->module.name = name;
+    d->module.from_lib = NULL;
+    d->module.decl_count = count;
+    if (count > 0) {
+        d->module.decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
+        memcpy(d->module.decls, decls, sizeof(Decl*) * (size_t)count);
+        free(decls);
+    } else {
+        d->module.decls = NULL;
+    }
+    return d;
+}
+
+static Decl *parse_import_decl(Parser *p) {
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    expect(p, TOK_IMPORT);
+
+    /* import * from MODULE */
+    if (check(p, TOK_STAR)) {
+        advance_p(p);
+        expect(p, TOK_FROM);
+        const char *mod_name = tok_intern(p, expect(p, TOK_IDENT));
+        Decl *d = arena_alloc(p->arena, sizeof(Decl));
+        d->kind = DECL_IMPORT;
+        d->loc = loc;
+        d->is_private = false;
+        d->import.name = NULL;
+        d->import.alias = NULL;
+        d->import.from_module = mod_name;
+        d->import.from_namespace = NULL;
+        d->import.is_wildcard = true;
+        return d;
+    }
+
+    /* import NAME [as ALIAS] [from MODULE] */
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *alias = NULL;
+    const char *from_module = NULL;
+
+    if (check(p, TOK_AS)) {
+        advance_p(p);
+        alias = tok_intern(p, expect(p, TOK_IDENT));
+    }
+
+    if (check(p, TOK_FROM)) {
+        advance_p(p);
+        from_module = tok_intern(p, expect(p, TOK_IDENT));
+    }
+
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_IMPORT;
+    d->loc = loc;
+    d->is_private = false;
+    d->import.name = name;
+    d->import.alias = alias;
+    d->import.from_module = from_module;
+    d->import.from_namespace = NULL;
+    d->import.is_wildcard = false;
+    return d;
+}
+
+static Decl *parse_namespace_decl(Parser *p) {
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    expect(p, TOK_NAMESPACE);
+
+    /* namespace IDENT :: [IDENT ::] ... */
+    const char *first = tok_intern(p, expect(p, TOK_IDENT));
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s", first);
+
+    while (check(p, TOK_COLONCOLON)) {
+        advance_p(p);
+        if (check(p, TOK_IDENT)) {
+            const char *part = tok_intern(p, expect(p, TOK_IDENT));
+            size_t cur = strlen(buf);
+            snprintf(buf + cur, sizeof(buf) - cur, "_%s", part);
+        }
+    }
+
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_NAMESPACE;
+    d->loc = loc;
+    d->is_private = false;
+    d->ns.name = intern_cstr(p->intern, buf);
+    return d;
+}
+
 static Decl *parse_decl(Parser *p) {
     skip_newlines(p);
+
+    /* private modifier */
+    if (check(p, TOK_PRIVATE)) {
+        advance_p(p);
+        Decl *d = parse_decl(p);
+        d->is_private = true;
+        return d;
+    }
 
     if (check(p, TOK_LET)) return parse_let_decl(p);
     if (check(p, TOK_STRUCT)) return parse_struct_decl(p);
     if (check(p, TOK_UNION)) return parse_union_decl(p);
+    if (check(p, TOK_MODULE)) return parse_module_decl(p);
+    if (check(p, TOK_IMPORT)) return parse_import_decl(p);
+    if (check(p, TOK_NAMESPACE)) return parse_namespace_decl(p);
 
     SrcLoc loc = loc_from_token(current(p));
     diag_fatal(loc, "expected declaration, got %s",

@@ -8,6 +8,7 @@ typedef struct {
     int pos;
     Arena *arena;
     InternTable *intern;
+    const char *filename;   /* source filename for SrcLoc */
 } Parser;
 
 void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable *intern);

@@ -1,0 +1,7 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+import add as plus from math
+
+let main = (args: int32) ->
+    plus(20, 5)

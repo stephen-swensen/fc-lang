@@ -106,7 +106,7 @@ struct Expr {
         } call;
 
         /* EXPR_FIELD, EXPR_DEREF_FIELD */
-        struct { Expr *object; const char *name; } field;
+        struct { Expr *object; const char *name; const char *codegen_name; } field;
 
         /* EXPR_INDEX */
         struct { Expr *object; Expr *index; } index;
@@ -282,6 +282,7 @@ struct Decl {
         /* DECL_LET */
         struct {
             const char *name;
+            const char *codegen_name;   /* mangled C name for module members */
             bool is_mut;
             Expr *init;
             Type *resolved_type;    /* filled by pass2 */
