@@ -74,7 +74,7 @@ The test runner (`tests/run_tests.sh`) compiles each `.fc` file to C, compiles t
 ```
 spec/fc-spec.html       Language specification (open in browser)
 spec/TODO.md            Open design questions
-grammar.bnf             Formal EBNF grammar
+spec/grammar.bnf             Formal EBNF grammar
 src/                    Compiler source
   main.c                CLI entry point
   common.h / common.c   Arena allocator, string interning, dynamic arrays
