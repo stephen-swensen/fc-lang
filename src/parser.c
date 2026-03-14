@@ -714,6 +714,83 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_SIZEOF: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Type *ty = parse_type(p);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_SIZEOF, loc);
+        e->sizeof_expr.target = ty;
+        return e;
+    }
+
+    case TOK_DEFAULT: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Type *ty = parse_type(p);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_DEFAULT, loc);
+        e->default_expr.target = ty;
+        return e;
+    }
+
+    case TOK_FREE: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *operand = parse_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_FREE, loc);
+        e->free_expr.operand = operand;
+        return e;
+    }
+
+    case TOK_ALLOC: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+
+        /* Try to parse as type-based alloc: alloc(T) or alloc(T[N])
+         * Save position so we can backtrack if it's actually alloc(expr) */
+        int save = p->pos;
+        Token *first = current(p);
+        bool could_be_type = (first->kind == TOK_IDENT || first->kind == TOK_VOID ||
+                              first->kind == TOK_LPAREN || first->kind == TOK_TYPE_VAR);
+        if (could_be_type) {
+            Type *ty = parse_type(p);
+            if (check(p, TOK_RPAREN)) {
+                /* alloc(T) — bare type alloc */
+                advance_p(p);
+                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+                e->alloc_expr.alloc_type = ty;
+                e->alloc_expr.size_expr = NULL;
+                e->alloc_expr.init_expr = NULL;
+                return e;
+            }
+            if (check(p, TOK_LBRACKET)) {
+                /* alloc(T[N]) — array alloc */
+                advance_p(p);
+                Expr *size = parse_expr(p, PREC_NONE + 1);
+                expect(p, TOK_RBRACKET);
+                expect(p, TOK_RPAREN);
+                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+                e->alloc_expr.alloc_type = ty;
+                e->alloc_expr.size_expr = size;
+                e->alloc_expr.init_expr = NULL;
+                return e;
+            }
+            /* Not type-only — backtrack and parse as expression */
+            p->pos = save;
+        }
+
+        /* alloc(expr) — initialized alloc */
+        Expr *init = parse_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+        e->alloc_expr.alloc_type = NULL;
+        e->alloc_expr.size_expr = NULL;
+        e->alloc_expr.init_expr = init;
+        return e;
+    }
+
     /* Prefix unary operators: - ! ~ & * */
     case TOK_MINUS:
     case TOK_BANG:

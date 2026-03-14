@@ -1,0 +1,18 @@
+struct node =
+  value: int32
+  next: node*
+
+let main = (args: int32) ->
+  let a = alloc(node)!
+  let b = alloc(node)!
+  let c = alloc(node)!
+  a->value = 10
+  b->value = 20
+  c->value = 30
+  a->next = b
+  b->next = c
+  let sum = a->value + a->next->value + a->next->next->value
+  free(c)
+  free(b)
+  free(a)
+  sum

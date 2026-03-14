@@ -697,6 +697,51 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_MATCH:
         return check_match(ctx, e);
 
+    case EXPR_SIZEOF: {
+        Type *ty = resolve_type(ctx, e->sizeof_expr.target);
+        e->sizeof_expr.target = ty;
+        e->type = type_int64();
+        return e->type;
+    }
+
+    case EXPR_DEFAULT: {
+        Type *ty = resolve_type(ctx, e->default_expr.target);
+        e->default_expr.target = ty;
+        e->type = ty;
+        return e->type;
+    }
+
+    case EXPR_FREE: {
+        Type *ot = check_expr(ctx, e->free_expr.operand);
+        if (ot->kind != TYPE_POINTER && ot->kind != TYPE_SLICE &&
+            ot->kind != TYPE_STR && ot->kind != TYPE_ANY_PTR && ot->kind != TYPE_CSTR)
+            diag_fatal(e->loc, "free requires pointer or slice, got %s", type_name(ot));
+        e->type = type_void();
+        return e->type;
+    }
+
+    case EXPR_ALLOC: {
+        if (e->alloc_expr.alloc_type) {
+            Type *ty = resolve_type(ctx, e->alloc_expr.alloc_type);
+            e->alloc_expr.alloc_type = ty;
+            if (e->alloc_expr.size_expr) {
+                /* alloc(T[N]) → T[]? */
+                Type *st = check_expr(ctx, e->alloc_expr.size_expr);
+                if (!type_is_integer(st))
+                    diag_fatal(e->loc, "alloc array size must be integer, got %s", type_name(st));
+                e->type = type_option(ctx->arena, type_slice(ctx->arena, ty));
+            } else {
+                /* alloc(T) → T*? */
+                e->type = type_option(ctx->arena, type_pointer(ctx->arena, ty));
+            }
+        } else {
+            /* alloc(expr) → T*? where T is the type of expr */
+            Type *t = check_expr(ctx, e->alloc_expr.init_expr);
+            e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
+        }
+        return e->type;
+    }
+
     default:
         diag_fatal(e->loc, "unsupported expression kind in type checker (kind=%d)", e->kind);
     }

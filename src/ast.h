@@ -166,7 +166,11 @@ struct Expr {
         } array_lit;
 
         /* EXPR_ALLOC */
-        struct { Expr *operand; } alloc_expr;
+        struct {
+            Type *alloc_type;     /* type to allocate (NULL for init-from-expr form) */
+            Expr *size_expr;      /* array size for alloc(T[N]) — NULL for single */
+            Expr *init_expr;      /* init expression for alloc(expr) — NULL for type-only */
+        } alloc_expr;
 
         /* EXPR_FREE */
         struct { Expr *operand; } free_expr;

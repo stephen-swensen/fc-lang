@@ -74,6 +74,14 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_STRUCT:  fprintf(out, "%s", t->struc.name); break;
     case TYPE_UNION:   fprintf(out, "%s", t->unio.name);  break;
+    case TYPE_SLICE:
+        fprintf(out, "fc_slice_");
+        emit_type_ident(t->slice.elem, out);
+        break;
+    case TYPE_POINTER:
+        emit_type_ident(t->pointer.pointee, out);
+        fprintf(out, "_ptr");
+        break;
     default:           fprintf(out, "unknown");   break;
     }
 }
@@ -102,9 +110,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
                 fprintf(out, "return;\n");
             }
         } else if (s->kind == EXPR_ASSIGN) {
-            emit_expr(s->assign.target, out);
-            fprintf(out, " = ");
-            emit_expr(s->assign.value, out);
+            emit_expr(s, out);
             fprintf(out, ";\n");
         } else if (s->kind == EXPR_BREAK) {
             if (s->break_expr.value) {
@@ -765,11 +771,138 @@ static void emit_expr(Expr *e, FILE *out) {
         }
         break;
 
-    case EXPR_ASSIGN:
+    case EXPR_SIZEOF: {
+        fprintf(out, "(int64_t)sizeof(");
+        emit_type(e->sizeof_expr.target, out);
+        fprintf(out, ")");
+        break;
+    }
+
+    case EXPR_DEFAULT: {
+        Type *t = e->default_expr.target;
+        switch (t->kind) {
+        case TYPE_INT8: case TYPE_INT16: case TYPE_INT32: case TYPE_INT64:
+        case TYPE_UINT8: case TYPE_UINT16: case TYPE_UINT32: case TYPE_UINT64:
+        case TYPE_CHAR:
+            fprintf(out, "0");
+            break;
+        case TYPE_FLOAT32:
+            fprintf(out, "0.0f");
+            break;
+        case TYPE_FLOAT64:
+            fprintf(out, "0.0");
+            break;
+        case TYPE_BOOL:
+            fprintf(out, "false");
+            break;
+        case TYPE_POINTER:
+        case TYPE_ANY_PTR:
+        case TYPE_CSTR:
+            fprintf(out, "NULL");
+            break;
+        case TYPE_OPTION:
+            if (t->option.inner && t->option.inner->kind == TYPE_POINTER)
+                fprintf(out, "NULL");
+            else {
+                fprintf(out, "(");
+                emit_type(t, out);
+                fprintf(out, "){0}");
+            }
+            break;
+        default:
+            /* Structs, unions, slices — compound literal with {0} */
+            fprintf(out, "(");
+            emit_type(t, out);
+            fprintf(out, "){0}");
+            break;
+        }
+        break;
+    }
+
+    case EXPR_FREE: {
+        Type *ot = e->free_expr.operand->type;
+        if (ot && (ot->kind == TYPE_SLICE || ot->kind == TYPE_STR)) {
+            fprintf(out, "free((");
+            emit_expr(e->free_expr.operand, out);
+            fprintf(out, ").ptr)");
+        } else {
+            fprintf(out, "free(");
+            emit_expr(e->free_expr.operand, out);
+            fprintf(out, ")");
+        }
+        break;
+    }
+
+    case EXPR_ALLOC: {
+        if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
+            /* alloc(T[N]) → T[]? */
+            int tid = temp_counter++;
+            fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
+            emit_expr(e->alloc_expr.size_expr, out);
+            fprintf(out, "; ");
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, "* _aptr%d = (", tid);
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, "*)calloc((size_t)_asz%d, sizeof(", tid);
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, ")); _aptr%d ? (", tid);
+            emit_type(e->type, out);
+            fprintf(out, "){ .value = (");
+            /* inner slice type */
+            Type *slice_type = e->type->option.inner;
+            emit_type(slice_type, out);
+            fprintf(out, "){ .ptr = _aptr%d, .len = _asz%d }, .has_value = true } : (", tid, tid);
+            emit_type(e->type, out);
+            fprintf(out, "){ .has_value = false }; })");
+        } else if (e->alloc_expr.alloc_type) {
+            /* alloc(T) → T*? (bare pointer, calloc returns NULL on failure) */
+            fprintf(out, "(");
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, "*)calloc(1, sizeof(");
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, "))");
+        } else {
+            /* alloc(expr) → T*? with initialization */
+            int tid = temp_counter++;
+            Type *val_type = e->alloc_expr.init_expr->type;
+            fprintf(out, "({ ");
+            emit_type(val_type, out);
+            fprintf(out, "* _aptr%d = (", tid);
+            emit_type(val_type, out);
+            fprintf(out, "*)calloc(1, sizeof(");
+            emit_type(val_type, out);
+            fprintf(out, ")); if (_aptr%d) *_aptr%d = ", tid, tid);
+            emit_expr(e->alloc_expr.init_expr, out);
+            fprintf(out, "; _aptr%d; })", tid);
+        }
+        break;
+    }
+
+    case EXPR_ASSIGN: {
+        /* Special case: assignment to slice/str element needs bounds check inside */
+        Expr *target = e->assign.target;
+        if (target->kind == EXPR_INDEX) {
+            Type *obj_type = target->index.object->type;
+            if (obj_type && (obj_type->kind == TYPE_SLICE || obj_type->kind == TYPE_STR)) {
+                int tid = temp_counter++;
+                fprintf(out, "({ ");
+                emit_type(obj_type, out);
+                fprintf(out, " _s%d = ", tid);
+                emit_expr(target->index.object, out);
+                fprintf(out, "; int64_t _i%d = (int64_t)", tid);
+                emit_expr(target->index.index, out);
+                fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) abort(); _s%d.ptr[_i%d] = ",
+                    tid, tid, tid, tid, tid);
+                emit_expr(e->assign.value, out);
+                fprintf(out, "; })");
+                break;
+            }
+        }
         emit_expr(e->assign.target, out);
         fprintf(out, " = ");
         emit_expr(e->assign.value, out);
         break;
+    }
 
     case EXPR_LET: {
         const char *vname = e->let_expr.codegen_name ? e->let_expr.codegen_name : e->let_expr.let_name;
@@ -834,29 +967,37 @@ static void emit_func_decl(Decl *d, FILE *out) {
     fprintf(out, "}\n\n");
 }
 
-static void emit_struct_typedef(Decl *d, FILE *out) {
-    fprintf(out, "typedef struct {");
+static void emit_struct_forward(Decl *d, FILE *out) {
+    fprintf(out, "typedef struct %s %s;\n", d->struc.name, d->struc.name);
+}
+
+static void emit_struct_def(Decl *d, FILE *out) {
+    fprintf(out, "struct %s {", d->struc.name);
     for (int i = 0; i < d->struc.field_count; i++) {
         fprintf(out, " ");
         emit_type(d->struc.fields[i].type, out);
         fprintf(out, " %s;", d->struc.fields[i].name);
     }
-    fprintf(out, " } %s;\n", d->struc.name);
+    fprintf(out, " };\n");
 }
 
-static void emit_union_typedef(Decl *d, FILE *out) {
-    const char *name = d->unio.name;
+static void emit_union_forward(Decl *d, FILE *out) {
+    fprintf(out, "typedef struct %s %s;\n", d->unio.name, d->unio.name);
+}
 
-    /* Emit tag enum */
+static void emit_union_tag_enum(Decl *d, FILE *out) {
+    const char *name = d->unio.name;
     fprintf(out, "typedef enum {");
     for (int i = 0; i < d->unio.variant_count; i++) {
         if (i > 0) fprintf(out, ",");
         fprintf(out, " %s_tag_%s", name, d->unio.variants[i].name);
     }
     fprintf(out, " } %s_tag;\n", name);
+}
 
-    /* Emit tagged union struct */
-    fprintf(out, "typedef struct { %s_tag tag; union {", name);
+static void emit_union_def(Decl *d, FILE *out) {
+    const char *name = d->unio.name;
+    fprintf(out, "struct %s { %s_tag tag; union {", name, name);
     for (int i = 0; i < d->unio.variant_count; i++) {
         if (d->unio.variants[i].payload) {
             fprintf(out, " ");
@@ -864,7 +1005,7 @@ static void emit_union_typedef(Decl *d, FILE *out) {
             fprintf(out, " %s;", d->unio.variants[i].name);
         }
     }
-    fprintf(out, " }; } %s;\n", name);
+    fprintf(out, " }; };\n");
 }
 
 /* ---- Collect used slice/option types for typedef generation ---- */
@@ -899,6 +1040,8 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options) {
         if (!t->option.inner || t->option.inner->kind != TYPE_POINTER) {
             typeset_add(options, t);
         }
+        /* Recurse into inner type (e.g., T[]? needs slice typedef too) */
+        collect_types_in_type(t->option.inner, slices, options);
     }
 }
 
@@ -998,6 +1141,19 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options) {
     case EXPR_BREAK:
         if (e->break_expr.value) collect_types_expr(e->break_expr.value, slices, options);
         break;
+    case EXPR_ALLOC:
+        if (e->alloc_expr.size_expr) collect_types_expr(e->alloc_expr.size_expr, slices, options);
+        if (e->alloc_expr.init_expr) collect_types_expr(e->alloc_expr.init_expr, slices, options);
+        break;
+    case EXPR_FREE:
+        collect_types_expr(e->free_expr.operand, slices, options);
+        break;
+    case EXPR_SIZEOF:
+        collect_types_in_type(e->sizeof_expr.target, slices, options);
+        break;
+    case EXPR_DEFAULT:
+        collect_types_in_type(e->default_expr.target, slices, options);
+        break;
     default:
         break;
     }
@@ -1062,14 +1218,24 @@ void codegen_emit(Program *prog, FILE *out) {
 
     fprintf(out, "\n");
 
-    /* Emit struct and union type definitions */
+    /* Emit forward declarations for all structs and unions */
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
-        if (d->kind == DECL_STRUCT) {
-            emit_struct_typedef(d, out);
-        } else if (d->kind == DECL_UNION) {
-            emit_union_typedef(d, out);
-        }
+        if (d->kind == DECL_STRUCT) emit_struct_forward(d, out);
+        else if (d->kind == DECL_UNION) emit_union_forward(d, out);
+    }
+
+    /* Emit union tag enums (must come before full definitions) */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_UNION) emit_union_tag_enum(d, out);
+    }
+
+    /* Emit full struct and union definitions */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_STRUCT) emit_struct_def(d, out);
+        else if (d->kind == DECL_UNION) emit_union_def(d, out);
     }
     fprintf(out, "\n");
 

@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+  let x = default(int32?)
+  match x with
+    | none -> 50
+    | some(v) -> v

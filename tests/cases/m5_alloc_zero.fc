@@ -1,0 +1,10 @@
+struct counters =
+  a: int32
+  b: int32
+  c: int32
+
+let main = (args: int32) ->
+  let p = alloc(counters)!
+  let sum = p->a + p->b + p->c
+  free(p)
+  if sum == 0 then 1 else 0

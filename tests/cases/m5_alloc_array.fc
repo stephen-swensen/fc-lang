@@ -1,0 +1,9 @@
+let main = (args: int32) ->
+  let buf = alloc(int32[4])!
+  buf[0] = 10
+  buf[1] = 20
+  buf[2] = 30
+  buf[3] = 40
+  let sum = buf[0] + buf[1] + buf[2] + buf[3]
+  free(buf)
+  sum

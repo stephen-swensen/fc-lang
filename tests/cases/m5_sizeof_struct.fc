@@ -1,0 +1,7 @@
+struct pair =
+  a: int32
+  b: int32
+
+let main = (args: int32) ->
+  let s = sizeof(pair)
+  if s >= 8i64 then 1 else 0
