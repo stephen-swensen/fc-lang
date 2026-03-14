@@ -960,6 +960,35 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 }
 
+/* Recursively check a struct pattern in a match arm, resolving types and adding bindings */
+static void check_match_struct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_type) {
+    for (int fi = 0; fi < pat->struc.field_count; fi++) {
+        const char *fname = pat->struc.fields[fi].name;
+        Pattern *inner = pat->struc.fields[fi].pattern;
+        Type *field_type = NULL;
+        for (int fj = 0; fj < struct_type->struc.field_count; fj++) {
+            if (struct_type->struc.fields[fj].name == fname) {
+                field_type = resolve_type(ctx, struct_type->struc.fields[fj].type);
+                break;
+            }
+        }
+        if (!field_type)
+            diag_fatal(pat->loc, "struct '%s' has no field '%s'", struct_type->struc.name, fname);
+        pat->struc.fields[fi].resolved_type = field_type;
+        if (inner->kind == PAT_BINDING) {
+            scope_add(ctx->scope, inner->binding.name, inner->binding.name, field_type, false);
+        } else if (inner->kind == PAT_STRUCT) {
+            if (field_type->kind != TYPE_STRUCT)
+                diag_fatal(inner->loc, "struct pattern on non-struct field '%s' (type %s)", fname, type_name(field_type));
+            check_match_struct_pattern(ctx, inner, field_type);
+        }
+        if (inner->kind == PAT_INT_LIT && !type_is_integer(field_type))
+            diag_fatal(inner->loc, "integer pattern on non-integer field '%s'", fname);
+        if (inner->kind == PAT_BOOL_LIT && !type_eq(field_type, type_bool()))
+            diag_fatal(inner->loc, "bool pattern on non-bool field '%s'", fname);
+    }
+}
+
 static Type *check_match(CheckCtx *ctx, Expr *e) {
     Type *subj_type = check_expr(ctx, e->match_expr.subject);
     subj_type = resolve_type(ctx, subj_type);
@@ -1033,28 +1062,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         case PAT_STRUCT: {
             if (subj_type->kind != TYPE_STRUCT)
                 diag_fatal(pat->loc, "struct pattern on non-struct type %s", type_name(subj_type));
-            for (int fi = 0; fi < pat->struc.field_count; fi++) {
-                const char *fname = pat->struc.fields[fi].name;
-                Pattern *inner = pat->struc.fields[fi].pattern;
-                Type *field_type = NULL;
-                for (int fj = 0; fj < subj_type->struc.field_count; fj++) {
-                    if (subj_type->struc.fields[fj].name == fname) {
-                        field_type = resolve_type(ctx, subj_type->struc.fields[fj].type);
-                        break;
-                    }
-                }
-                if (!field_type)
-                    diag_fatal(pat->loc, "struct '%s' has no field '%s'", subj_type->struc.name, fname);
-                pat->struc.fields[fi].resolved_type = field_type;
-                if (inner->kind == PAT_BINDING) {
-                    scope_add(ctx->scope, inner->binding.name, inner->binding.name, field_type, false);
-                }
-                /* For literal patterns, type-check compatibility */
-                if (inner->kind == PAT_INT_LIT && !type_is_integer(field_type))
-                    diag_fatal(inner->loc, "integer pattern on non-integer field '%s'", fname);
-                if (inner->kind == PAT_BOOL_LIT && !type_eq(field_type, type_bool()))
-                    diag_fatal(inner->loc, "bool pattern on non-bool field '%s'", fname);
-            }
+            check_match_struct_pattern(ctx, pat, subj_type);
             break;
         }
         case PAT_VARIANT: {

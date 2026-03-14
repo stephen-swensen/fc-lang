@@ -109,6 +109,56 @@ static void emit_destruct_bindings(Pattern *pat, const char *parent_expr, FILE *
     }
 }
 
+/* Recursively emit condition checks for a struct pattern in a match.
+   prefix is the C expression for the struct value (e.g., "_subj0" or "_subj0.field").
+   has_cond tracks whether we've started the "if (" yet. */
+static void emit_struct_pat_conditions(Pattern *pat, const char *prefix, bool *has_cond, FILE *out) {
+    for (int fi = 0; fi < pat->struc.field_count; fi++) {
+        Pattern *inner = pat->struc.fields[fi].pattern;
+        const char *fname = pat->struc.fields[fi].name;
+        char path[256];
+        snprintf(path, sizeof(path), "%s.%s", prefix, fname);
+
+        if (inner->kind == PAT_BINDING || inner->kind == PAT_WILDCARD) continue;
+        if (inner->kind == PAT_STRUCT) {
+            emit_struct_pat_conditions(inner, path, has_cond, out);
+            continue;
+        }
+        if (*has_cond) fprintf(out, " && ");
+        else fprintf(out, "if (");
+        *has_cond = true;
+        if (inner->kind == PAT_INT_LIT) {
+            fprintf(out, "%s == %" PRId64, path, inner->int_lit.value);
+        } else if (inner->kind == PAT_BOOL_LIT) {
+            fprintf(out, "%s == %s", path, inner->bool_lit.value ? "true" : "false");
+        } else if (inner->kind == PAT_CHAR_LIT) {
+            fprintf(out, "%s == '\\x%02x'", path, inner->char_lit.value);
+        }
+    }
+}
+
+/* Recursively emit bindings for a struct pattern in a match.
+   prefix is the C expression for the struct value. */
+static void emit_struct_pat_bindings(Pattern *pat, const char *prefix, FILE *out) {
+    for (int fi = 0; fi < pat->struc.field_count; fi++) {
+        Pattern *inner = pat->struc.fields[fi].pattern;
+        const char *fname = pat->struc.fields[fi].name;
+        Type *ft = pat->struc.fields[fi].resolved_type;
+        char path[256];
+        snprintf(path, sizeof(path), "%s.%s", prefix, fname);
+
+        if (inner->kind == PAT_BINDING) {
+            emit_indent(out);
+            emit_type(ft, out);
+            fprintf(out, " %s = %s;\n", inner->binding.name, path);
+            emit_indent(out);
+            fprintf(out, "(void)%s;\n", inner->binding.name);
+        } else if (inner->kind == PAT_STRUCT) {
+            emit_struct_pat_bindings(inner, path, out);
+        }
+    }
+}
+
 static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return) {
     for (int i = 0; i < count; i++) {
         Expr *s = stmts[i];
@@ -741,25 +791,12 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
                 break;
             case PAT_STRUCT: {
-                /* Build condition from literal sub-patterns; binding sub-patterns always match */
+                char subj_prefix[64];
+                snprintf(subj_prefix, sizeof(subj_prefix), "_subj%d", subj_id);
                 bool has_cond = false;
-                for (int fi = 0; fi < pat->struc.field_count; fi++) {
-                    Pattern *inner = pat->struc.fields[fi].pattern;
-                    if (inner->kind == PAT_BINDING || inner->kind == PAT_WILDCARD) continue;
-                    if (has_cond) fprintf(out, " && ");
-                    else fprintf(out, "if (");
-                    has_cond = true;
-                    if (inner->kind == PAT_INT_LIT) {
-                        fprintf(out, "_subj%d.%s == %" PRId64, subj_id, pat->struc.fields[fi].name, inner->int_lit.value);
-                    } else if (inner->kind == PAT_BOOL_LIT) {
-                        fprintf(out, "_subj%d.%s == %s", subj_id, pat->struc.fields[fi].name,
-                            inner->bool_lit.value ? "true" : "false");
-                    } else if (inner->kind == PAT_CHAR_LIT) {
-                        fprintf(out, "_subj%d.%s == '\\x%02x'", subj_id, pat->struc.fields[fi].name, inner->char_lit.value);
-                    }
-                }
+                emit_struct_pat_conditions(pat, subj_prefix, &has_cond, out);
                 if (has_cond) fprintf(out, ") {\n");
-                else fprintf(out, "{\n"); /* all bindings/wildcards — always matches */
+                else fprintf(out, "{\n");
                 break;
             }
             case PAT_VARIANT:
@@ -795,25 +832,9 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_indent(out);
                 fprintf(out, "(void)%s;\n", pat->some_pat.inner->binding.name);
             } else if (pat->kind == PAT_STRUCT) {
-                /* Emit field bindings */
-                Type *struct_type = e->match_expr.subject->type;
-                for (int fi = 0; fi < pat->struc.field_count; fi++) {
-                    Pattern *inner = pat->struc.fields[fi].pattern;
-                    if (inner->kind != PAT_BINDING) continue;
-                    const char *fname = pat->struc.fields[fi].name;
-                    /* Find field type */
-                    for (int fj = 0; fj < struct_type->struc.field_count; fj++) {
-                        if (struct_type->struc.fields[fj].name == fname) {
-                            emit_indent(out);
-                            emit_type(struct_type->struc.fields[fj].type, out);
-                            fprintf(out, " %s = _subj%d.%s;\n",
-                                inner->binding.name, subj_id, fname);
-                            emit_indent(out);
-                            fprintf(out, "(void)%s;\n", inner->binding.name);
-                            break;
-                        }
-                    }
-                }
+                char subj_prefix[64];
+                snprintf(subj_prefix, sizeof(subj_prefix), "_subj%d", subj_id);
+                emit_struct_pat_bindings(pat, subj_prefix, out);
             } else if (pat->kind == PAT_VARIANT && pat->variant.payload &&
                        pat->variant.payload->kind == PAT_BINDING) {
                 /* Find the payload type */
