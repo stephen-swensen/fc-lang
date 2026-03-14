@@ -1475,6 +1475,35 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     return e->type;
 }
 
+/* Check if an expression is a compile-time constant (no variable refs or calls) */
+static bool is_const_expr(Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+    case EXPR_INT_LIT:
+    case EXPR_FLOAT_LIT:
+    case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT:
+    case EXPR_CSTRING_LIT:
+    case EXPR_SIZEOF:
+    case EXPR_DEFAULT:
+    case EXPR_NONE:
+        return true;
+    case EXPR_UNARY_PREFIX:
+        return is_const_expr(e->unary_prefix.operand);
+    case EXPR_BINARY:
+        return is_const_expr(e->binary.left) && is_const_expr(e->binary.right);
+    case EXPR_CAST:
+        return is_const_expr(e->cast.operand);
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            if (!is_const_expr(e->struct_lit.fields[i].value)) return false;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static void check_decl_let(CheckCtx *ctx, Decl *d) {
     /* For function declarations, pre-register a partial function type
      * so the body can make recursive calls. */
@@ -1576,6 +1605,12 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
             Decl *child = d->module.decls[j];
             if (child->kind == DECL_LET) {
                 check_decl_let(&ctx, child);
+                if (child->let.init && child->let.init->kind != EXPR_FUNC &&
+                    !is_const_expr(child->let.init)) {
+                    diag_error(child->loc,
+                        "top-level initializer for '%s' must be a constant expression",
+                        child->let.name);
+                }
             } else if (child->kind == DECL_MODULE) {
                 /* Nested submodule: type-check with submodule's symtab */
                 Symbol *sub_sym = symtab_lookup_kind(mod_sym->members, child->module.name, DECL_MODULE);
@@ -1583,8 +1618,15 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
                     SymbolTable *saved_inner = ctx.module_symtab;
                     ctx.module_symtab = sub_sym->members;
                     for (int k = 0; k < child->module.decl_count; k++) {
-                        if (child->module.decls[k]->kind == DECL_LET) {
-                            check_decl_let(&ctx, child->module.decls[k]);
+                        Decl *sub_child = child->module.decls[k];
+                        if (sub_child->kind == DECL_LET) {
+                            check_decl_let(&ctx, sub_child);
+                            if (sub_child->let.init && sub_child->let.init->kind != EXPR_FUNC &&
+                                !is_const_expr(sub_child->let.init)) {
+                                diag_error(sub_child->loc,
+                                    "top-level initializer for '%s' must be a constant expression",
+                                    sub_child->let.name);
+                            }
                         }
                     }
                     ctx.module_symtab = saved_inner;
@@ -1627,6 +1669,12 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
         }
         if (d->kind == DECL_LET) {
             check_decl_let(&ctx, d);
+            if (d->let.init && d->let.init->kind != EXPR_FUNC &&
+                !is_const_expr(d->let.init)) {
+                diag_error(d->loc,
+                    "top-level initializer for '%s' must be a constant expression",
+                    d->let.name);
+            }
         }
     }
 

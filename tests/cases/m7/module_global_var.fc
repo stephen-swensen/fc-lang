@@ -1,6 +1,6 @@
 module config =
     let base = 10
-    let offset = base + 4
+    let offset = 14
 
 let main = (args: int32) ->
     config.base + config.offset + 18

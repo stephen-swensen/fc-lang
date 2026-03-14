@@ -1164,7 +1164,7 @@ static bool is_func_decl(Decl *d) {
     return d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC;
 }
 
-static void emit_func_decl(Decl *d, FILE *out, Decl **all_decls, int all_count) {
+static void emit_func_decl(Decl *d, FILE *out) {
     Expr *fn = d->let.init;
     Type *ft = d->let.resolved_type;
     const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
@@ -1174,16 +1174,6 @@ static void emit_func_decl(Decl *d, FILE *out, Decl **all_decls, int all_count) 
         fprintf(out, "int main(int argc, char **argv) {\n");
         /* TODO: convert argc/argv to FC str[] args */
         fprintf(out, "    (void)argc; (void)argv;\n");
-        /* Initialize file-scope global variables */
-        for (int i = 0; i < all_count; i++) {
-            Decl *gd = all_decls[i];
-            if (gd->kind == DECL_LET && !is_func_decl(gd) && gd->let.init) {
-                const char *gname = gd->let.codegen_name ? gd->let.codegen_name : gd->let.name;
-                fprintf(out, "    %s = ", gname);
-                emit_expr(gd->let.init, out);
-                fprintf(out, ";\n");
-            }
-        }
     } else {
         /* Emit return type */
         emit_type(ft->func.return_type, out);
@@ -1740,19 +1730,20 @@ void codegen_emit(Program *prog, FILE *out) {
         }
     }
 
-    /* Emit non-function global variable declarations with zero initializers.
+    /* Emit non-function global variable definitions.
      * Must come before lifted lambdas so they can reference globals.
-     * Real initialization happens at the start of main (or synthetic main)
-     * because C requires file-scope initializers to be constant expressions.
-     * Module members (with codegen_name) are always emitted; other top-level
-     * variables are only emitted at file scope when there is a real main. */
+     * Pass2 enforces that initializers are constant expressions, so these
+     * are valid at C file scope. Module members (with codegen_name) are
+     * always emitted; other top-level variables only when there is a main. */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d) &&
             (d->let.codegen_name || has_main)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             emit_type(d->let.resolved_type, out);
-            fprintf(out, " %s;\n", cname);
+            fprintf(out, " %s = ", cname);
+            emit_expr(d->let.init, out);
+            fprintf(out, ";\n");
         }
     }
     fprintf(out, "\n");
@@ -1830,7 +1821,7 @@ void codegen_emit(Program *prog, FILE *out) {
     /* Emit function definitions */
     for (int i = 0; i < all_count; i++) {
         if (is_func_decl(all_decls[i])) {
-            emit_func_decl(all_decls[i], out, all_decls, all_count);
+            emit_func_decl(all_decls[i], out);
         }
     }
 

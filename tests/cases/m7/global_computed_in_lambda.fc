@@ -1,5 +1,4 @@
-let base = 20
-let offset = base + 1
+let offset = 21
 
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 

@@ -1,2 +1,3 @@
-let x = -5
-let y = x + 10
+let main = (args: int32) ->
+    let x = -5
+    x + 10
