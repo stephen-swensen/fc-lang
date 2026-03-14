@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+#include <ctype.h>
 
 void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable *intern) {
     p->tokens = tokens;
@@ -109,6 +110,7 @@ static Prec infix_prec(TokenKind kind) {
 
 static Expr *alloc_expr(Parser *p, ExprKind kind, SrcLoc loc) {
     Expr *e = arena_alloc(p->arena, sizeof(Expr));
+    memset(e, 0, sizeof(Expr));
     e->kind = kind;
     loc.filename = p->filename;
     e->loc = loc;
@@ -268,12 +270,43 @@ static Type *parse_type(Parser *p) {
 
 static Expr *parse_expr(Parser *p, Prec min_prec);
 static Expr *parse_block_item(Parser *p);
+static Pattern *parse_pattern(Parser *p);
 static Expr *parse_match_expr(Parser *p);
 static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc);
 
 static int64_t parse_int_value(const char *start, int length) {
     char buf[64];
     int num_len = 0;
+
+    /* Check for 0x, 0b, 0o prefixes */
+    if (length >= 2 && start[0] == '0') {
+        if (start[1] == 'x' || start[1] == 'X') {
+            for (int i = 2; i < length && i < 63; i++) {
+                char c = start[i];
+                if (isxdigit((unsigned char)c)) buf[num_len++] = c;
+                else break;
+            }
+            buf[num_len] = '\0';
+            return (int64_t)strtoll(buf, NULL, 16);
+        }
+        if (start[1] == 'b' || start[1] == 'B') {
+            for (int i = 2; i < length && i < 63; i++) {
+                if (start[i] == '0' || start[i] == '1') buf[num_len++] = start[i];
+                else break;
+            }
+            buf[num_len] = '\0';
+            return (int64_t)strtoll(buf, NULL, 2);
+        }
+        if (start[1] == 'o' || start[1] == 'O') {
+            for (int i = 2; i < length && i < 63; i++) {
+                if (start[i] >= '0' && start[i] <= '7') buf[num_len++] = start[i];
+                else break;
+            }
+            buf[num_len] = '\0';
+            return (int64_t)strtoll(buf, NULL, 8);
+        }
+    }
+
     for (int i = 0; i < length && i < 63; i++) {
         if (start[i] >= '0' && start[i] <= '9') buf[num_len++] = start[i];
         else break;
@@ -283,12 +316,67 @@ static int64_t parse_int_value(const char *start, int length) {
     return (int64_t)strtoll(buf, NULL, 10);
 }
 
+/* Find where the numeric part ends (for suffix extraction) */
+static int int_num_end(const char *start, int length) {
+    if (length >= 2 && start[0] == '0') {
+        if (start[1] == 'x' || start[1] == 'X') {
+            int i = 2;
+            while (i < length && isxdigit((unsigned char)start[i])) i++;
+            return i;
+        }
+        if (start[1] == 'b' || start[1] == 'B') {
+            int i = 2;
+            while (i < length && (start[i] == '0' || start[i] == '1')) i++;
+            return i;
+        }
+        if (start[1] == 'o' || start[1] == 'O') {
+            int i = 2;
+            while (i < length && start[i] >= '0' && start[i] <= '7') i++;
+            return i;
+        }
+    }
+    int i = 0;
+    while (i < length && start[i] >= '0' && start[i] <= '9') i++;
+    return i;
+}
+
 static Type *parse_int_type(const char *start, int length) {
-    int num_end = 0;
-    while (num_end < length && start[num_end] >= '0' && start[num_end] <= '9') num_end++;
+    int num_end = int_num_end(start, length);
     if (num_end >= length) return type_int32();
     Type *t = type_from_int_suffix(start + num_end, length - num_end);
     return t ? t : type_int32();
+}
+
+/* Parse the byte value from a char literal token (e.g., 'a', '\n', '\x41').
+   Token includes the surrounding single quotes. */
+static uint8_t parse_char_value(const char *start, int length) {
+    /* start[0] = ', start[length-1] = ' */
+    if (length < 3) return 0;
+    if (start[1] != '\\') return (uint8_t)start[1];
+    /* escape sequence */
+    if (length < 4) return 0;
+    switch (start[2]) {
+    case 'n':  return '\n';
+    case 't':  return '\t';
+    case 'r':  return '\r';
+    case '\\': return '\\';
+    case '\'': return '\'';
+    case '0':  return '\0';
+    case 'x': {
+        /* \xNN — two hex digits */
+        if (length < 6) return 0;
+        unsigned val = 0;
+        for (int i = 3; i < 5; i++) {
+            val <<= 4;
+            char c = start[i];
+            if (c >= '0' && c <= '9') val += (unsigned)(c - '0');
+            else if (c >= 'a' && c <= 'f') val += (unsigned)(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') val += (unsigned)(c - 'A' + 10);
+        }
+        return (uint8_t)val;
+    }
+    default: return (uint8_t)start[2];
+    }
 }
 
 /* Parse a block: INDENT item (NEWLINE item)* DEDENT.
@@ -421,6 +509,21 @@ static Expr *parse_block_item(Parser *p) {
             advance_p(p);
             is_mut = true;
         }
+
+        /* Struct destructuring: let { field = name, ... } = expr */
+        if (check(p, TOK_LBRACE)) {
+            /* Reuse parse_pattern to handle nested destructuring */
+            Pattern *pat = parse_pattern(p);
+            expect(p, TOK_EQ);
+
+            Expr *init = parse_expr(p, PREC_NONE + 1);
+            Expr *e = alloc_expr(p, EXPR_LET_DESTRUCT, loc);
+            e->let_destruct.pattern = pat;
+            e->let_destruct.is_mut = is_mut;
+            e->let_destruct.init = init;
+            return e;
+        }
+
         const char *name = tok_intern(p, expect(p, TOK_IDENT));
         expect(p, TOK_EQ);
 
@@ -530,6 +633,13 @@ static Expr *parse_prefix(Parser *p) {
         /* Skip c" and closing " */
         e->cstring_lit.value = t->start + 2;
         e->cstring_lit.length = t->length - 3;
+        return e;
+    }
+
+    case TOK_CHAR_LIT: {
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_CHAR_LIT, loc);
+        e->char_lit.value = parse_char_value(t->start, t->length);
         return e;
     }
 
@@ -993,6 +1103,13 @@ static Pattern *parse_pattern(Parser *p) {
         return pat;
     }
 
+    if (check(p, TOK_CHAR_LIT)) {
+        Token *t2 = advance_p(p);
+        pat->kind = PAT_CHAR_LIT;
+        pat->char_lit.value = parse_char_value(t2->start, t2->length);
+        return pat;
+    }
+
     if (check(p, TOK_NONE)) {
         advance_p(p);
         pat->kind = PAT_NONE;
@@ -1005,6 +1122,34 @@ static Pattern *parse_pattern(Parser *p) {
         pat->kind = PAT_SOME;
         pat->some_pat.inner = parse_pattern(p);
         expect(p, TOK_RPAREN);
+        return pat;
+    }
+
+    if (check(p, TOK_LBRACE)) {
+        advance_p(p); /* consume { */
+        pat->kind = PAT_STRUCT;
+        FieldPattern *fields = NULL;
+        int count = 0, cap = 0;
+        if (!check(p, TOK_RBRACE)) {
+            do {
+                skip_newlines(p);
+                const char *fname = tok_intern(p, expect(p, TOK_IDENT));
+                expect(p, TOK_EQ);
+                Pattern *inner = parse_pattern(p);
+                FieldPattern fp;
+                fp.name = fname;
+                fp.pattern = inner;
+                DA_APPEND(fields, count, cap, fp);
+                if (!check(p, TOK_COMMA)) break;
+                advance_p(p);
+            } while (!check(p, TOK_RBRACE));
+        }
+        skip_newlines(p);
+        expect(p, TOK_RBRACE);
+        pat->struc.fields = arena_alloc(p->arena, sizeof(FieldPattern) * (count > 0 ? (size_t)count : 1));
+        memcpy(pat->struc.fields, fields, sizeof(FieldPattern) * (size_t)count);
+        pat->struc.field_count = count;
+        free(fields);
         return pat;
     }
 

@@ -1,0 +1,6 @@
+let set_stuff = (x: int32) ->
+    let y = x + 1
+
+let main = (args: int32) ->
+    set_stuff(5)
+    42

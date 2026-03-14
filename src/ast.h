@@ -42,6 +42,7 @@ typedef enum {
     EXPR_NONE,
     EXPR_DEREF_FIELD,   /* x->f */
     EXPR_LET,           /* let binding inside a block */
+    EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -60,6 +61,12 @@ struct FieldInit {
     const char *name;
     Expr *value;
 };
+
+typedef struct {
+    const char *name;       /* struct field name */
+    Pattern *pattern;       /* inner pattern (binding, literal, nested struct, etc.) */
+    Type *resolved_type;    /* filled by pass2: resolved type of this field */
+} FieldPattern;
 
 struct Expr {
     ExprKind kind;
@@ -214,6 +221,15 @@ struct Expr {
             Expr *let_init;
             Type *let_type;     /* filled by pass2 */
         } let_expr;
+
+        /* EXPR_LET_DESTRUCT */
+        struct {
+            Pattern *pattern;       /* PAT_STRUCT pattern */
+            bool is_mut;
+            Expr *init;
+            Type *init_type;        /* filled by pass2 */
+            const char *tmp_name;   /* codegen temp name for the RHS */
+        } let_destruct;
     };
 };
 
@@ -247,7 +263,7 @@ struct Pattern {
             Pattern *payload;   /* NULL if no payload */
         } variant;
         struct {
-            FieldInit *fields;  /* reuse: name = pattern stored as Expr */
+            FieldPattern *fields;
             int field_count;
         } struc;
     };

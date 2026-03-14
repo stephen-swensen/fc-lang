@@ -1,0 +1,3 @@
+let main = (args: int32) ->
+    let x = ~0
+    x * -1

@@ -123,6 +123,36 @@ static Token scan_identifier(Lexer *l) {
 }
 
 static Token scan_number(Lexer *l) {
+    /* Check for 0x, 0b, 0o prefixes */
+    if (l->current[-1] == '0') {
+        if (peek(l) == 'x' || peek(l) == 'X') {
+            advance(l); /* consume x */
+            while (isxdigit((unsigned char)peek(l))) advance(l);
+            if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+                advance(l);
+                while (isdigit((unsigned char)peek(l))) advance(l);
+            }
+            return make_token(l, TOK_INT_LIT);
+        }
+        if (peek(l) == 'b' || peek(l) == 'B') {
+            advance(l); /* consume b */
+            while (peek(l) == '0' || peek(l) == '1') advance(l);
+            if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+                advance(l);
+                while (isdigit((unsigned char)peek(l))) advance(l);
+            }
+            return make_token(l, TOK_INT_LIT);
+        }
+        if (peek(l) == 'o' || peek(l) == 'O') {
+            advance(l); /* consume o */
+            while (peek(l) >= '0' && peek(l) <= '7') advance(l);
+            if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+                advance(l);
+                while (isdigit((unsigned char)peek(l))) advance(l);
+            }
+            return make_token(l, TOK_INT_LIT);
+        }
+    }
     while (isdigit((unsigned char)peek(l))) advance(l);
     if (peek(l) == '.' && isdigit((unsigned char)peek_next(l))) {
         advance(l);
@@ -249,6 +279,7 @@ static Token scan_token(Lexer *l) {
         return make_token(l, TOK_GT);
     case '&': return match(l, '&') ? make_token(l, TOK_AMPAMP) : make_token(l, TOK_AMP);
     case '|': return match(l, '|') ? make_token(l, TOK_PIPEPIPE) : make_token(l, TOK_PIPE);
+    case '\'': return scan_char_lit(l);
     case '.': return match(l, '.') ? make_token(l, TOK_DOTDOT) : make_token(l, TOK_DOT);
     case ':': return match(l, ':') ? make_token(l, TOK_COLONCOLON) : make_token(l, TOK_COLON);
     case '#': {

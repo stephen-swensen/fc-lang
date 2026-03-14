@@ -1,0 +1,1 @@
+let main = (args: int32) -> 17 % 5

@@ -56,6 +56,7 @@ typedef struct {
     bool in_for;             /* true when inside a for loop (break value forbidden) */
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
     const char *current_ns;      /* current namespace for namespace isolation */
+    Type *recursive_ret;         /* non-NULL placeholder when resolving a recursive function */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -97,6 +98,48 @@ static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
 }
 
 static Type *check_match(CheckCtx *ctx, Expr *e);
+
+/* Recursively check a struct destructuring pattern, adding bindings to scope */
+static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_type, bool is_mut, SrcLoc loc) {
+    if (pat->kind != PAT_STRUCT)
+        diag_fatal(pat->loc, "expected struct destructuring pattern");
+    if (struct_type->kind != TYPE_STRUCT)
+        diag_fatal(loc, "cannot destructure non-struct type %s", type_name(struct_type));
+
+    for (int i = 0; i < pat->struc.field_count; i++) {
+        const char *fname = pat->struc.fields[i].name;
+        Pattern *inner = pat->struc.fields[i].pattern;
+
+        /* Find the field type */
+        Type *field_type = NULL;
+        for (int j = 0; j < struct_type->struc.field_count; j++) {
+            if (struct_type->struc.fields[j].name == fname) {
+                field_type = struct_type->struc.fields[j].type;
+                break;
+            }
+        }
+        if (!field_type)
+            diag_fatal(loc, "struct '%s' has no field '%s'", struct_type->struc.name, fname);
+
+        field_type = resolve_type(ctx, field_type);
+        pat->struc.fields[i].resolved_type = field_type;
+
+        if (inner->kind == PAT_BINDING) {
+            const char *orig_name = inner->binding.name;
+            int id = local_id_counter++;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "_l_%s_%d", orig_name, id);
+            char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
+            memcpy(cg, buf, strlen(buf) + 1);
+            inner->binding.name = cg;  /* overwrite with codegen name */
+            scope_add(ctx->scope, orig_name, cg, field_type, is_mut);
+        } else if (inner->kind == PAT_STRUCT) {
+            check_destruct_pattern(ctx, inner, field_type, is_mut, loc);
+        } else {
+            diag_fatal(inner->loc, "unsupported pattern in let destructuring");
+        }
+    }
+}
 
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
@@ -395,6 +438,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (!type_eq(ct, type_bool()))
             diag_fatal(e->loc, "if condition must be bool, got %s", type_name(ct));
         Type *tt = check_expr(ctx, e->if_expr.then_body);
+        /* If resolving a recursive function, fill in the return type from the
+         * base case (then-branch) before checking the recursive branch (else). */
+        if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
+            tt->kind != TYPE_VOID) {
+            *ctx->recursive_ret = *tt;
+        }
         if (e->if_expr.else_body) {
             Type *et = check_expr(ctx, e->if_expr.else_body);
             if (!type_eq(tt, et)) {
@@ -430,6 +479,26 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         memcpy(cg, buf, strlen(buf) + 1);
         e->let_expr.codegen_name = cg;
         scope_add(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut);
+        e->type = type_void();
+        return e->type;
+    }
+
+    case EXPR_LET_DESTRUCT: {
+        Type *t = check_expr(ctx, e->let_destruct.init);
+        if (t->kind != TYPE_STRUCT)
+            diag_fatal(e->loc, "cannot destructure non-struct type %s", type_name(t));
+        e->let_destruct.init_type = t;
+
+        /* Generate temp name for the RHS struct value */
+        int tmp_id = local_id_counter++;
+        char tmp_buf[128];
+        snprintf(tmp_buf, sizeof(tmp_buf), "_ds_%d", tmp_id);
+        char *tmp_name = arena_alloc(ctx->arena, strlen(tmp_buf) + 1);
+        memcpy(tmp_name, tmp_buf, strlen(tmp_buf) + 1);
+        e->let_destruct.tmp_name = tmp_name;
+
+        check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
+
         e->type = type_void();
         return e->type;
     }
@@ -944,6 +1013,10 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
             if (!type_eq(subj_type, type_bool()))
                 diag_fatal(pat->loc, "bool pattern on non-bool type %s", type_name(subj_type));
             break;
+        case PAT_CHAR_LIT:
+            if (!type_eq(subj_type, type_char()))
+                diag_fatal(pat->loc, "char pattern on non-char type %s", type_name(subj_type));
+            break;
         case PAT_SOME: {
             if (subj_type->kind != TYPE_OPTION)
                 diag_fatal(pat->loc, "some pattern on non-option type %s", type_name(subj_type));
@@ -957,6 +1030,33 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
             if (subj_type->kind != TYPE_OPTION)
                 diag_fatal(pat->loc, "none pattern on non-option type %s", type_name(subj_type));
             break;
+        case PAT_STRUCT: {
+            if (subj_type->kind != TYPE_STRUCT)
+                diag_fatal(pat->loc, "struct pattern on non-struct type %s", type_name(subj_type));
+            for (int fi = 0; fi < pat->struc.field_count; fi++) {
+                const char *fname = pat->struc.fields[fi].name;
+                Pattern *inner = pat->struc.fields[fi].pattern;
+                Type *field_type = NULL;
+                for (int fj = 0; fj < subj_type->struc.field_count; fj++) {
+                    if (subj_type->struc.fields[fj].name == fname) {
+                        field_type = resolve_type(ctx, subj_type->struc.fields[fj].type);
+                        break;
+                    }
+                }
+                if (!field_type)
+                    diag_fatal(pat->loc, "struct '%s' has no field '%s'", subj_type->struc.name, fname);
+                pat->struc.fields[fi].resolved_type = field_type;
+                if (inner->kind == PAT_BINDING) {
+                    scope_add(ctx->scope, inner->binding.name, inner->binding.name, field_type, false);
+                }
+                /* For literal patterns, type-check compatibility */
+                if (inner->kind == PAT_INT_LIT && !type_is_integer(field_type))
+                    diag_fatal(inner->loc, "integer pattern on non-integer field '%s'", fname);
+                if (inner->kind == PAT_BOOL_LIT && !type_eq(field_type, type_bool()))
+                    diag_fatal(inner->loc, "bool pattern on non-bool field '%s'", fname);
+            }
+            break;
+        }
         case PAT_VARIANT: {
             if (subj_type->kind != TYPE_UNION)
                 diag_fatal(pat->loc, "variant pattern on non-union type %s", type_name(subj_type));
@@ -991,6 +1091,11 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 
         if (!result_type) {
             result_type = arm_type;
+            /* Fill recursive return type from first concrete arm (base case) */
+            if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
+                arm_type->kind != TYPE_VOID) {
+                *ctx->recursive_ret = *arm_type;
+            }
         } else if (!type_eq(result_type, arm_type)) {
             diag_fatal(arm->loc, "match arms have different types: %s vs %s",
                 type_name(result_type), type_name(arm_type));
@@ -1002,9 +1107,8 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 }
 
 static void check_decl_let(CheckCtx *ctx, Decl *d) {
-    Type *t = check_expr(ctx, d->let.init);
-    d->let.resolved_type = t;
-    /* Update symbol in the appropriate table */
+    /* For function declarations, pre-register a partial function type
+     * so the body can make recursive calls. */
     const char *lookup_name = d->let.name;
     Symbol *sym = NULL;
     if (ctx->module_symtab) {
@@ -1013,6 +1117,45 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     if (!sym) {
         sym = symtab_lookup(ctx->symtab, lookup_name);
     }
+
+    Type *recursive_ret = NULL;
+    if (d->let.init && d->let.init->kind == EXPR_FUNC && sym && !sym->type) {
+        /* Build a partial function type with params known, return type placeholder.
+         * Allocate the return type as a mutable cell; after body checking we
+         * overwrite it in-place so all references (including recursive call sites)
+         * see the resolved return type. */
+        Expr *fn = d->let.init;
+        int pc = fn->func.param_count;
+        Type **ptypes = NULL;
+        if (pc > 0)
+            ptypes = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)pc);
+        for (int i = 0; i < pc; i++)
+            ptypes[i] = resolve_type(ctx, fn->func.params[i].type);
+
+        recursive_ret = malloc(sizeof(Type));
+        memset(recursive_ret, 0, sizeof(Type));
+        recursive_ret->kind = TYPE_VOID;  /* placeholder */
+
+        Type *ft = arena_alloc(ctx->arena, sizeof(Type));
+        ft->kind = TYPE_FUNC;
+        ft->func.param_types = ptypes;
+        ft->func.param_count = pc;
+        ft->func.return_type = recursive_ret;
+        sym->type = ft;
+    }
+
+    Type *saved_recursive_ret = ctx->recursive_ret;
+    ctx->recursive_ret = recursive_ret;
+    Type *t = check_expr(ctx, d->let.init);
+    ctx->recursive_ret = saved_recursive_ret;
+
+    /* If we pre-registered a recursive function type, patch the return type */
+    if (recursive_ret) {
+        Type *actual_ret = t->kind == TYPE_FUNC ? t->func.return_type : t;
+        *recursive_ret = *actual_ret;
+    }
+
+    d->let.resolved_type = t;
     if (sym) sym->type = t;
     /* Add to scope so later decls can reference it */
     const char *cg_name = d->let.codegen_name ? d->let.codegen_name : d->let.name;
@@ -1031,6 +1174,7 @@ void pass2_check(Program *prog, SymbolTable *symtab) {
         .in_for = false,
         .module_symtab = NULL,
         .current_ns = NULL,
+        .recursive_ret = NULL,
     };
 
     /* First pass: type-check all module member decls (including nested submodules) */

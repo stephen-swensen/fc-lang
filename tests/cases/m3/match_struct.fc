@@ -1,0 +1,15 @@
+struct point =
+    x: int32
+    y: int32
+
+let classify = (p: point) ->
+    match p with
+    | { x = 0, y = 0 } -> 1
+    | { x = 0, y = v } -> v
+    | { x = v } -> v
+
+let main = (args: int32) ->
+    let r1 = classify(point { x = 0, y = 0 })
+    let r2 = classify(point { x = 0, y = 10 })
+    let r3 = classify(point { x = 20, y = 5 })
+    r1 + r2 + r3

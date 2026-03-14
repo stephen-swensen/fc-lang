@@ -1,0 +1,12 @@
+struct point =
+    x: int32
+    y: int32
+
+struct circle =
+    center: point
+    radius: int32
+
+let main = (args: int32) ->
+    let c = circle { center = point { x = 10, y = 20 }, radius = 5 }
+    let { center = { x = cx, y = cy }, radius = r } = c
+    cx + cy + r

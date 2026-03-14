@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let x = 3.14
+    let y = 2.0
+    let z = x + y
+    (int32)z

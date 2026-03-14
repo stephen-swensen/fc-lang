@@ -1,0 +1,6 @@
+let main = (args: int32) ->
+    let mut r = 0
+    if 7 & 3 == 3 then r = r + 1
+    if (1 | 2) + 4 == 7 then r = r + 1
+    if 2 + 3 * 4 == 14 then r = r + 1
+    r

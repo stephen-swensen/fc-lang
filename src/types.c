@@ -30,7 +30,8 @@ PRIM(bool,    TYPE_BOOL)
 PRIM(void,    TYPE_VOID)
 PRIM(str,     TYPE_STR)
 PRIM(cstr,    TYPE_CSTR)
-PRIM(char,    TYPE_CHAR)
+/* char is an alias for uint8 per spec */
+Type *type_char(void) { return type_uint8(); }
 PRIM(any_ptr, TYPE_ANY_PTR)
 
 #undef PRIM
