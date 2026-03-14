@@ -73,7 +73,7 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
 
 /* Resolve a named type stub (TYPE_STRUCT with no fields) to the actual type from symtab */
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
-    if (!t) return t;
+    if (!t || t->kind == TYPE_ERROR) return t;
     if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.fields == NULL && t->struc.name) {
         /* Check module symtab first (for within-module type references) */
         if (ctx->module_symtab) {
@@ -101,10 +101,15 @@ static Type *check_match(CheckCtx *ctx, Expr *e);
 
 /* Recursively check a struct destructuring pattern, adding bindings to scope */
 static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_type, bool is_mut, SrcLoc loc) {
-    if (pat->kind != PAT_STRUCT)
-        diag_fatal(pat->loc, "expected struct destructuring pattern");
-    if (struct_type->kind != TYPE_STRUCT)
-        diag_fatal(loc, "cannot destructure non-struct type %s", type_name(struct_type));
+    if (type_is_error(struct_type)) return;
+    if (pat->kind != PAT_STRUCT) {
+        diag_error(pat->loc, "expected struct destructuring pattern");
+        return;
+    }
+    if (struct_type->kind != TYPE_STRUCT) {
+        diag_error(loc, "cannot destructure non-struct type %s", type_name(struct_type));
+        return;
+    }
 
     for (int i = 0; i < pat->struc.field_count; i++) {
         const char *fname = pat->struc.fields[i].name;
@@ -118,8 +123,10 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
                 break;
             }
         }
-        if (!field_type)
-            diag_fatal(loc, "struct '%s' has no field '%s'", struct_type->struc.name, fname);
+        if (!field_type) {
+            diag_error(loc, "struct '%s' has no field '%s'", struct_type->struc.name, fname);
+            continue;
+        }
 
         field_type = resolve_type(ctx, field_type);
         pat->struc.fields[i].resolved_type = field_type;
@@ -138,7 +145,8 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
         } else if (inner->kind == PAT_STRUCT) {
             check_destruct_pattern(ctx, inner, field_type, is_mut, loc);
         } else {
-            diag_fatal(inner->loc, "unsupported pattern in let destructuring");
+            diag_error(inner->loc, "unsupported pattern in let destructuring");
+            return;
         }
     }
 }
@@ -190,14 +198,22 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name) {
                     e->ident.codegen_name = msym->decl->let.codegen_name;
                 }
-                if (!msym->type) diag_fatal(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+                if (!msym->type) {
+                    diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+                    e->type = type_error();
+                    return e->type;
+                }
                 e->type = msym->type;
                 return e->type;
             }
         }
         /* Check global symbol table */
         Symbol *sym = symtab_lookup(ctx->symtab, e->ident.name);
-        if (!sym) diag_fatal(e->loc, "undefined name '%s'", e->ident.name);
+        if (!sym) {
+            diag_error(e->loc, "undefined name '%s'", e->ident.name);
+            e->type = type_error();
+            return e->type;
+        }
         /* For struct/union type names used in expressions (e.g., variant construction),
          * return the type itself */
         if (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION) {
@@ -212,13 +228,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 ns_mod = symtab_lookup_module(ctx->symtab, e->ident.name, NULL);
             }
             if (!ns_mod) {
-                diag_fatal(e->loc, "module '%s' is in a different namespace; use 'import' to access it",
+                diag_error(e->loc, "module '%s' is in a different namespace; use 'import' to access it",
                     e->ident.name);
+                e->type = type_error();
+                return e->type;
             }
             e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
             return e->type;
         }
-        if (!sym->type) diag_fatal(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+        if (!sym->type) {
+            diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+            e->type = type_error();
+            return e->type;
+        }
         /* Propagate codegen_name from imported/module symbols */
         if (sym->decl && sym->decl->kind == DECL_LET && sym->decl->let.codegen_name) {
             e->ident.codegen_name = sym->decl->let.codegen_name;
@@ -230,6 +252,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_BINARY: {
         Type *lt = check_expr(ctx, e->binary.left);
         Type *rt = check_expr(ctx, e->binary.right);
+        if (type_is_error(lt) || type_is_error(rt)) { e->type = type_error(); return e->type; }
         TokenKind op = e->binary.op;
 
         if (op == TOK_PLUS || op == TOK_MINUS) {
@@ -238,13 +261,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = lt;
                 return e->type;
             }
-            if (!type_is_numeric(lt) || !type_is_numeric(rt))
-                diag_fatal(e->loc, "arithmetic requires numeric operands, got %s and %s",
+            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+                diag_error(e->loc, "arithmetic requires numeric operands, got %s and %s",
                     type_name(lt), type_name(rt));
+                e->type = type_error();
+                return e->type;
+            }
             if (!type_eq(lt, rt)) {
                 Type *common = type_common_numeric(lt, rt);
-                if (!common)
-                    diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!common) {
+                    diag_error(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
                 if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
                 if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
                 lt = rt = common;
@@ -254,13 +283,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
 
         if (op == TOK_STAR || op == TOK_SLASH || op == TOK_PERCENT) {
-            if (!type_is_numeric(lt) || !type_is_numeric(rt))
-                diag_fatal(e->loc, "arithmetic requires numeric operands, got %s and %s",
+            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+                diag_error(e->loc, "arithmetic requires numeric operands, got %s and %s",
                     type_name(lt), type_name(rt));
+                e->type = type_error();
+                return e->type;
+            }
             if (!type_eq(lt, rt)) {
                 Type *common = type_common_numeric(lt, rt);
-                if (!common)
-                    diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!common) {
+                    diag_error(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
                 if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
                 if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
                 lt = rt = common;
@@ -273,8 +308,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
             if (!type_eq(lt, rt)) {
                 Type *common = type_common_numeric(lt, rt);
-                if (!common)
-                    diag_fatal(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!common) {
+                    diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
                 if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
                 if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
             }
@@ -283,19 +321,28 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
 
         if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
-            if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool()))
-                diag_fatal(e->loc, "logical operator requires bool operands");
+            if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
+                diag_error(e->loc, "logical operator requires bool operands");
+                e->type = type_error();
+                return e->type;
+            }
             e->type = type_bool();
             return e->type;
         }
 
         if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET) {
-            if (!type_is_integer(lt) || !type_is_integer(rt))
-                diag_fatal(e->loc, "bitwise operator requires integer operands");
+            if (!type_is_integer(lt) || !type_is_integer(rt)) {
+                diag_error(e->loc, "bitwise operator requires integer operands");
+                e->type = type_error();
+                return e->type;
+            }
             if (!type_eq(lt, rt)) {
                 Type *common = type_common_numeric(lt, rt);
-                if (!common)
-                    diag_fatal(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                if (!common) {
+                    diag_error(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
                 if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
                 if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
                 lt = rt = common;
@@ -305,54 +352,80 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
 
         if (op == TOK_LTLT || op == TOK_GTGT) {
-            if (!type_is_integer(lt) || !type_is_integer(rt))
-                diag_fatal(e->loc, "shift requires integer operands");
+            if (!type_is_integer(lt) || !type_is_integer(rt)) {
+                diag_error(e->loc, "shift requires integer operands");
+                e->type = type_error();
+                return e->type;
+            }
             e->type = lt;
             return e->type;
         }
 
-        diag_fatal(e->loc, "unsupported binary operator");
+        diag_error(e->loc, "unsupported binary operator");
+        e->type = type_error();
+        return e->type;
     }
 
     case EXPR_UNARY_PREFIX: {
         Type *ot = check_expr(ctx, e->unary_prefix.operand);
+        if (type_is_error(ot)) { e->type = type_error(); return e->type; }
         TokenKind op = e->unary_prefix.op;
         if (op == TOK_MINUS) {
-            if (!type_is_numeric(ot))
-                diag_fatal(e->loc, "unary minus requires numeric operand, got %s", type_name(ot));
+            if (!type_is_numeric(ot)) {
+                diag_error(e->loc, "unary minus requires numeric operand, got %s", type_name(ot));
+                e->type = type_error();
+                return e->type;
+            }
             e->type = ot;
         } else if (op == TOK_BANG) {
-            if (!type_eq(ot, type_bool()))
-                diag_fatal(e->loc, "unary ! requires bool operand, got %s", type_name(ot));
+            if (!type_eq(ot, type_bool())) {
+                diag_error(e->loc, "unary ! requires bool operand, got %s", type_name(ot));
+                e->type = type_error();
+                return e->type;
+            }
             e->type = type_bool();
         } else if (op == TOK_TILDE) {
-            if (!type_is_integer(ot))
-                diag_fatal(e->loc, "bitwise not requires integer operand");
+            if (!type_is_integer(ot)) {
+                diag_error(e->loc, "bitwise not requires integer operand");
+                e->type = type_error();
+                return e->type;
+            }
             e->type = ot;
         } else if (op == TOK_AMP) {
             /* Address-of: result is pointer */
             e->type = type_pointer(ctx->arena, ot);
         } else if (op == TOK_STAR) {
             /* Dereference: operand must be pointer */
-            if (ot->kind != TYPE_POINTER)
-                diag_fatal(e->loc, "dereference requires pointer operand, got %s", type_name(ot));
+            if (ot->kind != TYPE_POINTER) {
+                diag_error(e->loc, "dereference requires pointer operand, got %s", type_name(ot));
+                e->type = type_error();
+                return e->type;
+            }
             e->type = ot->pointer.pointee;
         } else {
-            diag_fatal(e->loc, "unsupported unary operator");
+            diag_error(e->loc, "unsupported unary operator");
+            e->type = type_error();
+            return e->type;
         }
         return e->type;
     }
 
     case EXPR_UNARY_POSTFIX: {
         Type *ot = check_expr(ctx, e->unary_postfix.operand);
+        if (type_is_error(ot)) { e->type = type_error(); return e->type; }
         if (e->unary_postfix.op == TOK_BANG) {
             /* Option unwrap: T? -> T */
-            if (ot->kind != TYPE_OPTION)
-                diag_fatal(e->loc, "unwrap (!) requires option type, got %s", type_name(ot));
+            if (ot->kind != TYPE_OPTION) {
+                diag_error(e->loc, "unwrap (!) requires option type, got %s", type_name(ot));
+                e->type = type_error();
+                return e->type;
+            }
             e->type = ot->option.inner;
             return e->type;
         }
-        diag_fatal(e->loc, "unsupported postfix operator");
+        diag_error(e->loc, "unsupported postfix operator");
+        e->type = type_error();
+        return e->type;
     }
 
     case EXPR_FUNC: {
@@ -389,6 +462,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_CALL: {
         Type *ft = check_expr(ctx, e->call.func);
+        if (type_is_error(ft)) { e->type = type_error(); return e->type; }
 
         /* Check if this is a union variant constructor: union_name.variant(payload) */
         if (ft->kind == TYPE_UNION && e->call.func->kind == EXPR_FIELD) {
@@ -398,59 +472,103 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             for (int v = 0; v < union_type->unio.variant_count; v++) {
                 if (union_type->unio.variants[v].name == variant_name) {
                     Type *payload_type = resolve_type(ctx, union_type->unio.variants[v].payload);
-                    if (!payload_type)
-                        diag_fatal(e->loc, "variant '%s' takes no payload", variant_name);
-                    if (e->call.arg_count != 1)
-                        diag_fatal(e->loc, "variant constructor takes exactly 1 argument");
+                    if (!payload_type) {
+                        diag_error(e->loc, "variant '%s' takes no payload", variant_name);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    if (e->call.arg_count != 1) {
+                        diag_error(e->loc, "variant constructor takes exactly 1 argument");
+                        e->type = type_error();
+                        return e->type;
+                    }
                     Type *arg_type = check_expr(ctx, e->call.args[0]);
-                    if (!type_eq(arg_type, payload_type))
-                        diag_fatal(e->call.args[0]->loc,
+                    if (type_is_error(arg_type)) { e->type = type_error(); return e->type; }
+                    if (!type_eq(arg_type, payload_type)) {
+                        diag_error(e->call.args[0]->loc,
                             "variant '%s': expected %s, got %s",
                             variant_name, type_name(payload_type), type_name(arg_type));
+                        e->type = type_error();
+                        return e->type;
+                    }
                     e->type = union_type;
                     return e->type;
                 }
             }
-            diag_fatal(e->loc, "union '%s' has no variant '%s'",
+            diag_error(e->loc, "union '%s' has no variant '%s'",
                 union_type->unio.name, variant_name);
+            e->type = type_error();
+            return e->type;
         }
 
-        if (ft->kind != TYPE_FUNC)
-            diag_fatal(e->loc, "cannot call non-function type %s", type_name(ft));
-        if (e->call.arg_count != ft->func.param_count)
-            diag_fatal(e->loc, "expected %d arguments, got %d",
+        if (ft->kind != TYPE_FUNC) {
+            diag_error(e->loc, "cannot call non-function type %s", type_name(ft));
+            e->type = type_error();
+            return e->type;
+        }
+        if (e->call.arg_count != ft->func.param_count) {
+            diag_error(e->loc, "expected %d arguments, got %d",
                 ft->func.param_count, e->call.arg_count);
+            e->type = type_error();
+            return e->type;
+        }
+        bool arg_error = false;
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *at = check_expr(ctx, e->call.args[i]);
+            if (type_is_error(at)) { arg_error = true; continue; }
             if (!type_eq(at, ft->func.param_types[i])) {
                 if (type_can_widen(at, ft->func.param_types[i])) {
                     e->call.args[i] = wrap_widen(ctx->arena, e->call.args[i], ft->func.param_types[i]);
                 } else {
-                    diag_fatal(e->call.args[i]->loc, "argument %d: expected %s, got %s",
+                    diag_error(e->call.args[i]->loc, "argument %d: expected %s, got %s",
                         i + 1, type_name(ft->func.param_types[i]), type_name(at));
+                    arg_error = true;
                 }
             }
         }
+        if (arg_error) { e->type = type_error(); return e->type; }
         e->type = ft->func.return_type;
         return e->type;
     }
 
     case EXPR_IF: {
         Type *ct = check_expr(ctx, e->if_expr.cond);
-        if (!type_eq(ct, type_bool()))
-            diag_fatal(e->loc, "if condition must be bool, got %s", type_name(ct));
+        if (type_is_error(ct)) {
+            /* Still check branches for more errors */
+            Type *tt = check_expr(ctx, e->if_expr.then_body);
+            if (e->if_expr.else_body) check_expr(ctx, e->if_expr.else_body);
+            (void)tt;
+            e->type = type_error();
+            return e->type;
+        }
+        if (!type_eq(ct, type_bool())) {
+            diag_error(e->loc, "if condition must be bool, got %s", type_name(ct));
+            Type *tt = check_expr(ctx, e->if_expr.then_body);
+            if (e->if_expr.else_body) check_expr(ctx, e->if_expr.else_body);
+            (void)tt;
+            e->type = type_error();
+            return e->type;
+        }
         Type *tt = check_expr(ctx, e->if_expr.then_body);
         /* If resolving a recursive function, fill in the return type from the
          * base case (then-branch) before checking the recursive branch (else). */
         if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
-            tt->kind != TYPE_VOID) {
+            tt->kind != TYPE_VOID && !type_is_error(tt)) {
             *ctx->recursive_ret = *tt;
         }
         if (e->if_expr.else_body) {
             Type *et = check_expr(ctx, e->if_expr.else_body);
+            if (type_is_error(tt) || type_is_error(et)) {
+                /* Use whichever is non-error, or error if both */
+                e->type = type_is_error(tt) ? et : tt;
+                if (type_is_error(e->type)) e->type = type_error();
+                return e->type;
+            }
             if (!type_eq(tt, et)) {
-                diag_fatal(e->loc, "if branches have different types: %s vs %s",
+                diag_error(e->loc, "if branches have different types: %s vs %s",
                     type_name(tt), type_name(et));
+                e->type = type_error();
+                return e->type;
             }
             e->type = tt;
         } else {
@@ -471,8 +589,32 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_LET: {
         Type *t = check_expr(ctx, e->let_expr.let_init);
-        if (t->kind == TYPE_VOID)
-            diag_fatal(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
+        if (type_is_error(t)) {
+            /* Add binding with error type so subsequent uses don't cascade "undefined" */
+            int id = local_id_counter++;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "_l_%s_%d", e->let_expr.let_name, id);
+            char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
+            memcpy(cg, buf, strlen(buf) + 1);
+            e->let_expr.codegen_name = cg;
+            e->let_expr.let_type = type_error();
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            e->type = type_void();
+            return e->type;
+        }
+        if (t->kind == TYPE_VOID) {
+            diag_error(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
+            int id = local_id_counter++;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "_l_%s_%d", e->let_expr.let_name, id);
+            char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
+            memcpy(cg, buf, strlen(buf) + 1);
+            e->let_expr.codegen_name = cg;
+            e->let_expr.let_type = type_error();
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            e->type = type_void();
+            return e->type;
+        }
         e->let_expr.let_type = t;
         int id = local_id_counter++;
         char buf[128];
@@ -487,8 +629,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_LET_DESTRUCT: {
         Type *t = check_expr(ctx, e->let_destruct.init);
-        if (t->kind != TYPE_STRUCT)
-            diag_fatal(e->loc, "cannot destructure non-struct type %s", type_name(t));
+        if (type_is_error(t)) {
+            e->type = type_void();
+            return e->type;
+        }
+        if (t->kind != TYPE_STRUCT) {
+            diag_error(e->loc, "cannot destructure non-struct type %s", type_name(t));
+            e->type = type_void();
+            return e->type;
+        }
         e->let_destruct.init_type = t;
 
         /* Generate temp name for the RHS struct value */
@@ -516,11 +665,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_ASSIGN: {
         Type *lt = check_expr(ctx, e->assign.target);
         Type *vt = check_expr(ctx, e->assign.value);
+        if (type_is_error(lt) || type_is_error(vt)) {
+            e->type = type_void();
+            return e->type;
+        }
         if (!type_eq(lt, vt)) {
             if (type_can_widen(vt, lt)) {
                 e->assign.value = wrap_widen(ctx->arena, e->assign.value, lt);
             } else {
-                diag_fatal(e->loc, "assignment type mismatch: %s vs %s", type_name(lt), type_name(vt));
+                diag_error(e->loc, "assignment type mismatch: %s vs %s", type_name(lt), type_name(vt));
             }
         }
         e->type = type_void();
@@ -529,6 +682,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_CAST: {
         Type *from = check_expr(ctx, e->cast.operand);
+        if (type_is_error(from)) { e->type = type_error(); return e->type; }
         Type *to = e->cast.target;
         bool from_num = type_is_numeric(from);
         bool to_num = type_is_numeric(to);
@@ -538,8 +692,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         bool to_int = type_is_integer(to);
         /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer */
         if (!((from_num && to_num) || (from_ptr && to_ptr) ||
-              (from_ptr && to_int) || (from_int && to_ptr)))
-            diag_fatal(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
+              (from_ptr && to_int) || (from_int && to_ptr))) {
+            diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
+            e->type = type_error();
+            return e->type;
+        }
         e->type = to;
         return e->type;
     }
@@ -547,12 +704,20 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_STRUCT_LIT: {
         /* Look up the struct type */
         Symbol *sym = symtab_lookup(ctx->symtab, e->struct_lit.type_name);
-        if (!sym) diag_fatal(e->loc, "unknown type '%s'", e->struct_lit.type_name);
-        if (sym->kind != DECL_STRUCT || !sym->type || sym->type->kind != TYPE_STRUCT)
-            diag_fatal(e->loc, "'%s' is not a struct type", e->struct_lit.type_name);
+        if (!sym) {
+            diag_error(e->loc, "unknown type '%s'", e->struct_lit.type_name);
+            e->type = type_error();
+            return e->type;
+        }
+        if (sym->kind != DECL_STRUCT || !sym->type || sym->type->kind != TYPE_STRUCT) {
+            diag_error(e->loc, "'%s' is not a struct type", e->struct_lit.type_name);
+            e->type = type_error();
+            return e->type;
+        }
         Type *st = sym->type;
 
         /* Type-check each field init */
+        bool field_error = false;
         for (int i = 0; i < e->struct_lit.field_count; i++) {
             FieldInit *fi = &e->struct_lit.fields[i];
             /* Find field in struct */
@@ -560,24 +725,31 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             for (int j = 0; j < st->struc.field_count; j++) {
                 if (st->struc.fields[j].name == fi->name) {
                     Type *ft = check_expr(ctx, fi->value);
+                    if (type_is_error(ft)) { field_error = true; found = true; break; }
                     Type *expected = resolve_type(ctx, st->struc.fields[j].type);
-                    if (!type_eq(ft, expected))
-                        diag_fatal(fi->value->loc, "field '%s': expected %s, got %s",
+                    if (!type_eq(ft, expected)) {
+                        diag_error(fi->value->loc, "field '%s': expected %s, got %s",
                             fi->name, type_name(expected), type_name(ft));
+                        field_error = true;
+                    }
                     found = true;
                     break;
                 }
             }
-            if (!found)
-                diag_fatal(e->loc, "struct '%s' has no field '%s'",
+            if (!found) {
+                diag_error(e->loc, "struct '%s' has no field '%s'",
                     e->struct_lit.type_name, fi->name);
+                field_error = true;
+            }
         }
+        if (field_error) { e->type = type_error(); return e->type; }
         e->type = st;
         return e->type;
     }
 
     case EXPR_FIELD: {
         Type *obj_type = check_expr(ctx, e->field.object);
+        if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
 
         /* Try to resolve the object as a module reference (handles nested chains).
          * For EXPR_IDENT "math", find module "math".
@@ -633,12 +805,18 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
         if (mod_sym && mod_sym->members) {
             Symbol *member = symtab_lookup(mod_sym->members, e->field.name);
-            if (!member)
-                diag_fatal(e->loc, "module '%s' has no member '%s'",
+            if (!member) {
+                diag_error(e->loc, "module '%s' has no member '%s'",
                     mod_sym->name, e->field.name);
-            if (member->is_private)
-                diag_fatal(e->loc, "cannot access private member '%s' of module '%s'",
+                e->type = type_error();
+                return e->type;
+            }
+            if (member->is_private) {
+                diag_error(e->loc, "cannot access private member '%s' of module '%s'",
                     e->field.name, mod_sym->name);
+                e->type = type_error();
+                return e->type;
+            }
             /* Submodule access: return void sentinel for further chaining */
             if (member->kind == DECL_MODULE) {
                 e->type = type_void();
@@ -664,9 +842,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 ctx->scope = saved_scope;
                 ctx->module_symtab = saved_mod;
             }
-            if (!member->type)
-                diag_fatal(e->loc, "use of '%s.%s' before its type is resolved",
+            if (!member->type) {
+                diag_error(e->loc, "use of '%s.%s' before its type is resolved",
                     mod_sym->name, e->field.name);
+                e->type = type_error();
+                return e->type;
+            }
             e->type = member->type;
             return e->type;
         }
@@ -702,40 +883,58 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
 
         /* Normal struct field access */
-        if (obj_type->kind != TYPE_STRUCT)
-            diag_fatal(e->loc, "field access on non-struct type %s", type_name(obj_type));
+        if (obj_type->kind != TYPE_STRUCT) {
+            diag_error(e->loc, "field access on non-struct type %s", type_name(obj_type));
+            e->type = type_error();
+            return e->type;
+        }
         for (int i = 0; i < obj_type->struc.field_count; i++) {
             if (obj_type->struc.fields[i].name == e->field.name) {
                 e->type = resolve_type(ctx, obj_type->struc.fields[i].type);
                 return e->type;
             }
         }
-        diag_fatal(e->loc, "struct '%s' has no field '%s'",
+        diag_error(e->loc, "struct '%s' has no field '%s'",
             obj_type->struc.name, e->field.name);
+        e->type = type_error();
+        return e->type;
     }
 
     case EXPR_DEREF_FIELD: {
         Type *obj_type = check_expr(ctx, e->field.object);
-        if (obj_type->kind != TYPE_POINTER)
-            diag_fatal(e->loc, "-> requires pointer type, got %s", type_name(obj_type));
+        if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
+        if (obj_type->kind != TYPE_POINTER) {
+            diag_error(e->loc, "-> requires pointer type, got %s", type_name(obj_type));
+            e->type = type_error();
+            return e->type;
+        }
         Type *pointee = resolve_type(ctx, obj_type->pointer.pointee);
-        if (pointee->kind != TYPE_STRUCT)
-            diag_fatal(e->loc, "-> requires pointer to struct, got pointer to %s", type_name(pointee));
+        if (pointee->kind != TYPE_STRUCT) {
+            diag_error(e->loc, "-> requires pointer to struct, got pointer to %s", type_name(pointee));
+            e->type = type_error();
+            return e->type;
+        }
         for (int i = 0; i < pointee->struc.field_count; i++) {
             if (pointee->struc.fields[i].name == e->field.name) {
                 e->type = resolve_type(ctx, pointee->struc.fields[i].type);
                 return e->type;
             }
         }
-        diag_fatal(e->loc, "struct '%s' has no field '%s'",
+        diag_error(e->loc, "struct '%s' has no field '%s'",
             pointee->struc.name, e->field.name);
+        e->type = type_error();
+        return e->type;
     }
 
     case EXPR_INDEX: {
         Type *obj_type = check_expr(ctx, e->index.object);
         Type *idx_type = check_expr(ctx, e->index.index);
-        if (!type_is_integer(idx_type))
-            diag_fatal(e->loc, "index must be integer, got %s", type_name(idx_type));
+        if (type_is_error(obj_type) || type_is_error(idx_type)) { e->type = type_error(); return e->type; }
+        if (!type_is_integer(idx_type)) {
+            diag_error(e->loc, "index must be integer, got %s", type_name(idx_type));
+            e->type = type_error();
+            return e->type;
+        }
 
         if (obj_type->kind == TYPE_SLICE) {
             e->type = obj_type->slice.elem;
@@ -749,23 +948,35 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = obj_type->pointer.pointee;
             return e->type;
         }
-        diag_fatal(e->loc, "indexing requires slice or pointer, got %s", type_name(obj_type));
+        diag_error(e->loc, "indexing requires slice or pointer, got %s", type_name(obj_type));
+        e->type = type_error();
+        return e->type;
     }
 
     case EXPR_SLICE: {
         Type *obj_type = check_expr(ctx, e->slice.object);
+        if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
         if (e->slice.lo) {
             Type *lo_type = check_expr(ctx, e->slice.lo);
-            if (!type_is_integer(lo_type))
-                diag_fatal(e->loc, "slice index must be integer");
+            if (!type_is_error(lo_type) && !type_is_integer(lo_type)) {
+                diag_error(e->loc, "slice index must be integer");
+                e->type = type_error();
+                return e->type;
+            }
         }
         if (e->slice.hi) {
             Type *hi_type = check_expr(ctx, e->slice.hi);
-            if (!type_is_integer(hi_type))
-                diag_fatal(e->loc, "slice index must be integer");
+            if (!type_is_error(hi_type) && !type_is_integer(hi_type)) {
+                diag_error(e->loc, "slice index must be integer");
+                e->type = type_error();
+                return e->type;
+            }
         }
-        if (obj_type->kind != TYPE_SLICE && obj_type->kind != TYPE_STR)
-            diag_fatal(e->loc, "subslice requires slice type, got %s", type_name(obj_type));
+        if (obj_type->kind != TYPE_SLICE && obj_type->kind != TYPE_STR) {
+            diag_error(e->loc, "subslice requires slice type, got %s", type_name(obj_type));
+            e->type = type_error();
+            return e->type;
+        }
         e->type = obj_type;
         return e->type;
     }
@@ -774,23 +985,32 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* Array literal: type[size] { elems... } → creates a slice */
         /* The size expression must be an integer */
         Type *size_type = check_expr(ctx, e->array_lit.size_expr);
-        if (!type_is_integer(size_type))
-            diag_fatal(e->loc, "array size must be integer, got %s", type_name(size_type));
+        if (!type_is_error(size_type) && !type_is_integer(size_type)) {
+            diag_error(e->loc, "array size must be integer, got %s", type_name(size_type));
+            e->type = type_error();
+            return e->type;
+        }
         /* Type-check elements */
         Type *elem_type = resolve_type(ctx, e->array_lit.elem_type);
+        bool elem_error = false;
         for (int i = 0; i < e->array_lit.elem_count; i++) {
             Type *et = check_expr(ctx, e->array_lit.elems[i]);
-            if (!type_eq(et, elem_type))
-                diag_fatal(e->array_lit.elems[i]->loc,
+            if (type_is_error(et)) { elem_error = true; continue; }
+            if (!type_eq(et, elem_type)) {
+                diag_error(e->array_lit.elems[i]->loc,
                     "array element type mismatch: expected %s, got %s",
                     type_name(elem_type), type_name(et));
+                elem_error = true;
+            }
         }
+        if (elem_error) { e->type = type_error(); return e->type; }
         e->type = type_slice(ctx->arena, elem_type);
         return e->type;
     }
 
     case EXPR_SOME: {
         Type *inner = check_expr(ctx, e->some_expr.value);
+        if (type_is_error(inner)) { e->type = type_error(); return e->type; }
         e->type = type_option(ctx->arena, inner);
         return e->type;
     }
@@ -803,7 +1023,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type->option.inner = resolve_type(ctx, e->type->option.inner);
             return e->type;
         }
-        diag_fatal(e->loc, "bare 'none' is not allowed in expressions; use T.none (e.g. int32.none)");
+        diag_error(e->loc, "bare 'none' is not allowed in expressions; use T.none (e.g. int32.none)");
+        e->type = type_error();
+        return e->type;
     }
 
     case EXPR_LOOP: {
@@ -837,19 +1059,29 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Scope *saved = ctx->scope;
         ctx->scope = inner;
 
-        if (e->for_expr.range_end) {
+        if (type_is_error(iter_type)) {
+            /* Add loop var with error type so body can still be checked */
+            scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+            if (e->for_expr.index_var)
+                scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
+        } else if (e->for_expr.range_end) {
             /* Range iteration: for i in lo..hi */
             Type *end_type = check_expr(ctx, e->for_expr.range_end);
-            if (!type_is_integer(iter_type) || !type_is_integer(end_type))
-                diag_fatal(e->loc, "range bounds must be integer types");
-            /* Use the wider type; if both same, use that */
-            Type *var_type = iter_type;
-            if (!type_eq(iter_type, end_type)) {
-                /* Allow int32..int64 widening */
-                if (iter_type->kind < end_type->kind) var_type = end_type;
-                else var_type = iter_type;
+            if (type_is_error(end_type)) {
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+            } else if (!type_is_integer(iter_type) || !type_is_integer(end_type)) {
+                diag_error(e->loc, "range bounds must be integer types");
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+            } else {
+                /* Use the wider type; if both same, use that */
+                Type *var_type = iter_type;
+                if (!type_eq(iter_type, end_type)) {
+                    /* Allow int32..int64 widening */
+                    if (iter_type->kind < end_type->kind) var_type = end_type;
+                    else var_type = iter_type;
+                }
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, var_type, false);
             }
-            scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, var_type, false);
         } else {
             /* Collection iteration: for x in slice */
             if (iter_type->kind == TYPE_SLICE) {
@@ -863,7 +1095,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
                 }
             } else {
-                diag_fatal(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
+                diag_error(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
             }
         }
 
@@ -885,17 +1118,25 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_BREAK: {
-        if (!ctx->loop_break_type)
-            diag_fatal(e->loc, "break outside of loop");
+        if (!ctx->loop_break_type) {
+            diag_error(e->loc, "break outside of loop");
+            e->type = type_void();
+            return e->type;
+        }
         if (e->break_expr.value) {
-            if (ctx->in_for)
-                diag_fatal(e->loc, "break with value is not allowed in for loops");
+            if (ctx->in_for) {
+                diag_error(e->loc, "break with value is not allowed in for loops");
+                e->type = type_void();
+                return e->type;
+            }
             Type *vt = check_expr(ctx, e->break_expr.value);
-            if (*ctx->loop_break_type == NULL) {
-                *ctx->loop_break_type = vt;
-            } else if (!type_eq(*ctx->loop_break_type, vt)) {
-                diag_fatal(e->loc, "break type mismatch: expected %s, got %s",
-                    type_name(*ctx->loop_break_type), type_name(vt));
+            if (!type_is_error(vt)) {
+                if (*ctx->loop_break_type == NULL) {
+                    *ctx->loop_break_type = vt;
+                } else if (!type_eq(*ctx->loop_break_type, vt)) {
+                    diag_error(e->loc, "break type mismatch: expected %s, got %s",
+                        type_name(*ctx->loop_break_type), type_name(vt));
+                }
             }
         }
         e->type = type_void();
@@ -903,8 +1144,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_CONTINUE: {
-        if (!ctx->loop_break_type)
-            diag_fatal(e->loc, "continue outside of loop");
+        if (!ctx->loop_break_type) {
+            diag_error(e->loc, "continue outside of loop");
+        }
         e->type = type_void();
         return e->type;
     }
@@ -928,9 +1170,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_FREE: {
         Type *ot = check_expr(ctx, e->free_expr.operand);
+        if (type_is_error(ot)) {
+            e->type = type_void();
+            return e->type;
+        }
         if (ot->kind != TYPE_POINTER && ot->kind != TYPE_SLICE &&
-            ot->kind != TYPE_STR && ot->kind != TYPE_ANY_PTR && ot->kind != TYPE_CSTR)
-            diag_fatal(e->loc, "free requires pointer or slice, got %s", type_name(ot));
+            ot->kind != TYPE_STR && ot->kind != TYPE_ANY_PTR && ot->kind != TYPE_CSTR) {
+            diag_error(e->loc, "free requires pointer or slice, got %s", type_name(ot));
+        }
         e->type = type_void();
         return e->type;
     }
@@ -942,8 +1189,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (e->alloc_expr.size_expr) {
                 /* alloc(T[N]) → T[]? */
                 Type *st = check_expr(ctx, e->alloc_expr.size_expr);
-                if (!type_is_integer(st))
-                    diag_fatal(e->loc, "alloc array size must be integer, got %s", type_name(st));
+                if (type_is_error(st)) { e->type = type_error(); return e->type; }
+                if (!type_is_integer(st)) {
+                    diag_error(e->loc, "alloc array size must be integer, got %s", type_name(st));
+                    e->type = type_error();
+                    return e->type;
+                }
                 e->type = type_option(ctx->arena, type_slice(ctx->arena, ty));
             } else {
                 /* alloc(T) → T*? */
@@ -952,6 +1203,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         } else {
             /* alloc(expr) → T*? where T is the type of expr */
             Type *t = check_expr(ctx, e->alloc_expr.init_expr);
+            if (type_is_error(t)) { e->type = type_error(); return e->type; }
             e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
         }
         return e->type;
@@ -964,6 +1216,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
 /* Recursively check any pattern in a match arm, resolving types and adding bindings */
 static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
+    if (type_is_error(type)) return;
     type = resolve_type(ctx, type);
     switch (pat->kind) {
     case PAT_WILDCARD:
@@ -984,32 +1237,44 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
         scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false);
         break;
     case PAT_INT_LIT:
-        if (!type_is_integer(type))
-            diag_fatal(pat->loc, "integer pattern on non-integer type %s", type_name(type));
+        if (!type_is_integer(type)) {
+            diag_error(pat->loc, "integer pattern on non-integer type %s", type_name(type));
+            return;
+        }
         break;
     case PAT_BOOL_LIT:
-        if (!type_eq(type, type_bool()))
-            diag_fatal(pat->loc, "bool pattern on non-bool type %s", type_name(type));
+        if (!type_eq(type, type_bool())) {
+            diag_error(pat->loc, "bool pattern on non-bool type %s", type_name(type));
+            return;
+        }
         break;
     case PAT_CHAR_LIT:
-        if (!type_eq(type, type_char()))
-            diag_fatal(pat->loc, "char pattern on non-char type %s", type_name(type));
+        if (!type_eq(type, type_char())) {
+            diag_error(pat->loc, "char pattern on non-char type %s", type_name(type));
+            return;
+        }
         break;
     case PAT_STRING_LIT:
         break;
     case PAT_SOME:
-        if (type->kind != TYPE_OPTION)
-            diag_fatal(pat->loc, "some pattern on non-option type %s", type_name(type));
+        if (type->kind != TYPE_OPTION) {
+            diag_error(pat->loc, "some pattern on non-option type %s", type_name(type));
+            return;
+        }
         if (pat->some_pat.inner)
             check_match_pattern(ctx, pat->some_pat.inner, type->option.inner);
         break;
     case PAT_NONE:
-        if (type->kind != TYPE_OPTION)
-            diag_fatal(pat->loc, "none pattern on non-option type %s", type_name(type));
+        if (type->kind != TYPE_OPTION) {
+            diag_error(pat->loc, "none pattern on non-option type %s", type_name(type));
+            return;
+        }
         break;
     case PAT_VARIANT: {
-        if (type->kind != TYPE_UNION)
-            diag_fatal(pat->loc, "variant pattern on non-union type %s", type_name(type));
+        if (type->kind != TYPE_UNION) {
+            diag_error(pat->loc, "variant pattern on non-union type %s", type_name(type));
+            return;
+        }
         bool found = false;
         for (int v = 0; v < type->unio.variant_count; v++) {
             if (type->unio.variants[v].name == pat->variant.variant) {
@@ -1021,14 +1286,18 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
                 break;
             }
         }
-        if (!found)
-            diag_fatal(pat->loc, "union '%s' has no variant '%s'",
+        if (!found) {
+            diag_error(pat->loc, "union '%s' has no variant '%s'",
                 type->unio.name, pat->variant.variant);
+            return;
+        }
         break;
     }
     case PAT_STRUCT: {
-        if (type->kind != TYPE_STRUCT)
-            diag_fatal(pat->loc, "struct pattern on non-struct type %s", type_name(type));
+        if (type->kind != TYPE_STRUCT) {
+            diag_error(pat->loc, "struct pattern on non-struct type %s", type_name(type));
+            return;
+        }
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
             const char *fname = pat->struc.fields[fi].name;
             Type *field_type = NULL;
@@ -1038,8 +1307,10 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
                     break;
                 }
             }
-            if (!field_type)
-                diag_fatal(pat->loc, "struct '%s' has no field '%s'", type->struc.name, fname);
+            if (!field_type) {
+                diag_error(pat->loc, "struct '%s' has no field '%s'", type->struc.name, fname);
+                continue;
+            }
             pat->struc.fields[fi].resolved_type = field_type;
             check_match_pattern(ctx, pat->struc.fields[fi].pattern, field_type);
         }
@@ -1054,8 +1325,11 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     /* Update the subject's type to the resolved type so codegen can access it */
     e->match_expr.subject->type = subj_type;
 
-    if (e->match_expr.arm_count == 0)
-        diag_fatal(e->loc, "match expression has no arms");
+    if (e->match_expr.arm_count == 0) {
+        diag_error(e->loc, "match expression has no arms");
+        e->type = type_error();
+        return e->type;
+    }
 
     Type *result_type = NULL;
 
@@ -1075,7 +1349,9 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         Type *arm_type = check_block(ctx, arm->body, arm->body_count);
         ctx->scope = saved;
 
-        if (!result_type) {
+        if (type_is_error(arm_type)) continue;
+
+        if (!result_type || type_is_error(result_type)) {
             result_type = arm_type;
             /* Fill recursive return type from first concrete arm (base case) */
             if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
@@ -1083,12 +1359,12 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
                 *ctx->recursive_ret = *arm_type;
             }
         } else if (!type_eq(result_type, arm_type)) {
-            diag_fatal(arm->loc, "match arms have different types: %s vs %s",
+            diag_error(arm->loc, "match arms have different types: %s vs %s",
                 type_name(result_type), type_name(arm_type));
         }
     }
 
-    e->type = result_type;
+    e->type = result_type ? result_type : type_error();
     return e->type;
 }
 

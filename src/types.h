@@ -26,6 +26,7 @@ typedef enum {
     TYPE_UNION,
     TYPE_ANY_PTR,
     TYPE_TYPE_VAR,
+    TYPE_ERROR,      /* poison type for error recovery */
 
     TYPE_COUNT
 } TypeKind;
@@ -86,6 +87,8 @@ Type *type_str(void);
 Type *type_cstr(void);
 Type *type_char(void);
 Type *type_any_ptr(void);
+Type *type_error(void);
+bool type_is_error(Type *t);
 
 /* Type construction */
 Type *type_pointer(Arena *a, Type *pointee);

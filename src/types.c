@@ -33,8 +33,13 @@ PRIM(cstr,    TYPE_CSTR)
 /* char is an alias for uint8 per spec */
 Type *type_char(void) { return type_uint8(); }
 PRIM(any_ptr, TYPE_ANY_PTR)
+PRIM(error,   TYPE_ERROR)
 
 #undef PRIM
+
+bool type_is_error(Type *t) {
+    return t && t->kind == TYPE_ERROR;
+}
 
 Type *type_pointer(Arena *a, Type *pointee) {
     Type *t = arena_alloc(a, sizeof(Type));
@@ -79,6 +84,7 @@ bool type_is_numeric(Type *t) {
 
 bool type_eq(Type *a, Type *b) {
     if (a == b) return true;
+    if (a->kind == TYPE_ERROR || b->kind == TYPE_ERROR) return true;
     if (a->kind != b->kind) {
         /* A struct stub might need to match a union type or vice versa.
          * Both stub and real type might have different kinds if parser defaults to TYPE_STRUCT. */
@@ -119,6 +125,7 @@ static const char *primitive_names[] = {
     [TYPE_CSTR]    = "cstr",
     [TYPE_CHAR]    = "char",
     [TYPE_ANY_PTR] = "any*",
+    [TYPE_ERROR]   = "<error>",
 };
 
 const char *type_name(Type *t) {
@@ -133,11 +140,13 @@ const char *type_name(Type *t) {
     case TYPE_FUNC:    return "(fn)";
     case TYPE_STRUCT:  return t->struc.name;
     case TYPE_UNION:   return t->unio.name;
+    case TYPE_ERROR:  return "<error>";
     default:           return "?";
     }
 }
 
 bool type_can_widen(Type *from, Type *to) {
+    if (from->kind == TYPE_ERROR || to->kind == TYPE_ERROR) return true;
     if (type_eq(from, to)) return true;
     TypeKind f = from->kind, t = to->kind;
 
@@ -164,6 +173,8 @@ bool type_can_widen(Type *from, Type *to) {
 }
 
 Type *type_common_numeric(Type *a, Type *b) {
+    if (a->kind == TYPE_ERROR) return b;
+    if (b->kind == TYPE_ERROR) return a;
     if (type_eq(a, b)) return a;
     if (type_can_widen(a, b)) return b;
     if (type_can_widen(b, a)) return a;
