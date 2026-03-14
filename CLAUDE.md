@@ -111,18 +111,28 @@ Tests live in `tests/cases/`, organized into subdirectories by milestone:
 - `m3/` — structs, unions, match
 - `m4/` — types: options, slices, pointers, casts, widening
 - `m5/` — memory: alloc, free, sizeof, default
-- `m6/` — modules, imports, namespaces (single-file)
-- `m6/multi/` — multi-file compilation scenarios (namespaces, cross-namespace imports, etc.)
+- `m6/` — modules, imports, namespaces (single-file tests as `.fc` files, multi-file tests as subdirectories)
 
-Each test is an `.fc` file plus one of:
+Each **single-file test** is an `.fc` file plus one of:
 - `.expected_exit` — expected exit code (0–255); the test compiles and runs
 - `.error` — substring expected in compiler stderr; the test must fail to compile
 
-Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/multi/cross_ns_import`, etc.
+Each **multi-file test** is a subdirectory containing:
+- Multiple `.fc` files (e.g. `main.fc`, `lib.fc`) — all compiled together
+- `expected_exit` or `error` (no dot prefix) — the expected result
+
+Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/cross_ns_import`, etc.
 
 ### Multi-file tests
 
-Multi-file tests live in `m6/multi/`. For tests that compile multiple `.fc` files together, use a `_part2.fc` suffix for companion files. The test runner automatically pairs `foo.fc` with `foo_part2.fc` when both exist. Only the base file should have `.expected_exit` or `.error`.
+Multi-file tests each get their own subdirectory under `m6/`, making it clear which files belong together. For example:
+```
+m6/cross_ns_import/
+    main.fc          # file with main, imports from lib
+    lib.fc           # file defining the namespace/module
+    expected_exit    # expected exit code
+```
+The test runner discovers all `.fc` files in the subdirectory and compiles them together.
 
 ### Test coverage philosophy
 

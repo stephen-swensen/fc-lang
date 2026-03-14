@@ -11,88 +11,122 @@ passed=0
 failed=0
 errors=""
 
-for fc_file in $(find "$TESTDIR" -name "*.fc" ! -name "*_part2.fc" | sort); do
-    test_name=$(basename "$fc_file" .fc)
-    test_dir=$(dirname "$fc_file")
+run_test() {
+    local test_display="$1"
+    local fc_files="$2"
+    local error_file="$3"
+    local expected_exit_file="$4"
+    local expected_file="$5"
 
-    # Display name: path relative to TESTDIR, without .fc extension
-    test_display=$(realpath --relative-to="$TESTDIR" "$fc_file" | sed 's/\.fc$//')
-
-    c_file="$TMPDIR/${test_display//\//_}.c"
-    bin_file="$TMPDIR/${test_display//\//_}"
-
-    # Check for companion files (multi-file test)
-    fc_files="$fc_file"
-    if [ -f "$test_dir/${test_name}_part2.fc" ]; then
-        fc_files="$fc_file $test_dir/${test_name}_part2.fc"
-    fi
+    local slug="${test_display//\//_}"
+    local c_file="$TMPDIR/${slug}.c"
+    local bin_file="$TMPDIR/${slug}"
 
     # Compile FC -> C
-    if ! $FC $fc_files -o "$c_file" 2>"$TMPDIR/${test_display//\//_}.stderr"; then
-        # Check if this is an expected error test
-        if [ -f "$test_dir/${test_name}.error" ]; then
-            expected_error=$(cat "$test_dir/${test_name}.error")
-            actual_error=$(cat "$TMPDIR/${test_display//\//_}.stderr")
+    if ! $FC $fc_files -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
+        if [ -n "$error_file" ] && [ -f "$error_file" ]; then
+            local expected_error=$(cat "$error_file")
+            local actual_error=$(cat "$TMPDIR/${slug}.stderr")
             if echo "$actual_error" | grep -qF "$expected_error"; then
                 echo "  PASS  $test_display (expected error)"
                 passed=$((passed + 1))
-                continue
+                return
             else
                 echo "  FAIL  $test_display (wrong error)"
                 echo "    expected: $expected_error"
                 echo "    got: $actual_error"
                 failed=$((failed + 1))
                 errors="$errors  $test_display\n"
-                continue
+                return
             fi
         fi
         echo "  FAIL  $test_display (fc compilation failed)"
-        cat "$TMPDIR/${test_display//\//_}.stderr"
+        cat "$TMPDIR/${slug}.stderr"
         failed=$((failed + 1))
         errors="$errors  $test_display\n"
-        continue
+        return
     fi
 
     # Compile C -> binary
-    if ! "$CC" -std=c11 -Wall -Werror -o "$bin_file" "$c_file" 2>"$TMPDIR/${test_display//\//_}.cc_stderr"; then
+    if ! "$CC" -std=c11 -Wall -Werror -o "$bin_file" "$c_file" 2>"$TMPDIR/${slug}.cc_stderr"; then
         echo "  FAIL  $test_display (C compilation failed)"
-        cat "$TMPDIR/${test_display//\//_}.cc_stderr"
+        cat "$TMPDIR/${slug}.cc_stderr"
         failed=$((failed + 1))
         errors="$errors  $test_display\n"
-        continue
+        return
     fi
 
     # Check expected exit code
-    if [ -f "$test_dir/${test_name}.expected_exit" ]; then
-        expected_exit=$(cat "$test_dir/${test_name}.expected_exit" | tr -d '[:space:]')
+    if [ -n "$expected_exit_file" ] && [ -f "$expected_exit_file" ]; then
+        local expected_exit=$(cat "$expected_exit_file" | tr -d '[:space:]')
         set +e
-        "$bin_file" > "$TMPDIR/${test_display//\//_}.stdout" 2>&1
-        actual_exit=$?
+        "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1
+        local actual_exit=$?
         set -e
         if [ "$actual_exit" != "$expected_exit" ]; then
             echo "  FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
             failed=$((failed + 1))
             errors="$errors  $test_display\n"
-            continue
+            return
         fi
     fi
 
     # Check expected stdout
-    if [ -f "$test_dir/${test_name}.expected" ]; then
+    if [ -n "$expected_file" ] && [ -f "$expected_file" ]; then
         set +e
-        "$bin_file" > "$TMPDIR/${test_display//\//_}.stdout" 2>&1
+        "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1
         set -e
-        if ! diff -u "$test_dir/${test_name}.expected" "$TMPDIR/${test_display//\//_}.stdout" > "$TMPDIR/${test_display//\//_}.diff" 2>&1; then
+        if ! diff -u "$expected_file" "$TMPDIR/${slug}.stdout" > "$TMPDIR/${slug}.diff" 2>&1; then
             echo "  FAIL  $test_display (output mismatch)"
-            cat "$TMPDIR/${test_display//\//_}.diff"
+            cat "$TMPDIR/${slug}.diff"
             failed=$((failed + 1))
             errors="$errors  $test_display\n"
-            continue
+            return
         fi
     fi
 
     echo "  PASS  $test_display"
     passed=$((passed + 1))
+}
+
+# Discover and run tests
+# Two kinds:
+#   1. Single-file: a .fc file directly in a milestone dir (m1/foo.fc)
+#   2. Multi-file:  a subdirectory containing *.fc files + expected_exit or error
+#      (m6/cross_ns_import/{main.fc, lib.fc, expected_exit})
+
+for milestone_dir in "$TESTDIR"/m*/; do
+    milestone=$(basename "$milestone_dir")
+
+    # Single-file tests: .fc files directly in this directory
+    for fc_file in "$milestone_dir"*.fc; do
+        [ -f "$fc_file" ] || continue
+        test_name=$(basename "$fc_file" .fc)
+        test_display="$milestone/$test_name"
+
+        run_test "$test_display" \
+            "$fc_file" \
+            "$milestone_dir${test_name}.error" \
+            "$milestone_dir${test_name}.expected_exit" \
+            "$milestone_dir${test_name}.expected"
+    done
+
+    # Multi-file tests: subdirectories containing .fc files
+    for test_subdir in "$milestone_dir"*/; do
+        [ -d "$test_subdir" ] || continue
+        test_name=$(basename "$test_subdir")
+        test_display="$milestone/$test_name"
+
+        # Collect all .fc files in the subdirectory
+        fc_files=$(find "$test_subdir" -name "*.fc" | sort | tr '\n' ' ')
+        [ -n "$fc_files" ] || continue
+
+        run_test "$test_display" \
+            "$fc_files" \
+            "${test_subdir}error" \
+            "${test_subdir}expected_exit" \
+            "${test_subdir}expected"
+    done
 done
 
 echo ""
