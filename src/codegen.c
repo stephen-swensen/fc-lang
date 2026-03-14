@@ -195,12 +195,21 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "%" PRId64, e->int_lit.value);
         break;
 
-    case EXPR_FLOAT_LIT:
-        if (e->float_lit.lit_type->kind == TYPE_FLOAT32)
-            fprintf(out, "%gf", e->float_lit.value);
-        else
-            fprintf(out, "%g", e->float_lit.value);
+    case EXPR_FLOAT_LIT: {
+        /* %g may strip the decimal point (e.g., 0.0 → "0"), which makes
+         * "0f" invalid C. Ensure there's always a decimal point. */
+        char fbuf[64];
+        snprintf(fbuf, sizeof(fbuf), "%g", e->float_lit.value);
+        bool has_dot = (strchr(fbuf, '.') || strchr(fbuf, 'e') || strchr(fbuf, 'E'));
+        if (e->float_lit.lit_type->kind == TYPE_FLOAT32) {
+            if (has_dot) fprintf(out, "%sf", fbuf);
+            else fprintf(out, "%s.0f", fbuf);
+        } else {
+            if (has_dot) fprintf(out, "%s", fbuf);
+            else fprintf(out, "%s.0", fbuf);
+        }
         break;
+    }
 
     case EXPR_BOOL_LIT:
         fprintf(out, "%s", e->bool_lit.value ? "true" : "false");
@@ -689,6 +698,8 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_indent(out);
                 emit_type(e->match_expr.subject->type, out);
                 fprintf(out, " %s = _subj%d;\n", pat->binding.name, subj_id);
+                emit_indent(out);
+                fprintf(out, "(void)%s;\n", pat->binding.name);
             } else if (pat->kind == PAT_SOME && pat->some_pat.inner &&
                        pat->some_pat.inner->kind == PAT_BINDING) {
                 emit_indent(out);
@@ -701,6 +712,8 @@ static void emit_expr(Expr *e, FILE *out) {
                     fprintf(out, " %s = _subj%d.value;\n",
                         pat->some_pat.inner->binding.name, subj_id);
                 }
+                emit_indent(out);
+                fprintf(out, "(void)%s;\n", pat->some_pat.inner->binding.name);
             } else if (pat->kind == PAT_VARIANT && pat->variant.payload &&
                        pat->variant.payload->kind == PAT_BINDING) {
                 /* Find the payload type */
@@ -712,6 +725,8 @@ static void emit_expr(Expr *e, FILE *out) {
                         fprintf(out, " %s = _subj%d.%s;\n",
                             pat->variant.payload->binding.name,
                             subj_id, pat->variant.variant);
+                        emit_indent(out);
+                        fprintf(out, "(void)%s;\n", pat->variant.payload->binding.name);
                         break;
                     }
                 }
@@ -1005,15 +1020,25 @@ static void emit_union_tag_enum(Decl *d, FILE *out) {
 
 static void emit_union_def(Decl *d, FILE *out) {
     const char *name = d->unio.name;
-    fprintf(out, "struct %s { %s_tag tag; union {", name, name);
+    /* Check if any variant has a payload */
+    bool has_any_payload = false;
     for (int i = 0; i < d->unio.variant_count; i++) {
-        if (d->unio.variants[i].payload) {
-            fprintf(out, " ");
-            emit_type(d->unio.variants[i].payload, out);
-            fprintf(out, " %s;", d->unio.variants[i].name);
-        }
+        if (d->unio.variants[i].payload) { has_any_payload = true; break; }
     }
-    fprintf(out, " }; };\n");
+    if (has_any_payload) {
+        fprintf(out, "struct %s { %s_tag tag; union {", name, name);
+        for (int i = 0; i < d->unio.variant_count; i++) {
+            if (d->unio.variants[i].payload) {
+                fprintf(out, " ");
+                emit_type(d->unio.variants[i].payload, out);
+                fprintf(out, " %s;", d->unio.variants[i].name);
+            }
+        }
+        fprintf(out, " }; };\n");
+    } else {
+        /* Tag-only union (enum-like) — no anonymous union needed */
+        fprintf(out, "struct %s { %s_tag tag; };\n", name, name);
+    }
 }
 
 /* ---- Collect used slice/option types for typedef generation ---- */

@@ -1132,6 +1132,8 @@ match some_node with
 | `{ field = pattern }` | struct destructuring, omitted fields match anything |
 | `{}` | matches any struct, binds nothing |
 
+When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants.
+
 Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
 
 Float literals and `cstr` literals are not valid in pattern position. Float equality is unreliable under IEEE 754 — a float literal pattern is almost certainly a bug. `cstr` equality is pointer comparison, not content comparison, so a `cstr` literal pattern would rarely do what the programmer intended. Both are compile errors.

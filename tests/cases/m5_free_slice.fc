@@ -1,6 +1,6 @@
 let main = (args: int32) ->
-  let buf = alloc(int32[10])!
-  buf[0] = 42
-  let r = buf[0]
-  free(buf)
-  r
+    let buf = alloc(int32[10])!
+    buf[0] = 42
+    let r = buf[0]
+    free(buf)
+    r

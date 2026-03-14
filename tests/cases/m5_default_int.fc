@@ -1,5 +1,5 @@
 let main = (args: int32) ->
-  let x = default(int32)
-  let y = default(uint8)
-  let z = default(bool)
-  if x == 0 && (int32)y == 0 && z == false then 42 else 1
+    let x = default(int32)
+    let y = default(uint8)
+    let z = default(bool)
+    if x == 0 && (int32)y == 0 && z == false then 42 else 1

@@ -376,6 +376,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_LET: {
         Type *t = check_expr(ctx, e->let_expr.let_init);
+        if (t->kind == TYPE_VOID)
+            diag_fatal(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
         e->let_expr.let_type = t;
         int id = local_id_counter++;
         char buf[128];
@@ -773,6 +775,22 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
             /* Matches anything */
             break;
         case PAT_BINDING:
+            /* Check if binding name is actually a no-payload union variant */
+            if (subj_type->kind == TYPE_UNION) {
+                bool is_variant = false;
+                for (int v = 0; v < subj_type->unio.variant_count; v++) {
+                    if (subj_type->unio.variants[v].name == pat->binding.name &&
+                        subj_type->unio.variants[v].payload == NULL) {
+                        /* Rewrite as variant pattern */
+                        pat->kind = PAT_VARIANT;
+                        pat->variant.variant = pat->binding.name;
+                        pat->variant.payload = NULL;
+                        is_variant = true;
+                        break;
+                    }
+                }
+                if (is_variant) break;
+            }
             /* Bind the subject value to a name */
             scope_add(ctx->scope, pat->binding.name, pat->binding.name, subj_type, false);
             break;

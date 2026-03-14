@@ -1,10 +1,10 @@
 let main = (args: int32) ->
-  let n = 5
-  let buf = alloc(int32[n])!
-  for i in 0..n
-    buf[i] = i * i
-  let mut sum = 0
-  for x in buf
-    sum = sum + x
-  free(buf)
-  sum
+    let n = 5
+    let buf = alloc(int32[n])!
+    for i in 0..n
+        buf[i] = i * i
+    let mut sum = 0
+    for x in buf
+        sum = sum + x
+    free(buf)
+    sum

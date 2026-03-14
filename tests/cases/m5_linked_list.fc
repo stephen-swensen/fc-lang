@@ -1,40 +1,40 @@
 struct node =
-  value: int32
-  next: node*?
+    value: int32
+    next: node*?
 
 let push = (head: node*?, val: int32) ->
-  let n = alloc(node)!
-  n->value = val
-  n->next = head
-  some(n)
+    let n = alloc(node)!
+    n->value = val
+    n->next = head
+    some(n)
 
 let sum_list = (head: node*?) ->
-  let mut sum = 0
-  let mut cur = head
-  loop
-    match cur with
-      | none -> break
-      | some(n) ->
-        sum = sum + n->value
-        cur = n->next
-  sum
+    let mut sum = 0
+    let mut cur = head
+    loop
+        match cur with
+            | none -> break
+            | some(n) ->
+                sum = sum + n->value
+                cur = n->next
+    sum
 
 let free_list = (head: node*?) ->
-  let mut cur = head
-  loop
-    match cur with
-      | none -> break
-      | some(n) ->
-        cur = n->next
-        free(n)
+    let mut cur = head
+    loop
+        match cur with
+            | none -> break
+            | some(n) ->
+                cur = n->next
+                free(n)
 
 let main = (args: int32) ->
-  let mut list = default(node*?)
-  list = push(list, 1)
-  list = push(list, 2)
-  list = push(list, 3)
-  list = push(list, 4)
-  list = push(list, 5)
-  let result = sum_list(list)
-  free_list(list)
-  result
+    let mut list = default(node*?)
+    list = push(list, 1)
+    list = push(list, 2)
+    list = push(list, 3)
+    list = push(list, 4)
+    list = push(list, 5)
+    let result = sum_list(list)
+    free_list(list)
+    result
