@@ -1,0 +1,11 @@
+union color =
+    | red
+    | green
+    | blue
+
+let main = (args: int32) ->
+    let c = default(color)
+    match c with
+    | red -> 10
+    | green -> 20
+    | blue -> 30

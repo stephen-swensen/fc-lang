@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let x = 42
+    match x with
+    | 42 -> 1
+    | n -> 0

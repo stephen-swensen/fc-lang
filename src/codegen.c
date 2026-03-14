@@ -405,6 +405,14 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_FIELD: {
+        /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
+        if (e->type && e->type->kind == TYPE_UNION &&
+            e->field.object->kind == EXPR_IDENT) {
+            const char *union_name = e->type->unio.name;
+            fprintf(out, "(%s){ .tag = %s_tag_%s }",
+                union_name, union_name, e->field.name);
+            break;
+        }
         emit_expr(e->field.object, out);
         fprintf(out, ".%s", e->field.name);
         break;
@@ -1203,6 +1211,26 @@ void codegen_emit(Program *prog, FILE *out) {
     /* Always emit fc_str (alias for uint8 slice) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
 
+    /* Emit forward declarations for all structs and unions */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_STRUCT) emit_struct_forward(d, out);
+        else if (d->kind == DECL_UNION) emit_union_forward(d, out);
+    }
+
+    /* Emit union tag enums (must come before full definitions) */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_UNION) emit_union_tag_enum(d, out);
+    }
+
+    /* Emit full struct and union definitions */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_STRUCT) emit_struct_def(d, out);
+        else if (d->kind == DECL_UNION) emit_union_def(d, out);
+    }
+
     /* Collect all slice and option types used in the program */
     TypeSet slices = {0};
     TypeSet options = {0};
@@ -1236,7 +1264,7 @@ void codegen_emit(Program *prog, FILE *out) {
         fprintf(out, ";\n");
     }
 
-    /* Emit option typedefs */
+    /* Emit option typedefs (after struct/union defs so inner types are defined) */
     for (int i = 0; i < options.count; i++) {
         Type *o = options.types[i];
         fprintf(out, "typedef struct { ");
@@ -1249,27 +1277,6 @@ void codegen_emit(Program *prog, FILE *out) {
     free(slices.types);
     free(options.types);
 
-    fprintf(out, "\n");
-
-    /* Emit forward declarations for all structs and unions */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
-        if (d->kind == DECL_STRUCT) emit_struct_forward(d, out);
-        else if (d->kind == DECL_UNION) emit_union_forward(d, out);
-    }
-
-    /* Emit union tag enums (must come before full definitions) */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
-        if (d->kind == DECL_UNION) emit_union_tag_enum(d, out);
-    }
-
-    /* Emit full struct and union definitions */
-    for (int i = 0; i < prog->decl_count; i++) {
-        Decl *d = prog->decls[i];
-        if (d->kind == DECL_STRUCT) emit_struct_def(d, out);
-        else if (d->kind == DECL_UNION) emit_union_def(d, out);
-    }
     fprintf(out, "\n");
 
     /* Check if we have a main function */
