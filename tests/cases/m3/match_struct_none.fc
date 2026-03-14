@@ -1,0 +1,9 @@
+struct item =
+    name: int32
+    count: int32?
+
+let main = (args: int32) ->
+    let i = item { name = 42, count = int32.none }
+    match i with
+    | { count = some(c) } -> c
+    | { name = n, count = none } -> n

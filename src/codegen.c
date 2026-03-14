@@ -133,6 +133,23 @@ static void emit_struct_pat_conditions(Pattern *pat, const char *prefix, bool *h
             fprintf(out, "%s == %s", path, inner->bool_lit.value ? "true" : "false");
         } else if (inner->kind == PAT_CHAR_LIT) {
             fprintf(out, "%s == '\\x%02x'", path, inner->char_lit.value);
+        } else if (inner->kind == PAT_SOME) {
+            Type *ft = pat->struc.fields[fi].resolved_type;
+            if (ft->option.inner && ft->option.inner->kind == TYPE_POINTER) {
+                fprintf(out, "%s != NULL", path);
+            } else {
+                fprintf(out, "%s.has_value", path);
+            }
+        } else if (inner->kind == PAT_NONE) {
+            Type *ft = pat->struc.fields[fi].resolved_type;
+            if (ft->option.inner && ft->option.inner->kind == TYPE_POINTER) {
+                fprintf(out, "%s == NULL", path);
+            } else {
+                fprintf(out, "!%s.has_value", path);
+            }
+        } else if (inner->kind == PAT_VARIANT) {
+            Type *ft = pat->struc.fields[fi].resolved_type;
+            fprintf(out, "%s.tag == %s_tag_%s", path, ft->unio.name, inner->variant.variant);
         }
     }
 }
@@ -155,6 +172,32 @@ static void emit_struct_pat_bindings(Pattern *pat, const char *prefix, FILE *out
             fprintf(out, "(void)%s;\n", inner->binding.name);
         } else if (inner->kind == PAT_STRUCT) {
             emit_struct_pat_bindings(inner, path, out);
+        } else if (inner->kind == PAT_SOME && inner->some_pat.inner &&
+                   inner->some_pat.inner->kind == PAT_BINDING) {
+            Type *inner_type = ft->option.inner;
+            emit_indent(out);
+            emit_type(inner_type, out);
+            if (inner_type->kind == TYPE_POINTER) {
+                fprintf(out, " %s = %s;\n", inner->some_pat.inner->binding.name, path);
+            } else {
+                fprintf(out, " %s = %s.value;\n", inner->some_pat.inner->binding.name, path);
+            }
+            emit_indent(out);
+            fprintf(out, "(void)%s;\n", inner->some_pat.inner->binding.name);
+        } else if (inner->kind == PAT_VARIANT && inner->variant.payload &&
+                   inner->variant.payload->kind == PAT_BINDING) {
+            for (int v = 0; v < ft->unio.variant_count; v++) {
+                if (ft->unio.variants[v].name == inner->variant.variant &&
+                    ft->unio.variants[v].payload) {
+                    emit_indent(out);
+                    emit_type(ft->unio.variants[v].payload, out);
+                    fprintf(out, " %s = %s.%s;\n",
+                        inner->variant.payload->binding.name, path, inner->variant.variant);
+                    emit_indent(out);
+                    fprintf(out, "(void)%s;\n", inner->variant.payload->binding.name);
+                    break;
+                }
+            }
         }
     }
 }
@@ -1351,6 +1394,26 @@ void codegen_emit(Program *prog, FILE *out) {
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
+    /* Collect all slice and option types used in the program */
+    TypeSet slices = {0};
+    TypeSet options = {0};
+
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
+        if (d->kind == DECL_LET) {
+            collect_types_in_type(d->let.resolved_type, &slices, &options);
+            collect_types_expr(d->let.init, &slices, &options);
+        }
+        if (d->kind == DECL_STRUCT) {
+            for (int j = 0; j < d->struc.field_count; j++)
+                collect_types_in_type(d->struc.fields[j].type, &slices, &options);
+        }
+        if (d->kind == DECL_UNION) {
+            for (int j = 0; j < d->unio.variant_count; j++)
+                collect_types_in_type(d->unio.variants[j].payload, &slices, &options);
+        }
+    }
+
     /* Emit forward declarations for all structs and unions */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
@@ -1364,6 +1427,35 @@ void codegen_emit(Program *prog, FILE *out) {
         if (d->kind == DECL_UNION) emit_union_tag_enum(d, out);
     }
 
+    /* Emit slice typedefs — before struct defs since structs may contain slices */
+    for (int i = 0; i < slices.count; i++) {
+        Type *s = slices.types[i];
+        if (type_eq(s->slice.elem, type_uint8())) continue; /* str already emitted */
+        /* Forward-declare as named struct so structs can reference it */
+        fprintf(out, "typedef struct fc_slice_");
+        emit_type_ident(s->slice.elem, out);
+        fprintf(out, "_s { ");
+        emit_type(s->slice.elem, out);
+        fprintf(out, "* ptr; int64_t len; } fc_slice_");
+        emit_type_ident(s->slice.elem, out);
+        fprintf(out, ";\n");
+    }
+
+    /* Emit option typedefs — before struct defs since structs may contain options.
+       For options wrapping structs, the struct is forward-declared above but the
+       option stores T by value, so emit those after struct defs. */
+    for (int i = 0; i < options.count; i++) {
+        Type *o = options.types[i];
+        if (o->option.inner &&
+            (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION))
+            continue; /* defer until after struct/union defs */
+        fprintf(out, "typedef struct { ");
+        emit_type(o->option.inner, out);
+        fprintf(out, " value; bool has_value; } fc_option_");
+        emit_type_ident(o->option.inner, out);
+        fprintf(out, ";\n");
+    }
+
     /* Emit full struct and union definitions */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
@@ -1371,42 +1463,12 @@ void codegen_emit(Program *prog, FILE *out) {
         else if (d->kind == DECL_UNION) emit_union_def(d, out);
     }
 
-    /* Collect all slice and option types used in the program */
-    TypeSet slices = {0};
-    TypeSet options = {0};
-
-    for (int i = 0; i < all_count; i++) {
-        Decl *d = all_decls[i];
-        if (d->kind == DECL_LET) {
-            collect_types_in_type(d->let.resolved_type, &slices, &options);
-            collect_types_expr(d->let.init, &slices, &options);
-        }
-        /* Check struct field types */
-        if (d->kind == DECL_STRUCT) {
-            for (int j = 0; j < d->struc.field_count; j++)
-                collect_types_in_type(d->struc.fields[j].type, &slices, &options);
-        }
-        if (d->kind == DECL_UNION) {
-            for (int j = 0; j < d->unio.variant_count; j++)
-                collect_types_in_type(d->unio.variants[j].payload, &slices, &options);
-        }
-    }
-
-    /* Emit slice typedefs (skip str which is already emitted) */
-    for (int i = 0; i < slices.count; i++) {
-        Type *s = slices.types[i];
-        /* str is already defined above */
-        if (type_eq(s->slice.elem, type_uint8())) continue;
-        fprintf(out, "typedef struct { ");
-        emit_type(s->slice.elem, out);
-        fprintf(out, "* ptr; int64_t len; } fc_slice_");
-        emit_type_ident(s->slice.elem, out);
-        fprintf(out, ";\n");
-    }
-
-    /* Emit option typedefs (after struct/union defs so inner types are defined) */
+    /* Emit option typedefs that wrap struct/union types (need full definitions) */
     for (int i = 0; i < options.count; i++) {
         Type *o = options.types[i];
+        if (!o->option.inner ||
+            (o->option.inner->kind != TYPE_STRUCT && o->option.inner->kind != TYPE_UNION))
+            continue; /* already emitted above */
         fprintf(out, "typedef struct { ");
         emit_type(o->option.inner, out);
         fprintf(out, " value; bool has_value; } fc_option_");
