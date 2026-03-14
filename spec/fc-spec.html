@@ -2403,6 +2403,68 @@ The returned sub-slice shares memory with `buf`. The programmer is responsible f
 
 # PART 7 — Program Structure
 
+## The FC Compiler
+
+FC programs are compiled by the `fc` command-line tool, which transpiles FC source files into a single C11 source file. The generated C is then compiled with any C11 compiler (e.g., `cc`, `gcc`, `clang`).
+
+### Usage
+
+```
+fc <input.fc> [input2.fc ...] [-o output.c]
+```
+
+One or more `.fc` source files are passed as arguments. If `-o` is not specified, the output filename is derived from the first input file by replacing its extension with `.c`.
+
+```
+fc main.fc                              // produces main.c
+fc main.fc -o build/app.c               // explicit output path
+fc src/main.fc src/math.fc src/util.fc   // produces src/main.c
+```
+
+All source files are compiled together as a single translation unit — there is no separate compilation or linking step on the FC side. The resulting C file is self-contained and can be compiled with:
+
+```
+cc -std=c11 -o myapp main.c
+```
+
+### Diagnostics
+
+The compiler writes all diagnostic messages to stderr. Each message includes the source location and a description:
+
+```
+filename.fc:line:col: error: description
+```
+
+**Error accumulation** — the compiler reports as many errors as it can in a single invocation rather than stopping at the first error. When the type checker encounters an error, it marks the erroneous expression with a poison type and continues checking the rest of the program. The poison type propagates silently through subsequent operations, suppressing cascading false positives. For example, if `let a = 1 + true` produces a type error, later uses of `a` in arithmetic, function calls, or assignments will not generate additional spurious errors.
+
+Syntax errors (lexer and parser) remain fatal — they prevent the compiler from building a well-formed AST, so compilation stops immediately on the first syntax error.
+
+After all errors are reported, the compiler prints a summary:
+
+```
+3 error(s)
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Compilation succeeded |
+| 1 | One or more errors occurred |
+
+### Compilation pipeline
+
+The compiler processes source in four stages:
+
+1. **Lex & parse** — each source file is tokenized (with indentation converted to `INDENT`/`DEDENT` tokens) and parsed into an AST. Syntax errors are fatal.
+2. **Pass 1 (declaration collection)** — all files are scanned to collect top-level names, struct/union layouts, function signatures, module and namespace declarations. This enables forward references and cross-file module access regardless of file order.
+3. **Pass 2 (type checking)** — expressions are type-checked bottom-up with scope tracking. Type errors are accumulated, not fatal.
+4. **Code generation** — the typed AST is emitted as C11 source.
+
+If any errors are accumulated during passes 1 or 2, code generation is skipped and the compiler exits with code 1.
+
+---
+
 ## Module System & Visibility
 
 Modules are logical organizational units, fully contained within a single file. Multiple modules may exist in one file. The same module name may not be declared more than once within the same namespace across the build.
@@ -2523,10 +2585,10 @@ Inside `module vec2`, the `vec2` struct is visible because it was defined in the
 All `.fc` files involved in a build are passed to the compiler together. The compiler accepts individual files, glob patterns, or directories (non-recursive):
 
 ```
-fc build main.fc
-fc build src/*.fc
-fc build src/
-fc build src/*.fc vendor/acme/*.fc vendor/widget/*.fc
+fc main.fc
+fc src/*.fc
+fc src/
+fc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
 ```
 
 The first compiler pass scans all provided files, collects every namespace and module declaration, and builds a global module map before any type-checking occurs. This means modules can reference each other regardless of file order, and mutual recursion across files requires no special syntax.
@@ -2536,7 +2598,7 @@ The first compiler pass scans all provided files, collects every namespace and m
 **Vendor libraries** are distributed as source — `.fc` files with a namespace declaration. They are included in the build the same way as any other file. The namespace prevents their module names from colliding with application code or other vendors:
 
 ```
-fc build src/*.fc vendor/acme/graphics/*.fc vendor/widget/ui/*.fc
+fc src/*.fc vendor/acme/graphics/*.fc vendor/widget/ui/*.fc
 ```
 
 ### Transpilation note
@@ -2583,8 +2645,8 @@ Flags are simple names — either set or not set. There are no valued flags. Two
 **User-defined flags** — passed on the command line:
 
 ```
-fc build --flag debug main.fc
-fc build --flag feature_x --flag debug main.fc
+fc --flag debug main.fc
+fc --flag feature_x --flag debug main.fc
 ```
 
 ### Usage
@@ -2644,21 +2706,21 @@ FC is designed to support multiple deployment targets beyond standard hosted env
 **Hosted** (default) — the standard target for desktop, server, and general-purpose programs. Full libc is available. `alloc` and `free` work automatically. `import libc` exposes the full C standard library. `alloc` uses `calloc`, guaranteeing zero-initialized heap memory. Sets the `target_hosted` flag.
 
 ```
-fc build src/
-fc build src/*.fc vendor/acme/*.fc
+fc src/
+fc src/*.fc vendor/acme/*.fc
 ```
 
 **Embedded with allocator** — targets like Arduino Uno and ESP32 where `malloc` and `free` are available but the rest of libc is absent or limited. `alloc` and `free` still work. `import libc` only exposes functions available on the target — the compiler warns if unavailable functions are used. Where `calloc` is available, `alloc` uses it directly. Where it is not, the compiler emits `malloc` + `memset` to achieve the same zero-initialization guarantee. On these targets heap allocations are typically small and infrequent, so the `memset` overhead is negligible. Sets the `target_embedded` flag.
 
 ```
-fc build --target arduino-uno src/*.fc
-fc build --target esp32 src/*.fc
+fc --target arduino-uno src/*.fc
+fc --target esp32 src/*.fc
 ```
 
 **Bare metal / no allocator** — targets like ATtiny or custom hardware where no heap allocator is available and memory is severely constrained. `alloc` and `free` are unavailable — using them is a compile error. Programs must be entirely stack-based. Stack allocation is always zero-initialized via C declaration syntax, which works identically on all targets and requires no runtime support. This is analogous to Rust's `no_std` mode. Sets the `target_bare_metal` flag.
 
 ```
-fc build --target bare-metal src/*.fc
+fc --target bare-metal src/*.fc
 ```
 
 Target definitions specify the available libc subset, pointer width, endianness, and other platform characteristics. The compiler uses this to enforce correct usage at compile time rather than producing code that fails silently at runtime.
@@ -3585,7 +3647,7 @@ let main = (args: str[]) ->
 **Build:**
 
 ```
-fc build src/*.fc vendor/geom/*.fc
+fc src/*.fc vendor/geom/*.fc
 ```
 
 The compiler's first pass collects all four files, registers `geom::` as a namespace containing `vectors` and `shapes`, and resolves all imports before type-checking. The two `global::` files see each other's modules without qualification; `src/world.fc` must use the full `from geom::vectors` and `from geom::shapes` forms to reach across the namespace boundary. `src/main.fc` does the same to bring `vec2` and `shape` into scope for constructing the `world.body` literal — importing `world` alone is not sufficient, since re-exporting imported names is not automatic.
