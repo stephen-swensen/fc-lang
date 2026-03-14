@@ -133,6 +133,8 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
             memcpy(cg, buf, strlen(buf) + 1);
             inner->binding.name = cg;  /* overwrite with codegen name */
             scope_add(ctx->scope, orig_name, cg, field_type, is_mut);
+        } else if (inner->kind == PAT_WILDCARD) {
+            /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
             check_destruct_pattern(ctx, inner, field_type, is_mut, loc);
         } else {
@@ -960,100 +962,89 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 }
 
-/* Recursively check a struct pattern in a match arm, resolving types and adding bindings */
-static void check_match_struct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_type) {
-    for (int fi = 0; fi < pat->struc.field_count; fi++) {
-        const char *fname = pat->struc.fields[fi].name;
-        Pattern *inner = pat->struc.fields[fi].pattern;
-        Type *field_type = NULL;
-        for (int fj = 0; fj < struct_type->struc.field_count; fj++) {
-            if (struct_type->struc.fields[fj].name == fname) {
-                field_type = resolve_type(ctx, struct_type->struc.fields[fj].type);
+/* Recursively check any pattern in a match arm, resolving types and adding bindings */
+static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
+    type = resolve_type(ctx, type);
+    switch (pat->kind) {
+    case PAT_WILDCARD:
+        break;
+    case PAT_BINDING:
+        /* Check if binding name is a no-payload union variant */
+        if (type->kind == TYPE_UNION) {
+            for (int v = 0; v < type->unio.variant_count; v++) {
+                if (type->unio.variants[v].name == pat->binding.name &&
+                    type->unio.variants[v].payload == NULL) {
+                    pat->kind = PAT_VARIANT;
+                    pat->variant.variant = pat->binding.name;
+                    pat->variant.payload = NULL;
+                    return;
+                }
+            }
+        }
+        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false);
+        break;
+    case PAT_INT_LIT:
+        if (!type_is_integer(type))
+            diag_fatal(pat->loc, "integer pattern on non-integer type %s", type_name(type));
+        break;
+    case PAT_BOOL_LIT:
+        if (!type_eq(type, type_bool()))
+            diag_fatal(pat->loc, "bool pattern on non-bool type %s", type_name(type));
+        break;
+    case PAT_CHAR_LIT:
+        if (!type_eq(type, type_char()))
+            diag_fatal(pat->loc, "char pattern on non-char type %s", type_name(type));
+        break;
+    case PAT_STRING_LIT:
+        break;
+    case PAT_SOME:
+        if (type->kind != TYPE_OPTION)
+            diag_fatal(pat->loc, "some pattern on non-option type %s", type_name(type));
+        if (pat->some_pat.inner)
+            check_match_pattern(ctx, pat->some_pat.inner, type->option.inner);
+        break;
+    case PAT_NONE:
+        if (type->kind != TYPE_OPTION)
+            diag_fatal(pat->loc, "none pattern on non-option type %s", type_name(type));
+        break;
+    case PAT_VARIANT: {
+        if (type->kind != TYPE_UNION)
+            diag_fatal(pat->loc, "variant pattern on non-union type %s", type_name(type));
+        bool found = false;
+        for (int v = 0; v < type->unio.variant_count; v++) {
+            if (type->unio.variants[v].name == pat->variant.variant) {
+                found = true;
+                if (pat->variant.payload && type->unio.variants[v].payload) {
+                    Type *payload_type = resolve_type(ctx, type->unio.variants[v].payload);
+                    check_match_pattern(ctx, pat->variant.payload, payload_type);
+                }
                 break;
             }
         }
-        if (!field_type)
-            diag_fatal(pat->loc, "struct '%s' has no field '%s'", struct_type->struc.name, fname);
-        pat->struc.fields[fi].resolved_type = field_type;
-        switch (inner->kind) {
-        case PAT_BINDING:
-            /* Check if binding name is a no-payload union variant */
-            if (field_type->kind == TYPE_UNION) {
-                bool is_variant = false;
-                for (int v = 0; v < field_type->unio.variant_count; v++) {
-                    if (field_type->unio.variants[v].name == inner->binding.name &&
-                        field_type->unio.variants[v].payload == NULL) {
-                        inner->kind = PAT_VARIANT;
-                        inner->variant.variant = inner->binding.name;
-                        inner->variant.payload = NULL;
-                        is_variant = true;
-                        break;
-                    }
-                }
-                if (!is_variant)
-                    scope_add(ctx->scope, inner->binding.name, inner->binding.name, field_type, false);
-            } else {
-                scope_add(ctx->scope, inner->binding.name, inner->binding.name, field_type, false);
-            }
-            break;
-        case PAT_WILDCARD:
-            break;
-        case PAT_STRUCT:
-            if (field_type->kind != TYPE_STRUCT)
-                diag_fatal(inner->loc, "struct pattern on non-struct field '%s' (type %s)", fname, type_name(field_type));
-            check_match_struct_pattern(ctx, inner, field_type);
-            break;
-        case PAT_INT_LIT:
-            if (!type_is_integer(field_type))
-                diag_fatal(inner->loc, "integer pattern on non-integer field '%s'", fname);
-            break;
-        case PAT_BOOL_LIT:
-            if (!type_eq(field_type, type_bool()))
-                diag_fatal(inner->loc, "bool pattern on non-bool field '%s'", fname);
-            break;
-        case PAT_CHAR_LIT:
-            if (!type_eq(field_type, type_char()))
-                diag_fatal(inner->loc, "char pattern on non-char field '%s'", fname);
-            break;
-        case PAT_SOME:
-            if (field_type->kind != TYPE_OPTION)
-                diag_fatal(inner->loc, "some pattern on non-option field '%s' (type %s)", fname, type_name(field_type));
-            if (inner->some_pat.inner && inner->some_pat.inner->kind == PAT_BINDING) {
-                Type *inner_type = field_type->option.inner;
-                scope_add(ctx->scope, inner->some_pat.inner->binding.name,
-                    inner->some_pat.inner->binding.name, inner_type, false);
-            }
-            break;
-        case PAT_NONE:
-            if (field_type->kind != TYPE_OPTION)
-                diag_fatal(inner->loc, "none pattern on non-option field '%s' (type %s)", fname, type_name(field_type));
-            break;
-        case PAT_VARIANT: {
-            if (field_type->kind != TYPE_UNION)
-                diag_fatal(inner->loc, "variant pattern on non-union field '%s' (type %s)", fname, type_name(field_type));
-            bool found = false;
-            for (int v = 0; v < field_type->unio.variant_count; v++) {
-                if (field_type->unio.variants[v].name == inner->variant.variant) {
-                    found = true;
-                    if (inner->variant.payload && field_type->unio.variants[v].payload) {
-                        Type *payload_type = resolve_type(ctx, field_type->unio.variants[v].payload);
-                        if (inner->variant.payload->kind == PAT_BINDING) {
-                            scope_add(ctx->scope, inner->variant.payload->binding.name,
-                                inner->variant.payload->binding.name, payload_type, false);
-                        }
-                    }
+        if (!found)
+            diag_fatal(pat->loc, "union '%s' has no variant '%s'",
+                type->unio.name, pat->variant.variant);
+        break;
+    }
+    case PAT_STRUCT: {
+        if (type->kind != TYPE_STRUCT)
+            diag_fatal(pat->loc, "struct pattern on non-struct type %s", type_name(type));
+        for (int fi = 0; fi < pat->struc.field_count; fi++) {
+            const char *fname = pat->struc.fields[fi].name;
+            Type *field_type = NULL;
+            for (int fj = 0; fj < type->struc.field_count; fj++) {
+                if (type->struc.fields[fj].name == fname) {
+                    field_type = resolve_type(ctx, type->struc.fields[fj].type);
                     break;
                 }
             }
-            if (!found)
-                diag_fatal(inner->loc, "union '%s' has no variant '%s'",
-                    field_type->unio.name, inner->variant.variant);
-            break;
+            if (!field_type)
+                diag_fatal(pat->loc, "struct '%s' has no field '%s'", type->struc.name, fname);
+            pat->struc.fields[fi].resolved_type = field_type;
+            check_match_pattern(ctx, pat->struc.fields[fi].pattern, field_type);
         }
-        default:
-            diag_fatal(inner->loc, "unsupported pattern in struct field '%s'", fname);
-            break;
-        }
+        break;
+    }
     }
 }
 
@@ -1078,88 +1069,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         ctx->scope = arm_scope;
 
         /* Check pattern and introduce bindings */
-        switch (pat->kind) {
-        case PAT_WILDCARD:
-            /* Matches anything */
-            break;
-        case PAT_BINDING:
-            /* Check if binding name is actually a no-payload union variant */
-            if (subj_type->kind == TYPE_UNION) {
-                bool is_variant = false;
-                for (int v = 0; v < subj_type->unio.variant_count; v++) {
-                    if (subj_type->unio.variants[v].name == pat->binding.name &&
-                        subj_type->unio.variants[v].payload == NULL) {
-                        /* Rewrite as variant pattern */
-                        pat->kind = PAT_VARIANT;
-                        pat->variant.variant = pat->binding.name;
-                        pat->variant.payload = NULL;
-                        is_variant = true;
-                        break;
-                    }
-                }
-                if (is_variant) break;
-            }
-            /* Bind the subject value to a name */
-            scope_add(ctx->scope, pat->binding.name, pat->binding.name, subj_type, false);
-            break;
-        case PAT_INT_LIT:
-            if (!type_is_integer(subj_type))
-                diag_fatal(pat->loc, "integer pattern on non-integer type %s", type_name(subj_type));
-            break;
-        case PAT_BOOL_LIT:
-            if (!type_eq(subj_type, type_bool()))
-                diag_fatal(pat->loc, "bool pattern on non-bool type %s", type_name(subj_type));
-            break;
-        case PAT_CHAR_LIT:
-            if (!type_eq(subj_type, type_char()))
-                diag_fatal(pat->loc, "char pattern on non-char type %s", type_name(subj_type));
-            break;
-        case PAT_SOME: {
-            if (subj_type->kind != TYPE_OPTION)
-                diag_fatal(pat->loc, "some pattern on non-option type %s", type_name(subj_type));
-            Type *inner_type = subj_type->option.inner;
-            if (pat->some_pat.inner->kind == PAT_BINDING) {
-                scope_add(ctx->scope, pat->some_pat.inner->binding.name, pat->some_pat.inner->binding.name, inner_type, false);
-            }
-            break;
-        }
-        case PAT_NONE:
-            if (subj_type->kind != TYPE_OPTION)
-                diag_fatal(pat->loc, "none pattern on non-option type %s", type_name(subj_type));
-            break;
-        case PAT_STRUCT: {
-            if (subj_type->kind != TYPE_STRUCT)
-                diag_fatal(pat->loc, "struct pattern on non-struct type %s", type_name(subj_type));
-            check_match_struct_pattern(ctx, pat, subj_type);
-            break;
-        }
-        case PAT_VARIANT: {
-            if (subj_type->kind != TYPE_UNION)
-                diag_fatal(pat->loc, "variant pattern on non-union type %s", type_name(subj_type));
-            /* Find variant */
-            bool found = false;
-            for (int v = 0; v < subj_type->unio.variant_count; v++) {
-                if (subj_type->unio.variants[v].name == pat->variant.variant) {
-                    found = true;
-                    /* If variant has payload and pattern has binding, add binding */
-                    if (pat->variant.payload && subj_type->unio.variants[v].payload) {
-                        Type *payload_type = resolve_type(ctx, subj_type->unio.variants[v].payload);
-                        if (pat->variant.payload->kind == PAT_BINDING) {
-                            scope_add(ctx->scope, pat->variant.payload->binding.name,
-                                pat->variant.payload->binding.name, payload_type, false);
-                        }
-                    }
-                    break;
-                }
-            }
-            if (!found)
-                diag_fatal(pat->loc, "union '%s' has no variant '%s'",
-                    subj_type->unio.name, pat->variant.variant);
-            break;
-        }
-        default:
-            diag_fatal(pat->loc, "unsupported pattern kind in match");
-        }
+        check_match_pattern(ctx, pat, subj_type);
 
         /* Type-check arm body */
         Type *arm_type = check_block(ctx, arm->body, arm->body_count);

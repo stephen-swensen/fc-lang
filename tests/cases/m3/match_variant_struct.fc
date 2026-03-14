@@ -1,0 +1,13 @@
+struct point =
+    x: int32
+    y: int32
+
+union shape =
+    | circle(int32)
+    | rect(point)
+
+let main = (args: int32) ->
+    let s = shape.rect(point { x = 4, y = 6 })
+    match s with
+    | circle(r) -> r
+    | rect({ x = x, y = y }) -> x + y

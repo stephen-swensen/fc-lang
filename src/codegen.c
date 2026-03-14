@@ -88,117 +88,132 @@ static void emit_type_ident(Type *t, FILE *out) {
 
 static void emit_expr(Expr *e, FILE *out);
 
-/* Recursively emit bindings for a struct destructuring pattern.
-   parent_expr is the C expression for the struct value being destructured. */
-static void emit_destruct_bindings(Pattern *pat, const char *parent_expr, FILE *out) {
-    for (int i = 0; i < pat->struc.field_count; i++) {
-        const char *fname = pat->struc.fields[i].name;
-        Pattern *inner = pat->struc.fields[i].pattern;
-        Type *ft = pat->struc.fields[i].resolved_type;
-
-        if (inner->kind == PAT_BINDING) {
-            emit_indent(out);
-            emit_type(ft, out);
-            fprintf(out, " %s = %s.%s;\n", inner->binding.name, parent_expr, fname);
-        } else if (inner->kind == PAT_STRUCT) {
-            /* Nested: recurse with chained field access */
-            char nested_expr[256];
-            snprintf(nested_expr, sizeof(nested_expr), "%s.%s", parent_expr, fname);
-            emit_destruct_bindings(inner, nested_expr, out);
+/* Recursively emit condition checks for any pattern.
+   expr is the C expression for the value being matched.
+   type is the FC type of the value.
+   has_cond tracks whether "if (" has been emitted. */
+static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool *has_cond, FILE *out) {
+    switch (pat->kind) {
+    case PAT_BINDING:
+    case PAT_WILDCARD:
+        break;
+    case PAT_INT_LIT:
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        fprintf(out, "%s == %" PRId64, expr, pat->int_lit.value);
+        break;
+    case PAT_BOOL_LIT:
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        fprintf(out, "%s == %s", expr, pat->bool_lit.value ? "true" : "false");
+        break;
+    case PAT_CHAR_LIT:
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        fprintf(out, "%s == '\\x%02x'", expr, pat->char_lit.value);
+        break;
+    case PAT_SOME: {
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        bool is_ptr = type->option.inner && type->option.inner->kind == TYPE_POINTER;
+        if (is_ptr) fprintf(out, "%s != NULL", expr);
+        else fprintf(out, "%s.has_value", expr);
+        if (pat->some_pat.inner) {
+            char inner_expr[256];
+            if (is_ptr) snprintf(inner_expr, sizeof(inner_expr), "%s", expr);
+            else snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            emit_pat_conditions(pat->some_pat.inner, inner_expr, type->option.inner, has_cond, out);
         }
+        break;
     }
-}
-
-/* Recursively emit condition checks for a struct pattern in a match.
-   prefix is the C expression for the struct value (e.g., "_subj0" or "_subj0.field").
-   has_cond tracks whether we've started the "if (" yet. */
-static void emit_struct_pat_conditions(Pattern *pat, const char *prefix, bool *has_cond, FILE *out) {
-    for (int fi = 0; fi < pat->struc.field_count; fi++) {
-        Pattern *inner = pat->struc.fields[fi].pattern;
-        const char *fname = pat->struc.fields[fi].name;
-        char path[256];
-        snprintf(path, sizeof(path), "%s.%s", prefix, fname);
-
-        if (inner->kind == PAT_BINDING || inner->kind == PAT_WILDCARD) continue;
-        if (inner->kind == PAT_STRUCT) {
-            emit_struct_pat_conditions(inner, path, has_cond, out);
-            continue;
-        }
-        if (*has_cond) fprintf(out, " && ");
-        else fprintf(out, "if (");
-        *has_cond = true;
-        if (inner->kind == PAT_INT_LIT) {
-            fprintf(out, "%s == %" PRId64, path, inner->int_lit.value);
-        } else if (inner->kind == PAT_BOOL_LIT) {
-            fprintf(out, "%s == %s", path, inner->bool_lit.value ? "true" : "false");
-        } else if (inner->kind == PAT_CHAR_LIT) {
-            fprintf(out, "%s == '\\x%02x'", path, inner->char_lit.value);
-        } else if (inner->kind == PAT_SOME) {
-            Type *ft = pat->struc.fields[fi].resolved_type;
-            if (ft->option.inner && ft->option.inner->kind == TYPE_POINTER) {
-                fprintf(out, "%s != NULL", path);
-            } else {
-                fprintf(out, "%s.has_value", path);
-            }
-        } else if (inner->kind == PAT_NONE) {
-            Type *ft = pat->struc.fields[fi].resolved_type;
-            if (ft->option.inner && ft->option.inner->kind == TYPE_POINTER) {
-                fprintf(out, "%s == NULL", path);
-            } else {
-                fprintf(out, "!%s.has_value", path);
-            }
-        } else if (inner->kind == PAT_VARIANT) {
-            Type *ft = pat->struc.fields[fi].resolved_type;
-            fprintf(out, "%s.tag == %s_tag_%s", path, ft->unio.name, inner->variant.variant);
-        }
-    }
-}
-
-/* Recursively emit bindings for a struct pattern in a match.
-   prefix is the C expression for the struct value. */
-static void emit_struct_pat_bindings(Pattern *pat, const char *prefix, FILE *out) {
-    for (int fi = 0; fi < pat->struc.field_count; fi++) {
-        Pattern *inner = pat->struc.fields[fi].pattern;
-        const char *fname = pat->struc.fields[fi].name;
-        Type *ft = pat->struc.fields[fi].resolved_type;
-        char path[256];
-        snprintf(path, sizeof(path), "%s.%s", prefix, fname);
-
-        if (inner->kind == PAT_BINDING) {
-            emit_indent(out);
-            emit_type(ft, out);
-            fprintf(out, " %s = %s;\n", inner->binding.name, path);
-            emit_indent(out);
-            fprintf(out, "(void)%s;\n", inner->binding.name);
-        } else if (inner->kind == PAT_STRUCT) {
-            emit_struct_pat_bindings(inner, path, out);
-        } else if (inner->kind == PAT_SOME && inner->some_pat.inner &&
-                   inner->some_pat.inner->kind == PAT_BINDING) {
-            Type *inner_type = ft->option.inner;
-            emit_indent(out);
-            emit_type(inner_type, out);
-            if (inner_type->kind == TYPE_POINTER) {
-                fprintf(out, " %s = %s;\n", inner->some_pat.inner->binding.name, path);
-            } else {
-                fprintf(out, " %s = %s.value;\n", inner->some_pat.inner->binding.name, path);
-            }
-            emit_indent(out);
-            fprintf(out, "(void)%s;\n", inner->some_pat.inner->binding.name);
-        } else if (inner->kind == PAT_VARIANT && inner->variant.payload &&
-                   inner->variant.payload->kind == PAT_BINDING) {
-            for (int v = 0; v < ft->unio.variant_count; v++) {
-                if (ft->unio.variants[v].name == inner->variant.variant &&
-                    ft->unio.variants[v].payload) {
-                    emit_indent(out);
-                    emit_type(ft->unio.variants[v].payload, out);
-                    fprintf(out, " %s = %s.%s;\n",
-                        inner->variant.payload->binding.name, path, inner->variant.variant);
-                    emit_indent(out);
-                    fprintf(out, "(void)%s;\n", inner->variant.payload->binding.name);
+    case PAT_NONE:
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (type->option.inner && type->option.inner->kind == TYPE_POINTER)
+            fprintf(out, "%s == NULL", expr);
+        else
+            fprintf(out, "!%s.has_value", expr);
+        break;
+    case PAT_VARIANT: {
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        fprintf(out, "%s.tag == %s_tag_%s", expr, type->unio.name, pat->variant.variant);
+        if (pat->variant.payload) {
+            char payload_expr[256];
+            snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr, pat->variant.variant);
+            Type *payload_type = NULL;
+            for (int v = 0; v < type->unio.variant_count; v++) {
+                if (type->unio.variants[v].name == pat->variant.variant) {
+                    payload_type = type->unio.variants[v].payload;
                     break;
                 }
             }
+            if (payload_type)
+                emit_pat_conditions(pat->variant.payload, payload_expr, payload_type, has_cond, out);
         }
+        break;
+    }
+    case PAT_STRUCT:
+        for (int fi = 0; fi < pat->struc.field_count; fi++) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
+            emit_pat_conditions(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, has_cond, out);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* Recursively emit variable declarations for all bindings in a pattern.
+   expr is the C expression for the value being matched.
+   type is the FC type of the value. */
+static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *out) {
+    switch (pat->kind) {
+    case PAT_BINDING:
+        emit_indent(out);
+        emit_type(type, out);
+        fprintf(out, " %s = %s;\n", pat->binding.name, expr);
+        emit_indent(out);
+        fprintf(out, "(void)%s;\n", pat->binding.name);
+        break;
+    case PAT_WILDCARD:
+    case PAT_INT_LIT:
+    case PAT_BOOL_LIT:
+    case PAT_CHAR_LIT:
+    case PAT_NONE:
+    case PAT_STRING_LIT:
+        break;
+    case PAT_SOME: {
+        if (pat->some_pat.inner) {
+            Type *inner_type = type->option.inner;
+            char inner_expr[256];
+            if (inner_type && inner_type->kind == TYPE_POINTER)
+                snprintf(inner_expr, sizeof(inner_expr), "%s", expr);
+            else
+                snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            emit_pat_bindings(pat->some_pat.inner, inner_expr, inner_type, out);
+        }
+        break;
+    }
+    case PAT_VARIANT: {
+        if (pat->variant.payload) {
+            Type *payload_type = NULL;
+            for (int v = 0; v < type->unio.variant_count; v++) {
+                if (type->unio.variants[v].name == pat->variant.variant) {
+                    payload_type = type->unio.variants[v].payload;
+                    break;
+                }
+            }
+            if (payload_type) {
+                char payload_expr[256];
+                snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr, pat->variant.variant);
+                emit_pat_bindings(pat->variant.payload, payload_expr, payload_type, out);
+            }
+        }
+        break;
+    }
+    case PAT_STRUCT:
+        for (int fi = 0; fi < pat->struc.field_count; fi++) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
+            emit_pat_bindings(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, out);
+        }
+        break;
     }
 }
 
@@ -227,7 +242,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
             fprintf(out, " %s = ", s->let_destruct.tmp_name);
             emit_expr(s->let_destruct.init, out);
             fprintf(out, ";\n");
-            emit_destruct_bindings(s->let_destruct.pattern, s->let_destruct.tmp_name, out);
+            emit_pat_bindings(s->let_destruct.pattern, s->let_destruct.tmp_name, s->let_destruct.init_type, out);
             if (is_last) {
                 emit_indent(out);
                 fprintf(out, "(void)%s;\n", s->let_destruct.tmp_name);
@@ -795,106 +810,22 @@ static void emit_expr(Expr *e, FILE *out) {
         for (int i = 0; i < e->match_expr.arm_count; i++) {
             MatchArm *arm = &e->match_expr.arms[i];
             Pattern *pat = arm->pattern;
+            char subj_expr[64];
+            snprintf(subj_expr, sizeof(subj_expr), "_subj%d", subj_id);
             emit_indent(out);
 
             if (i > 0) fprintf(out, "else ");
 
-            switch (pat->kind) {
-            case PAT_WILDCARD:
-            case PAT_BINDING:
-                /* Always matches — this is the else branch */
-                fprintf(out, "{\n");
-                break;
-            case PAT_INT_LIT:
-                fprintf(out, "if (_subj%d == %" PRId64 ") {\n", subj_id, pat->int_lit.value);
-                break;
-            case PAT_BOOL_LIT:
-                fprintf(out, "if (_subj%d == %s) {\n", subj_id,
-                    pat->bool_lit.value ? "true" : "false");
-                break;
-            case PAT_CHAR_LIT:
-                fprintf(out, "if (_subj%d == '\\x%02x') {\n", subj_id, pat->char_lit.value);
-                break;
-            case PAT_SOME:
-                if (e->match_expr.subject->type->kind == TYPE_OPTION &&
-                    e->match_expr.subject->type->option.inner &&
-                    e->match_expr.subject->type->option.inner->kind == TYPE_POINTER) {
-                    fprintf(out, "if (_subj%d != NULL) {\n", subj_id);
-                } else {
-                    fprintf(out, "if (_subj%d.has_value) {\n", subj_id);
-                }
-                break;
-            case PAT_NONE:
-                if (e->match_expr.subject->type->kind == TYPE_OPTION &&
-                    e->match_expr.subject->type->option.inner &&
-                    e->match_expr.subject->type->option.inner->kind == TYPE_POINTER) {
-                    fprintf(out, "if (_subj%d == NULL) {\n", subj_id);
-                } else {
-                    fprintf(out, "if (!_subj%d.has_value) {\n", subj_id);
-                }
-                break;
-            case PAT_STRUCT: {
-                char subj_prefix[64];
-                snprintf(subj_prefix, sizeof(subj_prefix), "_subj%d", subj_id);
-                bool has_cond = false;
-                emit_struct_pat_conditions(pat, subj_prefix, &has_cond, out);
-                if (has_cond) fprintf(out, ") {\n");
-                else fprintf(out, "{\n");
-                break;
-            }
-            case PAT_VARIANT:
-                fprintf(out, "if (_subj%d.tag == %s_tag_%s) {\n", subj_id,
-                    e->match_expr.subject->type->unio.name, pat->variant.variant);
-                break;
-            default:
-                fprintf(out, "/* unsupported pattern */ {\n");
-                break;
-            }
+            /* Emit conditions */
+            bool has_cond = false;
+            emit_pat_conditions(pat, subj_expr, e->match_expr.subject->type, &has_cond, out);
+            if (has_cond) fprintf(out, ") {\n");
+            else fprintf(out, "{\n");
 
             indent_level++;
 
             /* Emit bindings */
-            if (pat->kind == PAT_BINDING) {
-                emit_indent(out);
-                emit_type(e->match_expr.subject->type, out);
-                fprintf(out, " %s = _subj%d;\n", pat->binding.name, subj_id);
-                emit_indent(out);
-                fprintf(out, "(void)%s;\n", pat->binding.name);
-            } else if (pat->kind == PAT_SOME && pat->some_pat.inner &&
-                       pat->some_pat.inner->kind == PAT_BINDING) {
-                emit_indent(out);
-                Type *inner_type = e->match_expr.subject->type->option.inner;
-                emit_type(inner_type, out);
-                if (inner_type->kind == TYPE_POINTER) {
-                    fprintf(out, " %s = _subj%d;\n",
-                        pat->some_pat.inner->binding.name, subj_id);
-                } else {
-                    fprintf(out, " %s = _subj%d.value;\n",
-                        pat->some_pat.inner->binding.name, subj_id);
-                }
-                emit_indent(out);
-                fprintf(out, "(void)%s;\n", pat->some_pat.inner->binding.name);
-            } else if (pat->kind == PAT_STRUCT) {
-                char subj_prefix[64];
-                snprintf(subj_prefix, sizeof(subj_prefix), "_subj%d", subj_id);
-                emit_struct_pat_bindings(pat, subj_prefix, out);
-            } else if (pat->kind == PAT_VARIANT && pat->variant.payload &&
-                       pat->variant.payload->kind == PAT_BINDING) {
-                /* Find the payload type */
-                Type *union_type = e->match_expr.subject->type;
-                for (int v = 0; v < union_type->unio.variant_count; v++) {
-                    if (union_type->unio.variants[v].name == pat->variant.variant) {
-                        emit_indent(out);
-                        emit_type(union_type->unio.variants[v].payload, out);
-                        fprintf(out, " %s = _subj%d.%s;\n",
-                            pat->variant.payload->binding.name,
-                            subj_id, pat->variant.variant);
-                        emit_indent(out);
-                        fprintf(out, "(void)%s;\n", pat->variant.payload->binding.name);
-                        break;
-                    }
-                }
-            }
+            emit_pat_bindings(pat, subj_expr, e->match_expr.subject->type, out);
 
             /* Emit arm body */
             if (match_is_void) {
@@ -1456,25 +1387,41 @@ void codegen_emit(Program *prog, FILE *out) {
         fprintf(out, ";\n");
     }
 
-    /* Emit full struct and union definitions */
+    /* Emit full struct and union definitions, interleaved with option typedefs
+       that wrap them (so struct A using B? gets fc_option_B right after B).
+       Note: unresolved type stubs from the parser always have kind TYPE_STRUCT
+       even for unions, so we match by name against both struct and union decls. */
+    bool *opt_emitted = calloc(options.count, sizeof(bool));
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
-        if (d->kind == DECL_STRUCT) emit_struct_def(d, out);
-        else if (d->kind == DECL_UNION) emit_union_def(d, out);
+        const char *def_name = NULL;
+        if (d->kind == DECL_STRUCT) {
+            emit_struct_def(d, out);
+            def_name = d->struc.name;
+        } else if (d->kind == DECL_UNION) {
+            emit_union_def(d, out);
+            def_name = d->unio.name;
+        }
+        if (!def_name) continue;
+        /* Emit any deferred option typedefs whose inner type matches this name */
+        for (int j = 0; j < options.count; j++) {
+            if (opt_emitted[j]) continue;
+            Type *o = options.types[j];
+            if (!o->option.inner) continue;
+            const char *inner_name = NULL;
+            if (o->option.inner->kind == TYPE_STRUCT) inner_name = o->option.inner->struc.name;
+            else if (o->option.inner->kind == TYPE_UNION) inner_name = o->option.inner->unio.name;
+            if (inner_name && inner_name == def_name) {
+                fprintf(out, "typedef struct { ");
+                emit_type(o->option.inner, out);
+                fprintf(out, " value; bool has_value; } fc_option_");
+                emit_type_ident(o->option.inner, out);
+                fprintf(out, ";\n");
+                opt_emitted[j] = true;
+            }
+        }
     }
-
-    /* Emit option typedefs that wrap struct/union types (need full definitions) */
-    for (int i = 0; i < options.count; i++) {
-        Type *o = options.types[i];
-        if (!o->option.inner ||
-            (o->option.inner->kind != TYPE_STRUCT && o->option.inner->kind != TYPE_UNION))
-            continue; /* already emitted above */
-        fprintf(out, "typedef struct { ");
-        emit_type(o->option.inner, out);
-        fprintf(out, " value; bool has_value; } fc_option_");
-        emit_type_ident(o->option.inner, out);
-        fprintf(out, ";\n");
-    }
+    free(opt_emitted);
 
     free(slices.types);
     free(options.types);
