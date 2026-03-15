@@ -129,6 +129,22 @@ static Expr **arena_copy_exprs(Parser *p, Expr **arr, int count) {
 
 static Type *parse_type(Parser *p);
 
+/* Check if a token kind is valid inside a type argument list <...> */
+static bool is_type_arg_token(TokenKind k) {
+    switch (k) {
+    case TOK_IDENT: case TOK_TYPE_VAR: case TOK_VOID:
+    case TOK_LT: case TOK_GT:
+    case TOK_COMMA:
+    case TOK_QUESTION: case TOK_STAR:
+    case TOK_LBRACKET: case TOK_RBRACKET:
+    case TOK_LPAREN: case TOK_RPAREN:
+    case TOK_ARROW:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool is_type_name(const char *s, int len) {
     struct { const char *n; int l; } names[] = {
         {"int8",2+2}, {"int16",2+3}, {"int32",2+3}, {"int64",2+3},
@@ -230,6 +246,41 @@ static Type *parse_type(Parser *p) {
         udt->struc.name = tok_intern(p, t);
         udt->struc.fields = NULL;
         udt->struc.field_count = 0;
+        udt->struc.type_args = NULL;
+        udt->struc.type_arg_count = 0;
+        /* Check for type arguments: name<Type, ...> */
+        if (check(p, TOK_LT)) {
+            /* Scan forward to verify this is a type arg list (not comparison) */
+            int save = p->pos;
+            advance_p(p); /* consume < */
+            Type **targs = NULL;
+            int ta_count = 0, ta_cap = 0;
+            bool valid = true;
+            do {
+                Token *tt = current(p);
+                if (tt->kind == TOK_IDENT || tt->kind == TOK_TYPE_VAR ||
+                    tt->kind == TOK_LPAREN || tt->kind == TOK_VOID) {
+                    Type *ty = parse_type(p);
+                    DA_APPEND(targs, ta_count, ta_cap, ty);
+                } else {
+                    valid = false;
+                    break;
+                }
+                if (!check(p, TOK_COMMA)) break;
+                advance_p(p);
+            } while (1);
+            if (valid && check(p, TOK_GT)) {
+                advance_p(p); /* consume > */
+                udt->struc.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                memcpy(udt->struc.type_args, targs, sizeof(Type*) * (size_t)ta_count);
+                udt->struc.type_arg_count = ta_count;
+                free(targs);
+            } else {
+                /* Not type args — backtrack */
+                p->pos = save;
+                free(targs);
+            }
+        }
         return parse_type_suffix(p, udt);
     }
 
@@ -750,19 +801,24 @@ static Expr *parse_prefix(Parser *p) {
         if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_COLON) {
             return parse_func_literal(p);
         }
-        /* (Type)expr : cast — check if next token is a type name followed by ) */
-        if (peek_at(p, 1)->kind == TOK_IDENT &&
-            is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) &&
-            peek_at(p, 2)->kind == TOK_RPAREN) {
-            /* Cast expression */
+        /* (Type)expr : cast — check if next token is a type name or type var */
+        if ((peek_at(p, 1)->kind == TOK_IDENT &&
+             is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length)) ||
+            peek_at(p, 1)->kind == TOK_TYPE_VAR) {
+            /* Try to parse as cast with backtracking */
+            int save = p->pos;
             advance_p(p); /* ( */
             Type *target = parse_type(p);
-            expect(p, TOK_RPAREN);
-            Expr *operand = parse_expr(p, PREC_PREFIX);
-            Expr *e = alloc_expr(p, EXPR_CAST, loc);
-            e->cast.target = target;
-            e->cast.operand = operand;
-            return e;
+            if (check(p, TOK_RPAREN)) {
+                advance_p(p);
+                Expr *operand = parse_expr(p, PREC_PREFIX);
+                Expr *e = alloc_expr(p, EXPR_CAST, loc);
+                e->cast.target = target;
+                e->cast.operand = operand;
+                return e;
+            }
+            /* Not a cast — backtrack */
+            p->pos = save;
         }
         /* Parenthesized expression */
         advance_p(p);
@@ -787,8 +843,16 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
-    /* TOK_NONE removed: bare 'none' is not valid in expression context.
-     * Use T.none (e.g. int32.none) instead — handled in DOT infix. */
+    case TOK_NONE: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Type *ty = parse_type(p);
+        expect(p, TOK_RPAREN);
+        Type *opt = type_option(p->arena, ty);
+        Expr *e = alloc_expr(p, EXPR_NONE, loc);
+        e->none_expr.target = opt;
+        return e;
+    }
 
     case TOK_LOOP: {
         advance_p(p);
@@ -906,6 +970,31 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    /* <'a, 'b>(params) -> body : generic function literal with explicit type vars */
+    case TOK_LT: {
+        if (peek_at(p, 1)->kind != TOK_TYPE_VAR) {
+            diag_fatal(loc, "unexpected '<' in expression");
+        }
+        advance_p(p); /* consume < */
+        const char **tvars = NULL;
+        int tv_count = 0, tv_cap = 0;
+        do {
+            Token *tv = expect(p, TOK_TYPE_VAR);
+            const char *tvname = tok_intern(p, tv);
+            DA_APPEND(tvars, tv_count, tv_cap, tvname);
+            if (!check(p, TOK_COMMA)) break;
+            advance_p(p);
+        } while (1);
+        expect(p, TOK_GT);
+        /* Parse the following function literal */
+        Expr *func = parse_func_literal(p);
+        func->func.explicit_type_vars = arena_alloc(p->arena, sizeof(const char*) * (size_t)tv_count);
+        memcpy(func->func.explicit_type_vars, tvars, sizeof(const char*) * (size_t)tv_count);
+        func->func.explicit_type_var_count = tv_count;
+        free(tvars);
+        return func;
+    }
+
     /* Prefix unary operators: - ! ~ & * */
     case TOK_MINUS:
     case TOK_BANG:
@@ -942,28 +1031,6 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_DOT: {
-        /* T.none: qualified none expression */
-        if (check(p, TOK_NONE)) {
-            advance_p(p); /* consume 'none' */
-            /* left must be an identifier (the type name) */
-            if (left->kind != EXPR_IDENT)
-                diag_fatal(loc, "qualified none requires a type name before '.'");
-            const char *tname = left->ident.name;
-            /* Look up as built-in type first */
-            Type *inner = type_from_name(tname, (int)strlen(tname));
-            if (!inner) {
-                /* User-defined type — create a stub */
-                inner = arena_alloc(p->arena, sizeof(Type));
-                inner->kind = TYPE_STRUCT;
-                inner->struc.name = tname;
-                inner->struc.fields = NULL;
-                inner->struc.field_count = 0;
-            }
-            Type *opt = type_option(p->arena, inner);
-            Expr *e = alloc_expr(p, EXPR_NONE, loc);
-            e->none_expr.target = opt;
-            return e;
-        }
         Token *field = expect(p, TOK_IDENT);
         Expr *e = alloc_expr(p, EXPR_FIELD, loc);
         e->field.object = left;
@@ -1038,6 +1105,135 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_ASSIGN, loc);
         e->assign.target = left;
         e->assign.value = value;
+        return e;
+    }
+
+    case TOK_LT: {
+        /* Check if this is a generic call: left<Type, ...>(args)
+         * The '<' token has already been consumed by the Pratt loop.
+         * Scan forward to see if tokens between here and '>' are all
+         * type-compatible, and '>' is followed by '('. */
+        if (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) {
+            int scan = p->pos;
+            int depth = 1;
+            bool valid = true;
+
+            while (scan < p->token_count && depth > 0) {
+                TokenKind k = p->tokens[scan].kind;
+                if (k == TOK_LT) { depth++; scan++; continue; }
+                if (k == TOK_GT) {
+                    depth--;
+                    if (depth == 0) break;
+                    scan++;
+                    continue;
+                }
+                if (!is_type_arg_token(k)) { valid = false; break; }
+                scan++;
+            }
+
+            if (valid && depth == 0 && scan < p->token_count &&
+                p->tokens[scan].kind == TOK_GT &&
+                scan + 1 < p->token_count &&
+                (p->tokens[scan + 1].kind == TOK_LPAREN ||
+                 p->tokens[scan + 1].kind == TOK_DOT)) {
+                /* Parse type args */
+                Type **type_args = NULL;
+                int ta_count = 0, ta_cap = 0;
+                do {
+                    Type *ty = parse_type(p);
+                    DA_APPEND(type_args, ta_count, ta_cap, ty);
+                    if (!check(p, TOK_COMMA)) break;
+                    advance_p(p);
+                } while (1);
+                expect(p, TOK_GT);
+
+                if (check(p, TOK_DOT)) {
+                    /* name<Types>.variant — generic union variant construction */
+                    advance_p(p); /* consume '.' */
+                    Token *field = expect(p, TOK_IDENT);
+                    const char *vname = tok_intern(p, field);
+
+                    /* Store type_args on left (the union name ident) for pass2 */
+                    /* Build EXPR_FIELD: left.variant */
+                    Expr *fld = alloc_expr(p, EXPR_FIELD, loc);
+                    fld->field.object = left;
+                    fld->field.name = vname;
+
+                    /* Store type args on the field expr for pass2 to resolve */
+                    fld->field.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                    memcpy(fld->field.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
+                    fld->field.type_arg_count = ta_count;
+
+                    if (check(p, TOK_LPAREN)) {
+                        /* Payload variant: name<Types>.variant(arg) */
+                        advance_p(p);
+                        Expr **args = NULL;
+                        int arg_count = 0, arg_cap = 0;
+                        if (!check(p, TOK_RPAREN)) {
+                            do {
+                                Expr *arg = parse_expr(p, PREC_NONE + 1);
+                                DA_APPEND(args, arg_count, arg_cap, arg);
+                                if (!check(p, TOK_COMMA)) break;
+                                advance_p(p);
+                            } while (1);
+                        }
+                        expect(p, TOK_RPAREN);
+
+                        Expr *e = alloc_expr(p, EXPR_CALL, loc);
+                        e->call.func = fld;
+                        e->call.args = arena_copy_exprs(p, args, arg_count);
+                        e->call.arg_count = arg_count;
+                        e->call.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                        memcpy(e->call.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
+                        e->call.type_arg_count = ta_count;
+                        free(type_args);
+                        free(args);
+                        return e;
+                    }
+                    /* No-payload variant: name<Types>.variant */
+                    /* Store type args on the field expr for pass2 to pick up */
+                    fld->field.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                    memcpy(fld->field.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
+                    fld->field.type_arg_count = ta_count;
+                    free(type_args);
+                    return fld;
+                }
+
+                /* Generic function call: name<Types>(args) */
+                expect(p, TOK_LPAREN);
+
+                /* Parse call arguments */
+                Expr **args = NULL;
+                int arg_count = 0, arg_cap = 0;
+                if (!check(p, TOK_RPAREN)) {
+                    do {
+                        Expr *arg = parse_expr(p, PREC_NONE + 1);
+                        DA_APPEND(args, arg_count, arg_cap, arg);
+                        if (!check(p, TOK_COMMA)) break;
+                        advance_p(p);
+                    } while (1);
+                }
+                expect(p, TOK_RPAREN);
+
+                Expr *e = alloc_expr(p, EXPR_CALL, loc);
+                e->call.func = left;
+                e->call.args = arena_copy_exprs(p, args, arg_count);
+                e->call.arg_count = arg_count;
+                e->call.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                memcpy(e->call.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
+                e->call.type_arg_count = ta_count;
+                free(type_args);
+                free(args);
+                return e;
+            }
+        }
+        /* Not a generic call — fall through to comparison */
+        Prec prec = infix_prec(op);
+        Expr *right = parse_expr(p, prec + 1);
+        Expr *e = alloc_expr(p, EXPR_BINARY, loc);
+        e->binary.op = op;
+        e->binary.left = left;
+        e->binary.right = right;
         return e;
     }
 

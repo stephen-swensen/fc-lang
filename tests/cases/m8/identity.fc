@@ -1,0 +1,6 @@
+let identity = (x: 'a) -> x
+
+let main = (args: int32) ->
+    let a = identity(42)
+    let b = identity(true)
+    if b then a else 0

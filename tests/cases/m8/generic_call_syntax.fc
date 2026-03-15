@@ -1,0 +1,5 @@
+let make = <'a>() -> default('a)
+
+let main = (args: int32) ->
+    let x = make<int32>()
+    x + 42

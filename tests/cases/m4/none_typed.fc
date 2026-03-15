@@ -4,6 +4,6 @@ let check = (x: int32?) ->
     | none -> 0
 
 let main = (args: int32) ->
-    let a = check(int32.none)
+    let a = check(none(int32))
     let b = check(some(42))
     a + b

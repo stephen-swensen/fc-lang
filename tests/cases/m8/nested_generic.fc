@@ -1,0 +1,11 @@
+struct box =
+    value: 'a
+
+struct pair =
+    first: 'a
+    second: 'b
+
+let main = (args: int32) ->
+    let inner = box { value = 42 }
+    let p = pair { first = inner, second = true }
+    p.first.value

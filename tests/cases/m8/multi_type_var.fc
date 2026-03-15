@@ -1,0 +1,7 @@
+let fst = (a: 'a, b: 'b) -> a
+let snd = (a: 'a, b: 'b) -> b
+
+let main = (args: int32) ->
+    let x = fst(42, true)
+    let y = snd(10, 7i8)
+    x + (int32)y

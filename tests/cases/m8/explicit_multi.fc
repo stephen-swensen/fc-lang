@@ -1,0 +1,8 @@
+let size_sum = <'a, 'b>() ->
+    let a = sizeof('a)
+    let b = sizeof('b)
+    a + b
+
+let main = (args: int32) ->
+    let s = size_sum<int32, int64>()
+    (int32)s

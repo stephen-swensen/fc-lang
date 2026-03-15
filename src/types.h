@@ -60,11 +60,15 @@ struct Type {
             const char *name;
             StructField *fields;
             int field_count;
+            Type **type_args;
+            int type_arg_count;
         } struc;
         struct {
             const char *name;
             UnionVariant *variants;
             int variant_count;
+            Type **type_args;
+            int type_arg_count;
         } unio;
         struct { const char *name; } type_var;
     };
@@ -112,3 +116,22 @@ Type *type_common_numeric(Type *a, Type *b);
 
 /* Map a type suffix string (e.g., "i8", "u64") to a type, or NULL */
 Type *type_from_int_suffix(const char *suffix, int len);
+
+/* Type variable constructor */
+Type *type_type_var(Arena *a, const char *name);
+
+/* Check if a type contains any type variables (recursively) */
+bool type_contains_type_var(Type *t);
+
+/* Collect unique type variable names from a type in order of first appearance */
+void type_collect_vars(Type *t, const char ***vars, int *count, int *cap);
+
+/* Substitute type variables: replace TYPE_TYPE_VAR with concrete types */
+Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete, int count);
+
+/* Mangle a type name for use in C identifiers */
+const char *mangle_type_name(Type *t);
+
+/* Build mangled name for a generic instantiation, e.g. "fc_identity_int32" */
+const char *mangle_generic_name(Arena *a, InternTable *intern,
+                                const char *base, Type **type_args, int count);

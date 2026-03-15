@@ -4,6 +4,59 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Detect generics: scan fields/params for type variables */
+static void detect_generic_struct(Decl *d, Symbol *sym) {
+    const char **vars = NULL;
+    int vcount = 0, vcap = 0;
+    for (int i = 0; i < d->struc.field_count; i++)
+        type_collect_vars(d->struc.fields[i].type, &vars, &vcount, &vcap);
+    if (vcount > 0) {
+        d->struc.is_generic = true;
+        d->struc.type_params = vars;
+        d->struc.type_param_count = vcount;
+        sym->is_generic = true;
+        sym->type_params = vars;
+        sym->type_param_count = vcount;
+    }
+}
+
+static void detect_generic_union(Decl *d, Symbol *sym) {
+    const char **vars = NULL;
+    int vcount = 0, vcap = 0;
+    for (int i = 0; i < d->unio.variant_count; i++)
+        type_collect_vars(d->unio.variants[i].payload, &vars, &vcount, &vcap);
+    if (vcount > 0) {
+        d->unio.is_generic = true;
+        d->unio.type_params = vars;
+        d->unio.type_param_count = vcount;
+        sym->is_generic = true;
+        sym->type_params = vars;
+        sym->type_param_count = vcount;
+    }
+}
+
+static void detect_generic_func(Decl *d, Symbol *sym) {
+    if (!d->let.init || d->let.init->kind != EXPR_FUNC) return;
+    Expr *fn = d->let.init;
+    const char **vars = NULL;
+    int vcount = 0, vcap = 0;
+
+    /* Collect from explicit type vars */
+    for (int i = 0; i < fn->func.explicit_type_var_count; i++)
+        DA_APPEND(vars, vcount, vcap, fn->func.explicit_type_vars[i]);
+
+    /* Collect from parameter types */
+    for (int i = 0; i < fn->func.param_count; i++)
+        type_collect_vars(fn->func.params[i].type, &vars, &vcount, &vcap);
+
+    if (vcount > 0) {
+        sym->is_generic = true;
+        sym->type_params = vars;
+        sym->type_param_count = vcount;
+        sym->explicit_type_param_count = fn->func.explicit_type_var_count;
+    }
+}
+
 void symtab_init(SymbolTable *t) {
     t->symbols = NULL;
     t->count = 0;
@@ -31,7 +84,8 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
 
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
     Symbol sym = { .name = name, .ns_prefix = NULL, .kind = kind, .decl = decl,
-                   .type = NULL, .members = NULL, .is_private = false };
+                   .type = NULL, .members = NULL, .is_private = false,
+                   .is_generic = false, .type_params = NULL, .type_param_count = 0 };
     DA_APPEND(t->symbols, t->count, t->capacity, sym);
 }
 
@@ -62,7 +116,10 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     st->struc.name = d->struc.name;
     st->struc.fields = d->struc.fields;
     st->struc.field_count = d->struc.field_count;
+    st->struc.type_args = NULL;
+    st->struc.type_arg_count = 0;
     sym->type = st;
+    detect_generic_struct(d, sym);
     return st;
 }
 
@@ -75,7 +132,10 @@ static Type *register_union_sym(SymbolTable *tab, Decl *d) {
     ut->unio.name = d->unio.name;
     ut->unio.variants = d->unio.variants;
     ut->unio.variant_count = d->unio.variant_count;
+    ut->unio.type_args = NULL;
+    ut->unio.type_arg_count = 0;
     sym->type = ut;
+    detect_generic_union(d, sym);
     return ut;
 }
 
@@ -98,6 +158,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 symtab_add(members, src_name, DECL_LET, child);
                 Symbol *msym = symtab_lookup(members, src_name);
                 msym->is_private = child->is_private;
+                detect_generic_func(child, msym);
             }
             break;
         }
@@ -117,7 +178,10 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 st->struc.name = mangled;
                 st->struc.fields = child->struc.fields;
                 st->struc.field_count = child->struc.field_count;
+                st->struc.type_args = NULL;
+                st->struc.type_arg_count = 0;
                 msym->type = st;
+                detect_generic_struct(child, msym);
             }
             break;
         }
@@ -137,7 +201,10 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 ut->unio.name = mangled;
                 ut->unio.variants = child->unio.variants;
                 ut->unio.variant_count = child->unio.variant_count;
+                ut->unio.type_args = NULL;
+                ut->unio.type_arg_count = 0;
                 msym->type = ut;
+                detect_generic_union(child, msym);
             }
             break;
         }
@@ -265,6 +332,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                 d->let.init && d->let.init->kind == EXPR_FUNC) {
                 d->let.codegen_name = make_mangled(intern, "fc", d->let.name);
             }
+            /* Detect generic functions */
+            Symbol *let_sym = symtab_lookup(symtab, d->let.name);
+            if (let_sym) detect_generic_func(d, let_sym);
             break;
         }
         case DECL_STRUCT: {

@@ -1,0 +1,5 @@
+let identity = (x: 'a) -> x
+let apply_identity = (x: 'a) -> identity(x)
+
+let main = (args: int32) ->
+    apply_identity(42)

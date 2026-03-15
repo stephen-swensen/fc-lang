@@ -1,0 +1,6 @@
+struct box =
+    value: 'a
+
+let main = (args: int32) ->
+    let b = box { value = 42 }
+    b.value

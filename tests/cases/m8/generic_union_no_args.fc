@@ -1,0 +1,7 @@
+union maybe =
+    | just('a)
+    | nothing
+
+let main = (args: int32) ->
+    let x = maybe.just(42)
+    0

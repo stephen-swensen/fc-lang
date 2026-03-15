@@ -117,10 +117,15 @@ struct Expr {
             Type **type_args;
             int type_arg_count;
             bool is_indirect;     /* callee is a function value (fat pointer) */
+            const char *mangled_name;   /* C function name for monomorphized call, NULL for non-generic */
         } call;
 
         /* EXPR_FIELD, EXPR_DEREF_FIELD */
-        struct { Expr *object; const char *name; const char *codegen_name; } field;
+        struct {
+            Expr *object; const char *name; const char *codegen_name;
+            Type **type_args;       /* explicit type args for generic variant: name<Types>.variant */
+            int type_arg_count;
+        } field;
 
         /* EXPR_INDEX */
         struct { Expr *object; Expr *index; } index;
@@ -165,6 +170,8 @@ struct Expr {
             Capture *captures;      /* filled by pass2, NULL if non-capturing */
             int capture_count;
             const char *lifted_name; /* C function name for lambdas in expression position */
+            const char **explicit_type_vars;    /* <'a, 'b> prefix, NULL if implicit-only */
+            int explicit_type_var_count;
         } func;
 
         /* EXPR_STRUCT_LIT */
@@ -319,6 +326,9 @@ struct Decl {
             const char *name;
             StructField *fields;
             int field_count;
+            const char **type_params;   /* type var names, e.g. ["'a", "'b"] */
+            int type_param_count;
+            bool is_generic;
         } struc;
 
         /* DECL_UNION */
@@ -326,6 +336,9 @@ struct Decl {
             const char *name;
             UnionVariant *variants;
             int variant_count;
+            const char **type_params;
+            int type_param_count;
+            bool is_generic;
         } unio;
 
         /* DECL_MODULE */

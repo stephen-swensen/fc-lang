@@ -13,6 +13,10 @@ typedef struct {
     Type *type;             /* NULL until pass2 resolves it */
     SymbolTable *members;   /* non-NULL for DECL_MODULE */
     bool is_private;
+    bool is_generic;
+    const char **type_params;    /* ["'a", "'b"] — explicit vars first, then implicit */
+    int type_param_count;
+    int explicit_type_param_count;  /* how many of type_params are from <> decl */
 } Symbol;
 
 struct SymbolTable {

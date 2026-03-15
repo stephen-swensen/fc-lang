@@ -1,7 +1,21 @@
 #include "codegen.h"
+#include "monomorph.h"
+#include "pass1.h"
 #include "diag.h"
 #include <inttypes.h>
 #include <string.h>
+
+/* Substitution context for monomorphized emission */
+typedef struct {
+    const char **var_names;
+    Type **concrete;
+    int count;
+} SubstCtx;
+static SubstCtx *g_subst = NULL;
+static MonoTable *g_mono = NULL;
+static Arena *g_arena = NULL;
+static InternTable *g_intern = NULL;
+static SymbolTable *g_symtab = NULL;
 
 static int indent_level = 0;
 static int temp_counter = 0;
@@ -10,10 +24,45 @@ static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
 
+/* Compute mangled name for a generic struct/union type under g_subst */
+static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
+    const char **vars = NULL;
+    int vc = 0, vcap = 0;
+    type_collect_vars(t, &vars, &vc, &vcap);
+    Type **concrete_args = arena_alloc(g_arena, sizeof(Type*) * (size_t)vc);
+    for (int i = 0; i < vc; i++) {
+        /* Look up this type var in g_subst */
+        concrete_args[i] = NULL;
+        for (int j = 0; j < g_subst->count; j++) {
+            if (g_subst->var_names[j] == vars[i]) {
+                concrete_args[i] = g_subst->concrete[j];
+                break;
+            }
+        }
+        if (!concrete_args[i]) {
+            /* Not found — create a type var type */
+            concrete_args[i] = type_type_var(g_arena, vars[i]);
+        }
+    }
+    const char *mangled = mangle_generic_name(g_arena, g_intern,
+        base_name, concrete_args, vc);
+    free(vars);
+    return mangled;
+}
+
 /* Emit the identifier portion of a function type typedef name */
 static void emit_fn_type_suffix(Type *t, FILE *out);
 
 static void emit_type(Type *t, FILE *out) {
+    /* Handle type variable substitution during monomorphized emission */
+    if (g_subst && t->kind == TYPE_TYPE_VAR) {
+        for (int i = 0; i < g_subst->count; i++) {
+            if (g_subst->var_names[i] == t->type_var.name) {
+                emit_type(g_subst->concrete[i], out);
+                return;
+            }
+        }
+    }
     switch (t->kind) {
     case TYPE_INT8:    fprintf(out, "int8_t");    break;
     case TYPE_INT16:   fprintf(out, "int16_t");   break;
@@ -49,9 +98,17 @@ static void emit_type(Type *t, FILE *out) {
         }
         break;
     case TYPE_STRUCT:
+        if (g_subst && type_contains_type_var(t)) {
+            fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
+            return;
+        }
         fprintf(out, "%s", t->struc.name);
         break;
     case TYPE_UNION:
+        if (g_subst && type_contains_type_var(t)) {
+            fprintf(out, "%s", mangle_generic_with_subst(t->unio.name, t));
+            return;
+        }
         fprintf(out, "%s", t->unio.name);
         break;
     case TYPE_FUNC:
@@ -69,6 +126,15 @@ static void emit_type(Type *t, FILE *out) {
 
 /* Emit a C type name suitable for use in identifiers (slice/option typedef names) */
 static void emit_type_ident(Type *t, FILE *out) {
+    /* Handle type variable substitution */
+    if (g_subst && t->kind == TYPE_TYPE_VAR) {
+        for (int i = 0; i < g_subst->count; i++) {
+            if (g_subst->var_names[i] == t->type_var.name) {
+                emit_type_ident(g_subst->concrete[i], out);
+                return;
+            }
+        }
+    }
     switch (t->kind) {
     case TYPE_INT8:    fprintf(out, "int8_t");    break;
     case TYPE_INT16:   fprintf(out, "int16_t");   break;
@@ -82,8 +148,18 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
-    case TYPE_STRUCT:  fprintf(out, "%s", t->struc.name); break;
-    case TYPE_UNION:   fprintf(out, "%s", t->unio.name);  break;
+    case TYPE_STRUCT:
+        if (g_subst && type_contains_type_var(t))
+            fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
+        else
+            fprintf(out, "%s", t->struc.name);
+        break;
+    case TYPE_UNION:
+        if (g_subst && type_contains_type_var(t))
+            fprintf(out, "%s", mangle_generic_with_subst(t->unio.name, t));
+        else
+            fprintf(out, "%s", t->unio.name);
+        break;
     case TYPE_SLICE:
         fprintf(out, "fc_slice_");
         emit_type_ident(t->slice.elem, out);
@@ -172,7 +248,11 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
         break;
     case PAT_VARIANT: {
         if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
-        fprintf(out, "%s.tag == %s_tag_%s", expr, type->unio.name, pat->variant.variant);
+        const char *uname = type->unio.name;
+        if (g_subst && type_contains_type_var(type)) {
+            uname = mangle_generic_with_subst(uname, type);
+        }
+        fprintf(out, "%s.tag == %s_tag_%s", expr, uname, pat->variant.variant);
         if (pat->variant.payload) {
             char payload_expr[256];
             snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr, pat->variant.variant);
@@ -506,6 +586,10 @@ static void emit_expr(Expr *e, FILE *out) {
         if (e->type && e->type->kind == TYPE_UNION &&
             e->call.func->kind == EXPR_FIELD) {
             const char *union_name = e->type->unio.name;
+            /* Under substitution, compute mangled name for generic unions */
+            if (g_subst && type_contains_type_var(e->type)) {
+                union_name = mangle_generic_with_subst(union_name, e->type);
+            }
             const char *variant_name = e->call.func->field.name;
             fprintf(out, "(%s){ .tag = %s_tag_%s, .%s = ",
                 union_name, union_name, variant_name, variant_name);
@@ -533,12 +617,43 @@ static void emit_expr(Expr *e, FILE *out) {
             /* Direct call — emit function name directly (not via emit_expr
                to avoid fat-pointer wrapping) and append NULL for _ctx */
             Expr *callee = e->call.func;
-            const char *fn_name = NULL;
-            if (callee->kind == EXPR_IDENT) {
-                fn_name = callee->ident.codegen_name
-                    ? callee->ident.codegen_name : callee->ident.name;
-            } else if (callee->kind == EXPR_FIELD && callee->field.codegen_name) {
-                fn_name = callee->field.codegen_name;
+            const char *fn_name = e->call.mangled_name; /* monomorphized name if generic */
+
+            /* Resolve deferred generic call under substitution context */
+            if (!fn_name && g_subst && e->call.type_arg_count > 0) {
+                Type **concrete_args = malloc(sizeof(Type*) * (size_t)e->call.type_arg_count);
+                for (int i = 0; i < e->call.type_arg_count; i++) {
+                    concrete_args[i] = type_substitute(g_arena, e->call.type_args[i],
+                        g_subst->var_names, g_subst->concrete, g_subst->count);
+                }
+                /* Find the callee's base name for mangling */
+                const char *base_name = NULL;
+                Symbol *callee_sym = NULL;
+                if (callee->kind == EXPR_IDENT) {
+                    callee_sym = symtab_lookup(g_symtab, callee->ident.name);
+                    if (callee_sym && callee_sym->decl && callee_sym->decl->kind == DECL_LET
+                        && callee_sym->decl->let.codegen_name) {
+                        base_name = callee_sym->decl->let.codegen_name;
+                    } else if (callee_sym) {
+                        base_name = callee_sym->name;
+                    }
+                }
+                if (base_name && callee_sym) {
+                    fn_name = mono_register(g_mono, g_arena, g_intern,
+                        base_name, NULL, concrete_args, e->call.type_arg_count,
+                        callee_sym->decl, DECL_LET,
+                        callee_sym->type_params, callee_sym->type_param_count);
+                }
+                free(concrete_args);
+            }
+
+            if (!fn_name) {
+                if (callee->kind == EXPR_IDENT) {
+                    fn_name = callee->ident.codegen_name
+                        ? callee->ident.codegen_name : callee->ident.name;
+                } else if (callee->kind == EXPR_FIELD && callee->field.codegen_name) {
+                    fn_name = callee->field.codegen_name;
+                }
             }
 
             if (fn_name) {
@@ -657,6 +772,9 @@ static void emit_expr(Expr *e, FILE *out) {
         /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
         if (e->type && e->type->kind == TYPE_UNION) {
             const char *union_name = e->type->unio.name;
+            if (g_subst && type_contains_type_var(e->type)) {
+                union_name = mangle_generic_with_subst(union_name, e->type);
+            }
             fprintf(out, "(%s){ .tag = %s_tag_%s }",
                 union_name, union_name, e->field.name);
             break;
@@ -786,6 +904,48 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Use the resolved type name (handles mangled module types) */
         const char *sname = (e->type && e->type->kind == TYPE_STRUCT) ?
             e->type->struc.name : e->struct_lit.type_name;
+        /* Under substitution, compute mangled name for generic structs */
+        if (g_subst && e->type && e->type->kind == TYPE_STRUCT &&
+            type_contains_type_var(e->type)) {
+            sname = mangle_generic_with_subst(sname, e->type);
+            /* Register the mono instance for this struct if needed */
+            Symbol *struct_sym = symtab_lookup(g_symtab, e->struct_lit.type_name);
+            if (struct_sym && struct_sym->is_generic) {
+                const char **vars = NULL;
+                int vc = 0, vcap = 0;
+                type_collect_vars(e->type, &vars, &vc, &vcap);
+                Type **concrete_args = arena_alloc(g_arena, sizeof(Type*) * (size_t)vc);
+                for (int k = 0; k < vc; k++) {
+                    concrete_args[k] = NULL;
+                    for (int j = 0; j < g_subst->count; j++) {
+                        if (g_subst->var_names[j] == vars[k]) {
+                            concrete_args[k] = g_subst->concrete[j];
+                            break;
+                        }
+                    }
+                    if (!concrete_args[k]) concrete_args[k] = type_type_var(g_arena, vars[k]);
+                }
+                mono_register(g_mono, g_arena, g_intern,
+                    struct_sym->name, struct_sym->ns_prefix,
+                    concrete_args, vc, struct_sym->decl,
+                    DECL_STRUCT, struct_sym->type_params, struct_sym->type_param_count);
+                /* Set concrete_type on the instance */
+                MonoInstance *mi = mono_find(g_mono, sname);
+                if (mi && !mi->concrete_type) {
+                    Type *ct = type_substitute(g_arena, struct_sym->type,
+                        struct_sym->type_params, concrete_args,
+                        struct_sym->type_param_count < vc ? struct_sym->type_param_count : vc);
+                    if (ct == struct_sym->type) {
+                        Type *cp = arena_alloc(g_arena, sizeof(Type));
+                        *cp = *ct;
+                        ct = cp;
+                    }
+                    ct->struc.name = sname;
+                    mi->concrete_type = ct;
+                }
+                free(vars);
+            }
+        }
         fprintf(out, "(%s){ ", sname);
         for (int i = 0; i < e->struct_lit.field_count; i++) {
             if (i > 0) fprintf(out, ", ");
@@ -1164,6 +1324,19 @@ static bool is_func_decl(Decl *d) {
     return d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC;
 }
 
+static bool is_generic_decl(Decl *d) {
+    if (d->kind == DECL_STRUCT) return d->struc.is_generic;
+    if (d->kind == DECL_UNION) return d->unio.is_generic;
+    if (d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC) {
+        /* Check if any param contains type vars */
+        Expr *fn = d->let.init;
+        if (fn->func.explicit_type_var_count > 0) return true;
+        for (int i = 0; i < fn->func.param_count; i++)
+            if (type_contains_type_var(fn->func.params[i].type)) return true;
+    }
+    return false;
+}
+
 static void emit_func_decl(Decl *d, FILE *out) {
     Expr *fn = d->let.init;
     Type *ft = d->let.resolved_type;
@@ -1287,6 +1460,7 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
 
 static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, TypeSet *fns) {
     if (!t) return;
+    if (type_contains_type_var(t)) return;  /* skip generic types */
     if (t->kind == TYPE_SLICE) {
         typeset_add(slices, t);
     } else if (t->kind == TYPE_OPTION) {
@@ -1554,7 +1728,12 @@ static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) 
     *out_count = count;
 }
 
-void codegen_emit(Program *prog, FILE *out) {
+void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
+                  Arena *arena, InternTable *intern_tbl, SymbolTable *symtab) {
+    g_mono = mono;
+    g_arena = arena;
+    g_intern = intern_tbl;
+    g_symtab = symtab;
     /* Preamble */
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stdbool.h>\n");
@@ -1570,6 +1749,36 @@ void codegen_emit(Program *prog, FILE *out) {
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
+    /* Discover transitive monomorphized instances BEFORE emitting anything.
+     * Walk each mono function body to trigger deferred generic call resolution,
+     * which may register new struct/union/function instances. Use /dev/null
+     * to discard output — we only care about side-effects on the mono table. */
+    {
+        FILE *null_out = fopen("/dev/null", "w");
+        int discovered = 0;
+        while (discovered < mono->count) {
+            int batch_end = mono->count;
+            for (int mi = discovered; mi < batch_end; mi++) {
+                MonoInstance *inst = &mono->entries[mi];
+                if (inst->decl_kind != DECL_LET) continue;
+                Decl *tmpl = inst->template_decl;
+                if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
+                Expr *fn = tmpl->let.init;
+                SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+                g_subst = &subst;
+                int save_indent = indent_level;
+                int save_temp = temp_counter;
+                indent_level = 1;
+                emit_block_stmts(fn->func.body, fn->func.body_count, null_out, true);
+                indent_level = save_indent;
+                temp_counter = save_temp;
+                g_subst = NULL;
+            }
+            discovered = batch_end;
+        }
+        fclose(null_out);
+    }
+
     /* Collect all slice, option, and function types used in the program */
     TypeSet slices = {0};
     TypeSet options = {0};
@@ -1577,6 +1786,7 @@ void codegen_emit(Program *prog, FILE *out) {
 
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
+        if (is_generic_decl(d)) continue;
         if (d->kind == DECL_LET) {
             collect_types_in_type(d->let.resolved_type, &slices, &options, &fns);
             collect_types_expr(d->let.init, &slices, &options, &fns);
@@ -1590,18 +1800,54 @@ void codegen_emit(Program *prog, FILE *out) {
                 collect_types_in_type(d->unio.variants[j].payload, &slices, &options, &fns);
         }
     }
+    /* Also collect types from monomorphized instances */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->concrete_type) {
+            if (inst->concrete_type->kind == TYPE_STRUCT) {
+                for (int f = 0; f < inst->concrete_type->struc.field_count; f++)
+                    collect_types_in_type(inst->concrete_type->struc.fields[f].type, &slices, &options, &fns);
+            } else if (inst->concrete_type->kind == TYPE_UNION) {
+                for (int v = 0; v < inst->concrete_type->unio.variant_count; v++)
+                    collect_types_in_type(inst->concrete_type->unio.variants[v].payload, &slices, &options, &fns);
+            }
+        }
+    }
 
-    /* Emit forward declarations for all structs and unions */
+    /* Emit forward declarations for all structs and unions (skip generics) */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
+        if (is_generic_decl(d)) continue;
         if (d->kind == DECL_STRUCT) emit_struct_forward(d, out);
         else if (d->kind == DECL_UNION) emit_union_forward(d, out);
     }
+    /* Forward declarations for monomorphized structs/unions */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind == DECL_STRUCT) {
+            fprintf(out, "typedef struct %s %s;\n", inst->mangled_name, inst->mangled_name);
+        } else if (inst->decl_kind == DECL_UNION) {
+            fprintf(out, "typedef struct %s %s;\n", inst->mangled_name, inst->mangled_name);
+        }
+    }
 
-    /* Emit union tag enums (must come before full definitions) */
+    /* Emit union tag enums (skip generics) */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
+        if (is_generic_decl(d)) continue;
         if (d->kind == DECL_UNION) emit_union_tag_enum(d, out);
+    }
+    /* Tag enums for monomorphized unions */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind != DECL_UNION || !inst->concrete_type) continue;
+        Type *ct = inst->concrete_type;
+        fprintf(out, "typedef enum {");
+        for (int v = 0; v < ct->unio.variant_count; v++) {
+            if (v > 0) fprintf(out, ",");
+            fprintf(out, " %s_tag_%s", inst->mangled_name, ct->unio.variants[v].name);
+        }
+        fprintf(out, " } %s_tag;\n", inst->mangled_name);
     }
 
     /* Emit slice typedefs — before struct defs since structs may contain slices */
@@ -1633,13 +1879,12 @@ void codegen_emit(Program *prog, FILE *out) {
         fprintf(out, ";\n");
     }
 
-    /* Emit full struct and union definitions, interleaved with option typedefs
-       that wrap them (so struct A using B? gets fc_option_B right after B).
-       Note: unresolved type stubs from the parser always have kind TYPE_STRUCT
-       even for unions, so we match by name against both struct and union decls. */
+    /* Emit full struct and union definitions (skip generics), interleaved with
+       option typedefs that wrap them. */
     bool *opt_emitted = calloc(options.count, sizeof(bool));
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
+        if (is_generic_decl(d)) continue;
         const char *def_name = NULL;
         if (d->kind == DECL_STRUCT) {
             emit_struct_def(d, out);
@@ -1668,6 +1913,39 @@ void codegen_emit(Program *prog, FILE *out) {
         }
     }
     free(opt_emitted);
+
+    /* Emit monomorphized struct/union definitions */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (!inst->concrete_type) continue;
+        Type *ct = inst->concrete_type;
+        if (inst->decl_kind == DECL_STRUCT) {
+            fprintf(out, "struct %s {", inst->mangled_name);
+            for (int f = 0; f < ct->struc.field_count; f++) {
+                fprintf(out, " ");
+                emit_type(ct->struc.fields[f].type, out);
+                fprintf(out, " %s;", ct->struc.fields[f].name);
+            }
+            fprintf(out, " };\n");
+        } else if (inst->decl_kind == DECL_UNION) {
+            bool has_payload = false;
+            for (int v = 0; v < ct->unio.variant_count; v++)
+                if (ct->unio.variants[v].payload) { has_payload = true; break; }
+            if (has_payload) {
+                fprintf(out, "struct %s { %s_tag tag; union {", inst->mangled_name, inst->mangled_name);
+                for (int v = 0; v < ct->unio.variant_count; v++) {
+                    if (ct->unio.variants[v].payload) {
+                        fprintf(out, " ");
+                        emit_type(ct->unio.variants[v].payload, out);
+                        fprintf(out, " %s;", ct->unio.variants[v].name);
+                    }
+                }
+                fprintf(out, " }; };\n");
+            } else {
+                fprintf(out, "struct %s { %s_tag tag; };\n", inst->mangled_name, inst->mangled_name);
+            }
+        }
+    }
 
     /* Emit function type typedefs */
     for (int i = 0; i < fns.count; i++) {
@@ -1702,10 +1980,10 @@ void codegen_emit(Program *prog, FILE *out) {
         }
     }
 
-    /* Emit forward declarations for functions (with void* _ctx) */
+    /* Emit forward declarations for functions (with void* _ctx), skip generics */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
-        if (is_func_decl(d) && strcmp(d->let.name, "main") != 0) {
+        if (is_func_decl(d) && strcmp(d->let.name, "main") != 0 && !is_generic_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             Type *ft = d->let.resolved_type;
             emit_type(ft->func.return_type, out);
@@ -1719,6 +1997,27 @@ void codegen_emit(Program *prog, FILE *out) {
             if (fn->func.param_count > 0) fprintf(out, ", ");
             fprintf(out, "void* _ctx);\n");
         }
+    }
+    /* Forward declarations for monomorphized functions */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind != DECL_LET) continue;
+        Decl *tmpl = inst->template_decl;
+        if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
+        Expr *fn = tmpl->let.init;
+        /* Set up substitution context */
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        emit_type(fn->type->func.return_type, out);
+        fprintf(out, " %s(", inst->mangled_name);
+        for (int j = 0; j < fn->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(fn->func.params[j].type, out);
+            fprintf(out, " %s", fn->func.params[j].name);
+        }
+        if (fn->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx);\n");
+        g_subst = NULL;
     }
     fprintf(out, "\n");
 
@@ -1818,11 +2117,59 @@ void codegen_emit(Program *prog, FILE *out) {
     }
     free(lambdas.exprs);
 
-    /* Emit function definitions */
+    /* Emit function definitions (skip generics) */
     for (int i = 0; i < all_count; i++) {
-        if (is_func_decl(all_decls[i])) {
+        if (is_func_decl(all_decls[i]) && !is_generic_decl(all_decls[i])) {
             emit_func_decl(all_decls[i], out);
         }
+    }
+
+    /* Emit forward declarations for all monomorphized functions (including transitive) */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind != DECL_LET) continue;
+        Decl *tmpl = inst->template_decl;
+        if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
+        Expr *fn = tmpl->let.init;
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        emit_type(fn->type->func.return_type, out);
+        fprintf(out, " %s(", inst->mangled_name);
+        for (int j = 0; j < fn->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(fn->func.params[j].type, out);
+            fprintf(out, " %s", fn->func.params[j].name);
+        }
+        if (fn->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx);\n");
+        g_subst = NULL;
+    }
+    fprintf(out, "\n");
+
+    /* Emit monomorphized function definitions */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind != DECL_LET) continue;
+        Decl *tmpl = inst->template_decl;
+        if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
+        Expr *fn = tmpl->let.init;
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        emit_type(fn->type->func.return_type, out);
+        fprintf(out, " %s(", inst->mangled_name);
+        for (int j = 0; j < fn->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(fn->func.params[j].type, out);
+            fprintf(out, " %s", fn->func.params[j].name);
+        }
+        if (fn->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx) {\n");
+        fprintf(out, "    (void)_ctx;\n");
+        indent_level = 1;
+        emit_block_stmts(fn->func.body, fn->func.body_count, out, true);
+        indent_level = 0;
+        fprintf(out, "}\n\n");
+        g_subst = NULL;
     }
 
     /* If no main function, wrap non-func decls in synthetic main */

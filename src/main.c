@@ -4,6 +4,7 @@
 #include "pass1.h"
 #include "pass2.h"
 #include "codegen.h"
+#include "monomorph.h"
 #include "diag.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,7 +148,8 @@ int main(int argc, char **argv) {
     }
 
     /* Pass 2: type check */
-    pass2_check(prog, &symtab);
+    MonoTable mono = {0};
+    pass2_check(prog, &symtab, &intern_table, &mono);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
@@ -164,7 +166,7 @@ int main(int argc, char **argv) {
         diag_fatal_simple("cannot open output '%s'", output_path);
     }
 
-    codegen_emit(prog, out);
+    codegen_emit(prog, out, &mono, &arena, &intern_table, &symtab);
     fclose(out);
 
     /* Cleanup */
@@ -177,6 +179,7 @@ int main(int argc, char **argv) {
     free(all_tokens);
     free(input_paths);
     free(symtab.symbols);
+    free(mono.entries);
     arena_free(&arena);
 
     return 0;
