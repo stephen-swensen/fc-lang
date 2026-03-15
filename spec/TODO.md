@@ -27,6 +27,17 @@ Open design questions and topics for future discussion.
 
 ---
 
+## Implicit widening in generic calls and struct literals
+
+Currently, implicit int widening (e.g. int32 → int64) does not apply in two contexts:
+
+1. **Struct literal fields** — `my_struct { len = 0 }` fails if `len` is int64; requires `0i64`
+2. **Generic function arguments with concrete param types** — e.g. `get(list, 0)` where `index: int64` fails; requires `0i64`
+
+In both cases the type checker knows the target type and could insert a widening cast. The question is whether this should be done during unification (for generics) or during struct literal checking, and whether it introduces ambiguity or surprises. Revisit to see if we can reduce the need for explicit suffixed literals.
+
+---
+
 ## Resolved
 
 ### File handles are `any*`, not a built-in type (resolved 2026-03-11)

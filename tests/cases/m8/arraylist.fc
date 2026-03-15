@@ -5,13 +5,13 @@ struct arraylist =
 module arraylist =
 
     private let grow = (l: arraylist<'a>*) ->
-        let new_cap = l->data.len * 2i64
+        let new_cap = l->data.len * 2
         let mut new_data = alloc('a[new_cap])!
-        let mut i = 0i64
+        let mut i = 0
         loop
             if i >= l->len then break
             new_data[i] = l->data[i]
-            i = i + 1i64
+            i = i + 1
         free(l->data)
         l->data = new_data
 
@@ -24,7 +24,7 @@ module arraylist =
     let add = (l: arraylist<'a>*, value: 'a) ->
         if l->len == l->data.len then arraylist.grow(l)
         l->data[l->len] = value
-        l->len = l->len + 1i64
+        l->len = l->len + 1
 
     let get = (l: arraylist<'a>, index: int64) ->
         l.data[index]
@@ -37,26 +37,26 @@ module arraylist =
         let mut i = l->len
         loop
             if i <= index then break
-            l->data[i] = l->data[i - 1i64]
-            i = i - 1i64
+            l->data[i] = l->data[i - 1]
+            i = i - 1
         l->data[index] = value
-        l->len = l->len + 1i64
+        l->len = l->len + 1
 
     let fold = (l: arraylist<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
         let mut acc = init
-        let mut i = 0i64
+        let mut i = 0
         loop
             if i >= l.len then break acc
             acc = f(acc, l.data[i])
-            i = i + 1i64
+            i = i + 1
 
     let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
         let mut result = arraylist.make<'b>()
-        let mut i = 0i64
+        let mut i = 0
         loop
             if i >= l.len then break result
             arraylist.add(&result, f(l.data[i]))
-            i = i + 1i64
+            i = i + 1
 
 let main = (args: int32) ->
     let mut nums = arraylist.make<int32>()
