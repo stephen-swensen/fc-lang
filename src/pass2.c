@@ -1505,7 +1505,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
-            if (member->is_private) {
+            if (member->is_private && ctx->module_symtab != mod_sym->members) {
                 diag_error(e->loc, "cannot access private member '%s' of module '%s'",
                     e->field.name, mod_sym->name);
                 e->type = type_error();
