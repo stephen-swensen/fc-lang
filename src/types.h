@@ -120,6 +120,9 @@ Type *type_from_int_suffix(const char *suffix, int len);
 /* Type variable constructor */
 Type *type_type_var(Arena *a, const char *name);
 
+/* Does this type need a generated eq function (as opposed to C native ==)? */
+bool type_needs_eq_func(Type *t);
+
 /* Check if a type contains any type variables (recursively) */
 bool type_contains_type_var(Type *t);
 

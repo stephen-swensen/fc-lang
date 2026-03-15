@@ -225,6 +225,24 @@ Type *type_type_var(Arena *a, const char *name) {
     return t;
 }
 
+bool type_needs_eq_func(Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+    case TYPE_STRUCT:
+    case TYPE_UNION:
+    case TYPE_SLICE:
+    case TYPE_STR:
+    case TYPE_STR32:
+    case TYPE_FUNC:
+        return true;
+    case TYPE_OPTION:
+        /* Pointer options use C native == (NULL for none) */
+        return !(t->option.inner && t->option.inner->kind == TYPE_POINTER);
+    default:
+        return false;
+    }
+}
+
 bool type_contains_type_var(Type *t) {
     if (!t) return false;
     switch (t->kind) {

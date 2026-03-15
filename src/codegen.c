@@ -17,6 +17,10 @@ static Arena *g_arena = NULL;
 static InternTable *g_intern = NULL;
 static SymbolTable *g_symtab = NULL;
 
+/* Forward declaration for TypeSet (defined later) */
+typedef struct TypeSet TypeSet;
+static TypeSet *g_eq_set = NULL;
+
 static int indent_level = 0;
 static int temp_counter = 0;
 
@@ -148,6 +152,10 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
+    case TYPE_STR:     fprintf(out, "fc_str");    break;
+    case TYPE_STR32:   fprintf(out, "fc_str32");  break;
+    case TYPE_CSTR:    fprintf(out, "const_char_ptr"); break;
+    case TYPE_ANY_PTR: fprintf(out, "void_ptr");  break;
     case TYPE_STRUCT:
         if (g_subst && type_contains_type_var(t))
             fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
@@ -204,6 +212,7 @@ static void emit_fn_type_suffix(Type *t, FILE *out) {
 }
 
 static void emit_expr(Expr *e, FILE *out);
+static void emit_eq_func_name(Type *t, FILE *out);
 
 /* Recursively emit condition checks for any pattern.
    expr is the C expression for the value being matched.
@@ -274,6 +283,11 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
             snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
             emit_pat_conditions(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, has_cond, out);
         }
+        break;
+    case PAT_STRING_LIT:
+        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        fprintf(out, "fc_eq_fc_str(%s, (fc_str){(uint8_t*)\"%.*s\", %d})",
+            expr, pat->string_lit.length, pat->string_lit.value, pat->string_lit.length);
         break;
     default:
         break;
@@ -509,6 +523,30 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_BINARY: {
+        /* Structural equality on complex types */
+        if ((e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) && e->binary.left->type) {
+            Type *cmp_type = e->binary.left->type;
+            /* Resolve type vars through g_subst if active */
+            if (g_subst && cmp_type->kind == TYPE_TYPE_VAR) {
+                for (int i = 0; i < g_subst->count; i++) {
+                    if (g_subst->var_names[i] == cmp_type->type_var.name) {
+                        cmp_type = g_subst->concrete[i];
+                        break;
+                    }
+                }
+            }
+            if (type_needs_eq_func(cmp_type)) {
+                if (e->binary.op == TOK_BANGEQ) fprintf(out, "(!");
+                emit_eq_func_name(cmp_type, out);
+                fprintf(out, "(");
+                emit_expr(e->binary.left, out);
+                fprintf(out, ", ");
+                emit_expr(e->binary.right, out);
+                fprintf(out, ")");
+                if (e->binary.op == TOK_BANGEQ) fprintf(out, ")");
+                break;
+            }
+        }
         const char *op_str;
         switch (e->binary.op) {
         case TOK_PLUS:     op_str = "+";  break;
@@ -1404,11 +1442,11 @@ static void emit_union_def(Decl *d, FILE *out) {
 
 /* ---- Collect used slice/option types for typedef generation ---- */
 
-typedef struct {
+struct TypeSet {
     Type **types;
     int count;
     int cap;
-} TypeSet;
+};
 
 static bool typeset_contains(TypeSet *ts, Type *t) {
     for (int i = 0; i < ts->count; i++) {
@@ -1452,6 +1490,101 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     }
 }
 
+/* Resolve struct/union stub types (name only, 0 fields) to full definitions */
+static Type *resolve_struct_stub(Type *t) {
+    if (!g_symtab) return t;
+    /* Parser creates all user-defined type references as TYPE_STRUCT stubs
+       (field_count=0), even for unions. Resolve via symbol table or mono table. */
+    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0) {
+        Symbol *sym = symtab_lookup(g_symtab, t->struc.name);
+        if (sym && sym->type) {
+            if ((sym->type->kind == TYPE_STRUCT && sym->type->struc.field_count > 0) ||
+                (sym->type->kind == TYPE_UNION && sym->type->unio.variant_count > 0))
+                return sym->type;
+        }
+        if (g_mono) {
+            for (int i = 0; i < g_mono->count; i++) {
+                if (g_mono->entries[i].mangled_name == t->struc.name &&
+                    g_mono->entries[i].concrete_type)
+                    return g_mono->entries[i].concrete_type;
+            }
+        }
+    }
+    if (t->kind == TYPE_UNION && t->unio.variant_count == 0) {
+        Symbol *sym = symtab_lookup(g_symtab, t->unio.name);
+        if (sym && sym->type) {
+            if ((sym->type->kind == TYPE_UNION && sym->type->unio.variant_count > 0) ||
+                (sym->type->kind == TYPE_STRUCT && sym->type->struc.field_count > 0))
+                return sym->type;
+        }
+        if (g_mono) {
+            for (int i = 0; i < g_mono->count; i++) {
+                if (g_mono->entries[i].mangled_name == t->unio.name &&
+                    g_mono->entries[i].concrete_type)
+                    return g_mono->entries[i].concrete_type;
+            }
+        }
+    }
+    return t;
+}
+
+/* Recursively collect types that need generated eq functions */
+static void collect_eq_types(Type *t, TypeSet *eqs) {
+    if (!t) return;
+    /* Apply type variable substitution if available */
+    if (g_subst && type_contains_type_var(t)) {
+        t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
+        if (!type_contains_type_var(t))
+            mono_resolve_type_names(g_mono, g_arena, g_intern, t);
+    }
+    if (type_contains_type_var(t)) return;
+    if (!type_needs_eq_func(t)) return;
+    t = resolve_struct_stub(t);
+    if (typeset_contains(eqs, t)) return;
+    typeset_add(eqs, t);
+    switch (t->kind) {
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++)
+            collect_eq_types(t->struc.fields[i].type, eqs);
+        break;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++)
+            if (t->unio.variants[i].payload)
+                collect_eq_types(t->unio.variants[i].payload, eqs);
+        break;
+    case TYPE_SLICE:
+        collect_eq_types(t->slice.elem, eqs);
+        break;
+    case TYPE_OPTION:
+        collect_eq_types(t->option.inner, eqs);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Walk patterns looking for PAT_STRING_LIT to register str eq */
+static void collect_eq_from_pattern(Pattern *pat, TypeSet *eqs) {
+    if (!pat) return;
+    switch (pat->kind) {
+    case PAT_STRING_LIT:
+        collect_eq_types(type_str(), eqs);
+        break;
+    case PAT_SOME:
+        if (pat->some_pat.inner) collect_eq_from_pattern(pat->some_pat.inner, eqs);
+        break;
+    case PAT_VARIANT:
+        if (pat->variant.payload) collect_eq_from_pattern(pat->variant.payload, eqs);
+        break;
+    case PAT_STRUCT:
+        for (int i = 0; i < pat->struc.field_count; i++)
+            collect_eq_from_pattern(pat->struc.fields[i].pattern, eqs);
+        break;
+    default:
+        break;
+    }
+}
+
 static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeSet *fns) {
     if (!e) return;
     collect_types_in_type(e->type, slices, options, fns);
@@ -1460,6 +1593,10 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_BINARY:
         collect_types_expr(e->binary.left, slices, options, fns);
         collect_types_expr(e->binary.right, slices, options, fns);
+        if (g_eq_set && (e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ)) {
+            Type *cmp_type = e->binary.left->type;
+            if (cmp_type) collect_eq_types(cmp_type, g_eq_set);
+        }
         break;
     case EXPR_UNARY_PREFIX:
         collect_types_expr(e->unary_prefix.operand, slices, options, fns);
@@ -1531,6 +1668,8 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_MATCH:
         collect_types_expr(e->match_expr.subject, slices, options, fns);
         for (int i = 0; i < e->match_expr.arm_count; i++) {
+            if (g_eq_set)
+                collect_eq_from_pattern(e->match_expr.arms[i].pattern, g_eq_set);
             for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
                 collect_types_expr(e->match_expr.arms[i].body[j], slices, options, fns);
         }
@@ -1680,6 +1819,141 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
     }
 }
 
+/* ---- Eq function generation ---- */
+
+static void emit_eq_func_name(Type *t, FILE *out) {
+    fprintf(out, "fc_eq_");
+    emit_type_ident(t, out);
+}
+
+static void emit_eq_forward(Type *t, FILE *out) {
+    fprintf(out, "static inline bool ");
+    emit_eq_func_name(t, out);
+    fprintf(out, "(");
+    emit_type(t, out);
+    fprintf(out, " a, ");
+    emit_type(t, out);
+    fprintf(out, " b);\n");
+}
+
+/* Emit the comparison expression for two values of type t.
+   a_prefix/b_prefix are "a"/"b" (or "a.field"/"b.field"). */
+static void emit_value_eq(Type *t, const char *a_expr, const char *b_expr, FILE *out) {
+    if (type_needs_eq_func(t)) {
+        emit_eq_func_name(t, out);
+        fprintf(out, "(%s, %s)", a_expr, b_expr);
+    } else {
+        fprintf(out, "%s == %s", a_expr, b_expr);
+    }
+}
+
+static void emit_eq_func(Type *t, FILE *out) {
+    fprintf(out, "static inline bool ");
+    emit_eq_func_name(t, out);
+    fprintf(out, "(");
+    emit_type(t, out);
+    fprintf(out, " a, ");
+    emit_type(t, out);
+    fprintf(out, " b) {\n");
+
+    t = resolve_struct_stub(t);
+    switch (t->kind) {
+    case TYPE_STR:
+        fprintf(out, "    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);\n");
+        break;
+    case TYPE_STR32:
+        fprintf(out, "    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len * sizeof(uint32_t)) == 0);\n");
+        break;
+    case TYPE_STRUCT: {
+        int fc = t->struc.field_count;
+        if (fc == 0) {
+            fprintf(out, "    (void)a; (void)b;\n    return true;\n");
+        } else {
+            fprintf(out, "    return ");
+            for (int i = 0; i < fc; i++) {
+                if (i > 0) fprintf(out, " && ");
+                char a_buf[256], b_buf[256];
+                snprintf(a_buf, sizeof(a_buf), "a.%s", t->struc.fields[i].name);
+                snprintf(b_buf, sizeof(b_buf), "b.%s", t->struc.fields[i].name);
+                emit_value_eq(t->struc.fields[i].type, a_buf, b_buf, out);
+            }
+            fprintf(out, ";\n");
+        }
+        break;
+    }
+    case TYPE_UNION: {
+        /* Check if any variant has a payload */
+        bool has_payload = false;
+        for (int i = 0; i < t->unio.variant_count; i++)
+            if (t->unio.variants[i].payload) { has_payload = true; break; }
+
+        if (!has_payload) {
+            /* Tag-only union — just compare tags */
+            fprintf(out, "    return a.tag == b.tag;\n");
+        } else {
+            fprintf(out, "    if (a.tag != b.tag) return false;\n");
+            fprintf(out, "    switch (a.tag) {\n");
+            const char *uname = t->unio.name;
+            for (int i = 0; i < t->unio.variant_count; i++) {
+                fprintf(out, "    case %s_tag_%s: ", uname, t->unio.variants[i].name);
+                if (t->unio.variants[i].payload) {
+                    char a_buf[256], b_buf[256];
+                    snprintf(a_buf, sizeof(a_buf), "a.%s", t->unio.variants[i].name);
+                    snprintf(b_buf, sizeof(b_buf), "b.%s", t->unio.variants[i].name);
+                    fprintf(out, "return ");
+                    emit_value_eq(t->unio.variants[i].payload, a_buf, b_buf, out);
+                    fprintf(out, ";\n");
+                } else {
+                    fprintf(out, "return true;\n");
+                }
+            }
+            fprintf(out, "    }\n");
+            fprintf(out, "    return true;\n");
+        }
+        break;
+    }
+    case TYPE_SLICE: {
+        Type *elem = t->slice.elem;
+        fprintf(out, "    if (a.len != b.len) return false;\n");
+        fprintf(out, "    if (a.len == 0) return true;\n");
+        /* Use memcmp for non-float primitives that don't need eq funcs */
+        if (!type_needs_eq_func(elem) && !type_is_float(elem)) {
+            fprintf(out, "    return memcmp(a.ptr, b.ptr, (size_t)a.len * sizeof(");
+            emit_type(elem, out);
+            fprintf(out, ")) == 0;\n");
+        } else {
+            fprintf(out, "    for (int64_t _i = 0; _i < a.len; _i++)\n");
+            fprintf(out, "        if (!");
+            if (type_needs_eq_func(elem)) {
+                emit_eq_func_name(elem, out);
+                fprintf(out, "(a.ptr[_i], b.ptr[_i])");
+            } else {
+                /* float — use C == */
+                fprintf(out, "(a.ptr[_i] == b.ptr[_i])");
+            }
+            fprintf(out, ") return false;\n");
+            fprintf(out, "    return true;\n");
+        }
+        break;
+    }
+    case TYPE_OPTION:
+        fprintf(out, "    if (a.has_value != b.has_value) return false;\n");
+        fprintf(out, "    if (!a.has_value) return true;\n");
+        fprintf(out, "    return ");
+        emit_value_eq(t->option.inner, "a.value", "b.value", out);
+        fprintf(out, ";\n");
+        break;
+    case TYPE_FUNC:
+        fprintf(out, "    return a.fn_ptr == b.fn_ptr && a.ctx == b.ctx;\n");
+        break;
+    default:
+        fprintf(out, "    return false; /* unsupported type */\n");
+        break;
+    }
+
+    fprintf(out, "}\n");
+}
+
 /* Collect all top-level decls plus module child decls into a flat array */
 /* Recursively flatten module decls into a single array */
 static void flatten_decls(Decl **decls, int decl_count, Decl ***out, int *count, int *cap) {
@@ -1712,6 +1986,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "#include <stdbool.h>\n");
     fprintf(out, "#include <inttypes.h>\n");
     fprintf(out, "#include <stdlib.h>\n");
+    fprintf(out, "#include <string.h>\n");
     fprintf(out, "\n");
 
     /* Always emit fc_str (alias for uint8 slice) */
@@ -1722,10 +1997,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
-    /* Collect all slice, option, and function types used in the program */
+    /* Collect all slice, option, function, and eq types used in the program */
     TypeSet slices = {0};
     TypeSet options = {0};
     TypeSet fns = {0};
+    TypeSet eqs = {0};
+    g_eq_set = &eqs;
 
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
@@ -1770,6 +2047,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             collect_types_expr(fn->func.body[j], &slices, &options, &fns);
         g_subst = NULL;
     }
+    g_eq_set = NULL;
 
     /* Emit forward declarations for all structs and unions (skip generics) */
     for (int i = 0; i < all_count; i++) {
@@ -1920,9 +2198,16 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, ";\n");
     }
 
+    /* Emit eq function forward declarations and definitions */
+    for (int i = 0; i < eqs.count; i++)
+        emit_eq_forward(eqs.types[i], out);
+    for (int i = 0; i < eqs.count; i++)
+        emit_eq_func(eqs.types[i], out);
+
     free(slices.types);
     free(options.types);
     free(fns.types);
+    free(eqs.types);
 
     fprintf(out, "\n");
 

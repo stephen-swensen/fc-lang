@@ -1,0 +1,10 @@
+let score = (s: str) ->
+    match s with
+    | "a" -> 1
+    | "bb" -> 2
+    | "ccc" -> 3
+    | "dddd" -> 4
+    | _ -> 0
+
+let main = (args: int32) ->
+    score("a") + score("bb") + score("ccc") + score("dddd") + score("unknown")

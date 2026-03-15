@@ -755,8 +755,32 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
-        if (op == TOK_EQEQ || op == TOK_BANGEQ || op == TOK_LT ||
-            op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
+        /* Structural equality: == and != work on all types */
+        if (op == TOK_EQEQ || op == TOK_BANGEQ) {
+            if (type_eq(lt, rt)) {
+                e->type = type_bool();
+                return e->type;
+            }
+            /* Try numeric widening for mismatched numeric types */
+            Type *common = type_common_numeric(lt, rt);
+            if (common) {
+                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
+                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
+                e->type = type_bool();
+                return e->type;
+            }
+            diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+            e->type = type_error();
+            return e->type;
+        }
+
+        /* Ordering: < > <= >= require numeric types */
+        if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
+            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+                diag_error(e->loc, "ordering comparison requires numeric types, got %s and %s", type_name(lt), type_name(rt));
+                e->type = type_error();
+                return e->type;
+            }
             if (!type_eq(lt, rt)) {
                 Type *common = type_common_numeric(lt, rt);
                 if (!common) {
@@ -2017,6 +2041,10 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
         }
         break;
     case PAT_STRING_LIT:
+        if (!type_eq(type, type_str())) {
+            diag_error(pat->loc, "string pattern on non-str type %s", type_name(type));
+            return;
+        }
         break;
     case PAT_SOME:
         if (type->kind != TYPE_OPTION) {

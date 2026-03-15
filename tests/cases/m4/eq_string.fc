@@ -1,0 +1,10 @@
+let main = (args: int32) ->
+    let a = "hello"
+    let b = "hello"
+    let c = "world"
+    let d = "hi"
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    if a != d then r = r + 4 else r = r
+    r

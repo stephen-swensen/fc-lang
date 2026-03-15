@@ -1,0 +1,3 @@
+let main = (args: int32) ->
+    let a = "hello"
+    if a == 42 then 1 else 0

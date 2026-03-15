@@ -1,0 +1,17 @@
+struct pair =
+    first: 'a
+    second: 'b
+
+let main = (args: int32) ->
+    let a = pair { first = 1, second = true }
+    let b = pair { first = 1, second = true }
+    let c = pair { first = 1, second = false }
+    let d = pair { first = "hello", second = "world" }
+    let e = pair { first = "hello", second = "world" }
+    let f = pair { first = "hello", second = "other" }
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    if d == e then r = r + 4 else r = r
+    if d != f then r = r else r = r
+    r

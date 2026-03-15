@@ -1306,6 +1306,14 @@ static Pattern *parse_pattern(Parser *p) {
         return pat;
     }
 
+    if (check(p, TOK_STRING_LIT)) {
+        Token *t2 = advance_p(p);
+        pat->kind = PAT_STRING_LIT;
+        pat->string_lit.value = t2->start + 1;  /* skip opening quote */
+        pat->string_lit.length = t2->length - 2; /* skip both quotes */
+        return pat;
+    }
+
     if (check(p, TOK_NONE)) {
         advance_p(p);
         pat->kind = PAT_NONE;

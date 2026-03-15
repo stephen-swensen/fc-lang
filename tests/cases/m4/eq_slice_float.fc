@@ -1,0 +1,17 @@
+let main = (args: int32) ->
+    let a = alloc(float64[2])!
+    a[0] = 1.5
+    a[1] = 2.5
+    let b = alloc(float64[2])!
+    b[0] = 1.5
+    b[1] = 2.5
+    let c = alloc(float64[2])!
+    c[0] = 1.5
+    c[1] = 9.9
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    free(a)
+    free(b)
+    free(c)
+    r

@@ -1,0 +1,19 @@
+union token =
+    | number(int32)
+    | name(int32)
+    | eof
+
+let main = (args: int32) ->
+    let a = token.number(42)
+    let b = token.number(42)
+    let c = token.number(99)
+    let d = token.eof
+    let e = token.eof
+    let f = token.name(1)
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    if d == e then r = r + 4 else r = r
+    if a != d then r = r + 8 else r = r
+    if a != f then r = r else r = r
+    r

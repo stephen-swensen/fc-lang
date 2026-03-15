@@ -1,0 +1,8 @@
+let classify = (s: str) ->
+    match s with
+    | "yes" -> 1
+    | "no" -> 2
+    | _ -> 0
+
+let main = (args: int32) ->
+    classify("yes") + classify("no") + classify("maybe")

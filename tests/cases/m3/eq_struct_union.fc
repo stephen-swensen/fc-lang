@@ -1,0 +1,18 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+
+struct drawing =
+    name: int32
+    s: shape
+
+let main = (args: int32) ->
+    let a = drawing { name = 1, s = shape.circle(5) }
+    let b = drawing { name = 1, s = shape.circle(5) }
+    let c = drawing { name = 1, s = shape.square(5) }
+    let d = drawing { name = 2, s = shape.circle(5) }
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    if a != d then r = r + 4 else r = r
+    r

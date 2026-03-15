@@ -1,0 +1,12 @@
+let main = (args: int32) ->
+    let a = 10i8
+    let b = 10
+    let c = 20i16
+    let d = 20i64
+    let e = 5u8
+    let f = 5
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if c == d then r = r + 2 else r = r
+    if e == f then r = r + 4 else r = r
+    r

@@ -1,0 +1,4 @@
+let main = (args: int32) ->
+    let a = some(1)
+    let b = some(2)
+    if a > b then 1 else 0

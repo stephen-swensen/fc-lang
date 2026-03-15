@@ -137,12 +137,18 @@ The test runner discovers all `.fc` files in the subdirectory and compiles them 
 
 ### Test coverage philosophy
 
-Strive for near-complete code coverage. Every feature described in the spec must have corresponding tests. When adding a feature or fixing a bug, add tests that exercise:
+Correctness is imperative in compiler implementation — exhaustive testing is not optional. Every new feature, bug fix, or spec change must be accompanied by a thorough test suite that covers not just the happy path but all meaningful combinations and edge cases.
+
+When adding a feature or fixing a bug, add tests that exercise:
 - The happy path (feature works as specified)
 - All syntax forms and variations (e.g., every import form the spec defines)
-- Edge cases and boundary conditions
-- Error cases (invalid input produces a clear compile error)
-- Interactions between features (e.g., shadowing + mutability, match + options + unions)
+- Edge cases and boundary conditions (empty inputs, single elements, maximum values)
+- Error cases (invalid input produces a clear compile error, type mismatches, ordering violations)
+- Interactions between features (e.g., shadowing + mutability, match + options + unions, generics + equality, nested types)
+- Multiple type combinations (e.g., if a feature works on structs, unions, slices, options, and strings — test all of them, not just one)
+- Generic/monomorphized variants of the feature
+
+Aim for dozens of test cases per feature, not a handful. A bug caught by a test during development costs minutes; a bug discovered in user code costs hours.
 
 Each milestone must fully implement all spec features for that area — no deferring aspects to later milestones.
 
