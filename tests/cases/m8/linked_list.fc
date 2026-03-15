@@ -1,0 +1,57 @@
+struct node =
+    value: 'a
+    next:  node<'a>*?
+
+module node =
+    let make = (value: 'a) ->
+        let n = alloc(node { value = value })!
+        n->next = none(node<'a>*)
+        n
+
+    let prepend = (head: node<'a>*?, value: 'a) ->
+        let n = node.make(value)
+        n->next = head
+        n
+
+    let map = (head: node<'a>*?, f: ('a) -> 'b) ->
+        match head with
+        | none      -> none(node<'b>*)
+        | some(ptr) ->
+            let n = node.make(f(ptr->value))
+            n->next = node.map(ptr->next, f)
+            some(n)
+
+    let drop = (head: node<'a>*?) ->
+        let mut current = head
+        loop
+            match current with
+            | none      -> break
+            | some(ptr) ->
+                let next = ptr->next
+                free(ptr)
+                current = next
+
+let main = (args: int32) ->
+    // build list: 3 -> 2 -> 1
+    let n1 = node.prepend(none(node<int32>*), 1)
+    let n2 = node.prepend(some(n1), 2)
+    let n3 = node.prepend(some(n2), 3)
+    let list = some(n3)
+
+    // check head values
+    let v3 = n3->value    // 3
+    let v2 = n2->value    // 2
+    let v1 = n1->value    // 1
+
+    // map: double each value -> 6 -> 4 -> 2
+    let doubled = node.map(list, (x: int32) -> x * 2)
+
+    // extract doubled head
+    let dv = doubled!->value    // 6
+
+    // clean up
+    node.drop(list)
+    node.drop(doubled)
+
+    // 3 + 2 + 1 + 6 = 12
+    v3 + v2 + v1 + dv

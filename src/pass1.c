@@ -110,7 +110,8 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
 /* Register a struct type symbol and return the created type */
 static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     symtab_add(tab, d->struc.name, DECL_STRUCT, d);
-    Symbol *sym = symtab_lookup(tab, d->struc.name);
+    /* Use the last added entry (not symtab_lookup which may find a module with same name) */
+    Symbol *sym = &tab->symbols[tab->count - 1];
     Type *st = malloc(sizeof(Type));
     st->kind = TYPE_STRUCT;
     st->struc.name = d->struc.name;
@@ -126,7 +127,8 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
 /* Register a union type symbol and return the created type */
 static Type *register_union_sym(SymbolTable *tab, Decl *d) {
     symtab_add(tab, d->unio.name, DECL_UNION, d);
-    Symbol *sym = symtab_lookup(tab, d->unio.name);
+    /* Use the last added entry (not symtab_lookup which may find a module with same name) */
+    Symbol *sym = &tab->symbols[tab->count - 1];
     Type *ut = malloc(sizeof(Type));
     ut->kind = TYPE_UNION;
     ut->unio.name = d->unio.name;
@@ -339,7 +341,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         }
         case DECL_STRUCT: {
             Symbol *existing = symtab_lookup(symtab, d->struc.name);
-            if (existing) {
+            if (existing && existing->kind != DECL_MODULE) {
                 diag_error(d->loc, "redefinition of '%s'", d->struc.name);
             } else {
                 register_struct_sym(symtab, d);
@@ -348,7 +350,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         }
         case DECL_UNION: {
             Symbol *existing = symtab_lookup(symtab, d->unio.name);
-            if (existing) {
+            if (existing && existing->kind != DECL_MODULE) {
                 diag_error(d->loc, "redefinition of '%s'", d->unio.name);
             } else {
                 register_union_sym(symtab, d);

@@ -333,14 +333,24 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
             fields[i].type = type_substitute(a, t->struc.fields[i].type, var_names, concrete, count);
             if (fields[i].type != t->struc.fields[i].type) changed = true;
         }
+        /* Also substitute type_args if present */
+        Type **new_targs = NULL;
+        int new_targ_count = t->struc.type_arg_count;
+        if (new_targ_count > 0) {
+            new_targs = arena_alloc(a, sizeof(Type*) * (size_t)new_targ_count);
+            for (int i = 0; i < new_targ_count; i++) {
+                new_targs[i] = type_substitute(a, t->struc.type_args[i], var_names, concrete, count);
+                if (new_targs[i] != t->struc.type_args[i]) changed = true;
+            }
+        }
         if (!changed) return t;
         Type *ns = arena_alloc(a, sizeof(Type));
         ns->kind = TYPE_STRUCT;
         ns->struc.name = t->struc.name;
         ns->struc.fields = fields;
         ns->struc.field_count = t->struc.field_count;
-        ns->struc.type_args = NULL;
-        ns->struc.type_arg_count = 0;
+        ns->struc.type_args = new_targs;
+        ns->struc.type_arg_count = new_targ_count;
         return ns;
     }
     case TYPE_UNION: {
@@ -351,14 +361,24 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
             vars[i].payload = type_substitute(a, t->unio.variants[i].payload, var_names, concrete, count);
             if (vars[i].payload != t->unio.variants[i].payload) changed = true;
         }
+        /* Also substitute type_args if present */
+        Type **new_targs = NULL;
+        int new_targ_count = t->unio.type_arg_count;
+        if (new_targ_count > 0) {
+            new_targs = arena_alloc(a, sizeof(Type*) * (size_t)new_targ_count);
+            for (int i = 0; i < new_targ_count; i++) {
+                new_targs[i] = type_substitute(a, t->unio.type_args[i], var_names, concrete, count);
+                if (new_targs[i] != t->unio.type_args[i]) changed = true;
+            }
+        }
         if (!changed) return t;
         Type *nu = arena_alloc(a, sizeof(Type));
         nu->kind = TYPE_UNION;
         nu->unio.name = t->unio.name;
         nu->unio.variants = vars;
         nu->unio.variant_count = t->unio.variant_count;
-        nu->unio.type_args = NULL;
-        nu->unio.type_arg_count = 0;
+        nu->unio.type_args = new_targs;
+        nu->unio.type_arg_count = new_targ_count;
         return nu;
     }
     default: return t;

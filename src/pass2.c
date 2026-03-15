@@ -104,14 +104,60 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
 /* Resolve a named type stub (TYPE_STRUCT with no fields) to the actual type from symtab */
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
+
+    /* Recurse into compound types */
+    if (t->kind == TYPE_POINTER) {
+        Type *inner = resolve_type(ctx, t->pointer.pointee);
+        if (inner != t->pointer.pointee) return type_pointer(ctx->arena, inner);
+        return t;
+    }
+    if (t->kind == TYPE_OPTION) {
+        Type *inner = resolve_type(ctx, t->option.inner);
+        if (inner != t->option.inner) return type_option(ctx->arena, inner);
+        return t;
+    }
+    if (t->kind == TYPE_SLICE) {
+        Type *inner = resolve_type(ctx, t->slice.elem);
+        if (inner != t->slice.elem) return type_slice(ctx->arena, inner);
+        return t;
+    }
+    if (t->kind == TYPE_FUNC) {
+        bool changed = false;
+        Type **params = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)t->func.param_count);
+        for (int i = 0; i < t->func.param_count; i++) {
+            params[i] = resolve_type(ctx, t->func.param_types[i]);
+            if (params[i] != t->func.param_types[i]) changed = true;
+        }
+        Type *ret = resolve_type(ctx, t->func.return_type);
+        if (ret != t->func.return_type) changed = true;
+        if (!changed) return t;
+        Type *nf = arena_alloc(ctx->arena, sizeof(Type));
+        nf->kind = TYPE_FUNC;
+        nf->func.param_types = params;
+        nf->func.param_count = t->func.param_count;
+        nf->func.return_type = ret;
+        return nf;
+    }
+
     if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.fields == NULL && t->struc.name) {
-        /* Check module symtab first (for within-module type references) */
+        /* Look up as struct/union first, then fall back to general lookup.
+         * This handles the case where a module shares the same name as a type. */
         Symbol *sym = NULL;
         if (ctx->module_symtab) {
-            sym = symtab_lookup(ctx->module_symtab, t->struc.name);
+            sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_STRUCT);
+            if (!sym)
+                sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_UNION);
         }
         if (!sym) {
-            sym = symtab_lookup(ctx->symtab, t->struc.name);
+            sym = symtab_lookup_kind(ctx->symtab, t->struc.name, DECL_STRUCT);
+            if (!sym)
+                sym = symtab_lookup_kind(ctx->symtab, t->struc.name, DECL_UNION);
+        }
+        if (!sym) {
+            if (ctx->module_symtab)
+                sym = symtab_lookup(ctx->module_symtab, t->struc.name);
+            if (!sym)
+                sym = symtab_lookup(ctx->symtab, t->struc.name);
         }
         if (sym && sym->type) {
             /* If the stub has type args (e.g. box<int32>), instantiate the generic */
@@ -143,6 +189,15 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                     Type *copy = arena_alloc(ctx->arena, sizeof(Type));
                     *copy = *sym->type;
                     concrete = copy;
+                }
+
+                /* Preserve resolved type_args on the concrete type for unification */
+                if (concrete->kind == TYPE_STRUCT) {
+                    concrete->struc.type_args = resolved_args;
+                    concrete->struc.type_arg_count = nta;
+                } else if (concrete->kind == TYPE_UNION) {
+                    concrete->unio.type_args = resolved_args;
+                    concrete->unio.type_arg_count = nta;
                 }
 
                 if (!has_tv) {
@@ -235,6 +290,16 @@ static bool unify(Type *param_type, Type *arg_type,
         return unify(param_type->func.return_type, arg_type->func.return_type,
                      var_names, bindings, var_count);
     case TYPE_STRUCT:
+        /* If both have type_args, unify them (covers same-name and different-name cases) */
+        if (param_type->struc.type_arg_count > 0 &&
+            arg_type->struc.type_arg_count == param_type->struc.type_arg_count) {
+            for (int i = 0; i < param_type->struc.type_arg_count; i++) {
+                if (!unify(param_type->struc.type_args[i], arg_type->struc.type_args[i],
+                           var_names, bindings, var_count))
+                    return false;
+            }
+            return true;
+        }
         if (param_type->struc.name == arg_type->struc.name)
             return true;
         /* If param has type-var fields, try unifying field-by-field */
@@ -249,6 +314,16 @@ static bool unify(Type *param_type, Type *arg_type,
         }
         return false;
     case TYPE_UNION:
+        /* If both have type_args, unify them */
+        if (param_type->unio.type_arg_count > 0 &&
+            arg_type->unio.type_arg_count == param_type->unio.type_arg_count) {
+            for (int i = 0; i < param_type->unio.type_arg_count; i++) {
+                if (!unify(param_type->unio.type_args[i], arg_type->unio.type_args[i],
+                           var_names, bindings, var_count))
+                    return false;
+            }
+            return true;
+        }
         if (param_type->unio.name == arg_type->unio.name)
             return true;
         /* If param has type-var variants, try unifying variant-by-variant */
@@ -290,7 +365,134 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
                 return symtab_lookup(mod->members, callee->field.name);
         }
     }
+    /* Fallback: if callee is EXPR_FIELD on a struct type (e.g. field access),
+     * it's not a module call — the callee type is the function itself. */
+    if (callee->kind == EXPR_FIELD) {
+        /* Maybe the object resolved to a struct type and the field is a function? */
+        Expr *obj = callee->field.object;
+        if (obj->kind == EXPR_IDENT) {
+            /* Try looking up as a module (type-associated module with same name as struct) */
+            Symbol *mod = symtab_lookup_kind(ctx->symtab, obj->ident.name, DECL_MODULE);
+            if (mod && mod->members)
+                return symtab_lookup(mod->members, callee->field.name);
+        }
+    }
     return NULL;
+}
+
+/* Recursively walk a return type and register/mangle any generic structs/unions.
+ * Returns the (possibly modified) type with mangled names. */
+static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
+    if (!t) return t;
+    switch (t->kind) {
+    case TYPE_POINTER: {
+        Type *inner = resolve_generic_types_in_ret(ctx, t->pointer.pointee);
+        if (inner != t->pointer.pointee) return type_pointer(ctx->arena, inner);
+        return t;
+    }
+    case TYPE_OPTION: {
+        Type *inner = resolve_generic_types_in_ret(ctx, t->option.inner);
+        if (inner != t->option.inner) return type_option(ctx->arena, inner);
+        return t;
+    }
+    case TYPE_SLICE: {
+        Type *inner = resolve_generic_types_in_ret(ctx, t->slice.elem);
+        if (inner != t->slice.elem) return type_slice(ctx->arena, inner);
+        return t;
+    }
+    case TYPE_STRUCT:
+    case TYPE_UNION: {
+        const char *type_base_name = (t->kind == TYPE_STRUCT) ? t->struc.name : t->unio.name;
+        /* Look up the original type symbol */
+        Symbol *type_sym = symtab_lookup_kind(ctx->symtab, type_base_name,
+            t->kind == TYPE_STRUCT ? DECL_STRUCT : DECL_UNION);
+        if (!type_sym) {
+            /* Search module member symtabs */
+            for (int si = 0; si < ctx->symtab->count && !type_sym; si++) {
+                Symbol *s = &ctx->symtab->symbols[si];
+                if (s->kind != DECL_MODULE || !s->members) continue;
+                for (int mi2 = 0; mi2 < s->members->count; mi2++) {
+                    Symbol *ms = &s->members->symbols[mi2];
+                    if (!ms->type) continue;
+                    if ((ms->type->kind == TYPE_STRUCT && ms->type->struc.name == type_base_name) ||
+                        (ms->type->kind == TYPE_UNION && ms->type->unio.name == type_base_name)) {
+                        type_sym = ms; break;
+                    }
+                }
+            }
+        }
+        if (!type_sym || !type_sym->is_generic) return t;
+
+        int tntp = type_sym->type_param_count;
+        Type **type_bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)tntp);
+        memset(type_bindings, 0, sizeof(Type*) * (size_t)tntp);
+
+        /* Use type_args if available (preferred), otherwise unify fields/variants */
+        if (t->kind == TYPE_STRUCT && t->struc.type_arg_count == tntp) {
+            for (int i = 0; i < tntp; i++)
+                type_bindings[i] = t->struc.type_args[i];
+        } else if (t->kind == TYPE_UNION && t->unio.type_arg_count == tntp) {
+            for (int i = 0; i < tntp; i++)
+                type_bindings[i] = t->unio.type_args[i];
+        } else {
+            Type *tmpl_type = type_sym->type;
+            if (t->kind == TYPE_STRUCT && tmpl_type->kind == TYPE_STRUCT) {
+                for (int fi = 0; fi < tmpl_type->struc.field_count &&
+                                 fi < t->struc.field_count; fi++) {
+                    unify(tmpl_type->struc.fields[fi].type, t->struc.fields[fi].type,
+                          type_sym->type_params, type_bindings, tntp);
+                }
+            } else if (t->kind == TYPE_UNION && tmpl_type->kind == TYPE_UNION) {
+                for (int vi = 0; vi < tmpl_type->unio.variant_count &&
+                                 vi < t->unio.variant_count; vi++) {
+                    if (tmpl_type->unio.variants[vi].payload && t->unio.variants[vi].payload) {
+                        unify(tmpl_type->unio.variants[vi].payload, t->unio.variants[vi].payload,
+                              type_sym->type_params, type_bindings, tntp);
+                    }
+                }
+            }
+        }
+
+        /* Check all bindings resolved */
+        for (int i = 0; i < tntp; i++) {
+            if (!type_bindings[i]) return t;
+        }
+
+        const char *type_mangled = mono_register(ctx->mono_table, ctx->arena,
+            ctx->intern, type_base_name, type_sym->ns_prefix,
+            type_bindings, tntp, type_sym->decl,
+            type_sym->kind, type_sym->type_params, tntp);
+
+        Type *result = arena_alloc(ctx->arena, sizeof(Type));
+        *result = *t;
+        if (result->kind == TYPE_STRUCT) {
+            result->struc.name = type_mangled;
+            result->struc.type_args = type_bindings;
+            result->struc.type_arg_count = tntp;
+        } else {
+            result->unio.name = type_mangled;
+            result->unio.type_args = type_bindings;
+            result->unio.type_arg_count = tntp;
+        }
+
+        MonoInstance *mi = mono_find(ctx->mono_table, type_mangled);
+        if (mi && !mi->concrete_type) {
+            Type *ct = type_substitute(ctx->arena, type_sym->type,
+                type_sym->type_params, type_bindings, tntp);
+            if (ct == type_sym->type) {
+                Type *cp = arena_alloc(ctx->arena, sizeof(Type));
+                *cp = *ct;
+                ct = cp;
+            }
+            if (ct->kind == TYPE_STRUCT) ct->struc.name = type_mangled;
+            else ct->unio.name = type_mangled;
+            mi->concrete_type = ct;
+        }
+        return result;
+    }
+    default:
+        return t;
+    }
 }
 
 /* Recursively check a struct destructuring pattern, adding bindings to scope */
@@ -819,6 +1021,17 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Symbol *callee_sym = find_callee_symbol(ctx, e->call.func);
         bool callee_is_generic = callee_sym && callee_sym->is_generic;
         if (type_contains_type_var(ft) || callee_is_generic) {
+            /* If the callee is a local variable (function parameter or let binding)
+             * whose type contains type vars from an enclosing generic scope,
+             * it's NOT a generic call — it's a regular call through a function value. */
+            bool is_local_fn_value = false;
+            if (e->call.func->kind == EXPR_IDENT && e->call.func->ident.is_local) {
+                is_local_fn_value = true;
+            }
+            if (is_local_fn_value) {
+                /* Skip generic resolution — treat as a normal call with type-var types */
+                goto normal_call;
+            }
             if (!callee_sym || !callee_sym->is_generic) {
                 diag_error(e->loc, "cannot resolve generic function");
                 e->type = type_error();
@@ -888,87 +1101,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Type *concrete_ret = type_substitute(ctx->arena, ft->func.return_type,
                 callee_sym->type_params, bindings, ntp);
 
-            /* If the return type is a generic struct/union that became concrete,
-             * register the mono instance and set the mangled name */
+            /* Register mono instances for any generic struct/union in the return type */
             if (concrete_ret && !type_contains_type_var(concrete_ret)) {
-                if (concrete_ret->kind == TYPE_STRUCT || concrete_ret->kind == TYPE_UNION) {
-                    const char *type_base_name = (concrete_ret->kind == TYPE_STRUCT)
-                        ? concrete_ret->struc.name : concrete_ret->unio.name;
-                    /* Look up the original type symbol to get generic info */
-                    Symbol *type_sym = symtab_lookup(ctx->symtab, type_base_name);
-                    if (!type_sym) {
-                        /* Search module member symtabs — struct may be module-scoped
-                         * and its type name is already mangled (e.g. "containers_box") */
-                        for (int si = 0; si < ctx->symtab->count && !type_sym; si++) {
-                            Symbol *s = &ctx->symtab->symbols[si];
-                            if (s->kind != DECL_MODULE || !s->members) continue;
-                            for (int mi2 = 0; mi2 < s->members->count; mi2++) {
-                                Symbol *ms = &s->members->symbols[mi2];
-                                if (!ms->type) continue;
-                                if ((ms->type->kind == TYPE_STRUCT && ms->type->struc.name == type_base_name) ||
-                                    (ms->type->kind == TYPE_UNION && ms->type->unio.name == type_base_name)) {
-                                    type_sym = ms;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (type_sym && type_sym->is_generic) {
-                        /* Unify each field of the original struct template against the
-                         * concrete return type to determine correct type arg bindings.
-                         * This handles cases where type vars appear in a different order
-                         * than the struct definition (e.g. swap returns pair{first:'b, second:'a}). */
-                        int tntp = type_sym->type_param_count;
-                        Type **type_bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)tntp);
-                        memset(type_bindings, 0, sizeof(Type*) * (size_t)tntp);
-                        Type *tmpl_type = type_sym->type;
-                        if (concrete_ret->kind == TYPE_STRUCT && tmpl_type->kind == TYPE_STRUCT) {
-                            for (int fi = 0; fi < tmpl_type->struc.field_count &&
-                                             fi < concrete_ret->struc.field_count; fi++) {
-                                unify(tmpl_type->struc.fields[fi].type,
-                                      concrete_ret->struc.fields[fi].type,
-                                      type_sym->type_params, type_bindings, tntp);
-                            }
-                        } else if (concrete_ret->kind == TYPE_UNION && tmpl_type->kind == TYPE_UNION) {
-                            for (int vi = 0; vi < tmpl_type->unio.variant_count &&
-                                             vi < concrete_ret->unio.variant_count; vi++) {
-                                if (tmpl_type->unio.variants[vi].payload &&
-                                    concrete_ret->unio.variants[vi].payload) {
-                                    unify(tmpl_type->unio.variants[vi].payload,
-                                          concrete_ret->unio.variants[vi].payload,
-                                          type_sym->type_params, type_bindings, tntp);
-                                }
-                            }
-                        }
-                        const char *type_mangled = mono_register(ctx->mono_table, ctx->arena,
-                            ctx->intern, type_base_name, type_sym->ns_prefix,
-                            type_bindings, tntp, type_sym->decl,
-                            type_sym->kind, type_sym->type_params, tntp);
-                        if (concrete_ret == ft->func.return_type) {
-                            Type *copy = arena_alloc(ctx->arena, sizeof(Type));
-                            *copy = *concrete_ret;
-                            concrete_ret = copy;
-                        }
-                        if (concrete_ret->kind == TYPE_STRUCT)
-                            concrete_ret->struc.name = type_mangled;
-                        else
-                            concrete_ret->unio.name = type_mangled;
-
-                        MonoInstance *mi = mono_find(ctx->mono_table, type_mangled);
-                        if (mi && !mi->concrete_type) {
-                            Type *ct = type_substitute(ctx->arena, type_sym->type,
-                                type_sym->type_params, type_bindings, tntp);
-                            if (ct == type_sym->type) {
-                                Type *cp = arena_alloc(ctx->arena, sizeof(Type));
-                                *cp = *ct;
-                                ct = cp;
-                            }
-                            if (ct->kind == TYPE_STRUCT) ct->struc.name = type_mangled;
-                            else ct->unio.name = type_mangled;
-                            mi->concrete_type = ct;
-                        }
-                    }
-                }
+                concrete_ret = resolve_generic_types_in_ret(ctx, concrete_ret);
             }
 
             /* Store the inferred type args on the call for codegen */
@@ -1004,6 +1139,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
+        normal_call:
         if (e->call.arg_count != ft->func.param_count) {
             diag_error(e->loc, "expected %d arguments, got %d",
                 ft->func.param_count, e->call.arg_count);
@@ -1014,6 +1150,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *at = check_expr(ctx, e->call.args[i]);
             if (type_is_error(at)) { arg_error = true; continue; }
+            /* Skip strict type check if either side contains type vars
+             * (inside a generic template — checked at monomorphization) */
+            if (type_contains_type_var(at) || type_contains_type_var(ft->func.param_types[i]))
+                continue;
             if (!type_eq(at, ft->func.param_types[i])) {
                 if (type_can_widen(at, ft->func.param_types[i])) {
                     e->call.args[i] = wrap_widen(ctx->arena, e->call.args[i], ft->func.param_types[i]);
@@ -1217,9 +1357,16 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* Look up the struct type */
         Symbol *sym = NULL;
         if (ctx->module_symtab)
-            sym = symtab_lookup(ctx->module_symtab, e->struct_lit.type_name);
+            sym = symtab_lookup_kind(ctx->module_symtab, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
-            sym = symtab_lookup(ctx->symtab, e->struct_lit.type_name);
+            sym = symtab_lookup_kind(ctx->symtab, e->struct_lit.type_name, DECL_STRUCT);
+        /* Fallback: try general lookup (for within-module struct references) */
+        if (!sym) {
+            if (ctx->module_symtab)
+                sym = symtab_lookup(ctx->module_symtab, e->struct_lit.type_name);
+            if (!sym)
+                sym = symtab_lookup(ctx->symtab, e->struct_lit.type_name);
+        }
         if (!sym) {
             diag_error(e->loc, "unknown type '%s'", e->struct_lit.type_name);
             e->type = type_error();
@@ -1303,6 +1450,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 *copy = *st;
                 concrete = copy;
             }
+            /* Preserve type_args (bindings) on the concrete type for unification */
+            concrete->struc.type_args = bindings;
+            concrete->struc.type_arg_count = ntp;
 
             if (!has_tv_binding) {
                 /* Register and build concrete type */
