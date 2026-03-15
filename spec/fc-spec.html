@@ -768,7 +768,7 @@ let { center = { x = cx, y = cy }, radius = r } = green_circle
 Any binding can shadow any other binding of the same name, regardless of mutability:
 
 ```fc
-let x = int32.none
+let x = none(int32)
 let x = some(32)       // let shadows let
 
 let mut y = 42
@@ -794,7 +794,7 @@ FC uses simple right-to-left (inside-out) inference. The type of a binding is al
 ```fc
 let double = (x: int32) -> x * 2    // return type inferred as int32
 let n = alloc(node)!                 // inferred as node*
-let x = int32.none                   // inferred as int32?
+let x = none(int32)                  // inferred as int32?
 let x = some(42)                     // inferred as int32?
 ```
 
@@ -1189,7 +1189,7 @@ loop
 // loop as expression — type inferred from break value
 let mut i = 0
 let result = loop
-    if i >= data.len then break int32.none
+    if i >= data.len then break none(int32)
     if matches(data[i]) then break some(i)
     i = i + 1
 ```
@@ -1268,7 +1268,7 @@ loop
     if i >= 9 then break
 
 // break and continue in for
-let mut result = point.none
+let mut result = none(point)
 for p in points
     if p.x < 0.0 then continue       // skip negative x
     if p.x == 0.0 then
@@ -1376,9 +1376,9 @@ let factorial = (n: int32) ->
 
 ```fc
 let find = (haystack: str, needle: str) ->
-    if needle.len > haystack.len then return str.none
+    if needle.len > haystack.len then return none(str)
     // ... rest of body
-    str.none
+    none(str)
 
 let log_nop = (msg: str) -> return     // void — does nothing
 
@@ -1669,9 +1669,12 @@ node*?      // optional pointer to node
 ### Constructing options
 
 ```fc
-some(x)     // wrap a value — type inferred from x
-T.none      // typed none — see §Static Type Properties
+some(x)        // wrap a value — type inferred from x
+none(int32)    // typed none — int32? with no value
+none(node*)    // node*? with no value
 ```
+
+`some` and `none` are built-in operators. `some(expr)` infers the option type from the expression. `none(type)` takes a type name as its argument (like `sizeof` and `default`) and produces a value of type `type?` with no value present.
 
 ### Unwrapping
 
@@ -1944,19 +1947,9 @@ Function types transpile to C function pointers. When the function type appears 
 
 Every type in FC has built-in static properties accessible via dot notation on the type name. These replace C's inconsistent collection of macros.
 
-The dot notation `T.something` is not a special "static property" feature — it is simply module access syntax. The compiler implicitly provides a built-in module for each primitive type pre-populated with universal and type-specific properties. User-defined static properties on structs are just a module sharing the type's name (see §Module System).
+The dot notation `T.something` is not a special "static property" feature — it is simply module access syntax. The compiler implicitly provides a built-in module for each primitive type pre-populated with type-specific properties. User-defined static properties on structs are just a module sharing the type's name (see §Module System).
 
-A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. `str` is `uint8[]` and `str.none` is therefore valid for the same reason `uint8[].none` would be. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
-
-### Compiler-provided universals
-
-Available on every type:
-
-```fc
-int32.none      // int32? with no value
-node.none       // node? with no value
-str.none        // str? with no value
-```
+A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
 
 ### Type-specific built-ins
 
@@ -2009,7 +2002,7 @@ let f = default(float64)   // 0.0
 let b = default(bool)      // false
 let s = default(str)       // empty slice — { ptr = null, len = 0 }
 let p = default(point)     // point { x = 0.0, y = 0.0 }
-let o = default(int32?)    // int32.none
+let o = default(int32?)    // none(int32)
 let n = sizeof(int32)      // 4 — int64
 ```
 
@@ -2840,7 +2833,7 @@ if fd == -1 then handle_error()
 
 ### Null arguments to C
 
-If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `T.none` or `some(ptr)` at the call site:
+If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `none(T*)` or `some(ptr)` at the call site:
 
 ```fc
 module libc from "libc.so" =
@@ -2946,10 +2939,10 @@ module libc from "libc.so" =
 let my_cb = (data: any*) ->
     let s = (my_state*) data
     // use s->...
-    any*.none
+    none(any*)
 
 let mut state = my_state { ... }
-pthread_create(any*.none, any*.none, my_cb, some((any*) &state))
+pthread_create(none(any*), none(any*), my_cb, some((any*) &state))
 ```
 
 `my_cb` is non-capturing so it passes cleanly to `pthread_create`. The `any*` user-data is cast to the concrete type inside the callback.
@@ -3131,12 +3124,20 @@ union result =
     | err('b)
 ```
 
-The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. When used in type positions or constructed, the type arguments are supplied by context:
+The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. The type parameters are ordered by first appearance in the body, reading top-to-bottom, left-to-right.
+
+For generic structs, type arguments are inferred from the struct literal fields:
 
 ```fc
 let p = pair { first = 42, second = "hello" }    // pair<int32, str>
 let b = box { value = 3.14 }                     // box<float64>
-let r = result.ok(42)                            // result<int32, 'b> — 'b unconstrained until used
+```
+
+For generic unions, type arguments must be provided explicitly at the construction site using `name<types>.variant(args)` syntax. This is required because a variant's payload may not constrain all type parameters — for example, `result.err(32)` cannot determine `'a`:
+
+```fc
+let r = result<int32, str>.ok(42)                // result<int32, str>
+let e = result<int32, str>.err("fail")           // result<int32, str>
 ```
 
 Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
@@ -3160,17 +3161,16 @@ module box =
     let map = (b: box<'a>, f: ('a) -> 'b) -> box { value = f(b.value) }
 ```
 
-Static type properties such as `.none`, `default(T)`, `sizeof(T)`, and module member access follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
+Built-in operators `default(T)`, `sizeof(T)`, and `none(T)`, as well as static module member access, follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
 
 ```fc
 let make_default = (x: 'a) -> default('a)     // ok — checked at call site
 let size_of_val  = (x: 'a) -> sizeof('a)       // ok — checked at call site
 let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type has .min
+let make_none    = (x: 'a) -> none('a)         // ok — produces 'a? with no value
 ```
 
 A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
-
-Static property access extends naturally to parameterized type expressions — `node<'b>.none` is valid because `node<'b>` is a type and `.none` is a universal property on all types. No special syntax rule is needed; the parser treats `T<args>` as a type expression and `.property` as property access on that type. This is the same form used in expressions like `arraylist.make<int32>()` — the `<args>` resolves the type, and the `.` navigates into the associated module or property.
 
 ---
 
@@ -3184,7 +3184,7 @@ union option =
     | some('a)
 ```
 
-`none` is declared first so that zero-initialized memory is always a valid `none` — consistent with the union default value rules (see §Default Values). `'a?` is syntactic sugar for `option<'a>` — the two are interchangeable in all type positions. The existing `.none` and `some(x)` construction syntax, pattern matching, and `!` unwrapping all apply unchanged.
+`none` is declared first so that zero-initialized memory is always a valid `none` — consistent with the union default value rules (see §Default Values). `'a?` is syntactic sugar for `option<'a>` — the two are interchangeable in all type positions. The built-in `none(type)` and `some(expr)` operators (see §Constructing options), pattern matching, and `!` unwrapping all apply unchanged. Unlike user-defined generic unions which require explicit type arguments at construction sites, `none` and `some` have dedicated operator syntax for ergonomic use.
 
 The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
 
@@ -3386,7 +3386,7 @@ module node =
 
     let map = (head: node<'a>*?, f: ('a) -> 'b) ->
         match head with
-        | none      -> node<'b>.none
+        | none      -> none(node<'b>*)
         | some(ptr) ->
             let n = node.make(f(ptr->value))
             n->next = node.map(ptr->next, f)
@@ -3403,7 +3403,7 @@ module node =
                 current = next
 
 let main = (args: str[]) ->
-    let list = some(node.prepend(some(node.prepend(node.none, 1)), 2))
+    let list = some(node.prepend(some(node.prepend(none(node<int32>*), 1)), 2))
     let doubled = node.map(list, (x: int32) -> x * 2)
     node.drop(list)
     node.drop(doubled)
@@ -3418,11 +3418,11 @@ Demonstrates slice operations, loops, and early return.
 import libc
 
 let find_substring = (haystack: str, needle: str) ->
-    if needle.len > haystack.len then return str.none
+    if needle.len > haystack.len then return none(str)
     let mut i = 0
     loop
         // safe: needle.len <= haystack.len guaranteed by early return above
-        if i > haystack.len - needle.len then break str.none
+        if i > haystack.len - needle.len then break none(str)
         let candidate = haystack[i .. i + needle.len]
         if candidate == needle then break some(candidate)
         i = i + 1
@@ -3507,7 +3507,7 @@ module arraylist =
         acc
 
     let reduce = (l: arraylist<'a>, f: ('a, 'a) -> 'a) ->
-        if l.len == 0 then 'a.none
+        if l.len == 0 then none('a)
         else
             let mut acc = l.data[0]
             for x in l.data[1..l.len]
@@ -3526,7 +3526,7 @@ module arraylist =
     let try_find = (l: arraylist<'a>, pred: ('a) -> bool) ->
         let mut i = 0
         loop
-            if i >= l.len then break 'a.none
+            if i >= l.len then break none('a)
             if pred(l.data[i]) then break some(l.data[i])
             i = i + 1
 
