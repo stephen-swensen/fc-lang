@@ -16,7 +16,7 @@ module arraylist =
         l->data = new_data
 
     let make = <'a>() ->
-        arraylist { data = alloc('a[4])!, len = 0i64 }
+        arraylist { data = alloc('a[4])!, len = 0 }
 
     let drop = (l: arraylist<'a>) ->
         free(l.data)

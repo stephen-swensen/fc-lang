@@ -1003,11 +1003,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     if (type_is_error(arg_type)) { e->type = type_error(); return e->type; }
 
                     if (!type_eq(arg_type, payload_type) && !type_contains_type_var(payload_type)) {
-                        diag_error(e->call.args[0]->loc,
-                            "variant '%s': expected %s, got %s",
-                            variant_name, type_name(payload_type), type_name(arg_type));
-                        e->type = type_error();
-                        return e->type;
+                        if (type_can_widen(arg_type, payload_type)) {
+                            e->call.args[0] = wrap_widen(ctx->arena, e->call.args[0], payload_type);
+                        } else {
+                            diag_error(e->call.args[0]->loc,
+                                "variant '%s': expected %s, got %s",
+                                variant_name, type_name(payload_type), type_name(arg_type));
+                            e->type = type_error();
+                            return e->type;
+                        }
                     }
                     e->type = union_type;
                     return e->type;
@@ -1384,9 +1388,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     if (type_is_error(fval)) { field_error = true; found = true; break; }
                     Type *expected = resolve_type(ctx, st->struc.fields[j].type);
                     if (!type_eq(fval, expected) && !type_contains_type_var(expected)) {
-                        diag_error(fi->value->loc, "field '%s': expected %s, got %s",
-                            fi->name, type_name(expected), type_name(fval));
-                        field_error = true;
+                        if (type_can_widen(fval, expected)) {
+                            fi->value = wrap_widen(ctx->arena, fi->value, expected);
+                        } else {
+                            diag_error(fi->value->loc, "field '%s': expected %s, got %s",
+                                fi->name, type_name(expected), type_name(fval));
+                            field_error = true;
+                        }
                     }
                     found = true;
                     break;

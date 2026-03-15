@@ -27,18 +27,17 @@ Open design questions and topics for future discussion.
 
 ---
 
-## Implicit widening in generic calls and struct literals
+## Implicit widening in generic function calls
 
-Currently, implicit int widening (e.g. int32 → int64) does not apply in two contexts:
-
-1. **Struct literal fields** — `my_struct { len = 0 }` fails if `len` is int64; requires `0i64`
-2. **Generic function arguments with concrete param types** — e.g. `get(list, 0)` where `index: int64` fails; requires `0i64`
-
-In both cases the type checker knows the target type and could insert a widening cast. The question is whether this should be done during unification (for generics) or during struct literal checking, and whether it introduces ambiguity or surprises. Revisit to see if we can reduce the need for explicit suffixed literals.
+Generic function arguments with concrete param types do not auto-widen — e.g. `get(list, 0)` where `index: int64` fails; requires `0i64`. The question is whether widening should happen during or after unification, and whether it introduces ambiguity or surprises.
 
 ---
 
 ## Resolved
+
+### Implicit widening in struct literals and variant constructors (resolved 2026-03-15)
+- Struct literal fields and union variant payloads now auto-widen, matching function call argument behavior.
+- e.g. `point { x = 10 }` works when `x: int64`, and `holder.val(42)` works when `val(int64)`.
 
 ### File handles are `any*`, not a built-in type (resolved 2026-03-11)
 - The `file` built-in type was removed. File handles are `any*` — the same opaque pointer type used for sqlite handles, pthread handles, and any other C resource.
