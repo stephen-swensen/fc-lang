@@ -1,6 +1,7 @@
 #pragma once
 #include "ast.h"
 #include "common.h"
+#include "pass1.h"
 
 typedef struct {
     const char *generic_name;    /* original name (interned) */
@@ -32,3 +33,14 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern,
 
 /* Find an instance by mangled name */
 MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
+
+/* Recursively resolve generic struct/union stubs with concrete type_args into
+ * mangled names in a type tree. Call after type_substitute() to ensure nested
+ * references (e.g. self-referential fields) have proper C identifiers. */
+void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
+
+/* Discover all transitive monomorphized instances by walking template function
+ * bodies. Generic calls inside generic functions aren't resolved until the outer
+ * function is instantiated; this fixpoint loop finds them all. Call after pass2. */
+void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern,
+                              SymbolTable *symtab);

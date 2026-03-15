@@ -214,6 +214,16 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                     } else if (concrete->kind == TYPE_UNION) {
                         concrete->unio.name = mangled;
                     }
+                    /* Build resolved concrete_type for codegen (separate copy
+                     * so stub resolution doesn't strip type_args from the
+                     * pass2 type still needed for unification) */
+                    MonoInstance *mi = mono_find(ctx->mono_table, mangled);
+                    if (mi && !mi->concrete_type) {
+                        Type *ct = arena_alloc(ctx->arena, sizeof(Type));
+                        *ct = *concrete;
+                        mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
+                        mi->concrete_type = ct;
+                    }
                 }
                 return concrete;
             }
@@ -485,6 +495,7 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
             }
             if (ct->kind == TYPE_STRUCT) ct->struc.name = type_mangled;
             else ct->unio.name = type_mangled;
+            mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
             mi->concrete_type = ct;
         }
         return result;
@@ -1436,7 +1447,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     DECL_STRUCT, sym->type_params, ntp);
                 concrete->struc.name = mangled;
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
-                if (mi) mi->concrete_type = concrete;
+                if (mi && !mi->concrete_type) {
+                    Type *ct = arena_alloc(ctx->arena, sizeof(Type));
+                    *ct = *concrete;
+                    mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
+                    mi->concrete_type = ct;
+                }
             }
             e->type = concrete;
             return e->type;

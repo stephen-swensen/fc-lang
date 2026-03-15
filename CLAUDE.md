@@ -34,7 +34,7 @@ FC is a C-targeting language with these core design constraints:
 
 ## Compiler Architecture
 
-The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → codegen → C file**.
+The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → mono discovery → codegen → C file**.
 
 ### Source files (`src/`)
 
@@ -44,8 +44,9 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - **`parser.c/h`** — Pratt parser. Produces an AST of `Expr` and `Decl` nodes. Handles expressions (12 precedence levels), statements, patterns, and declarations.
 - **`ast.h`** — AST node definitions. `Expr` (expressions, including `let` bindings), `Pattern` (match patterns), `Decl` (top-level declarations), `Program` (root).
 - **`pass1.c/h`** — First pass. Walks declarations to collect top-level names, struct/union layouts, and function signatures into a `SymbolTable`. Enables forward references.
-- **`pass2.c/h`** — Second pass (type checker). Walks expressions with a scope chain, infers types bottom-up, resolves identifiers, checks type compatibility, validates casts and widening. Assigns unique codegen names to local bindings for shadowing support. Uses `diag_error` (not `diag_fatal`) so multiple type errors are reported in a single compilation; erroneous expressions receive the poison type `TYPE_ERROR` which propagates silently to suppress cascading false positives.
-- **`codegen.c/h`** — C code emitter. Walks the typed AST and emits C11 source. Handles typedef generation for slices/options, function declarations, struct/union definitions, and expression emission.
+- **`pass2.c/h`** — Second pass (type checker). Walks expressions with a scope chain, infers types bottom-up, resolves identifiers, checks type compatibility, validates casts and widening. Assigns unique codegen names to local bindings for shadowing support. Registers monomorphized generic instances and resolves their concrete types. Uses `diag_error` (not `diag_fatal`) so multiple type errors are reported in a single compilation; erroneous expressions receive the poison type `TYPE_ERROR` which propagates silently to suppress cascading false positives.
+- **`monomorph.c/h`** — Monomorphization table and utilities. Tracks generic instantiations (functions, structs, unions) with their mangled names and concrete types. `mono_discover_transitive()` runs after pass2 to find all transitive instantiations (generic functions calling other generic functions) via a fixpoint AST walk. `mono_resolve_type_names()` resolves nested generic type references (e.g., self-referential struct fields) to mangled C identifiers.
+- **`codegen.c/h`** — C code emitter. Walks the typed AST and emits C11 source. Handles typedef generation for slices/options, function declarations, struct/union definitions, and expression emission. Emits monomorphized copies of generic functions/structs using a substitution context (`SubstCtx`) that replaces type variables with concrete types at emit time.
 - **`types.c/h`** — Type representation and utilities. Defines `Type` (int8–uint64, float32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
 - **`diag.c/h`** — Diagnostics. `diag_error()` reports an error with source location and continues (used by pass2 for error accumulation); `diag_fatal()` reports and exits immediately (used by lexer/parser for unrecoverable errors). `diag_error_count()` gates progression to later pipeline stages.
 - **`common.c/h`** — Shared utilities. Arena allocator, dynamic array macro (`DA_APPEND`).

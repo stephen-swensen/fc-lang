@@ -24,48 +24,6 @@ static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
 
-/* Recursively resolve struct/union stubs with concrete type_args into mangled names.
- * Used to fix self-referential fields in monomorphized struct definitions. */
-static void resolve_concrete_stubs(Type *t) {
-    if (!t) return;
-    switch (t->kind) {
-    case TYPE_POINTER: resolve_concrete_stubs(t->pointer.pointee); return;
-    case TYPE_SLICE:   resolve_concrete_stubs(t->slice.elem); return;
-    case TYPE_OPTION:  resolve_concrete_stubs(t->option.inner); return;
-    case TYPE_FUNC:
-        for (int i = 0; i < t->func.param_count; i++)
-            resolve_concrete_stubs(t->func.param_types[i]);
-        resolve_concrete_stubs(t->func.return_type);
-        return;
-    case TYPE_STRUCT:
-        if (t->struc.type_arg_count > 0 && !type_contains_type_var(t)) {
-            /* Only mangle if name isn't already a known mangled entry */
-            if (!mono_find(g_mono, t->struc.name)) {
-                t->struc.name = mangle_generic_name(g_arena, g_intern,
-                    t->struc.name, t->struc.type_args, t->struc.type_arg_count);
-            }
-            t->struc.type_args = NULL;
-            t->struc.type_arg_count = 0;
-        }
-        for (int i = 0; i < t->struc.field_count; i++)
-            resolve_concrete_stubs(t->struc.fields[i].type);
-        return;
-    case TYPE_UNION:
-        if (t->unio.type_arg_count > 0 && !type_contains_type_var(t)) {
-            if (!mono_find(g_mono, t->unio.name)) {
-                t->unio.name = mangle_generic_name(g_arena, g_intern,
-                    t->unio.name, t->unio.type_args, t->unio.type_arg_count);
-            }
-            t->unio.type_args = NULL;
-            t->unio.type_arg_count = 0;
-        }
-        for (int i = 0; i < t->unio.variant_count; i++)
-            resolve_concrete_stubs(t->unio.variants[i].payload);
-        return;
-    default: return;
-    }
-}
-
 /* Compute mangled name for a generic struct/union type under g_subst */
 static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
     const char **vars = NULL;
@@ -954,44 +912,6 @@ static void emit_expr(Expr *e, FILE *out) {
         if (g_subst && e->type && e->type->kind == TYPE_STRUCT &&
             type_contains_type_var(e->type)) {
             sname = mangle_generic_with_subst(sname, e->type);
-            /* Register the mono instance for this struct if needed */
-            Symbol *struct_sym = symtab_lookup(g_symtab, e->struct_lit.type_name);
-            if (struct_sym && struct_sym->is_generic) {
-                const char **vars = NULL;
-                int vc = 0, vcap = 0;
-                type_collect_vars(e->type, &vars, &vc, &vcap);
-                Type **concrete_args = arena_alloc(g_arena, sizeof(Type*) * (size_t)vc);
-                for (int k = 0; k < vc; k++) {
-                    concrete_args[k] = NULL;
-                    for (int j = 0; j < g_subst->count; j++) {
-                        if (g_subst->var_names[j] == vars[k]) {
-                            concrete_args[k] = g_subst->concrete[j];
-                            break;
-                        }
-                    }
-                    if (!concrete_args[k]) concrete_args[k] = type_type_var(g_arena, vars[k]);
-                }
-                mono_register(g_mono, g_arena, g_intern,
-                    struct_sym->name, struct_sym->ns_prefix,
-                    concrete_args, vc, struct_sym->decl,
-                    DECL_STRUCT, struct_sym->type_params, struct_sym->type_param_count);
-                /* Set concrete_type on the instance */
-                MonoInstance *mi = mono_find(g_mono, sname);
-                if (mi && !mi->concrete_type) {
-                    Type *ct = type_substitute(g_arena, struct_sym->type,
-                        struct_sym->type_params, concrete_args,
-                        struct_sym->type_param_count < vc ? struct_sym->type_param_count : vc);
-                    if (ct == struct_sym->type) {
-                        Type *cp = arena_alloc(g_arena, sizeof(Type));
-                        *cp = *ct;
-                        ct = cp;
-                    }
-                    ct->struc.name = sname;
-                    resolve_concrete_stubs(ct);
-                    mi->concrete_type = ct;
-                }
-                free(vars);
-            }
         }
         fprintf(out, "(%s){ ", sname);
         for (int i = 0; i < e->struct_lit.field_count; i++) {
@@ -1511,7 +1431,7 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     if (g_subst && type_contains_type_var(t)) {
         t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
         if (!type_contains_type_var(t))
-            resolve_concrete_stubs(t);
+            mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
     if (t->kind == TYPE_SLICE) {
@@ -1802,36 +1722,6 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
-    /* Discover transitive monomorphized instances BEFORE emitting anything.
-     * Walk each mono function body to trigger deferred generic call resolution,
-     * which may register new struct/union/function instances. Use /dev/null
-     * to discard output — we only care about side-effects on the mono table. */
-    {
-        FILE *null_out = fopen("/dev/null", "w");
-        int discovered = 0;
-        while (discovered < mono->count) {
-            int batch_end = mono->count;
-            for (int mi = discovered; mi < batch_end; mi++) {
-                MonoInstance *inst = &mono->entries[mi];
-                if (inst->decl_kind != DECL_LET) continue;
-                Decl *tmpl = inst->template_decl;
-                if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
-                Expr *fn = tmpl->let.init;
-                SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
-                g_subst = &subst;
-                int save_indent = indent_level;
-                int save_temp = temp_counter;
-                indent_level = 1;
-                emit_block_stmts(fn->func.body, fn->func.body_count, null_out, true);
-                indent_level = save_indent;
-                temp_counter = save_temp;
-                g_subst = NULL;
-            }
-            discovered = batch_end;
-        }
-        fclose(null_out);
-    }
-
     /* Collect all slice, option, and function types used in the program */
     TypeSet slices = {0};
     TypeSet options = {0};
@@ -1980,21 +1870,6 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
     }
     free(opt_emitted);
-
-    /* Resolve self-referential stubs in monomorphized concrete types.
-     * Only resolve nested types (fields/variants), not the top-level type
-     * which already has its mangled name set. */
-    for (int mi = 0; mi < mono->count; mi++) {
-        Type *ct = mono->entries[mi].concrete_type;
-        if (!ct) continue;
-        if (ct->kind == TYPE_STRUCT) {
-            for (int f = 0; f < ct->struc.field_count; f++)
-                resolve_concrete_stubs(ct->struc.fields[f].type);
-        } else if (ct->kind == TYPE_UNION) {
-            for (int v = 0; v < ct->unio.variant_count; v++)
-                resolve_concrete_stubs(ct->unio.variants[v].payload);
-        }
-    }
 
     /* Emit monomorphized struct/union definitions */
     for (int mi = 0; mi < mono->count; mi++) {

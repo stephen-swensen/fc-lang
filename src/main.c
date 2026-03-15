@@ -156,6 +156,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* Discover transitive monomorphized instances (generic-calling-generic) */
+    mono_discover_transitive(&mono, &arena, &intern_table, &symtab);
+
     /* Code generation */
     if (!output_path) {
         output_path = change_extension(input_paths[0], ".c");
