@@ -1088,9 +1088,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (type_is_error(at)) { arg_err = true; continue; }
                 if (!unify(ft->func.param_types[i], at,
                            callee_sym->type_params, bindings, ntp)) {
-                    diag_error(e->call.args[i]->loc,
-                        "argument %d: type mismatch", i + 1);
-                    arg_err = true;
+                    /* Unify failed — try implicit widening for concrete params */
+                    Type *pt = ft->func.param_types[i];
+                    if (!type_contains_type_var(pt) && type_can_widen(at, pt)) {
+                        e->call.args[i] = wrap_widen(ctx->arena, e->call.args[i], pt);
+                    } else {
+                        diag_error(e->call.args[i]->loc,
+                            "argument %d: type mismatch", i + 1);
+                        arg_err = true;
+                    }
                 }
             }
             if (arg_err) { e->type = type_error(); return e->type; }

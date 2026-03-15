@@ -27,13 +27,12 @@ Open design questions and topics for future discussion.
 
 ---
 
-## Implicit widening in generic function calls
-
-Generic function arguments with concrete param types do not auto-widen — e.g. `get(list, 0)` where `index: int64` fails; requires `0i64`. The question is whether widening should happen during or after unification, and whether it introduces ambiguity or surprises.
-
----
-
 ## Resolved
+
+### Implicit widening in generic function calls (resolved 2026-03-15)
+- Generic function arguments with concrete parameter types now auto-widen, matching non-generic call behavior.
+- e.g. `get(list, 0)` works when `index: int64` — the int32 literal widens to int64.
+- Widening only applies to parameters that contain no type variables. Type variable binding via unification still requires exact matches.
 
 ### Implicit widening in struct literals and variant constructors (resolved 2026-03-15)
 - Struct literal fields and union variant payloads now auto-widen, matching function call argument behavior.
