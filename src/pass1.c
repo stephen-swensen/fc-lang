@@ -521,9 +521,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                 Decl *child = mods[i]->module.decls[d];
                 if (child->kind != DECL_LET || !child->let.init) continue;
                 /* Walk expression tree looking for EXPR_IDENT matching other module names */
-                Expr *stack[256];
-                int sp = 0;
-                stack[sp++] = child->let.init;
+                Expr **stack = NULL;
+                int sp = 0, stack_cap = 0;
+                DA_APPEND(stack, sp, stack_cap, child->let.init);
                 while (sp > 0) {
                     Expr *ex = stack[--sp];
                     if (!ex) continue;
@@ -537,77 +537,80 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                         }
                     }
                     /* Push children to stack */
+                    #define PUSH(e) DA_APPEND(stack, sp, stack_cap, (e))
                     switch (ex->kind) {
-                    case EXPR_BINARY: stack[sp++] = ex->binary.left; stack[sp++] = ex->binary.right; break;
-                    case EXPR_UNARY_PREFIX: stack[sp++] = ex->unary_prefix.operand; break;
-                    case EXPR_UNARY_POSTFIX: stack[sp++] = ex->unary_postfix.operand; break;
+                    case EXPR_BINARY: PUSH(ex->binary.left); PUSH(ex->binary.right); break;
+                    case EXPR_UNARY_PREFIX: PUSH(ex->unary_prefix.operand); break;
+                    case EXPR_UNARY_POSTFIX: PUSH(ex->unary_postfix.operand); break;
                     case EXPR_CALL:
-                        stack[sp++] = ex->call.func;
-                        for (int a = 0; a < ex->call.arg_count; a++) stack[sp++] = ex->call.args[a];
+                        PUSH(ex->call.func);
+                        for (int a = 0; a < ex->call.arg_count; a++) PUSH(ex->call.args[a]);
                         break;
-                    case EXPR_FIELD: case EXPR_DEREF_FIELD: stack[sp++] = ex->field.object; break;
-                    case EXPR_INDEX: stack[sp++] = ex->index.object; stack[sp++] = ex->index.index; break;
+                    case EXPR_FIELD: case EXPR_DEREF_FIELD: PUSH(ex->field.object); break;
+                    case EXPR_INDEX: PUSH(ex->index.object); PUSH(ex->index.index); break;
                     case EXPR_IF:
-                        stack[sp++] = ex->if_expr.cond;
-                        stack[sp++] = ex->if_expr.then_body;
-                        if (ex->if_expr.else_body) { stack[sp++] = ex->if_expr.else_body; }
+                        PUSH(ex->if_expr.cond);
+                        PUSH(ex->if_expr.then_body);
+                        if (ex->if_expr.else_body) { PUSH(ex->if_expr.else_body); }
                         break;
                     case EXPR_BLOCK:
-                        for (int s = 0; s < ex->block.count; s++) { stack[sp++] = ex->block.stmts[s]; }
+                        for (int s = 0; s < ex->block.count; s++) { PUSH(ex->block.stmts[s]); }
                         break;
                     case EXPR_FUNC:
-                        for (int s = 0; s < ex->func.body_count; s++) { stack[sp++] = ex->func.body[s]; }
+                        for (int s = 0; s < ex->func.body_count; s++) { PUSH(ex->func.body[s]); }
                         break;
-                    case EXPR_LET: stack[sp++] = ex->let_expr.let_init; break;
-                    case EXPR_ASSIGN: stack[sp++] = ex->assign.target; stack[sp++] = ex->assign.value; break;
+                    case EXPR_LET: PUSH(ex->let_expr.let_init); break;
+                    case EXPR_ASSIGN: PUSH(ex->assign.target); PUSH(ex->assign.value); break;
                     case EXPR_RETURN:
-                        if (ex->return_expr.value) { stack[sp++] = ex->return_expr.value; }
+                        if (ex->return_expr.value) { PUSH(ex->return_expr.value); }
                         break;
                     case EXPR_BREAK:
-                        if (ex->break_expr.value) { stack[sp++] = ex->break_expr.value; }
+                        if (ex->break_expr.value) { PUSH(ex->break_expr.value); }
                         break;
                     case EXPR_LOOP:
-                        for (int s = 0; s < ex->loop_expr.body_count; s++) { stack[sp++] = ex->loop_expr.body[s]; }
+                        for (int s = 0; s < ex->loop_expr.body_count; s++) { PUSH(ex->loop_expr.body[s]); }
                         break;
                     case EXPR_FOR:
-                        stack[sp++] = ex->for_expr.iter;
-                        for (int s = 0; s < ex->for_expr.body_count; s++) { stack[sp++] = ex->for_expr.body[s]; }
+                        PUSH(ex->for_expr.iter);
+                        for (int s = 0; s < ex->for_expr.body_count; s++) { PUSH(ex->for_expr.body[s]); }
                         break;
                     case EXPR_MATCH:
-                        stack[sp++] = ex->match_expr.subject;
+                        PUSH(ex->match_expr.subject);
                         for (int a = 0; a < ex->match_expr.arm_count; a++) {
                             for (int s = 0; s < ex->match_expr.arms[a].body_count; s++) {
-                                stack[sp++] = ex->match_expr.arms[a].body[s];
+                                PUSH(ex->match_expr.arms[a].body[s]);
                             }
                         }
                         break;
-                    case EXPR_CAST: stack[sp++] = ex->cast.operand; break;
-                    case EXPR_SOME: stack[sp++] = ex->some_expr.value; break;
+                    case EXPR_CAST: PUSH(ex->cast.operand); break;
+                    case EXPR_SOME: PUSH(ex->some_expr.value); break;
                     case EXPR_STRUCT_LIT:
-                        for (int f = 0; f < ex->struct_lit.field_count; f++) { stack[sp++] = ex->struct_lit.fields[f].value; }
+                        for (int f = 0; f < ex->struct_lit.field_count; f++) { PUSH(ex->struct_lit.fields[f].value); }
                         break;
                     case EXPR_SLICE:
-                        stack[sp++] = ex->slice.object;
-                        if (ex->slice.lo) { stack[sp++] = ex->slice.lo; }
-                        if (ex->slice.hi) { stack[sp++] = ex->slice.hi; }
+                        PUSH(ex->slice.object);
+                        if (ex->slice.lo) { PUSH(ex->slice.lo); }
+                        if (ex->slice.hi) { PUSH(ex->slice.hi); }
                         break;
                     case EXPR_ALLOC:
-                        if (ex->alloc_expr.size_expr) { stack[sp++] = ex->alloc_expr.size_expr; }
-                        if (ex->alloc_expr.init_expr) { stack[sp++] = ex->alloc_expr.init_expr; }
+                        if (ex->alloc_expr.size_expr) { PUSH(ex->alloc_expr.size_expr); }
+                        if (ex->alloc_expr.init_expr) { PUSH(ex->alloc_expr.init_expr); }
                         break;
-                    case EXPR_FREE: stack[sp++] = ex->free_expr.operand; break;
+                    case EXPR_FREE: PUSH(ex->free_expr.operand); break;
                     default: break;
                     }
+                    #undef PUSH
                 }
+                free(stack);
             }
         }
 
         /* DFS cycle detection */
         int *color = calloc((size_t)mod_count, sizeof(int)); /* 0=white, 1=gray, 2=black */
+        int *dfs_stack = malloc((size_t)mod_count * sizeof(int));
         bool found_cycle = false;
         for (int start = 0; start < mod_count && !found_cycle; start++) {
             if (color[start] != 0) continue;
-            int dfs_stack[256];
             int dsp = 0;
             dfs_stack[dsp++] = start;
             color[start] = 1;
@@ -637,6 +640,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             }
         }
 
+        free(dfs_stack);
         free(mods);
         free(deps);
         free(color);
