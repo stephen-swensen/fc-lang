@@ -406,16 +406,18 @@ const char *mangle_type_name(Type *t) {
     case TYPE_UNION:   return t->unio.name;
     case TYPE_TYPE_VAR: return t->type_var.name;
     default: {
-        /* For compound types, build a static buffer */
-        static char buf[256];
+        /* Rotating buffers to avoid corruption during recursive calls */
+        static char bufs[4][256];
+        static int bidx = 0;
+        char *buf = bufs[bidx & 3]; bidx++;
         if (t->kind == TYPE_POINTER) {
-            snprintf(buf, sizeof(buf), "ptr_%s", mangle_type_name(t->pointer.pointee));
+            snprintf(buf, 256, "ptr_%s", mangle_type_name(t->pointer.pointee));
         } else if (t->kind == TYPE_SLICE) {
-            snprintf(buf, sizeof(buf), "slice_%s", mangle_type_name(t->slice.elem));
+            snprintf(buf, 256, "slice_%s", mangle_type_name(t->slice.elem));
         } else if (t->kind == TYPE_OPTION) {
-            snprintf(buf, sizeof(buf), "opt_%s", mangle_type_name(t->option.inner));
+            snprintf(buf, 256, "opt_%s", mangle_type_name(t->option.inner));
         } else {
-            snprintf(buf, sizeof(buf), "unknown");
+            snprintf(buf, 256, "unknown");
         }
         return buf;
     }

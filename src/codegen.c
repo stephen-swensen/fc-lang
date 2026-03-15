@@ -668,32 +668,21 @@ static void emit_expr(Expr *e, FILE *out) {
                     concrete_args[i] = type_substitute(g_arena, e->call.type_args[i],
                         g_subst->var_names, g_subst->concrete, g_subst->count);
                 }
-                /* Find the callee's base name for mangling */
+                /* Find the callee symbol and its base name for mangling */
                 const char *base_name = NULL;
                 Symbol *callee_sym = NULL;
                 if (callee->kind == EXPR_IDENT) {
                     callee_sym = symtab_lookup(g_symtab, callee->ident.name);
-                    if (callee_sym && callee_sym->decl && callee_sym->decl->kind == DECL_LET
-                        && callee_sym->decl->let.codegen_name) {
-                        base_name = callee_sym->decl->let.codegen_name;
-                    } else if (callee_sym) {
-                        base_name = callee_sym->name;
-                    }
-                } else if (callee->kind == EXPR_FIELD) {
-                    /* Module function call (e.g., node.make) */
-                    Expr *obj = callee->field.object;
-                    if (obj->kind == EXPR_IDENT) {
-                        Symbol *mod = symtab_lookup_module(g_symtab, obj->ident.name, NULL);
-                        if (mod && mod->members) {
-                            callee_sym = symtab_lookup(mod->members, callee->field.name);
-                            if (callee_sym && callee_sym->decl && callee_sym->decl->kind == DECL_LET
-                                && callee_sym->decl->let.codegen_name) {
-                                base_name = callee_sym->decl->let.codegen_name;
-                            } else if (callee_sym) {
-                                base_name = callee_sym->name;
-                            }
-                        }
-                    }
+                } else if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
+                    Symbol *mod = symtab_lookup_module(g_symtab, callee->field.object->ident.name, NULL);
+                    if (!mod) mod = symtab_lookup_kind(g_symtab, callee->field.object->ident.name, DECL_MODULE);
+                    if (mod && mod->members)
+                        callee_sym = symtab_lookup(mod->members, callee->field.name);
+                }
+                if (callee_sym) {
+                    base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
+                                 && callee_sym->decl->let.codegen_name)
+                                ? callee_sym->decl->let.codegen_name : callee_sym->name;
                 }
                 if (base_name && callee_sym) {
                     fn_name = mono_register(g_mono, g_arena, g_intern,

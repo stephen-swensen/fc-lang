@@ -342,6 +342,25 @@ static bool unify(Type *param_type, Type *arg_type,
     }
 }
 
+/* Look up a module symbol, trying namespace-qualified, then global, then module_symtab */
+static Symbol *lookup_module(CheckCtx *ctx, const char *name) {
+    Symbol *mod = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+    if (!mod && ctx->current_ns)
+        mod = symtab_lookup_module(ctx->symtab, name, NULL);
+    if (!mod && ctx->module_symtab)
+        mod = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
+    if (!mod)
+        mod = symtab_lookup_kind(ctx->symtab, name, DECL_MODULE);
+    return mod;
+}
+
+/* Check if any type binding still contains unresolved type variables */
+static bool bindings_contain_type_vars(Type **bindings, int count) {
+    for (int i = 0; i < count; i++)
+        if (type_contains_type_var(bindings[i])) return true;
+    return false;
+}
+
 /* Find the Symbol for an EXPR_CALL's callee, looking up global/module symbols */
 static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
     if (callee->kind == EXPR_IDENT) {
@@ -352,30 +371,10 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
             sym = symtab_lookup(ctx->symtab, callee->ident.name);
         return sym;
     }
-    if (callee->kind == EXPR_FIELD && callee->field.codegen_name) {
-        /* Module member — walk the module chain */
-        Expr *obj = callee->field.object;
-        if (obj->kind == EXPR_IDENT) {
-            Symbol *mod = symtab_lookup_module(ctx->symtab, obj->ident.name, ctx->current_ns);
-            if (!mod && ctx->current_ns)
-                mod = symtab_lookup_module(ctx->symtab, obj->ident.name, NULL);
-            if (!mod && ctx->module_symtab)
-                mod = symtab_lookup_kind(ctx->module_symtab, obj->ident.name, DECL_MODULE);
-            if (mod && mod->members)
-                return symtab_lookup(mod->members, callee->field.name);
-        }
-    }
-    /* Fallback: if callee is EXPR_FIELD on a struct type (e.g. field access),
-     * it's not a module call — the callee type is the function itself. */
-    if (callee->kind == EXPR_FIELD) {
-        /* Maybe the object resolved to a struct type and the field is a function? */
-        Expr *obj = callee->field.object;
-        if (obj->kind == EXPR_IDENT) {
-            /* Try looking up as a module (type-associated module with same name as struct) */
-            Symbol *mod = symtab_lookup_kind(ctx->symtab, obj->ident.name, DECL_MODULE);
-            if (mod && mod->members)
-                return symtab_lookup(mod->members, callee->field.name);
-        }
+    if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
+        Symbol *mod = lookup_module(ctx, callee->field.object->ident.name);
+        if (mod && mod->members)
+            return symtab_lookup(mod->members, callee->field.name);
     }
     return NULL;
 }
@@ -1020,20 +1019,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
          * that don't appear in parameter/return types, e.g. sizeof('a)) */
         Symbol *callee_sym = find_callee_symbol(ctx, e->call.func);
         bool callee_is_generic = callee_sym && callee_sym->is_generic;
-        if (type_contains_type_var(ft) || callee_is_generic) {
-            /* If the callee is a local variable (function parameter or let binding)
-             * whose type contains type vars from an enclosing generic scope,
-             * it's NOT a generic call — it's a regular call through a function value. */
-            bool is_local_fn_value = false;
-            if (e->call.func->kind == EXPR_IDENT && e->call.func->ident.is_local) {
-                is_local_fn_value = true;
-            }
-            if (is_local_fn_value) {
-                /* Skip generic resolution — treat as a normal call with type-var types */
-                goto normal_call;
-            }
+        /* A local function value whose type contains type vars (e.g. a closure
+         * parameter 'f: ('a) -> 'b') is NOT a generic call — skip resolution */
+        bool is_local_fn_value = e->call.func->kind == EXPR_IDENT
+                                 && e->call.func->ident.is_local;
+        if ((type_contains_type_var(ft) || callee_is_generic) && !is_local_fn_value) {
             if (!callee_sym || !callee_sym->is_generic) {
-                diag_error(e->loc, "cannot resolve generic function");
+                diag_error(e->loc, "cannot resolve generic function '%s'",
+                    e->call.func->kind == EXPR_IDENT ? e->call.func->ident.name : "?");
                 e->type = type_error();
                 return e->type;
             }
@@ -1111,17 +1104,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             memcpy(e->call.type_args, bindings, sizeof(Type*) * (size_t)ntp);
             e->call.type_arg_count = ntp;
 
-            /* Check if any binding contains type vars (nested generic call) */
-            bool has_type_var_binding = false;
-            for (int i = 0; i < ntp; i++) {
-                if (type_contains_type_var(bindings[i])) {
-                    has_type_var_binding = true;
-                    break;
-                }
-            }
-
-            if (!has_type_var_binding) {
-                /* All bindings are concrete — register now */
+            /* If any binding still has type vars, defer monomorphization to codegen */
+            if (!bindings_contain_type_vars(bindings, ntp)) {
                 const char *base_name = callee_sym->name;
                 Decl *tmpl_decl = callee_sym->decl;
                 if (tmpl_decl && tmpl_decl->kind == DECL_LET && tmpl_decl->let.codegen_name) {
@@ -1132,24 +1116,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     DECL_LET, callee_sym->type_params, ntp);
                 e->call.mangled_name = mangled;
             }
-            /* else: mangled_name stays NULL; resolved at codegen time via substitution */
 
             e->call.is_indirect = false;
             e->type = concrete_ret;
             return e->type;
         }
 
-        normal_call:
+        /* Normal (non-generic) call */
         if (e->call.arg_count != ft->func.param_count) {
             diag_error(e->loc, "expected %d arguments, got %d",
                 ft->func.param_count, e->call.arg_count);
             e->type = type_error();
             return e->type;
         }
-        bool arg_error = false;
+        bool arg_err = false;
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *at = check_expr(ctx, e->call.args[i]);
-            if (type_is_error(at)) { arg_error = true; continue; }
+            if (type_is_error(at)) { arg_err = true; continue; }
             /* Skip strict type check if either side contains type vars
              * (inside a generic template — checked at monomorphization) */
             if (type_contains_type_var(at) || type_contains_type_var(ft->func.param_types[i]))
@@ -1160,11 +1143,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 } else {
                     diag_error(e->call.args[i]->loc, "argument %d: expected %s, got %s",
                         i + 1, type_name(ft->func.param_types[i]), type_name(at));
-                    arg_error = true;
+                    arg_err = true;
                 }
             }
         }
-        if (arg_error) { e->type = type_error(); return e->type; }
+        if (arg_err) { e->type = type_error(); return e->type; }
 
         /* Determine call mode: direct vs indirect */
         e->call.is_indirect = true;  /* default to indirect for function-type callees */
@@ -1434,15 +1417,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     return e->type;
                 }
             }
-            /* Check if bindings contain type vars (nested generic) */
-            bool has_tv_binding = false;
-            for (int i = 0; i < ntp; i++) {
-                if (type_contains_type_var(bindings[i])) {
-                    has_tv_binding = true;
-                    break;
-                }
-            }
-
             Type *concrete = type_substitute(ctx->arena, st,
                 sym->type_params, bindings, ntp);
             if (concrete == st) {
@@ -1454,7 +1428,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             concrete->struc.type_args = bindings;
             concrete->struc.type_arg_count = ntp;
 
-            if (!has_tv_binding) {
+            if (!bindings_contain_type_vars(bindings, ntp)) {
                 /* Register and build concrete type */
                 const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
                     sym->name, sym->ns_prefix,
@@ -1490,11 +1464,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* Also check module symtab for within-module references */
             if (!mod_sym && ctx->module_symtab)
                 mod_sym = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
-        } else if (e->field.object->kind == EXPR_FIELD && e->field.object->type &&
-                   e->field.object->type->kind == TYPE_VOID) {
-            /* Object is a field expression that resolved to void (submodule sentinel).
-             * We stored a module_ref tag to help find it. Walk the chain. */
-            /* Use the codegen_name we set as a breadcrumb to the submodule */
         }
 
         /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
@@ -1604,14 +1573,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     for (int k = 0; k < ntp; k++)
                         bindings[k] = resolve_type(ctx, e->field.type_args[k]);
 
-                    bool has_tv_binding = false;
-                    for (int k = 0; k < ntp; k++) {
-                        if (type_contains_type_var(bindings[k])) {
-                            has_tv_binding = true;
-                            break;
-                        }
-                    }
-
                     Type *concrete = type_substitute(ctx->arena, sym->type,
                         sym->type_params, bindings, ntp);
                     if (concrete == sym->type) {
@@ -1620,7 +1581,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         concrete = copy;
                     }
 
-                    if (!has_tv_binding) {
+                    if (!bindings_contain_type_vars(bindings, ntp)) {
                         const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
                             sym->name, sym->ns_prefix,
                             bindings, ntp, sym->decl,
