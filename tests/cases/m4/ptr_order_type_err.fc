@@ -1,0 +1,6 @@
+let main = (args: int32) ->
+    let mut a = 10
+    let mut b = 3.14
+    let pa = &a
+    let pb = &b
+    if pa < pb then 1 else 0

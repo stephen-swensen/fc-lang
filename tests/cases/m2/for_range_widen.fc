@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let mut sum = 0i64
+    for i in 0i8..5
+        sum = sum + (int64)i
+    (int32)sum

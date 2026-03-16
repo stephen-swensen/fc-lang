@@ -88,6 +88,7 @@ Type *type_float64(void);
 Type *type_bool(void);
 Type *type_void(void);
 Type *type_str(void);
+Type *type_str32(void);
 Type *type_cstr(void);
 Type *type_char(void);
 Type *type_any_ptr(void);

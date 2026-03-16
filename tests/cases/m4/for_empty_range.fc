@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let mut sum = 0
+    for i in 5..5
+        sum = sum + i
+    sum

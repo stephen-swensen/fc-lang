@@ -1,0 +1,6 @@
+let do_nothing = (x: int32) ->
+    return
+
+let main = (args: int32) ->
+    let v = do_nothing(5)
+    0

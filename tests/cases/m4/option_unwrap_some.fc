@@ -1,0 +1,12 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: int32) ->
+    let a = some(10)
+    let b = some(20)
+    let p = some(point { x = 3, y = 4 })
+    let val_a = a!
+    let val_b = b!
+    let val_p = p!
+    val_a + val_b + val_p.x + val_p.y

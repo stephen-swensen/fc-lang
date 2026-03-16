@@ -1,0 +1,6 @@
+let main = (args: int32) ->
+    let x = 1 +
+        2 + 3
+    let y = 10 *
+        2
+    x + y

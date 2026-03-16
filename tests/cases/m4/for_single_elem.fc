@@ -1,0 +1,6 @@
+let main = (args: int32) ->
+    let s = int32[1] { 77 }
+    let mut sum = 0
+    for x in s
+        sum = sum + x
+    sum

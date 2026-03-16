@@ -29,6 +29,7 @@ PRIM(float64, TYPE_FLOAT64)
 PRIM(bool,    TYPE_BOOL)
 PRIM(void,    TYPE_VOID)
 PRIM(str,     TYPE_STR)
+PRIM(str32,   TYPE_STR32)
 PRIM(cstr,    TYPE_CSTR)
 /* char is an alias for uint8 per spec */
 Type *type_char(void) { return type_uint8(); }

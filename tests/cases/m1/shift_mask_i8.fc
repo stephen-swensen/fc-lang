@@ -1,0 +1,4 @@
+let main = (args: int32) ->
+    let a = 1i8 << 8i8
+    // 8 & 7 = 0, so 1 << 0 = 1
+    if a == 1i8 then 1 else 0

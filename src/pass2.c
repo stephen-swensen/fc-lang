@@ -774,10 +774,20 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
-        /* Ordering: < > <= >= require numeric types */
+        /* Ordering: < > <= >= require numeric or pointer types */
         if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
+            /* Pointer ordering: both must be same pointer type */
+            if (lt->kind == TYPE_POINTER && rt->kind == TYPE_POINTER) {
+                if (!type_eq(lt, rt)) {
+                    diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
+                e->type = type_bool();
+                return e->type;
+            }
             if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                diag_error(e->loc, "ordering comparison requires numeric types, got %s and %s", type_name(lt), type_name(rt));
+                diag_error(e->loc, "ordering comparison requires numeric or pointer types, got %s and %s", type_name(lt), type_name(rt));
                 e->type = type_error();
                 return e->type;
             }
@@ -867,7 +877,20 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
             e->type = ot;
         } else if (op == TOK_AMP) {
-            /* Address-of: result is pointer */
+            /* Address-of: only allowed on let mut bindings.
+             * Exception: &f on a top-level (non-capturing) function gives a
+             * raw C function pointer. */
+            Expr *operand = e->unary_prefix.operand;
+            if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
+                bool op_is_mut = false;
+                scope_lookup_capture(ctx->scope, operand->ident.name,
+                    NULL, &op_is_mut, NULL, NULL);
+                if (!op_is_mut) {
+                    diag_error(e->loc, "address-of requires mutable binding");
+                    e->type = type_error();
+                    return e->type;
+                }
+            }
             e->type = type_pointer(ctx->arena, ot);
         } else if (op == TOK_STAR) {
             /* Dereference: operand must be pointer */

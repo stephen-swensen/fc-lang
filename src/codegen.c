@@ -465,6 +465,28 @@ static void emit_if_stmt(Expr *e, FILE *out) {
     }
 }
 
+/* Helper: C unsigned type name for a signed integer type */
+static const char *unsigned_counterpart(Type *t) {
+    switch (t->kind) {
+    case TYPE_INT8:  return "uint8_t";
+    case TYPE_INT16: return "uint16_t";
+    case TYPE_INT32: return "uint32_t";
+    case TYPE_INT64: return "uint64_t";
+    default: return NULL;
+    }
+}
+
+/* Helper: shift mask for an integer type's bit width */
+static int shift_mask_for(Type *t) {
+    switch (t->kind) {
+    case TYPE_INT8:  case TYPE_UINT8:  return 7;
+    case TYPE_INT16: case TYPE_UINT16: return 15;
+    case TYPE_INT32: case TYPE_UINT32: return 31;
+    case TYPE_INT64: case TYPE_UINT64: return 63;
+    default: return 0;
+    }
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -547,8 +569,61 @@ static void emit_expr(Expr *e, FILE *out) {
                 break;
             }
         }
+        int op = e->binary.op;
+        Type *rt = e->type;
+
+        /* Signed overflow wrapping: (int32_t)((uint32_t)a + (uint32_t)b) */
+        if ((op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR) &&
+            rt && type_is_signed(rt)) {
+            const char *ut = unsigned_counterpart(rt);
+            fprintf(out, "(");
+            emit_type(rt, out);
+            fprintf(out, ")(((%s)", ut);
+            emit_expr(e->binary.left, out);
+            fprintf(out, ") %s ((%s)", op == TOK_PLUS ? "+" : op == TOK_MINUS ? "-" : "*", ut);
+            emit_expr(e->binary.right, out);
+            fprintf(out, "))");
+            break;
+        }
+
+        /* Shift masking: a << (b & 31) for 32-bit, etc. */
+        if ((op == TOK_LTLT || op == TOK_GTGT) && rt && type_is_integer(rt)) {
+            int mask = shift_mask_for(rt);
+            if (op == TOK_LTLT && type_is_signed(rt)) {
+                /* Signed left shift: also wrap through unsigned */
+                const char *ut = unsigned_counterpart(rt);
+                fprintf(out, "(");
+                emit_type(rt, out);
+                fprintf(out, ")(((%s)", ut);
+                emit_expr(e->binary.left, out);
+                fprintf(out, ") << (");
+                emit_expr(e->binary.right, out);
+                fprintf(out, " & %d))", mask);
+            } else {
+                fprintf(out, "(");
+                emit_expr(e->binary.left, out);
+                fprintf(out, " %s (", op == TOK_LTLT ? "<<" : ">>");
+                emit_expr(e->binary.right, out);
+                fprintf(out, " & %d))", mask);
+            }
+            break;
+        }
+
+        /* Integer division/modulo by zero check */
+        if ((op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            emit_type(rt, out);
+            fprintf(out, " _dv%d = ", tid);
+            emit_expr(e->binary.right, out);
+            fprintf(out, "; if (_dv%d == 0) abort(); (", tid);
+            emit_expr(e->binary.left, out);
+            fprintf(out, ") %s _dv%d; })", op == TOK_SLASH ? "/" : "%", tid);
+            break;
+        }
+
         const char *op_str;
-        switch (e->binary.op) {
+        switch (op) {
         case TOK_PLUS:     op_str = "+";  break;
         case TOK_MINUS:    op_str = "-";  break;
         case TOK_STAR:     op_str = "*";  break;
@@ -578,6 +653,16 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_UNARY_PREFIX: {
+        /* Signed negation wrapping: (int32_t)(-(uint32_t)x) */
+        if (e->unary_prefix.op == TOK_MINUS && e->type && type_is_signed(e->type)) {
+            const char *ut = unsigned_counterpart(e->type);
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, ")(-((%s)", ut);
+            emit_expr(e->unary_prefix.operand, out);
+            fprintf(out, "))");
+            break;
+        }
         const char *op_str;
         switch (e->unary_prefix.op) {
         case TOK_MINUS: op_str = "-"; break;

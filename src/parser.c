@@ -178,7 +178,7 @@ static Type *type_from_name(const char *s, int len) {
         {"uint32",6, type_uint32}, {"uint64",6, type_uint64},
         {"float32",7, type_float32}, {"float64",7, type_float64},
         {"bool",4, type_bool},     {"char",4, type_char},
-        {"str",3, type_str},       {"str32",3, NULL},
+        {"str",3, type_str},       {"str32",5, type_str32},
         {"cstr",4, type_cstr},     {"any",3, type_any_ptr},
     };
     for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
