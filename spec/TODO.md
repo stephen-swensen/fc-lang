@@ -38,6 +38,15 @@ Open design questions and topics for future discussion.
 - Struct literal fields and union variant payloads now auto-widen, matching function call argument behavior.
 - e.g. `point { x = 10 }` works when `x: int64`, and `holder.val(42)` works when `val(int64)`.
 
+### Structural equality, codegen safety, spec alignment (resolved 2026-03-15)
+- Structural `==`/`!=` implemented for all types: structs (field-by-field), unions (tag + payload), slices (element-wise), str/str32 (len + memcmp), options (has_value + inner), func (fn_ptr + ctx). Generated `fc_eq_T` comparison functions.
+- Codegen safety: signed overflow wrapping via cast-through-unsigned for `+`, `-`, `*`, unary `-`; shift amount masking (`& 31` for 32-bit, etc.); integer division/modulo by zero emits `abort()` check (float unaffected per IEEE 754).
+- str32 type parsing fixed (wrong length in lookup table, missing `type_str32()` constructor).
+- Pointer ordering (`<`, `>`, `<=`, `>=`) now accepted (was incorrectly limited to numeric types).
+- Address-of (`&x`) now rejects immutable `let` bindings; `&f` on top-level functions still works.
+- String literal pattern matching in `match` implemented (was a no-op in codegen).
+- 326 tests covering all milestones M1–M8 plus cross-cutting features.
+
 ### File handles are `any*`, not a built-in type (resolved 2026-03-11)
 - The `file` built-in type was removed. File handles are `any*` — the same opaque pointer type used for sqlite handles, pthread handles, and any other C resource.
 - No reason to privilege file I/O with a special type when all other C libraries use `any*`.
