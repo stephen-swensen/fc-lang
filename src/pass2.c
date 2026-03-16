@@ -2013,8 +2013,105 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* alloc(expr) → T*? where T is the type of expr */
             Type *t = check_expr(ctx, e->alloc_expr.init_expr);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
-            e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
+            if (t->kind == TYPE_STR) {
+                /* alloc("...") or alloc(str_expr) → str? (heap-allocated string) */
+                e->type = type_option(ctx->arena, type_str());
+            } else {
+                e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
+            }
         }
+        return e->type;
+    }
+
+    case EXPR_INTERP_STRING: {
+        for (int i = 0; i < e->interp_string.segment_count; i++) {
+            InterpSegment *seg = &e->interp_string.segments[i];
+            if (seg->is_literal) continue;
+
+            Type *et = check_expr(ctx, seg->expr);
+            if (type_is_error(et)) continue;
+            et = resolve_type(ctx, et);
+
+            char conv = seg->conversion;
+            bool ok = false;
+            switch (conv) {
+            case 'd': case 'i': case 'u': case 'x': case 'X': case 'o':
+                ok = type_is_integer(et);
+                if (!ok) diag_error(seg->expr->loc,
+                    "format specifier %%%c expects integer type, got %s",
+                    conv, type_name(et));
+                break;
+            case 'f': case 'e': case 'E': case 'g': case 'G':
+                ok = (et->kind == TYPE_FLOAT32 || et->kind == TYPE_FLOAT64);
+                if (!ok) diag_error(seg->expr->loc,
+                    "format specifier %%%c expects float type, got %s",
+                    conv, type_name(et));
+                /* For %f, check that explicit width is specified */
+                if (ok && conv == 'f') {
+                    /* Parse the format spec to check for width */
+                    bool has_width = false;
+                    const char *s = seg->text;
+                    /* Skip flags */
+                    while (*s == '-' || *s == '+' || *s == '0' || *s == '#' || *s == ' ') s++;
+                    /* Check for width digits */
+                    if (*s >= '1' && *s <= '9') has_width = true;
+                    if (!has_width) {
+                        diag_error(seg->expr->loc,
+                            "%%f format requires explicit width (e.g. %%8.2f)");
+                    }
+                }
+                break;
+            case 's':
+                ok = (et->kind == TYPE_STR || et->kind == TYPE_CSTR);
+                if (!ok) diag_error(seg->expr->loc,
+                    "format specifier %%s expects str or cstr, got %s",
+                    type_name(et));
+                break;
+            case 'c':
+                ok = (et->kind == TYPE_CHAR || et->kind == TYPE_UINT8);
+                if (!ok) diag_error(seg->expr->loc,
+                    "format specifier %%c expects char, got %s",
+                    type_name(et));
+                break;
+            case 'p':
+                ok = (et->kind == TYPE_POINTER || et->kind == TYPE_ANY_PTR ||
+                      et->kind == TYPE_CSTR);
+                if (!ok) diag_error(seg->expr->loc,
+                    "format specifier %%p expects pointer type, got %s",
+                    type_name(et));
+                break;
+            default:
+                diag_error(seg->expr->loc,
+                    "unknown format specifier %%%c", conv);
+                break;
+            }
+        }
+        e->type = type_str();
+        return e->type;
+    }
+
+    case EXPR_PRINT: {
+        if (e->print_expr.dest) {
+            Type *dt = check_expr(ctx, e->print_expr.dest);
+            if (!type_is_error(dt)) {
+                dt = resolve_type(ctx, dt);
+                if (dt->kind != TYPE_ANY_PTR) {
+                    diag_error(e->loc,
+                        "fprint destination must be any*, got %s",
+                        type_name(dt));
+                }
+            }
+        }
+        Type *at = check_expr(ctx, e->print_expr.arg);
+        if (!type_is_error(at)) {
+            at = resolve_type(ctx, at);
+            if (at->kind != TYPE_STR) {
+                diag_error(e->loc,
+                    "print argument must be str, got %s",
+                    type_name(at));
+            }
+        }
+        e->type = type_void();
         return e->type;
     }
 

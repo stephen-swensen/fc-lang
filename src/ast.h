@@ -37,6 +37,7 @@ typedef enum {
     EXPR_SIZEOF,
     EXPR_DEFAULT,
     EXPR_PRINT,
+    EXPR_INTERP_STRING,
     EXPR_ASSIGN,
     EXPR_SOME,
     EXPR_NONE,
@@ -67,6 +68,14 @@ struct FieldInit {
     const char *name;
     Expr *value;
 };
+
+typedef struct {
+    bool is_literal;        /* true = literal text, false = format expression */
+    const char *text;       /* literal text or format specifier string */
+    int text_length;        /* length of text or spec */
+    char conversion;        /* for format segments: 'd', 'x', 'f', 's', etc. */
+    Expr *expr;             /* for format segments: the expression (NULL for literals) */
+} InterpSegment;
 
 typedef struct {
     const char *name;       /* struct field name */
@@ -205,14 +214,18 @@ struct Expr {
         /* EXPR_DEFAULT */
         struct { Type *target; } default_expr;
 
-        /* EXPR_PRINT (also EPRINT, FPRINT, SPRINT) */
+        /* EXPR_PRINT (print, eprint, fprint) */
         struct {
-            TokenKind print_kind;   /* TOK_PRINT, TOK_EPRINT, etc. */
-            Expr *dest;             /* file handle for fprint, buffer for sprint */
-            Expr *fmt;
-            Expr **args;
-            int arg_count;
+            TokenKind print_kind;   /* TOK_PRINT, TOK_EPRINT, TOK_FPRINT */
+            Expr *dest;             /* file handle for fprint, NULL for print/eprint */
+            Expr *arg;              /* the str expression */
         } print_expr;
+
+        /* EXPR_INTERP_STRING */
+        struct {
+            InterpSegment *segments;
+            int segment_count;
+        } interp_string;
 
         /* EXPR_SOME */
         struct { Expr *value; } some_expr;

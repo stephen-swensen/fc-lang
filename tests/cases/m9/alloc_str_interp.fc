@@ -1,0 +1,21 @@
+let main = (args: int32) ->
+    let x = 42
+    let s = alloc("%d{x}")
+    let mut r = 0
+    match s with
+    | some(v) ->
+        if v == "42" then r = r + 1 else r = r
+        if v.len == 2 then r = r + 2 else r = r
+        free(v)
+    | none -> r = r
+
+    // multi-segment interpolated
+    let name = "world"
+    let s2 = alloc("hello %s{name}!")
+    match s2 with
+    | some(v) ->
+        if v == "hello world!" then r = r + 4 else r = r
+        free(v)
+    | none -> r = r
+
+    r

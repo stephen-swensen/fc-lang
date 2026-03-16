@@ -687,6 +687,101 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_INTERP_START: {
+        advance_p(p); /* consume INTERP_START */
+        InterpSegment *segs = NULL;
+        int seg_count = 0, seg_cap = 0;
+
+        /* Add leading literal text segment */
+        InterpSegment lit_seg;
+        memset(&lit_seg, 0, sizeof(lit_seg));
+        lit_seg.is_literal = true;
+        lit_seg.text = t->start;
+        lit_seg.text_length = t->length;
+        DA_APPEND(segs, seg_count, seg_cap, lit_seg);
+
+        for (;;) {
+            /* Expect FMT_SPEC */
+            Token *fmt = expect(p, TOK_FMT_SPEC);
+            InterpSegment fmt_seg;
+            memset(&fmt_seg, 0, sizeof(fmt_seg));
+            fmt_seg.is_literal = false;
+            fmt_seg.text = fmt->start;
+            fmt_seg.text_length = fmt->length;
+            /* Extract conversion character (last char of format spec) */
+            fmt_seg.conversion = fmt->start[fmt->length - 1];
+
+            /* Parse expression */
+            fmt_seg.expr = parse_expr(p, PREC_NONE + 1);
+
+            DA_APPEND(segs, seg_count, seg_cap, fmt_seg);
+
+            if (check(p, TOK_INTERP_MID)) {
+                Token *mid = advance_p(p);
+                InterpSegment mid_seg;
+                memset(&mid_seg, 0, sizeof(mid_seg));
+                mid_seg.is_literal = true;
+                mid_seg.text = mid->start;
+                mid_seg.text_length = mid->length;
+                DA_APPEND(segs, seg_count, seg_cap, mid_seg);
+                continue;
+            }
+
+            if (check(p, TOK_INTERP_END)) {
+                Token *end = advance_p(p);
+                InterpSegment end_seg;
+                memset(&end_seg, 0, sizeof(end_seg));
+                end_seg.is_literal = true;
+                end_seg.text = end->start;
+                end_seg.text_length = end->length;
+                DA_APPEND(segs, seg_count, seg_cap, end_seg);
+                break;
+            }
+
+            diag_fatal(loc, "expected interpolation continuation or end, got %s",
+                token_kind_name(current(p)->kind));
+        }
+
+        /* Copy segments into arena */
+        InterpSegment *arena_segs = arena_alloc(p->arena,
+            sizeof(InterpSegment) * (size_t)seg_count);
+        memcpy(arena_segs, segs, sizeof(InterpSegment) * (size_t)seg_count);
+        free(segs);
+
+        Expr *e = alloc_expr(p, EXPR_INTERP_STRING, loc);
+        e->interp_string.segments = arena_segs;
+        e->interp_string.segment_count = seg_count;
+        return e;
+    }
+
+    case TOK_PRINT:
+    case TOK_EPRINT: {
+        TokenKind pk = t->kind;
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *arg = parse_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_PRINT, loc);
+        e->print_expr.print_kind = pk;
+        e->print_expr.dest = NULL;
+        e->print_expr.arg = arg;
+        return e;
+    }
+
+    case TOK_FPRINT: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *dest = parse_expr(p, PREC_NONE + 1);
+        expect(p, TOK_COMMA);
+        Expr *arg = parse_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_PRINT, loc);
+        e->print_expr.print_kind = TOK_FPRINT;
+        e->print_expr.dest = dest;
+        e->print_expr.arg = arg;
+        return e;
+    }
+
     case TOK_CHAR_LIT: {
         advance_p(p);
         Expr *e = alloc_expr(p, EXPR_CHAR_LIT, loc);

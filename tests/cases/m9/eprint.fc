@@ -1,0 +1,3 @@
+let main = (args: int32) ->
+    eprint("error\n")
+    0

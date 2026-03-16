@@ -1,0 +1,3 @@
+let main = (args: int32) ->
+    print("ok\n")
+    0

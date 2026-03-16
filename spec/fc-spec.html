@@ -570,7 +570,7 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `default`, `print`, `eprint`, `fprint`, `sprint`
+`alloc`, `free`, `sizeof`, `default`, `print`, `eprint`, `fprint`
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
@@ -646,6 +646,54 @@ The following escape sequences are valid in `str`, `cstr`, and `char` literals:
 | `\\xNN` | arbitrary byte value, exactly two hex digits |
 
 All three literal forms share the same escape set. An unrecognized escape sequence is a compile error.
+
+### String Interpolation
+
+Any string literal may contain **interpolation segments** — format specifier / expression pairs that are evaluated at runtime and spliced into the string. A string literal with no interpolation segments remains a static, read-only `str` as before.
+
+An interpolation segment has the form `%spec{expr}`, where `spec` is a printf-style format specifier and `expr` is an arbitrary FC expression:
+
+```fc
+let name = "world"
+let age = 30
+let greeting = "hello %s{name}, you are %d{age} years old"
+```
+
+The compiler validates that each format specifier is compatible with the expression's type — a mismatch is a compile error.
+
+#### Format specifiers
+
+| Specifier | Valid types | Notes |
+|-----------|------------|-------|
+| `%d`, `%i` | all integer types | decimal |
+| `%u` | all integer types | unsigned decimal |
+| `%x`, `%X` | all integer types | hexadecimal |
+| `%o` | all integer types | octal |
+| `%f` | `float32`, `float64` | fixed-point — **width required** |
+| `%e`, `%E` | `float32`, `float64` | scientific notation |
+| `%g`, `%G` | `float32`, `float64` | shortest representation |
+| `%s` | `str`, `cstr` | string |
+| `%c` | `char` | single character |
+| `%p` | any pointer type | pointer address |
+| `%%` | — | literal `%`, no expression |
+
+Width, precision, and flag modifiers are allowed: `%04d{x}`, `%.2f{pi}`, `%20s{name}`.
+
+The `%f` format requires an explicit width (e.g., `%8.2f`) because fixed-point float output can be arbitrarily long. Other float formats (`%e`, `%g`) are bounded by type and do not require explicit width.
+
+#### Bounded allocation
+
+Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, and pointer formats are bounded at compile time by the type's maximum formatted width. String formats (`%s`) use the runtime `.len`. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size.
+
+#### Escape rules
+
+`%%` produces a literal `%` character. Bare `{` and `}` are not special — interpolation is only triggered by the `%spec{` pattern.
+
+```fc
+"100%%"                    // "100%"
+"braces { } are literal"   // "braces { } are literal"
+"use %d format"            // static — %d not followed by {
+```
 
 ### Casting
 
@@ -1979,7 +2027,7 @@ Four built-in compile-time operators handle memory-related operations that requi
 
 | Operator | Description |
 |----------|-------------|
-| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. When `T` is a slice type `T[N]`, allocates `N` elements and returns `T[]?`. Also accepts a value expression — `alloc(expr)` — inferring the type from the expression and initializing the allocated memory with that value. |
+| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. When `T` is a slice type `T[N]`, allocates `N` elements and returns `T[]?`. Also accepts a value expression — `alloc(expr)` — inferring the type from the expression and initializing the allocated memory with that value. When applied to a string literal, `alloc("...")` heap-allocates and returns `str?`. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
@@ -2254,7 +2302,7 @@ import sys from std::
 
 match sys.env("HOME") with
 | none       -> eprint("HOME not set\n")
-| some(home) -> print("home: %s\n", home)
+| some(home) -> print("home: %s{home}\n")
 ```
 
 **`sys.exit`** — terminates the process immediately with the given exit code. The return type is `void` but the function never returns. After `sys.exit`, no destructors, deferred operations, or further code execute.
@@ -2269,7 +2317,7 @@ if fatal_error then sys.exit(1)
 let start = sys.time()
 do_work()
 let elapsed = sys.time() - start
-print("took %d ms\n", elapsed)
+print("took %d{elapsed} ms\n")
 ```
 
 **`sys.sleep`** — pauses execution for the given number of milliseconds. Wraps `nanosleep` on POSIX systems.
@@ -2302,107 +2350,38 @@ sys.sleep(1000)    // sleep for 1 second
 
 ---
 
-## Formatted Output
+## Text Output
 
-Four built-in operators provide type-safe formatted output using printf-style format strings. These are compile-time operators — like `alloc` and `sizeof`, they are resolved by the compiler, cannot be stored in bindings, and cannot be passed as arguments.
+Three built-in operators write strings to output destinations. These are compile-time operators — like `alloc` and `sizeof`, they are resolved by the compiler, cannot be stored in bindings, and cannot be passed as arguments.
 
-| Operator | Destination | Returns |
-|----------|-------------|---------|
-| `print(fmt, args...)` | `stdout` | `void` |
-| `eprint(fmt, args...)` | `stderr` | `void` |
-| `fprint(f, fmt, args...)` | an `any*` file handle | `void` |
-| `sprint(buf, fmt, args...)` | caller-provided `uint8[]` buffer | `str` — sub-slice of bytes written |
+| Operator | Signature | Destination |
+|----------|-----------|-------------|
+| `print(expr)` | `(str) -> void` | stdout |
+| `eprint(expr)` | `(str) -> void` | stderr |
+| `fprint(f, expr)` | `(any*, str) -> void` | file handle `f` |
 
-The format string `fmt` is a `str` value (not `cstr`). All standard printf format specifiers are supported — `%d`, `%x`, `%04d`, `%.2f`, `%s`, `%%`, and so on.
-
-```fc
-print("hello %s, you are %d years old\n", name, age)
-eprint("error: %s\n", msg)
-
-import io from std::
-let f = io.open("log.txt", "w")!
-fprint(f, "event %d: %s\n", id, description)
-io.close(f)
-
-let mut buf = uint8[256] { }
-let msg = sprint(buf, "x = %d, y = %d", x, y)
-```
-
-### Compile-time format checking
-
-The compiler parses the format string at compile time and validates each format specifier against the corresponding argument's type. A mismatch is a compile error:
-
-```fc
-let x = 42
-print("value: %s\n", x)    // compile error — %s expects str or cstr, got int32
-print("value: %d\n", x)    // ok
-```
-
-The compiler checks:
-
-| Specifier | Valid argument types |
-|-----------|-------------------|
-| `%d`, `%i` | all integer types |
-| `%u`, `%x`, `%X`, `%o` | all integer types |
-| `%f`, `%e`, `%E`, `%g`, `%G` | `float32`, `float64` |
-| `%s` | `str`, `cstr` |
-| `%c` | `char` |
-| `%p` | any pointer type (`T*`, `any*`) |
-| `%%` | — (literal percent, no argument consumed) |
-
-Width, precision, and flag modifiers (`%04d`, `%-20s`, `%.2f`) are passed through to the C format string unchanged. The compiler validates the base specifier only.
-
-### Transparent str handling
-
-When `%s` is used with a `str` argument, the compiler automatically expands it to `%.*s` and passes the length and pointer — no manual `.ptr` or null-termination required:
+Each operator takes a single `str` argument and writes its contents to the destination. Combined with string interpolation, this replaces printf-style variadic format strings:
 
 ```fc
 let name = "world"
-print("hello %s\n", name)
-// compiler emits: printf("hello %.*s\n", (int)name.len, name.ptr)
+let age = 30
+print("hello %s{name}, you are %d{age} years old\n")
+eprint("error: %s{msg}\n")
 ```
 
-When `%s` is used with a `cstr` argument, the compiler emits plain `%s`:
-
-```fc
-let name = c"world"
-print("hello %s\n", name)
-// compiler emits: printf("hello %s\n", name)
-```
-
-This means `%s` always does the right thing regardless of which string type is passed.
-
-### sprint
-
-`sprint` writes formatted output into a caller-provided `uint8[]` buffer and returns a `str` sub-slice covering the bytes actually written (not including the null terminator). If the output exceeds the buffer size, it is truncated — matching `snprintf` behavior.
-
-```fc
-let mut buf = uint8[64] { }
-let msg = sprint(buf, "point(%d, %d)", x, y)
-// msg is a sub-slice of buf — no allocation occurred
-```
-
-The returned sub-slice shares memory with `buf`. The programmer is responsible for the buffer's lifetime. To detect truncation, compare `msg.len` against `buf.len - 1` — if equal, the output may have been clipped.
+When the argument is a static string literal (no interpolation), the compiler emits a direct write from read-only memory. When the argument is an interpolated string, the buffer is allocated and formatted first, then written.
 
 > **Transpilation**
-> The four operators map to C's printf family:
 > ```c
-> // print("x = %d\n", x) — str format string
-> printf("x = %d\n", x);
+> // print("hello\n") — static string, direct write
+> fwrite("hello\n", 1, 6, stdout);
 >
-> // eprint("error: %s\n", msg) — msg is str
-> fprintf(stderr, "error: %.*s\n", (int)msg.len, msg.ptr);
+> // print("hello %s{name}\n") — interpolated string
+> ({ fc_str _s = <interp_codegen>; fwrite(_s.ptr, 1, (size_t)_s.len, stdout); })
 >
-> // fprint(f, "event %d\n", id) — f is any*
-> fprintf((FILE*)f, "event %d\n", id);
->
-> // sprint(buf, "x = %d", x)
-> int _n = snprintf(buf.ptr, buf.len, "x = %d", x);
-> if (_n < 0) _n = 0;
-> if (_n > buf.len - 1) _n = buf.len - 1;
-> // result is (fc_slice_uint8){ .ptr = buf.ptr, .len = (int64_t)_n }
+> // print(msg) — str binding
+> fwrite(msg.ptr, 1, (size_t)msg.len, stdout);
 > ```
-> The format string itself is always emitted as a C string literal or passed via `.ptr` — the compiler ensures null termination for the format string argument at the C boundary. Format specifiers for `str` arguments are rewritten from `%s` to `%.*s` with the corresponding length and pointer arguments inserted.
 
 ---
 

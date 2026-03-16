@@ -11,6 +11,13 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern) {
     l->col = 1;
     l->start_col = 1;
     l->intern = intern;
+    l->interp_depth = 0;
+    l->interp_scan_fmt = false;
+    l->interp_fmt_start = NULL;
+    l->interp_fmt_len = 0;
+    l->interp_fmt_line = 0;
+    l->interp_fmt_col = 0;
+    memset(l->interp_brace, 0, sizeof(l->interp_brace));
 }
 
 static char peek(Lexer *l)      { return *l->current; }
@@ -107,7 +114,6 @@ static TokenKind check_keyword(const char *start, int len) {
         {"print",     5,  TOK_PRINT},
         {"eprint",    6,  TOK_EPRINT},
         {"fprint",    6,  TOK_FPRINT},
-        {"sprint",    6,  TOK_SPRINT},
     };
     for (int i = 0; i < (int)(sizeof(keywords)/sizeof(keywords[0])); i++) {
         if (keywords[i].klen == len && memcmp(start, keywords[i].kw, (size_t)len) == 0)
@@ -170,15 +176,115 @@ static Token scan_number(Lexer *l) {
     return make_token(l, TOK_INT_LIT);
 }
 
+/* Check if position p (pointing past '%') looks like a format spec followed by '{'.
+ * Returns length of the spec (not including '%' or '{'), or 0 if no match.
+ * Format spec: optional flags (-+0# space), optional width (digits), optional .precision,
+ * then a required conversion char (d,i,u,x,X,o,f,e,E,g,G,s,c,p). */
+static int check_interp_spec(const char *p) {
+    const char *s = p;
+    /* optional flags */
+    while (*s == '-' || *s == '+' || *s == '0' || *s == '#' || *s == ' ') s++;
+    /* optional width */
+    while (*s >= '0' && *s <= '9') s++;
+    /* optional precision */
+    if (*s == '.') {
+        s++;
+        while (*s >= '0' && *s <= '9') s++;
+    }
+    /* required conversion character */
+    const char *convs = "diuxXofeEgGscp";
+    const char *conv = s;
+    bool found = false;
+    for (const char *c = convs; *c; c++) {
+        if (*conv == *c) { found = true; break; }
+    }
+    if (!found) return 0;
+    s++;
+    /* must be followed by { */
+    if (*s != '{') return 0;
+    return (int)(s - p);
+}
+
+/* Scan string literal text (after opening " or after closing } of interp expr).
+ * If interpolation %spec{ is found, emits INTERP_START/MID and sets up FMT_SPEC state.
+ * If closing " is found, emits STRING_LIT (plain) or INTERP_END.
+ * tok_kind is TOK_INTERP_START for first segment, TOK_INTERP_MID for subsequent. */
+static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
+    const char *text_start = l->current;  /* start of literal text content */
+
+    while (!at_end(l) && peek(l) != '"') {
+        if (peek(l) == '\\') {
+            advance(l); /* skip backslash */
+            if (!at_end(l)) advance(l); /* skip escaped char */
+            continue;
+        }
+        if (peek(l) == '%') {
+            /* Check for %% (literal percent escape) */
+            if (l->current[1] == '%') {
+                advance(l); advance(l); /* consume both % */
+                continue;
+            }
+            /* Check for %spec{ (interpolation start) */
+            int spec_len = check_interp_spec(l->current + 1);
+            if (spec_len > 0) {
+                /* Found interpolation: emit the text before it */
+                Token t;
+                t.kind = tok_kind;
+                t.start = text_start;
+                t.length = (int)(l->current - text_start);
+                t.line = l->line;
+                t.col = l->start_col;
+
+                /* Advance past % */
+                advance(l);
+
+                /* Store format spec location for next scan_token call */
+                l->interp_fmt_start = l->current;
+                l->interp_fmt_len = spec_len;
+                l->interp_fmt_line = l->line;
+                l->interp_fmt_col = l->col;
+
+                /* Advance past spec and opening { */
+                for (int i = 0; i < spec_len; i++) advance(l);
+                advance(l); /* consume { */
+
+                /* Enter interpolation mode */
+                if (l->interp_depth >= MAX_INTERP_DEPTH) {
+                    return error_token(l, "string interpolation nested too deeply");
+                }
+                l->interp_depth++;
+                l->interp_brace[l->interp_depth - 1] = 1;
+                l->interp_scan_fmt = true;
+
+                return t;
+            }
+        }
+        advance(l);
+    }
+
+    /* Reached closing " (or end of input) */
+    if (at_end(l)) return error_token(l, "unterminated string");
+
+    if (tok_kind == TOK_INTERP_MID) {
+        /* End of an interpolated string (after at least one interp segment) */
+        Token t;
+        t.kind = TOK_INTERP_END;
+        t.start = text_start;
+        t.length = (int)(l->current - text_start);
+        t.line = l->line;
+        t.col = l->start_col;
+        advance(l); /* consume closing " */
+        return t;
+    }
+
+    /* Plain string or first call that found no interpolation — TOK_STRING_LIT */
+    advance(l); /* consume closing " */
+    return make_token(l, TOK_STRING_LIT);
+}
+
 static Token scan_string(Lexer *l) {
     advance(l); /* opening " */
-    while (!at_end(l) && peek(l) != '"') {
-        if (peek(l) == '\\') advance(l);
-        if (!at_end(l)) advance(l);
-    }
-    if (at_end(l)) return error_token(l, "unterminated string");
-    advance(l);
-    return make_token(l, TOK_STRING_LIT);
+    return scan_string_body(l, TOK_INTERP_START);
 }
 
 static Token scan_cstring(Lexer *l) {
@@ -209,10 +315,39 @@ static Token scan_char_lit(Lexer *l) {
 }
 
 static Token scan_token(Lexer *l) {
+    /* If we need to emit a format specifier from interpolation */
+    if (l->interp_scan_fmt) {
+        l->interp_scan_fmt = false;
+        return (Token){
+            .kind = TOK_FMT_SPEC,
+            .start = l->interp_fmt_start,
+            .length = l->interp_fmt_len,
+            .line = l->interp_fmt_line,
+            .col = l->interp_fmt_col,
+        };
+    }
+
     l->start = l->current;
     l->start_col = l->col;
 
     if (at_end(l)) return make_token(l, TOK_EOF);
+
+    /* If inside interpolation expression, track brace depth */
+    if (l->interp_depth > 0) {
+        int idx = l->interp_depth - 1;
+        if (peek(l) == '{') {
+            l->interp_brace[idx]++;
+        } else if (peek(l) == '}') {
+            l->interp_brace[idx]--;
+            if (l->interp_brace[idx] == 0) {
+                /* Closing brace of interpolation expression.
+                 * Resume scanning the string continuation. */
+                advance(l); /* consume } */
+                l->interp_depth--;
+                return scan_string_body(l, TOK_INTERP_MID);
+            }
+        }
+    }
 
     char c = advance(l);
 

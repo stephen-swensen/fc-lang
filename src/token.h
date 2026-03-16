@@ -49,7 +49,11 @@ typedef enum {
     TOK_PRINT,
     TOK_EPRINT,
     TOK_FPRINT,
-    TOK_SPRINT,
+    /* String interpolation */
+    TOK_INTERP_START,       /* leading text of interpolated string */
+    TOK_INTERP_MID,         /* middle text between interpolation segments */
+    TOK_INTERP_END,         /* trailing text of interpolated string */
+    TOK_FMT_SPEC,           /* format specifier e.g. "d", "04x", "8.2f" */
 
     /* Operators */
     TOK_PLUS,           /* + */

@@ -1,0 +1,4 @@
+let main = (args: int32) ->
+    let x = 3.14
+    let s = "%f{x}"
+    0

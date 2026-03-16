@@ -284,6 +284,16 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
     case EXPR_FREE:
         discover_in_expr(e->free_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
         return;
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++) {
+            if (!e->interp_string.segments[i].is_literal)
+                discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, symtab, var_names, concrete, var_count);
+        }
+        return;
+    case EXPR_PRINT:
+        if (e->print_expr.dest) discover_in_expr(e->print_expr.dest, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->print_expr.arg, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     default: return;
     }
 }

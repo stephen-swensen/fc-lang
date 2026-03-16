@@ -27,6 +27,17 @@ Open design questions and topics for future discussion.
 
 ---
 
+## Slice/pointer provenance tracking
+
+Stack-allocated memory (e.g. interpolated strings via `alloca`, `&local_var`), read-only memory (string literals), and heap memory (`alloc`) all produce the same pointer/slice types. The compiler currently has no way to distinguish provenance or warn about returning stack pointers, freeing read-only memory, etc. This is a known gap — same as C. Options to explore:
+- Lightweight escape analysis (warn if stack-derived slice/pointer escapes the function)
+- Provenance annotations or regions
+- Runtime tagging (unlikely — conflicts with zero-cost philosophy)
+
+No urgency — the "trust the programmer" model works for now — but worth revisiting as the language matures.
+
+---
+
 ## Resolved
 
 ### Implicit widening in generic function calls (resolved 2026-03-15)

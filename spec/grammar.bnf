@@ -158,6 +158,23 @@ CHAR_LIT      = "'" , ( escape_seq | any_char - "'" - '\\' ) , "'" ;
 string_char   = escape_seq | any_char - '"' - '\\' ;
 STR_LIT       = '"' , { string_char } , '"' ;
 
+(* --- String interpolation ---                                        *)
+(* An interpolation segment is %spec{expr} inside a string literal.    *)
+(* Strings with interpolation segments produce stack-allocated str.     *)
+
+fmt_flag      = '-' | '+' | '0' | '#' | ' ' ;
+fmt_width     = digit , { digit } ;
+fmt_precision = '.' , { digit } ;
+fmt_conv      = 'd' | 'i' | 'u' | 'x' | 'X' | 'o'
+              | 'f' | 'e' | 'E' | 'g' | 'G'
+              | 's' | 'c' | 'p' ;
+fmt_spec      = { fmt_flag } , [ fmt_width ] , [ fmt_precision ] , fmt_conv ;
+
+interp_seg    = '%' , fmt_spec , '{' , expr , '}' ;
+percent_esc   = '%%' ;
+
+INTERP_STR    = '"' , { string_char | interp_seg | percent_esc } , '"' ;
+
 (* --- C-string literals ---                                           *)
 
 CSTR_LIT      = 'c' , '"' , { string_char } , '"' ;
