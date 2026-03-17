@@ -121,6 +121,7 @@ Each **single-file test** is an `.fc` file plus one of:
 Each **multi-file test** is a subdirectory containing:
 - Multiple `.fc` files (e.g. `main.fc`, `lib.fc`) — all compiled together
 - `expected_exit` or `error` (no dot prefix) — the expected result
+- `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
 
 Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/cross_ns_import`, etc.
 
@@ -133,7 +134,7 @@ m6/cross_ns_import/
     lib.fc           # file defining the namespace/module
     expected_exit    # expected exit code
 ```
-The test runner discovers all `.fc` files in the subdirectory and compiles them together.
+The test runner discovers all `.fc` files in the subdirectory and compiles them together. If a `deps` file exists, the listed files are also included in compilation. Use `deps` instead of copying stdlib files into test directories — e.g., a `deps` file containing `stdlib/io.fc` for tests that use `std::io`.
 
 ### Test coverage philosophy
 

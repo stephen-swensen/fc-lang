@@ -121,6 +121,14 @@ for milestone_dir in "$TESTDIR"/m*/; do
         fc_files=$(find "$test_subdir" -name "*.fc" | sort | tr '\n' ' ')
         [ -n "$fc_files" ] || continue
 
+        # Append dependency files listed in deps (one path per line, relative to project root)
+        if [ -f "${test_subdir}deps" ]; then
+            while IFS= read -r dep; do
+                [ -n "$dep" ] || continue
+                fc_files="$fc_files $dep"
+            done < "${test_subdir}deps"
+        fi
+
         run_test "$test_display" \
             "$fc_files" \
             "${test_subdir}error" \
