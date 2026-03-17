@@ -1,0 +1,9 @@
+import io from std::
+
+let main = (args: int32) ->
+    let f = io.open("/nonexistent/path/file.txt", "r")
+    match f with
+    | some(v) ->
+        io.close(v)
+        1
+    | none -> 42

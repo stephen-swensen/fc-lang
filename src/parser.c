@@ -234,7 +234,11 @@ static Type *parse_type(Parser *p) {
             advance_p(p);
             /* Special case: 'any' must be followed by '*' */
             if (base == type_any_ptr()) {
-                /* already any*, no need for * suffix unless we want any** etc */
+                if (!check(p, TOK_STAR)) {
+                    SrcLoc loc = loc_from_token(current(p));
+                    diag_fatal(loc, "'any' must be followed by '*' (any*)");
+                }
+                advance_p(p); /* consume the mandatory * */
                 return parse_type_suffix(p, base);
             }
             return parse_type_suffix(p, base);
@@ -751,34 +755,6 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_INTERP_STRING, loc);
         e->interp_string.segments = arena_segs;
         e->interp_string.segment_count = seg_count;
-        return e;
-    }
-
-    case TOK_PRINT:
-    case TOK_EPRINT: {
-        TokenKind pk = t->kind;
-        advance_p(p);
-        expect(p, TOK_LPAREN);
-        Expr *arg = parse_expr(p, PREC_NONE + 1);
-        expect(p, TOK_RPAREN);
-        Expr *e = alloc_expr(p, EXPR_PRINT, loc);
-        e->print_expr.print_kind = pk;
-        e->print_expr.dest = NULL;
-        e->print_expr.arg = arg;
-        return e;
-    }
-
-    case TOK_FPRINT: {
-        advance_p(p);
-        expect(p, TOK_LPAREN);
-        Expr *dest = parse_expr(p, PREC_NONE + 1);
-        expect(p, TOK_COMMA);
-        Expr *arg = parse_expr(p, PREC_NONE + 1);
-        expect(p, TOK_RPAREN);
-        Expr *e = alloc_expr(p, EXPR_PRINT, loc);
-        e->print_expr.print_kind = TOK_FPRINT;
-        e->print_expr.dest = dest;
-        e->print_expr.arg = arg;
         return e;
     }
 
@@ -1693,6 +1669,15 @@ static Decl *parse_module_decl(Parser *p) {
     loc.filename = p->filename;
     expect(p, TOK_MODULE);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
+
+    /* Optional from "lib" clause */
+    const char *from_lib = NULL;
+    if (check(p, TOK_FROM)) {
+        advance_p(p);
+        Token *lib_tok = expect(p, TOK_STRING_LIT);
+        from_lib = intern(p->intern, lib_tok->start + 1, lib_tok->length - 2);
+    }
+
     expect(p, TOK_EQ);
 
     /* Parse body: INDENT { decl } DEDENT */
@@ -1720,7 +1705,7 @@ static Decl *parse_module_decl(Parser *p) {
     d->is_private = false;
     d->module.name = name;
     d->module.ns_prefix = NULL;
-    d->module.from_lib = NULL;
+    d->module.from_lib = from_lib;
     d->module.decl_count = count;
     if (count > 0) {
         d->module.decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
@@ -1927,6 +1912,28 @@ static Decl *parse_namespace_decl(Parser *p) {
     return d;
 }
 
+static Decl *parse_extern_decl(Parser *p) {
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    expect(p, TOK_EXTERN);
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *alias = NULL;
+    if (check(p, TOK_AS)) {
+        advance_p(p);
+        alias = tok_intern(p, expect(p, TOK_IDENT));
+    }
+    expect(p, TOK_COLON);
+    Type *type = parse_type(p);
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_EXTERN;
+    d->loc = loc;
+    d->is_private = false;
+    d->ext.name = name;
+    d->ext.alias = alias;
+    d->ext.type = type;
+    return d;
+}
+
 static Decl *parse_decl(Parser *p) {
     skip_newlines(p);
 
@@ -1944,6 +1951,7 @@ static Decl *parse_decl(Parser *p) {
     if (check(p, TOK_MODULE)) return parse_module_decl(p);
     if (check(p, TOK_IMPORT)) return parse_import_decl(p);
     if (check(p, TOK_NAMESPACE)) return parse_namespace_decl(p);
+    if (check(p, TOK_EXTERN)) return parse_extern_decl(p);
 
     SrcLoc loc = loc_from_token(current(p));
     diag_fatal(loc, "expected declaration, got %s",

@@ -290,10 +290,6 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                 discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, symtab, var_names, concrete, var_count);
         }
         return;
-    case EXPR_PRINT:
-        if (e->print_expr.dest) discover_in_expr(e->print_expr.dest, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->print_expr.arg, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
     default: return;
     }
 }

@@ -570,7 +570,11 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `default`, `print`, `eprint`, `fprint`
+`alloc`, `free`, `sizeof`, `default`
+
+The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
+
+`stdin`, `stdout`, `stderr`
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
@@ -713,6 +717,13 @@ let z = (uint8) some_int32  // narrowing cast, programmer responsible
 let p = (any*) &my_state         // T* to any* — erase type for C interop
 let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer responsible
 let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
+```
+
+**str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string. The copy lives until the enclosing function returns (uses `alloca`). This is the safe way to pass FC strings to C functions that expect null-terminated strings:
+
+```fc
+let s = "hello"
+let cs = (cstr) s   // stack copy with null terminator
 ```
 
 **Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
@@ -1440,8 +1451,10 @@ In all cases `return` is only needed for early exits — the normal return value
 ### Entry point
 
 ```fc
+import io from std::
+
 let main = (args: str[]) ->
-    print("program: %s\n", args[0])
+    io.write("program: %s{args[0]}\n", stdout)
     0
 ```
 
@@ -2189,24 +2202,33 @@ let p = alloc(point3d)!
 import io from std::
 ```
 
-### Constants
-
-| Constant | Type | Description | C equivalent |
-|----------|------|-------------|--------------|
-| `io.stdout` | `any*` | Standard output stream | `(void*)stdout` |
-| `io.stderr` | `any*` | Standard error stream | `(void*)stderr` |
-
 ### Operations
 
 ```fc
+io.write(s: str, f: any*) -> int64
+io.read(buf: uint8[], n: int64, f: any*) -> int64
 io.open(path: str, mode: str) -> any*?
 io.close(f: any*) -> void
-io.read(f: any*, buf: uint8[]) -> str
-io.write(f: any*, data: str) -> int64
 io.flush(f: any*) -> void
 ```
 
-**`io.open`** — opens a file at the given path with the given mode. Returns `any*?` — `none` on failure. Mode strings follow C conventions: `"r"` (read), `"w"` (write/truncate), `"a"` (append), `"rb"` (read binary), etc. Both arguments accept `str` — the compiler ensures null-termination at the C boundary (see transpilation note below).
+**`io.write`** — writes the contents of `s` to the file handle `f`. Returns the number of bytes written as `int64`.
+
+```fc
+import io from std::
+
+io.write("hello world\n", stdout)
+io.write("error: something failed\n", stderr)
+```
+
+**`io.read`** — reads up to `n` bytes from the file handle `f` into the provided buffer. Returns the number of bytes actually read as `int64`. A return value of 0 indicates end-of-file or error.
+
+```fc
+let mut buf = uint8[1024] {}
+let n = io.read(buf, 1024, f)
+```
+
+**`io.open`** — opens a file at the given path with the given mode. Returns `any*?` — `none` on failure. Mode strings follow C conventions: `"r"` (read), `"w"` (write/truncate), `"a"` (append), `"rb"` (read binary), etc. Both arguments accept `str` — the `(cstr)` cast inside `io.open` ensures null-termination at the C boundary.
 
 Since `any*?` uses null-sentinel optimization (same as `T*?`), the option wrapper is zero-cost — `none` is just a null pointer.
 
@@ -2215,7 +2237,7 @@ import io from std::
 
 let f = io.open("data.txt", "r")
 match f with
-| none    -> eprint("failed to open file\n")
+| none    -> io.write("failed to open file\n", stderr)
 | some(f) ->
     // use f
     io.close(f)
@@ -2223,58 +2245,32 @@ match f with
 
 **`io.close`** — closes the file. Using a file handle after closing it is undefined behavior.
 
-**`io.read`** — reads up to `buf.len` bytes from the file into the provided buffer. Returns a `str` sub-slice of `buf` covering the bytes actually read. An empty slice (length 0) indicates end-of-file or error.
-
-```fc
-let mut buf = uint8[1024] { }
-let data = io.read(f, buf)
-if data.len == 0 then
-    eprint("EOF or error\n")
-```
-
-**`io.write`** — writes the contents of `data` to the file. Returns the number of bytes written as `int64`. A short write (return value less than `data.len`) indicates an error.
-
-```fc
-io.write(f, "hello world\n")
-```
-
 **`io.flush`** — flushes buffered output to the underlying file. Relevant for files opened in buffered mode. `stdout` is line-buffered by default; `stderr` is unbuffered.
 
+### stdin, stdout, stderr
+
+The built-in globals `stdin`, `stdout`, and `stderr` are typed `any*` and refer to the standard C streams. They do not require importing `std::io` — they are always available.
+
+```fc
+io.write("hello\n", stdout)
+io.write("error\n", stderr)
+let n = io.read(buf, 256, stdin)
+```
+
 > **Transpilation**
-> All `io` handles are `any*` in FC and cast to/from `FILE*` at the C boundary.
+> All file handles are `any*` in FC and cast to/from `FILE*` at the C boundary. `stdin`/`stdout`/`stderr` emit `(void*)stdin`/`(void*)stdout`/`(void*)stderr`.
 >
-> When a `str` argument must be passed to a C function that expects a null-terminated string, the compiler emits a stack copy with a null terminator appended. The copy is unconditional — reading past the slice boundary to check for an existing null byte would be unsafe (the memory may not be owned, and even if it is, another thread could mutate it). For functions like `io.open` the cost of a small `memcpy` is negligible next to the underlying syscall.
->
-> This only applies to arguments that become C strings (`char*`) — namely the `path` and `mode` parameters to `io.open`. Data-oriented operations like `io.read` and `io.write` use length-based C functions (`fread`/`fwrite`) that take a pointer and a byte count directly, so `str` arguments pass through with no copy and no null-termination overhead, regardless of size.
+> The `io.open` wrapper uses `(cstr)` casts internally to null-terminate its `str` arguments before passing them to C's `fopen`. Data-oriented operations like `io.read` and `io.write` use length-based C functions (`fread`/`fwrite`) that take a pointer and a byte count directly — no null-termination overhead.
 > ```c
-> // io.open(path, mode) — path and mode are str
-> // compiler emits null-terminated stack copies:
-> char _path_buf[/*path.len+1*/];
-> memcpy(_path_buf, path.ptr, path.len);
-> _path_buf[path.len] = '\0';
-> // (same pattern for mode)
-> void* f = (void*)fopen(_path_buf, _mode_buf);
+> // io.write(s, f)
+> fwrite(s.ptr, 1, (size_t)s.len, f);
 >
-> // io.read(f, buf) — reads into buf, returns sub-slice
-> size_t _n = fread(buf.ptr, 1, buf.len, (FILE*)f);
-> // result is (fc_slice_uint8){ .ptr = buf.ptr, .len = (int64_t)_n }
->
-> // io.write(f, data)
-> size_t _n = fwrite(data.ptr, 1, data.len, (FILE*)f);
+> // io.open(path, mode) — uses (cstr) cast internally
+> fopen(path_cstr, mode_cstr);
 >
 > // io.close(f)
-> fclose((FILE*)f);
->
-> // io.flush(f)
-> fflush((FILE*)f);
->
-> // io.stdout / io.stderr
-> void* io_stdout = (void*)stdout;
-> void* io_stderr = (void*)stderr;
+> fclose(f);
 > ```
-
-> **Note on `print`/`eprint`**
-> The `print` and `eprint` operators write to stdout and stderr directly — they do not require importing `std::io`. They are reserved compiler operators, not `io` module functions.
 
 ---
 
@@ -2298,11 +2294,12 @@ sys.sleep(ms: int64) -> void
 **`sys.env`** — reads the environment variable with the given name. Returns `str?` — `none` if the variable is not set. The returned `str` is a view into process memory (from C's `getenv`), valid for the lifetime of the process unless the environment is modified. The `name` argument receives the same null-termination treatment as `io.open`'s path argument — an unconditional stack copy with a null byte appended.
 
 ```fc
+import io from std::
 import sys from std::
 
 match sys.env("HOME") with
-| none       -> eprint("HOME not set\n")
-| some(home) -> print("home: %s{home}\n")
+| none       -> io.write("HOME not set\n", stderr)
+| some(home) -> io.write("home: %s{home}\n", stdout)
 ```
 
 **`sys.exit`** — terminates the process immediately with the given exit code. The return type is `void` but the function never returns. After `sys.exit`, no destructors, deferred operations, or further code execute.
@@ -2317,7 +2314,7 @@ if fatal_error then sys.exit(1)
 let start = sys.time()
 do_work()
 let elapsed = sys.time() - start
-print("took %d{elapsed} ms\n")
+io.write("took %d{elapsed} ms\n", stdout)
 ```
 
 **`sys.sleep`** — pauses execution for the given number of milliseconds. Wraps `nanosleep` on POSIX systems.
@@ -2349,39 +2346,6 @@ sys.sleep(1000)    // sleep for 1 second
 > ```
 
 ---
-
-## Text Output
-
-Three built-in operators write strings to output destinations. These are compile-time operators — like `alloc` and `sizeof`, they are resolved by the compiler, cannot be stored in bindings, and cannot be passed as arguments.
-
-| Operator | Signature | Destination |
-|----------|-----------|-------------|
-| `print(expr)` | `(str) -> void` | stdout |
-| `eprint(expr)` | `(str) -> void` | stderr |
-| `fprint(f, expr)` | `(any*, str) -> void` | file handle `f` |
-
-Each operator takes a single `str` argument and writes its contents to the destination. Combined with string interpolation, this replaces printf-style variadic format strings:
-
-```fc
-let name = "world"
-let age = 30
-print("hello %s{name}, you are %d{age} years old\n")
-eprint("error: %s{msg}\n")
-```
-
-When the argument is a static string literal (no interpolation), the compiler emits a direct write from read-only memory. When the argument is an interpolated string, the buffer is allocated and formatted first, then written.
-
-> **Transpilation**
-> ```c
-> // print("hello\n") — static string, direct write
-> fwrite("hello\n", 1, 6, stdout);
->
-> // print("hello %s{name}\n") — interpolated string
-> ({ fc_str _s = <interp_codegen>; fwrite(_s.ptr, 1, (size_t)_s.len, stdout); })
->
-> // print(msg) — str binding
-> fwrite(msg.ptr, 1, (size_t)msg.len, stdout);
-> ```
 
 ---
 
@@ -2713,23 +2677,37 @@ Target definitions specify the available libc subset, pointer width, endianness,
 
 ## C Interop
 
-C library bindings are declared using `extern` inside a module that names the C library source. The programmer is responsible for correct type mapping.
+C library bindings are declared using `extern` inside a module with a `from` clause that names the C header file. The compiler emits a corresponding `#include` directive in the generated C output. The programmer is responsible for correct type mapping.
 
 > **Note on `from` in module declarations**
-> The `from "..."` in `module libc from "libc.so"` is distinct from the `from` used in import statements. Here `from` binds the module to a C library source — a string literal naming the shared library or object file. It is only valid in module declarations containing `extern` bindings. It has nothing to do with namespace-qualified imports.
+> The `from "..."` in `module libc from "stdio.h"` is distinct from the `from` used in import statements. Here `from` names the C header that provides the declared symbols. The compiler emits `#include <header>` for each unique `from` string. It has nothing to do with namespace-qualified imports.
+
+> **Module and extern constraints**
+> A module with a `from` clause may **only** contain `extern` declarations — it is a pure C binding wrapper. Conversely, `extern` declarations may **only** appear inside a module with a `from` clause. Regular FC code (let bindings, structs, unions) belongs in modules without `from`. To mix FC wrappers with C bindings, use a nested submodule:
+> ```fc
+> module io =
+>     private module c from "stdio.h" =
+>         extern fwrite: (any*, uint64, uint64, any*) -> uint64
+>     let write = (s: str, f: any*) ->
+>         (int64) c.fwrite((any*)s.ptr, 1u64, (uint64)s.len, f)
+> ```
 
 ```fc
-module libc from "libc.so" =
-    extern printf:  (cstr, ...) -> int32
+module c_stdlib from "stdlib.h" =
     extern free as c_free: (any*) -> void
     extern malloc:  (int64) -> any*?
+
+module c_stdio from "stdio.h" =
+    extern printf:  (cstr, ...) -> int32
+    extern fopen:   (cstr, cstr) -> any*?
+
+module c_string from "string.h" =
     extern memcpy:  (any*, any*, int64) -> any*
     extern strlen:  (cstr) -> int64
-    extern fopen:   (cstr, cstr) -> any*?
 ```
 
-> **Note on the libc module**
-> The declarations above are illustrative. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `int64` parameters for `malloc`, `memcpy`, and `strlen` map C's `size_t` — the principle is to use a reasonable signed upper bound that is never incorrect, so that FC's `int64` lengths pass through without casts. The compiler emits casts to `size_t` at the C boundary. In practice, common libc bindings ship with the FC compiler as pre-written `extern` declarations and most programs only need to `import libc`.
+> **Note on the examples above**
+> Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `int64` parameters for `malloc`, `memcpy`, and `strlen` map C's `size_t` — a reasonable upper bound that is never incorrect. The compiler implicitly narrows these at the C boundary via the real header prototypes.
 
 ### Reserved identifiers and `extern as`
 
@@ -2738,7 +2716,7 @@ FC reserves `alloc`, `free`, `sizeof`, and `default` as built-in operator names 
 The `extern as` form resolves this by binding the C function under a different name in the FC module:
 
 ```fc
-module libc from "libc.so" =
+module libc from "stdlib.h" =
     extern free as c_free: (any*) -> void   // C's free, available as libc.c_free
 ```
 
@@ -2759,7 +2737,7 @@ Some C functions accept a variable number of arguments — `printf`, `sprintf`, 
 For C interop, variadic C functions are declared using `...` as a terminal parameter:
 
 ```fc
-module libc from "libc.so" =
+module c_stdio from "stdio.h" =
     extern printf:  (cstr, ...) -> int32
     extern sprintf: (cstr, cstr, ...) -> int32
     extern fprintf: (any*, cstr, ...) -> int32
@@ -2803,10 +2781,10 @@ The programmer is responsible for correctly declaring which C functions can retu
 For C functions that signal failure via a sentinel integer value (such as `-1`), declare the return type as a plain integer and check the sentinel directly — do not use `?`:
 
 ```fc
-module libc from "libc.so" =
+module posix from "fcntl.h" =
     extern open: (cstr, int32) -> int32    // returns -1 on failure, not null
 
-let fd = libc.open(c"file.txt", 0)
+let fd = posix.open(c"file.txt", 0)
 if fd == -1 then handle_error()
 ```
 
@@ -2815,7 +2793,7 @@ if fd == -1 then handle_error()
 If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `none(T*)` or `some(ptr)` at the call site:
 
 ```fc
-module libc from "libc.so" =
+module pthreads from "pthread.h" =
     extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
     // thread function: (any*) -> any*? — receives and returns the user-data pointer
 ```
@@ -2843,10 +2821,10 @@ module sock =                  // socket type constants
     let dgram  = 2
     let raw    = 3
 
-module libc from "libc.so" =
+module c_socket from "sys/socket.h" =
     extern socket: (int32, int32, int32) -> int32    // returns fd or -1
 
-let fd = libc.socket(af.inet, sock.stream, 0)
+let fd = c_socket.socket(af.inet, sock.stream, 0)
 if fd == -1 then handle_error()
 ```
 
@@ -2874,16 +2852,18 @@ let mode = file_mode.read | file_mode.write
 FC code that receives `any*` handles never constructs or inspects them; it passes them to functions that know how to operate on them:
 
 ```fc
-module sqlite from "libsqlite3.so" =
+module sqlite from "sqlite3.h" =
     extern sqlite3_open:  (cstr, any*?) -> int32
     extern sqlite3_exec:  (any*, cstr, (any*, int32, any*, any*) -> int32, any*?, any*?) -> int32
     extern sqlite3_close: (any*) -> int32
 
-module libc from "libc.so" =
+module c_stdio from "stdio.h" =
     extern fopen:  (cstr, cstr) -> any*?
     extern fclose: (any*) -> int32
     extern fread:  (any*, int64, int64, any*) -> int64
     extern fwrite: (any*, int64, int64, any*) -> int64
+
+module c_stdlib from "stdlib.h" =
     extern malloc: (int64) -> any*?
     extern free:   (any*) -> void
 ```
@@ -2897,11 +2877,11 @@ The programmer is responsible for passing handles to the correct functions — F
 When a function type appears as a parameter in an `extern` declaration, the compiler maps it to a C function pointer at the boundary. The programmer passes a non-capturing lambda directly — no `&` required:
 
 ```fc
-module libc from "libc.so" =
+module c_stdlib from "stdlib.h" =
     extern qsort: (any*, int64, int64, (any*, any*) -> int32) -> void
 
 // pass a non-capturing lambda directly — compiler handles C function pointer mapping
-libc.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
+c_stdlib.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
     *(int32*) a - *(int32*) b)
 ```
 
@@ -2912,7 +2892,7 @@ Passing a capturing lambda to a C function pointer parameter is a compile error 
 C APIs commonly pass a `void*` user_data alongside a function pointer so the callback can recover its context. Declare the callback parameter as an FC function type and the user-data as `any*`:
 
 ```fc
-module libc from "libc.so" =
+module pthreads from "pthread.h" =
     extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
 
 let my_cb = (data: any*) ->
@@ -2947,7 +2927,15 @@ In C, `void*` is frequently used for patterns that FC handles at the language le
 
 ### Converting between str and cstr
 
-`str` to `cstr` — use `.ptr`. Programmer is responsible for null termination:
+`str` to `cstr` — use `(cstr)` cast to create a null-terminated stack copy:
+
+```fc
+let cs = (cstr) s    // stack copy with null terminator — safe for passing to C
+```
+
+The cast emits an `alloca`+`memcpy` to create a null-terminated copy on the stack. The copy is valid until the enclosing function returns. This is the preferred approach for passing FC strings to C functions.
+
+Alternatively, use `.ptr` if the string is known to be null-terminated (e.g., a string literal):
 
 ```fc
 let cs = s.ptr    // type: cstr — only safe if s is null-terminated

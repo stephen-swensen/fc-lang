@@ -1,0 +1,26 @@
+namespace std::
+
+module io =
+    private module c from "stdio.h" =
+        extern fwrite: (any*, uint64, uint64, any*) -> uint64
+        extern fread: (any*, uint64, uint64, any*) -> uint64
+        extern fopen: (cstr, cstr) -> any*?
+        extern fclose: (any*) -> int32
+        extern fflush: (any*) -> int32
+
+    let write = (s: str, f: any*) ->
+        (int64) c.fwrite((any*)s.ptr, 1u64, (uint64)s.len, f)
+
+    let read = (buf: uint8[], n: int64, f: any*) ->
+        (int64) c.fread((any*)buf.ptr, 1u64, (uint64)n, f)
+
+    let open = (path: str, mode: str) ->
+        c.fopen((cstr)path, (cstr)mode)
+
+    let close = (f: any*) ->
+        c.fclose(f)
+        return
+
+    let flush = (f: any*) ->
+        c.fflush(f)
+        return

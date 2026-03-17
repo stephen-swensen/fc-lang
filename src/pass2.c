@@ -631,6 +631,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->type = msym->type;
                     return e->type;
                 }
+                if (msym->kind == DECL_MODULE) {
+                    e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
+                    return e->type;
+                }
                 /* Use the mangled codegen_name */
                 if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name) {
                     e->ident.codegen_name = msym->decl->let.codegen_name;
@@ -647,6 +651,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* Check global symbol table */
         Symbol *sym = symtab_lookup(ctx->symtab, e->ident.name);
         if (!sym) {
+            /* Built-in globals: stdin, stdout, stderr */
+            const char *n = e->ident.name;
+            if (n == intern_cstr(ctx->intern, "stdin") ||
+                n == intern_cstr(ctx->intern, "stdout") ||
+                n == intern_cstr(ctx->intern, "stderr")) {
+                e->type = type_any_ptr();
+                return e->type;
+            }
             diag_error(e->loc, "undefined name '%s'", e->ident.name);
             e->type = type_error();
             return e->type;
@@ -1225,6 +1237,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->call.is_indirect = false;  /* module function → direct */
         }
 
+        /* Detect extern calls — these skip the _ctx parameter */
+        if (callee_sym && callee_sym->kind == DECL_EXTERN) {
+            e->call.is_extern_call = true;
+        }
+
         e->type = ft->func.return_type;
         return e->type;
     }
@@ -1393,9 +1410,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR || to->kind == TYPE_CSTR);
         bool from_int = type_is_integer(from);
         bool to_int = type_is_integer(to);
-        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer */
+        bool str_to_cstr = (from->kind == TYPE_STR && to->kind == TYPE_CSTR);
+        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str -> cstr */
         if (!((from_num && to_num) || (from_ptr && to_ptr) ||
-              (from_ptr && to_int) || (from_int && to_ptr))) {
+              (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
             e->type = type_error();
             return e->type;
@@ -1595,6 +1613,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
             /* Struct/union type member */
             if (member->kind == DECL_STRUCT || member->kind == DECL_UNION) {
+                e->type = member->type;
+                return e->type;
+            }
+            /* Extern member: use raw C name */
+            if (member->kind == DECL_EXTERN) {
+                e->field.codegen_name = member->decl->ext.name;
                 e->type = member->type;
                 return e->type;
             }
@@ -2087,31 +2111,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
         }
         e->type = type_str();
-        return e->type;
-    }
-
-    case EXPR_PRINT: {
-        if (e->print_expr.dest) {
-            Type *dt = check_expr(ctx, e->print_expr.dest);
-            if (!type_is_error(dt)) {
-                dt = resolve_type(ctx, dt);
-                if (dt->kind != TYPE_ANY_PTR) {
-                    diag_error(e->loc,
-                        "fprint destination must be any*, got %s",
-                        type_name(dt));
-                }
-            }
-        }
-        Type *at = check_expr(ctx, e->print_expr.arg);
-        if (!type_is_error(at)) {
-            at = resolve_type(ctx, at);
-            if (at->kind != TYPE_STR) {
-                diag_error(e->loc,
-                    "print argument must be str, got %s",
-                    type_name(at));
-            }
-        }
-        e->type = type_void();
         return e->type;
     }
 

@@ -115,8 +115,10 @@ keyword = "let" | "mut" | "struct" | "union" | "module"
 
 (* Reserved identifiers — built-in compile-time operators.             *)
 (* These may not be shadowed by user-defined bindings.                 *)
-reserved_ident = "alloc" | "free" | "sizeof" | "default"
-               | "print" | "eprint" | "fprint" | "sprint" ;
+reserved_ident = "alloc" | "free" | "sizeof" | "default" ;
+
+(* Built-in globals — predefined identifiers typed any*.                *)
+builtin_global = "stdin" | "stdout" | "stderr" ;
 
 (* Built-in type names — may not be used as user-defined names.        *)
 builtin_type = "int8" | "int16" | "int32" | "int64"
@@ -323,6 +325,9 @@ union_body       = variant_decl , { NEWLINE , variant_decl } ;
 variant_decl     = "|" , IDENT , [ "(" , type_expr , ")" ] ;
 
 (* --- module ------------------------------------------------------- *)
+(* A module with "from" is a C binding module — it may only contain   *)
+(* extern declarations. A module without "from" may not contain       *)
+(* extern declarations.                                               *)
 
 module_decl      = [ "private" ] , "module" , IDENT , [ "from" , STR_LIT ] , "="
                  , INDENT , module_body , DEDENT ;
@@ -333,7 +338,7 @@ module_item      = let_decl
                  | struct_decl
                  | union_decl
                  | module_decl
-                 | extern_decl
+                 | extern_decl       (* only valid when enclosing module has "from" *)
                  | import_decl
                  | cond_comp_block
                  ;
@@ -542,10 +547,6 @@ primary_expr     = INT_LIT
                  | free_expr
                  | sizeof_expr
                  | default_expr
-                 | print_expr
-                 | eprint_expr
-                 | fprint_expr
-                 | sprint_expr
                  | some_expr
                  | struct_literal
                  | slice_literal
@@ -638,19 +639,6 @@ sizeof_expr      = "sizeof" , "(" , type_expr , ")" ;
 default_expr     = "default" , "(" , type_expr , ")" ;
 
 some_expr        = "some" , "(" , expr , ")" ;
-
-
-(* ------------------------------------------------------------------ *)
-(*  Formatted output operators                                         *)
-(* ------------------------------------------------------------------ *)
-
-print_expr       = "print" , "(" , expr , { "," , expr } , ")" ;
-
-eprint_expr      = "eprint" , "(" , expr , { "," , expr } , ")" ;
-
-fprint_expr      = "fprint" , "(" , expr , "," , expr , { "," , expr } , ")" ;
-
-sprint_expr      = "sprint" , "(" , expr , "," , expr , { "," , expr } , ")" ;
 
 
 (* ------------------------------------------------------------------ *)

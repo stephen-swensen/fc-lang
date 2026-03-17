@@ -1,0 +1,5 @@
+module math from "stdlib.h" =
+    extern abs as c_abs: (int32) -> int32
+
+let main = (args: int32) ->
+    math.c_abs(0 - 42)

@@ -36,7 +36,6 @@ typedef enum {
     EXPR_FREE,
     EXPR_SIZEOF,
     EXPR_DEFAULT,
-    EXPR_PRINT,
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
     EXPR_SOME,
@@ -126,6 +125,7 @@ struct Expr {
             Type **type_args;
             int type_arg_count;
             bool is_indirect;     /* callee is a function value (fat pointer) */
+            bool is_extern_call;  /* callee is an extern function (no _ctx) */
             const char *mangled_name;   /* C function name for monomorphized call, NULL for non-generic */
         } call;
 
@@ -213,13 +213,6 @@ struct Expr {
 
         /* EXPR_DEFAULT */
         struct { Type *target; } default_expr;
-
-        /* EXPR_PRINT (print, eprint, fprint) */
-        struct {
-            TokenKind print_kind;   /* TOK_PRINT, TOK_EPRINT, TOK_FPRINT */
-            Expr *dest;             /* file handle for fprint, NULL for print/eprint */
-            Expr *arg;              /* the str expression */
-        } print_expr;
 
         /* EXPR_INTERP_STRING */
         struct {

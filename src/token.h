@@ -46,9 +46,6 @@ typedef enum {
     TOK_FREE,
     TOK_SIZEOF,
     TOK_DEFAULT,
-    TOK_PRINT,
-    TOK_EPRINT,
-    TOK_FPRINT,
     /* String interpolation */
     TOK_INTERP_START,       /* leading text of interpolated string */
     TOK_INTERP_MID,         /* middle text between interpolation segments */

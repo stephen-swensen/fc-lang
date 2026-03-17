@@ -1,0 +1,6 @@
+module c from "stdlib.h" =
+    extern atoi: (cstr) -> int32
+
+let main = (args: int32) ->
+    let s = "42"
+    c.atoi((cstr)s)

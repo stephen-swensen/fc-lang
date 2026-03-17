@@ -1,4 +1,6 @@
+import io from std::
+
 let main = (args: int32) ->
     let msg = "hello\n"
-    print(msg)
+    io.write(msg, stdout)
     0

@@ -1,0 +1,10 @@
+import io from std::
+
+let main = (args: int32) ->
+    let f = io.open("/tmp/fc_test_io_open_close.txt", "w")
+    match f with
+    | some(v) ->
+        io.write("test\n", v)
+        io.close(v)
+        42
+    | none -> 1

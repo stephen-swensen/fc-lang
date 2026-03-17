@@ -24,6 +24,15 @@ static TypeSet *g_eq_set = NULL;
 static int indent_level = 0;
 static int temp_counter = 0;
 
+/* Does the option inner type use null-sentinel optimization (bare pointer, NULL = none)? */
+static bool is_null_sentinel(Type *opt_type) {
+    if (!opt_type || opt_type->kind != TYPE_OPTION) return false;
+    Type *inner = opt_type->option.inner;
+    return inner && (inner->kind == TYPE_POINTER ||
+                     inner->kind == TYPE_ANY_PTR ||
+                     inner->kind == TYPE_CSTR);
+}
+
 static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
@@ -57,6 +66,8 @@ static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
 /* Emit the identifier portion of a function type typedef name */
 static void emit_fn_type_suffix(Type *t, FILE *out);
 
+static void emit_type_ident(Type *t, FILE *out);
+
 static void emit_type(Type *t, FILE *out) {
     /* Handle type variable substitution during monomorphized emission */
     if (g_subst && t->kind == TYPE_TYPE_VAR) {
@@ -88,16 +99,22 @@ static void emit_type(Type *t, FILE *out) {
         fprintf(out, "*");
         break;
     case TYPE_SLICE:
-        fprintf(out, "fc_slice_");
-        emit_type(t->slice.elem, out);
+        if (type_eq(t->slice.elem, type_uint8())) {
+            fprintf(out, "fc_str");  /* uint8[] and str share the same typedef */
+        } else {
+            fprintf(out, "fc_slice_");
+            emit_type_ident(t->slice.elem, out);
+        }
         break;
     case TYPE_OPTION:
-        if (t->option.inner && t->option.inner->kind == TYPE_POINTER) {
-            /* T*? → plain pointer (null = none) */
+        if (t->option.inner && (t->option.inner->kind == TYPE_POINTER ||
+            t->option.inner->kind == TYPE_ANY_PTR ||
+            t->option.inner->kind == TYPE_CSTR)) {
+            /* Pointer-like? → plain pointer (null = none) */
             emit_type(t->option.inner, out);
         } else {
             fprintf(out, "fc_option_");
-            if (t->option.inner) emit_type(t->option.inner, out);
+            if (t->option.inner) emit_type_ident(t->option.inner, out);
             else fprintf(out, "void");
         }
         break;
@@ -237,7 +254,7 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
         break;
     case PAT_SOME: {
         if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
-        bool is_ptr = type->option.inner && type->option.inner->kind == TYPE_POINTER;
+        bool is_ptr = is_null_sentinel(type);
         if (is_ptr) fprintf(out, "%s != NULL", expr);
         else fprintf(out, "%s.has_value", expr);
         if (pat->some_pat.inner) {
@@ -250,7 +267,7 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
     }
     case PAT_NONE:
         if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
-        if (type->option.inner && type->option.inner->kind == TYPE_POINTER)
+        if (is_null_sentinel(type))
             fprintf(out, "%s == NULL", expr);
         else
             fprintf(out, "!%s.has_value", expr);
@@ -317,7 +334,7 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
         if (pat->some_pat.inner) {
             Type *inner_type = type->option.inner;
             char inner_expr[256];
-            if (inner_type && inner_type->kind == TYPE_POINTER)
+            if (is_null_sentinel(type))
                 snprintf(inner_expr, sizeof(inner_expr), "%s", expr);
             else
                 snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
@@ -522,16 +539,36 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "'\\x%02x'", e->char_lit.value);
         break;
 
-    case EXPR_STRING_LIT:
+    case EXPR_STRING_LIT: {
+        /* Compute actual byte length after C escape processing */
+        int actual_len = 0;
+        const char *s = e->string_lit.value;
+        int slen = e->string_lit.length;
+        for (int j = 0; j < slen; j++) {
+            if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
+            else if (s[j] == '\\' && j + 1 < slen) {
+                if (s[j+1] == 'x' && j + 3 < slen) j += 3;
+                else j++;
+            }
+            actual_len++;
+        }
         fprintf(out, "((fc_str){(uint8_t*)\"%.*s\", %d})",
-            e->string_lit.length, e->string_lit.value, e->string_lit.length);
+            e->string_lit.length, e->string_lit.value, actual_len);
         break;
+    }
 
     case EXPR_CSTRING_LIT:
         fprintf(out, "\"%.*s\"", e->cstring_lit.length, e->cstring_lit.value);
         break;
 
     case EXPR_IDENT:
+        /* Built-in globals: stdin, stdout, stderr */
+        if (e->type && e->type->kind == TYPE_ANY_PTR) {
+            const char *n = e->ident.name;
+            if (strcmp(n, "stdin") == 0) { fprintf(out, "(void*)stdin"); break; }
+            if (strcmp(n, "stdout") == 0) { fprintf(out, "(void*)stdout"); break; }
+            if (strcmp(n, "stderr") == 0) { fprintf(out, "(void*)stderr"); break; }
+        }
         if (e->type && e->type->kind == TYPE_FUNC &&
             !e->ident.is_local) {
             /* Top-level function used as a value — wrap in fat pointer */
@@ -682,8 +719,7 @@ static void emit_expr(Expr *e, FILE *out) {
         if (e->unary_postfix.op == TOK_BANG) {
             /* Option unwrap: check has_value, abort if none */
             Type *opt_type = e->unary_postfix.operand->type;
-            if (opt_type && opt_type->kind == TYPE_OPTION &&
-                opt_type->option.inner && opt_type->option.inner->kind == TYPE_POINTER) {
+            if (is_null_sentinel(opt_type)) {
                 /* T*? → plain pointer, unwrap = null check */
                 fprintf(out, "({ ");
                 emit_type(opt_type->option.inner, out);
@@ -783,7 +819,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
             }
 
-            if (fn_name) {
+            if (fn_name && !e->call.is_extern_call) {
                 fprintf(out, "%s(", fn_name);
                 for (int i = 0; i < e->call.arg_count; i++) {
                     if (i > 0) fprintf(out, ", ");
@@ -791,8 +827,16 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
                 if (e->call.arg_count > 0) fprintf(out, ", ");
                 fprintf(out, "NULL)");
+            } else if (fn_name) {
+                /* Extern call: no _ctx parameter */
+                fprintf(out, "%s(", fn_name);
+                for (int i = 0; i < e->call.arg_count; i++) {
+                    if (i > 0) fprintf(out, ", ");
+                    emit_expr(e->call.args[i], out);
+                }
+                fprintf(out, ")");
             } else {
-                /* Fallback: emit normally (e.g., extern functions) */
+                /* Fallback: emit normally */
                 emit_expr(e->call.func, out);
                 fprintf(out, "(");
                 for (int i = 0; i < e->call.arg_count; i++) {
@@ -874,11 +918,22 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_CAST: {
-        fprintf(out, "((");
-        emit_type(e->cast.target, out);
-        fprintf(out, ")");
-        emit_expr(e->cast.operand, out);
-        fprintf(out, ")");
+        /* str -> cstr: stack copy with null terminator */
+        if (e->cast.operand->type && e->cast.operand->type->kind == TYPE_STR &&
+            e->cast.target->kind == TYPE_CSTR) {
+            int tid = temp_counter++;
+            fprintf(out, "({ fc_str _sc%d = ", tid);
+            emit_expr(e->cast.operand, out);
+            fprintf(out, "; char *_cb%d = (char*)alloca((size_t)(_sc%d.len + 1))", tid, tid);
+            fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, (size_t)_sc%d.len)", tid, tid, tid);
+            fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (const char*)_cb%d; })", tid, tid, tid);
+        } else {
+            fprintf(out, "((");
+            emit_type(e->cast.target, out);
+            fprintf(out, ")");
+            emit_expr(e->cast.operand, out);
+            fprintf(out, ")");
+        }
         break;
     }
 
@@ -972,10 +1027,8 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_SOME: {
-        Type *opt_type = e->type;
-        if (opt_type && opt_type->kind == TYPE_OPTION &&
-            opt_type->option.inner && opt_type->option.inner->kind == TYPE_POINTER) {
-            /* T*? → plain pointer, some(x) = x */
+        if (is_null_sentinel(e->type)) {
+            /* T*?/any*?/cstr? → plain pointer, some(x) = x */
             emit_expr(e->some_expr.value, out);
         } else {
             fprintf(out, "(");
@@ -988,10 +1041,8 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_NONE: {
-        Type *opt_type = e->type;
-        if (opt_type && opt_type->kind == TYPE_OPTION &&
-            opt_type->option.inner && opt_type->option.inner->kind == TYPE_POINTER) {
-            /* T*? → plain pointer, none = NULL */
+        if (is_null_sentinel(e->type)) {
+            /* T*?/any*?/cstr? → plain pointer, none = NULL */
             fprintf(out, "NULL");
         } else {
             fprintf(out, "(");
@@ -1267,7 +1318,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "NULL");
             break;
         case TYPE_OPTION:
-            if (t->option.inner && t->option.inner->kind == TYPE_POINTER)
+            if (is_null_sentinel(t))
                 fprintf(out, "NULL");
             else {
                 fprintf(out, "(");
@@ -1675,53 +1726,6 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
-    case EXPR_PRINT: {
-        TokenKind pk = e->print_expr.print_kind;
-        const char *dest;
-        if (pk == TOK_PRINT) dest = "stdout";
-        else if (pk == TOK_EPRINT) dest = "stderr";
-        else dest = NULL; /* fprint */
-
-        /* If the argument is a static string literal, optimize to fwrite from static memory */
-        Expr *arg = e->print_expr.arg;
-        if (arg->kind == EXPR_STRING_LIT) {
-            int actual_len = 0;
-            const char *s = arg->string_lit.value;
-            int slen = arg->string_lit.length;
-            for (int j = 0; j < slen; j++) {
-                if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
-                else if (s[j] == '\\' && j + 1 < slen) {
-                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
-                    else j++;
-                }
-                actual_len++;
-            }
-            fprintf(out, "fwrite(\"%.*s\", 1, %d, ",
-                arg->string_lit.length, arg->string_lit.value, actual_len);
-            if (dest)
-                fprintf(out, "%s)", dest);
-            else {
-                fprintf(out, "(FILE*)");
-                emit_expr(e->print_expr.dest, out);
-                fprintf(out, ")");
-            }
-        } else {
-            /* General case: evaluate str, then fwrite */
-            int tid = temp_counter++;
-            fprintf(out, "({ fc_str _ps%d = ", tid);
-            emit_expr(arg, out);
-            fprintf(out, "; fwrite(_ps%d.ptr, 1, (size_t)_ps%d.len, ", tid, tid);
-            if (dest)
-                fprintf(out, "%s", dest);
-            else {
-                fprintf(out, "(FILE*)");
-                emit_expr(e->print_expr.dest, out);
-            }
-            fprintf(out, "); })");
-        }
-        break;
-    }
-
     default:
         fprintf(out, "/* TODO: expr kind %d */", e->kind);
         break;
@@ -2110,10 +2114,6 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
                 collect_types_expr(e->interp_string.segments[i].expr, slices, options, fns);
         }
         break;
-    case EXPR_PRINT:
-        if (e->print_expr.dest) collect_types_expr(e->print_expr.dest, slices, options, fns);
-        collect_types_expr(e->print_expr.arg, slices, options, fns);
-        break;
     default:
         break;
     }
@@ -2381,6 +2381,19 @@ static void flatten_decls(Decl **decls, int decl_count, Decl ***out, int *count,
     }
 }
 
+/* Recursively collect unique from_lib strings from module declarations */
+static void collect_from_libs(Decl *d, const char **seen, int *count, int cap) {
+    if (d->kind != DECL_MODULE) return;
+    if (d->module.from_lib) {
+        for (int i = 0; i < *count; i++)
+            if (strcmp(seen[i], d->module.from_lib) == 0) return;
+        if (*count < cap)
+            seen[(*count)++] = d->module.from_lib;
+    }
+    for (int i = 0; i < d->module.decl_count; i++)
+        collect_from_libs(d->module.decls[i], seen, count, cap);
+}
+
 static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) {
     Decl **all = NULL;
     int count = 0, cap = 0;
@@ -2395,7 +2408,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_arena = arena;
     g_intern = intern_tbl;
     g_symtab = symtab;
-    /* Preamble */
+    /* Preamble — compiler-required headers */
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stdbool.h>\n");
     fprintf(out, "#include <inttypes.h>\n");
@@ -2403,6 +2416,26 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "#include <string.h>\n");
     fprintf(out, "#include <stdio.h>\n");
     fprintf(out, "#include <alloca.h>\n");
+
+    /* Emit #include for each unique from_lib in extern modules */
+    {
+        const char *seen[64];
+        int seen_count = 0;
+        for (int i = 0; i < prog->decl_count; i++)
+            collect_from_libs(prog->decls[i], seen, &seen_count, 64);
+        for (int i = 0; i < seen_count; i++) {
+            /* Skip headers already in the preamble */
+            if (strcmp(seen[i], "stdint.h") == 0 ||
+                strcmp(seen[i], "stdbool.h") == 0 ||
+                strcmp(seen[i], "inttypes.h") == 0 ||
+                strcmp(seen[i], "stdlib.h") == 0 ||
+                strcmp(seen[i], "string.h") == 0 ||
+                strcmp(seen[i], "stdio.h") == 0 ||
+                strcmp(seen[i], "alloca.h") == 0)
+                continue;
+            fprintf(out, "#include <%s>\n", seen[i]);
+        }
+    }
     fprintf(out, "\n");
 
     /* Always emit fc_str (alias for uint8 slice) */

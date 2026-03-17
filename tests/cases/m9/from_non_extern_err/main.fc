@@ -1,0 +1,5 @@
+module m from "stdlib.h" =
+    extern abs: (int32) -> int32
+    let double_it = (x: int32) -> x + x
+
+let main = (args: int32) -> 0

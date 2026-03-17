@@ -146,6 +146,21 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                                     SymbolTable *members, InternTable *intern,
                                     SymbolTable *global_symtab) {
     const char *mod_name = d->module.name;
+    /* Validate: from-modules may only contain extern declarations,
+     * and non-from modules may not contain extern declarations. */
+    for (int j = 0; j < d->module.decl_count; j++) {
+        Decl *child = d->module.decls[j];
+        if (d->module.from_lib && child->kind != DECL_EXTERN) {
+            diag_error(child->loc,
+                "module '%s' has a 'from' clause — only extern declarations are allowed",
+                mod_name);
+        }
+        if (!d->module.from_lib && child->kind == DECL_EXTERN) {
+            diag_error(child->loc,
+                "extern declaration in module '%s' requires a 'from' clause on the module",
+                mod_name);
+        }
+    }
     for (int j = 0; j < d->module.decl_count; j++) {
         Decl *child = d->module.decls[j];
         switch (child->kind) {
@@ -207,6 +222,19 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 ut->unio.type_arg_count = 0;
                 msym->type = ut;
                 detect_generic_union(child, msym);
+            }
+            break;
+        }
+        case DECL_EXTERN: {
+            const char *src_name = child->ext.alias ? child->ext.alias : child->ext.name;
+            if (symtab_lookup(members, src_name)) {
+                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                    src_name, mod_name);
+            } else {
+                symtab_add(members, src_name, DECL_EXTERN, child);
+                Symbol *msym = symtab_lookup(members, src_name);
+                msym->type = child->ext.type;
+                msym->is_private = child->is_private;
             }
             break;
         }

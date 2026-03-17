@@ -27,12 +27,24 @@ Open design questions and topics for future discussion.
 
 ---
 
+## No `size_t` equivalent — extern declarations hardcode uint64
+
+FC has no `size_t` type. Extern declarations for C functions that take or return `size_t` (e.g., `fwrite`, `fread`, `malloc`) must use a fixed-width integer — currently `uint64`. This is correct on 64-bit platforms but wrong on 32-bit, where `size_t` is `uint32`.
+
+**Current workaround**: Since FC doesn't emit its own extern forward declarations (the real C headers provide correct prototypes via `#include`), the C compiler sees the correct `size_t`-width parameters and implicitly narrows the `uint64` values FC passes. This is sub-optimal (unnecessary 64→32 bit operations) but valid — the same pattern as FC's general approach of using `int64` arithmetic on 32-bit platforms where `int32` is native. The values involved in I/O sizes always fit in 32 bits in practice.
+
+**If FC adds 32-bit target support**: Consider adding a `usize`/`isize` type that maps to the target's pointer width, or a `size_t` type alias that resolves at codegen time. Until then, `uint64` is the pragmatic choice.
+
+---
+
 ## Slice/pointer provenance tracking
 
 Stack-allocated memory (e.g. interpolated strings via `alloca`, `&local_var`), read-only memory (string literals), and heap memory (`alloc`) all produce the same pointer/slice types. The compiler currently has no way to distinguish provenance or warn about returning stack pointers, freeing read-only memory, etc. This is a known gap — same as C. Options to explore:
 - Lightweight escape analysis (warn if stack-derived slice/pointer escapes the function)
 - Provenance annotations or regions
 - Runtime tagging (unlikely — conflicts with zero-cost philosophy)
+
+Related concern: if a function returns a `str`, the caller can't distinguish heap-allocated (must free) from read-only (must not free/mutate). One option: make `free` on read-only memory a no-op (compiler or runtime check), so callers can always safely free a returned slice. But this doesn't solve the case where a caller tries to write into returned read-only memory. Needs more thought.
 
 No urgency — the "trust the programmer" model works for now — but worth revisiting as the language matures.
 
@@ -62,6 +74,13 @@ No urgency — the "trust the programmer" model works for now — but worth revi
 - The `file` built-in type was removed. File handles are `any*` — the same opaque pointer type used for sqlite handles, pthread handles, and any other C resource.
 - No reason to privilege file I/O with a special type when all other C libraries use `any*`.
 - File operations moved from built-in `file.open`/`file.close`/etc. to `std::io` module (`io.open`, `io.close`, etc.).
-- `stdout`/`stderr` moved from built-in constants to `io.stdout`/`io.stderr`.
-- `print`/`eprint` remain reserved compiler operators — they don't require `std::io` import.
-- `fprint` destination changed from `file` to `any*`.
+
+### Extern declarations, std::io module, print→io.write migration (resolved 2026-03-16)
+- `extern` declarations implemented: parse, pass1 registration, pass2 type-checking, codegen (no `_ctx` parameter).
+- `module ... from "lib"` syntax for C library source metadata.
+- `stdlib/io.fc` written as a physical FC file wrapping C stdio via extern declarations.
+- `stdin`/`stdout`/`stderr` are now built-in globals typed `any*` (not module members).
+- `str→cstr` cast implemented via `(cstr)expr` — emits alloca+memcpy stack copy with null terminator.
+- `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
+- Null-sentinel optimization extended to `any*?` and `cstr?` (not just `T*?`).
+- 369 tests covering all milestones M1–M9.

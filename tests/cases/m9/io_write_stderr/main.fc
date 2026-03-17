@@ -1,0 +1,5 @@
+import io from std::
+
+let main = (args: int32) ->
+    io.write("error\n", stderr)
+    0

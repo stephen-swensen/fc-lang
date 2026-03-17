@@ -1,0 +1,7 @@
+module c from "stdlib.h" =
+    extern abs: (int32) -> int32
+
+let main = (args: int32) ->
+    let a = c.abs(0 - 3)
+    let b = c.abs(0 - 4)
+    a + b
