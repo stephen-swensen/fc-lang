@@ -29,6 +29,7 @@ FC is a C-targeting language with these core design constraints:
 - **Target**: C11 (using `int8_t`/etc. from `<stdint.h>`, `_Static_assert`, anonymous unions)
 - **Memory model**: Manual, no GC, no borrow checker — follows C's philosophy
 - **Syntax**: Indentation-based (offside rule, spaces only — tabs are a compile error)
+- **Comments**: `//` line comments, `/* */` block comments (nestable). No `#` comments.
 - **Type inference**: Directional (bottom-up, inside-out), never global unification
 - **Generics**: Monomorphized at compile time, zero runtime cost
 

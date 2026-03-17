@@ -1,0 +1,8 @@
+// Top-level line comment
+let add = (a: int32, b: int32) ->
+    // comment inside function body
+    a + b // end-of-line comment
+
+// comment between declarations
+let main = (args: int32) ->
+    add(0, 1) // trailing comment
