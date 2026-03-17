@@ -2012,6 +2012,8 @@ The dot notation `T.something` is not a special "static property" feature — it
 
 A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
 
+The built-in aliases `str`, `cstr`, and `str32` are the canonical examples: `str` is `uint8[]`, `cstr` is `uint8*`, and `str32` is `uint32[]`. Import aliases (§Importing) extend this mechanism to user-defined types — `import point as pt from geometry` makes `pt` a type alias for `point`. The alias name is preserved in diagnostics and function signatures, but the underlying type identity is unchanged: `pt` and `point` are the same type, values are freely interchangeable, and `==` works across them.
+
 ### Type-specific built-ins
 
 Available only on the types where they make sense — using them on other types is a compile error:
@@ -2505,6 +2507,19 @@ import func_a from acme::graphics::module_a           // symbol from named modul
 - `import *` works on modules only — you cannot wildcard-import from a bare namespace
 
 `import T from M` brings both the type `T` and the module `T` (if it exists) into scope together. There is no need to import them separately.
+
+**Alias name propagation.** When a type is imported with `as`, the alias name becomes the display name for that type within the importing scope — it appears in error messages, type signatures, and diagnostics. The alias does not create a new type; it is purely a naming convenience. The same type may be imported under multiple aliases, and values of any alias are freely interchangeable:
+
+```fc
+import point as pt from geometry
+import point as coord from geometry
+
+let move = (p: pt, dx: int32) -> pt { x = p.x + dx, y = p.y }
+
+let main = (args: int32) ->
+    let a = coord { x = 1, y = 2 }  // coord and pt are the same type
+    move(a, 10)                       // passing coord where pt is expected — OK
+```
 
 Circular references between modules are not allowed — whether via `import` or direct qualified access. If module A references anything in module B, module B may not reference anything in module A, directly or transitively. This applies even when both modules are defined in the same file. The compiler detects cycles during the first pass and reports them as compile errors.
 
