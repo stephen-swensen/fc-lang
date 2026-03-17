@@ -232,9 +232,10 @@ static void emit_fn_type_suffix(Type *t, FILE *out) {
 static void emit_expr(Expr *e, FILE *out);
 static void emit_eq_func_name(Type *t, FILE *out);
 
-/* Emit a function call argument for an extern call, inserting a (const char*)
- * cast when the parameter is cstr-aliased (C headers expect const char*,
- * but FC emits all uint8* as uint8_t*). */
+/* Emit a function call argument for an extern call, inserting casts at the
+ * C boundary: cstr (uint8*) → const char*, cstr* (uint8**) → char**,
+ * and any** (void**) → void* (C's void* converts to any T** implicitly,
+ * but void** does not). */
 static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     if (param_type && is_cstr_type(param_type)) {
         fprintf(out, "(const char*)");
@@ -242,6 +243,11 @@ static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
                is_cstr_type(param_type->pointer.pointee)) {
         /* uint8** → char** at C boundary (e.g. strtol's char** out-param) */
         fprintf(out, "(char**)");
+    } else if (param_type && param_type->kind == TYPE_POINTER &&
+               param_type->pointer.pointee->kind == TYPE_ANY_PTR) {
+        /* any** (void**) → void* at C boundary — void* converts to any T**
+         * implicitly in C, but void** does not (e.g. sqlite3_open's sqlite3**) */
+        fprintf(out, "(void*)");
     }
     emit_expr(e, out);
 }

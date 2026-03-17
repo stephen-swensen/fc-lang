@@ -116,7 +116,15 @@ let mut end = default(uint8*)
 let val = c.strtol((cstr)s, &end, 10)   // &end is uint8**, codegen emits (char**)
 ```
 
-**Opaque handle out-parameters** (e.g. `sqlite3_open`'s `sqlite3**`) are a different case. Since FC represents opaque C types as `any*`, the out-parameter would need `any**` — but `void**` is not implicitly convertible to `sqlite3**` in C. The pragmatic workaround is declaring the param as `any*` and casting: `(any*)&db`. A future improvement could teach the extern boundary to handle this, but it's low priority since most opaque-handle APIs are wrapped in higher-level FC modules that hide the out-parameter pattern.
+**Opaque handle out-parameters** (e.g. `sqlite3_open`'s `sqlite3**`) are also handled automatically. Since FC represents opaque C types as `any*`, the out-parameter type is `any**` — which emits as `void**` in C. But `void**` is not implicitly convertible to `sqlite3**` in C (only `void*` has that special property). The compiler handles this by emitting a `(void*)` cast at the extern boundary, collapsing `void**` to `void*` which C then implicitly converts to the target `T**`:
+
+```fc
+module sqlite from "sqlite3.h" =
+    extern sqlite3_open: (cstr, any**) -> int32
+
+let mut db = default(any*)
+let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (void*)
+```
 
 ### What we're not doing
 
@@ -166,4 +174,4 @@ let val = c.strtol((cstr)s, &end, 10)   // &end is uint8**, codegen emits (char*
 - `const char*` emission confined to extern call boundaries only; within FC-generated code, `cstr` emits as `uint8_t*`.
 - `import T as alias from M` now propagates the alias name to diagnostics and type signatures via shallow-copied `Type` with `alias` set. Multiple aliases for the same type are independent and interchangeable.
 - Spec updated with alias name propagation semantics in §Static Type Properties and §Importing.
-- 395 tests covering all milestones M1–M9.
+- 396 tests covering all milestones M1–M9.

@@ -2829,14 +2829,15 @@ Higher-level FC types must be explicitly lowered at C call sites:
 
 ### Automatic boundary casts
 
-The compiler automatically inserts C-level casts at extern call boundaries to bridge FC's unsigned byte types (`uint8_t`) with C's `char`-based conventions. These casts are invisible to the FC programmer — they only appear in the generated C:
+The compiler automatically inserts C-level casts at extern call boundaries to bridge FC's type representations with C's conventions. These casts are invisible to the FC programmer — they only appear in the generated C:
 
-| FC parameter type | C cast inserted | C equivalent |
+| FC parameter type | C cast inserted | Reason |
 |---|---|---|
-| `cstr` (`uint8*`) | `(const char*)` | `const char*` |
-| `cstr*` (`uint8**`) | `(char**)` | `char**` |
+| `cstr` (`uint8*`) | `(const char*)` | C string functions expect `const char*`, FC emits `uint8_t*` |
+| `cstr*` (`uint8**`) | `(char**)` | Out-parameter variant (e.g. `strtol`'s `endptr`) |
+| `any**` (`void**`) | `(void*)` | `void**` doesn't implicitly convert to `T**` in C; `void*` does |
 
-This covers the common C string APIs: functions taking `const char*` (most C string functions) and functions taking `char**` out-parameters (e.g. `strtol`'s `endptr`). No explicit cast is needed in the FC source — the compiler handles it:
+The `cstr` casts are safe because `char` and `uint8_t` have the same size and alignment — the signedness difference is irrelevant for string data. The `any**` cast leverages C's special rule that `void*` implicitly converts to any pointer type, including `T**` — but `void**` does not have this property.
 
 ```fc
 module c from "stdlib.h" =
@@ -2846,7 +2847,15 @@ let mut end = default(uint8*)
 let val = c.strtol((cstr)s, &end, 10)   // cstr → (const char*), &end → (char**)
 ```
 
-These casts are safe because `char` and `uint8_t` have the same size and alignment on all targets. The signedness difference is irrelevant for string data.
+The `any**` cast covers opaque handle APIs where a C function writes a handle through a `T**` out-parameter:
+
+```fc
+module sqlite from "sqlite3.h" =
+    extern sqlite3_open: (cstr, any**) -> int32
+
+let mut db = default(any*)
+let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (void*)
+```
 
 ### Mapping C enums
 
