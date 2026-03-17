@@ -1926,9 +1926,9 @@ The cost of `int64` on 32-bit and smaller targets is real but acceptable; progra
 
 Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
-### String literals and null termination
+### String literals and memory
 
-FC string literals are guaranteed to be null-terminated in memory. The `len` field does not include the null byte — it reflects the number of usable characters. This means a literal's `.ptr` is always safe to pass to C string functions.
+FC's `str` type makes no null-termination guarantee. A `str` is a fat pointer — a pointer and a length — and the length is the only authority on where the string ends. To pass a string to a C function that expects null termination, use a `(cstr)` cast or a `c"..."` literal.
 
 String literal memory lives in static read-only storage — the compiler emits the bytes into the binary's read-only data section, and the `str` fat pointer is constructed with `.ptr` pointing to that static data. This has two consequences:
 
@@ -1947,13 +1947,6 @@ buf[0] = 72u8            // ok — heap-allocated, mutable
 free(buf)                // ok — heap-allocated
 ```
 
-Sub-slices obtained via `s[i..j]` make no null-termination guarantee. Passing a sub-slice's `.ptr` to a C string function is the programmer's responsibility.
-
-```fc
-let s = "hello"     // stored as h e l l o \0 in memory, s.len == 5
-let sub = s[1..3]   // fat pointer into same memory — NOT null-terminated
-```
-
 ### Slice construction from raw pointer
 
 When interoperating with C, a slice can be constructed from a raw pointer and a known length using struct literal syntax:
@@ -1967,12 +1960,14 @@ The resulting slice shares memory with the original pointer — no allocation oc
 
 ### C interop
 
-Pass `.ptr` to C functions expecting a raw pointer. For string functions, ensure null termination first:
+For C functions expecting a null-terminated string, use `(cstr)` to create a stack copy with a null terminator, or use `c"..."` literals for constant strings:
 
 ```fc
-libc.puts(s.ptr)             // safe only if s is null-terminated
+libc.puts((cstr)s)           // stack copy with null terminator
 libc.puts(c"hello")          // cstr literal — always null-terminated
 ```
+
+For C functions that take a pointer and length (e.g. `fwrite`), pass `.ptr` and `.len` directly — no null termination needed.
 
 ### Embedded targets and raw pointer arrays
 
@@ -2822,7 +2817,7 @@ module pthreads from "pthread.h" =
 
 Higher-level FC types must be explicitly lowered at C call sites:
 
-- `str` — pass `s.ptr` to get a `cstr`. Programmer is responsible for ensuring null termination.
+- `str` — use `(cstr)s` to create a null-terminated stack copy, or `c"..."` for constant strings. Do not pass `s.ptr` directly to functions expecting null-terminated strings.
 - `cstr` — pass directly. Use `c"..."` literals for constant strings.
 - `T?` — unwrap with `x!` or `match` before passing
 - Structs — memory-compatible with C structs if declared in the same field order
@@ -2983,13 +2978,7 @@ In C, `void*` is frequently used for patterns that FC handles at the language le
 let cs = (cstr) s    // stack copy with null terminator — safe for passing to C
 ```
 
-The cast emits an `alloca`+`memcpy` to create a null-terminated copy on the stack. The copy is valid until the enclosing function returns. This is the preferred approach for passing FC strings to C functions.
-
-Alternatively, use `.ptr` if the string is known to be null-terminated (e.g., a string literal):
-
-```fc
-let cs = s.ptr    // type: cstr — only safe if s is null-terminated
-```
+The cast emits an `alloca`+`memcpy` to create a null-terminated copy on the stack. The copy is valid until the enclosing function returns.
 
 `cstr` to `str` — construct a slice from the raw pointer and length:
 
