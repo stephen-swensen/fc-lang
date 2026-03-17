@@ -1770,6 +1770,21 @@ int32*?      // optional pointer, may be none
 node**       // pointer to pointer to node
 ```
 
+Multi-level pointers (`T**`, `T***`, etc.) compose naturally. In practice, `T**` appears in two contexts: C interop with out-parameter APIs (a function writes a `T*` back through a `T**`), and low-level data structures. Idiomatic FC rarely needs `T**` for pure FC code — option types, struct returns, and mutable bindings cover the common cases where C would use a pointer out-parameter.
+
+```fc
+// T** out-parameter pattern — function writes a heap pointer through T**
+let create = (out: int32**) ->
+    let p = alloc(int32)!
+    *p = 99
+    *out = p
+
+let mut result = default(int32*)
+create(&result)        // &result is int32** — create writes through it
+let v = *result        // 99
+free(result)
+```
+
 ### Pointer width
 
 A pointer is its own type — `T*` — and its storage width is a property of the pointer itself, not of `T`. All pointer types in FC, regardless of what they point to, are exactly one native word wide: 32 bits on a 32-bit target, 64 bits on a 64-bit target, and so on for any architecture FC targets. The element type `T` only matters when the pointer is dereferenced — it tells the compiler how many bytes to read and what type the result has. The pointer value itself, the address, is always one word.
@@ -2811,6 +2826,27 @@ Higher-level FC types must be explicitly lowered at C call sites:
 - `cstr` — pass directly. Use `c"..."` literals for constant strings.
 - `T?` — unwrap with `x!` or `match` before passing
 - Structs — memory-compatible with C structs if declared in the same field order
+
+### Automatic boundary casts
+
+The compiler automatically inserts C-level casts at extern call boundaries to bridge FC's unsigned byte types (`uint8_t`) with C's `char`-based conventions. These casts are invisible to the FC programmer — they only appear in the generated C:
+
+| FC parameter type | C cast inserted | C equivalent |
+|---|---|---|
+| `cstr` (`uint8*`) | `(const char*)` | `const char*` |
+| `cstr*` (`uint8**`) | `(char**)` | `char**` |
+
+This covers the common C string APIs: functions taking `const char*` (most C string functions) and functions taking `char**` out-parameters (e.g. `strtol`'s `endptr`). No explicit cast is needed in the FC source — the compiler handles it:
+
+```fc
+module c from "stdlib.h" =
+    extern strtol: (cstr, cstr*, int32) -> int64
+
+let mut end = default(uint8*)
+let val = c.strtol((cstr)s, &end, 10)   // cstr → (const char*), &end → (char**)
+```
+
+These casts are safe because `char` and `uint8_t` have the same size and alignment on all targets. The signedness difference is irrelevant for string data.
 
 ### Mapping C enums
 

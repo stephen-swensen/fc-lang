@@ -238,6 +238,10 @@ static void emit_eq_func_name(Type *t, FILE *out);
 static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     if (param_type && is_cstr_type(param_type)) {
         fprintf(out, "(const char*)");
+    } else if (param_type && param_type->kind == TYPE_POINTER &&
+               is_cstr_type(param_type->pointer.pointee)) {
+        /* uint8** → char** at C boundary (e.g. strtol's char** out-param) */
+        fprintf(out, "(char**)");
     }
     emit_expr(e, out);
 }

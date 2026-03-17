@@ -1,0 +1,5 @@
+let main = (args: int32) ->
+    let mut x = 42
+    let mut p = &x
+    let pp = &p
+    **pp

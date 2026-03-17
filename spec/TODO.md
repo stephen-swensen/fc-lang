@@ -84,6 +84,40 @@ Core mechanic is straightforward: add `const` to the type system, reject writes 
 
 None of these are blockers — FC's type system is simpler than C's, so the design should be cleaner. Defer until after core milestones, then add as a focused feature.
 
+#### Why `const` is simpler in FC than in C
+
+In C, `const` can appear at every level of pointer indirection independently — `const int *`, `int *const`, `const int *const`, `const int **`, `int *const *`, etc. With N levels of indirection there are 2^N combinations, and the placement rules (`const` applies to whatever is left of it) are notoriously confusing.
+
+FC's `const` would be simpler because:
+
+1. **`let` vs `let mut` already handles reassignment.** C uses `const` for two things: "data is read-only" (`const int *p`) and "variable can't be reassigned" (`int *const p`). FC's `let`/`let mut` distinction covers the second case, so FC's `const` would only mean "the pointed-to data is read-only" — one meaning, not two.
+2. **Multi-level pointers are rare in practice.** FC supports `T**` (the spec and compiler both allow it), but idiomatic FC code rarely needs it — option types, struct fields, and multiple return values via structs cover the common cases. So while `const` would technically need to compose through pointer levels, the N=1 case (`const T*`, `const T[]`) would cover the vast majority of real usage.
+
+#### `T**` and C interop
+
+FC supports `T**` in the type system — the compiler, parser, and type checker all handle multi-level pointers. The main C use case for double pointers is out-parameters, where a function writes a pointer back through `T**`:
+
+```c
+int sqlite3_open(const char *filename, sqlite3 **ppDb);
+long strtol(const char *str, char **endptr, int base);
+// caller: sqlite3 *db; sqlite3_open("test.db", &db);
+// the ** exists because &(T*) = T** — it's just an out-parameter
+```
+
+**In pure FC**, `T**` out-parameters work directly — a function can accept `T**` and write through it. However, idiomatic FC rarely needs this pattern because functions return values directly, and option types / struct returns handle the cases where C would use an out-parameter.
+
+**At the C boundary**, `cstr*` (uint8**) is automatically cast to `char**` by the compiler, following the same pattern as the `cstr` → `const char*` cast for single-level pointers. This covers common C APIs like `strtol`:
+
+```fc
+module c from "stdlib.h" =
+    extern strtol: (cstr, cstr*, int32) -> int64
+
+let mut end = default(uint8*)
+let val = c.strtol((cstr)s, &end, 10)   // &end is uint8**, codegen emits (char**)
+```
+
+**Opaque handle out-parameters** (e.g. `sqlite3_open`'s `sqlite3**`) are a different case. Since FC represents opaque C types as `any*`, the out-parameter would need `any**` — but `void**` is not implicitly convertible to `sqlite3**` in C. The pragmatic workaround is declaring the param as `any*` and casting: `(any*)&db`. A future improvement could teach the extern boundary to handle this, but it's low priority since most opaque-handle APIs are wrapped in higher-level FC modules that hide the out-parameter pattern.
+
 ### What we're not doing
 
 - Borrow checker / ownership system (Rust-style) — too complex, conflicts with "manual memory, maps to C" philosophy
@@ -132,4 +166,4 @@ None of these are blockers — FC's type system is simpler than C's, so the desi
 - `const char*` emission confined to extern call boundaries only; within FC-generated code, `cstr` emits as `uint8_t*`.
 - `import T as alias from M` now propagates the alias name to diagnostics and type signatures via shallow-copied `Type` with `alias` set. Multiple aliases for the same type are independent and interchangeable.
 - Spec updated with alias name propagation semantics in §Static Type Properties and §Importing.
-- 389 tests covering all milestones M1–M9.
+- 395 tests covering all milestones M1–M9.
