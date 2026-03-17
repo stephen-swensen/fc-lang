@@ -1287,7 +1287,7 @@ The `..` syntax is only valid in `for` position and slice indexing position — 
 
 ```fc
 for i, p in points
-    if p.x == 0.0 then libc.printf(c"zero at index %d\n", i)
+    if p.x == 0.0 then io.write("zero at index %d{i}\n", stdout)
 ```
 
 The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration.
@@ -1956,7 +1956,7 @@ Pass `.ptr` to C functions expecting a raw pointer. For string functions, ensure
 
 ```fc
 libc.puts(s.ptr)             // safe only if s is null-terminated
-libc.printf(c"hello\n")     // cstr literal — always safe
+libc.puts(c"hello")          // cstr literal — always null-terminated
 ```
 
 ### Embedded targets and raw pointer arrays
@@ -2609,7 +2609,7 @@ import libc
 #end
 
 #if debug
-let log = (msg: str) -> libc.printf(msg.ptr)
+let log = (msg: str) -> io.write(msg, stdout)
 #else
 let log = (msg: str) -> return
 #end
@@ -2620,7 +2620,7 @@ Expression-level usage — conditionally including statements inside a function 
 ```fc
 let process = (data: uint8[]) ->
 #if debug
-    libc.printf(c"processing\n")
+    io.write("processing\n", stdout)
 #end
     do_work(data)    // still in function body — same indentation level as the #if block contents
 ```
@@ -2698,7 +2698,6 @@ module c_stdlib from "stdlib.h" =
     extern malloc:  (int64) -> any*?
 
 module c_stdio from "stdio.h" =
-    extern printf:  (cstr, ...) -> int32
     extern fopen:   (cstr, cstr) -> any*?
 
 module c_string from "string.h" =
@@ -2729,39 +2728,6 @@ let mut free_fn = (ptr: any*) -> free(ptr)   // (any*) -> void — addressable, 
 ```
 
 The `extern as` form is shown here for completeness and is more relevant when a C library has a function named `alloc`, `sizeof`, or `default`.
-
-### Variadic C functions
-
-Some C functions accept a variable number of arguments — `printf`, `sprintf`, `fprintf` being the most common. FC has no variadic functions and cannot define them: the directional inference model requires every parameter to have a declared type, which variadics by definition cannot provide.
-
-For C interop, variadic C functions are declared using `...` as a terminal parameter:
-
-```fc
-module c_stdio from "stdio.h" =
-    extern printf:  (cstr, ...) -> int32
-    extern sprintf: (cstr, cstr, ...) -> int32
-    extern fprintf: (any*, cstr, ...) -> int32
-```
-
-At a call site, arguments beyond the declared typed parameters are passed through without type-checking — the same trust-the-programmer stance FC takes on all C interop sharp edges:
-
-```fc
-libc.printf(c"value: %d\n", x)
-libc.printf(c"%s has %d items\n", name.ptr, count)
-```
-
-FC-defined functions cannot use `...`. If a programmer needs a variable number of arguments in FC code, the idiomatic approach is a slice parameter:
-
-```fc
-let log = (parts: str[]) ->
-    for p in parts
-        libc.printf(c"%.*s", p.len, p.ptr)
-    libc.printf(c"\n")
-
-log(str[2] { "value is: ", int_to_str(x) })
-```
-
-This is fully type-safe and consistent with the inference model.
 
 ### Null return values from C
 
@@ -3398,8 +3364,8 @@ let main = (args: str[]) ->
     let haystack = "the quick brown fox"
     let needle = "brown"
     match find_substring(haystack, needle) with
-    | some(_) -> libc.printf(c"found\n")
-    | none    -> libc.printf(c"not found\n")
+    | some(_) -> io.write("found\n", stdout)
+    | none    -> io.write("not found\n", stdout)
     0
 ```
 

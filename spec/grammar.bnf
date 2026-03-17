@@ -345,14 +345,7 @@ module_item      = let_decl
 
 (* --- extern ------------------------------------------------------- *)
 
-(* Extern declarations use extern_func_type to support C variadics.    *)
-extern_decl      = "extern" , IDENT , [ "as" , IDENT ] , ":" , extern_func_type ;
-
-(* Extern function type allows a trailing "..." for variadic C funcs.  *)
-(* Examples:  (cstr, ...) -> int32    (any*, cstr, ...) -> int32       *)
-extern_func_type = "(" , extern_type_list , ")" , "->" , type_expr
-                 | type_expr      (* non-function extern bindings      *)
-                 ;
+extern_decl      = "extern" , IDENT , [ "as" , IDENT ] , ":" , type_expr ;
 
 
 (* ================================================================== *)
@@ -401,10 +394,6 @@ type_arg_list    = type_expr , { "," , type_expr } ;
 
 type_param_list  = [ type_expr , { "," , type_expr } ] ;
 
-(* Variadic marker in extern declarations only.                        *)
-extern_type_list = [ type_expr , { "," , type_expr } , [ "," , "..." ] ]
-                 | "..."
-                 ;
 
 
 (* ================================================================== *)

@@ -88,7 +88,7 @@ fc-lang/
 | **M6** | Modules + imports: `module`, `import`, `namespace`, `from`, `as`, `private`, qualified names, name mangling | Multi-module program |
 | **M7** | Closures: Capture analysis (`let` only, `let mut` rejected), fat function pointers, context struct generation | Higher-order functions |
 | **M8** | Generics: Type variables, `<T>` syntax, monomorphization, fixpoint iteration, deduplication, mangled names | Generic identity, pair, arraylist |
-| **M9** | C interop + formatted output: `extern`, `from "lib"`, variadics, `c"..."`, `print`/`eprint`/`fprint`/`sprint` with compile-time format checking, `%s` to `%.*s` rewriting, `#if`/`#else`/`#end`, `std::io`, `std::sys`, main args as `str[]` | C interop, printf format checking, std modules |
+| **M9** | C interop + formatted output: `extern`, `from "header.h"`, `c"..."`, string interpolation, `std::io` (write/read/open/close/flush), stdin/stdout/stderr globals, str→cstr cast, `#if`/`#else`/`#end`, `std::sys`, main args as `str[]` | C interop, std modules |
 | **M10** | Polish: Full match exhaustiveness, closure escape detection, stack-slice return detection, integer literal range checking, static type properties (`int32.min`, `float64.nan`, etc.), initialized heap alloc (`alloc(T{...})`) | Full suite |
 
 ---
