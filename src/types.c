@@ -28,15 +28,66 @@ PRIM(float32, TYPE_FLOAT32)
 PRIM(float64, TYPE_FLOAT64)
 PRIM(bool,    TYPE_BOOL)
 PRIM(void,    TYPE_VOID)
-PRIM(str,     TYPE_STR)
-PRIM(str32,   TYPE_STR32)
-PRIM(cstr,    TYPE_CSTR)
 /* char is an alias for uint8 per spec */
 Type *type_char(void) { return type_uint8(); }
 PRIM(any_ptr, TYPE_ANY_PTR)
 PRIM(error,   TYPE_ERROR)
 
 #undef PRIM
+
+/* str = uint8[] with alias "str" */
+Type *type_str(void) {
+    static Type str_type = {0};
+    static bool init = false;
+    if (!init) {
+        str_type.kind = TYPE_SLICE;
+        str_type.alias = "str";
+        str_type.slice.elem = type_uint8();
+        init = true;
+    }
+    return &str_type;
+}
+
+/* str32 = uint32[] with alias "str32" */
+Type *type_str32(void) {
+    static Type str32_type = {0};
+    static bool init = false;
+    if (!init) {
+        str32_type.kind = TYPE_SLICE;
+        str32_type.alias = "str32";
+        str32_type.slice.elem = type_uint32();
+        init = true;
+    }
+    return &str32_type;
+}
+
+/* cstr = uint8* with alias "cstr" */
+Type *type_cstr(void) {
+    static Type cstr_type = {0};
+    static bool init = false;
+    if (!init) {
+        cstr_type.kind = TYPE_POINTER;
+        cstr_type.alias = "cstr";
+        cstr_type.pointer.pointee = type_uint8();
+        init = true;
+    }
+    return &cstr_type;
+}
+
+bool is_str_type(Type *t) {
+    return t && t->kind == TYPE_SLICE && t->slice.elem &&
+           t->slice.elem->kind == TYPE_UINT8;
+}
+
+bool is_cstr_type(Type *t) {
+    return t && t->kind == TYPE_POINTER && t->pointer.pointee &&
+           t->pointer.pointee->kind == TYPE_UINT8;
+}
+
+bool is_str32_type(Type *t) {
+    return t && t->kind == TYPE_SLICE && t->slice.elem &&
+           t->slice.elem->kind == TYPE_UINT32;
+}
 
 bool type_is_error(Type *t) {
     return t && t->kind == TYPE_ERROR;
@@ -127,18 +178,20 @@ static const char *primitive_names[] = {
     [TYPE_FLOAT64] = "float64",
     [TYPE_BOOL]    = "bool",
     [TYPE_VOID]    = "void",
-    [TYPE_STR]     = "str",
-    [TYPE_STR32]   = "str32",
-    [TYPE_CSTR]    = "cstr",
     [TYPE_CHAR]    = "char",
     [TYPE_ANY_PTR] = "any*",
     [TYPE_ERROR]   = "<error>",
 };
 
 const char *type_name(Type *t) {
+    if (t->alias) return t->alias;
     if (t->kind < TYPE_POINTER) {
         return primitive_names[t->kind];
     }
+    /* For compound types, check known aliases */
+    if (is_str_type(t)) return "str";
+    if (is_cstr_type(t)) return "cstr";
+    if (is_str32_type(t)) return "str32";
     /* For compound types, return a placeholder */
     switch (t->kind) {
     case TYPE_POINTER: return "T*";
@@ -232,8 +285,6 @@ bool type_needs_eq_func(Type *t) {
     case TYPE_STRUCT:
     case TYPE_UNION:
     case TYPE_SLICE:
-    case TYPE_STR:
-    case TYPE_STR32:
     case TYPE_FUNC:
         return true;
     case TYPE_OPTION:
@@ -406,6 +457,9 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
 
 const char *mangle_type_name(Type *t) {
     if (!t) return "void";
+    if (is_str_type(t)) return "str";
+    if (is_cstr_type(t)) return "cstr";
+    if (is_str32_type(t)) return "str32";
     switch (t->kind) {
     case TYPE_INT8:    return "int8";
     case TYPE_INT16:   return "int16";
@@ -419,8 +473,6 @@ const char *mangle_type_name(Type *t) {
     case TYPE_FLOAT64: return "f64";
     case TYPE_BOOL:    return "bool";
     case TYPE_VOID:    return "void";
-    case TYPE_STR:     return "str";
-    case TYPE_CSTR:    return "cstr";
     case TYPE_STRUCT:  return t->struc.name;
     case TYPE_UNION:   return t->unio.name;
     case TYPE_TYPE_VAR: return t->type_var.name;

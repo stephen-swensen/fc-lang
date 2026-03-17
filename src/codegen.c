@@ -29,8 +29,7 @@ static bool is_null_sentinel(Type *opt_type) {
     if (!opt_type || opt_type->kind != TYPE_OPTION) return false;
     Type *inner = opt_type->option.inner;
     return inner && (inner->kind == TYPE_POINTER ||
-                     inner->kind == TYPE_ANY_PTR ||
-                     inner->kind == TYPE_CSTR);
+                     inner->kind == TYPE_ANY_PTR);
 }
 
 static void emit_indent(FILE *out) {
@@ -91,16 +90,16 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_VOID:    fprintf(out, "void");      break;
-    case TYPE_STR:     fprintf(out, "fc_str");    break;
-    case TYPE_CSTR:    fprintf(out, "const char*"); break;
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_POINTER:
         emit_type(t->pointer.pointee, out);
         fprintf(out, "*");
         break;
     case TYPE_SLICE:
-        if (type_eq(t->slice.elem, type_uint8())) {
-            fprintf(out, "fc_str");  /* uint8[] and str share the same typedef */
+        if (is_str_type(t)) {
+            fprintf(out, "fc_str");
+        } else if (is_str32_type(t)) {
+            fprintf(out, "fc_str32");
         } else {
             fprintf(out, "fc_slice_");
             emit_type_ident(t->slice.elem, out);
@@ -108,8 +107,7 @@ static void emit_type(Type *t, FILE *out) {
         break;
     case TYPE_OPTION:
         if (t->option.inner && (t->option.inner->kind == TYPE_POINTER ||
-            t->option.inner->kind == TYPE_ANY_PTR ||
-            t->option.inner->kind == TYPE_CSTR)) {
+            t->option.inner->kind == TYPE_ANY_PTR)) {
             /* Pointer-like? → plain pointer (null = none) */
             emit_type(t->option.inner, out);
         } else {
@@ -169,9 +167,6 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
-    case TYPE_STR:     fprintf(out, "fc_str");    break;
-    case TYPE_STR32:   fprintf(out, "fc_str32");  break;
-    case TYPE_CSTR:    fprintf(out, "const_char_ptr"); break;
     case TYPE_ANY_PTR: fprintf(out, "void_ptr");  break;
     case TYPE_STRUCT:
         if (g_subst && type_contains_type_var(t))
@@ -186,8 +181,14 @@ static void emit_type_ident(Type *t, FILE *out) {
             fprintf(out, "%s", t->unio.name);
         break;
     case TYPE_SLICE:
-        fprintf(out, "fc_slice_");
-        emit_type_ident(t->slice.elem, out);
+        if (is_str_type(t)) {
+            fprintf(out, "fc_str");
+        } else if (is_str32_type(t)) {
+            fprintf(out, "fc_str32");
+        } else {
+            fprintf(out, "fc_slice_");
+            emit_type_ident(t->slice.elem, out);
+        }
         break;
     case TYPE_POINTER:
         emit_type_ident(t->pointer.pointee, out);
@@ -230,6 +231,16 @@ static void emit_fn_type_suffix(Type *t, FILE *out) {
 
 static void emit_expr(Expr *e, FILE *out);
 static void emit_eq_func_name(Type *t, FILE *out);
+
+/* Emit a function call argument for an extern call, inserting a (const char*)
+ * cast when the parameter is cstr-aliased (C headers expect const char*,
+ * but FC emits all uint8* as uint8_t*). */
+static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
+    if (param_type && is_cstr_type(param_type)) {
+        fprintf(out, "(const char*)");
+    }
+    emit_expr(e, out);
+}
 
 /* Recursively emit condition checks for any pattern.
    expr is the C expression for the value being matched.
@@ -558,7 +569,7 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_CSTRING_LIT:
-        fprintf(out, "\"%.*s\"", e->cstring_lit.length, e->cstring_lit.value);
+        fprintf(out, "(uint8_t*)\"%.*s\"", e->cstring_lit.length, e->cstring_lit.value);
         break;
 
     case EXPR_IDENT:
@@ -757,12 +768,14 @@ static void emit_expr(Expr *e, FILE *out) {
             break;
         }
 
+        /* Get callee function type for coercion */
+        Type *call_ft = e->call.func->type;
+
         if (e->call.is_indirect) {
             /* Indirect call through fat pointer */
             int tid = temp_counter++;
-            Type *ft = e->call.func->type;
             fprintf(out, "({ ");
-            emit_type(ft, out);
+            emit_type(call_ft, out);
             fprintf(out, " _cf%d = ", tid);
             emit_expr(e->call.func, out);
             fprintf(out, "; _cf%d.fn_ptr(", tid);
@@ -828,11 +841,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (e->call.arg_count > 0) fprintf(out, ", ");
                 fprintf(out, "NULL)");
             } else if (fn_name) {
-                /* Extern call: no _ctx parameter */
+                /* Extern call: cast cstr-aliased params to const char* for C headers */
                 fprintf(out, "%s(", fn_name);
                 for (int i = 0; i < e->call.arg_count; i++) {
                     if (i > 0) fprintf(out, ", ");
-                    emit_expr(e->call.args[i], out);
+                    Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
+                        ? call_ft->func.param_types[i] : NULL;
+                    emit_extern_arg(e->call.args[i], pt, out);
                 }
                 fprintf(out, ")");
             } else {
@@ -919,14 +934,14 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_CAST: {
         /* str -> cstr: stack copy with null terminator */
-        if (e->cast.operand->type && e->cast.operand->type->kind == TYPE_STR &&
-            e->cast.target->kind == TYPE_CSTR) {
+        if (e->cast.operand->type && is_str_type(e->cast.operand->type) &&
+            is_cstr_type(e->cast.target)) {
             int tid = temp_counter++;
             fprintf(out, "({ fc_str _sc%d = ", tid);
             emit_expr(e->cast.operand, out);
-            fprintf(out, "; char *_cb%d = (char*)alloca((size_t)(_sc%d.len + 1))", tid, tid);
+            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)alloca((size_t)(_sc%d.len + 1))", tid, tid);
             fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, (size_t)_sc%d.len)", tid, tid, tid);
-            fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (const char*)_cb%d; })", tid, tid, tid);
+            fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
         } else {
             fprintf(out, "((");
             emit_type(e->cast.target, out);
@@ -975,7 +990,7 @@ static void emit_expr(Expr *e, FILE *out) {
     case EXPR_INDEX: {
         /* Bounds check for slices */
         Type *obj_type = e->index.object->type;
-        if (obj_type && (obj_type->kind == TYPE_SLICE || obj_type->kind == TYPE_STR)) {
+        if (obj_type && obj_type->kind == TYPE_SLICE) {
             int tid = temp_counter++;
             fprintf(out, "({ ");
             emit_type(obj_type, out);
@@ -1152,7 +1167,7 @@ static void emit_expr(Expr *e, FILE *out) {
 
             /* Element binding */
             emit_indent(out);
-            Type *elem_type = (iter_type->kind == TYPE_STR) ? type_uint8() : iter_type->slice.elem;
+            Type *elem_type = iter_type->slice.elem;
             emit_type(elem_type, out);
             fprintf(out, " %s = ", e->for_expr.var);
             emit_expr(e->for_expr.iter, out);
@@ -1314,7 +1329,6 @@ static void emit_expr(Expr *e, FILE *out) {
             break;
         case TYPE_POINTER:
         case TYPE_ANY_PTR:
-        case TYPE_CSTR:
             fprintf(out, "NULL");
             break;
         case TYPE_OPTION:
@@ -1338,7 +1352,7 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_FREE: {
         Type *ot = e->free_expr.operand->type;
-        if (ot && (ot->kind == TYPE_SLICE || ot->kind == TYPE_STR)) {
+        if (ot && ot->kind == TYPE_SLICE) {
             fprintf(out, "free((");
             emit_expr(e->free_expr.operand, out);
             fprintf(out, ").ptr)");
@@ -1379,7 +1393,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "))");
         } else if (e->alloc_expr.init_expr->type &&
-                   e->alloc_expr.init_expr->type->kind == TYPE_STR) {
+                   is_str_type(e->alloc_expr.init_expr->type)) {
             /* alloc("...") or alloc(str_expr) → str? (heap-allocated string) */
             int tid = temp_counter++;
             fprintf(out, "({ fc_str _as%d = ", tid);
@@ -1416,7 +1430,7 @@ static void emit_expr(Expr *e, FILE *out) {
         Expr *target = e->assign.target;
         if (target->kind == EXPR_INDEX) {
             Type *obj_type = target->index.object->type;
-            if (obj_type && (obj_type->kind == TYPE_SLICE || obj_type->kind == TYPE_STR)) {
+            if (obj_type && obj_type->kind == TYPE_SLICE) {
                 int tid = temp_counter++;
                 fprintf(out, "({ ");
                 emit_type(obj_type, out);
@@ -1486,7 +1500,7 @@ static void emit_expr(Expr *e, FILE *out) {
         int str_arg_idx = 0;
         for (int i = 0; i < seg_count; i++) {
             if (!segs[i].is_literal && segs[i].conversion == 's' &&
-                segs[i].expr->type && segs[i].expr->type->kind == TYPE_STR) {
+                segs[i].expr->type && is_str_type(segs[i].expr->type)) {
                 fprintf(out, "fc_str _sa%d_%d = ", tid, str_arg_idx);
                 emit_expr(segs[i].expr, out);
                 fprintf(out, "; ");
@@ -1531,9 +1545,9 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
 
                 bool is_str_arg = (conv == 's' && segs[i].expr->type &&
-                                   segs[i].expr->type->kind == TYPE_STR);
+                                   is_str_type(segs[i].expr->type));
                 bool is_cstr_arg = (conv == 's' && segs[i].expr->type &&
-                                    segs[i].expr->type->kind == TYPE_CSTR);
+                                    is_cstr_type(segs[i].expr->type));
 
                 if (is_str_arg) {
                     if (!first_term) fprintf(out, " + ");
@@ -1648,7 +1662,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
             } else {
                 bool is_str_arg = (segs[i].conversion == 's' &&
-                                   segs[i].expr->type && segs[i].expr->type->kind == TYPE_STR);
+                                   segs[i].expr->type && is_str_type(segs[i].expr->type));
                 if (is_str_arg) {
                     /* Rewrite %s to %.*s for str arguments */
                     fprintf(out, "%%");
@@ -1684,7 +1698,7 @@ static void emit_expr(Expr *e, FILE *out) {
             if (segs[i].is_literal) continue;
             fprintf(out, ", ");
             bool is_str_arg = (segs[i].conversion == 's' &&
-                               segs[i].expr->type && segs[i].expr->type->kind == TYPE_STR);
+                               segs[i].expr->type && is_str_type(segs[i].expr->type));
             if (is_str_arg) {
                 /* %.*s needs (int)len, ptr */
                 fprintf(out, "(int)_sa%d_%d.len, _sa%d_%d.ptr",
@@ -1705,7 +1719,7 @@ static void emit_expr(Expr *e, FILE *out) {
                     fprintf(out, "(double)");
                 } else if (t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR)) {
                     fprintf(out, "(void*)");
-                } else if (t && t->kind == TYPE_CSTR) {
+                } else if (t && is_cstr_type(t)) {
                     if (segs[i].conversion == 'p')
                         fprintf(out, "(void*)");
                     else
@@ -2272,12 +2286,6 @@ static void emit_eq_func(Type *t, FILE *out) {
 
     t = resolve_struct_stub(t);
     switch (t->kind) {
-    case TYPE_STR:
-        fprintf(out, "    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);\n");
-        break;
-    case TYPE_STR32:
-        fprintf(out, "    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len * sizeof(uint32_t)) == 0);\n");
-        break;
     case TYPE_STRUCT: {
         int fc = t->struc.field_count;
         if (fc == 0) {
@@ -2438,8 +2446,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
     fprintf(out, "\n");
 
-    /* Always emit fc_str (alias for uint8 slice) */
+    /* Always emit fc_str and fc_str32 (aliases for uint8/uint32 slices) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
+    fprintf(out, "typedef struct { uint32_t* ptr; int64_t len; } fc_str32;\n");
 
     /* Flatten module decls into a single array */
     Decl **all_decls;
@@ -2537,7 +2546,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     /* Emit slice typedefs — before struct defs since structs may contain slices */
     for (int i = 0; i < slices.count; i++) {
         Type *s = slices.types[i];
-        if (type_eq(s->slice.elem, type_uint8())) continue; /* str already emitted */
+        if (is_str_type(s) || is_str32_type(s)) continue; /* str/str32 already emitted */
         /* Forward-declare as named struct so structs can reference it */
         fprintf(out, "typedef struct fc_slice_");
         emit_type_ident(s->slice.elem, out);

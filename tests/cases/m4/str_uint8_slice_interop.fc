@@ -1,0 +1,28 @@
+let get_len_str = (s: str) ->
+    s.len
+
+let get_len_u8slice = (s: uint8[]) ->
+    s.len
+
+let first_byte_str = (s: str) ->
+    s[0]
+
+let first_byte_u8slice = (s: uint8[]) ->
+    s[0]
+
+let main = (args: int32) ->
+    let s = "hello"
+    let mut buf = uint8[3] { }
+    buf.ptr[0] = 65u8
+    buf.ptr[1] = 66u8
+    buf.ptr[2] = 67u8
+
+    let a = get_len_u8slice(s)
+    let b = get_len_u8slice(buf)
+    let c = get_len_str(s)
+    let d = get_len_str(buf)
+    let e = first_byte_u8slice(s)
+    let f = first_byte_str(buf)
+
+    let result = (int32)a + (int32)b + (int32)c + (int32)d + (int32)e + (int32)f
+    result

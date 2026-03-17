@@ -1406,11 +1406,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *to = e->cast.target;
         bool from_num = type_is_numeric(from);
         bool to_num = type_is_numeric(to);
-        bool from_ptr = (from->kind == TYPE_POINTER || from->kind == TYPE_ANY_PTR || from->kind == TYPE_CSTR);
-        bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR || to->kind == TYPE_CSTR);
+        bool from_ptr = (from->kind == TYPE_POINTER || from->kind == TYPE_ANY_PTR);
+        bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR);
         bool from_int = type_is_integer(from);
         bool to_int = type_is_integer(to);
-        bool str_to_cstr = (from->kind == TYPE_STR && to->kind == TYPE_CSTR);
+        bool str_to_cstr = (is_str_type(from) && is_cstr_type(to));
         /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str -> cstr */
         if (!((from_num && to_num) || (from_ptr && to_ptr) ||
               (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr)) {
@@ -1708,14 +1708,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         obj_type = resolve_type(ctx, obj_type);
 
         /* Slice .len and .ptr fields */
-        if (obj_type->kind == TYPE_SLICE || obj_type->kind == TYPE_STR) {
+        if (obj_type->kind == TYPE_SLICE) {
             if (strcmp(e->field.name, "len") == 0) {
                 e->type = type_int64();
                 return e->type;
             }
             if (strcmp(e->field.name, "ptr") == 0) {
-                Type *elem = (obj_type->kind == TYPE_STR) ? type_uint8() : obj_type->slice.elem;
-                e->type = type_pointer(ctx->arena, elem);
+                e->type = type_pointer(ctx->arena, obj_type->slice.elem);
                 return e->type;
             }
         }
@@ -1778,10 +1777,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = obj_type->slice.elem;
             return e->type;
         }
-        if (obj_type->kind == TYPE_STR) {
-            e->type = type_uint8();
-            return e->type;
-        }
         if (obj_type->kind == TYPE_POINTER) {
             e->type = obj_type->pointer.pointee;
             return e->type;
@@ -1810,7 +1805,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
         }
-        if (obj_type->kind != TYPE_SLICE && obj_type->kind != TYPE_STR) {
+        if (obj_type->kind != TYPE_SLICE) {
             diag_error(e->loc, "subslice requires slice type, got %s", type_name(obj_type));
             e->type = type_error();
             return e->type;
@@ -1922,11 +1917,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (e->for_expr.index_var) {
                     scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
                 }
-            } else if (iter_type->kind == TYPE_STR) {
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_uint8(), false);
-                if (e->for_expr.index_var) {
-                    scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
-                }
             } else {
                 diag_error(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
                 scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
@@ -2008,7 +1998,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         if (ot->kind != TYPE_POINTER && ot->kind != TYPE_SLICE &&
-            ot->kind != TYPE_STR && ot->kind != TYPE_ANY_PTR && ot->kind != TYPE_CSTR) {
+            ot->kind != TYPE_ANY_PTR) {
             diag_error(e->loc, "free requires pointer or slice, got %s", type_name(ot));
         }
         e->type = type_void();
@@ -2037,7 +2027,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* alloc(expr) → T*? where T is the type of expr */
             Type *t = check_expr(ctx, e->alloc_expr.init_expr);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
-            if (t->kind == TYPE_STR) {
+            if (is_str_type(t)) {
                 /* alloc("...") or alloc(str_expr) → str? (heap-allocated string) */
                 e->type = type_option(ctx->arena, type_str());
             } else {
@@ -2086,7 +2076,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
                 break;
             case 's':
-                ok = (et->kind == TYPE_STR || et->kind == TYPE_CSTR);
+                ok = (is_str_type(et) || is_cstr_type(et));
                 if (!ok) diag_error(seg->expr->loc,
                     "format specifier %%s expects str or cstr, got %s",
                     type_name(et));
@@ -2098,8 +2088,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     type_name(et));
                 break;
             case 'p':
-                ok = (et->kind == TYPE_POINTER || et->kind == TYPE_ANY_PTR ||
-                      et->kind == TYPE_CSTR);
+                ok = (et->kind == TYPE_POINTER || et->kind == TYPE_ANY_PTR);
                 if (!ok) diag_error(seg->expr->loc,
                     "format specifier %%p expects pointer type, got %s",
                     type_name(et));

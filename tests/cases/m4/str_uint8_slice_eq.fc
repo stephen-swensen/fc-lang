@@ -1,0 +1,13 @@
+let main = (args: int32) ->
+    let s = "ABC"
+    let mut buf = uint8[3] { }
+    buf.ptr[0] = 65u8
+    buf.ptr[1] = 66u8
+    buf.ptr[2] = 67u8
+
+    let eq1 = s == buf
+    let eq2 = buf == s
+    let neq = s != buf
+
+    if eq1 && eq2 && !neq then 1
+    else 0

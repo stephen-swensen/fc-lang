@@ -14,9 +14,6 @@ typedef enum {
     TYPE_FLOAT64,
     TYPE_BOOL,
     TYPE_VOID,
-    TYPE_STR,
-    TYPE_STR32,
-    TYPE_CSTR,
     TYPE_CHAR,
     TYPE_POINTER,
     TYPE_SLICE,
@@ -47,6 +44,7 @@ struct UnionVariant {
 
 struct Type {
     TypeKind kind;
+    const char *alias;  /* display name override (e.g. "str" for uint8[], "cstr" for uint8*) */
     union {
         struct { Type *pointee; } pointer;
         struct { Type *elem; } slice;
@@ -99,6 +97,11 @@ bool type_is_error(Type *t);
 Type *type_pointer(Arena *a, Type *pointee);
 Type *type_slice(Arena *a, Type *elem);
 Type *type_option(Arena *a, Type *inner);
+
+/* Alias type helpers: str = uint8[], cstr = uint8*, str32 = uint32[] */
+bool is_str_type(Type *t);
+bool is_cstr_type(Type *t);
+bool is_str32_type(Type *t);
 
 /* Queries */
 bool type_is_integer(Type *t);

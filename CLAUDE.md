@@ -60,6 +60,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - Implicit widening only where lossless (e.g., `int32` → `int64`, NOT int → float)
 - Integer-to-float always requires an explicit cast
 - No `null` in the language — option types (`T?`) replace nullable values
+- **Type aliases are true aliases**: `str`, `cstr`, `str32` are desugared to their underlying types (`uint8[]`, `uint8*`, `uint32[]`) internally with a `const char *alias` field on `Type` for display purposes. They are fully interchangeable with their underlying types — `str` and `uint8[]` are the same type, `cstr` and `uint8*` are the same type. The alias only affects `type_name()` output in diagnostics, never type equality or semantics. C interop details (e.g., `const char*` for C string functions) are handled only at extern call boundaries in codegen, not in the type system.
 
 ### Compilation Model
 - **Two-pass**: First pass collects top-level names/types/layouts; second pass type-checks expressions
