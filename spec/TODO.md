@@ -37,38 +37,6 @@ FC has no `size_t` type. Extern declarations for C functions that take or return
 
 ---
 
-## Desugar `str`/`cstr`/`str32` to their underlying types
-
-Currently `str`, `cstr`, and `str32` are their own `TypeKind` values (`TYPE_STR`, `TYPE_CSTR`, `TYPE_STR32`), separate from `TYPE_SLICE` and `TYPE_POINTER`. The spec says `str = uint8[]`, `cstr = uint8*`, and `str32 = uint32[]`, but the type system treats them as distinct kinds. This causes ~15+ duplicate code paths in pass2 and codegen that check `TYPE_SLICE || TYPE_STR` or handle `TYPE_STR`/`TYPE_CSTR` as special cases alongside their underlying types.
-
-**Proposed change**: Add a `const char *alias` field to the `Type` struct. Desugar aliases early (during parsing or type construction) so that internally:
-- `str` → `TYPE_SLICE { elem = uint8, alias = "str" }`
-- `cstr` → `TYPE_POINTER { pointee = uint8, alias = "cstr" }`
-- `str32` → `TYPE_SLICE { elem = uint32, alias = "str32" }`
-
-The `alias` field is a general-purpose mechanism — not limited to built-in string types. It extends naturally to user-defined type aliases via `import ... as`:
-```
-import some_struct as my_alias from some_module
-let f = (x: my_alias) -> ...
-```
-Here `x`'s type is structurally `some_struct` but carries `alias = "my_alias"`. The alias propagates through function signatures and error messages, conveying the author's intent.
-
-The `alias` field is used only by `type_name()` for diagnostics and display. It has no semantic effect — `type_eq()` ignores it entirely.
-
-**Key behaviors**:
-- `type_eq()` ignores the alias field — `str` and `uint8[]` are the same type, `my_alias` and `some_struct` are the same type
-- A function declared `fn foo(s: str)` accepts a `uint8[]` argument, and vice versa
-- The function signature preserves the alias name chosen: `foo`'s parameter displays as `str`, not `uint8[]`
-- String literals produce `uint8[]` with `alias = "str"`
-- The `uint8[] → cstr` cast (stack copy + null termination) triggers on any `uint8[]` slice, not just `TYPE_STR`
-- All existing slice/pointer code paths in pass2 and codegen work automatically — no `|| TYPE_STR` branches needed
-- The few str-specific behaviors (str→cstr cast, `%s` formatting, string interpolation `%.*s` rewriting) check `is_str_type(t)` / `is_cstr_type(t)` helpers instead of `t->kind == TYPE_STR`
-- `import X as Y` sets `alias = "Y"` on the resolved type when used in signatures
-
-**Result**: Eliminates ~15 duplicate code paths, matches the spec's claim that these are true aliases, preserves readable diagnostics, and provides a general alias mechanism for future use.
-
----
-
 ## Slice/pointer provenance tracking
 
 Stack-allocated memory (e.g. interpolated strings via `alloca`, `&local_var`), read-only memory (string literals), and heap memory (`alloc`) all produce the same pointer/slice types. The compiler currently has no way to distinguish provenance or warn about returning stack pointers, freeing read-only memory, etc. This is a known gap — same as C. Options to explore:
@@ -115,4 +83,11 @@ No urgency — the "trust the programmer" model works for now — but worth revi
 - `str→cstr` cast implemented via `(cstr)expr` — emits alloca+memcpy stack copy with null terminator.
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?` (not just `T*?`).
-- 369 tests covering all milestones M1–M9.
+
+### True type aliases for str/cstr/str32, import-as alias propagation (resolved 2026-03-17)
+- `TYPE_STR`, `TYPE_CSTR`, `TYPE_STR32` removed from `TypeKind` enum. `str` is now `TYPE_SLICE{uint8}`, `cstr` is `TYPE_POINTER{uint8}`, `str32` is `TYPE_SLICE{uint32}` — with a `const char *alias` field on `Type` for display names.
+- `str` and `uint8[]` are fully interchangeable (same for `cstr`/`uint8*`, `str32`/`uint32[]`). Eliminated ~15 duplicate `TYPE_SLICE || TYPE_STR` code paths in pass2 and codegen.
+- `const char*` emission confined to extern call boundaries only; within FC-generated code, `cstr` emits as `uint8_t*`.
+- `import T as alias from M` now propagates the alias name to diagnostics and type signatures via shallow-copied `Type` with `alias` set. Multiple aliases for the same type are independent and interchangeable.
+- Spec updated with alias name propagation semantics in §Static Type Properties and §Importing.
+- 389 tests covering all milestones M1–M9.
