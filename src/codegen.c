@@ -1393,18 +1393,30 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "))");
         } else if (e->alloc_expr.init_expr->type &&
-                   is_str_type(e->alloc_expr.init_expr->type)) {
-            /* alloc("...") or alloc(str_expr) → str? (heap-allocated string) */
+                   e->alloc_expr.init_expr->type->kind == TYPE_SLICE) {
+            /* alloc(slice_expr) → T[]? (deep-copy slice data to heap) */
             int tid = temp_counter++;
-            fprintf(out, "({ fc_str _as%d = ", tid);
+            Type *slice_type = e->alloc_expr.init_expr->type;
+            Type *elem_type = slice_type->slice.elem;
+            fprintf(out, "({ ");
+            emit_type(slice_type, out);
+            fprintf(out, " _as%d = ", tid);
             emit_expr(e->alloc_expr.init_expr, out);
-            fprintf(out, "; uint8_t *_ap%d = (uint8_t*)malloc((size_t)_as%d.len); ",
-                tid, tid);
-            fprintf(out, "_ap%d ? (memcpy(_ap%d, _as%d.ptr, (size_t)_as%d.len), (",
+            fprintf(out, "; ");
+            emit_type(elem_type, out);
+            fprintf(out, " *_ap%d = (", tid);
+            emit_type(elem_type, out);
+            fprintf(out, "*)malloc((size_t)_as%d.len * sizeof(", tid);
+            emit_type(elem_type, out);
+            fprintf(out, ")); ");
+            fprintf(out, "_ap%d ? (memcpy(_ap%d, _as%d.ptr, (size_t)_as%d.len * sizeof(",
                 tid, tid, tid, tid);
-            /* some(str) */
+            emit_type(elem_type, out);
+            fprintf(out, ")), (");
             emit_type(e->type, out);
-            fprintf(out, "){ .value = (fc_str){ .ptr = _ap%d, .len = _as%d.len }, .has_value = true }) : (",
+            fprintf(out, "){ .value = (");
+            emit_type(slice_type, out);
+            fprintf(out, "){ .ptr = _ap%d, .len = _as%d.len }, .has_value = true }) : (",
                 tid, tid);
             emit_type(e->type, out);
             fprintf(out, "){ .has_value = false }; })");

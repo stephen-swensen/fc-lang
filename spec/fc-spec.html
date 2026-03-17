@@ -2042,7 +2042,9 @@ Four built-in compile-time operators handle memory-related operations that requi
 
 | Operator | Description |
 |----------|-------------|
-| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. When `T` is a slice type `T[N]`, allocates `N` elements and returns `T[]?`. Also accepts a value expression — `alloc(expr)` — inferring the type from the expression and initializing the allocated memory with that value. When applied to a string literal, `alloc("...")` heap-allocates and returns `str?`. |
+| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
+| `alloc(T[N])` | Heap-allocate a slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. If `expr` is a slice, **deep-copies the data** — allocates `len * sizeof(elem)` bytes and copies the contents — returning `T[]?`. Otherwise allocates a single `T` and writes the value, returning `T*?`. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
@@ -2136,6 +2138,28 @@ free(buf)                    // free a heap-allocated slice — compiler emits f
 
 `alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N])` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
 
+### alloc forms summary
+
+| Form | Returns | Behavior |
+|------|---------|----------|
+| `alloc(T)` | `T*?` | Zero-initialized single value |
+| `alloc(T[N])` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
+| `alloc(expr)` where expr is a struct/union/scalar | `T*?` | Heap-allocate and copy value |
+| `alloc(expr)` where expr is a slice | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
+
+The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
+
+```fc
+let s = "count: \{n}"       // stack-allocated (alloca) — unsafe to return
+let owned = alloc(s)!        // heap copy — safe to return, caller must free
+
+let mut buf = int32[3] { }
+buf.ptr[0] = 10
+let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
+```
+
+`alloc(variable)` works for any binding — the compiler resolves the parser ambiguity between type names and variable names. If the name refers to a variable in scope, it is treated as `alloc(expr)`, not `alloc(T)`.
+
 `alloc` and `free` require a hosted environment or an embedded target with a heap allocator. They are unavailable on bare-metal targets and are a compile error if used there. See §Build Targets.
 
 ### Initialized alloc
@@ -2163,7 +2187,7 @@ let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
 let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
 ```
 
-In all cases the return type is the same as the zero-init form — `T*?` for structs and unions, `T[]?` for slices.
+In all cases the return type follows from the value's type — `T*?` for structs, unions, and scalars; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
 > `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.

@@ -37,16 +37,58 @@ FC has no `size_t` type. Extern declarations for C functions that take or return
 
 ---
 
-## Slice/pointer provenance tracking
+## Slice/pointer provenance and safety
 
-Stack-allocated memory (e.g. interpolated strings via `alloca`, `&local_var`), read-only memory (string literals), and heap memory (`alloc`) all produce the same pointer/slice types. The compiler currently has no way to distinguish provenance or warn about returning stack pointers, freeing read-only memory, etc. This is a known gap — same as C. Options to explore:
-- Lightweight escape analysis (warn if stack-derived slice/pointer escapes the function)
-- Provenance annotations or regions
-- Runtime tagging (unlikely — conflicts with zero-cost philosophy)
+### Current situation
 
-Related concern: if a function returns a `str`, the caller can't distinguish heap-allocated (must free) from read-only (must not free/mutate). One option: make `free` on read-only memory a no-op (compiler or runtime check), so callers can always safely free a returned slice. But this doesn't solve the case where a caller tries to write into returned read-only memory. Needs more thought.
+All pointer/slice creation paths produce the same types with no provenance information:
 
-No urgency — the "trust the programmer" model works for now — but worth revisiting as the language matures.
+| Source | Storage | Safe to return? | Safe to free? |
+|--------|---------|-----------------|---------------|
+| `alloc(T)`, `alloc(T, N)`, `alloc(expr)` | Heap | Yes | Yes |
+| `"hello"`, `c"hello"` | Static read-only | Yes | **No** |
+| `&x` on `let mut` | Stack | **No** | **No** |
+| `T[N] { }` array literal | Stack | **No** | **No** |
+| `"hello \{x}"` interpolation | Stack (`alloca`) | **No** | **No** |
+| `(cstr)str_value` cast | Stack (`alloca`) | **No** | **No** |
+
+This is the same situation as C, with one exception: C has `const` which provides partial protection (compiler rejects writes through `const char*`), while FC has no equivalent. FC also creates more implicit stack temporaries than typical C (interpolation, str→cstr casts, array literals) where the sugar hides the provenance.
+
+The `alloc(slice)` deep-copy pattern mitigates this — `alloc(s)!` promotes any stack slice to heap-owned memory. But the programmer must know when to use it.
+
+### Escape analysis (low-hanging fruit)
+
+Lightweight compile-time checks for the obvious cases:
+- Returning a stack-derived pointer or slice from a function
+- Storing a stack pointer/slice in a heap-allocated struct
+- `free()` on a string literal or stack pointer
+
+GCC/Clang do this for the simplest C cases (`-Wreturn-local-addr`). FC could do better since the compiler has more information about slice origins (it generates the `alloca` calls and array literal backing arrays).
+
+### `const` qualifier (future)
+
+Adding a `const` qualifier to pointer/slice types would let FC match C's convention where `const T*` / `const T[]` means "borrowed, don't modify, don't free" and `T*` / `T[]` means "you own this, you're responsible for it." This is widely used in C APIs:
+
+```
+const char *getenv(...)     // returns internal pointer — don't free
+char *strdup(...)           // returns heap copy — caller must free
+```
+
+Core mechanic is straightforward: add `const` to the type system, reject writes through const pointers/slices in pass2, emit `const` in codegen. Key design questions:
+
+- **Depth**: does `const int32*[]` mean the ints are const, the slice is const, or both? FC's simpler type system (no multi-level `const * const *` chains) should allow a cleaner design than C.
+- **Inference**: should `let s = "hello"` infer `const str`? Probably yes for literals. Need coercion rules (non-const to const is safe, const to non-const requires explicit cast).
+- **Transitivity**: if you have a const pointer to a struct, are the struct's fields const? (C says yes.)
+- **Generics**: how does `box<const int32>` interact with monomorphization?
+- **Cast-away**: C allows `(char*)const_ptr` to strip const. FC should probably allow this for C interop but could warn.
+
+None of these are blockers — FC's type system is simpler than C's, so the design should be cleaner. Defer until after core milestones, then add as a focused feature.
+
+### What we're not doing
+
+- Borrow checker / ownership system (Rust-style) — too complex, conflicts with "manual memory, maps to C" philosophy
+- Runtime provenance tagging — conflicts with zero-cost philosophy
+- Automatic reference counting — same
 
 ---
 

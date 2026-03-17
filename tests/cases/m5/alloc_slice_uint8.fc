@@ -1,0 +1,12 @@
+let main = (args: int32) ->
+    let mut buf = uint8[3] { }
+    buf.ptr[0] = 65u8
+    buf.ptr[1] = 66u8
+    buf.ptr[2] = 67u8
+
+    let copy = alloc(buf)!
+    buf.ptr[0] = 0u8
+
+    let result = (int32)copy[0] + (int32)copy[1] + (int32)copy[2]
+    free(copy)
+    result

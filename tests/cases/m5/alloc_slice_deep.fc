@@ -1,0 +1,13 @@
+let main = (args: int32) ->
+    let mut buf = int32[3] { }
+    buf.ptr[0] = 10
+    buf.ptr[1] = 20
+    buf.ptr[2] = 30
+
+    let copy = alloc(buf)!
+
+    buf.ptr[0] = 99
+
+    let v = copy[0] + copy[1] + copy[2]
+    free(copy)
+    v
