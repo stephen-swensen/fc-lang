@@ -1,0 +1,16 @@
+module shapes =
+    union shape =
+        | circle(int32)
+        | rect(int32)
+
+import shape as sh from shapes
+
+let area = (s: sh) ->
+    match s with
+    | circle(r) -> r * r
+    | rect(w) -> w * w
+
+let main = (args: int32) ->
+    let c = sh.circle(5)
+    let r = sh.rect(4)
+    area(c) + area(r)

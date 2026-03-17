@@ -506,7 +506,17 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             } else {
                 symtab_add(symtab, import_name, msym->kind, msym->decl);
                 Symbol *new_sym = &symtab->symbols[symtab->count - 1];
-                new_sym->type = msym->type;
+                /* If importing a type with an alias, shallow-copy the Type so
+                 * the alias field doesn't mutate the original shared type. */
+                if (d->import.alias && msym->type &&
+                    (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION)) {
+                    Type *copy = malloc(sizeof(Type));
+                    *copy = *msym->type;
+                    copy->alias = d->import.alias;
+                    new_sym->type = copy;
+                } else {
+                    new_sym->type = msym->type;
+                }
                 new_sym->members = msym->members;
             }
             /* Type-associated module: if importing a type, also import the

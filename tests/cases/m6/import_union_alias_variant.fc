@@ -1,0 +1,19 @@
+module shapes =
+    union color =
+        | red
+        | green
+        | blue
+
+import color as col from shapes
+
+let to_num = (c: col) ->
+    match c with
+    | red -> 1
+    | green -> 2
+    | blue -> 3
+
+let main = (args: int32) ->
+    let r = col.red
+    let g = col.green
+    let b = col.blue
+    to_num(r) + to_num(g) + to_num(b)

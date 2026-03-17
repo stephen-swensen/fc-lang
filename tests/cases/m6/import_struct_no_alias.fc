@@ -1,0 +1,12 @@
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+import point from geometry
+
+let make = (x: int32, y: int32) -> point { x = x, y = y }
+
+let main = (args: int32) ->
+    let p = make(10, 20)
+    p.x + p.y

@@ -1,0 +1,12 @@
+module containers =
+    struct box =
+        value: 'a
+
+    let wrap = (x: 'a) -> box { value = x }
+    let unwrap = (b: box<'a>) -> b.value
+
+import box as wrapper from containers
+
+let main = (args: int32) ->
+    let b = containers.wrap(42)
+    containers.unwrap(b)

@@ -1,0 +1,10 @@
+module shapes =
+    union color =
+        | red
+        | green
+
+import color as col from shapes
+
+let main = (args: int32) ->
+    let c = col.red
+    c + 1
