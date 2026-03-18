@@ -1002,13 +1002,34 @@ static Expr *parse_prefix(Parser *p) {
         advance_p(p);
         expect(p, TOK_LPAREN);
 
-        /* Try to parse as type-based alloc: alloc(T) or alloc(T[N])
-         * Save position so we can backtrack if it's actually alloc(expr) */
-        int save = p->pos;
+        /* Decide type vs expression without backtracking.
+         * Built-in types, void, and type variables are syntactically unambiguous.
+         * Unknown identifiers followed by [ are treated as alloc(T[N]).
+         * Bare unknown identifiers (followed by )) are parsed as expressions —
+         * pass2 disambiguates type names from variables.
+         * Unknown identifiers followed by < need a tentative parse for generic
+         * type args (the <> ambiguity is inherent to the grammar). */
         Token *first = current(p);
-        bool could_be_type = (first->kind == TOK_IDENT || first->kind == TOK_VOID ||
-                              first->kind == TOK_LPAREN || first->kind == TOK_TYPE_VAR);
-        if (could_be_type) {
+        bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR);
+        bool try_type = false;
+        int save = 0;
+
+        if (!is_type && first->kind == TOK_IDENT) {
+            if (type_from_name(first->start, first->length)) {
+                is_type = true;
+            } else {
+                Token *next = peek_at(p, 1);
+                if (next->kind == TOK_LBRACKET) {
+                    is_type = true;
+                } else if (next->kind == TOK_LT) {
+                    /* Could be generic type args or comparison — try type */
+                    try_type = true;
+                    save = p->pos;
+                }
+            }
+        }
+
+        if (is_type || try_type) {
             Type *ty = parse_type(p);
             if (check(p, TOK_RPAREN)) {
                 /* alloc(T) — bare type alloc */
@@ -1031,8 +1052,12 @@ static Expr *parse_prefix(Parser *p) {
                 e->alloc_expr.init_expr = NULL;
                 return e;
             }
-            /* Not type-only — backtrack and parse as expression */
-            p->pos = save;
+            if (try_type) {
+                /* Generic type args didn't pan out — backtrack */
+                p->pos = save;
+            } else {
+                diag_fatal(loc, "expected ')' or '[' after type in alloc");
+            }
         }
 
         /* alloc(expr) — initialized alloc */

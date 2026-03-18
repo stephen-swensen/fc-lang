@@ -2011,34 +2011,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Type *ty = resolve_type(ctx, e->alloc_expr.alloc_type);
             e->alloc_expr.alloc_type = ty;
 
-            /* Parser ambiguity: alloc(name) where name is a variable, not a type.
-             * The parser tentatively parses it as alloc(T). If resolve_type returns
-             * an unresolved struct stub (no fields) and the name is a variable in
-             * scope, reinterpret as alloc(expr). */
-            if (!e->alloc_expr.size_expr &&
-                ty->kind == TYPE_STRUCT && ty->struc.field_count == 0 &&
-                ty->struc.fields == NULL && ty->struc.name) {
-                Type *var_type = scope_lookup_capture(ctx->scope, ty->struc.name,
-                    NULL, NULL, NULL, NULL);
-                if (!var_type) {
-                    /* Also check top-level let bindings */
-                    Symbol *sym = symtab_lookup(ctx->symtab, ty->struc.name);
-                    if (sym && sym->kind == DECL_LET) var_type = sym->type;
-                }
-                if (var_type) {
-                    /* Reinterpret as alloc(expr): build an EXPR_IDENT node */
-                    Expr *ident = arena_alloc(ctx->arena, sizeof(Expr));
-                    memset(ident, 0, sizeof(Expr));
-                    ident->kind = EXPR_IDENT;
-                    ident->loc = e->loc;
-                    ident->ident.name = ty->struc.name;
-                    e->alloc_expr.alloc_type = NULL;
-                    e->alloc_expr.init_expr = ident;
-                    /* Fall through to the alloc(expr) path below */
-                    goto alloc_expr_path;
-                }
-            }
-
             if (e->alloc_expr.size_expr) {
                 /* alloc(T[N]) → T[]? */
                 Type *st = check_expr(ctx, e->alloc_expr.size_expr);
@@ -2053,7 +2025,36 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 /* alloc(T) → T*? */
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, ty));
             }
-        } else { alloc_expr_path: {
+        } else {
+            /* alloc(expr) — a bare identifier may be a type name rather than
+             * a variable.  Check the variable scope first; if not found, try
+             * resolving as a type so that alloc(my_struct) works. */
+            if (e->alloc_expr.init_expr->kind == EXPR_IDENT) {
+                const char *name = e->alloc_expr.init_expr->ident.name;
+                Type *var_type = scope_lookup_capture(ctx->scope, name,
+                    NULL, NULL, NULL, NULL);
+                if (!var_type) {
+                    Symbol *sym = symtab_lookup(ctx->symtab, name);
+                    if (sym && sym->kind == DECL_LET) var_type = sym->type;
+                }
+                if (!var_type) {
+                    /* Not a variable — try to resolve as a type name */
+                    Type *stub = arena_alloc(ctx->arena, sizeof(Type));
+                    memset(stub, 0, sizeof(Type));
+                    stub->kind = TYPE_STRUCT;
+                    stub->struc.name = name;
+                    Type *ty = resolve_type(ctx, stub);
+                    if (ty != stub) {
+                        /* Resolved as type — treat as alloc(T) */
+                        e->alloc_expr.alloc_type = ty;
+                        e->alloc_expr.init_expr = NULL;
+                        e->type = type_option(ctx->arena, type_pointer(ctx->arena, ty));
+                        return e->type;
+                    }
+                    /* Neither variable nor type — fall through to check_expr
+                     * which will report the undeclared identifier error */
+                }
+            }
             /* alloc(expr) → T*? where T is the type of expr */
             Type *t = check_expr(ctx, e->alloc_expr.init_expr);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
@@ -2063,7 +2064,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             } else {
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
             }
-        }}
+        }
         return e->type;
     }
 
