@@ -2543,6 +2543,37 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     scope_add(ctx->scope, d->let.name, cg_name, t, d->let.is_mut);
 }
 
+/* Recursively type-check module members, including arbitrarily nested submodules.
+ * parent_members is the symbol table to look up submodule symbols in. */
+static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
+                                 SymbolTable *parent_members) {
+    for (int i = 0; i < mod_decl->module.decl_count; i++) {
+        Decl *child = mod_decl->module.decls[i];
+        if (child->kind == DECL_LET) {
+            check_decl_let(ctx, child);
+            if (child->let.init && child->let.init->kind != EXPR_FUNC &&
+                !is_const_expr(child->let.init)) {
+                diag_error(child->loc,
+                    "top-level initializer for '%s' must be a constant expression",
+                    child->let.name);
+            }
+        } else if (child->kind == DECL_MODULE) {
+            Symbol *sub_sym = symtab_lookup_kind(parent_members,
+                child->module.name, DECL_MODULE);
+            if (sub_sym && sub_sym->members) {
+                SymbolTable *saved_symtab = ctx->module_symtab;
+                Scope *saved_scope = ctx->scope;
+                ctx->module_symtab = sub_sym->members;
+                ctx->scope = scope_new(ctx->arena, ctx->scope);
+                ctx->scope->is_global = true;
+                check_module_members(ctx, child, sub_sym->members);
+                ctx->scope = saved_scope;
+                ctx->module_symtab = saved_symtab;
+            }
+        }
+    }
+}
+
 void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, MonoTable *mono) {
     Arena arena;
     arena_init(&arena);
@@ -2583,43 +2614,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         ctx.module_symtab = mod_sym->members;
         ctx.scope = scope_new(&arena, NULL);
         ctx.scope->is_global = true;
-        /* Type-check all let decls in this module, recursing into submodules */
-        for (int j = 0; j < d->module.decl_count; j++) {
-            Decl *child = d->module.decls[j];
-            if (child->kind == DECL_LET) {
-                check_decl_let(&ctx, child);
-                if (child->let.init && child->let.init->kind != EXPR_FUNC &&
-                    !is_const_expr(child->let.init)) {
-                    diag_error(child->loc,
-                        "top-level initializer for '%s' must be a constant expression",
-                        child->let.name);
-                }
-            } else if (child->kind == DECL_MODULE) {
-                /* Nested submodule: type-check with submodule's symtab */
-                Symbol *sub_sym = symtab_lookup_kind(mod_sym->members, child->module.name, DECL_MODULE);
-                if (sub_sym && sub_sym->members) {
-                    SymbolTable *saved_inner = ctx.module_symtab;
-                    Scope *saved_sub_scope = ctx.scope;
-                    ctx.module_symtab = sub_sym->members;
-                    ctx.scope = scope_new(&arena, ctx.scope);
-                    ctx.scope->is_global = true;
-                    for (int k = 0; k < child->module.decl_count; k++) {
-                        Decl *sub_child = child->module.decls[k];
-                        if (sub_child->kind == DECL_LET) {
-                            check_decl_let(&ctx, sub_child);
-                            if (sub_child->let.init && sub_child->let.init->kind != EXPR_FUNC &&
-                                !is_const_expr(sub_child->let.init)) {
-                                diag_error(sub_child->loc,
-                                    "top-level initializer for '%s' must be a constant expression",
-                                    sub_child->let.name);
-                            }
-                        }
-                    }
-                    ctx.scope = saved_sub_scope;
-                    ctx.module_symtab = saved_inner;
-                }
-            }
-        }
+        check_module_members(&ctx, d, mod_sym->members);
         ctx.scope = saved_scope;
         ctx.module_symtab = saved_mod;
     }

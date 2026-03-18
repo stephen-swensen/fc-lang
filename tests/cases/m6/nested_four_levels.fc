@@ -1,0 +1,15 @@
+// Four-level nesting: deepest module accesses all ancestors
+module a =
+    private let x = 2
+
+    module b =
+        private let y = 3
+
+        module c =
+            private let z = 5
+
+            module d =
+                let product = () -> x * y * z
+
+let main = (args: str[]) ->
+    a.b.c.d.product()

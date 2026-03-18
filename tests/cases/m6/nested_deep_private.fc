@@ -1,0 +1,12 @@
+// Three-level nesting: bottom accesses ancestors' private members
+module top =
+    private let base = 10
+
+    module mid =
+        private let multiplier = 3
+
+        module bottom =
+            let compute = () -> base * multiplier
+
+let main = (args: str[]) ->
+    top.mid.bottom.compute()
