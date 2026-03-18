@@ -14,7 +14,7 @@ FC is a systems programming language that transpiles to C11. It aims to combine 
 
 ## Status
 
-The compiler is under active development, targeting the v0.5 draft spec. Progress by milestone:
+The compiler is under active development, targeting the v0.6 draft spec. Progress by milestone:
 
 | Milestone | Scope | Status |
 |-----------|-------|--------|
@@ -22,11 +22,11 @@ The compiler is under active development, targeting the v0.5 draft spec. Progres
 | M2 | Functions, control flow (`if`/`else`), blocks | Done |
 | M3 | Structs, unions, match expressions, patterns | Done |
 | M4 | Pointers, slices, options, loops | Done |
-| M5 | Memory (`alloc`, `free`, `sizeof`, `default`) | Planned |
-| M6 | Modules, imports, namespaces | Planned |
-| M7 | Closures, capture analysis | Planned |
-| M8 | Generics, monomorphization | Planned |
-| M9 | C interop, formatted output | Planned |
+| M5 | Memory (`alloc`, `free`, `sizeof`, `default`) | Done |
+| M6 | Modules, imports, namespaces | Done |
+| M7 | Closures, capture analysis | Done |
+| M8 | Generics, monomorphization | Done |
+| M9 | C interop, std::io, std::sys, conditional compilation | Done |
 | M10 | Polish, exhaustiveness, error detection | Planned |
 
 ## Building
