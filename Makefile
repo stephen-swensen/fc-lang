@@ -18,4 +18,7 @@ clean:
 test: $(BIN)
 	@bash tests/run_tests.sh
 
-.PHONY: all clean test
+test-parallel: $(BIN)
+	@bash tests/run_tests_parallel.sh
+
+.PHONY: all clean test test-parallel
