@@ -1,0 +1,29 @@
+// Test type properties used in expressions and function args
+let add = (a: int32, b: int32) ->
+    a + b
+
+let clamp = (val: int32) ->
+    if val > 100 then 100
+    else if val < 0 then 0
+    else val
+
+let main = (args: str[]) ->
+    // Use in function arguments
+    let x = add(int32.max, int32.min)
+    // INT32_MAX + INT32_MIN == -1 (wrapping arithmetic via unsigned cast)
+    if x != -1 then return 1
+
+    // Use in comparisons
+    let y = 42
+    if y > int32.max then return 2
+    if y < int32.min then return 3
+
+    // Use in arithmetic
+    let z = uint8.max - uint8.min  // 255 - 0 = 255
+    if (int32)z != 255 then return 4
+
+    // Use in let binding and pass to function
+    let limit = clamp(int32.bits)  // clamp(32) = 32
+    if limit != 32 then return 5
+
+    0

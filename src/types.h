@@ -121,6 +121,9 @@ Type *type_common_numeric(Type *a, Type *b);
 /* Map a type suffix string (e.g., "i8", "u64") to a type, or NULL */
 Type *type_from_int_suffix(const char *suffix, int len);
 
+/* Map a type name string (e.g., "int32", "bool", "str") to a type, or NULL */
+Type *type_from_name(const char *s, int len);
+
 /* Type variable constructor */
 Type *type_type_var(Arena *a, const char *name);
 

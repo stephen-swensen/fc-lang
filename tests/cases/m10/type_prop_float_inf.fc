@@ -1,0 +1,19 @@
+// Test static type properties: float inf and neg_inf
+let main = (args: str[]) ->
+    let inf32 = float32.inf
+    let inf64 = float64.inf
+    let ninf32 = float32.neg_inf
+    let ninf64 = float64.neg_inf
+    // inf > max
+    if (float64)inf32 <= (float64)float32.max then return 1
+    if inf64 <= float64.max then return 2
+    // neg_inf < -max
+    if (float64)ninf32 >= (float64)(0.0f32 - float32.max) then return 3
+    if ninf64 >= 0.0 - float64.max then return 4
+    // inf + inf == inf
+    if inf64 + inf64 != inf64 then return 5
+    // neg_inf < 0
+    if ninf64 >= 0.0 then return 6
+    // inf > 0
+    if inf64 <= 0.0 then return 7
+    0

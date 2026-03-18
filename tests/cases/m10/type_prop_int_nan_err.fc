@@ -1,0 +1,4 @@
+// Error: int32 has no .nan property
+let main = (args: str[]) ->
+    let x = int32.nan
+    0

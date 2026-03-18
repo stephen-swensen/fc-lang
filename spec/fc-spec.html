@@ -2028,19 +2028,37 @@ The built-in aliases `str`, `cstr`, and `str32` are the canonical examples: `str
 
 Available only on the types where they make sense — using them on other types is a compile error:
 
+| Types | `.min` | `.max` | `.bits` | `.nan` | `.inf` | `.neg_inf` | `.epsilon` |
+|-------|--------|--------|---------|--------|--------|------------|------------|
+| int8–int64 | yes | yes | yes | — | — | — | — |
+| uint8–uint64 | yes | yes | yes | — | — | — | — |
+| float32, float64 | yes | yes | yes | yes | yes | yes | yes |
+
 ```fc
 int32.min       // minimum representable value
 int32.max       // maximum representable value
+int32.bits      // 32
 uint8.min       // 0
 uint8.max       // 255
 float64.nan     // not-a-number
 float64.inf     // positive infinity
-float32.nan
-float32.inf
+float64.neg_inf // negative infinity
+float64.min     // smallest positive normal value
+float64.max     // largest finite value
+float64.epsilon // machine epsilon
+float64.bits    // 64
 ```
 
+- **Integer `.min`/`.max`**: range bounds (`INT32_MIN`/`INT32_MAX` etc.)
+- **Float `.min`**: smallest positive normal value (`FLT_MIN`/`DBL_MIN`)
+- **Float `.max`**: largest finite value (`FLT_MAX`/`DBL_MAX`)
+- **Float `.epsilon`**: smallest x such that 1.0 + x ≠ 1.0 (`FLT_EPSILON`/`DBL_EPSILON`)
+- **Float `.inf`/`.neg_inf`**: positive/negative infinity
+- **Float `.nan`**: not-a-number
+- **`.bits`**: bit width of the type as `int32` (8, 16, 32, or 64)
+
 > **Transpilation**
-> `T.min` / `T.max` transpile to the appropriate `INT32_MIN` / `INT32_MAX` style constants from `stdint.h`.
+> Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `int32.max` becomes `INT32_MAX`, `float64.nan` becomes `((double)NAN)`.
 
 # PART 5 — Memory Management
 

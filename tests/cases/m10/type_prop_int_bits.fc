@@ -1,0 +1,15 @@
+// Test static type properties: .bits on integer types
+let main = (args: str[]) ->
+    if int8.bits != 8 then return 1
+    if int16.bits != 16 then return 2
+    if int32.bits != 32 then return 3
+    if int64.bits != 64 then return 4
+    if uint8.bits != 8 then return 5
+    if uint16.bits != 16 then return 6
+    if uint32.bits != 32 then return 7
+    if uint64.bits != 64 then return 8
+    // .bits returns int32
+    let b = int64.bits
+    let c = b + 1
+    if c != 65 then return 9
+    0

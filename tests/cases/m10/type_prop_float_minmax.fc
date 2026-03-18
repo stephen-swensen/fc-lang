@@ -1,0 +1,20 @@
+// Test static type properties: float min, max, epsilon, bits
+let main = (args: str[]) ->
+    // float64.min is the smallest positive normal value (> 0)
+    if float64.min <= 0.0 then return 1
+    // float64.max is a very large positive value
+    if float64.max <= 0.0 then return 2
+    // float64.epsilon > 0 and small
+    if float64.epsilon <= 0.0 then return 3
+    // 1.0 + epsilon != 1.0
+    if 1.0 + float64.epsilon == 1.0 then return 4
+    // float32 versions
+    if float32.min <= 0.0f32 then return 5
+    if float32.max <= 0.0f32 then return 6
+    if float32.epsilon <= 0.0f32 then return 7
+    // float bits
+    if float32.bits != 32 then return 8
+    if float64.bits != 64 then return 9
+    // float64.max > float32.max (after cast)
+    if float64.max <= (float64)float32.max then return 10
+    0

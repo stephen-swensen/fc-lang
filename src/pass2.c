@@ -580,6 +580,98 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
     }
 }
 
+/* Returns the result type if type_name.prop is a valid static type property,
+ * NULL if type_name is not a primitive type name (fall through to normal resolution).
+ * Returns (Type*)-1 sentinel if it IS a type name but the property is invalid.
+ * Sets *codegen_out to the C constant string to emit on success. */
+static Type *resolve_type_property(const char *type_name, const char *prop,
+                                   const char **codegen_out) {
+    int len = (int)strlen(type_name);
+    Type *t = type_from_name(type_name, len);
+    if (!t) return NULL;  /* not a type name at all — fall through */
+
+    TypeKind kind = t->kind;
+    bool is_int = type_is_integer(t);
+    bool is_float = type_is_float(t);
+
+    /* Only integer and float types have static properties */
+    if (!is_int && !is_float)
+        return (Type *)-1;  /* e.g. bool.min — type name but no properties */
+
+    /* .bits — always int32 */
+    if (strcmp(prop, "bits") == 0) {
+        switch (kind) {
+            case TYPE_INT8:  case TYPE_UINT8:  *codegen_out = "8";  break;
+            case TYPE_INT16: case TYPE_UINT16: *codegen_out = "16"; break;
+            case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: *codegen_out = "32"; break;
+            case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: *codegen_out = "64"; break;
+            default: return (Type *)-1;
+        }
+        return type_int32();
+    }
+
+    /* Integer properties */
+    if (is_int) {
+        if (strcmp(prop, "min") == 0) {
+            switch (kind) {
+                case TYPE_INT8:   *codegen_out = "INT8_MIN";       break;
+                case TYPE_INT16:  *codegen_out = "INT16_MIN";      break;
+                case TYPE_INT32:  *codegen_out = "INT32_MIN";      break;
+                case TYPE_INT64:  *codegen_out = "INT64_MIN";      break;
+                case TYPE_UINT8:  *codegen_out = "((uint8_t)0)";   break;
+                case TYPE_UINT16: *codegen_out = "((uint16_t)0)";  break;
+                case TYPE_UINT32: *codegen_out = "((uint32_t)0)";  break;
+                case TYPE_UINT64: *codegen_out = "((uint64_t)0)";  break;
+                default: return (Type *)-1;
+            }
+            return t;
+        }
+        if (strcmp(prop, "max") == 0) {
+            switch (kind) {
+                case TYPE_INT8:   *codegen_out = "INT8_MAX";   break;
+                case TYPE_INT16:  *codegen_out = "INT16_MAX";  break;
+                case TYPE_INT32:  *codegen_out = "INT32_MAX";  break;
+                case TYPE_INT64:  *codegen_out = "INT64_MAX";  break;
+                case TYPE_UINT8:  *codegen_out = "UINT8_MAX";  break;
+                case TYPE_UINT16: *codegen_out = "UINT16_MAX"; break;
+                case TYPE_UINT32: *codegen_out = "UINT32_MAX"; break;
+                case TYPE_UINT64: *codegen_out = "UINT64_MAX"; break;
+                default: return (Type *)-1;
+            }
+            return t;
+        }
+        return (Type *)-1;  /* valid type, invalid property */
+    }
+
+    /* Float properties */
+    bool is_f32 = (kind == TYPE_FLOAT32);
+    if (strcmp(prop, "min") == 0) {
+        *codegen_out = is_f32 ? "FLT_MIN" : "DBL_MIN";
+        return t;
+    }
+    if (strcmp(prop, "max") == 0) {
+        *codegen_out = is_f32 ? "FLT_MAX" : "DBL_MAX";
+        return t;
+    }
+    if (strcmp(prop, "epsilon") == 0) {
+        *codegen_out = is_f32 ? "FLT_EPSILON" : "DBL_EPSILON";
+        return t;
+    }
+    if (strcmp(prop, "nan") == 0) {
+        *codegen_out = is_f32 ? "((float)NAN)" : "((double)NAN)";
+        return t;
+    }
+    if (strcmp(prop, "inf") == 0) {
+        *codegen_out = is_f32 ? "((float)INFINITY)" : "((double)INFINITY)";
+        return t;
+    }
+    if (strcmp(prop, "neg_inf") == 0) {
+        *codegen_out = is_f32 ? "((float)(-INFINITY))" : "((double)(-INFINITY))";
+        return t;
+    }
+    return (Type *)-1;  /* valid type, invalid property */
+}
+
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -1587,6 +1679,25 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_FIELD: {
+        /* Static type properties: int32.min, float64.nan, etc. */
+        if (e->field.object->kind == EXPR_IDENT) {
+            const char *codegen_cstr = NULL;
+            Type *prop_type = resolve_type_property(
+                e->field.object->ident.name, e->field.name, &codegen_cstr);
+            if (prop_type == (Type *)-1) {
+                /* Valid type name but unsupported property */
+                diag_error(e->loc, "type '%s' has no property '%s'",
+                    e->field.object->ident.name, e->field.name);
+                e->type = type_error();
+                return e->type;
+            }
+            if (prop_type) {
+                e->field.codegen_name = codegen_cstr;
+                e->type = prop_type;
+                return e->type;
+            }
+        }
+
         Type *obj_type = check_expr(ctx, e->field.object);
         if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
 

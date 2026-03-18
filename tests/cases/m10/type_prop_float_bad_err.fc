@@ -1,0 +1,4 @@
+// Error: float64 has no .foo property
+let main = (args: str[]) ->
+    let x = float64.foo
+    0

@@ -1,0 +1,4 @@
+// Error: bool has no static type properties
+let main = (args: str[]) ->
+    let x = bool.min
+    0

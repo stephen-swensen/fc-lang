@@ -1,0 +1,11 @@
+// Test static type properties: float nan
+let main = (args: str[]) ->
+    let nan32 = float32.nan
+    let nan64 = float64.nan
+    // NaN != NaN is the defining property
+    if nan32 == nan32 then return 1
+    if nan64 == nan64 then return 2
+    // NaN is not greater or less than anything
+    if nan64 > 0.0 then return 3
+    if nan64 < 0.0 then return 4
+    0

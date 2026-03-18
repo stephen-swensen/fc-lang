@@ -2493,6 +2493,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "#include <string.h>\n");
     fprintf(out, "#include <stdio.h>\n");
     fprintf(out, "#include <alloca.h>\n");
+    fprintf(out, "#include <math.h>\n");
+    fprintf(out, "#include <float.h>\n");
 
     /* Emit #include for each unique from_lib in extern modules */
     for (int i = 0; i < from_lib_count; i++) {
@@ -2503,7 +2505,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             strcmp(from_libs[i], "stdlib.h") == 0 ||
             strcmp(from_libs[i], "string.h") == 0 ||
             strcmp(from_libs[i], "stdio.h") == 0 ||
-            strcmp(from_libs[i], "alloca.h") == 0)
+            strcmp(from_libs[i], "alloca.h") == 0 ||
+            strcmp(from_libs[i], "math.h") == 0 ||
+            strcmp(from_libs[i], "float.h") == 0)
             continue;
         fprintf(out, "#include <%s>\n", from_libs[i]);
     }

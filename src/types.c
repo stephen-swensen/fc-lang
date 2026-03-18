@@ -273,6 +273,25 @@ Type *type_from_int_suffix(const char *suffix, int len) {
     return NULL;
 }
 
+Type *type_from_name(const char *s, int len) {
+    struct { const char *n; int l; Type *(*fn)(void); } map[] = {
+        {"int8",4, type_int8},     {"int16",5, type_int16},
+        {"int32",5, type_int32},   {"int64",5, type_int64},
+        {"uint8",5, type_uint8},   {"uint16",6, type_uint16},
+        {"uint32",6, type_uint32}, {"uint64",6, type_uint64},
+        {"float32",7, type_float32}, {"float64",7, type_float64},
+        {"bool",4, type_bool},     {"char",4, type_char},
+        {"str",3, type_str},       {"str32",5, type_str32},
+        {"cstr",4, type_cstr},     {"any",3, type_any_ptr},
+    };
+    for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
+        if (map[i].l == len && memcmp(s, map[i].n, (size_t)len) == 0) {
+            return map[i].fn ? map[i].fn() : NULL;
+        }
+    }
+    return NULL;
+}
+
 Type *type_type_var(Arena *a, const char *name) {
     Type *t = arena_alloc(a, sizeof(Type));
     t->kind = TYPE_TYPE_VAR;
