@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+#if target_hosted
+    42
+#end

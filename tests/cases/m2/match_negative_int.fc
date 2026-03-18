@@ -1,0 +1,13 @@
+let classify = (x: int32) ->
+    match x with
+    | -1 -> 10
+    | 0 -> 20
+    | 42 -> 30
+    | _ -> 40
+
+let main = (args: str[]) ->
+    let a = classify(-1)
+    let b = classify(0)
+    let c = classify(42)
+    let d = classify(99)
+    a + b + c + d

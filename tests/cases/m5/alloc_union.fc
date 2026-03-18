@@ -1,0 +1,12 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+
+let main = (args: str[]) ->
+    let s = alloc(shape)!
+    *s = shape.circle(7)
+    let r = match *s with
+        | circle(v) -> v
+        | square(v) -> v
+    free(s)
+    r

@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let empty = default(int32[])
+    let mut sum = 0
+    for x in empty
+        sum = sum + x
+    sum

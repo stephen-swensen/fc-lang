@@ -1,0 +1,18 @@
+struct point =
+    x: int32
+    y: int32
+
+union element =
+    | pt(point)
+    | val(int32)
+
+let main = (args: str[]) ->
+    let a = element.pt(point { x = 1, y = 2 })
+    let b = element.pt(point { x = 1, y = 2 })
+    let c = element.pt(point { x = 3, y = 4 })
+    let d = element.val(1)
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    if a != d then r = r + 4 else r = r
+    r

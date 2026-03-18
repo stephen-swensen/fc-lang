@@ -1,0 +1,12 @@
+let main = (args: str[]) ->
+    let mut a = 10
+    let mut b = 20
+    let pa = &a
+    let pb = &b
+    let mut r = 0
+    if pa != pb then r = r + 1 else r = r
+    // one of these must be true: pa < pb or pa > pb
+    if pa < pb then r = r + 2 else if pa > pb then r = r + 2 else r = r
+    // test <= and >=
+    if pa <= pb then r = r + 4 else if pa >= pb then r = r + 4 else r = r
+    r

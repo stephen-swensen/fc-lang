@@ -1,0 +1,11 @@
+union result =
+    | ok('a)
+    | err(int32)
+
+let make_ok = (x: 'a) -> result<'a>.ok(x)
+
+let main = (args: str[]) ->
+    let r = make_ok(42)
+    match r with
+    | ok(v) -> v
+    | err(e) -> e

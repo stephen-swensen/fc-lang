@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let s = "hello"
+    let copy = alloc(s)!
+    let v = (int32)copy.len
+    free(copy)
+    v

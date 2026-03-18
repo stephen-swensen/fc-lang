@@ -1,0 +1,8 @@
+let classify = (s: str) ->
+    match s with
+    | "" -> 1
+    | "hello" -> 2
+    | _ -> 0
+
+let main = (args: str[]) ->
+    classify("") + classify("hello")

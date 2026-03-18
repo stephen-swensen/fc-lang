@@ -1,0 +1,13 @@
+union shape =
+    | circle(int32)
+    | dot
+
+struct drawing =
+    x: int32
+    shape: shape
+
+let main = (args: str[]) ->
+    let d = drawing { x = 7, shape = shape.dot }
+    match d with
+    | { shape = circle(r) } -> r
+    | { x = x, shape = dot } -> x

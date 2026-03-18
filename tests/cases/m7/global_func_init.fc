@@ -1,0 +1,6 @@
+let compute = (x: int32) -> x * 7
+
+let result = compute(6)
+
+let main = (args: str[]) ->
+    result

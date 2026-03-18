@@ -1,0 +1,12 @@
+let main = (args: str[]) ->
+    let mut buf = int32[4] { }
+    buf.ptr[0] = 10
+    buf.ptr[1] = 20
+    buf.ptr[2] = 30
+    buf.ptr[3] = 40
+    let p = buf.ptr
+    let a = *(p + 0)
+    let b = *(p + 1)
+    let c = *(p + 2)
+    let d = *(p + 3)
+    a + b + c + d

@@ -1,0 +1,11 @@
+let main = (args: str[]) ->
+    let s = alloc("hello")
+    let mut r = 0
+    match s with
+    | some(v) ->
+        if v == "hello" then r = r + 1 else r = r
+        // verify it's a real copy (different from static)
+        if v.len == 5 then r = r + 2 else r = r
+        free(v)
+    | none -> r = r
+    r

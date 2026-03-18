@@ -1,0 +1,8 @@
+let apply = (f: (int32) -> int32, x: int32) -> f(x)
+
+let main = (args: str[]) ->
+    let offset = 5
+    let add_offset = (n: int32) -> n + offset
+    let a = apply(add_offset, 10)
+    let b = apply(add_offset, 20)
+    a + b + 2

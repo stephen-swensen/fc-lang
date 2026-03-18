@@ -1,0 +1,10 @@
+module alpha =
+    let value = 20
+    let compute = (x: int32) -> x + value
+
+module beta =
+    let value = 22
+    let compute = (x: int32) -> x * 2
+
+let main = (args: str[]) ->
+    alpha.compute(0) + beta.compute(1) + beta.value - alpha.value

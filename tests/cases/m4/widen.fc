@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let a = 10i64
+    let b = 5
+    let sum = a + b
+    let diff = a - b
+    let prod = a * b
+    let mut result = 0i64
+    if a > b then result = sum + diff + prod
+    (int32)result

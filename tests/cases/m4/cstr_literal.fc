@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let s = c"hello"
+    let addr = (int64)s
+    if addr > 0 then 1 else 0

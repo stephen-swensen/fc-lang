@@ -1,0 +1,11 @@
+// C interop: strtol uses char** out-param to report parse end position.
+// FC declares the out-param as cstr* (uint8**); codegen casts to char**
+// at the extern boundary automatically.
+module c from "stdlib.h" =
+    extern strtol: (cstr, cstr*, int32) -> int64
+
+let main = (args: str[]) ->
+    let s = "42xyz"
+    let mut end = default(uint8*)
+    let val = c.strtol((cstr)s, &end, 10)
+    (int32)val

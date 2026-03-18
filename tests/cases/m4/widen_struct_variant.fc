@@ -1,0 +1,19 @@
+struct point =
+    x: int64
+    y: int64
+
+union holder =
+    | val(int64)
+    | empty
+
+let main = (args: str[]) ->
+    // struct field widening: int32 -> int64
+    let p = point { x = 10, y = 20 }
+    // variant payload widening: int32 -> int64
+    let h = holder.val(42)
+    let v = 
+        match h with
+        | val(n) -> (int32)n
+        | empty -> 0
+    // 10 + 20 + 42 = 72
+    (int32)(p.x + p.y) + v

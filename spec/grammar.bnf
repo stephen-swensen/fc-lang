@@ -1,0 +1,773 @@
+(* ================================================================== *)
+(* FC Language — EBNF Grammar                                         *)
+(* Version 0.5-draft                                                   *)
+(*                                                                     *)
+(* Notation:                                                           *)
+(*   =          defines a production                                   *)
+(*   ;          ends a production                                      *)
+(*   |          alternation                                            *)
+(*   [ ... ]    optional (zero or one)                                 *)
+(*   { ... }    repetition (zero or more)                              *)
+(*   ( ... )    grouping                                               *)
+(*   "..."      terminal string / keyword                              *)
+(*   '...'      terminal character or token                            *)
+(*   (* ... *)  comment                                                *)
+(*   -          set difference                                         *)
+(*   ,          concatenation                                          *)
+(* ================================================================== *)
+
+
+(* ================================================================== *)
+(*                        LEXICAL GRAMMAR                              *)
+(* ================================================================== *)
+
+(* ------------------------------------------------------------------ *)
+(* 1. Character classes                                                *)
+(* ------------------------------------------------------------------ *)
+
+letter        = 'a' | 'b' | ... | 'z' | 'A' | 'B' | ... | 'Z' ;
+digit         = '0' | '1' | ... | '9' ;
+hex_digit     = digit | 'a' | 'b' | 'c' | 'd' | 'e' | 'f'
+                     | 'A' | 'B' | 'C' | 'D' | 'E' | 'F' ;
+underscore    = '_' ;
+space         = ' ' ;       (* U+0020 — the only permitted whitespace for indentation *)
+newline_char  = '\n' | '\r\n' ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 2. Comments                                                         *)
+(* ------------------------------------------------------------------ *)
+
+line_comment  = '//' , { any_char - newline_char } ;
+
+(* Block comments nest: the lexer tracks depth.                        *)
+(* An unterminated block comment is a compile error.                   *)
+block_comment = '/*' , block_comment_body , '*/' ;
+block_comment_body = { block_comment | any_char_except_comment_delimiters } ;
+
+comment       = line_comment | block_comment ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 3. Layout tokens  (Python-style INDENT / DEDENT / NEWLINE)         *)
+(* ------------------------------------------------------------------ *)
+
+(*                                                                     *)
+(* The lexer maintains:                                                *)
+(*   - A column stack (initially [0])                                  *)
+(*   - An `expecting_block` flag, initially false                      *)
+(*                                                                     *)
+(* Block-forming tokens that set `expecting_block = true`:             *)
+(*   =  ->  with  then  else  loop  for...in                          *)
+(*                                                                     *)
+(* At each logical newline the lexer inspects the column of the first  *)
+(* non-whitespace token on the next line:                              *)
+(*                                                                     *)
+(*   If `expecting_block` is true:                                     *)
+(*     - If column > stack.top  -> emit INDENT, push column            *)
+(*     - If column == stack.top -> emit NEWLINE (same-level peer)      *)
+(*     - If column < stack.top  -> emit DEDENT(s) until stack.top      *)
+(*                                 matches, then emit NEWLINE          *)
+(*     In all cases, reset `expecting_block = false`                   *)
+(*                                                                     *)
+(*   If `expecting_block` is false:                                    *)
+(*     - If column == stack.top -> emit NEWLINE (new peer statement)   *)
+(*     - If column > stack.top  -> (continuation line — no token       *)
+(*                                  emitted; the parser sees the next  *)
+(*                                  real token as part of the current  *)
+(*                                  expression)                        *)
+(*     - If column < stack.top  -> emit DEDENT(s) until stack.top      *)
+(*                                 matches, then NEWLINE               *)
+(*                                                                     *)
+(* At EOF: emit DEDENT for every remaining level on the stack above 0. *)
+(*                                                                     *)
+(* Tabs ('\t') at the start of a line are a compile error.             *)
+(*                                                                     *)
+
+INDENT  = (* synthetic token — column increased after block-forming *) ;
+DEDENT  = (* synthetic token — column decreased below stack top *)     ;
+NEWLINE = (* synthetic token — new peer at current block column *)     ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 4. Identifiers                                                      *)
+(* ------------------------------------------------------------------ *)
+
+ident_start   = letter | underscore ;
+ident_cont    = letter | digit | underscore ;
+IDENT         = ident_start , { ident_cont } ;
+
+(* Type variable names begin with an apostrophe.                       *)
+TYPE_VAR      = "'" , ( letter | underscore ) , { ident_cont } ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 5. Keywords                                                         *)
+(* ------------------------------------------------------------------ *)
+
+(* Reserved words — may not be used as identifiers.                    *)
+keyword = "let" | "mut" | "struct" | "union" | "module"
+        | "namespace" | "import" | "from" | "as" | "extern"
+        | "private" | "match" | "with" | "if" | "then" | "else"
+        | "for" | "in" | "loop" | "break" | "continue" | "return"
+        | "some" | "true" | "false" | "none" | "void"
+        | "any"         (* only valid as part of "any*" type syntax *) ;
+
+(* Reserved identifiers — built-in compile-time operators.             *)
+(* These may not be shadowed by user-defined bindings.                 *)
+reserved_ident = "alloc" | "free" | "sizeof" | "default" ;
+
+(* Built-in globals — predefined identifiers typed any*.                *)
+builtin_global = "stdin" | "stdout" | "stderr" ;
+
+(* Built-in type names — may not be used as user-defined names.        *)
+builtin_type = "int8" | "int16" | "int32" | "int64"
+             | "uint8" | "uint16" | "uint32" | "uint64"
+             | "float32" | "float64"
+             | "bool" | "char"
+             | "str" | "str32" | "cstr" ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 6. Literals                                                         *)
+(* ------------------------------------------------------------------ *)
+
+(* --- Integer literals ---                                            *)
+
+int_suffix    = "i8" | "i16" | "i32" | "i64"
+              | "u8" | "u16" | "u32" | "u64" ;
+INT_LIT       = digit , { digit } , [ int_suffix ] ;
+
+(* Suffixed integer literals are range-checked at compile time.        *)
+
+(* --- Float literals ---                                              *)
+
+float_suffix  = "f32" | "f64" ;
+FLOAT_LIT     = digit , { digit } , '.' , digit , { digit } , [ float_suffix ] ;
+
+(* --- Boolean literals ---                                            *)
+
+BOOL_LIT      = "true" | "false" ;
+
+(* --- Character literals ---                                          *)
+
+escape_seq    = '\\' , ( 'n' | 't' | 'r' | '\\' | "'" | '"' | '0'
+                       | ( 'x' , hex_digit , hex_digit ) ) ;
+CHAR_LIT      = "'" , ( escape_seq | any_char - "'" - '\\' ) , "'" ;
+
+(* --- String literals ---                                             *)
+
+string_char   = escape_seq | any_char - '"' - '\\' ;
+STR_LIT       = '"' , { string_char } , '"' ;
+
+(* --- String interpolation ---                                        *)
+(* An interpolation segment is %spec{expr} inside a string literal.    *)
+(* Strings with interpolation segments produce stack-allocated str.     *)
+
+fmt_flag      = '-' | '+' | '0' | '#' | ' ' ;
+fmt_width     = digit , { digit } ;
+fmt_precision = '.' , { digit } ;
+fmt_conv      = 'd' | 'i' | 'u' | 'x' | 'X' | 'o'
+              | 'f' | 'e' | 'E' | 'g' | 'G'
+              | 's' | 'c' | 'p' ;
+fmt_spec      = { fmt_flag } , [ fmt_width ] , [ fmt_precision ] , fmt_conv ;
+
+interp_seg    = '%' , fmt_spec , '{' , expr , '}' ;
+percent_esc   = '%%' ;
+
+INTERP_STR    = '"' , { string_char | interp_seg | percent_esc } , '"' ;
+
+(* --- C-string literals ---                                           *)
+
+CSTR_LIT      = 'c' , '"' , { string_char } , '"' ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 7. Operators and punctuation                                        *)
+(* ------------------------------------------------------------------ *)
+
+(* Multi-character operators are listed first for maximal munch.       *)
+
+OP_ARROW      = "->" ;
+OP_LSHIFT     = "<<" ;
+OP_RSHIFT     = ">>" ;
+OP_EQ         = "==" ;
+OP_NEQ        = "!=" ;
+OP_LE         = "<=" ;
+OP_GE         = ">=" ;
+OP_AND        = "&&" ;
+OP_OR         = "||" ;
+OP_DOTDOT     = ".." ;
+OP_COLONCOLON = "::" ;
+
+(* Single-character operators and punctuation                          *)
+OP_PLUS       = '+' ;
+OP_MINUS      = '-' ;
+OP_STAR       = '*' ;
+OP_SLASH      = '/' ;
+OP_PERCENT    = '%' ;
+OP_AMP        = '&' ;
+OP_PIPE       = '|' ;
+OP_CARET      = '^' ;
+OP_TILDE      = '~' ;
+OP_BANG       = '!' ;
+OP_LT         = '<' ;
+OP_GT         = '>' ;
+OP_ASSIGN     = '=' ;
+OP_DOT        = '.' ;
+
+(* Delimiters                                                          *)
+LPAREN        = '(' ;
+RPAREN        = ')' ;
+LBRACKET      = '[' ;
+RBRACKET      = ']' ;
+LBRACE        = '{' ;
+RBRACE        = '}' ;
+COMMA         = ',' ;
+COLON         = ':' ;
+HASH          = '#' ;
+QUESTION      = '?' ;
+
+
+(* ------------------------------------------------------------------ *)
+(* 8. Conditional compilation directives                               *)
+(* ------------------------------------------------------------------ *)
+
+(* Directives always appear at column 0.                               *)
+(* They are lexed as distinct tokens before parsing.                   *)
+
+PP_IF         = '#' , "if" ;
+PP_ELSE_IF    = '#' , "else" , "if" ;
+PP_ELSE       = '#' , "else" ;
+PP_END        = '#' , "end" ;
+
+
+(* ================================================================== *)
+(*                       SYNTACTIC GRAMMAR                             *)
+(* ================================================================== *)
+
+
+(* ================================================================== *)
+(*                           Programs                                  *)
+(* ================================================================== *)
+
+program          = [ namespace_decl , NEWLINE ]
+                 , { top_level_item , NEWLINE }
+                 ;
+
+namespace_decl   = "namespace" , namespace_path ;
+
+(* A namespace path is one or more segments separated and terminated   *)
+(* by "::".  Examples: acme::  acme::graphics::                       *)
+namespace_path   = IDENT , "::" , { IDENT , "::" } ;
+
+top_level_item   = import_decl
+                 | let_decl
+                 | struct_decl
+                 | union_decl
+                 | module_decl
+                 | cond_comp_block
+                 ;
+
+
+(* ================================================================== *)
+(*                           Imports                                   *)
+(* ================================================================== *)
+
+import_decl      = "import" , import_list , [ "from" , import_source ]
+                 | "import" , qualified_import
+                 ;
+
+import_list      = import_item , { "," , import_item }
+                 | "*"
+                 ;
+
+import_item      = IDENT , [ "as" , IDENT ] ;
+
+(* The source of an import: a bare namespace or a module path.         *)
+import_source    = namespace_path                          (* e.g. acme::graphics:: *)
+                 | [ namespace_path ] , module_path        (* e.g. acme::graphics::module_a *)
+                 ;
+
+(* Dotted module path within a namespace (for submodule navigation).   *)
+module_path      = IDENT , { "." , IDENT } ;
+
+(* Fully qualified import using :: and . notation.                     *)
+qualified_import = [ namespace_path ] , module_path , [ "as" , IDENT ] ;
+
+
+(* ================================================================== *)
+(*                         Declarations                                *)
+(* ================================================================== *)
+
+(* --- let / let mut ------------------------------------------------ *)
+
+let_decl         = [ "private" ] , "let" , [ "mut" ] , let_target , "=" , expr_or_block ;
+
+let_target       = IDENT
+                 | struct_destruct_pattern    (* destructuring bind *)
+                 ;
+
+(* --- struct ------------------------------------------------------- *)
+
+struct_decl      = [ "private" ] , "struct" , IDENT , "=" , INDENT , struct_body , DEDENT ;
+
+struct_body      = field_decl , { NEWLINE , field_decl } ;
+
+field_decl       = IDENT , ":" , type_expr ;
+
+(* --- union -------------------------------------------------------- *)
+
+union_decl       = [ "private" ] , "union" , IDENT , "=" , INDENT , union_body , DEDENT ;
+
+union_body       = variant_decl , { NEWLINE , variant_decl } ;
+
+variant_decl     = "|" , IDENT , [ "(" , type_expr , ")" ] ;
+
+(* --- module ------------------------------------------------------- *)
+(* A module with "from" is a C binding module — it may only contain   *)
+(* extern declarations. A module without "from" may not contain       *)
+(* extern declarations.                                               *)
+
+module_decl      = [ "private" ] , "module" , IDENT , [ "from" , STR_LIT ] , "="
+                 , INDENT , module_body , DEDENT ;
+
+module_body      = { module_item , NEWLINE } ;
+
+module_item      = let_decl
+                 | struct_decl
+                 | union_decl
+                 | module_decl
+                 | extern_decl       (* only valid when enclosing module has "from" *)
+                 | import_decl
+                 | cond_comp_block
+                 ;
+
+(* --- extern ------------------------------------------------------- *)
+
+extern_decl      = "extern" , IDENT , [ "as" , IDENT ] , ":" , type_expr ;
+
+
+(* ================================================================== *)
+(*                    Conditional Compilation                          *)
+(* ================================================================== *)
+
+cond_comp_block  = PP_IF , IDENT , NEWLINE
+                 , { top_level_item , NEWLINE | module_item , NEWLINE | block_expr_item }
+                 , { PP_ELSE_IF , IDENT , NEWLINE
+                   , { top_level_item , NEWLINE | module_item , NEWLINE | block_expr_item } }
+                 , [ PP_ELSE , NEWLINE
+                   , { top_level_item , NEWLINE | module_item , NEWLINE | block_expr_item } ]
+                 , PP_END
+                 ;
+
+
+(* ================================================================== *)
+(*                         Type Expressions                            *)
+(* ================================================================== *)
+
+type_expr        = func_type ;
+
+(* Function type: (A, B) -> C                                         *)
+(* Right-associative: (A) -> (B) -> C  means  (A) -> ((B) -> C)       *)
+func_type        = type_primary , "->" , func_type
+                 | type_primary
+                 ;
+
+(* After resolving a base type, apply postfix type modifiers.          *)
+type_primary     = type_atom , { type_postfix } ;
+
+type_postfix     = "*"                           (* pointer type:  T*     *)
+                 | "[" , "]"                     (* slice type:    T[]    *)
+                 | "?"                           (* option type:   T?     *)
+                 ;
+
+type_atom        = builtin_type                  (* int32, str, cstr, ... *)
+                 | "void"
+                 | "any" , "*"                   (* any*  — opaque pointer *)
+                 | IDENT , [ "<" , type_arg_list , ">" ]   (* user-defined, possibly generic *)
+                 | TYPE_VAR                       (* 'a, 'b, 'elem, ...   *)
+                 | "(" , type_param_list , ")"   (* tuple-like param list for function types *)
+                 ;
+
+type_arg_list    = type_expr , { "," , type_expr } ;
+
+type_param_list  = [ type_expr , { "," , type_expr } ] ;
+
+
+
+(* ================================================================== *)
+(*                         Expressions                                 *)
+(* ================================================================== *)
+
+(* An expression or a new indented block that evaluates to a value.    *)
+expr_or_block    = expr
+                 | INDENT , block , DEDENT
+                 ;
+
+(* A block is a sequence of peer items; the last one is the value.     *)
+block            = block_expr_item , { NEWLINE , block_expr_item } ;
+
+block_expr_item  = let_binding
+                 | struct_decl               (* local struct definition  *)
+                 | union_decl                (* local union definition   *)
+                 | cond_comp_block           (* #if inside a block       *)
+                 | expr
+                 ;
+
+let_binding      = "let" , [ "mut" ] , let_target , "=" , expr_or_block ;
+
+
+(* ------------------------------------------------------------------ *)
+(*  Expression precedence — Pratt parser, 12 levels                    *)
+(*                                                                     *)
+(*  Level 1  (highest): Postfix    x! x[i] x.f x->f x()    left       *)
+(*  Level 2:  Prefix    -x !x ~x &x *x (T)x                right      *)
+(*  Level 3:  * / %                                          left       *)
+(*  Level 4:  + -                                            left       *)
+(*  Level 5:  << >>                                          left       *)
+(*  Level 6:  &          (bitwise AND)                       left       *)
+(*  Level 7:  ^          (bitwise XOR)                       left       *)
+(*  Level 8:  |          (bitwise OR)                        left       *)
+(*  Level 9:  == != < > <= >=                                left       *)
+(*  Level 10: &&         (logical AND)                       left       *)
+(*  Level 11: ||         (logical OR)                        left       *)
+(*  Level 12 (lowest):  =  (assignment)                      right      *)
+(*                                                                     *)
+(*  IMPORTANT: There is NO ** exponentiation operator.                 *)
+(* ------------------------------------------------------------------ *)
+
+expr             = assign_expr ;
+
+(* Level 12 — assignment (right-associative)                           *)
+assign_expr      = or_expr , "=" , assign_expr
+                 | or_expr
+                 ;
+
+(* Level 11 — logical OR                                               *)
+or_expr          = and_expr , { "||" , and_expr } ;
+
+(* Level 10 — logical AND                                              *)
+and_expr         = cmp_expr , { "&&" , cmp_expr } ;
+
+(* Level 9 — comparison                                                *)
+cmp_expr         = bitor_expr , { cmp_op , bitor_expr } ;
+cmp_op           = "==" | "!=" | "<" | ">" | "<=" | ">=" ;
+
+(* Level 8 — bitwise OR                                                *)
+bitor_expr       = bitxor_expr , { "|" , bitxor_expr } ;
+
+(* Level 7 — bitwise XOR                                               *)
+bitxor_expr      = bitand_expr , { "^" , bitand_expr } ;
+
+(* Level 6 — bitwise AND                                               *)
+bitand_expr      = shift_expr , { "&" , shift_expr } ;
+
+(* Level 5 — shifts                                                    *)
+shift_expr       = add_expr , { ( "<<" | ">>" ) , add_expr } ;
+
+(* Level 4 — additive                                                  *)
+add_expr         = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+
+(* Level 3 — multiplicative                                            *)
+mul_expr         = prefix_expr , { ( "*" | "/" | "%" ) , prefix_expr } ;
+
+(* Level 2 — unary prefix (right-associative)                         *)
+prefix_expr      = "-" , prefix_expr                   (* negation       *)
+                 | "!" , prefix_expr                   (* boolean not    *)
+                 | "~" , prefix_expr                   (* bitwise not    *)
+                 | "&" , prefix_expr                   (* address-of     *)
+                 | "*" , prefix_expr                   (* dereference    *)
+                 | cast_expr                           (* (T) expr       *)
+                 | postfix_expr
+                 ;
+
+(* Cast: (Type) expr                                                   *)
+(* Disambiguation: the parser checks whether the contents of the       *)
+(* parentheses form a valid type_expr followed by ')' and then a       *)
+(* non-operator token.  If yes, it is a cast; otherwise, a             *)
+(* parenthesized expression.  See disambiguation rule 6.               *)
+cast_expr        = "(" , type_expr , ")" , prefix_expr ;
+
+(* Level 1 — postfix (left-associative)                                *)
+postfix_expr     = primary_expr , { postfix_op } ;
+
+postfix_op       = "!"                                         (* option unwrap  *)
+                 | "[" , index_or_slice , "]"                  (* index / slice  *)
+                 | "." , IDENT                                 (* field access   *)
+                 | "->" , IDENT                                (* pointer field  *)
+                 | call_args                                   (* function call  *)
+                 ;
+
+(* Indexing: s[i]  or  sub-slicing: s[i..j], s[..j], s[i..]           *)
+index_or_slice   = [ expr ] , ".." , [ expr ]          (* sub-slice forms  *)
+                 | expr                                (* plain index      *)
+                 ;
+
+(* Call arguments — may include generic type arguments.                *)
+(* name<Type, ...>(args)  is a generic call.                           *)
+(* name(args)             is a plain call.                             *)
+call_args        = [ "<" , type_arg_list , ">" ] , "(" , [ arg_list ] , ")" ;
+
+arg_list         = expr , { "," , expr } ;
+
+
+(* ------------------------------------------------------------------ *)
+(*  Primary expressions                                                *)
+(* ------------------------------------------------------------------ *)
+
+primary_expr     = INT_LIT
+                 | FLOAT_LIT
+                 | BOOL_LIT
+                 | CHAR_LIT
+                 | STR_LIT
+                 | CSTR_LIT
+                 | "none"
+                 | "void"
+                 | lambda_expr
+                 | if_expr
+                 | match_expr
+                 | loop_expr
+                 | for_expr
+                 | return_expr
+                 | break_expr
+                 | "continue"
+                 | alloc_expr
+                 | free_expr
+                 | sizeof_expr
+                 | default_expr
+                 | some_expr
+                 | struct_literal
+                 | slice_literal
+                 | variant_construction
+                 | type_property_access
+                 | IDENT
+                 | "(" , expr , ")"             (* parenthesized expression *)
+                 ;
+
+
+(* ------------------------------------------------------------------ *)
+(*  Lambda expressions                                                 *)
+(* ------------------------------------------------------------------ *)
+
+(* Lambdas may have explicit type variable declarations for factory    *)
+(* functions where the type var does not appear in any parameter.      *)
+
+lambda_expr      = [ "<" , type_var_list , ">" ]
+                 , "(" , [ param_list ] , ")" , "->" , expr_or_block
+                 ;
+
+type_var_list    = TYPE_VAR , { "," , TYPE_VAR } ;
+
+param_list       = param , { "," , param } ;
+
+param            = IDENT , ":" , type_expr ;
+
+
+(* ------------------------------------------------------------------ *)
+(*  Control flow expressions                                           *)
+(* ------------------------------------------------------------------ *)
+
+if_expr          = "if" , expr , "then" , expr_or_block
+                 , [ "else" , else_branch ]
+                 ;
+
+else_branch      = if_expr                      (* else if ... *)
+                 | expr_or_block                (* else ...    *)
+                 ;
+
+match_expr       = "match" , expr , "with" , INDENT , match_arms , DEDENT ;
+
+match_arms       = match_arm , { NEWLINE , match_arm } ;
+
+match_arm        = "|" , pattern , "->" , expr_or_block ;
+
+loop_expr        = "loop" , INDENT , block , DEDENT ;
+
+for_expr         = "for" , for_binding , "in" , for_iterable
+                 , INDENT , block , DEDENT
+                 ;
+
+for_binding      = IDENT                        (* element iteration          *)
+                 | IDENT , "," , IDENT          (* index-element iteration    *)
+                 ;
+
+(* The parser parses a single expr, then checks for ".." to            *)
+(* distinguish range iteration from slice iteration.                   *)
+for_iterable     = expr , ".." , expr           (* range iteration: a..b      *)
+                 | expr                         (* slice iteration            *)
+                 ;
+
+return_expr      = "return" , [ expr ] ;
+
+break_expr       = "break" , [ expr ] ;
+
+
+(* ------------------------------------------------------------------ *)
+(*  Built-in compile-time operators                                    *)
+(* ------------------------------------------------------------------ *)
+
+alloc_expr       = "alloc" , "(" , alloc_arg , ")" ;
+
+(* alloc accepts:                                                      *)
+(*   - a bare type name:               alloc(node)                     *)
+(*   - a slice type with length:       alloc(int32[128])               *)
+(*   - a value expression:             alloc(point { x = 1 })         *)
+(*   - a slice literal:                alloc(int32[4] { 1,2,3,4 })   *)
+(*   - a variant:                      alloc(shape.circle(3.14))      *)
+alloc_arg        = type_expr , "[" , expr , "]" , [ "{" , [ expr_list ] , "}" ]
+                                                 (* slice alloc with optional init *)
+                 | type_expr                     (* bare type alloc             *)
+                 | expr                          (* value expression alloc      *)
+                 ;
+
+free_expr        = "free" , "(" , expr , ")" ;
+
+sizeof_expr      = "sizeof" , "(" , type_expr , ")" ;
+
+default_expr     = "default" , "(" , type_expr , ")" ;
+
+some_expr        = "some" , "(" , expr , ")" ;
+
+
+(* ------------------------------------------------------------------ *)
+(*  Struct, slice, and variant literals                                *)
+(* ------------------------------------------------------------------ *)
+
+(* Struct literal: point { x = 1.0, y = 2.0 }                         *)
+(* Also used for slice construction from raw parts: str { ptr=p, len=n }*)
+struct_literal   = IDENT , [ "<" , type_arg_list , ">" ]
+                 , "{" , [ field_init_list ] , "}"
+                 ;
+
+field_init_list  = field_init , { "," , field_init } ;
+
+field_init       = IDENT , "=" , expr ;
+
+(* Stack slice literal: int32[4] { 0, 1, 2, 3 }  or  int32[128] { }  *)
+(* The type name is a built-in type or user-defined type.              *)
+slice_literal    = type_expr , "[" , expr , "]" , "{" , [ expr_list ] , "}" ;
+
+expr_list        = expr , { "," , expr } ;
+
+(* Variant construction: shape.circle(3.14)  or  result.ok(42)        *)
+(* Also covers type property access: int32.max, node<'b>.none         *)
+variant_construction = IDENT , [ "<" , type_arg_list , ">" ]
+                     , "." , IDENT , [ "(" , [ arg_list ] , ")" ]
+                     ;
+
+(* Type property access covers:                                        *)
+(*   - built-in type properties:   int32.max, float64.nan, str.none    *)
+(*   - any* properties:            any*.none                           *)
+(*   - type variable properties:   'a.min, 'a.none                    *)
+(*   - parameterized type props:   node<'b>.none                      *)
+(* Also covers module.member access: math.add, io.stdout               *)
+(* Note: IDENT.IDENT is handled by the postfix "." rule on             *)
+(* primary_expr -> IDENT, so type_property_access is only needed for   *)
+(* type names that are not plain IDENT (built-in types, any*, etc.)    *)
+type_property_access = ( builtin_type | "any" , "*" | TYPE_VAR
+                       | IDENT , "<" , type_arg_list , ">" )
+                     , "." , IDENT
+                     ;
+
+
+(* ================================================================== *)
+(*                           Patterns                                  *)
+(* ================================================================== *)
+
+pattern          = "_"                                   (* wildcard           *)
+                 | BOOL_LIT                              (* true / false       *)
+                 | "none"                                (* option none        *)
+                 | CHAR_LIT                              (* char literal       *)
+                 | STR_LIT                               (* string literal     *)
+                 | [ "-" ] , INT_LIT                     (* integer literal, possibly negative *)
+                 | "some" , "(" , pattern , ")"          (* some(pattern)      *)
+                 | IDENT , "(" , pattern , ")"           (* variant(pattern)   *)
+                 | struct_destruct_pattern               (* { field = pat }    *)
+                 | IDENT                                 (* binding name       *)
+                 ;
+
+(* Struct destructuring pattern: { field = pat, ... }                  *)
+(* An empty {} matches any struct, binds nothing.                      *)
+struct_destruct_pattern = "{" , [ field_pattern_list ] , "}" ;
+
+field_pattern_list      = field_pattern , { "," , field_pattern } ;
+
+field_pattern           = IDENT , "=" , pattern ;
+
+
+(* ================================================================== *)
+(*                      DISAMBIGUATION RULES                           *)
+(* ================================================================== *)
+
+(*                                                                     *)
+(* Rule 1: * and & as prefix vs. infix                                 *)
+(*                                                                     *)
+(*   The lexer / parser determines whether * and & are prefix or       *)
+(*   infix based on the preceding token:                               *)
+(*     - After an operator, open paren/bracket, keyword, or at the     *)
+(*       start of an expression:  prefix (dereference / address-of).   *)
+(*     - After an identifier, literal, close paren/bracket, or         *)
+(*       postfix !:  infix (multiplication / bitwise AND).             *)
+(*                                                                     *)
+(* Rule 2: ! as prefix (boolean-not) vs. postfix (unwrap)              *)
+(*                                                                     *)
+(*   Same preceding-token rule as * and &:                             *)
+(*     - After an identifier, literal, close paren/bracket:            *)
+(*       postfix unwrap (x!).                                          *)
+(*     - At the start of an expression or after an operator / keyword: *)
+(*       prefix boolean not (!x).                                      *)
+(*                                                                     *)
+(* Rule 3: -> as function type, pointer field access, match arm        *)
+(*                                                                     *)
+(*   - In type_expr context:  function type arrow.                     *)
+(*   - After "|" pattern in match_arm:  match arm separator.           *)
+(*   - In expression context after a postfix_expr:  pointer field      *)
+(*     access (ptr->field).                                            *)
+(*   - After a parameter list "(" params ")":  lambda body arrow.      *)
+(*                                                                     *)
+(* Rule 4: | as match arm pipe vs. bitwise OR                          *)
+(*                                                                     *)
+(*   - At the start of a match arm (immediately after INDENT or        *)
+(*     NEWLINE inside a match body):  match arm pipe.                  *)
+(*   - In expression context:  bitwise OR.                             *)
+(*                                                                     *)
+(* Rule 5: name<Type>() generic call vs. comparison                    *)
+(*                                                                     *)
+(*   name<Type>() is always parsed as a generic call, never as a       *)
+(*   comparison expression.  This is unambiguous because type names    *)
+(*   (int32, str, point, 'a, etc.) are syntactically distinct from     *)
+(*   value expressions in all positions where they may appear inside   *)
+(*   the angle brackets.  No turbofish (::< >) syntax is needed.      *)
+(*                                                                     *)
+(*   The parser uses a lookahead strategy:                             *)
+(*     If IDENT is followed by '<', attempt to parse type_arg_list     *)
+(*     followed by '>' and '('.  If successful, it is a generic call.  *)
+(*     Otherwise, backtrack and parse '<' as a comparison operator.    *)
+(*                                                                     *)
+(* Rule 6: (T)expr cast vs. parenthesized expression                   *)
+(*                                                                     *)
+(*   The parser attempts to parse the contents of (...) as a           *)
+(*   type_expr.  If it succeeds and the ')' is followed by a token     *)
+(*   that can start a prefix_expr (identifier, literal, '(', '*',     *)
+(*   '&', '!', '~', '-'), then it is a cast: (T)expr.                 *)
+(*   Otherwise, it is a parenthesized expression: (expr).              *)
+(*                                                                     *)
+(*   This works because type expressions and value expressions are     *)
+(*   syntactically distinct — a bare type name like int32 or float64   *)
+(*   cannot appear as an expression, and type-forming tokens like *    *)
+(*   (postfix), [], and ? after a type name have no expression         *)
+(*   interpretation in that position.                                  *)
+(*                                                                     *)
+(* Rule 7: Negative pattern literals                                   *)
+(*                                                                     *)
+(*   In pattern context only, a '-' immediately followed by an         *)
+(*   INT_LIT (with no intervening whitespace) is parsed as a single    *)
+(*   negative integer literal token, not as unary negation applied     *)
+(*   to a pattern.  Examples: -1, -42i8, -100i64.                     *)
+(*   Float literals are not valid in patterns — negative or otherwise. *)
+(*                                                                     *)
+
+(* ================================================================== *)
+(*                         END OF GRAMMAR                              *)
+(* ================================================================== *)

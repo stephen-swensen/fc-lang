@@ -1,0 +1,23 @@
+// Test implicit widening for concrete params in generic functions
+// e.g. get(list, 0) where index: int64 should auto-widen int32 literal
+
+let pick = (a: 'a, index: int64) ->
+    if index == 0 then a
+    else a
+
+let add64 = (x: 'a, offset: int64) ->
+    offset
+
+let main = (args: str[]) ->
+    // int32 literal 0 widens to int64 for concrete param
+    let r1 = pick(42, 0)
+    // int32 literal 2 widens to int64
+    let r2 = pick(10, 2)
+    // explicit i64 still works
+    let r3 = add64(10, 5i64)
+    // int32 var widens to int64
+    let idx = 3
+    let r4 = pick(99, idx)
+    // r1=42, r2=10, r3=5, r4=99
+    // 42 + 10 + 5 + 99 = 156
+    r1 + r2 + (int32)r3 + r4

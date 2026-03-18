@@ -1,0 +1,5 @@
+let get_size = <'a>() -> sizeof('a)
+
+let main = (args: str[]) ->
+    let s = get_size<int32>()
+    (int32)s

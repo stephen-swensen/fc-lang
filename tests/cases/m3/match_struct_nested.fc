@@ -1,0 +1,14 @@
+struct point =
+    x: int32
+    y: int32
+
+struct rect =
+    origin: point
+    w: int32
+
+let main = (args: str[]) ->
+    let r = rect { origin = point { x = 0, y = 5 }, w = 10 }
+    match r with
+    | { origin = { x = 0, y = 0 }, w = w } -> w
+    | { origin = { x = 0, y = y }, w = w } -> y + w
+    | { origin = { x = x } } -> x

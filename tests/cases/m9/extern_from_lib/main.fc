@@ -1,0 +1,5 @@
+module c from "stdlib.h" =
+    extern abs: (int32) -> int32
+
+let main = (args: str[]) ->
+    c.abs(0 - 15)

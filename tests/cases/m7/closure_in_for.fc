@@ -1,0 +1,9 @@
+let apply = (f: (int32) -> int32, x: int32) -> f(x)
+
+let main = (args: str[]) ->
+    let mut sum = 0
+    for i in 0..5
+        let captured = i
+        let f = (x: int32) -> x + captured
+        sum = sum + apply(f, 10)
+    sum

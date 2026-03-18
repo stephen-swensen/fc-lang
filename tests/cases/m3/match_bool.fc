@@ -1,0 +1,5 @@
+let to_int = (b: bool) -> match b with
+    | true -> 1
+    | false -> 0
+
+let main = (args: str[]) -> to_int(true) + to_int(false)

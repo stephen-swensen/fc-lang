@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let max = 2147483647
+    let result = max + 1
+    let mut r = 0
+    if result == -2147483648 then r = r + 1 else r = r
+    let min = -2147483648
+    let result2 = min - 1
+    if result2 == 2147483647 then r = r + 2 else r = r
+    r

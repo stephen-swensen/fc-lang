@@ -1,0 +1,8 @@
+struct triple =
+    a: int32
+    b: int32
+    c: int32
+
+let main = (args: str[]) ->
+    let t = triple { b = 50 }
+    t.a + t.b + t.c

@@ -1,0 +1,7 @@
+struct pair =
+    first: 'a
+    second: 'b
+
+let main = (args: str[]) ->
+    let p = pair { first = 10, second = 32 }
+    p.first + p.second

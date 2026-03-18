@@ -1,0 +1,85 @@
+struct arraylist =
+    data: 'a[]
+    len:  int64
+
+module arraylist =
+
+    private let grow = (l: arraylist<'a>*) ->
+        let new_cap = l->data.len * 2
+        let mut new_data = alloc('a[new_cap])!
+        let mut i = 0
+        loop
+            if i >= l->len then break
+            new_data[i] = l->data[i]
+            i = i + 1
+        free(l->data)
+        l->data = new_data
+
+    let make = <'a>() ->
+        arraylist { data = alloc('a[4])!, len = 0 }
+
+    let drop = (l: arraylist<'a>) ->
+        free(l.data)
+
+    let add = (l: arraylist<'a>*, value: 'a) ->
+        if l->len == l->data.len then arraylist.grow(l)
+        l->data[l->len] = value
+        l->len = l->len + 1
+
+    let get = (l: arraylist<'a>, index: int64) ->
+        l.data[index]
+
+    let update = (l: arraylist<'a>*, index: int64, value: 'a) ->
+        l->data[index] = value
+
+    let insert = (l: arraylist<'a>*, index: int64, value: 'a) ->
+        if l->len == l->data.len then arraylist.grow(l)
+        let mut i = l->len
+        loop
+            if i <= index then break
+            l->data[i] = l->data[i - 1]
+            i = i - 1
+        l->data[index] = value
+        l->len = l->len + 1
+
+    let fold = (l: arraylist<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+        let mut acc = init
+        let mut i = 0
+        loop
+            if i >= l.len then break acc
+            acc = f(acc, l.data[i])
+            i = i + 1
+
+    let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
+        let mut result = arraylist.make<'b>()
+        let mut i = 0
+        loop
+            if i >= l.len then break result
+            arraylist.add(&result, f(l.data[i]))
+            i = i + 1
+
+let main = (args: str[]) ->
+    let mut nums = arraylist.make<int32>()
+    arraylist.add(&nums, 10)
+    arraylist.add(&nums, 20)
+    arraylist.add(&nums, 30)
+    arraylist.add(&nums, 40)
+    arraylist.add(&nums, 50)
+    // nums = [10, 20, 30, 40, 50], capacity grew to 8
+    arraylist.insert(&nums, 2, 99)
+    // nums = [10, 20, 99, 30, 40, 50]
+    arraylist.update(&nums, 0, 15)
+    // nums = [15, 20, 99, 30, 40, 50]
+
+    let sum = arraylist.fold(nums, 0, (acc: int32, x: int32) -> acc + x)
+    // sum = 15+20+99+30+40+50 = 254
+
+    let doubled = arraylist.map(nums, (x: int32) -> x * 2)
+    let dv = arraylist.get(doubled, 0)
+    // dv = 30
+
+    arraylist.drop(nums)
+    arraylist.drop(doubled)
+
+    // 254 - 30 = 224
+    sum - dv

@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let a = ""
+    let b = ""
+    let c = "x"
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    r

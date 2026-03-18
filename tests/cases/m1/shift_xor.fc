@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let a = 1 << 4
+    let b = 255 >> 4
+    let c = a ^ b
+    let d = c << 1
+    d

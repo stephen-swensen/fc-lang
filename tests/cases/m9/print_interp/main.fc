@@ -1,0 +1,7 @@
+import io from std::
+
+let main = (args: str[]) ->
+    let x = 42
+    let name = "world"
+    io.write("hello %s{name}, x=%d{x}\n", stdout)
+    0

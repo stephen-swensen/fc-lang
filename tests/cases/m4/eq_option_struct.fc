@@ -1,0 +1,14 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let a = some(point { x = 1, y = 2 })
+    let b = some(point { x = 1, y = 2 })
+    let c = some(point { x = 9, y = 9 })
+    let d = none(point)
+    let mut r = 0
+    if a == b then r = r + 1 else r = r
+    if a != c then r = r + 2 else r = r
+    if a != d then r = r + 4 else r = r
+    r

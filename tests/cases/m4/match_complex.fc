@@ -1,0 +1,41 @@
+struct dims =
+    w: int32
+    h: int32
+
+union shape =
+    | circle(int32)
+    | rect(dims)
+
+let area = (s: shape) ->
+    match s with
+    | circle(r) -> r * r
+    | rect(d) -> d.w * d.h
+
+let nested = (x: int32?) ->
+    match x with
+    | some(v) ->
+        match v with
+        | 0 -> 10
+        | 1 -> 20
+        | _ -> 30
+    | none -> 0
+
+let check_sign = (x: int32) ->
+    match x with
+    | -1 -> 10
+    | 0 -> 20
+    | 1 -> 30
+    | _ -> 40
+
+let main = (args: str[]) ->
+    let c = shape.circle(5)
+    let r = shape.rect(dims { w = 3, h = 4 })
+    let a1 = area(c)
+    let a2 = area(r)
+    let n1 = nested(some(0))
+    let n2 = nested(some(1))
+    let n3 = nested(some(99))
+    let n4 = nested(none(int32))
+    let s1 = check_sign(-1)
+    let s2 = check_sign(0)
+    a1 + a2 + n1 + n2 + n3 + n4 + s1 + s2

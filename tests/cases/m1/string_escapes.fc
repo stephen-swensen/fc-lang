@@ -1,0 +1,23 @@
+let main = (args: str[]) ->
+    let s1 = "a\tb"
+    let s2 = "a\rb"
+    let s3 = "a\\b"
+    let s4 = "a\"b"
+    let s5 = "a\0b"
+    let s6 = "\x41\x42"
+    let mut r = 0
+    // \t is 9
+    if s1.ptr[1] == 9 then r = r + 1
+    // \r is 13
+    if s2.ptr[1] == 13 then r = r + 1
+    // \\ is 92
+    if s3.ptr[1] == 92 then r = r + 1
+    // \" is 34
+    if s4.ptr[1] == 34 then r = r + 1
+    // \0 is 0
+    if s5.ptr[1] == 0 then r = r + 1
+    // \x41 is 'A' (65)
+    if s6.ptr[0] == 65 then r = r + 1
+    // \x42 is 'B' (66)
+    if s6.ptr[1] == 66 then r = r + 1
+    r

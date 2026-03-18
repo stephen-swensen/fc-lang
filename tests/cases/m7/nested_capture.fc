@@ -1,0 +1,10 @@
+let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply2 = (f: (int32) -> int32, x: int32) -> f(x)
+
+let main = (args: str[]) ->
+    let a = 10
+    let outer = (x: int32) ->
+        let b = 20
+        let inner = (y: int32) -> y + a + b
+        apply2(inner, x)
+    apply(outer, 12)

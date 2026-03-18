@@ -1,0 +1,1 @@
+let main = (args: str[]) -> 17 % 5

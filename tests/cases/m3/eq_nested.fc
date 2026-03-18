@@ -1,0 +1,15 @@
+struct inner =
+    v: int32
+
+struct outer =
+    a: inner
+    b: inner
+
+let main = (args: str[]) ->
+    let x = outer { a = inner { v = 1 }, b = inner { v = 2 } }
+    let y = outer { a = inner { v = 1 }, b = inner { v = 2 } }
+    let z = outer { a = inner { v = 1 }, b = inner { v = 3 } }
+    let mut r = 0
+    if x == y then r = r + 1 else r = r
+    if x != z then r = r + 2 else r = r
+    r

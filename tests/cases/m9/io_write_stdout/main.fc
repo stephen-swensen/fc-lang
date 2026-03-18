@@ -1,0 +1,5 @@
+import io from std::
+
+let main = (args: str[]) ->
+    io.write("hello\n", stdout)
+    0

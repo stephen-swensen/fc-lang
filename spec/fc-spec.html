@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FC Language Specification v0.5</title>
+<title>FC Language Specification v0.6</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Fraunces:ital,wght@0,300;0,600;1,300&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -570,7 +570,11 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `default`, `print`, `eprint`, `fprint`, `sprint`
+`alloc`, `free`, `sizeof`, `default`
+
+The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
+
+`stdin`, `stdout`, `stderr`
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
@@ -647,6 +651,54 @@ The following escape sequences are valid in `str`, `cstr`, and `char` literals:
 
 All three literal forms share the same escape set. An unrecognized escape sequence is a compile error.
 
+### String Interpolation
+
+Any string literal may contain **interpolation segments** — format specifier / expression pairs that are evaluated at runtime and spliced into the string. A string literal with no interpolation segments remains a static, read-only `str` as before.
+
+An interpolation segment has the form `%spec{expr}`, where `spec` is a printf-style format specifier and `expr` is an arbitrary FC expression:
+
+```fc
+let name = "world"
+let age = 30
+let greeting = "hello %s{name}, you are %d{age} years old"
+```
+
+The compiler validates that each format specifier is compatible with the expression's type — a mismatch is a compile error.
+
+#### Format specifiers
+
+| Specifier | Valid types | Notes |
+|-----------|------------|-------|
+| `%d`, `%i` | all integer types | decimal |
+| `%u` | all integer types | unsigned decimal |
+| `%x`, `%X` | all integer types | hexadecimal |
+| `%o` | all integer types | octal |
+| `%f` | `float32`, `float64` | fixed-point — **width required** |
+| `%e`, `%E` | `float32`, `float64` | scientific notation |
+| `%g`, `%G` | `float32`, `float64` | shortest representation |
+| `%s` | `str`, `cstr` | string |
+| `%c` | `char` | single character |
+| `%p` | any pointer type | pointer address |
+| `%%` | — | literal `%`, no expression |
+
+Width, precision, and flag modifiers are allowed: `%04d{x}`, `%.2f{pi}`, `%20s{name}`.
+
+The `%f` format requires an explicit width (e.g., `%8.2f`) because fixed-point float output can be arbitrarily long. Other float formats (`%e`, `%g`) are bounded by type and do not require explicit width.
+
+#### Bounded allocation
+
+Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, and pointer formats are bounded at compile time by the type's maximum formatted width. String formats (`%s`) use the runtime `.len`. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size.
+
+#### Escape rules
+
+`%%` produces a literal `%` character. Bare `{` and `}` are not special — interpolation is only triggered by the `%spec{` pattern.
+
+```fc
+"100%%"                    // "100%"
+"braces { } are literal"   // "braces { } are literal"
+"use %d format"            // static — %d not followed by {
+```
+
 ### Casting
 
 Explicit casts use C-style prefix cast syntax: `(T) expr`. All conversions not covered by the implicit widening rules require an explicit cast.
@@ -665,6 +717,13 @@ let z = (uint8) some_int32  // narrowing cast, programmer responsible
 let p = (any*) &my_state         // T* to any* — erase type for C interop
 let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer responsible
 let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
+```
+
+**str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string. The copy lives until the enclosing function returns (uses `alloca`). This is the safe way to pass FC strings to C functions that expect null-terminated strings:
+
+```fc
+let s = "hello"
+let cs = (cstr) s   // stack copy with null terminator
 ```
 
 **Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
@@ -718,6 +777,18 @@ This is consistent with the pointer rule — writing through a `let` binding poi
 
 At the top level of a file or module, `let`, `let mut`, `struct`, `union`, `module`, and `import` are **statements** — they are processed by the first compiler pass, have no type, and produce no value.
 
+Top-level and module-level non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `default`, and struct literals with constant fields. Variable references and function calls are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions, avoids hidden startup code, and ensures that top-level state can be fully determined at compile time.
+
+```fc
+let max_size = 1024             // ok — integer literal
+let mask = 0xFF & 0x0F          // ok — constant arithmetic
+let scale = 2 * 3 + 1           // ok — constant arithmetic
+
+let x = 10
+let y = x + 5                   // ERROR — references variable x
+let z = compute()               // ERROR — function call
+```
+
 Inside any expression context, `let` and `let mut` introduce bindings within a block. The binding is visible to all subsequent expressions in the same block — scoping and sequencing both follow directly from the block model:
 
 ```fc
@@ -756,7 +827,7 @@ let { center = { x = cx, y = cy }, radius = r } = green_circle
 Any binding can shadow any other binding of the same name, regardless of mutability:
 
 ```fc
-let x = int32.none
+let x = none(int32)
 let x = some(32)       // let shadows let
 
 let mut y = 42
@@ -782,7 +853,7 @@ FC uses simple right-to-left (inside-out) inference. The type of a binding is al
 ```fc
 let double = (x: int32) -> x * 2    // return type inferred as int32
 let n = alloc(node)!                 // inferred as node*
-let x = int32.none                   // inferred as int32?
+let x = none(int32)                  // inferred as int32?
 let x = some(42)                     // inferred as int32?
 ```
 
@@ -1132,6 +1203,8 @@ match some_node with
 | `{ field = pattern }` | struct destructuring, omitted fields match anything |
 | `{}` | matches any struct, binds nothing |
 
+When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants.
+
 Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
 
 Float literals and `cstr` literals are not valid in pattern position. Float equality is unreliable under IEEE 754 — a float literal pattern is almost certainly a bug. `cstr` equality is pointer comparison, not content comparison, so a `cstr` literal pattern would rarely do what the programmer intended. Both are compile errors.
@@ -1175,7 +1248,7 @@ loop
 // loop as expression — type inferred from break value
 let mut i = 0
 let result = loop
-    if i >= data.len then break int32.none
+    if i >= data.len then break none(int32)
     if matches(data[i]) then break some(i)
     i = i + 1
 ```
@@ -1214,7 +1287,7 @@ The `..` syntax is only valid in `for` position and slice indexing position — 
 
 ```fc
 for i, p in points
-    if p.x == 0.0 then libc.printf(c"zero at index %d\n", i)
+    if p.x == 0.0 then io.write("zero at index %d{i}\n", stdout)
 ```
 
 The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration.
@@ -1254,7 +1327,7 @@ loop
     if i >= 9 then break
 
 // break and continue in for
-let mut result = point.none
+let mut result = none(point)
 for p in points
     if p.x < 0.0 then continue       // skip negative x
     if p.x == 0.0 then
@@ -1362,9 +1435,9 @@ let factorial = (n: int32) ->
 
 ```fc
 let find = (haystack: str, needle: str) ->
-    if needle.len > haystack.len then return str.none
+    if needle.len > haystack.len then return none(str)
     // ... rest of body
-    str.none
+    none(str)
 
 let log_nop = (msg: str) -> return     // void — does nothing
 
@@ -1378,8 +1451,10 @@ In all cases `return` is only needed for early exits — the normal return value
 ### Entry point
 
 ```fc
+import io from std::
+
 let main = (args: str[]) ->
-    print("program: %s\n", args[0])
+    io.write("program: %s{args[0]}\n", stdout)
     0
 ```
 
@@ -1655,9 +1730,12 @@ node*?      // optional pointer to node
 ### Constructing options
 
 ```fc
-some(x)     // wrap a value — type inferred from x
-T.none      // typed none — see §Static Type Properties
+some(x)        // wrap a value — type inferred from x
+none(int32)    // typed none — int32? with no value
+none(node*)    // node*? with no value
 ```
+
+`some` and `none` are built-in operators. `some(expr)` infers the option type from the expression. `none(type)` takes a type name as its argument (like `sizeof` and `default`) and produces a value of type `type?` with no value present.
 
 ### Unwrapping
 
@@ -1690,6 +1768,21 @@ This is a convention enforced by the language surface, not a hard guarantee at t
 int32*       // pointer to int32, always valid
 int32*?      // optional pointer, may be none
 node**       // pointer to pointer to node
+```
+
+Multi-level pointers (`T**`, `T***`, etc.) compose naturally. In practice, `T**` appears in two contexts: C interop with out-parameter APIs (a function writes a `T*` back through a `T**`), and low-level data structures. Idiomatic FC rarely needs `T**` for pure FC code — option types, struct returns, and mutable bindings cover the common cases where C would use a pointer out-parameter.
+
+```fc
+// T** out-parameter pattern — function writes a heap pointer through T**
+let create = (out: int32**) ->
+    let p = alloc(int32)!
+    *p = 99
+    *out = p
+
+let mut result = default(int32*)
+create(&result)        // &result is int32** — create writes through it
+let v = *result        // 99
+free(result)
 ```
 
 ### Pointer width
@@ -1833,9 +1926,9 @@ The cost of `int64` on 32-bit and smaller targets is real but acceptable; progra
 
 Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
-### String literals and null termination
+### String literals and memory
 
-FC string literals are guaranteed to be null-terminated in memory. The `len` field does not include the null byte — it reflects the number of usable characters. This means a literal's `.ptr` is always safe to pass to C string functions.
+FC's `str` type makes no null-termination guarantee. A `str` is a fat pointer — a pointer and a length — and the length is the only authority on where the string ends. To pass a string to a C function that expects null termination, use a `(cstr)` cast or a `c"..."` literal.
 
 String literal memory lives in static read-only storage — the compiler emits the bytes into the binary's read-only data section, and the `str` fat pointer is constructed with `.ptr` pointing to that static data. This has two consequences:
 
@@ -1854,13 +1947,6 @@ buf[0] = 72u8            // ok — heap-allocated, mutable
 free(buf)                // ok — heap-allocated
 ```
 
-Sub-slices obtained via `s[i..j]` make no null-termination guarantee. Passing a sub-slice's `.ptr` to a C string function is the programmer's responsibility.
-
-```fc
-let s = "hello"     // stored as h e l l o \0 in memory, s.len == 5
-let sub = s[1..3]   // fat pointer into same memory — NOT null-terminated
-```
-
 ### Slice construction from raw pointer
 
 When interoperating with C, a slice can be constructed from a raw pointer and a known length using struct literal syntax:
@@ -1874,12 +1960,14 @@ The resulting slice shares memory with the original pointer — no allocation oc
 
 ### C interop
 
-Pass `.ptr` to C functions expecting a raw pointer. For string functions, ensure null termination first:
+For C functions expecting a null-terminated string, use `(cstr)` to create a stack copy with a null terminator, or use `c"..."` literals for constant strings:
 
 ```fc
-libc.puts(s.ptr)             // safe only if s is null-terminated
-libc.printf(c"hello\n")     // cstr literal — always safe
+libc.puts((cstr)s)           // stack copy with null terminator
+libc.puts(c"hello")          // cstr literal — always null-terminated
 ```
+
+For C functions that take a pointer and length (e.g. `fwrite`), pass `.ptr` and `.len` directly — no null termination needed.
 
 ### Embedded targets and raw pointer arrays
 
@@ -1930,19 +2018,11 @@ Function types transpile to C function pointers. When the function type appears 
 
 Every type in FC has built-in static properties accessible via dot notation on the type name. These replace C's inconsistent collection of macros.
 
-The dot notation `T.something` is not a special "static property" feature — it is simply module access syntax. The compiler implicitly provides a built-in module for each primitive type pre-populated with universal and type-specific properties. User-defined static properties on structs are just a module sharing the type's name (see §Module System).
+The dot notation `T.something` is not a special "static property" feature — it is simply module access syntax. The compiler implicitly provides a built-in module for each primitive type pre-populated with type-specific properties. User-defined static properties on structs are just a module sharing the type's name (see §Module System).
 
-A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. `str` is `uint8[]` and `str.none` is therefore valid for the same reason `uint8[].none` would be. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
+A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
 
-### Compiler-provided universals
-
-Available on every type:
-
-```fc
-int32.none      // int32? with no value
-node.none       // node? with no value
-str.none        // str? with no value
-```
+The built-in aliases `str`, `cstr`, and `str32` are the canonical examples: `str` is `uint8[]`, `cstr` is `uint8*`, and `str32` is `uint32[]`. Import aliases (§Importing) extend this mechanism to user-defined types — `import point as pt from geometry` makes `pt` a type alias for `point`. The alias name is preserved in diagnostics and function signatures, but the underlying type identity is unchanged: `pt` and `point` are the same type, values are freely interchangeable, and `==` works across them.
 
 ### Type-specific built-ins
 
@@ -1972,7 +2052,9 @@ Four built-in compile-time operators handle memory-related operations that requi
 
 | Operator | Description |
 |----------|-------------|
-| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. When `T` is a slice type `T[N]`, allocates `N` elements and returns `T[]?`. Also accepts a value expression — `alloc(expr)` — inferring the type from the expression and initializing the allocated memory with that value. |
+| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
+| `alloc(T[N])` | Heap-allocate a slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. If `expr` is a slice, **deep-copies the data** — allocates `len * sizeof(elem)` bytes and copies the contents — returning `T[]?`. Otherwise allocates a single `T` and writes the value, returning `T*?`. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
@@ -1995,7 +2077,7 @@ let f = default(float64)   // 0.0
 let b = default(bool)      // false
 let s = default(str)       // empty slice — { ptr = null, len = 0 }
 let p = default(point)     // point { x = 0.0, y = 0.0 }
-let o = default(int32?)    // int32.none
+let o = default(int32?)    // none(int32)
 let n = sizeof(int32)      // 4 — int64
 ```
 
@@ -2066,6 +2148,28 @@ free(buf)                    // free a heap-allocated slice — compiler emits f
 
 `alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N])` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
 
+### alloc forms summary
+
+| Form | Returns | Behavior |
+|------|---------|----------|
+| `alloc(T)` | `T*?` | Zero-initialized single value |
+| `alloc(T[N])` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
+| `alloc(expr)` where expr is a struct/union/scalar | `T*?` | Heap-allocate and copy value |
+| `alloc(expr)` where expr is a slice | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
+
+The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
+
+```fc
+let s = "count: \{n}"       // stack-allocated (alloca) — unsafe to return
+let owned = alloc(s)!        // heap copy — safe to return, caller must free
+
+let mut buf = int32[3] { }
+buf.ptr[0] = 10
+let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
+```
+
+`alloc(variable)` works for any binding — the compiler resolves the parser ambiguity between type names and variable names. If the name refers to a variable in scope, it is treated as `alloc(expr)`, not `alloc(T)`.
+
 `alloc` and `free` require a hosted environment or an embedded target with a heap allocator. They are unavailable on bare-metal targets and are a compile error if used there. See §Build Targets.
 
 ### Initialized alloc
@@ -2093,7 +2197,7 @@ let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
 let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
 ```
 
-In all cases the return type is the same as the zero-init form — `T*?` for structs and unions, `T[]?` for slices.
+In all cases the return type follows from the value's type — `T*?` for structs, unions, and scalars; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
 > `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
@@ -2134,24 +2238,33 @@ let p = alloc(point3d)!
 import io from std::
 ```
 
-### Constants
-
-| Constant | Type | Description | C equivalent |
-|----------|------|-------------|--------------|
-| `io.stdout` | `any*` | Standard output stream | `(void*)stdout` |
-| `io.stderr` | `any*` | Standard error stream | `(void*)stderr` |
-
 ### Operations
 
 ```fc
+io.write(s: str, f: any*) -> int64
+io.read(buf: uint8[], n: int64, f: any*) -> int64
 io.open(path: str, mode: str) -> any*?
 io.close(f: any*) -> void
-io.read(f: any*, buf: uint8[]) -> str
-io.write(f: any*, data: str) -> int64
 io.flush(f: any*) -> void
 ```
 
-**`io.open`** — opens a file at the given path with the given mode. Returns `any*?` — `none` on failure. Mode strings follow C conventions: `"r"` (read), `"w"` (write/truncate), `"a"` (append), `"rb"` (read binary), etc. Both arguments accept `str` — the compiler ensures null-termination at the C boundary (see transpilation note below).
+**`io.write`** — writes the contents of `s` to the file handle `f`. Returns the number of bytes written as `int64`.
+
+```fc
+import io from std::
+
+io.write("hello world\n", stdout)
+io.write("error: something failed\n", stderr)
+```
+
+**`io.read`** — reads up to `n` bytes from the file handle `f` into the provided buffer. Returns the number of bytes actually read as `int64`. A return value of 0 indicates end-of-file or error.
+
+```fc
+let mut buf = uint8[1024] {}
+let n = io.read(buf, 1024, f)
+```
+
+**`io.open`** — opens a file at the given path with the given mode. Returns `any*?` — `none` on failure. Mode strings follow C conventions: `"r"` (read), `"w"` (write/truncate), `"a"` (append), `"rb"` (read binary), etc. Both arguments accept `str` — the `(cstr)` cast inside `io.open` ensures null-termination at the C boundary.
 
 Since `any*?` uses null-sentinel optimization (same as `T*?`), the option wrapper is zero-cost — `none` is just a null pointer.
 
@@ -2160,7 +2273,7 @@ import io from std::
 
 let f = io.open("data.txt", "r")
 match f with
-| none    -> eprint("failed to open file\n")
+| none    -> io.write("failed to open file\n", stderr)
 | some(f) ->
     // use f
     io.close(f)
@@ -2168,58 +2281,32 @@ match f with
 
 **`io.close`** — closes the file. Using a file handle after closing it is undefined behavior.
 
-**`io.read`** — reads up to `buf.len` bytes from the file into the provided buffer. Returns a `str` sub-slice of `buf` covering the bytes actually read. An empty slice (length 0) indicates end-of-file or error.
-
-```fc
-let mut buf = uint8[1024] { }
-let data = io.read(f, buf)
-if data.len == 0 then
-    eprint("EOF or error\n")
-```
-
-**`io.write`** — writes the contents of `data` to the file. Returns the number of bytes written as `int64`. A short write (return value less than `data.len`) indicates an error.
-
-```fc
-io.write(f, "hello world\n")
-```
-
 **`io.flush`** — flushes buffered output to the underlying file. Relevant for files opened in buffered mode. `stdout` is line-buffered by default; `stderr` is unbuffered.
 
+### stdin, stdout, stderr
+
+The built-in globals `stdin`, `stdout`, and `stderr` are typed `any*` and refer to the standard C streams. They do not require importing `std::io` — they are always available.
+
+```fc
+io.write("hello\n", stdout)
+io.write("error\n", stderr)
+let n = io.read(buf, 256, stdin)
+```
+
 > **Transpilation**
-> All `io` handles are `any*` in FC and cast to/from `FILE*` at the C boundary.
+> All file handles are `any*` in FC and cast to/from `FILE*` at the C boundary. `stdin`/`stdout`/`stderr` emit `(void*)stdin`/`(void*)stdout`/`(void*)stderr`.
 >
-> When a `str` argument must be passed to a C function that expects a null-terminated string, the compiler emits a stack copy with a null terminator appended. The copy is unconditional — reading past the slice boundary to check for an existing null byte would be unsafe (the memory may not be owned, and even if it is, another thread could mutate it). For functions like `io.open` the cost of a small `memcpy` is negligible next to the underlying syscall.
->
-> This only applies to arguments that become C strings (`char*`) — namely the `path` and `mode` parameters to `io.open`. Data-oriented operations like `io.read` and `io.write` use length-based C functions (`fread`/`fwrite`) that take a pointer and a byte count directly, so `str` arguments pass through with no copy and no null-termination overhead, regardless of size.
+> The `io.open` wrapper uses `(cstr)` casts internally to null-terminate its `str` arguments before passing them to C's `fopen`. Data-oriented operations like `io.read` and `io.write` use length-based C functions (`fread`/`fwrite`) that take a pointer and a byte count directly — no null-termination overhead.
 > ```c
-> // io.open(path, mode) — path and mode are str
-> // compiler emits null-terminated stack copies:
-> char _path_buf[/*path.len+1*/];
-> memcpy(_path_buf, path.ptr, path.len);
-> _path_buf[path.len] = '\0';
-> // (same pattern for mode)
-> void* f = (void*)fopen(_path_buf, _mode_buf);
+> // io.write(s, f)
+> fwrite(s.ptr, 1, (size_t)s.len, f);
 >
-> // io.read(f, buf) — reads into buf, returns sub-slice
-> size_t _n = fread(buf.ptr, 1, buf.len, (FILE*)f);
-> // result is (fc_slice_uint8){ .ptr = buf.ptr, .len = (int64_t)_n }
->
-> // io.write(f, data)
-> size_t _n = fwrite(data.ptr, 1, data.len, (FILE*)f);
+> // io.open(path, mode) — uses (cstr) cast internally
+> fopen(path_cstr, mode_cstr);
 >
 > // io.close(f)
-> fclose((FILE*)f);
->
-> // io.flush(f)
-> fflush((FILE*)f);
->
-> // io.stdout / io.stderr
-> void* io_stdout = (void*)stdout;
-> void* io_stderr = (void*)stderr;
+> fclose(f);
 > ```
-
-> **Note on `print`/`eprint`**
-> The `print` and `eprint` operators write to stdout and stderr directly — they do not require importing `std::io`. They are reserved compiler operators, not `io` module functions.
 
 ---
 
@@ -2243,11 +2330,12 @@ sys.sleep(ms: int64) -> void
 **`sys.env`** — reads the environment variable with the given name. Returns `str?` — `none` if the variable is not set. The returned `str` is a view into process memory (from C's `getenv`), valid for the lifetime of the process unless the environment is modified. The `name` argument receives the same null-termination treatment as `io.open`'s path argument — an unconditional stack copy with a null byte appended.
 
 ```fc
+import io from std::
 import sys from std::
 
 match sys.env("HOME") with
-| none       -> eprint("HOME not set\n")
-| some(home) -> print("home: %s\n", home)
+| none       -> io.write("HOME not set\n", stderr)
+| some(home) -> io.write("home: %s{home}\n", stdout)
 ```
 
 **`sys.exit`** — terminates the process immediately with the given exit code. The return type is `void` but the function never returns. After `sys.exit`, no destructors, deferred operations, or further code execute.
@@ -2262,7 +2350,7 @@ if fatal_error then sys.exit(1)
 let start = sys.time()
 do_work()
 let elapsed = sys.time() - start
-print("took %d ms\n", elapsed)
+io.write("took %d{elapsed} ms\n", stdout)
 ```
 
 **`sys.sleep`** — pauses execution for the given number of milliseconds. Wraps `nanosleep` on POSIX systems.
@@ -2295,111 +2383,71 @@ sys.sleep(1000)    // sleep for 1 second
 
 ---
 
-## Formatted Output
-
-Four built-in operators provide type-safe formatted output using printf-style format strings. These are compile-time operators — like `alloc` and `sizeof`, they are resolved by the compiler, cannot be stored in bindings, and cannot be passed as arguments.
-
-| Operator | Destination | Returns |
-|----------|-------------|---------|
-| `print(fmt, args...)` | `stdout` | `void` |
-| `eprint(fmt, args...)` | `stderr` | `void` |
-| `fprint(f, fmt, args...)` | an `any*` file handle | `void` |
-| `sprint(buf, fmt, args...)` | caller-provided `uint8[]` buffer | `str` — sub-slice of bytes written |
-
-The format string `fmt` is a `str` value (not `cstr`). All standard printf format specifiers are supported — `%d`, `%x`, `%04d`, `%.2f`, `%s`, `%%`, and so on.
-
-```fc
-print("hello %s, you are %d years old\n", name, age)
-eprint("error: %s\n", msg)
-
-import io from std::
-let f = io.open("log.txt", "w")!
-fprint(f, "event %d: %s\n", id, description)
-io.close(f)
-
-let mut buf = uint8[256] { }
-let msg = sprint(buf, "x = %d, y = %d", x, y)
-```
-
-### Compile-time format checking
-
-The compiler parses the format string at compile time and validates each format specifier against the corresponding argument's type. A mismatch is a compile error:
-
-```fc
-let x = 42
-print("value: %s\n", x)    // compile error — %s expects str or cstr, got int32
-print("value: %d\n", x)    // ok
-```
-
-The compiler checks:
-
-| Specifier | Valid argument types |
-|-----------|-------------------|
-| `%d`, `%i` | all integer types |
-| `%u`, `%x`, `%X`, `%o` | all integer types |
-| `%f`, `%e`, `%E`, `%g`, `%G` | `float32`, `float64` |
-| `%s` | `str`, `cstr` |
-| `%c` | `char` |
-| `%p` | any pointer type (`T*`, `any*`) |
-| `%%` | — (literal percent, no argument consumed) |
-
-Width, precision, and flag modifiers (`%04d`, `%-20s`, `%.2f`) are passed through to the C format string unchanged. The compiler validates the base specifier only.
-
-### Transparent str handling
-
-When `%s` is used with a `str` argument, the compiler automatically expands it to `%.*s` and passes the length and pointer — no manual `.ptr` or null-termination required:
-
-```fc
-let name = "world"
-print("hello %s\n", name)
-// compiler emits: printf("hello %.*s\n", (int)name.len, name.ptr)
-```
-
-When `%s` is used with a `cstr` argument, the compiler emits plain `%s`:
-
-```fc
-let name = c"world"
-print("hello %s\n", name)
-// compiler emits: printf("hello %s\n", name)
-```
-
-This means `%s` always does the right thing regardless of which string type is passed.
-
-### sprint
-
-`sprint` writes formatted output into a caller-provided `uint8[]` buffer and returns a `str` sub-slice covering the bytes actually written (not including the null terminator). If the output exceeds the buffer size, it is truncated — matching `snprintf` behavior.
-
-```fc
-let mut buf = uint8[64] { }
-let msg = sprint(buf, "point(%d, %d)", x, y)
-// msg is a sub-slice of buf — no allocation occurred
-```
-
-The returned sub-slice shares memory with `buf`. The programmer is responsible for the buffer's lifetime. To detect truncation, compare `msg.len` against `buf.len - 1` — if equal, the output may have been clipped.
-
-> **Transpilation**
-> The four operators map to C's printf family:
-> ```c
-> // print("x = %d\n", x) — str format string
-> printf("x = %d\n", x);
->
-> // eprint("error: %s\n", msg) — msg is str
-> fprintf(stderr, "error: %.*s\n", (int)msg.len, msg.ptr);
->
-> // fprint(f, "event %d\n", id) — f is any*
-> fprintf((FILE*)f, "event %d\n", id);
->
-> // sprint(buf, "x = %d", x)
-> int _n = snprintf(buf.ptr, buf.len, "x = %d", x);
-> if (_n < 0) _n = 0;
-> if (_n > buf.len - 1) _n = buf.len - 1;
-> // result is (fc_slice_uint8){ .ptr = buf.ptr, .len = (int64_t)_n }
-> ```
-> The format string itself is always emitted as a C string literal or passed via `.ptr` — the compiler ensures null termination for the format string argument at the C boundary. Format specifiers for `str` arguments are rewritten from `%s` to `%.*s` with the corresponding length and pointer arguments inserted.
-
 ---
 
 # PART 7 — Program Structure
+
+## The FC Compiler
+
+FC programs are compiled by the `fc` command-line tool, which transpiles FC source files into a single C11 source file. The generated C is then compiled with any C11 compiler (e.g., `cc`, `gcc`, `clang`).
+
+### Usage
+
+```
+fc <input.fc> [input2.fc ...] [-o output.c]
+```
+
+One or more `.fc` source files are passed as arguments. If `-o` is not specified, the output filename is derived from the first input file by replacing its extension with `.c`.
+
+```
+fc main.fc                              // produces main.c
+fc main.fc -o build/app.c               // explicit output path
+fc src/main.fc src/math.fc src/util.fc   // produces src/main.c
+```
+
+All source files are compiled together as a single translation unit — there is no separate compilation or linking step on the FC side. The resulting C file is self-contained and can be compiled with:
+
+```
+cc -std=c11 -o myapp main.c
+```
+
+### Diagnostics
+
+The compiler writes all diagnostic messages to stderr. Each message includes the source location and a description:
+
+```
+filename.fc:line:col: error: description
+```
+
+**Error accumulation** — the compiler reports as many errors as it can in a single invocation rather than stopping at the first error. When the type checker encounters an error, it marks the erroneous expression with a poison type and continues checking the rest of the program. The poison type propagates silently through subsequent operations, suppressing cascading false positives. For example, if `let a = 1 + true` produces a type error, later uses of `a` in arithmetic, function calls, or assignments will not generate additional spurious errors.
+
+Syntax errors (lexer and parser) remain fatal — they prevent the compiler from building a well-formed AST, so compilation stops immediately on the first syntax error.
+
+After all errors are reported, the compiler prints a summary:
+
+```
+3 error(s)
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Compilation succeeded |
+| 1 | One or more errors occurred |
+
+### Compilation pipeline
+
+The compiler processes source in four stages:
+
+1. **Lex & parse** — each source file is tokenized (with indentation converted to `INDENT`/`DEDENT` tokens) and parsed into an AST. Syntax errors are fatal.
+2. **Pass 1 (declaration collection)** — all files are scanned to collect top-level names, struct/union layouts, function signatures, module and namespace declarations. This enables forward references and cross-file module access regardless of file order.
+3. **Pass 2 (type checking)** — expressions are type-checked bottom-up with scope tracking. Type errors are accumulated, not fatal.
+4. **Code generation** — the typed AST is emitted as C11 source.
+
+If any errors are accumulated during passes 1 or 2, code generation is skipped and the compiler exits with code 1.
+
+---
 
 ## Module System & Visibility
 
@@ -2494,6 +2542,19 @@ import func_a from acme::graphics::module_a           // symbol from named modul
 
 `import T from M` brings both the type `T` and the module `T` (if it exists) into scope together. There is no need to import them separately.
 
+**Alias name propagation.** When a type is imported with `as`, the alias name becomes the display name for that type within the importing scope — it appears in error messages, type signatures, and diagnostics. The alias does not create a new type; it is purely a naming convenience. The same type may be imported under multiple aliases, and values of any alias are freely interchangeable:
+
+```fc
+import point as pt from geometry
+import point as coord from geometry
+
+let move = (p: pt, dx: int32) -> pt { x = p.x + dx, y = p.y }
+
+let main = (args: int32) ->
+    let a = coord { x = 1, y = 2 }  // coord and pt are the same type
+    move(a, 10)                       // passing coord where pt is expected — OK
+```
+
 Circular references between modules are not allowed — whether via `import` or direct qualified access. If module A references anything in module B, module B may not reference anything in module A, directly or transitively. This applies even when both modules are defined in the same file. The compiler detects cycles during the first pass and reports them as compile errors.
 
 If two types need mutual pointer references, they must live in the same module — intra-module mutual recursion via pointer fields is always valid (see §Structs).
@@ -2521,10 +2582,10 @@ Inside `module vec2`, the `vec2` struct is visible because it was defined in the
 All `.fc` files involved in a build are passed to the compiler together. The compiler accepts individual files, glob patterns, or directories (non-recursive):
 
 ```
-fc build main.fc
-fc build src/*.fc
-fc build src/
-fc build src/*.fc vendor/acme/*.fc vendor/widget/*.fc
+fc main.fc
+fc src/*.fc
+fc src/
+fc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
 ```
 
 The first compiler pass scans all provided files, collects every namespace and module declaration, and builds a global module map before any type-checking occurs. This means modules can reference each other regardless of file order, and mutual recursion across files requires no special syntax.
@@ -2534,7 +2595,7 @@ The first compiler pass scans all provided files, collects every namespace and m
 **Vendor libraries** are distributed as source — `.fc` files with a namespace declaration. They are included in the build the same way as any other file. The namespace prevents their module names from colliding with application code or other vendors:
 
 ```
-fc build src/*.fc vendor/acme/graphics/*.fc vendor/widget/ui/*.fc
+fc src/*.fc vendor/acme/graphics/*.fc vendor/widget/ui/*.fc
 ```
 
 ### Transpilation note
@@ -2581,8 +2642,8 @@ Flags are simple names — either set or not set. There are no valued flags. Two
 **User-defined flags** — passed on the command line:
 
 ```
-fc build --flag debug main.fc
-fc build --flag feature_x --flag debug main.fc
+fc --flag debug main.fc
+fc --flag feature_x --flag debug main.fc
 ```
 
 ### Usage
@@ -2597,7 +2658,7 @@ import libc
 #end
 
 #if debug
-let log = (msg: str) -> libc.printf(msg.ptr)
+let log = (msg: str) -> io.write(msg, stdout)
 #else
 let log = (msg: str) -> return
 #end
@@ -2608,7 +2669,7 @@ Expression-level usage — conditionally including statements inside a function 
 ```fc
 let process = (data: uint8[]) ->
 #if debug
-    libc.printf(c"processing\n")
+    io.write("processing\n", stdout)
 #end
     do_work(data)    // still in function body — same indentation level as the #if block contents
 ```
@@ -2642,21 +2703,21 @@ FC is designed to support multiple deployment targets beyond standard hosted env
 **Hosted** (default) — the standard target for desktop, server, and general-purpose programs. Full libc is available. `alloc` and `free` work automatically. `import libc` exposes the full C standard library. `alloc` uses `calloc`, guaranteeing zero-initialized heap memory. Sets the `target_hosted` flag.
 
 ```
-fc build src/
-fc build src/*.fc vendor/acme/*.fc
+fc src/
+fc src/*.fc vendor/acme/*.fc
 ```
 
 **Embedded with allocator** — targets like Arduino Uno and ESP32 where `malloc` and `free` are available but the rest of libc is absent or limited. `alloc` and `free` still work. `import libc` only exposes functions available on the target — the compiler warns if unavailable functions are used. Where `calloc` is available, `alloc` uses it directly. Where it is not, the compiler emits `malloc` + `memset` to achieve the same zero-initialization guarantee. On these targets heap allocations are typically small and infrequent, so the `memset` overhead is negligible. Sets the `target_embedded` flag.
 
 ```
-fc build --target arduino-uno src/*.fc
-fc build --target esp32 src/*.fc
+fc --target arduino-uno src/*.fc
+fc --target esp32 src/*.fc
 ```
 
 **Bare metal / no allocator** — targets like ATtiny or custom hardware where no heap allocator is available and memory is severely constrained. `alloc` and `free` are unavailable — using them is a compile error. Programs must be entirely stack-based. Stack allocation is always zero-initialized via C declaration syntax, which works identically on all targets and requires no runtime support. This is analogous to Rust's `no_std` mode. Sets the `target_bare_metal` flag.
 
 ```
-fc build --target bare-metal src/*.fc
+fc --target bare-metal src/*.fc
 ```
 
 Target definitions specify the available libc subset, pointer width, endianness, and other platform characteristics. The compiler uses this to enforce correct usage at compile time rather than producing code that fails silently at runtime.
@@ -2665,23 +2726,36 @@ Target definitions specify the available libc subset, pointer width, endianness,
 
 ## C Interop
 
-C library bindings are declared using `extern` inside a module that names the C library source. The programmer is responsible for correct type mapping.
+C library bindings are declared using `extern` inside a module with a `from` clause that names the C header file. The compiler emits a corresponding `#include` directive in the generated C output. The programmer is responsible for correct type mapping.
 
 > **Note on `from` in module declarations**
-> The `from "..."` in `module libc from "libc.so"` is distinct from the `from` used in import statements. Here `from` binds the module to a C library source — a string literal naming the shared library or object file. It is only valid in module declarations containing `extern` bindings. It has nothing to do with namespace-qualified imports.
+> The `from "..."` in `module libc from "stdio.h"` is distinct from the `from` used in import statements. Here `from` names the C header that provides the declared symbols. The compiler emits `#include <header>` for each unique `from` string. It has nothing to do with namespace-qualified imports.
+
+> **Module and extern constraints**
+> A module with a `from` clause may **only** contain `extern` declarations — it is a pure C binding wrapper. Conversely, `extern` declarations may **only** appear inside a module with a `from` clause. Regular FC code (let bindings, structs, unions) belongs in modules without `from`. To mix FC wrappers with C bindings, use a nested submodule:
+> ```fc
+> module io =
+>     private module c from "stdio.h" =
+>         extern fwrite: (any*, uint64, uint64, any*) -> uint64
+>     let write = (s: str, f: any*) ->
+>         (int64) c.fwrite((any*)s.ptr, 1u64, (uint64)s.len, f)
+> ```
 
 ```fc
-module libc from "libc.so" =
-    extern printf:  (cstr, ...) -> int32
+module c_stdlib from "stdlib.h" =
     extern free as c_free: (any*) -> void
     extern malloc:  (int64) -> any*?
+
+module c_stdio from "stdio.h" =
+    extern fopen:   (cstr, cstr) -> any*?
+
+module c_string from "string.h" =
     extern memcpy:  (any*, any*, int64) -> any*
     extern strlen:  (cstr) -> int64
-    extern fopen:   (cstr, cstr) -> any*?
 ```
 
-> **Note on the libc module**
-> The declarations above are illustrative. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `int64` parameters for `malloc`, `memcpy`, and `strlen` map C's `size_t` — the principle is to use a reasonable signed upper bound that is never incorrect, so that FC's `int64` lengths pass through without casts. The compiler emits casts to `size_t` at the C boundary. In practice, common libc bindings ship with the FC compiler as pre-written `extern` declarations and most programs only need to `import libc`.
+> **Note on the examples above**
+> Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `int64` parameters for `malloc`, `memcpy`, and `strlen` map C's `size_t` — a reasonable upper bound that is never incorrect. The compiler implicitly narrows these at the C boundary via the real header prototypes.
 
 ### Reserved identifiers and `extern as`
 
@@ -2690,7 +2764,7 @@ FC reserves `alloc`, `free`, `sizeof`, and `default` as built-in operator names 
 The `extern as` form resolves this by binding the C function under a different name in the FC module:
 
 ```fc
-module libc from "libc.so" =
+module libc from "stdlib.h" =
     extern free as c_free: (any*) -> void   // C's free, available as libc.c_free
 ```
 
@@ -2703,39 +2777,6 @@ let mut free_fn = (ptr: any*) -> free(ptr)   // (any*) -> void — addressable, 
 ```
 
 The `extern as` form is shown here for completeness and is more relevant when a C library has a function named `alloc`, `sizeof`, or `default`.
-
-### Variadic C functions
-
-Some C functions accept a variable number of arguments — `printf`, `sprintf`, `fprintf` being the most common. FC has no variadic functions and cannot define them: the directional inference model requires every parameter to have a declared type, which variadics by definition cannot provide.
-
-For C interop, variadic C functions are declared using `...` as a terminal parameter:
-
-```fc
-module libc from "libc.so" =
-    extern printf:  (cstr, ...) -> int32
-    extern sprintf: (cstr, cstr, ...) -> int32
-    extern fprintf: (any*, cstr, ...) -> int32
-```
-
-At a call site, arguments beyond the declared typed parameters are passed through without type-checking — the same trust-the-programmer stance FC takes on all C interop sharp edges:
-
-```fc
-libc.printf(c"value: %d\n", x)
-libc.printf(c"%s has %d items\n", name.ptr, count)
-```
-
-FC-defined functions cannot use `...`. If a programmer needs a variable number of arguments in FC code, the idiomatic approach is a slice parameter:
-
-```fc
-let log = (parts: str[]) ->
-    for p in parts
-        libc.printf(c"%.*s", p.len, p.ptr)
-    libc.printf(c"\n")
-
-log(str[2] { "value is: ", int_to_str(x) })
-```
-
-This is fully type-safe and consistent with the inference model.
 
 ### Null return values from C
 
@@ -2755,19 +2796,19 @@ The programmer is responsible for correctly declaring which C functions can retu
 For C functions that signal failure via a sentinel integer value (such as `-1`), declare the return type as a plain integer and check the sentinel directly — do not use `?`:
 
 ```fc
-module libc from "libc.so" =
+module posix from "fcntl.h" =
     extern open: (cstr, int32) -> int32    // returns -1 on failure, not null
 
-let fd = libc.open(c"file.txt", 0)
+let fd = posix.open(c"file.txt", 0)
 if fd == -1 then handle_error()
 ```
 
 ### Null arguments to C
 
-If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `T.none` or `some(ptr)` at the call site:
+If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `none(T*)` or `some(ptr)` at the call site:
 
 ```fc
-module libc from "libc.so" =
+module pthreads from "pthread.h" =
     extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
     // thread function: (any*) -> any*? — receives and returns the user-data pointer
 ```
@@ -2776,10 +2817,40 @@ module libc from "libc.so" =
 
 Higher-level FC types must be explicitly lowered at C call sites:
 
-- `str` — pass `s.ptr` to get a `cstr`. Programmer is responsible for ensuring null termination.
+- `str` — use `(cstr)s` to create a null-terminated stack copy, or `c"..."` for constant strings. Do not pass `s.ptr` directly to functions expecting null-terminated strings.
 - `cstr` — pass directly. Use `c"..."` literals for constant strings.
 - `T?` — unwrap with `x!` or `match` before passing
 - Structs — memory-compatible with C structs if declared in the same field order
+
+### Automatic boundary casts
+
+The compiler automatically inserts C-level casts at extern call boundaries to bridge FC's type representations with C's conventions. These casts are invisible to the FC programmer — they only appear in the generated C:
+
+| FC parameter type | C cast inserted | Reason |
+|---|---|---|
+| `cstr` (`uint8*`) | `(const char*)` | C string functions expect `const char*`, FC emits `uint8_t*` |
+| `cstr*` (`uint8**`) | `(char**)` | Out-parameter variant (e.g. `strtol`'s `endptr`) |
+| `any**` (`void**`) | `(void*)` | `void**` doesn't implicitly convert to `T**` in C; `void*` does |
+
+The `cstr` casts are safe because `char` and `uint8_t` have the same size and alignment — the signedness difference is irrelevant for string data. The `any**` cast leverages C's special rule that `void*` implicitly converts to any pointer type, including `T**` — but `void**` does not have this property.
+
+```fc
+module c from "stdlib.h" =
+    extern strtol: (cstr, cstr*, int32) -> int64
+
+let mut end = default(uint8*)
+let val = c.strtol((cstr)s, &end, 10)   // cstr → (const char*), &end → (char**)
+```
+
+The `any**` cast covers opaque handle APIs where a C function writes a handle through a `T**` out-parameter:
+
+```fc
+module sqlite from "sqlite3.h" =
+    extern sqlite3_open: (cstr, any**) -> int32
+
+let mut db = default(any*)
+let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (void*)
+```
 
 ### Mapping C enums
 
@@ -2795,10 +2866,10 @@ module sock =                  // socket type constants
     let dgram  = 2
     let raw    = 3
 
-module libc from "libc.so" =
+module c_socket from "sys/socket.h" =
     extern socket: (int32, int32, int32) -> int32    // returns fd or -1
 
-let fd = libc.socket(af.inet, sock.stream, 0)
+let fd = c_socket.socket(af.inet, sock.stream, 0)
 if fd == -1 then handle_error()
 ```
 
@@ -2826,16 +2897,18 @@ let mode = file_mode.read | file_mode.write
 FC code that receives `any*` handles never constructs or inspects them; it passes them to functions that know how to operate on them:
 
 ```fc
-module sqlite from "libsqlite3.so" =
+module sqlite from "sqlite3.h" =
     extern sqlite3_open:  (cstr, any*?) -> int32
     extern sqlite3_exec:  (any*, cstr, (any*, int32, any*, any*) -> int32, any*?, any*?) -> int32
     extern sqlite3_close: (any*) -> int32
 
-module libc from "libc.so" =
+module c_stdio from "stdio.h" =
     extern fopen:  (cstr, cstr) -> any*?
     extern fclose: (any*) -> int32
     extern fread:  (any*, int64, int64, any*) -> int64
     extern fwrite: (any*, int64, int64, any*) -> int64
+
+module c_stdlib from "stdlib.h" =
     extern malloc: (int64) -> any*?
     extern free:   (any*) -> void
 ```
@@ -2849,11 +2922,11 @@ The programmer is responsible for passing handles to the correct functions — F
 When a function type appears as a parameter in an `extern` declaration, the compiler maps it to a C function pointer at the boundary. The programmer passes a non-capturing lambda directly — no `&` required:
 
 ```fc
-module libc from "libc.so" =
+module c_stdlib from "stdlib.h" =
     extern qsort: (any*, int64, int64, (any*, any*) -> int32) -> void
 
 // pass a non-capturing lambda directly — compiler handles C function pointer mapping
-libc.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
+c_stdlib.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
     *(int32*) a - *(int32*) b)
 ```
 
@@ -2864,16 +2937,16 @@ Passing a capturing lambda to a C function pointer parameter is a compile error 
 C APIs commonly pass a `void*` user_data alongside a function pointer so the callback can recover its context. Declare the callback parameter as an FC function type and the user-data as `any*`:
 
 ```fc
-module libc from "libc.so" =
+module pthreads from "pthread.h" =
     extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
 
 let my_cb = (data: any*) ->
     let s = (my_state*) data
     // use s->...
-    any*.none
+    none(any*)
 
 let mut state = my_state { ... }
-pthread_create(any*.none, any*.none, my_cb, some((any*) &state))
+pthread_create(none(any*), none(any*), my_cb, some((any*) &state))
 ```
 
 `my_cb` is non-capturing so it passes cleanly to `pthread_create`. The `any*` user-data is cast to the concrete type inside the callback.
@@ -2899,11 +2972,13 @@ In C, `void*` is frequently used for patterns that FC handles at the language le
 
 ### Converting between str and cstr
 
-`str` to `cstr` — use `.ptr`. Programmer is responsible for null termination:
+`str` to `cstr` — use `(cstr)` cast to create a null-terminated stack copy:
 
 ```fc
-let cs = s.ptr    // type: cstr — only safe if s is null-terminated
+let cs = (cstr) s    // stack copy with null terminator — safe for passing to C
 ```
+
+The cast emits an `alloca`+`memcpy` to create a null-terminated copy on the stack. The copy is valid until the enclosing function returns.
 
 `cstr` to `str` — construct a slice from the raw pointer and length:
 
@@ -3055,12 +3130,20 @@ union result =
     | err('b)
 ```
 
-The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. When used in type positions or constructed, the type arguments are supplied by context:
+The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. The type parameters are ordered by first appearance in the body, reading top-to-bottom, left-to-right.
+
+For generic structs, type arguments are inferred from the struct literal fields:
 
 ```fc
 let p = pair { first = 42, second = "hello" }    // pair<int32, str>
 let b = box { value = 3.14 }                     // box<float64>
-let r = result.ok(42)                            // result<int32, 'b> — 'b unconstrained until used
+```
+
+For generic unions, type arguments must be provided explicitly at the construction site using `name<types>.variant(args)` syntax. This is required because a variant's payload may not constrain all type parameters — for example, `result.err(32)` cannot determine `'a`:
+
+```fc
+let r = result<int32, str>.ok(42)                // result<int32, str>
+let e = result<int32, str>.err("fail")           // result<int32, str>
 ```
 
 Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
@@ -3084,17 +3167,16 @@ module box =
     let map = (b: box<'a>, f: ('a) -> 'b) -> box { value = f(b.value) }
 ```
 
-Static type properties such as `.none`, `default(T)`, `sizeof(T)`, and module member access follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
+Built-in operators `default(T)`, `sizeof(T)`, and `none(T)`, as well as static module member access, follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
 
 ```fc
 let make_default = (x: 'a) -> default('a)     // ok — checked at call site
 let size_of_val  = (x: 'a) -> sizeof('a)       // ok — checked at call site
 let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type has .min
+let make_none    = (x: 'a) -> none('a)         // ok — produces 'a? with no value
 ```
 
 A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
-
-Static property access extends naturally to parameterized type expressions — `node<'b>.none` is valid because `node<'b>` is a type and `.none` is a universal property on all types. No special syntax rule is needed; the parser treats `T<args>` as a type expression and `.property` as property access on that type. This is the same form used in expressions like `arraylist.make<int32>()` — the `<args>` resolves the type, and the `.` navigates into the associated module or property.
 
 ---
 
@@ -3108,7 +3190,7 @@ union option =
     | some('a)
 ```
 
-`none` is declared first so that zero-initialized memory is always a valid `none` — consistent with the union default value rules (see §Default Values). `'a?` is syntactic sugar for `option<'a>` — the two are interchangeable in all type positions. The existing `.none` and `some(x)` construction syntax, pattern matching, and `!` unwrapping all apply unchanged.
+`none` is declared first so that zero-initialized memory is always a valid `none` — consistent with the union default value rules (see §Default Values). `'a?` is syntactic sugar for `option<'a>` — the two are interchangeable in all type positions. The built-in `none(type)` and `some(expr)` operators (see §Constructing options), pattern matching, and `!` unwrapping all apply unchanged. Unlike user-defined generic unions which require explicit type arguments at construction sites, `none` and `some` have dedicated operator syntax for ergonomic use.
 
 The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
 
@@ -3162,6 +3244,130 @@ The error message identifies the call site and the substitution: something like 
 
 ---
 
+# PART 10 — Style Guidelines
+
+## Formatting
+
+### Indentation Width
+
+Use **4 spaces** per indentation level. The language requires spaces only (tabs are a compile error), and while the offside rule technically permits any consistent width, 4 spaces is the standard. This follows the conventions established by F# and Python, both of which use the same indentation-based layout model.
+
+```fc
+let main = (args: str[]) ->
+    let x = 42
+    let y = x + 1
+    y
+```
+
+### Match Arm Alignment
+
+Match arms should be aligned at the **same column** as the `match` keyword. The language permits deeper indentation, but same-level alignment is the standard style:
+
+```fc
+// preferred
+match s with
+| circle(r) -> r * r
+| square(w) -> w * w
+
+// allowed but not preferred
+match s with
+    | circle(r) -> r * r
+    | square(w) -> w * w
+```
+
+When a match arm body spans multiple lines, the body is indented one level from the `|`:
+
+```fc
+match opt with
+| some(x) ->
+    let y = x + 1
+    y * 2
+| none -> 0
+```
+
+### Operator Spacing
+
+Use spaces around binary operators. No space between unary operators and their operands:
+
+```fc
+let x = a + b * c          // spaces around binary operators
+let y = -x                  // no space after unary -
+let z = !flag               // no space after unary !
+let p = *ptr                // no space after unary *
+```
+
+No spaces in field access, pointer access, or indexing:
+
+```fc
+p.x
+node->next
+data[i]
+s[1..10]
+```
+
+### Declarations
+
+Struct and union declarations place the body on the next line, indented one level. Each field or variant is on its own line:
+
+```fc
+struct point =
+    x: float64
+    y: float64
+
+union shape =
+    | circle(float64)
+    | rectangle(dims)
+    | point
+```
+
+No space between field name and colon in struct fields and function parameters:
+
+```fc
+struct rect =
+    w: int32
+    h: int32
+
+let area = (r: rect) -> r.w * r.h
+```
+
+### Function Definitions
+
+Short functions may be written on a single line. Longer functions place the body on the next line:
+
+```fc
+let double = (x: int32) -> x * 2
+
+let abs = (x: int32) ->
+    if x < 0 then -x else x
+```
+
+## Naming Conventions
+
+FC uses **snake_case** for all identifiers — variables, functions, types, fields, variants, modules, and namespaces. Type variables use an apostrophe prefix (`'a`, `'elem`). There is no PascalCase, camelCase, or UPPER_CASE convention in the language.
+
+| Element | Examples |
+|---------|----------|
+| Variables | `x`, `sum`, `cur_node` |
+| Functions | `area`, `sum_list`, `find_substring` |
+| Types (struct/union) | `point`, `shape`, `node` |
+| Fields and variants | `width`, `next`, `circle`, `ok` |
+| Modules and namespaces | `math`, `io`, `geom::` |
+| Type variables | `'a`, `'b`, `'elem` |
+
+## Comments
+
+Use `//` line comments for brief annotations. Use `/* */` block comments for larger sections. Block comments may be nested:
+
+```fc
+// single-line comment
+
+/* block comment */
+
+/* outer /* nested */ still in outer */
+```
+
+---
+
 # Appendix
 
 ## Full Examples
@@ -3186,7 +3392,7 @@ module node =
 
     let map = (head: node<'a>*?, f: ('a) -> 'b) ->
         match head with
-        | none      -> node<'b>.none
+        | none      -> none(node<'b>*)
         | some(ptr) ->
             let n = node.make(f(ptr->value))
             n->next = node.map(ptr->next, f)
@@ -3203,7 +3409,7 @@ module node =
                 current = next
 
 let main = (args: str[]) ->
-    let list = some(node.prepend(some(node.prepend(node.none, 1)), 2))
+    let list = some(node.prepend(some(node.prepend(none(node<int32>*), 1)), 2))
     let doubled = node.map(list, (x: int32) -> x * 2)
     node.drop(list)
     node.drop(doubled)
@@ -3218,11 +3424,11 @@ Demonstrates slice operations, loops, and early return.
 import libc
 
 let find_substring = (haystack: str, needle: str) ->
-    if needle.len > haystack.len then return str.none
+    if needle.len > haystack.len then return none(str)
     let mut i = 0
     loop
         // safe: needle.len <= haystack.len guaranteed by early return above
-        if i > haystack.len - needle.len then break str.none
+        if i > haystack.len - needle.len then break none(str)
         let candidate = haystack[i .. i + needle.len]
         if candidate == needle then break some(candidate)
         i = i + 1
@@ -3231,8 +3437,8 @@ let main = (args: str[]) ->
     let haystack = "the quick brown fox"
     let needle = "brown"
     match find_substring(haystack, needle) with
-    | some(_) -> libc.printf(c"found\n")
-    | none    -> libc.printf(c"not found\n")
+    | some(_) -> io.write("found\n", stdout)
+    | none    -> io.write("not found\n", stdout)
     0
 ```
 
@@ -3307,7 +3513,7 @@ module arraylist =
         acc
 
     let reduce = (l: arraylist<'a>, f: ('a, 'a) -> 'a) ->
-        if l.len == 0 then 'a.none
+        if l.len == 0 then none('a)
         else
             let mut acc = l.data[0]
             for x in l.data[1..l.len]
@@ -3326,7 +3532,7 @@ module arraylist =
     let try_find = (l: arraylist<'a>, pred: ('a) -> bool) ->
         let mut i = 0
         loop
-            if i >= l.len then break 'a.none
+            if i >= l.len then break none('a)
             if pred(l.data[i]) then break some(l.data[i])
             i = i + 1
 
@@ -3459,7 +3665,7 @@ let main = (args: str[]) ->
 **Build:**
 
 ```
-fc build src/*.fc vendor/geom/*.fc
+fc src/*.fc vendor/geom/*.fc
 ```
 
 The compiler's first pass collects all four files, registers `geom::` as a namespace containing `vectors` and `shapes`, and resolves all imports before type-checking. The two `global::` files see each other's modules without qualification; `src/world.fc` must use the full `from geom::vectors` and `from geom::shapes` forms to reach across the namespace boundary. `src/main.fc` does the same to bring `vec2` and `shape` into scope for constructing the `world.body` literal — importing `world` alone is not sufficient, since re-exporting imported names is not automatic.
@@ -3563,7 +3769,7 @@ hljs.registerLanguage('fc', function(hljs) {
 <div class="nav-overlay" id="nav-overlay"></div>
 <nav id="sidebar">
   <div class="nav-title">
-    spec v0.5
+    spec v0.6
     <span>FC Language</span>
   </div>
   <div id="nav-links"></div>
@@ -3575,7 +3781,7 @@ hljs.registerLanguage('fc', function(hljs) {
     <h1>FC</h1>
     <div class="subtitle">Functional C — a systems language that compiles to C, combining manual memory management with functional syntax and a stronger type system.</div>
     <div class="meta">
-      <div>version <span>0.5-draft</span></div>
+      <div>version <span>0.6-draft</span></div>
       <div>target <span>C11</span></div>
       <div>extension <span>.fc</span></div>
     </div>

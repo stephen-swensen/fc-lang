@@ -1,0 +1,6 @@
+import io from std::
+
+let main = (args: str[]) ->
+    let x = 42
+    io.write("x=%d{x}\n", stdout)
+    0

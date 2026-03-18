@@ -1,0 +1,10 @@
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+import point as pt from geometry
+
+let main = (args: str[]) ->
+    let p = pt { x = 10, y = 20 }
+    p + 1

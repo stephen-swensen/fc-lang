@@ -1,0 +1,5 @@
+let make_default = <'a>() -> default('a)
+
+let main = (args: str[]) ->
+    let x = make_default<int32>()
+    x

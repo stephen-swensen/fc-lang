@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let x = 7.5f32
+    let y = 2.5f32
+    (int32)(x - y)

@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let s = alloc("")
+    let mut r = 0
+    match s with
+    | some(v) ->
+        if v == "" then r = r + 1 else r = r
+        if v.len == 0 then r = r + 2 else r = r
+    | none -> r = r
+    r

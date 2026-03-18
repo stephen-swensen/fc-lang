@@ -1,0 +1,10 @@
+module c from "stdlib.h" =
+    extern atoi: (cstr) -> int32
+
+let parse_num = (p: uint8*) ->
+    c.atoi(p)
+
+let main = (args: str[]) ->
+    let s = "99"
+    let cs = (cstr)s
+    parse_num(cs)

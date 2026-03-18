@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let x = loop
+        if args > 0 then break 1
+        break true
+    0

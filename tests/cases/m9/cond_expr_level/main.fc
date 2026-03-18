@@ -1,0 +1,12 @@
+let main = (args: str[]) ->
+    let mut r = 0
+#if target_hosted
+    r = 20
+#end
+    let mut s = 0
+#if target_embedded
+    s = 99
+#else
+    s = 22
+#end
+    r + s

@@ -1,0 +1,2 @@
+module math =
+    let sub = (a: int32, b: int32) -> a - b

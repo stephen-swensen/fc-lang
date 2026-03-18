@@ -1,0 +1,2 @@
+let main = (args: str[]) ->
+    math.add(1, 2)

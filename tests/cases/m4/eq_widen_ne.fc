@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let a = 10i8
+    let b = 20
+    let c = 10i16
+    let d = 10i64
+    let mut r = 0
+    if a != b then r = r + 1 else r = r
+    if c == d then r = r + 2 else r = r
+    r

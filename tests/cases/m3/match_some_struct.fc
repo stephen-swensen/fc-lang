@@ -1,0 +1,10 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p = some(point { x = 3, y = 7 })
+    match p with
+    | some({ x = 0, y = y }) -> y
+    | some({ x = x, y = y }) -> x + y
+    | none -> 0

@@ -1,0 +1,8 @@
+let classify = (n: int32) -> match n with
+    | 0 -> 10
+    | 1 -> 20
+    | 2 -> 30
+    | _ -> 99
+
+let main = (args: str[]) ->
+    classify(0) + classify(2) + classify(5)

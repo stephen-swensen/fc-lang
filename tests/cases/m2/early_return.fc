@@ -1,0 +1,14 @@
+let find_first_positive = (a: int32, b: int32, c: int32) ->
+    if a > 0 then
+        return a
+    if b > 0 then
+        return b
+    if c > 0 then
+        return c
+    0
+
+let main = (args: str[]) ->
+    let r1 = find_first_positive(-1, -2, 7)
+    let r2 = find_first_positive(-1, 3, 99)
+    let r3 = find_first_positive(5, 99, 99)
+    r1 + r2 * 10 + r3

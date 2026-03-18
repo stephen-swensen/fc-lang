@@ -1,0 +1,7 @@
+let check = (x: int32) ->
+    match x with
+    | 0 -> 0
+    | _ -> 1
+
+let main = (args: str[]) ->
+    check(42)

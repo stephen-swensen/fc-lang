@@ -1,0 +1,3 @@
+let seven = () -> 7
+
+let main = (args: str[]) -> seven()

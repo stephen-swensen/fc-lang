@@ -1,0 +1,6 @@
+module c from "stdlib.h" =
+    extern abs: (int32) -> int32
+    extern atoi: (cstr) -> int32
+
+let main = (args: str[]) ->
+    c.abs(0 - 7) + c.atoi(c"3")

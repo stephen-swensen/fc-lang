@@ -1,0 +1,5 @@
+let a = 10
+let b = a + 5
+
+let main = (args: str[]) ->
+    a + b + 17

@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let c = 'A'
+    let s = "char=%c{c}"
+    let mut r = 0
+    if s == "char=A" then r = r + 1 else r = r
+    r

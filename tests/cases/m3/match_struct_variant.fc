@@ -1,0 +1,16 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+    | dot
+
+struct drawing =
+    x: int32
+    shape: shape
+
+let main = (args: str[]) ->
+    let d = drawing { x = 5, shape = shape.circle(10) }
+    let result = match d with
+    | { shape = circle(r) } -> r
+    | { shape = square(s) } -> s
+    | { shape = dot } -> 0
+    result

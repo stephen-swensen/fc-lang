@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = none(int32)
+    x!

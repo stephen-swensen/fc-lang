@@ -1,0 +1,16 @@
+let find_first = (s: int32[], target: int32) ->
+    let mut i = 0
+    loop
+        if i >= s.len then break none(int32)
+        if s.ptr[i] == target then break some(i)
+        i = i + 1
+
+let main = (args: str[]) ->
+    let mut data = int32[5] { }
+    data.ptr[0] = 10
+    data.ptr[1] = 20
+    data.ptr[2] = 30
+    data.ptr[3] = 40
+    data.ptr[4] = 50
+    let result = find_first(data, 30)
+    result!

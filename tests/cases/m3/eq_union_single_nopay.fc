@@ -1,0 +1,7 @@
+union unit =
+    | only
+
+let main = (args: str[]) ->
+    let a = unit.only
+    let b = unit.only
+    if a == b then 1 else 0

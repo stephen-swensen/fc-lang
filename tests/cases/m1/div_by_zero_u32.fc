@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let a = 42u32
+    let b = 0u32
+    (int32) (a / b)

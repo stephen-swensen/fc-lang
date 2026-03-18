@@ -1,0 +1,9 @@
+union shape =
+    | circle(int32)
+    | rect(int32)
+
+let main = (args: str[]) ->
+    let s = default(shape)
+    match s with
+    | circle(r) -> r + 1
+    | rect(w) -> w + 2

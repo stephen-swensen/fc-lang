@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let p = alloc(int32)!
+    *p = 42
+    let result = *p
+    free(p)
+    result

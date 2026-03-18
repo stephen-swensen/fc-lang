@@ -1,0 +1,3 @@
+import add from nonexistent
+
+let main = (args: str[]) -> 0

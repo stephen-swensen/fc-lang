@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let x = 42u64
+    let s = "val=%u{x}"
+    let mut r = 0
+    if s == "val=42" then r = r + 1 else r = r
+    let s2 = "%x{x}"
+    if s2 == "2a" then r = r + 2 else r = r
+    r

@@ -1,0 +1,23 @@
+union status =
+    | active(int32)
+    | inactive
+
+struct record =
+    id: int32
+    status: status
+    priority: int32?
+
+let classify = (r: record) ->
+    match r with
+    | { status = active(n), priority = some(p) } -> n + p
+    | { status = active(n), priority = none } -> n
+    | { status = inactive, priority = some(p) } -> p
+    | { status = inactive } -> 0
+
+let main = (args: str[]) ->
+    let r1 = record { id = 1, status = status.active(20), priority = some(5) }
+    let r2 = record { id = 2, status = status.active(30), priority = none(int32) }
+    let r3 = record { id = 3, status = status.inactive, priority = some(7) }
+    let r4 = record { id = 4, status = status.inactive, priority = none(int32) }
+    let sum = classify(r1) + classify(r2) + classify(r3) + classify(r4)
+    sum

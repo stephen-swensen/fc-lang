@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let a = 1u32 << 32u32
+    // 32 & 31 = 0, so 1 << 0 = 1
+    let mut r = 0
+    if a == 1u32 then r = r + 1 else r = r
+    let b = 255u8 >> 8u8
+    // 8 & 7 = 0, so 255 >> 0 = 255
+    if b == 255u8 then r = r + 2 else r = r
+    r

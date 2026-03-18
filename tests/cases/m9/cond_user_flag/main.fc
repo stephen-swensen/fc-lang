@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+#if debug
+    42
+#else
+    0
+#end

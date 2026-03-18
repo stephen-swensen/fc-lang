@@ -1,0 +1,27 @@
+let classify = (x: int32) ->
+    match x with
+    | 0 -> 0
+    | 1 -> 10
+    | _ -> 99
+
+let multiline_arm = (x: int32) ->
+    match x with
+    | 0 ->
+        let a = 1
+        let b = 2
+        a + b
+    | _ -> 0
+
+let match_then_code = (x: int32) ->
+    let r = match x with
+    | 0 -> 100
+    | _ -> 200
+    r + 1
+
+let main = (args: str[]) ->
+    let a = classify(0)
+    let b = classify(1)
+    let c = classify(5)
+    let d = multiline_arm(0)
+    let e = match_then_code(0)
+    a + b + c + d + e

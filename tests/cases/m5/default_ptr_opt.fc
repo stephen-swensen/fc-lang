@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let p = default(int32*?)
+    match p with
+    | none -> 10
+    | some(_) -> 0

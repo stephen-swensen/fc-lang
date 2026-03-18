@@ -1,0 +1,14 @@
+let main = (args: str[]) ->
+    let mut buf = int32[5] { }
+    buf.ptr[0] = 2
+    buf.ptr[1] = 4
+    buf.ptr[2] = 6
+    buf.ptr[3] = 8
+    buf.ptr[4] = 10
+    let head = buf[..3]
+    let tail = buf[2..]
+    let head_sum = head[0] + head[1] + head[2]
+    let tail_sum = tail[0] + tail[1] + tail[2]
+    let head_len = (int32)head.len
+    let tail_len = (int32)tail.len
+    head_sum + tail_sum + head_len + tail_len

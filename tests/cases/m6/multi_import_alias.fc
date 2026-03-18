@@ -1,0 +1,8 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+    let mul = (a: int32, b: int32) -> a * b
+
+import add as plus, mul as times from math
+
+let main = (args: str[]) ->
+    plus(times(3, 4), 5)

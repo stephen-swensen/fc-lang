@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let x = 5
+    match x with
+    | 1 -> 10
+    | 2 -> true
+    | _ -> 0

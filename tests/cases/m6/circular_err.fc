@@ -1,0 +1,7 @@
+module alpha =
+    let get_val = (x: int32) -> beta.double_it(x)
+
+module beta =
+    let double_it = (x: int32) -> alpha.get_val(x) * 2
+
+let main = (args: str[]) -> alpha.get_val(5)

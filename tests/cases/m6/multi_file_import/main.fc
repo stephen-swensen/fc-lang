@@ -1,0 +1,6 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+    struct vec2 =
+        x: int32
+        y: int32

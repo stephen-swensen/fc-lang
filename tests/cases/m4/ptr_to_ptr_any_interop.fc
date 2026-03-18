@@ -1,0 +1,14 @@
+// C interop: any** out-parameter pattern.
+// When an extern param is any** (void**), codegen casts to (void*) so
+// C's implicit void*→T** conversion works. This covers opaque handle
+// APIs like sqlite3_open(const char*, sqlite3**).
+// Here we test with strtol, declaring the out-param as any** to simulate
+// an opaque handle pattern where the caller passes &handle.
+module c from "stdlib.h" =
+    extern strtol: (cstr, any**, int32) -> int64
+
+let main = (args: str[]) ->
+    let s = "99end"
+    let mut end = default(any*)
+    let val = c.strtol((cstr)s, &end, 10)
+    (int32)val

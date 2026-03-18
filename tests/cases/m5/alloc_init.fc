@@ -1,0 +1,9 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p = alloc(point { x = 15, y = 25 })!
+    let result = p->x + p->y
+    free(p)
+    result

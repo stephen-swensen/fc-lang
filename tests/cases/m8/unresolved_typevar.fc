@@ -1,0 +1,4 @@
+let make = <'a, 'b>() -> default('a)
+
+let main = (args: str[]) ->
+    make<int32>()

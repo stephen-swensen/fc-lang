@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+#if target_embedded
+    1
+#else
+    42
+#end

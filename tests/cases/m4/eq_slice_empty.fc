@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    let a = alloc(int32[1])!
+    a[0] = 99
+    let s1 = a[0..0]
+    let s2 = a[0..0]
+    let mut r = 0
+    if s1 == s2 then r = r + 1 else r = r
+    if s1 != a then r = r + 2 else r = r
+    free(a)
+    r

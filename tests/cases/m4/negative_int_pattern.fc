@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let x = -1
+    let result = match x with
+        | -1 -> 10
+        | 0 -> 20
+        | _ -> 30
+    result

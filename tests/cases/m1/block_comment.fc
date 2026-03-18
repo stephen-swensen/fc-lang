@@ -1,0 +1,9 @@
+/* Top-level block comment */
+let add = (a: int32, b: int32) ->
+    /* nested /* inner block comment */ end */
+    a + b /* inline comment */
+
+let main = (args: str[]) ->
+    /* multi-line
+       block comment */
+    add(0, 1)

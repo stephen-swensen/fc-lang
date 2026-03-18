@@ -1,0 +1,15 @@
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+    let scale = (p: point, n: int32) -> point { x = p.x * n, y = p.y * n }
+
+import point as pt from geometry
+import point as coord from geometry
+
+let main = (args: str[]) ->
+    let a = pt { x = 3, y = 4 }
+    let b = coord { x = 5, y = 6 }
+    let c = geometry.scale(a, 2)
+    c.x + c.y + b.x + b.y

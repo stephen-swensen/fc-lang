@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let data = int32[3] { 10, 20, 30 }
+    let mut sum = 0i64
+    for i, x in data
+        sum = sum + i + (int64)x
+    (int32)sum

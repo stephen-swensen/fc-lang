@@ -1,0 +1,12 @@
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+    let manhattan = (p: point) -> p.x + p.y
+
+import point from geometry
+
+let main = (args: str[]) ->
+    let p = point { x = 10, y = 20 }
+    geometry.manhattan(p)

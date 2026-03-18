@@ -1,0 +1,3 @@
+module beta =
+    let value = 20
+    let add = (a: int32, b: int32) -> a + b + 1

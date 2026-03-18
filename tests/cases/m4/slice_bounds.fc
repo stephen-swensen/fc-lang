@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let mut buf = int32[3] { }
+    buf.ptr[0] = 1
+    buf.ptr[1] = 2
+    buf.ptr[2] = 3
+    buf[99]

@@ -1,0 +1,8 @@
+let write_val = (p: int32*, val: int32) ->
+    *p = val
+    return
+
+let main = (args: str[]) ->
+    let mut x = 0
+    write_val(&x, 42)
+    x

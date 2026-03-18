@@ -1,0 +1,10 @@
+union color =
+    | red
+    | green
+
+let main = (args: str[]) ->
+    let c = color.red
+    match c with
+    | red -> 1
+    | blue(x) -> x
+    | _ -> 0
