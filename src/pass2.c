@@ -2579,7 +2579,10 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         if (!mod_sym || !mod_sym->members) continue;
         ctx.current_ns = mod_sym->ns_prefix;
         SymbolTable *saved_mod = ctx.module_symtab;
+        Scope *saved_scope = ctx.scope;
         ctx.module_symtab = mod_sym->members;
+        ctx.scope = scope_new(&arena, NULL);
+        ctx.scope->is_global = true;
         /* Type-check all let decls in this module, recursing into submodules */
         for (int j = 0; j < d->module.decl_count; j++) {
             Decl *child = d->module.decls[j];
@@ -2596,7 +2599,10 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
                 Symbol *sub_sym = symtab_lookup_kind(mod_sym->members, child->module.name, DECL_MODULE);
                 if (sub_sym && sub_sym->members) {
                     SymbolTable *saved_inner = ctx.module_symtab;
+                    Scope *saved_sub_scope = ctx.scope;
                     ctx.module_symtab = sub_sym->members;
+                    ctx.scope = scope_new(&arena, ctx.scope);
+                    ctx.scope->is_global = true;
                     for (int k = 0; k < child->module.decl_count; k++) {
                         Decl *sub_child = child->module.decls[k];
                         if (sub_child->kind == DECL_LET) {
@@ -2609,10 +2615,12 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
                             }
                         }
                     }
+                    ctx.scope = saved_sub_scope;
                     ctx.module_symtab = saved_inner;
                 }
             }
         }
+        ctx.scope = saved_scope;
         ctx.module_symtab = saved_mod;
     }
 

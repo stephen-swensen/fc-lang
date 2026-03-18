@@ -2623,7 +2623,7 @@ The entire module and namespace system is a compiler-time concept — none of it
 - **Namespaces** — erased entirely. They exist only in the compiler's module map during the first pass.
 - **Modules** — become C symbol prefixes. `vec2.add(a, b)` transpiles to a call like `geom_vectors_vec2_add(a, b)`. The dot notation is purely a source-level convenience.
 - **`import`** — becomes nothing in the output. It informs the compiler which declarations are in scope; the transpiled C either uses `#include` for extern declarations or assumes all generated code compiles together as a single translation unit.
-- **`private`** — module-private symbols become `static` in C where file scope allows it, or are simply excluded from generated headers. Top-level file-private declarations are already `static` by nature.
+- **`private`** — enforced at compile time only. The generated C does not distinguish between public and private symbols; visibility is checked during type-checking and import resolution.
 - **Type-associated modules** — pure naming convention in the C output. `vec2.zero` is a prefixed global constant; `vec2.add` is a prefixed function. No vtable, no struct, no indirection.
 
 The result is that FC provides enforced module structure, namespace isolation, visibility control, and type-associated namespacing at zero runtime cost. The C compiler sees well-named, flat, idiomatic C. This property should be preserved in all future work on the module system — any new feature that would require a runtime representation in C needs strong justification.

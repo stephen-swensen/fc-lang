@@ -49,6 +49,14 @@ run_test() {
         return
     fi
 
+    # If an .error file exists but compilation succeeded, that's a failure
+    if [ -n "$error_file" ] && [ -f "$error_file" ]; then
+        echo "  FAIL  $test_display (expected error but compilation succeeded)"
+        failed=$((failed + 1))
+        errors="$errors  $test_display\n"
+        return
+    fi
+
     # Compile C -> binary
     if ! "$CC" -std=c11 -Wall -Werror -o "$bin_file" "$c_file" 2>"$TMPDIR/${slug}.cc_stderr"; then
         echo "  FAIL  $test_display (C compilation failed)"

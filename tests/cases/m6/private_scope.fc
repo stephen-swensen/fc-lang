@@ -1,0 +1,7 @@
+// Private bindings are visible to sibling members within the same module
+module math =
+    private let helper = (x: int32) -> x * 10
+    let compute = (x: int32) -> helper(x) + 5
+
+let main = (args: str[]) ->
+    math.compute(4)

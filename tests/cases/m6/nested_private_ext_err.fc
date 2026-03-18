@@ -1,0 +1,9 @@
+// External code still cannot access parent's private members
+module outer =
+    private let secret = 42
+
+    module inner =
+        let get = () -> secret
+
+let main = (args: str[]) ->
+    outer.secret

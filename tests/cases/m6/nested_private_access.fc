@@ -1,0 +1,11 @@
+// Nested submodules can access parent module's private members
+module outer =
+    private let secret = 7
+    private let helper = (x: int32) -> x * secret
+    let public_val = 3
+
+    module inner =
+        let use_all = (x: int32) -> helper(x) + public_val + secret
+
+let main = (args: str[]) ->
+    outer.inner.use_all(2)
