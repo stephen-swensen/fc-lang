@@ -4,6 +4,6 @@ struct point =
 
 let sum_point = (p: point) -> p.x + p.y
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = point { x = 2, y = 3 }
     sum_point(p)

@@ -2,5 +2,5 @@ module math =
     private let secret = (x: int32) -> x * 42
     let public_fn = (x: int32) -> x + 1
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     math.secret(5)

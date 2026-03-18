@@ -2,7 +2,7 @@ struct point =
     x: int32
     y: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = point { x = 1, y = 2 }
     match p with
     | { z = v } -> v

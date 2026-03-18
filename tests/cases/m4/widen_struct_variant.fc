@@ -6,7 +6,7 @@ union holder =
     | val(int64)
     | empty
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     // struct field widening: int32 -> int64
     let p = point { x = 10, y = 20 }
     // variant payload widening: int32 -> int64

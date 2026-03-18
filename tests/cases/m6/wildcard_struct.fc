@@ -7,6 +7,6 @@ module geometry =
 
 import * from geometry
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let v = make(10, 20)
     v.x + v.y

@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let hex = 0xFF
     let bin = 0b1010
     let oct = 0o77

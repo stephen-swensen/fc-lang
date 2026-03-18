@@ -6,7 +6,7 @@ struct rect =
     origin: point
     w: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let r = rect { origin = point { x = 0, y = 5 }, w = 10 }
     match r with
     | { origin = { x = 0, y = 0 }, w = w } -> w

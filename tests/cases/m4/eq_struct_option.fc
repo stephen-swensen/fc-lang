@@ -6,7 +6,7 @@ struct wrapper =
     p: point
     label: int32?
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = wrapper { p = point { x = 1, y = 2 }, label = some(10) }
     let b = wrapper { p = point { x = 1, y = 2 }, label = some(10) }
     let c = wrapper { p = point { x = 1, y = 2 }, label = none(int32) }

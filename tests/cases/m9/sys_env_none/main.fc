@@ -1,0 +1,6 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    match sys.env("FC_NONEXISTENT_VAR_12345") with
+    | some(v) -> 1
+    | none -> 0

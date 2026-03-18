@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 10i64
     let b = 5
     let sum = a + b
@@ -6,4 +6,4 @@ let main = (args: int32) ->
     let prod = a * b
     let mut result = 0i64
     if a > b then result = sum + diff + prod
-    result
+    (int32)result

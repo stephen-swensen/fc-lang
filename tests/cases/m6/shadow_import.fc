@@ -3,6 +3,6 @@ module math =
 
 import value from math
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let value = 100
     value

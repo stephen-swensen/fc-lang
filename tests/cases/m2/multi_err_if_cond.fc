@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = if 42 then 1 else 2
     let y = if "hi" then 3 else 4
     0

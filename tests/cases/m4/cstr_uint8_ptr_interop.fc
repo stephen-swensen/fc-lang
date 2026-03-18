@@ -4,7 +4,7 @@ module c from "stdlib.h" =
 let parse_num = (p: uint8*) ->
     c.atoi(p)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = "99"
     let cs = (cstr)s
     parse_num(cs)

@@ -5,5 +5,5 @@ module math =
 
 import add, mul from math
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     add(mul(3, 4), 5)

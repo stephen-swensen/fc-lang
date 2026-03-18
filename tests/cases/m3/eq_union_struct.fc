@@ -6,7 +6,7 @@ union element =
     | pt(point)
     | val(int32)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = element.pt(point { x = 1, y = 2 })
     let b = element.pt(point { x = 1, y = 2 })
     let c = element.pt(point { x = 3, y = 4 })

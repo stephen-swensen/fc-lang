@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut r = 0
     // normal division still works
     let a = 42 / 6

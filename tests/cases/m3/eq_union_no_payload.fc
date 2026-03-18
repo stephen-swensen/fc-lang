@@ -3,7 +3,7 @@ union color =
     | green
     | blue
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = color.red
     let b = color.red
     let c = color.blue

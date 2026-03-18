@@ -8,7 +8,7 @@ module geometry =
 import point as pt from geometry
 import point as coord from geometry
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = pt { x = 3, y = 4 }
     let b = coord { x = 5, y = 6 }
     let c = geometry.scale(a, 2)

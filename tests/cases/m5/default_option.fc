@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = default(int32?)
     match x with
     | none -> 50

@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = "hello"
     let r = "%d{s}"
     0

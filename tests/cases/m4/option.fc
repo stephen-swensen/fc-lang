@@ -4,7 +4,7 @@ let find_first_positive = (a: int32, b: int32, c: int32) ->
     else if c > 0 then some(c)
     else none(int32)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let result = find_first_positive(-1, 42, 99)
     match result with
     | some(v) -> v

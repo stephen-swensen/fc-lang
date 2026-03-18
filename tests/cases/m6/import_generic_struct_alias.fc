@@ -7,6 +7,6 @@ module containers =
 
 import box as wrapper from containers
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let b = containers.wrap(42)
     containers.unwrap(b)

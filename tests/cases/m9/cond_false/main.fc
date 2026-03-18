@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let mut r = 7
+#if target_embedded
+    r = 99
+#end
+    r

@@ -2,7 +2,7 @@ struct pair =
     first: 'a
     second: 'b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = pair { first = 1, second = true }
     let b = pair { first = 1, second = true }
     let c = pair { first = 1, second = false }

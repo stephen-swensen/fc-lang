@@ -6,5 +6,5 @@ module beta =
     let value = 22
     let compute = (x: int32) -> x * 2
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     alpha.compute(0) + beta.compute(1) + beta.value - alpha.value

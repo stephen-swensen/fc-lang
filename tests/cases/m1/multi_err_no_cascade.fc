@@ -4,7 +4,7 @@ struct point =
 
 let add = (a: int32, b: int32) -> a + b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 1 + true
     let b = a + 2
     let c = add(a, 3)

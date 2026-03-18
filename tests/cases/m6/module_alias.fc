@@ -4,5 +4,5 @@ module math =
 
 import math as m
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     m.add(m.mul(3, 4), 5)

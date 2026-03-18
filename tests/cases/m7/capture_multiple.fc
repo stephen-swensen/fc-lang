@@ -1,6 +1,6 @@
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 10
     let b = 20
     let add_both = (n: int32) -> n + a + b

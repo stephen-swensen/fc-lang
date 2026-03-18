@@ -8,7 +8,7 @@ import point as pt, point as coord from geometry
 let take_pt = (p: pt) -> p.x
 let take_coord = (p: coord) -> p.y
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = pt { x = 3, y = 4 }
     let b = coord { x = 5, y = 6 }
     take_pt(b) + take_coord(a)

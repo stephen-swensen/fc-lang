@@ -17,13 +17,14 @@ run_test() {
     local error_file="$3"
     local expected_exit_file="$4"
     local expected_file="$5"
+    local fc_flags="$6"
 
     local slug="${test_display//\//_}"
     local c_file="$TMPDIR/${slug}.c"
     local bin_file="$TMPDIR/${slug}"
 
     # Compile FC -> C
-    if ! $FC $fc_files -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
+    if ! $FC $fc_files $fc_flags -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
         if [ -n "$error_file" ] && [ -f "$error_file" ]; then
             local expected_error=$(cat "$error_file")
             local actual_error=$(cat "$TMPDIR/${slug}.stderr")
@@ -129,11 +130,21 @@ for milestone_dir in "$TESTDIR"/m*/; do
             done < "${test_subdir}deps"
         fi
 
+        # Collect --flag arguments from flags file
+        fc_flags=""
+        if [ -f "${test_subdir}flags" ]; then
+            while IFS= read -r flag; do
+                [ -n "$flag" ] || continue
+                fc_flags="$fc_flags --flag $flag"
+            done < "${test_subdir}flags"
+        fi
+
         run_test "$test_display" \
             "$fc_files" \
             "${test_subdir}error" \
             "${test_subdir}expected_exit" \
-            "${test_subdir}expected"
+            "${test_subdir}expected" \
+            "$fc_flags"
     done
 done
 

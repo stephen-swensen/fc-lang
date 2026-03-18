@@ -2,6 +2,6 @@ let make_adder = (x: int32) ->
     let offset = x
     (n: int32) -> n + offset
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let f = make_adder(10)
     f(32)

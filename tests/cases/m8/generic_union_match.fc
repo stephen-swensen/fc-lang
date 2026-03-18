@@ -7,7 +7,7 @@ let from_maybe = (m: maybe<'a>, fallback: 'a) ->
     | just(v) -> v
     | nothing -> fallback
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = maybe<int32>.just(42)
     let y = maybe<int32>.just(10)
     from_maybe(x, 0) + from_maybe(y, 0)

@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = alloc(float64[2])!
     a[0] = 1.5
     a[1] = 2.5

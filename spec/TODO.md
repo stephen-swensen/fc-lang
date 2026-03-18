@@ -136,6 +136,15 @@ let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (
 
 ## Resolved
 
+### M9: std::sys module, main args as str[], conditional compilation, cstr→str cast (resolved 2026-03-17)
+- `std::sys` module (`stdlib/sys.fc`): `env`, `exit`, `time`, `sleep` — pure FC wrapping C stdlib via extern declarations. `time`/`sleep` use a private `timespec` struct passed to C via `any*` casts. `_POSIX_C_SOURCE` emitted only when `time.h` is used.
+- Main function signature changed from `(args: int32)` to `(args: str[])`. Codegen emits `fc_main(fc_slice_fc_str args)` for user code plus a C `main` wrapper that converts `argc`/`argv` to `str[]` via `alloca`. Pass2 validates main takes exactly `str[]` and returns `int32`.
+- Conditional compilation: `#if`/`#else if`/`#else`/`#end` directives implemented as a token-level filter between raw tokenization and layout pass. Directives must appear at column 1. `target_hosted` is a built-in flag; user flags via `--flag name`. Inactive branches are stripped (syntax-checking deferred to M10).
+- `(str)cstr` cast implemented: wraps existing pointer with `strlen`-derived length (no copy). Complements existing `(cstr)str` cast (stack copy + null terminator).
+- Extern boundary casts extended to `cstr*` returns (`uint8_t**` ↔ `char**`).
+- Parser fix: `parse_if_expr` now restores position when no `else` found, preventing `(cast)expr` after void `if` from being misparsed as a function call.
+- 413 tests passing.
+
 ### Implicit widening in generic function calls (resolved 2026-03-15)
 - Generic function arguments with concrete parameter types now auto-widen, matching non-generic call behavior.
 - e.g. `get(list, 0)` works when `index: int64` — the int32 literal widens to int64.

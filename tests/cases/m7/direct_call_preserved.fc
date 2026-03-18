@@ -2,6 +2,6 @@ let add = (a: int32, b: int32) -> a + b
 
 let sub = (a: int32, b: int32) -> a - b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = add(30, 20)
     sub(x, 8)

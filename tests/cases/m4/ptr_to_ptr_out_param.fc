@@ -5,7 +5,7 @@ let create = (out: int32**) ->
     *p = 99
     *out = p
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut result = default(int32*)
     create(&result)
     let v = *result

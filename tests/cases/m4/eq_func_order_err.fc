@@ -1,5 +1,5 @@
 let f = (x: int32) -> x
 let g = (x: int32) -> x + 1
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     if f >= g then 1 else 0

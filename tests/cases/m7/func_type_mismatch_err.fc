@@ -2,5 +2,5 @@ let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
 let bool_fn = (x: int32) -> x > 0
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     apply(bool_fn, 5)

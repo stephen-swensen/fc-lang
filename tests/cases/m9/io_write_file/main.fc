@@ -1,6 +1,6 @@
 import io from std::
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let f = io.open("/tmp/fc_test_io_write_file.txt", "w")
     match f with
     | some(wf) ->

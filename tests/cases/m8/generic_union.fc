@@ -4,7 +4,7 @@ union result =
 
 let make_ok = (x: 'a) -> result<'a>.ok(x)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let r = make_ok(42)
     match r with
     | ok(v) -> v

@@ -3,6 +3,6 @@ let unwrap_or = (opt: 'a?, fallback: 'a) ->
     | some(v) -> v
     | none -> fallback
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let v = some(42)
     unwrap_or(v, 0)

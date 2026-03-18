@@ -2,7 +2,7 @@ struct maybe_val =
     tag: int32
     val: 'a?
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = maybe_val { tag = 1, val = some(42) }
     let b = maybe_val { tag = 1, val = some(42) }
     let c = maybe_val { tag = 1, val = none(int32) }

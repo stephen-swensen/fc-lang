@@ -2,6 +2,6 @@ struct point =
     x: int32
     y: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = default(point)
     p.x + p.y + 10

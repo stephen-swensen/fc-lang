@@ -4,6 +4,6 @@ let increment = (n: int32) ->
     counter = counter + n
     counter
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     increment(20)
     increment(22)

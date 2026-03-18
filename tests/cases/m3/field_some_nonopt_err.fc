@@ -2,7 +2,7 @@ struct item =
     x: int32
     y: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let i = item { x = 1, y = 2 }
     match i with
     | { x = some(v) } -> v

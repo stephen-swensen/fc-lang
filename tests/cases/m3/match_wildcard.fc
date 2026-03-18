@@ -3,5 +3,5 @@ let check = (x: int32) ->
     | 0 -> 0
     | _ -> 1
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     check(42)

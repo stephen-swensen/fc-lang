@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 1u32 << 32u32
     // 32 & 31 = 0, so 1 << 0 = 1
     let mut r = 0

@@ -5,6 +5,6 @@ module geometry =
 
 import point as pt from geometry
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = pt { x = 10, y = 20 }
     p + 1

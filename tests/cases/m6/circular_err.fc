@@ -4,4 +4,4 @@ module alpha =
 module beta =
     let double_it = (x: int32) -> alpha.get_val(x) * 2
 
-let main = (args: int32) -> alpha.get_val(5)
+let main = (args: str[]) -> alpha.get_val(5)

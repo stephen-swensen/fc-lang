@@ -3,6 +3,6 @@ module config =
 
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let scale = (n: int32) -> n * config.factor
     apply(scale, 6)

@@ -2,7 +2,7 @@ union maybe =
     | just('a)
     | nothing
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = maybe<int32>.just(42)
     let y = maybe<int32>.nothing
     match x with

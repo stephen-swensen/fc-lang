@@ -6,7 +6,7 @@ struct drawing =
     name: int32
     s: shape
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = drawing { name = 1, s = shape.circle(5) }
     let b = drawing { name = 1, s = shape.circle(5) }
     let c = drawing { name = 1, s = shape.square(5) }

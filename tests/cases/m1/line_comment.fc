@@ -4,5 +4,5 @@ let add = (a: int32, b: int32) ->
     a + b // end-of-line comment
 
 // comment between declarations
-let main = (args: int32) ->
+let main = (args: str[]) ->
     add(0, 1) // trailing comment

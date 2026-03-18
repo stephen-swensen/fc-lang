@@ -2,4 +2,4 @@ let fib = (n: int32) ->
     if n <= 1 then n
     else fib(n - 1) + fib(n - 2)
 
-let main = (args: int32) -> fib(10)
+let main = (args: str[]) -> fib(10)

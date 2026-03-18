@@ -3,5 +3,5 @@ module math =
 
 import add as plus from math
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     plus(20, 5)

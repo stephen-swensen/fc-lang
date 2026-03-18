@@ -10,7 +10,7 @@ let first_byte_str = (s: str) ->
 let first_byte_u8slice = (s: uint8[]) ->
     s[0]
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = "hello"
     let mut buf = uint8[3] { }
     buf.ptr[0] = 65u8

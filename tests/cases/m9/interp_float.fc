@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let pi = 3.14
     let s = "pi=%6.2f{pi}"
     let mut r = 0

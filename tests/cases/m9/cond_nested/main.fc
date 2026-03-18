@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+#if target_hosted
+    let mut r = 10
+#if target_hosted
+    r = 42
+#end
+    r
+#else
+    0
+#end

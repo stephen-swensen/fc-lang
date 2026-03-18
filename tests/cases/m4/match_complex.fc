@@ -27,7 +27,7 @@ let check_sign = (x: int32) ->
     | 1 -> 30
     | _ -> 40
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let c = shape.circle(5)
     let r = shape.rect(dims { w = 3, h = 4 })
     let a1 = area(c)

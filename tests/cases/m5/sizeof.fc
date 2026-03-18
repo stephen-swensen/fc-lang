@@ -1,6 +1,6 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = sizeof(int8)
     let b = sizeof(int32)
     let c = sizeof(int64)
     let d = sizeof(bool)
-    a + b + c + d
+    (int32)(a + b + c + d)

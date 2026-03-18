@@ -1,1 +1,1 @@
-let main = (args: int32) -> 17 % 5
+let main = (args: str[]) -> 17 % 5

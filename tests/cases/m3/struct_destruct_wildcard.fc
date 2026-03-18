@@ -3,7 +3,7 @@ struct point =
     y: int32
     z: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = point { x = 10, y = 20, z = 30 }
     let { x = x, y = _, z = z } = p
     x + z

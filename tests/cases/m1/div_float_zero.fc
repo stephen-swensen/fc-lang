@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     // float division by zero produces inf, NOT abort (IEEE 754)
     let a = 1.0 / 0.0
     // inf > 0.0 is true

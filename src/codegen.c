@@ -851,7 +851,19 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (e->call.arg_count > 0) fprintf(out, ", ");
                 fprintf(out, "NULL)");
             } else if (fn_name) {
-                /* Extern call: cast cstr-aliased params to const char* for C headers */
+                /* Extern call: cast cstr-aliased params to const char* for C headers,
+                 * and cast cstr/cstr? return values from char* back to uint8_t* */
+                Type *ret_type = (call_ft && call_ft->kind == TYPE_FUNC)
+                    ? call_ft->func.return_type : NULL;
+                bool ret_is_cstr = ret_type && is_cstr_type(ret_type);
+                bool ret_is_cstr_opt = ret_type && ret_type->kind == TYPE_OPTION &&
+                    is_cstr_type(ret_type->option.inner);
+                bool ret_is_cstr_ptr = ret_type && ret_type->kind == TYPE_POINTER &&
+                    is_cstr_type(ret_type->pointer.pointee);
+                if (ret_is_cstr || ret_is_cstr_opt)
+                    fprintf(out, "(uint8_t*)");
+                else if (ret_is_cstr_ptr)
+                    fprintf(out, "(uint8_t**)");
                 fprintf(out, "%s(", fn_name);
                 for (int i = 0; i < e->call.arg_count; i++) {
                     if (i > 0) fprintf(out, ", ");
@@ -952,6 +964,13 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "; uint8_t *_cb%d = (uint8_t*)alloca((size_t)(_sc%d.len + 1))", tid, tid);
             fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, (size_t)_sc%d.len)", tid, tid, tid);
             fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
+        /* cstr -> str: wrap pointer with strlen-computed length */
+        } else if (e->cast.operand->type && is_cstr_type(e->cast.operand->type) &&
+                   is_str_type(e->cast.target)) {
+            int tid = temp_counter++;
+            fprintf(out, "({ uint8_t *_cp%d = ", tid);
+            emit_expr(e->cast.operand, out);
+            fprintf(out, "; (fc_str){ .ptr = _cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })", tid, tid);
         } else {
             fprintf(out, "((");
             emit_type(e->cast.target, out);
@@ -1793,9 +1812,10 @@ static void emit_func_decl(Decl *d, FILE *out) {
     bool is_main = strcmp(d->let.name, "main") == 0;
 
     if (is_main) {
-        fprintf(out, "int main(int argc, char **argv) {\n");
-        /* TODO: convert argc/argv to FC str[] args */
-        fprintf(out, "    (void)argc; (void)argv;\n");
+        /* Emit the FC main body as fc_main(str[] args) */
+        fprintf(out, "int32_t fc_main(");
+        emit_type(fn->func.params[0].type, out);
+        fprintf(out, " %s) {\n", fn->func.params[0].name);
     } else {
         /* Emit return type */
         emit_type(ft->func.return_type, out);
@@ -1831,6 +1851,20 @@ static void emit_func_decl(Decl *d, FILE *out) {
     }
 
     fprintf(out, "}\n\n");
+
+    /* Emit C main wrapper that converts argc/argv to str[] */
+    if (is_main) {
+        fprintf(out, "int main(int argc, char **argv) {\n");
+        fprintf(out, "    fc_str *_args = (fc_str*)alloca((size_t)argc * sizeof(fc_str));\n");
+        fprintf(out, "    for (int _i = 0; _i < argc; _i++) {\n");
+        fprintf(out, "        _args[_i].ptr = (uint8_t*)argv[_i];\n");
+        fprintf(out, "        _args[_i].len = (int64_t)strlen(argv[_i]);\n");
+        fprintf(out, "    }\n");
+        fprintf(out, "    return fc_main((");
+        emit_type(fn->func.params[0].type, out);
+        fprintf(out, "){ .ptr = _args, .len = (int64_t)argc });\n");
+        fprintf(out, "}\n\n");
+    }
 }
 
 static void emit_struct_forward(Decl *d, FILE *out) {
@@ -2438,7 +2472,20 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_arena = arena;
     g_intern = intern_tbl;
     g_symtab = symtab;
+
+    /* Collect from_libs early so we can gate _POSIX_C_SOURCE */
+    const char *from_libs[64];
+    int from_lib_count = 0;
+    for (int i = 0; i < prog->decl_count; i++)
+        collect_from_libs(prog->decls[i], from_libs, &from_lib_count, 64);
+
+    bool needs_posix = false;
+    for (int i = 0; i < from_lib_count; i++)
+        if (strcmp(from_libs[i], "time.h") == 0) { needs_posix = true; break; }
+
     /* Preamble — compiler-required headers */
+    if (needs_posix)
+        fprintf(out, "#define _POSIX_C_SOURCE 200809L\n");
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stdbool.h>\n");
     fprintf(out, "#include <inttypes.h>\n");
@@ -2448,23 +2495,17 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "#include <alloca.h>\n");
 
     /* Emit #include for each unique from_lib in extern modules */
-    {
-        const char *seen[64];
-        int seen_count = 0;
-        for (int i = 0; i < prog->decl_count; i++)
-            collect_from_libs(prog->decls[i], seen, &seen_count, 64);
-        for (int i = 0; i < seen_count; i++) {
-            /* Skip headers already in the preamble */
-            if (strcmp(seen[i], "stdint.h") == 0 ||
-                strcmp(seen[i], "stdbool.h") == 0 ||
-                strcmp(seen[i], "inttypes.h") == 0 ||
-                strcmp(seen[i], "stdlib.h") == 0 ||
-                strcmp(seen[i], "string.h") == 0 ||
-                strcmp(seen[i], "stdio.h") == 0 ||
-                strcmp(seen[i], "alloca.h") == 0)
-                continue;
-            fprintf(out, "#include <%s>\n", seen[i]);
-        }
+    for (int i = 0; i < from_lib_count; i++) {
+        /* Skip headers already in the preamble */
+        if (strcmp(from_libs[i], "stdint.h") == 0 ||
+            strcmp(from_libs[i], "stdbool.h") == 0 ||
+            strcmp(from_libs[i], "inttypes.h") == 0 ||
+            strcmp(from_libs[i], "stdlib.h") == 0 ||
+            strcmp(from_libs[i], "string.h") == 0 ||
+            strcmp(from_libs[i], "stdio.h") == 0 ||
+            strcmp(from_libs[i], "alloca.h") == 0)
+            continue;
+        fprintf(out, "#include <%s>\n", from_libs[i]);
     }
     fprintf(out, "\n");
 
@@ -2702,9 +2743,17 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
     }
 
-    /* Emit forward declarations for functions (with void* _ctx), skip generics */
+    /* Emit forward declarations for functions (with void* _ctx), skip generics.
+     * main is emitted as fc_main with its str[] param (no _ctx). */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
+        if (is_func_decl(d) && strcmp(d->let.name, "main") == 0 && !is_generic_decl(d)) {
+            Expr *fn = d->let.init;
+            fprintf(out, "int32_t fc_main(");
+            emit_type(fn->func.params[0].type, out);
+            fprintf(out, " %s);\n", fn->func.params[0].name);
+            continue;
+        }
         if (is_func_decl(d) && strcmp(d->let.name, "main") != 0 && !is_generic_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             Type *ft = d->let.resolved_type;

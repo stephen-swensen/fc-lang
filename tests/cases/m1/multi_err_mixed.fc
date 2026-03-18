@@ -1,6 +1,6 @@
 let add = (a: int32, b: int32) -> a + b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 1 + true
     let b = add(true, 5)
     let c = !42

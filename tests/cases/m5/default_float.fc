@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = default(float64)
     let y = default(float32)
     if x == 0.0 && y == 0.0f32 then 1 else 0

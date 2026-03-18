@@ -2,7 +2,7 @@ struct point =
     x: int32
     y: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = alloc(point[2])!
     a[0] = point { x = 1, y = 2 }
     a[1] = point { x = 3, y = 4 }

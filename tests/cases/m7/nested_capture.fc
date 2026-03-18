@@ -1,7 +1,7 @@
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 let apply2 = (f: (int32) -> int32, x: int32) -> f(x)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 10
     let outer = (x: int32) ->
         let b = 20

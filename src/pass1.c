@@ -113,6 +113,7 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     /* Use the last added entry (not symtab_lookup which may find a module with same name) */
     Symbol *sym = &tab->symbols[tab->count - 1];
     Type *st = malloc(sizeof(Type));
+    memset(st, 0, sizeof(Type));
     st->kind = TYPE_STRUCT;
     st->struc.name = d->struc.name;
     st->struc.fields = d->struc.fields;
@@ -130,6 +131,7 @@ static Type *register_union_sym(SymbolTable *tab, Decl *d) {
     /* Use the last added entry (not symtab_lookup which may find a module with same name) */
     Symbol *sym = &tab->symbols[tab->count - 1];
     Type *ut = malloc(sizeof(Type));
+    memset(ut, 0, sizeof(Type));
     ut->kind = TYPE_UNION;
     ut->unio.name = d->unio.name;
     ut->unio.variants = d->unio.variants;

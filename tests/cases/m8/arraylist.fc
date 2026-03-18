@@ -58,7 +58,7 @@ module arraylist =
             arraylist.add(&result, f(l.data[i]))
             i = i + 1
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut nums = arraylist.make<int32>()
     arraylist.add(&nums, 10)
     arraylist.add(&nums, 20)

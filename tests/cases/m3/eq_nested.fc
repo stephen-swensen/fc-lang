@@ -5,7 +5,7 @@ struct outer =
     a: inner
     b: inner
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = outer { a = inner { v = 1 }, b = inner { v = 2 } }
     let y = outer { a = inner { v = 1 }, b = inner { v = 2 } }
     let z = outer { a = inner { v = 1 }, b = inner { v = 3 } }

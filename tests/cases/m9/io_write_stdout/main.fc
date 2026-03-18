@@ -1,5 +1,5 @@
 import io from std::
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     io.write("hello\n", stdout)
     0

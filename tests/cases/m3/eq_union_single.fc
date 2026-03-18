@@ -1,7 +1,7 @@
 union wrapper =
     | val(int32)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = wrapper.val(42)
     let b = wrapper.val(42)
     let c = wrapper.val(99)

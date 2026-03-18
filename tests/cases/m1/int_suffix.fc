@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 100i64
     let b = 58i64
     (int32)(a - b)

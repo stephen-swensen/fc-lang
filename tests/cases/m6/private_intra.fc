@@ -2,5 +2,5 @@ module math =
     private let helper = (x: int32) -> x * 10
     let compute = (x: int32) -> math.helper(x) + 5
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     math.compute(4)

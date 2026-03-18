@@ -3,7 +3,8 @@
 #include <ctype.h>
 #include <stdio.h>
 
-void lexer_init(Lexer *l, const char *source, InternTable *intern) {
+void lexer_init(Lexer *l, const char *source, InternTable *intern,
+                const char **flags, int flag_count) {
     l->source = source;
     l->current = source;
     l->start = source;
@@ -18,6 +19,8 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern) {
     l->interp_fmt_line = 0;
     l->interp_fmt_col = 0;
     memset(l->interp_brace, 0, sizeof(l->interp_brace));
+    l->flags = flags;
+    l->flag_count = flag_count;
 }
 
 static char peek(Lexer *l)      { return *l->current; }
@@ -417,12 +420,26 @@ static Token scan_token(Lexer *l) {
     case '#': {
         while (*l->current == ' ') advance(l);
         const char *dir = l->current;
-        while (isalpha((unsigned char)peek(l)) || peek(l) == ' ') advance(l);
+        /* Read only alpha chars for the directive keyword */
+        while (isalpha((unsigned char)peek(l))) advance(l);
         int dlen = (int)(l->current - dir);
-        if (dlen >= 7 && memcmp(dir, "else if", 7) == 0) return make_token(l, TOK_HASH_ELSE_IF);
-        if (dlen >= 4 && memcmp(dir, "else", 4) == 0) return make_token(l, TOK_HASH_ELSE);
-        if (dlen >= 3 && memcmp(dir, "end", 3) == 0) return make_token(l, TOK_HASH_END);
-        if (dlen >= 2 && memcmp(dir, "if", 2) == 0) return make_token(l, TOK_HASH_IF);
+        if (dlen == 3 && memcmp(dir, "end", 3) == 0) return make_token(l, TOK_HASH_END);
+        if (dlen == 4 && memcmp(dir, "else", 4) == 0) {
+            /* Check for "else if" — skip spaces, check for "if" */
+            const char *saved = l->current;
+            int saved_col = l->col;
+            while (*l->current == ' ') advance(l);
+            if (l->current[0] == 'i' && l->current[1] == 'f' &&
+                !isalpha((unsigned char)l->current[2]) && l->current[2] != '_') {
+                advance(l); advance(l);
+                return make_token(l, TOK_HASH_ELSE_IF);
+            }
+            /* Plain #else — restore position */
+            l->current = saved;
+            l->col = saved_col;
+            return make_token(l, TOK_HASH_ELSE);
+        }
+        if (dlen == 2 && memcmp(dir, "if", 2) == 0) return make_token(l, TOK_HASH_IF);
         return error_token(l, "unknown preprocessor directive");
     }
     }
@@ -467,6 +484,137 @@ static Token *raw_tokenize(Lexer *l, int *out_count) {
     return tokens;
 }
 
+/* ---- Conditional compilation filter (phase 1.5) ---- */
+
+#define MAX_COND_DEPTH 32
+
+static bool flag_is_set(const char **flags, int flag_count, const char *name, int name_len) {
+    for (int i = 0; i < flag_count; i++) {
+        if ((int)strlen(flags[i]) == name_len && memcmp(flags[i], name, (size_t)name_len) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Filter out tokens in inactive #if/#else if/#else/#end branches.
+ * Directive tokens are always stripped from output. */
+static Token *filter_conditionals(Token *tokens, int count,
+                                   const char **flags, int flag_count,
+                                   int *out_count) {
+    Token *out = NULL;
+    int olen = 0, ocap = 0;
+
+    /* State stack: active[depth] = whether current branch is being included.
+     * done[depth] = whether any branch at this level has been taken. */
+    bool active[MAX_COND_DEPTH];
+    bool done[MAX_COND_DEPTH];
+    int depth = 0;
+    active[0] = true;
+    done[0] = true;
+
+    for (int i = 0; i < count; i++) {
+        Token t = tokens[i];
+
+        if (t.kind == TOK_HASH_IF) {
+            /* Validate column 1 */
+            if (t.col != 1) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#if must appear at column 1");
+            }
+            /* Next non-newline token must be an identifier (the flag name) */
+            int j = i + 1;
+            while (j < count && tokens[j].kind == TOK_NEWLINE) j++;
+            if (j >= count || tokens[j].kind != TOK_IDENT) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#if requires a flag name");
+            }
+            bool parent_active = active[depth];
+            depth++;
+            if (depth >= MAX_COND_DEPTH) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "too many nested #if directives");
+            }
+            bool flag_set = flag_is_set(flags, flag_count, tokens[j].start, tokens[j].length);
+            active[depth] = parent_active && flag_set;
+            done[depth] = flag_set;
+            i = j; /* skip flag name token */
+            /* Skip trailing newline after directive */
+            if (i + 1 < count && tokens[i + 1].kind == TOK_NEWLINE) i++;
+            continue;
+        }
+
+        if (t.kind == TOK_HASH_ELSE_IF) {
+            if (t.col != 1) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#else if must appear at column 1");
+            }
+            if (depth == 0) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#else if without matching #if");
+            }
+            int j = i + 1;
+            while (j < count && tokens[j].kind == TOK_NEWLINE) j++;
+            if (j >= count || tokens[j].kind != TOK_IDENT) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#else if requires a flag name");
+            }
+            bool parent_active = (depth >= 2) ? active[depth - 1] : true;
+            bool flag_set = flag_is_set(flags, flag_count, tokens[j].start, tokens[j].length);
+            active[depth] = parent_active && !done[depth] && flag_set;
+            if (flag_set) done[depth] = true;
+            i = j;
+            if (i + 1 < count && tokens[i + 1].kind == TOK_NEWLINE) i++;
+            continue;
+        }
+
+        if (t.kind == TOK_HASH_ELSE) {
+            if (t.col != 1) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#else must appear at column 1");
+            }
+            if (depth == 0) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#else without matching #if");
+            }
+            bool parent_active = (depth >= 2) ? active[depth - 1] : true;
+            active[depth] = parent_active && !done[depth];
+            done[depth] = true;
+            /* Skip trailing newline after directive */
+            if (i + 1 < count && tokens[i + 1].kind == TOK_NEWLINE) i++;
+            continue;
+        }
+
+        if (t.kind == TOK_HASH_END) {
+            if (t.col != 1) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#end must appear at column 1");
+            }
+            if (depth == 0) {
+                SrcLoc loc = { .line = t.line, .col = t.col };
+                diag_fatal(loc, "#end without matching #if");
+            }
+            depth--;
+            /* Skip trailing newline after directive */
+            if (i + 1 < count && tokens[i + 1].kind == TOK_NEWLINE) i++;
+            continue;
+        }
+
+        /* Copy token if in an active branch */
+        if (active[depth]) {
+            DA_APPEND(out, olen, ocap, t);
+        }
+    }
+
+    if (depth != 0) {
+        /* Find the last #if for a better error location */
+        SrcLoc loc = { .line = tokens[count - 1].line, .col = 1 };
+        diag_fatal(loc, "unclosed #if (missing #end)");
+    }
+
+    *out_count = olen;
+    return out;
+}
+
 /* ---- Layout pass (phase 2): insert INDENT/DEDENT/NEWLINE ---- */
 
 #define MAX_INDENT 128
@@ -483,6 +631,14 @@ static bool is_always_block_former(TokenKind k) {
 Token *lexer_tokenize(Lexer *l, int *out_count) {
     int raw_count;
     Token *raw = raw_tokenize(l, &raw_count);
+
+    /* Filter conditional compilation directives */
+    int filtered_count;
+    Token *filtered = filter_conditionals(raw, raw_count,
+        l->flags, l->flag_count, &filtered_count);
+    free(raw);
+    raw = filtered;
+    raw_count = filtered_count;
 
     Token *out = NULL;
     int olen = 0, ocap = 0;

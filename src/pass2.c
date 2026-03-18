@@ -1411,9 +1411,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         bool from_int = type_is_integer(from);
         bool to_int = type_is_integer(to);
         bool str_to_cstr = (is_str_type(from) && is_cstr_type(to));
-        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str -> cstr */
+        bool cstr_to_str = (is_cstr_type(from) && is_str_type(to));
+        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str <-> cstr */
         if (!((from_num && to_num) || (from_ptr && to_ptr) ||
-              (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr)) {
+              (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr || cstr_to_str)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
             e->type = type_error();
             return e->type;
@@ -2498,6 +2499,36 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
                     d->let.name);
             }
         }
+    }
+
+    /* Validate main function signature: must take str[] and return int32 */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind != DECL_LET || !d->let.init) continue;
+        if (strcmp(d->let.name, "main") != 0) continue;
+        if (d->let.init->kind != EXPR_FUNC) continue;
+        Expr *fn = d->let.init;
+        Type *ft = d->let.resolved_type;
+        if (!ft || ft->kind != TYPE_FUNC) break;
+        if (type_is_error(ft)) break;
+        /* Check return type is int32 */
+        if (ft->func.return_type && !type_is_error(ft->func.return_type) &&
+            !type_eq(ft->func.return_type, type_int32())) {
+            diag_error(d->loc, "main must return int32");
+        }
+        /* Check exactly one parameter of type str[] (slice of str = slice of uint8[]) */
+        if (fn->func.param_count != 1) {
+            diag_error(d->loc, "main must take exactly one parameter of type str[]");
+        } else {
+            Type *pt = fn->func.params[0].type;
+            bool is_str_slice = pt && pt->kind == TYPE_SLICE &&
+                                is_str_type(pt->slice.elem);
+            if (!is_str_slice) {
+                diag_error(d->loc, "main parameter must be str[], got %s",
+                    type_name(pt));
+            }
+        }
+        break;
     }
 
     /* Don't free arena — types are referenced from AST */

@@ -1,7 +1,7 @@
 let add_one = (x: int32) -> x + 1
 let add_two = (x: int32) -> x + 2
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let f = add_one
     let g = add_one
     let h = add_two

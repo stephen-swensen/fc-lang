@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 'a'
     let b = 'b'
     let z = 'z'

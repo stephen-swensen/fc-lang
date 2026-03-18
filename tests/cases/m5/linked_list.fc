@@ -28,7 +28,7 @@ let free_list = (head: node*?) ->
             cur = n->next
             free(n)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut list = default(node*?)
     list = push(list, 1)
     list = push(list, 2)

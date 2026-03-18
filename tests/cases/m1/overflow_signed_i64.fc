@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let max = 9223372036854775807i64
     let result = max + 1i64
     // INT64_MIN is -9223372036854775808, which can't be a literal

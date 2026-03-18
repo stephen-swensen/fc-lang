@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = 42u64
     let s = "val=%u{x}"
     let mut r = 0

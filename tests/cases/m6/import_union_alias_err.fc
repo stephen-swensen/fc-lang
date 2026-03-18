@@ -5,6 +5,6 @@ module shapes =
 
 import color as col from shapes
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let c = col.red
     c + 1

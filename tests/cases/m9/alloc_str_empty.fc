@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = alloc("")
     let mut r = 0
     match s with

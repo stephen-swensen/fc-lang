@@ -2,7 +2,7 @@ struct point =
     x: int32
     y: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = some(10)
     let b = some(20)
     let p = some(point { x = 3, y = 4 })

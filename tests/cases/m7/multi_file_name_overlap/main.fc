@@ -1,2 +1,2 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     alpha.add(alpha.value, beta.value) + beta.add(3, 3)

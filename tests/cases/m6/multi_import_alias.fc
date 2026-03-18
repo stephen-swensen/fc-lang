@@ -4,5 +4,5 @@ module math =
 
 import add as plus, mul as times from math
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     plus(times(3, 4), 5)

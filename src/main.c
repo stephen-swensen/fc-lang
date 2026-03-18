@@ -52,10 +52,17 @@ int main(int argc, char **argv) {
     const char **input_paths = NULL;
     int input_count = 0, input_cap = 0;
     const char *output_path = NULL;
+    const char **flags = NULL;
+    int flag_count = 0, flag_cap = 0;
+
+    /* Built-in default flag */
+    DA_APPEND(flags, flag_count, flag_cap, "target_hosted");
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_path = argv[++i];
+        } else if (strcmp(argv[i], "--flag") == 0 && i + 1 < argc) {
+            DA_APPEND(flags, flag_count, flag_cap, argv[++i]);
         } else if (argv[i][0] != '-') {
             DA_APPEND(input_paths, input_count, input_cap, argv[i]);
         } else {
@@ -86,7 +93,7 @@ int main(int argc, char **argv) {
         sources[i] = read_file(input_paths[i]);
 
         Lexer lexer;
-        lexer_init(&lexer, sources[i], &intern_table);
+        lexer_init(&lexer, sources[i], &intern_table, flags, flag_count);
         int token_count;
         all_tokens[i] = lexer_tokenize(&lexer, &token_count);
 
@@ -181,6 +188,7 @@ int main(int argc, char **argv) {
     free(sources);
     free(all_tokens);
     free(input_paths);
+    free(flags);
     free(symtab.symbols);
     free(mono.entries);
     arena_free(&arena);

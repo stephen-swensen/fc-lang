@@ -1,6 +1,6 @@
 import io from std::
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let f = io.open("/nonexistent/path/file.txt", "r")
     match f with
     | some(v) ->

@@ -7,4 +7,4 @@ module mod_b =
 import x from mod_a
 import x from mod_b
 
-let main = (args: int32) -> x
+let main = (args: str[]) -> x

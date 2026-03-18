@@ -3,7 +3,7 @@ union color =
     | green
     | blue
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let c = color.blue
     match c with
     | red -> 10

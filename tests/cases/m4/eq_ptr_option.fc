@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut x = 10
     let a = some(&x)
     let b = some(&x)

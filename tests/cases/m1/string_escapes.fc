@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s1 = "a\tb"
     let s2 = "a\rb"
     let s3 = "a\\b"

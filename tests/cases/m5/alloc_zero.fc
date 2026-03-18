@@ -3,7 +3,7 @@ struct counters =
     b: int32
     c: int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = alloc(counters)!
     let sum = p->a + p->b + p->c
     free(p)

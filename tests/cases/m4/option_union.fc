@@ -12,6 +12,6 @@ let check = (c: color?) ->
         | blue -> 3
     | none -> 0
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let c = some(color.green)
     check(c)

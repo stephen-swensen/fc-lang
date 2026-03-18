@@ -6,7 +6,7 @@ let set_point = (p: point*, nx: int32, ny: int32) ->
     p->x = nx
     p->y = ny
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut p = point { x = 0, y = 0 }
     set_point(&p, 3, 7)
     p.x + p.y

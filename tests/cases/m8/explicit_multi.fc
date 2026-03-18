@@ -3,6 +3,6 @@ let size_sum = <'a, 'b>() ->
     let b = sizeof('b)
     a + b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = size_sum<int32, int64>()
     (int32)s

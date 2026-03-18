@@ -7,7 +7,7 @@
 module c from "stdlib.h" =
     extern strtol: (cstr, any**, int32) -> int64
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = "99end"
     let mut end = default(any*)
     let val = c.strtol((cstr)s, &end, 10)

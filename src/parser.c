@@ -526,6 +526,7 @@ static Expr *parse_if_expr(Parser *p) {
         then_expr->block.count = then_count;
     }
 
+    int save_pos = p->pos;
     skip_newlines(p);
 
     Expr *else_expr = NULL;
@@ -545,6 +546,9 @@ static Expr *parse_if_expr(Parser *p) {
                 else_expr->block.count = else_count;
             }
         }
+    } else {
+        /* No else — restore position so NEWLINE is visible to Pratt loop */
+        p->pos = save_pos;
     }
 
     Expr *e = alloc_expr(p, EXPR_IF, loc);

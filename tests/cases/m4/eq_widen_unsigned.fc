@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = 100u16
     let b = 100i64
     let c = 200u32

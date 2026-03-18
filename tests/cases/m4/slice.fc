@@ -4,7 +4,7 @@ let sum_slice = (s: int32[]) ->
         total = total + x
     total
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut buf = int32[4] { }
     buf.ptr[0] = 1
     buf.ptr[1] = 2

@@ -1,4 +1,4 @@
 module m =
     extern abs: (int32) -> int32
 
-let main = (args: int32) -> 0
+let main = (args: str[]) -> 0

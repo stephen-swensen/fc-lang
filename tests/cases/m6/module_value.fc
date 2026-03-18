@@ -2,5 +2,5 @@ module config =
     let max_size = 42
     let offset = 10
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     config.max_size + config.offset

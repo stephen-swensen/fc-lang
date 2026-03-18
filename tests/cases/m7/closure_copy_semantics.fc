@@ -1,6 +1,6 @@
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let val = 10
     let add_val = (n: int32) -> n + val
     let result = apply(add_val, 32)

@@ -5,6 +5,6 @@ module containers =
     let wrap = (x: 'a) -> box { value = x }
     let unwrap = (b: box<'a>) -> b.value
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let b = containers.wrap(42)
     containers.unwrap(b)

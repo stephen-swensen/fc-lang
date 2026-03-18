@@ -184,6 +184,7 @@ static const char *primitive_names[] = {
 };
 
 const char *type_name(Type *t) {
+    if (!t) return "<null-type>";
     if (t->alias) return t->alias;
     if (t->kind < TYPE_POINTER) {
         return primitive_names[t->kind];

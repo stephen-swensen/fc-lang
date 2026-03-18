@@ -2,7 +2,7 @@ union shape =
     | circle(int32)
     | square(int32)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = shape.circle(5)
     let b = shape.circle(5)
     let c = shape.square(5)

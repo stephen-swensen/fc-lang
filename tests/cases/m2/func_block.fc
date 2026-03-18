@@ -3,5 +3,5 @@ let compute = (x: int32, y: int32) ->
     let b = a * 2
     b - 1
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     compute(3, 4)

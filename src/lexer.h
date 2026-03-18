@@ -21,9 +21,14 @@ typedef struct {
     int interp_fmt_len;                     /* length of format spec text */
     int interp_fmt_line;                    /* line of format spec */
     int interp_fmt_col;                     /* col of format spec */
+
+    /* Conditional compilation flags (e.g., --flag target_hosted) */
+    const char **flags;
+    int flag_count;
 } Lexer;
 
-void lexer_init(Lexer *l, const char *source, InternTable *intern);
+void lexer_init(Lexer *l, const char *source, InternTable *intern,
+                const char **flags, int flag_count);
 
 /* Tokenize entire source into an array. Caller must free the array. */
 Token *lexer_tokenize(Lexer *l, int *out_count);

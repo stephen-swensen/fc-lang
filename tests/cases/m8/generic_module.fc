@@ -2,7 +2,7 @@ module utils =
     let identity = (x: 'a) -> x
     let add = (a: 'a, b: 'a) -> a + b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let x = utils.identity(42)
     let y = utils.add(20, 22)
     x + y

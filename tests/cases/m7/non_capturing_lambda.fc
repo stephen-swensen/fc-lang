@@ -1,5 +1,5 @@
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let double = (n: int32) -> n * 2
     apply(double, 21)

@@ -3,7 +3,7 @@ union token =
     | name(int32)
     | eof
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = token.number(42)
     let b = token.number(42)
     let c = token.number(99)

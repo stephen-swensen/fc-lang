@@ -8,7 +8,7 @@ let pick = (a: 'a, index: int64) ->
 let add64 = (x: 'a, offset: int64) ->
     offset
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     // int32 literal 0 widens to int64 for concrete param
     let r1 = pick(42, 0)
     // int32 literal 2 widens to int64

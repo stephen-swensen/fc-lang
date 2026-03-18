@@ -1,3 +1,3 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     break 5
     0

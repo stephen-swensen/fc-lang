@@ -5,7 +5,7 @@ struct pair =
 let get_first = (p: pair<int32, bool>) -> p.first
 let get_second = (p: pair<int32, bool>) -> p.second
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = pair { first = 42, second = true }
     let f = get_first(p)
     let s = get_second(p)

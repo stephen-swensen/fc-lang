@@ -1,4 +1,4 @@
 let add = (a: int64, b: int64) -> a + b
 
-let main = (args: int32) ->
-    add(10, 20)
+let main = (args: str[]) ->
+    (int32)add(10, 20)

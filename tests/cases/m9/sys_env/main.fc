@@ -1,0 +1,6 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    match sys.env("PATH") with
+    | some(v) -> 1
+    | none -> 0

@@ -1,2 +1,2 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     config.base + config.offset + 11

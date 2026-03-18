@@ -6,7 +6,7 @@ let check = (a: int32, b: int32) ->
     else
         3
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let r1 = check(5, 3)
     let r2 = check(5, -1)
     let r3 = check(-1, -2)

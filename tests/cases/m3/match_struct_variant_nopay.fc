@@ -6,7 +6,7 @@ struct drawing =
     x: int32
     shape: shape
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let d = drawing { x = 7, shape = shape.dot }
     match d with
     | { shape = circle(r) } -> r

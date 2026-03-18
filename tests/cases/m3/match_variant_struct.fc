@@ -6,7 +6,7 @@ union shape =
     | circle(int32)
     | rect(point)
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let s = shape.rect(point { x = 4, y = 6 })
     match s with
     | circle(r) -> r

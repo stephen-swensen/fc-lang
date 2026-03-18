@@ -4,4 +4,4 @@ module math =
 module math =
     let sub = (a: int32, b: int32) -> a - b
 
-let main = (args: int32) -> 0
+let main = (args: str[]) -> 0

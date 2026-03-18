@@ -5,7 +5,7 @@ struct pair =
     first: 'a
     second: 'b
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let inner = box { value = 42 }
     let p = pair { first = inner, second = true }
     p.first.value

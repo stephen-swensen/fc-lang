@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let a = alloc(int32[1])!
     a[0] = 99
     let s1 = a[0..0]

@@ -1,0 +1,6 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    let t = sys.time()
+    if t > 0i64 then 1
+    else 0

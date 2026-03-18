@@ -1,7 +1,7 @@
 module c from "stdlib.h" =
     extern atoi: (cstr) -> int32
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let mut buf = uint8[3] { }
     buf.ptr[0] = 55u8
     buf.ptr[1] = 55u8

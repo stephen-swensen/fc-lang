@@ -1,6 +1,6 @@
 import add from math
 import vec2 from math
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let v = vec2 { x = 3, y = 7 }
     add(v.x, v.y)

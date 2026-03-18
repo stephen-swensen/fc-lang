@@ -3,4 +3,4 @@ module math =
 
 namespace acme::
 
-let main = (args: int32) -> math.add(1, 2)
+let main = (args: str[]) -> math.add(1, 2)

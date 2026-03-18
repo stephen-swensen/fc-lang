@@ -1,4 +1,4 @@
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = alloc(int32)
     match p with
     | some(ptr) ->

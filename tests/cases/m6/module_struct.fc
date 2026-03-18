@@ -7,6 +7,6 @@ module geometry =
 
 import point from geometry
 
-let main = (args: int32) ->
+let main = (args: str[]) ->
     let p = point { x = 10, y = 20 }
     geometry.manhattan(p)
