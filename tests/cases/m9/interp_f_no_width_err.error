@@ -1,1 +1,1 @@
-%f format requires explicit width
+%f format requires explicit width (e.g. %8.2f)

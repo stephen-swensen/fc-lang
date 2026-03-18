@@ -1,1 +1,1 @@
-expected (int32) -> int32, got (int32) -> bool
+argument 1: expected (int32) -> int32, got (int32) -> bool

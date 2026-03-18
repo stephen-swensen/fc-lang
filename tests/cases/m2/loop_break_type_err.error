@@ -1,1 +1,1 @@
-break type mismatch
+break type mismatch: expected int32, got bool

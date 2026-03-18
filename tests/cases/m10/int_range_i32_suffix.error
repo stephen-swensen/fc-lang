@@ -1,1 +1,1 @@
-out of range for int32
+integer literal 2147483648 out of range for int32 (-2147483648..2147483647)

@@ -1,1 +1,1 @@
-out of range for uint8
+integer literal -1 out of range for uint8 (0..255)

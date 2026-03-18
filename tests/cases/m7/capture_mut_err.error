@@ -1,1 +1,1 @@
-cannot capture mutable binding
+cannot capture mutable binding 'count'

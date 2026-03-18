@@ -1,1 +1,1 @@
-different namespace
+module 'math' is in a different namespace; use 'import' to access it

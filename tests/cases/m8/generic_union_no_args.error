@@ -1,1 +1,1 @@
-requires explicit type arguments
+generic union 'maybe' requires explicit type arguments: maybe<...>.just

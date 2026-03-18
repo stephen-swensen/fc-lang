@@ -1,1 +1,1 @@
-no explicit type parameters
+function 'identity' has no explicit type parameters; type arguments are inferred from call arguments

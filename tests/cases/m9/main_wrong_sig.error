@@ -1,1 +1,1 @@
-main parameter must be str[]
+main parameter must be str[], got int32

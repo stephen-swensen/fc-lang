@@ -1,1 +1,1 @@
-out of range for int8
+integer literal -129 out of range for int8 (-128..127)

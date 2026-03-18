@@ -1,1 +1,1 @@
-cannot import private member
+cannot import private member 'secret' from module 'math'

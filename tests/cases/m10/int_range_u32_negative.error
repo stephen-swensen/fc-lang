@@ -1,1 +1,1 @@
-out of range for uint32
+integer literal -1 out of range for uint32 (0..4294967295)

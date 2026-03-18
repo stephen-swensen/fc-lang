@@ -1,1 +1,1 @@
-ordering comparison requires numeric
+ordering comparison requires numeric or pointer types, got str and str

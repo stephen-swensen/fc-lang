@@ -1,1 +1,1 @@
-out of range for uint16
+integer literal 65536 out of range for uint16 (0..65535)

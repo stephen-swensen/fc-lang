@@ -1,1 +1,1 @@
-struct pattern on non-struct type
+struct pattern on non-struct type int32

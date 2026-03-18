@@ -1,1 +1,1 @@
-out of range for uint64
+integer literal -1 out of range for uint64 (0..18446744073709551615)

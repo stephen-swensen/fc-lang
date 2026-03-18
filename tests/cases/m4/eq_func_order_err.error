@@ -1,1 +1,1 @@
-ordering comparison requires numeric
+ordering comparison requires numeric or pointer types, got (int32) -> int32 and (int32) -> int32
