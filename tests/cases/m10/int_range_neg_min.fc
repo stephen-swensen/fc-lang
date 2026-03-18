@@ -1,0 +1,11 @@
+// Negative MIN values should work via constant folding
+let main = (args: str[]) ->
+    let a = -128i8
+    let b = -32768i16
+    let c = -2147483648
+    if (int32)a == -128 then
+        if (int32)b == -32768 then
+            if c == -2147483648 then 0
+            else 3
+        else 2
+    else 1

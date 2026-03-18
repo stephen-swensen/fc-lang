@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = 256u8
+    0

@@ -1,5 +1,6 @@
 #include "pass2.h"
 #include "diag.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -231,6 +232,28 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         }
     }
     return t;
+}
+
+/* Check that an integer literal value fits in its target type */
+static void check_int_literal_range(int64_t value, Type *type, SrcLoc loc) {
+    int64_t lo, hi;
+    switch (type->kind) {
+    case TYPE_INT8:   lo = -128;        hi = 127;        break;
+    case TYPE_INT16:  lo = -32768;      hi = 32767;      break;
+    case TYPE_INT32:  lo = -2147483648LL; hi = 2147483647; break;
+    case TYPE_INT64:  return; /* always fits in int64_t storage */
+    case TYPE_UINT8:  lo = 0; hi = 255;        break;
+    case TYPE_UINT16: lo = 0; hi = 65535;      break;
+    case TYPE_UINT32: lo = 0; hi = 4294967295LL; break;
+    case TYPE_UINT64:
+        if (value < 0)
+            diag_error(loc, "integer literal %" PRId64 " out of range for uint64 (0..18446744073709551615)", value);
+        return;
+    default: return;
+    }
+    if (value < lo || value > hi)
+        diag_error(loc, "integer literal %" PRId64 " out of range for %s (%" PRId64 "..%" PRId64 ")",
+                   value, type_name(type), lo, hi);
 }
 
 /* Wrap an expression in an implicit widening cast */
@@ -561,6 +584,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
+        check_int_literal_range(e->int_lit.value, e->type, e->loc);
         return e->type;
 
     case EXPR_FLOAT_LIT:
@@ -864,6 +888,26 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_UNARY_PREFIX: {
+        /* Fold -literal before recursing so range check sees final value */
+        if (e->unary_prefix.op == TOK_MINUS) {
+            Expr *operand = e->unary_prefix.operand;
+            if (operand->kind == EXPR_INT_LIT) {
+                int64_t val = -operand->int_lit.value;
+                Type *lt = operand->int_lit.lit_type;
+                e->kind = EXPR_INT_LIT;
+                e->int_lit.value = val;
+                e->int_lit.lit_type = lt;
+                return check_expr(ctx, e);
+            }
+            if (operand->kind == EXPR_FLOAT_LIT) {
+                double val = -operand->float_lit.value;
+                Type *lt = operand->float_lit.lit_type;
+                e->kind = EXPR_FLOAT_LIT;
+                e->float_lit.value = val;
+                e->float_lit.lit_type = lt;
+                return check_expr(ctx, e);
+            }
+        }
         Type *ot = check_expr(ctx, e->unary_prefix.operand);
         if (type_is_error(ot)) { e->type = type_error(); return e->type; }
         TokenKind op = e->unary_prefix.op;
@@ -2166,6 +2210,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
             diag_error(pat->loc, "integer pattern on non-integer type %s", type_name(type));
             return;
         }
+        check_int_literal_range(pat->int_lit.value, type, pat->loc);
         break;
     case PAT_BOOL_LIT:
         if (!type_eq(type, type_bool())) {

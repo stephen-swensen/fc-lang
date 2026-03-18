@@ -87,6 +87,12 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - `loop` produces a value via `break value`; `for` is always void
 - `match` is exhaustive; wildcard `_` satisfies exhaustiveness
 
+### Function Syntax
+- Functions/lambdas do **not** have return type annotations — the return type is always inferred
+- Correct: `let f = (x: int32) -> x * 2` or with a block body: `let f = (x: int32) ->\n    x * 2`
+- **Wrong**: `let f = (x: int32) -> int32 = x * 2` — this is not valid FC syntax
+- The `->` token introduces the function body (or separates param types in function type syntax like `(int32) -> int32`)
+
 ### Bindings
 - `let`: immutable binding, not addressable, capturable in closures (by copy)
 - `let mut`: mutable binding, addressable (`&x` → `T*`), not capturable in closures
@@ -123,6 +129,7 @@ Tests live in `tests/cases/`, organized into subdirectories by milestone:
 - `m4/` — types: options, slices, pointers, casts, widening
 - `m5/` — memory: alloc, free, sizeof, default
 - `m6/` — modules, imports, namespaces (single-file tests as `.fc` files, multi-file tests as subdirectories)
+- `m10/` — polish: range checking, exhaustiveness, escape detection
 
 Each **single-file test** is an `.fc` file plus one of:
 - `.expected_exit` — expected exit code (0–255); the test compiles and runs
@@ -133,7 +140,7 @@ Each **multi-file test** is a subdirectory containing:
 - `expected_exit` or `error` (no dot prefix) — the expected result
 - `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
 
-Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/cross_ns_import`, etc.
+Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
 
 ### Multi-file tests
 

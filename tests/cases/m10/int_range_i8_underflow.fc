@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = -129i8
+    0

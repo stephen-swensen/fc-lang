@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = 32768i16
+    0

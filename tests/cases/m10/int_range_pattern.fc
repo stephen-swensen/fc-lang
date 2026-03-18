@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let x = 5i8
+    match x with
+    | 128 -> 1
+    | _ -> 0
