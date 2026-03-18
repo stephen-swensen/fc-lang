@@ -71,27 +71,10 @@ The test runner (`tests/run_tests.sh`) compiles each `.fc` file to C, compiles t
 
 ## Repository Layout
 
-```
-spec/fc-spec.html       Language specification (open in browser)
-spec/TODO.md            Open design questions
-spec/grammar.bnf             Formal EBNF grammar
-src/                    Compiler source
-  main.c                CLI entry point
-  common.h / common.c   Arena allocator, string interning, dynamic arrays
-  token.h / token.c     Token definitions
-  lexer.h / lexer.c     Tokenizer with indentation handling
-  ast.h                 AST node definitions (tagged unions)
-  parser.h / parser.c   Recursive descent + Pratt expression parser
-  types.h / types.c     Type representation and operations
-  pass1.h / pass1.c     Pass 1: top-level declaration collection
-  pass2.h / pass2.c     Pass 2: type checking
-  codegen.h / codegen.c C11 code emission
-  diag.h / diag.c       Error reporting with source locations
-tests/
-  run_tests.sh          Integration test runner
-  cases/                Test .fc files and expected outputs
-Makefile                Build system
-```
+- **`src/`** — The compiler, written in C11. Pipeline: lexer → parser → pass1 (declaration collection) → pass2 (type checking) → monomorphization → codegen (C11 emission).
+- **`stdlib/`** — Standard library modules (`std::io`, `std::sys`, etc.), written in FC.
+- **`spec/`** — Language specification (`fc-spec.html`, best viewed in a browser), formal grammar, and compiler roadmap.
+- **`tests/cases/`** — Integration tests organized by milestone (`m1/`, `m2/`, etc.). See `tests/run_tests.sh` for the test harness.
 
 For code examples, see the full language specification in `spec/fc-spec.html`.
 
