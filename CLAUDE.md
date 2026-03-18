@@ -99,6 +99,14 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - `!` is postfix option-unwrap AND prefix boolean-not (context-dependent)
 - `->` means: pointer field access, function type arrow, OR match arm separator (context-dependent)
 
+### Match Arm Indentation
+Match arms (`|` pipes) align with the `match` keyword, **not** indented under it. The lexer's layout pass treats `|` as a same-level delimiter:
+```fc
+match x with
+| some(v) -> use(v)
+| none -> fallback()
+```
+
 ### Naming Conventions (FC code)
 - All user-defined names use **lowercase snake_case**: `let my_func`, `struct my_point`, `union my_shape`, `module my_module`
 - This applies to struct names, union names, variant names, function names, module names, variable names
@@ -156,6 +164,12 @@ Aim for dozens of test cases per feature, not a handful. A bug caught by a test 
 Each milestone must fully implement all spec features for that area — no deferring aspects to later milestones.
 
 Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
+
+## Workflow
+
+- After completing each implementation milestone, pause and present a summary for user review before proceeding to the next
+- Run `make test` to confirm all tests pass before presenting the summary
+- Update the README.md milestone status table after each milestone is completed
 
 ## Spec Reference
 
