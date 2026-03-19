@@ -12,7 +12,7 @@ make -s fc
 tmpdir=$(mktemp -d /tmp/fc-run.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
 
-./fc "$@" -o "$tmpdir/out.c"
+./fc "$@" stdlib/* -o "$tmpdir/out.c"
 cc -std=c11 -Wall -Werror -o "$tmpdir/out" "$tmpdir/out.c"
 set +e
 "$tmpdir/out"
