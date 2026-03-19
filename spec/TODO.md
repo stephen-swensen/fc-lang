@@ -134,6 +134,29 @@ let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (
 
 ---
 
+## Field access on type variables — structural generics (explored, deferred)
+
+Explored allowing field access on bare type variables, e.g. `let sum = (p: 'a) -> p.x + p.y`, where `'a` is resolved to a concrete struct at monomorphization. This would enable duck-typed generic functions that operate on any struct with matching field names — similar to C++ templates or Go structural interfaces.
+
+### What was prototyped
+- A new type kind `TYPE_FIELD_OF(base_type, field_name)` representing "the type of field F of type T", resolved during `type_substitute` when the base type becomes a concrete struct.
+- Pass2 deferred field access validation on `TYPE_TYPE_VAR` and `TYPE_FIELD_OF`, creating `TYPE_FIELD_OF` nodes instead of erroring.
+- Binary operator deferral extended to handle `TYPE_FIELD_OF` operands.
+- Codegen resolved `TYPE_FIELD_OF` through the substitution context during monomorphized emission.
+- 17 tests passing: basic access, arithmetic, comparison, let binding, nested access (3 levels deep), multiple struct types, chained generic calls, multi-type instantiation.
+
+### Why it was deferred
+- **High complexity relative to value.** `TYPE_FIELD_OF` threads through `type_substitute`, `type_eq`, `type_contains_type_var`, `type_collect_vars`, `type_name`, `mangle_type_name`, `emit_type`, and `emit_type_ident`. The first 80% was clean, but completing it properly would require changes to `unify()`, match exhaustiveness, unary operators, and monomorphization-time error reporting — roughly as much work again.
+- **Incomplete error reporting.** Invalid field access (wrong field name, non-struct type) was not caught until C compilation. Proper monomorphization-time error reporting would be a significant addition to the compiler.
+- **Unification gaps.** Constructing a generic struct from deferred field values (`pair { x = p.y, y = p.x }`) fails because `unify` can't bind `'a` to `TYPE_FIELD_OF('a, "x")` without creating a self-referential binding.
+- **Trivial workaround exists.** Instead of `let sum = (p: 'a) -> p.x + p.y`, write `let sum = (x: 'a, y: 'a) -> x + y`. Passing fields as parameters is idiomatic in systems programming and already fully supported.
+- **Rare in practice.** "Any struct with field X" is a dynamic/structural typing pattern more natural in TypeScript or Go than in a C-targeting systems language. Real-world generic code (containers, algorithms, utilities) works through operators, function parameters, and built-in constructs — all already supported.
+
+### If revisited
+The `TYPE_FIELD_OF` approach is viable. Key remaining work: (1) extend `unify()` to handle `TYPE_FIELD_OF` in struct literal construction, (2) add monomorphization-time error reporting for invalid field access, (3) handle match/unwrap on deferred field types, (4) extend unary operator deferral. Consider whether the complexity is justified by real user demand before proceeding.
+
+---
+
 ## Resolved
 
 ### M9: std::sys module, main args as str[], conditional compilation, cstr→str cast (resolved 2026-03-17)

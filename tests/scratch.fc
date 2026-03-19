@@ -9,12 +9,10 @@ struct tuple3 =
   e2: 'a
   e3: 'a
 
-/*
 let g = (x: 'a) ->
   x.e1 + x.e2
-*/
 
-//let f = <'a>() -> 'a.min
+let f = <'a>() -> 'a.min
 
 let h = <'a>() -> default('a)
 
@@ -25,9 +23,9 @@ let main = (args: str[]) ->
   let x = tuple2 { e1 = 1, e2 = 2 }
   let y = tuple3 { e1 = 1, e2 = 2, e2 = 3 }
 
-  //io.write("g(x) = %i{g(x)}\n", stdout)
-  //io.write("g(y) = %i{g(y)}\n", stdout)
-  //io.write("f<int32() = %i{f<int32>()}\n", stdout)
+  io.write("g(x) = %i{g(x)}\n", stdout)
+  io.write("g(y) = %i{g(y)}\n", stdout)
+  io.write("f<int32() = %i{f<int32>()}\n", stdout)
   io.write("h<int32() = %i{h<int32>()}\n", stdout)
   io.write("k<int32() = %i{k(3)}\n", stdout)
   0
