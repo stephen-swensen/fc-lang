@@ -403,12 +403,8 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
             fprintf(out, " %s = ", vname);
             emit_expr(s->let_expr.let_init, out);
             fprintf(out, ";\n");
-            /* A let binding evaluates to void, so if it's the last stmt in a block
-             * the variable is unused — suppress the warning. */
-            if (is_last) {
-                emit_indent(out);
-                fprintf(out, "(void)%s;\n", vname);
-            }
+            emit_indent(out);
+            fprintf(out, "(void)%s;\n", vname);
         } else if (s->kind == EXPR_LET_DESTRUCT) {
             /* Emit: struct_type _ds_N = rhs; then recursively emit field bindings */
             emit_type(s->let_destruct.init_type, out);
@@ -416,10 +412,8 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
             emit_expr(s->let_destruct.init, out);
             fprintf(out, ";\n");
             emit_pat_bindings(s->let_destruct.pattern, s->let_destruct.tmp_name, s->let_destruct.init_type, out);
-            if (is_last) {
-                emit_indent(out);
-                fprintf(out, "(void)%s;\n", s->let_destruct.tmp_name);
-            }
+            emit_indent(out);
+            fprintf(out, "(void)%s;\n", s->let_destruct.tmp_name);
         } else if (s->kind == EXPR_RETURN) {
             if (s->return_expr.value) {
                 fprintf(out, "return ");
