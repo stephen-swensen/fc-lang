@@ -62,6 +62,63 @@ static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
     return mangled;
 }
 
+/* Resolve a concrete type + property name to a C constant string.
+ * Used for type-variable property access ('a.min etc.) during monomorphized emission. */
+static const char *resolve_type_prop_codegen(Type *t, const char *prop) {
+    TypeKind k = t->kind;
+    bool is_int = type_is_integer(t);
+    bool is_float = type_is_float(t);
+    if (!is_int && !is_float) return NULL;
+
+    if (strcmp(prop, "bits") == 0) {
+        switch (k) {
+        case TYPE_INT8: case TYPE_UINT8:   return "8";
+        case TYPE_INT16: case TYPE_UINT16: return "16";
+        case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: return "32";
+        case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: return "64";
+        default: return NULL;
+        }
+    }
+    if (is_int) {
+        if (strcmp(prop, "min") == 0) {
+            switch (k) {
+            case TYPE_INT8:   return "INT8_MIN";
+            case TYPE_INT16:  return "INT16_MIN";
+            case TYPE_INT32:  return "INT32_MIN";
+            case TYPE_INT64:  return "INT64_MIN";
+            case TYPE_UINT8:  return "((uint8_t)0)";
+            case TYPE_UINT16: return "((uint16_t)0)";
+            case TYPE_UINT32: return "((uint32_t)0)";
+            case TYPE_UINT64: return "((uint64_t)0)";
+            default: return NULL;
+            }
+        }
+        if (strcmp(prop, "max") == 0) {
+            switch (k) {
+            case TYPE_INT8:   return "INT8_MAX";
+            case TYPE_INT16:  return "INT16_MAX";
+            case TYPE_INT32:  return "INT32_MAX";
+            case TYPE_INT64:  return "INT64_MAX";
+            case TYPE_UINT8:  return "UINT8_MAX";
+            case TYPE_UINT16: return "UINT16_MAX";
+            case TYPE_UINT32: return "UINT32_MAX";
+            case TYPE_UINT64: return "UINT64_MAX";
+            default: return NULL;
+            }
+        }
+        return NULL;
+    }
+    /* Float properties */
+    bool is_f32 = (k == TYPE_FLOAT32);
+    if (strcmp(prop, "min") == 0) return is_f32 ? "FLT_MIN" : "DBL_MIN";
+    if (strcmp(prop, "max") == 0) return is_f32 ? "FLT_MAX" : "DBL_MAX";
+    if (strcmp(prop, "epsilon") == 0) return is_f32 ? "FLT_EPSILON" : "DBL_EPSILON";
+    if (strcmp(prop, "nan") == 0) return is_f32 ? "((float)NAN)" : "((double)NAN)";
+    if (strcmp(prop, "inf") == 0) return is_f32 ? "((float)INFINITY)" : "((double)INFINITY)";
+    if (strcmp(prop, "neg_inf") == 0) return is_f32 ? "((float)(-INFINITY))" : "((double)(-INFINITY))";
+    return NULL;
+}
+
 /* Emit the identifier portion of a function type typedef name */
 static void emit_fn_type_suffix(Type *t, FILE *out);
 
@@ -998,6 +1055,28 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "(%s){ .tag = %s_tag_%s }",
                 union_name, union_name, e->field.name);
             break;
+        }
+        /* Type variable property access: 'a.min → resolve via g_subst */
+        if (e->field.object->kind == EXPR_TYPE_VAR_REF && g_subst) {
+            const char *tv_name = e->field.object->type_var_ref.name;
+            Type *concrete = NULL;
+            for (int i = 0; i < g_subst->count; i++) {
+                if (g_subst->var_names[i] == tv_name) {
+                    concrete = g_subst->concrete[i];
+                    break;
+                }
+            }
+            if (concrete) {
+                const char *cstr = resolve_type_prop_codegen(concrete, e->field.name);
+                if (cstr) {
+                    fprintf(out, "%s", cstr);
+                    break;
+                }
+                diag_error(e->loc, "type '%s' has no property '%s'",
+                    type_name(concrete), e->field.name);
+                fprintf(out, "0 /* error */");
+                break;
+            }
         }
         emit_expr(e->field.object, out);
         fprintf(out, ".%s", e->field.name);

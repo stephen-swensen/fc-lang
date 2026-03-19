@@ -1093,6 +1093,14 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_TYPE_VAR: {
+        /* Allow 'a in expression position for type-variable property access ('a.min etc.) */
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_TYPE_VAR_REF, loc);
+        e->type_var_ref.name = tok_intern(p, t);
+        return e;
+    }
+
     default:
         diag_fatal(loc, "unexpected token %s in expression",
             token_kind_name(t->kind));

@@ -3260,6 +3260,19 @@ add("x", "y")       // compile error at this call site — str does not support 
 
 The error message identifies the call site and the substitution: something like "when calling `add` with `'a = str`, operator `+` is not defined for `str`." This makes it straightforward to diagnose in practice, even without a formal constraint declaration in the source.
 
+### Scope of operations on type variables
+
+The following operations are valid on type variables within a generic body, with validation deferred to monomorphization:
+
+- **Operators**: arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`)
+- **Built-in type operators**: `default('a)`, `sizeof('a)`, `none('a)`
+- **Built-in static type properties**: `'a.min`, `'a.max`, `'a.bits`, `'a.nan`, `'a.inf`, `'a.neg_inf`, `'a.epsilon`
+
+The following are **not** supported on type variables:
+
+- **Field access on values** — `x.field` where `x: 'a` is not valid. The compiler does not perform structural typing; a type variable does not carry information about which fields the concrete type will have. To operate on fields generically, pass them as separate parameters: write `let sum = (x: 'a, y: 'a) -> x + y` rather than `let sum = (p: 'a) -> p.x + p.y`.
+- **User-defined type-associated module members** — `'a.make()` or `'a.zero` where `make`/`zero` are members of a user-defined module sharing the type's name. Only the built-in static properties listed above are accessible on type variables. User-defined module members require a concrete type name.
+
 ---
 
 # PART 10 — Style Guidelines

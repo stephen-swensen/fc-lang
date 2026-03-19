@@ -1,0 +1,6 @@
+// 'a inferred from parameter, then used for property access
+let get_max_of = (x: 'a) -> 'a.max
+
+let main = (args: str[]) ->
+  let r = get_max_of(0u8)
+  (r + 0)

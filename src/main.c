@@ -179,6 +179,12 @@ int main(int argc, char **argv) {
     codegen_emit(prog, out, &mono, &arena, &intern_table, &symtab);
     fclose(out);
 
+    if (diag_error_count() > 0) {
+        fprintf(stderr, "%d error(s)\n", diag_error_count());
+        remove(output_path);
+        return 1;
+    }
+
     /* Cleanup */
     for (int i = 0; i < input_count; i++) {
         free(all_tokens[i]);

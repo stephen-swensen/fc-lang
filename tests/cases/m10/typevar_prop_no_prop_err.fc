@@ -1,0 +1,6 @@
+// Error: bool has no .min property
+let get_min = <'a>() -> 'a.min
+
+let main = (args: str[]) ->
+  get_min<bool>()
+  0

@@ -43,6 +43,7 @@ typedef enum {
     EXPR_DEREF_FIELD,   /* x->f */
     EXPR_LET,           /* let binding inside a block */
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
+    EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -253,6 +254,9 @@ struct Expr {
             Type *init_type;        /* filled by pass2 */
             const char *tmp_name;   /* codegen temp name for the RHS */
         } let_destruct;
+
+        /* EXPR_TYPE_VAR_REF — 'a in expression position (for 'a.min etc.) */
+        struct { const char *name; } type_var_ref;
     };
 };
 

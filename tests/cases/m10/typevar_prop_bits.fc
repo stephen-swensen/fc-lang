@@ -1,0 +1,5 @@
+// 'a.bits returns int32
+let get_bits = <'a>() -> 'a.bits
+
+let main = (args: str[]) ->
+  get_bits<int64>()

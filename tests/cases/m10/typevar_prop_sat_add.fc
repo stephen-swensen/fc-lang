@@ -1,0 +1,9 @@
+// Saturating add — real-world use case
+let sat_add = (a: 'a, b: 'a) ->
+  if a > 'a.max - b then 'a.max else a + b
+
+let main = (args: str[]) ->
+  let r1 = sat_add(200u8, 100u8)
+  let r2 = sat_add(10u8, 20u8)
+  // r1 = 255 (saturated), r2 = 30
+  (r1 - r2 + 0)

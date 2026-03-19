@@ -1,0 +1,6 @@
+// 'a.max on int8
+let get_max = <'a>() -> 'a.max
+
+let main = (args: str[]) ->
+  let m = get_max<int8>()
+  (m + 0)

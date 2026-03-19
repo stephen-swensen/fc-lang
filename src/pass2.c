@@ -1678,6 +1678,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    case EXPR_TYPE_VAR_REF: {
+        /* 'a used standalone (not as 'a.property) — error */
+        diag_error(e->loc, "type variable '%s' cannot be used as a value",
+            e->type_var_ref.name);
+        e->type = type_error();
+        return e->type;
+    }
+
     case EXPR_FIELD: {
         /* Static type properties: int32.min, float64.nan, etc. */
         if (e->field.object->kind == EXPR_IDENT) {
@@ -1696,6 +1704,28 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = prop_type;
                 return e->type;
             }
+        }
+
+        /* Type variable property access: 'a.min, 'a.max, etc.
+         * Defer resolution to monomorphization — validate property name now,
+         * resolve concrete value in codegen with g_subst. */
+        if (e->field.object->kind == EXPR_TYPE_VAR_REF) {
+            const char *prop = e->field.name;
+            const char *tv_name = e->field.object->type_var_ref.name;
+            bool is_bits = (strcmp(prop, "bits") == 0);
+            bool is_value_prop = (strcmp(prop, "min") == 0 ||
+                                  strcmp(prop, "max") == 0 ||
+                                  strcmp(prop, "nan") == 0 ||
+                                  strcmp(prop, "inf") == 0 ||
+                                  strcmp(prop, "neg_inf") == 0 ||
+                                  strcmp(prop, "epsilon") == 0);
+            if (!is_bits && !is_value_prop) {
+                diag_error(e->loc, "unknown type property '%s'", prop);
+                e->type = type_error();
+                return e->type;
+            }
+            e->type = is_bits ? type_int32() : type_type_var(ctx->arena, tv_name);
+            return e->type;
         }
 
         Type *obj_type = check_expr(ctx, e->field.object);
