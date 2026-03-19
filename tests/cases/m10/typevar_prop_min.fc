@@ -2,8 +2,8 @@
 let get_min = <'a>() -> 'a.min
 
 let main = (args: str[]) ->
-  let m = get_min<int32>()
-  // int32.min = -2147483648, but exit codes are mod 256
-  // just check it compiles and runs; use uint8 for checkable exit
-  let n = get_min<uint8>()
-  (n + 0)
+    let m = get_min<int32>()
+    // int32.min = -2147483648, but exit codes are mod 256
+    // just check it compiles and runs; use uint8 for checkable exit
+    let n = get_min<uint8>()
+    (n + 0)

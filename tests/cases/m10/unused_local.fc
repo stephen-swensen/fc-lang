@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-  let x = 42
-  let y = true
-  let z = "hello"
-  0
+    let x = 42
+    let y = true
+    let z = "hello"
+    0

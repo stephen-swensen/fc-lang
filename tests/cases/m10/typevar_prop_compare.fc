@@ -1,8 +1,8 @@
 // Property used in comparison
 let is_max = (x: 'a) ->
-  if x == 'a.max then 1 else 0
+    if x == 'a.max then 1 else 0
 
 let main = (args: str[]) ->
-  let r1 = is_max(127i8)
-  let r2 = is_max(100i8)
-  r1 * 10 + r2
+    let r1 = is_max(127i8)
+    let r2 = is_max(100i8)
+    r1 * 10 + r2

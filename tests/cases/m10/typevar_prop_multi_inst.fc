@@ -2,7 +2,7 @@
 let get_bits = <'a>() -> 'a.bits
 
 let main = (args: str[]) ->
-  let a = get_bits<uint8>()
-  let b = get_bits<int32>()
-  // 8 + 32 = 40
-  a + b
+    let a = get_bits<uint8>()
+    let b = get_bits<int32>()
+    // 8 + 32 = 40
+    a + b

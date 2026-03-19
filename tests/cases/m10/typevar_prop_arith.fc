@@ -2,5 +2,5 @@
 let range_size = <'a>() -> 'a.max - 'a.min
 
 let main = (args: str[]) ->
-  let r = range_size<uint8>()
-  (r + 0)
+    let r = range_size<uint8>()
+    (r + 0)

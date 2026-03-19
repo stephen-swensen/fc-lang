@@ -2,5 +2,5 @@
 let get_min = <'a>() -> 'a.min
 
 let main = (args: str[]) ->
-  get_min<bool>()
-  0
+    get_min<bool>()
+    0
