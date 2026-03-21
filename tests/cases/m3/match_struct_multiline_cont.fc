@@ -1,0 +1,11 @@
+// Multiline struct literal using continuation indentation
+struct point =
+    x: int32
+    y: int32
+    z: int32
+
+let main = (args: str[]) ->
+    let p = point {
+            x = 10, y = 20,
+            z = 30 }
+    p.x + p.y + p.z

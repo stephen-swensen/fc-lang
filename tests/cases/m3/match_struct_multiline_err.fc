@@ -1,0 +1,12 @@
+// Multiline struct literal with closing brace at original indentation
+// Fails because the offside rule emits DEDENT before the }
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p = point {
+        x = 10,
+        y = 20
+    }
+    p.x + p.y

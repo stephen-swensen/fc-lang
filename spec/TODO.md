@@ -157,6 +157,41 @@ The `TYPE_FIELD_OF` approach is viable. Key remaining work: (1) extend `unify()`
 
 ---
 
+## Multiline struct literals (and other bracketed expressions)
+
+FC's offside rule applies uniformly — braces `{ }`, parentheses `( )`, and brackets `[ ]` do not suppress layout. This means struct literals must be written on a single line:
+
+```fc
+let p = packet { hdr = header { code = status.ok, flag = true }, size = 100 }
+```
+
+The natural multiline style fails because the closing `}` at original indentation triggers DEDENT before the parser sees it:
+
+```fc
+// FAILS — lexer emits DEDENT before the closing }
+let p = packet {
+    hdr = header { code = status.ok, flag = true },
+    size = 100
+}
+```
+
+Continuation indentation works (lines indented deeper than the expression start suppress the newline), but the closing brace must stay on the last field's line or be indented deeper, which is awkward:
+
+```fc
+// Works but ugly — closing } must not drop back to original indentation
+let p = packet {
+        hdr = header { code = status.ok, flag = true },
+        size = 100 }
+```
+
+This affects struct literals, function calls with many arguments, and array literals. Languages like Python and Haskell suppress layout inside matched brackets, which allows natural multiline formatting.
+
+**Possible fix:** Track bracket depth in the lexer's layout pass. When inside `{ }`, `( )`, or `[ ]`, suppress INDENT/DEDENT/NEWLINE emission and let the parser handle newlines as whitespace. This is a well-understood technique (GHC, Python tokenizer) and would be a local change to the layout pass with no parser changes needed.
+
+**Risk:** Changing layout rules can subtly affect existing code if any patterns rely on the current behavior inside brackets. Needs careful testing against the full test suite.
+
+---
+
 ## Codegen: nested option typedef ordering bug
 
 Nested option types (e.g. `int32??` = `option<option<int32>>`) produce incorrect C code. The outer typedef `fc_option_fc_option_int32_t` is emitted before the inner typedef `fc_option_int32_t` it depends on, causing a C compilation error (`unknown type name`).
