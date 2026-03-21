@@ -1,0 +1,22 @@
+// 4 levels: outer struct -> inner struct -> union x bool
+// Missing { code = err(_), flag = false }
+union status =
+    | ok
+    | err(int32)
+
+struct header =
+    code: status
+    flag: bool
+
+struct packet =
+    hdr: header
+    size: int32
+
+let classify = (p: packet) ->
+    match p with
+    | { hdr = { code = ok, flag = true } } -> 1
+    | { hdr = { code = ok, flag = false } } -> 2
+    | { hdr = { code = err(c), flag = true } } -> c
+
+let main = (args: str[]) ->
+    classify(packet { hdr = header { code = status.ok, flag = true }, size = 0 })

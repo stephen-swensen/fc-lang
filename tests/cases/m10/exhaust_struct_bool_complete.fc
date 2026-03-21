@@ -1,0 +1,12 @@
+// Struct with bool field — both cases covered
+struct toggle =
+    value: int32
+    on: bool
+
+let check = (t: toggle) ->
+    match t with
+    | { on = true, value = v } -> v
+    | { on = false } -> 0
+
+let main = (args: str[]) ->
+    check(toggle { value = 42, on = true })

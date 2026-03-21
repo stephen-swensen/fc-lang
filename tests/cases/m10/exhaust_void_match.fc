@@ -1,0 +1,15 @@
+// Void match (no return value) should also check exhaustiveness
+union action =
+    | start
+    | stop
+
+let mut counter = 0
+
+let process = (a: action) ->
+    match a with
+    | start -> counter = 1
+    | stop -> counter = 0
+
+let main = (args: str[]) ->
+    process(action.start)
+    counter

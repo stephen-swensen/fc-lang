@@ -1,0 +1,11 @@
+// Struct where all fields are infinite types — no wildcard arm
+struct point =
+    x: int32
+    y: int32
+
+let check = (p: point) ->
+    match p with
+    | { x = 0, y = 0 } -> 1
+
+let main = (args: str[]) ->
+    check(point { x = 0, y = 0 })

@@ -1,0 +1,10 @@
+// Struct with option field, exhaustive without wildcard
+struct item =
+    name: int32
+    count: int32?
+
+let main = (args: str[]) ->
+    let i = item { name = 1, count = some(10) }
+    match i with
+    | { count = some(c) } -> c
+    | { count = none } -> 200

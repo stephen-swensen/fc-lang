@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let s = "hello"
+    let r = match s with
+    | "hello" -> 1
+    | "world" -> 2
+    0

@@ -1,0 +1,7 @@
+union wrapper =
+    | val(int32)
+
+let main = (args: str[]) ->
+    let w = wrapper.val(42)
+    match w with
+    | val(v) -> v

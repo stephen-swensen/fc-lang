@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let c = 'a'
+    let r = match c with
+    | 'a' -> 1
+    | 'b' -> 2
+    0

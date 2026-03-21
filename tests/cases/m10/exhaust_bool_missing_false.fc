@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let x = true
+    let r = match x with
+    | true -> 1
+    0

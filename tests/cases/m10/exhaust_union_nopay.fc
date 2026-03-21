@@ -1,0 +1,13 @@
+union direction =
+    | north
+    | south
+    | east
+    | west
+
+let main = (args: str[]) ->
+    let d = direction.north
+    let r = match d with
+    | north -> 1
+    | south -> 2
+    | east -> 3
+    0

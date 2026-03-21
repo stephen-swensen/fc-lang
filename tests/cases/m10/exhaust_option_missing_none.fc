@@ -1,0 +1,6 @@
+let check = (x: int32?) ->
+    match x with
+    | some(v) -> v
+
+let main = (args: str[]) ->
+    check(some(42))

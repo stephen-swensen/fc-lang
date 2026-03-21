@@ -2434,6 +2434,549 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
     }
 }
 
+/* ---- Maranget exhaustiveness checking ---- */
+
+/* Constructor representation for the pattern matrix */
+typedef enum {
+    CTOR_TRUE, CTOR_FALSE,
+    CTOR_SOME, CTOR_NONE,
+    CTOR_VARIANT,
+    CTOR_STRUCT,
+    CTOR_INT_LIT, CTOR_CHAR_LIT, CTOR_STRING_LIT,
+} CtorKind;
+
+typedef struct {
+    CtorKind kind;
+    const char *name;   /* variant name (CTOR_VARIANT) or struct name */
+    int arity;          /* number of sub-patterns */
+    int64_t int_val;    /* for CTOR_INT_LIT */
+    uint8_t char_val;   /* for CTOR_CHAR_LIT */
+    const char *str_val; /* for CTOR_STRING_LIT */
+} Ctor;
+
+typedef struct MatPat MatPat;
+struct MatPat {
+    bool is_wildcard;
+    Ctor ctor;
+    MatPat *sub;        /* array of arity sub-patterns */
+};
+
+typedef struct { MatPat *elems; int len; } PatRow;
+typedef struct { PatRow *rows; int row_count; int col_count; } PatMatrix;
+typedef struct { Type **elems; int len; } TypeRow;
+
+static bool ctor_eq(Ctor *a, Ctor *b) {
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case CTOR_VARIANT: return a->name == b->name;
+    case CTOR_INT_LIT: return a->int_val == b->int_val;
+    case CTOR_CHAR_LIT: return a->char_val == b->char_val;
+    case CTOR_STRING_LIT: return strcmp(a->str_val, b->str_val) == 0;
+    default: return true;
+    }
+}
+
+static MatPat matpat_wild(void) {
+    MatPat m = { .is_wildcard = true };
+    return m;
+}
+
+/* Convert AST Pattern to MatPat */
+static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
+    Arena *a = ctx->arena;
+    MatPat m = {0};
+    type = resolve_type(ctx, type);
+    switch (pat->kind) {
+    case PAT_WILDCARD:
+    case PAT_BINDING:
+        m.is_wildcard = true;
+        return m;
+    case PAT_BOOL_LIT:
+        m.ctor.kind = pat->bool_lit.value ? CTOR_TRUE : CTOR_FALSE;
+        m.ctor.arity = 0;
+        return m;
+    case PAT_SOME:
+        m.ctor.kind = CTOR_SOME;
+        m.ctor.arity = 1;
+        m.sub = arena_alloc(a, sizeof(MatPat));
+        if (pat->some_pat.inner) {
+            Type *inner = (type && type->kind == TYPE_OPTION) ? type->option.inner : NULL;
+            m.sub[0] = pat_to_matpat(ctx, pat->some_pat.inner, inner);
+        } else {
+            m.sub[0] = matpat_wild();
+        }
+        return m;
+    case PAT_NONE:
+        m.ctor.kind = CTOR_NONE;
+        m.ctor.arity = 0;
+        return m;
+    case PAT_VARIANT: {
+        m.ctor.kind = CTOR_VARIANT;
+        m.ctor.name = pat->variant.variant;
+        if (pat->variant.payload) {
+            m.ctor.arity = 1;
+            m.sub = arena_alloc(a, sizeof(MatPat));
+            /* Find payload type from union */
+            Type *pay_type = NULL;
+            if (type && type->kind == TYPE_UNION) {
+                for (int i = 0; i < type->unio.variant_count; i++) {
+                    if (type->unio.variants[i].name == pat->variant.variant) {
+                        pay_type = type->unio.variants[i].payload;
+                        break;
+                    }
+                }
+            }
+            m.sub[0] = pat_to_matpat(ctx, pat->variant.payload, pay_type);
+        } else {
+            m.ctor.arity = 0;
+        }
+        return m;
+    }
+    case PAT_STRUCT: {
+        /* Struct patterns expand to one sub-pattern per field in definition order.
+         * Omitted fields become wildcards. */
+        int nfields = 0;
+        StructField *fields = NULL;
+        if (type && type->kind == TYPE_STRUCT) {
+            nfields = type->struc.field_count;
+            fields = type->struc.fields;
+        }
+        m.ctor.kind = CTOR_STRUCT;
+        m.ctor.name = type ? type->struc.name : NULL;
+        m.ctor.arity = nfields;
+        m.sub = arena_alloc(a, nfields * sizeof(MatPat));
+        for (int i = 0; i < nfields; i++)
+            m.sub[i] = matpat_wild();
+        /* Fill in explicitly mentioned fields */
+        for (int pi = 0; pi < pat->struc.field_count; pi++) {
+            for (int fi = 0; fi < nfields; fi++) {
+                if (fields[fi].name == pat->struc.fields[pi].name) {
+                    m.sub[fi] = pat_to_matpat(ctx, pat->struc.fields[pi].pattern,
+                                              fields[fi].type);
+                    break;
+                }
+            }
+        }
+        return m;
+    }
+    case PAT_INT_LIT:
+        m.ctor.kind = CTOR_INT_LIT;
+        m.ctor.int_val = pat->int_lit.value;
+        m.ctor.arity = 0;
+        return m;
+    case PAT_CHAR_LIT:
+        m.ctor.kind = CTOR_CHAR_LIT;
+        m.ctor.char_val = pat->char_lit.value;
+        m.ctor.arity = 0;
+        return m;
+    case PAT_STRING_LIT:
+        m.ctor.kind = CTOR_STRING_LIT;
+        m.ctor.str_val = pat->string_lit.value;
+        m.ctor.arity = 0;
+        return m;
+    }
+    m.is_wildcard = true;
+    return m;
+}
+
+/* Enumerate all constructors for a type. Returns count, fills ctors array.
+ * Returns -1 if the type has infinite/non-enumerable constructors. */
+static int type_ctors_list(CheckCtx *ctx, Type *type, Ctor **out) {
+    Arena *a = ctx->arena;
+    type = resolve_type(ctx, type);
+    if (!type) { *out = NULL; return -1; }
+    if (type->kind == TYPE_BOOL) {
+        *out = arena_alloc(a, 2 * sizeof(Ctor));
+        (*out)[0] = (Ctor){ .kind = CTOR_TRUE, .arity = 0 };
+        (*out)[1] = (Ctor){ .kind = CTOR_FALSE, .arity = 0 };
+        return 2;
+    }
+    if (type->kind == TYPE_OPTION) {
+        *out = arena_alloc(a, 2 * sizeof(Ctor));
+        (*out)[0] = (Ctor){ .kind = CTOR_SOME, .arity = 1 };
+        (*out)[1] = (Ctor){ .kind = CTOR_NONE, .arity = 0 };
+        return 2;
+    }
+    if (type->kind == TYPE_UNION) {
+        int n = type->unio.variant_count;
+        *out = arena_alloc(a, n * sizeof(Ctor));
+        for (int i = 0; i < n; i++) {
+            (*out)[i] = (Ctor){
+                .kind = CTOR_VARIANT,
+                .name = type->unio.variants[i].name,
+                .arity = type->unio.variants[i].payload ? 1 : 0,
+            };
+        }
+        return n;
+    }
+    if (type->kind == TYPE_STRUCT) {
+        *out = arena_alloc(a, sizeof(Ctor));
+        (*out)[0] = (Ctor){
+            .kind = CTOR_STRUCT,
+            .name = type->struc.name,
+            .arity = type->struc.field_count,
+        };
+        return 1;
+    }
+    *out = NULL;
+    return -1;
+}
+
+/* Get the sub-types for a constructor applied to a type.
+ * Uses CheckCtx to resolve stub types (struct field types may be unresolved). */
+static TypeRow ctor_sub_types(CheckCtx *ctx, Ctor *ctor, Type *type) {
+    TypeRow r = {0};
+    switch (ctor->kind) {
+    case CTOR_SOME:
+        if (type && type->kind == TYPE_OPTION) {
+            r.len = 1;
+            r.elems = arena_alloc(ctx->arena, sizeof(Type*));
+            r.elems[0] = resolve_type(ctx, type->option.inner);
+        }
+        break;
+    case CTOR_NONE:
+    case CTOR_TRUE:
+    case CTOR_FALSE:
+    case CTOR_INT_LIT:
+    case CTOR_CHAR_LIT:
+    case CTOR_STRING_LIT:
+        break;
+    case CTOR_VARIANT:
+        if (type && type->kind == TYPE_UNION) {
+            for (int i = 0; i < type->unio.variant_count; i++) {
+                if (type->unio.variants[i].name == ctor->name) {
+                    if (type->unio.variants[i].payload) {
+                        r.len = 1;
+                        r.elems = arena_alloc(ctx->arena, sizeof(Type*));
+                        r.elems[0] = resolve_type(ctx, type->unio.variants[i].payload);
+                    }
+                    break;
+                }
+            }
+        }
+        break;
+    case CTOR_STRUCT:
+        if (type && type->kind == TYPE_STRUCT) {
+            r.len = type->struc.field_count;
+            r.elems = arena_alloc(ctx->arena, r.len * sizeof(Type*));
+            for (int i = 0; i < r.len; i++)
+                r.elems[i] = resolve_type(ctx, type->struc.fields[i].type);
+        }
+        break;
+    }
+    return r;
+}
+
+/* Build a new TypeRow: ctor_sub_types ++ types[1..] */
+static TypeRow types_specialize(CheckCtx *ctx, TypeRow *types, Ctor *ctor, Type *col_type) {
+    TypeRow sub = ctor_sub_types(ctx, ctor, col_type);
+    int new_len = sub.len + types->len - 1;
+    TypeRow r;
+    r.len = new_len;
+    r.elems = arena_alloc(ctx->arena, new_len * sizeof(Type*));
+    for (int i = 0; i < sub.len; i++)
+        r.elems[i] = sub.elems[i];
+    for (int i = 1; i < types->len; i++)
+        r.elems[sub.len + i - 1] = types->elems[i];
+    return r;
+}
+
+/* Specialize the matrix by constructor c */
+static PatMatrix specialize(Arena *a, PatMatrix *mat, Ctor *c) {
+    /* Count matching rows first */
+    int cap = mat->row_count;
+    PatRow *rows = arena_alloc(a, cap * sizeof(PatRow));
+    int count = 0;
+    int new_cols = c->arity + mat->col_count - 1;
+
+    for (int r = 0; r < mat->row_count; r++) {
+        MatPat *first = &mat->rows[r].elems[0];
+        bool match = false;
+        MatPat *subs = NULL;
+        int sub_count = 0;
+
+        if (first->is_wildcard) {
+            match = true;
+            /* Expand wildcard into arity wildcards */
+            sub_count = c->arity;
+            subs = arena_alloc(a, sub_count * sizeof(MatPat));
+            for (int i = 0; i < sub_count; i++)
+                subs[i] = matpat_wild();
+        } else if (ctor_eq(&first->ctor, c)) {
+            match = true;
+            sub_count = first->ctor.arity;
+            subs = first->sub;
+        }
+
+        if (match) {
+            PatRow *row = &rows[count++];
+            row->len = new_cols;
+            row->elems = arena_alloc(a, new_cols * sizeof(MatPat));
+            for (int i = 0; i < sub_count; i++)
+                row->elems[i] = subs[i];
+            for (int i = 1; i < mat->col_count; i++)
+                row->elems[sub_count + i - 1] = mat->rows[r].elems[i];
+        }
+    }
+
+    return (PatMatrix){ .rows = rows, .row_count = count, .col_count = new_cols };
+}
+
+/* Default matrix: rows with wildcard in first column, minus first column */
+static PatMatrix default_matrix(Arena *a, PatMatrix *mat) {
+    int cap = mat->row_count;
+    PatRow *rows = arena_alloc(a, cap * sizeof(PatRow));
+    int count = 0;
+    int new_cols = mat->col_count - 1;
+
+    for (int r = 0; r < mat->row_count; r++) {
+        if (mat->rows[r].elems[0].is_wildcard) {
+            PatRow *row = &rows[count++];
+            row->len = new_cols;
+            row->elems = arena_alloc(a, new_cols * sizeof(MatPat));
+            for (int i = 0; i < new_cols; i++)
+                row->elems[i] = mat->rows[r].elems[i + 1];
+        }
+    }
+
+    return (PatMatrix){ .rows = rows, .row_count = count, .col_count = new_cols };
+}
+
+/* Collect the set of constructors appearing in column 0 of the matrix */
+static int collect_head_ctors(Arena *a, PatMatrix *mat, Ctor **out) {
+    int count = 0, cap = 0;
+    *out = NULL;
+    for (int r = 0; r < mat->row_count; r++) {
+        MatPat *first = &mat->rows[r].elems[0];
+        if (first->is_wildcard) continue;
+        /* Check if already in the set */
+        bool found = false;
+        for (int i = 0; i < count; i++) {
+            if (ctor_eq(&(*out)[i], &first->ctor)) { found = true; break; }
+        }
+        if (!found) {
+            DA_APPEND(*out, count, cap, first->ctor);
+        }
+    }
+    /* Allocate into arena and copy if needed */
+    (void)a;
+    return count;
+}
+
+/* Find witness: returns NULL if exhaustive, or a witness PatRow if not */
+static PatRow *find_witness(CheckCtx *ctx, PatMatrix *mat, TypeRow *types) {
+    Arena *a = ctx->arena;
+    if (types->len == 0) {
+        if (mat->row_count > 0) return NULL; /* exhaustive */
+        /* Non-exhaustive: empty witness */
+        PatRow *w = arena_alloc(a, sizeof(PatRow));
+        w->len = 0;
+        w->elems = NULL;
+        return w;
+    }
+
+    Type *col_type = types->elems[0];
+
+    /* Collect constructors in column 0 */
+    Ctor *head_ctors = NULL;
+    int head_count = collect_head_ctors(a, mat, &head_ctors);
+
+    /* Get all constructors for this type */
+    Ctor *all_ctors = NULL;
+    int all_count = type_ctors_list(ctx, col_type, &all_ctors);
+
+    /* Check if head constructors form a complete signature */
+    bool complete = false;
+    if (all_count >= 0) {
+        complete = true;
+        for (int i = 0; i < all_count; i++) {
+            bool found = false;
+            for (int j = 0; j < head_count; j++) {
+                if (ctor_eq(&all_ctors[i], &head_ctors[j])) { found = true; break; }
+            }
+            if (!found) { complete = false; break; }
+        }
+    }
+
+    if (complete) {
+        /* Complete signature: check each constructor */
+        for (int ci = 0; ci < all_count; ci++) {
+            Ctor *c = &all_ctors[ci];
+            PatMatrix sm = specialize(a, mat, c);
+            TypeRow st = types_specialize(ctx, types, c, col_type);
+            PatRow *w = find_witness(ctx, &sm, &st);
+            if (w) {
+                /* Reconstruct: wrap first `arity` elements in c, prepend to rest */
+                int arity = c->arity;
+                PatRow *result = arena_alloc(a, sizeof(PatRow));
+                result->len = 1 + (w->len - arity);
+                result->elems = arena_alloc(a, result->len * sizeof(MatPat));
+                /* Build the constructor pattern from witness sub-patterns */
+                result->elems[0].is_wildcard = false;
+                result->elems[0].ctor = *c;
+                if (arity > 0) {
+                    result->elems[0].sub = arena_alloc(a, arity * sizeof(MatPat));
+                    for (int i = 0; i < arity; i++)
+                        result->elems[0].sub[i] = w->elems[i];
+                } else {
+                    result->elems[0].sub = NULL;
+                }
+                /* Copy remaining */
+                for (int i = arity; i < w->len; i++)
+                    result->elems[i - arity + 1] = w->elems[i];
+                return result;
+            }
+        }
+        return NULL; /* all constructors exhaustive */
+    } else {
+        /* Incomplete signature: check default matrix */
+        PatMatrix dm = default_matrix(a, mat);
+        TypeRow dt;
+        dt.len = types->len - 1;
+        dt.elems = types->elems + 1;
+        PatRow *w = find_witness(ctx, &dm, &dt);
+        if (w) {
+            PatRow *result = arena_alloc(a, sizeof(PatRow));
+            result->len = 1 + w->len;
+            result->elems = arena_alloc(a, result->len * sizeof(MatPat));
+            /* Copy rest */
+            for (int i = 0; i < w->len; i++)
+                result->elems[i + 1] = w->elems[i];
+
+            if (all_count < 0) {
+                /* Infinite type: wildcard */
+                result->elems[0] = matpat_wild();
+            } else {
+                /* Find a missing constructor */
+                Ctor *missing = &all_ctors[0]; /* default */
+                for (int i = 0; i < all_count; i++) {
+                    bool found = false;
+                    for (int j = 0; j < head_count; j++) {
+                        if (ctor_eq(&all_ctors[i], &head_ctors[j])) { found = true; break; }
+                    }
+                    if (!found) { missing = &all_ctors[i]; break; }
+                }
+                result->elems[0].is_wildcard = false;
+                result->elems[0].ctor = *missing;
+                if (missing->arity > 0) {
+                    result->elems[0].sub = arena_alloc(a, missing->arity * sizeof(MatPat));
+                    for (int i = 0; i < missing->arity; i++)
+                        result->elems[0].sub[i] = matpat_wild();
+                } else {
+                    result->elems[0].sub = NULL;
+                }
+            }
+            return result;
+        }
+        return NULL;
+    }
+}
+
+/* Find the deepest interesting witness pattern — dig through structs (single
+ * constructor) and option/variant wrappers to find the leaf that the user
+ * actually needs to handle. */
+static MatPat *find_interesting_witness(CheckCtx *ctx, MatPat *w, Type *type, Type **out_type) {
+    type = resolve_type(ctx, type);
+    if (w->is_wildcard) { *out_type = type; return w; }
+    if (w->ctor.kind == CTOR_STRUCT && type && type->kind == TYPE_STRUCT) {
+        /* Look inside struct for the interesting non-wildcard sub-pattern */
+        for (int i = 0; i < w->ctor.arity; i++) {
+            if (!w->sub[i].is_wildcard) {
+                Type *field_type = resolve_type(ctx, type->struc.fields[i].type);
+                return find_interesting_witness(ctx, &w->sub[i], field_type, out_type);
+            }
+        }
+    }
+    /* Dig through some(inner) — the interesting part is what's inside */
+    if (w->ctor.kind == CTOR_SOME && w->ctor.arity == 1 && !w->sub[0].is_wildcard) {
+        Type *inner = (type && type->kind == TYPE_OPTION) ? type->option.inner : NULL;
+        return find_interesting_witness(ctx, &w->sub[0], inner, out_type);
+    }
+    /* Dig through variant(payload) — the interesting part is what's inside */
+    if (w->ctor.kind == CTOR_VARIANT && w->ctor.arity == 1 && !w->sub[0].is_wildcard) {
+        Type *pay = NULL;
+        if (type && type->kind == TYPE_UNION) {
+            for (int i = 0; i < type->unio.variant_count; i++) {
+                if (type->unio.variants[i].name == w->ctor.name) {
+                    pay = type->unio.variants[i].payload;
+                    break;
+                }
+            }
+        }
+        return find_interesting_witness(ctx, &w->sub[0], pay, out_type);
+    }
+    *out_type = type;
+    return w;
+}
+
+/* Report a non-exhaustive match based on witness */
+static void report_witness(CheckCtx *ctx, SrcLoc loc, MatPat *witness, Type *subj_type) {
+    /* For struct witnesses, dig into sub-patterns for a meaningful error */
+    Type *witness_type = subj_type;
+    MatPat *interesting = find_interesting_witness(ctx, witness, subj_type, &witness_type);
+
+    if (interesting->is_wildcard) {
+        diag_error(loc,
+            "non-exhaustive match: add a wildcard '_' pattern or binding to cover all cases");
+        return;
+    }
+    switch (interesting->ctor.kind) {
+    case CTOR_TRUE:
+        diag_error(loc, "non-exhaustive match: missing 'true' case for bool");
+        break;
+    case CTOR_FALSE:
+        diag_error(loc, "non-exhaustive match: missing 'false' case for bool");
+        break;
+    case CTOR_SOME:
+        diag_error(loc, "non-exhaustive match: missing 'some' case for option type");
+        break;
+    case CTOR_NONE:
+        diag_error(loc, "non-exhaustive match: missing 'none' case for option type");
+        break;
+    case CTOR_VARIANT:
+        if (witness_type && witness_type->kind == TYPE_UNION)
+            diag_error(loc, "non-exhaustive match: missing variant '%s' of union '%s'",
+                interesting->ctor.name, witness_type->unio.name);
+        else
+            diag_error(loc, "non-exhaustive match: missing variant '%s'",
+                interesting->ctor.name);
+        break;
+    case CTOR_STRUCT:
+    case CTOR_INT_LIT:
+    case CTOR_CHAR_LIT:
+    case CTOR_STRING_LIT:
+        diag_error(loc,
+            "non-exhaustive match: add a wildcard '_' pattern or binding to cover all cases");
+        break;
+    }
+}
+
+static void check_match_exhaustiveness(CheckCtx *ctx, Expr *e, Type *subj_type) {
+    /* Build the pattern matrix (1 column per arm pattern) */
+    int arm_count = e->match_expr.arm_count;
+    PatRow *rows = arena_alloc(ctx->arena, arm_count * sizeof(PatRow));
+    for (int i = 0; i < arm_count; i++) {
+        rows[i].len = 1;
+        rows[i].elems = arena_alloc(ctx->arena, sizeof(MatPat));
+        rows[i].elems[0] = pat_to_matpat(ctx, e->match_expr.arms[i].pattern, subj_type);
+    }
+    PatMatrix mat = { .rows = rows, .row_count = arm_count, .col_count = 1 };
+
+    TypeRow types;
+    types.len = 1;
+    types.elems = arena_alloc(ctx->arena, sizeof(Type*));
+    types.elems[0] = subj_type;
+
+    PatRow *witness = find_witness(ctx, &mat, &types);
+    if (witness && witness->len > 0) {
+        report_witness(ctx, e->loc, &witness->elems[0], subj_type);
+    } else if (witness) {
+        /* Empty witness — shouldn't happen with len > 0, but guard */
+        diag_error(e->loc,
+            "non-exhaustive match: add a wildcard '_' pattern or binding to cover all cases");
+    }
+}
+
 static Type *check_match(CheckCtx *ctx, Expr *e) {
     Type *subj_type = check_expr(ctx, e->match_expr.subject);
     subj_type = resolve_type(ctx, subj_type);
@@ -2477,6 +3020,11 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
             diag_error(arm->loc, "match arms have different types: %s vs %s",
                 type_name(result_type), type_name(arm_type));
         }
+    }
+
+    /* ---- Exhaustiveness check ---- */
+    if (!type_is_error(subj_type)) {
+        check_match_exhaustiveness(ctx, e, subj_type);
     }
 
     e->type = result_type ? result_type : type_error();

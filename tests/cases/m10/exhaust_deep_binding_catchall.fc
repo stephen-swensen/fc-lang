@@ -1,0 +1,17 @@
+// Bindings work as wildcards deep inside nested patterns
+union shape =
+    | circle(int32)
+    | square(int32)
+
+struct item =
+    shape: shape
+    label: int32?
+
+let check = (i: item) ->
+    match i with
+    | { shape = circle(r), label = lbl } -> r
+    | { shape = square(s), label = lbl } -> s
+
+let main = (args: str[]) ->
+    let i = item { shape = shape.circle(7), label = some(99) }
+    check(i)

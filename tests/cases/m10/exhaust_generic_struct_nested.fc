@@ -1,0 +1,17 @@
+// Generic struct with union field — exhaustive after monomorphization
+union tag =
+    | x
+    | y
+
+struct holder =
+    val: 'a
+    tag: tag
+
+let check = (h: holder<int32>) ->
+    match h with
+    | { tag = x } -> 1
+    | { tag = y } -> 2
+
+let main = (args: str[]) ->
+    let h = holder { val = 42, tag = tag.x }
+    check(h)

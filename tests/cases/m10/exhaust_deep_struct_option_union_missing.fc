@@ -1,0 +1,18 @@
+// 3 levels deep: struct -> option -> union, missing blue
+union color =
+    | red
+    | green
+    | blue
+
+struct widget =
+    id: int32
+    tint: color?
+
+let classify = (w: widget) ->
+    match w with
+    | { tint = some(red) } -> 1
+    | { tint = some(green) } -> 2
+    | { tint = none } -> 0
+
+let main = (args: str[]) ->
+    classify(widget { id = 1, tint = some(color.red) })

@@ -1,0 +1,18 @@
+// Option wrapping union — all union variants under some + none = exhaustive
+// No some(_) or wildcard needed because the union is fully covered
+union dir =
+    | north
+    | south
+    | east
+    | west
+
+let check = (d: dir?) ->
+    match d with
+    | some(north) -> 1
+    | some(south) -> 2
+    | some(east) -> 3
+    | some(west) -> 4
+    | none -> 0
+
+let main = (args: str[]) ->
+    check(some(dir.east))

@@ -157,6 +157,53 @@ The `TYPE_FIELD_OF` approach is viable. Key remaining work: (1) extend `unify()`
 
 ---
 
+## Codegen: nested option typedef ordering bug
+
+Nested option types (e.g. `int32??` = `option<option<int32>>`) produce incorrect C code. The outer typedef `fc_option_fc_option_int32_t` is emitted before the inner typedef `fc_option_int32_t` it depends on, causing a C compilation error (`unknown type name`).
+
+Reproducer:
+```fc
+let check = (x: int32??) ->
+    match x with
+    | some(some(v)) -> v
+    | some(none) -> 0
+    | none -> -1
+```
+
+The fix is in codegen's typedef emission — it needs to topologically sort option typedefs (and likely all composite typedefs) so that dependencies are emitted before dependents. This may also affect nested slices or other recursive type constructions.
+
+---
+
+## Eager type resolution in pass1
+
+Struct field types and union variant payload types are stored as unresolved stubs after pass1 — the parser creates `TYPE_STRUCT` placeholders with `fields = NULL` for any user-defined type name (since it can't distinguish structs from unions at parse time), and pass1 copies these stubs directly into the registered type objects without resolving them.
+
+This means any code that walks type structures (exhaustiveness checking, codegen, future analyses) must call `resolve_type()` on every nested type it encounters, or silently get wrong results. This is a footgun — the Maranget exhaustiveness checker initially failed on struct-with-union-field patterns because field types were unresolved stubs showing `TYPE_STRUCT` instead of `TYPE_UNION`.
+
+**Proposed fix:** Add a second sub-pass at the end of pass1 (after all types are registered) that walks every struct field type and union variant payload type and resolves stubs to their real types in place. After this pass, all `Type*` in the type graph would be fully resolved, and pass2/codegen code could safely traverse type structures without defensive `resolve_type()` calls.
+
+**Scope:** Small — pass1 already has all the information needed (the symtab is fully populated by the time all declarations are registered). The sub-pass would be a simple loop over all registered struct/union symbols, resolving each field/payload type via symtab lookup. Generic types with type variables would be left as-is (they're resolved at instantiation time during monomorphization).
+
+---
+
+## Unreachable pattern detection in match
+
+The Maranget pattern matrix infrastructure is now in place (used for exhaustiveness checking). Unreachable arm detection is the dual: for each arm, call `find_witness` against the matrix of all preceding arms — if no witness exists, that arm can never match. This is a small addition on top of the existing `find_witness` / `specialize` / `default_matrix` machinery.
+
+Examples that should warn:
+
+```fc
+| red -> 1
+| red -> 2       // unreachable: same no-payload variant
+
+| circle(r) -> r
+| circle(5) -> 5 // unreachable: previous binding catches all circle payloads
+```
+
+**Decision: deferred.** Low priority since it's a warning, not a correctness issue. The hard part (Maranget infrastructure) is done.
+
+---
+
 ## Resolved
 
 ### M9: std::sys module, main args as str[], conditional compilation, cstr→str cast (resolved 2026-03-17)

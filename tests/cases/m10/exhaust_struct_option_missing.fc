@@ -1,0 +1,9 @@
+// Struct with option field, missing none path
+struct item =
+    name: int32
+    count: int32?
+
+let main = (args: str[]) ->
+    let i = item { name = 1, count = some(10) }
+    match i with
+    | { count = some(c) } -> c

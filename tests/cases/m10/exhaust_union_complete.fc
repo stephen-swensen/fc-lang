@@ -1,0 +1,12 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+    | dot
+
+let main = (args: str[]) ->
+    let s = shape.circle(5)
+    let r = match s with
+    | circle(r) -> r
+    | square(s) -> s
+    | dot -> 0
+    r

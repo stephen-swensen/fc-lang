@@ -1,0 +1,14 @@
+// Exhaustiveness on option wrapping a union — top-level some+none covered
+union shape =
+    | circle(int32)
+    | square(int32)
+
+let check = (s: shape?) ->
+    match s with
+    | some(circle(r)) -> r
+    | some(square(s)) -> s
+    | some(_) -> 0
+    | none -> 0
+
+let main = (args: str[]) ->
+    check(some(shape.circle(7)))

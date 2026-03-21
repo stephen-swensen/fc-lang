@@ -1,0 +1,22 @@
+// 3 levels deep: union containing option containing struct
+// Tests cross-product coverage: 2 variants x (some/none) x struct fields
+struct point =
+    x: int32
+    y: int32
+
+union located =
+    | at(point?)
+    | nowhere
+
+let classify = (l: located) ->
+    match l with
+    | at(some({ x = x, y = y })) -> x + y
+    | at(none) -> 0
+    | nowhere -> 100
+
+let main = (args: str[]) ->
+    let p = point { x = 3, y = 7 }
+    let l1 = located.at(some(p))
+    let l2 = located.at(none(point))
+    let l3 = located.nowhere
+    classify(l1) + classify(l2) + classify(l3)

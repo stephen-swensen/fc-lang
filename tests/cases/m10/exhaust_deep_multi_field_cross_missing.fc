@@ -1,0 +1,17 @@
+// Struct with two union fields — missing one combination (one, zero)
+union bit =
+    | zero
+    | one
+
+struct pair =
+    a: bit
+    b: bit
+
+let decode = (p: pair) ->
+    match p with
+    | { a = zero, b = zero } -> 0
+    | { a = zero, b = one } -> 1
+    | { a = one, b = one } -> 3
+
+let main = (args: str[]) ->
+    decode(pair { a = bit.one, b = bit.one })

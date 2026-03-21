@@ -1,0 +1,22 @@
+// 3 levels deep: struct containing option containing union
+// All paths covered without wildcard
+union color =
+    | red
+    | green
+    | blue
+
+struct widget =
+    id: int32
+    tint: color?
+
+let classify = (w: widget) ->
+    match w with
+    | { tint = some(red) } -> 1
+    | { tint = some(green) } -> 2
+    | { tint = some(blue) } -> 3
+    | { tint = none } -> 0
+
+let main = (args: str[]) ->
+    let w1 = widget { id = 1, tint = some(color.red) }
+    let w2 = widget { id = 2, tint = none(color) }
+    classify(w1) + classify(w2)

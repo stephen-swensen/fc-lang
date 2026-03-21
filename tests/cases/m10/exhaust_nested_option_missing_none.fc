@@ -1,0 +1,12 @@
+// Missing none case even with recursive inner patterns
+union shape =
+    | circle(int32)
+    | square(int32)
+
+let check = (s: shape?) ->
+    match s with
+    | some(circle(r)) -> r
+    | some(square(s)) -> s
+
+let main = (args: str[]) ->
+    check(some(shape.circle(7)))

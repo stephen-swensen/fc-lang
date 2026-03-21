@@ -1,0 +1,16 @@
+// Option wrapping union — none present but one variant missing under some
+union dir =
+    | north
+    | south
+    | east
+    | west
+
+let check = (d: dir?) ->
+    match d with
+    | some(north) -> 1
+    | some(south) -> 2
+    | some(east) -> 3
+    | none -> 0
+
+let main = (args: str[]) ->
+    check(some(dir.east))

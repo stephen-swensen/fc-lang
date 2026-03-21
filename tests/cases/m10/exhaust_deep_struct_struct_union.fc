@@ -1,0 +1,25 @@
+// 4 levels: outer struct -> inner struct -> option -> union
+// Tests that Maranget recurses through multiple struct layers
+union status =
+    | ok
+    | err(int32)
+
+struct header =
+    code: status
+    flag: bool
+
+struct packet =
+    hdr: header
+    size: int32
+
+let classify = (p: packet) ->
+    match p with
+    | { hdr = { code = ok, flag = true } } -> 1
+    | { hdr = { code = ok, flag = false } } -> 2
+    | { hdr = { code = err(c), flag = true } } -> c
+    | { hdr = { code = err(c), flag = false } } -> 0 - c
+
+let main = (args: str[]) ->
+    let p1 = packet { hdr = header { code = status.ok, flag = true }, size = 100 }
+    let p2 = packet { hdr = header { code = status.err(5), flag = false }, size = 200 }
+    classify(p1) + classify(p2)

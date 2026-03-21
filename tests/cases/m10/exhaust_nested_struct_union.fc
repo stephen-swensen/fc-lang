@@ -1,5 +1,4 @@
-import io from std::
-
+// Struct destructure with nested union match via wildcard
 struct container =
     label: int32
     value: int32
@@ -10,9 +9,8 @@ union wrapped =
 
 let check = (w: wrapped) ->
     match w with
-    | boxed({ label = 3, value = v }) -> v
+    | boxed({ label = l, value = v }) -> l + v
     | empty -> 0
 
 let main = (args: str[]) ->
     check(wrapped.boxed(container { label = 10, value = 20 }))
-

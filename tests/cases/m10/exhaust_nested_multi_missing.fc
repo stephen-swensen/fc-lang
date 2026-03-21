@@ -1,0 +1,13 @@
+// Multiple missing variants in nested context (option wrapping union)
+union rgb =
+    | red
+    | green
+    | blue
+
+let check = (c: rgb?) ->
+    match c with
+    | some(red) -> 1
+    | none -> 0
+
+let main = (args: str[]) ->
+    check(some(rgb.red))

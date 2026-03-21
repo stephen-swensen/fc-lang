@@ -1,0 +1,12 @@
+// Missing union variant even though inner patterns are detailed
+union entry =
+    | found(int32?)
+    | missing
+
+let check = (e: entry) ->
+    match e with
+    | found(some(v)) -> v
+    | found(none) -> 0
+
+let main = (args: str[]) ->
+    check(entry.found(some(42)))

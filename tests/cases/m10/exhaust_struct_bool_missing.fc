@@ -1,0 +1,11 @@
+// Struct with bool field — missing false case
+struct toggle =
+    value: int32
+    on: bool
+
+let check = (t: toggle) ->
+    match t with
+    | { on = true } -> 1
+
+let main = (args: str[]) ->
+    check(toggle { value = 0, on = true })

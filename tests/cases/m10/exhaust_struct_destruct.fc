@@ -1,0 +1,8 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p = point { x = 10, y = 20 }
+    match p with
+    | { x = a, y = b } -> a + b

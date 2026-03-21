@@ -1,0 +1,10 @@
+union result =
+    | ok('a)
+    | err('b)
+
+let check = (r: result<int32, int32>) ->
+    match r with
+    | ok(v) -> v
+
+let main = (args: str[]) ->
+    check(result<int32, int32>.ok(42))
