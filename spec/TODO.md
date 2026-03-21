@@ -16,15 +16,6 @@ Open design questions and topics for future discussion.
 
 ---
 
-## alloc / free / sizeof / default
-
-### Should these move to a sys module? (discussed, deferred)
-- Original motivation: reserved identifier status prevents users from defining `free` in their own modules
-- Resolved by convention: `drop` is the idiomatic name for user-defined deep cleanup functions; `free` is reserved for raw deallocation (wrapping C's `free`). Convention sidesteps the conflict.
-- A `sys::` namespace for built-ins would need to be a second implicit namespace (like `global::`), which is non-trivial spec work
-- Also discussed regularizing all four as generic functions in a `sys` module (e.g. `sys.alloc<T>()`, `sys.free(p)`) to make them feel like normal language constructs. Decided against it for several reasons: the initialized alloc form (`alloc(expr)`) would have to be dropped to avoid overloading; slice allocation requires an awkward separate name (`alloc_slice`) due to the no-overloading rule; and `sys` would not be a real module but compiler magic pretending to be one, which undermines the framing.
-- **Decision: no change for now.** Revisit if the `drop` convention proves insufficient in practice.
-
 ---
 
 ## No `size_t` equivalent — extern declarations hardcode uint64
@@ -192,27 +183,13 @@ This affects struct literals, function calls with many arguments, and array lite
 
 ---
 
----
-
-## Unreachable pattern detection in match
-
-The Maranget pattern matrix infrastructure is now in place (used for exhaustiveness checking). Unreachable arm detection is the dual: for each arm, call `find_witness` against the matrix of all preceding arms — if no witness exists, that arm can never match. This is a small addition on top of the existing `find_witness` / `specialize` / `default_matrix` machinery.
-
-Examples that should warn:
-
-```fc
-| red -> 1
-| red -> 2       // unreachable: same no-payload variant
-
-| circle(r) -> r
-| circle(5) -> 5 // unreachable: previous binding catches all circle payloads
-```
-
-**Decision: deferred.** Low priority since it's a warning, not a correctness issue. The hard part (Maranget infrastructure) is done.
-
----
-
 ## Resolved
+
+### alloc/free/sizeof/default placement — no change (resolved 2026-03-21)
+Considered moving to a `sys` module. Resolved by convention: `drop` is the idiomatic name for user cleanup; `free` stays reserved for raw deallocation. Regularizing as generic functions in a module was rejected because `alloc(expr)` can't coexist with `alloc<T>()` under no-overloading, and `sys` would be compiler magic pretending to be a module.
+
+### Unreachable pattern detection — deferred (resolved 2026-03-21)
+Low priority since it's a warning, not a correctness issue. The Maranget infrastructure is in place; unreachable arm detection is the dual of exhaustiveness (call `find_witness` against preceding arms). Small addition when needed.
 
 ### Eager type resolution — not viable (deferred indefinitely, 2026-03-21)
 Resolving struct field types and union variant payloads in-place on registered types (the high-value part of the proposal) is blocked by self-referential structs. A struct like `node { next: node*? }` creates a cyclic type graph when its field type is resolved from `option(pointer(stub))` to `option(pointer(full_node))` — the full node's `next` field then points back to itself. Functions like `type_contains_type_var()`, `type_eq()`, and other recursive type walkers traverse struct fields and infinite-loop on these cycles. Resolving only AST annotations (param types, cast targets, etc.) is possible but adds ~170 lines of AST walker to eliminate ~10 one-line `resolve_type()` calls — not worth the complexity. The existing on-demand `resolve_type()` calls in pass2 and `resolve_struct_stub()` in codegen remain the correct approach.
