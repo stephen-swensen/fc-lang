@@ -192,16 +192,6 @@ This affects struct literals, function calls with many arguments, and array lite
 
 ---
 
-## Eager type resolution in pass1
-
-Struct field types and union variant payload types are stored as unresolved stubs after pass1 — the parser creates `TYPE_STRUCT` placeholders with `fields = NULL` for any user-defined type name (since it can't distinguish structs from unions at parse time), and pass1 copies these stubs directly into the registered type objects without resolving them.
-
-This means any code that walks type structures (exhaustiveness checking, codegen, future analyses) must call `resolve_type()` on every nested type it encounters, or silently get wrong results. This is a footgun — the Maranget exhaustiveness checker initially failed on struct-with-union-field patterns because field types were unresolved stubs showing `TYPE_STRUCT` instead of `TYPE_UNION`.
-
-**Proposed fix:** Add a second sub-pass at the end of pass1 (after all types are registered) that walks every struct field type and union variant payload type and resolves stubs to their real types in place. After this pass, all `Type*` in the type graph would be fully resolved, and pass2/codegen code could safely traverse type structures without defensive `resolve_type()` calls.
-
-**Scope:** Small — pass1 already has all the information needed (the symtab is fully populated by the time all declarations are registered). The sub-pass would be a simple loop over all registered struct/union symbols, resolving each field/payload type via symtab lookup. Generic types with type variables would be left as-is (they're resolved at instantiation time during monomorphization).
-
 ---
 
 ## Unreachable pattern detection in match
@@ -223,6 +213,9 @@ Examples that should warn:
 ---
 
 ## Resolved
+
+### Eager type resolution — not viable (deferred indefinitely, 2026-03-21)
+Resolving struct field types and union variant payloads in-place on registered types (the high-value part of the proposal) is blocked by self-referential structs. A struct like `node { next: node*? }` creates a cyclic type graph when its field type is resolved from `option(pointer(stub))` to `option(pointer(full_node))` — the full node's `next` field then points back to itself. Functions like `type_contains_type_var()`, `type_eq()`, and other recursive type walkers traverse struct fields and infinite-loop on these cycles. Resolving only AST annotations (param types, cast targets, etc.) is possible but adds ~170 lines of AST walker to eliminate ~10 one-line `resolve_type()` calls — not worth the complexity. The existing on-demand `resolve_type()` calls in pass2 and `resolve_struct_stub()` in codegen remain the correct approach.
 
 ### Codegen: nested option/slice typedef ordering (resolved 2026-03-20)
 - `collect_types_in_type()` now recurses into inner types before adding the outer type to the typeset, ensuring dependency typedefs are emitted first in the generated C.
