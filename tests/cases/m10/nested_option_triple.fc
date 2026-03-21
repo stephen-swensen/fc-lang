@@ -1,0 +1,13 @@
+let check = (x: int32???) ->
+    match x with
+    | some(some(some(v))) -> v
+    | some(some(none)) -> 10
+    | some(none) -> 20
+    | none -> 30
+
+let main = (args: str[]) ->
+    let a = some(some(some(5)))
+    let b = some(some(none(int32)))
+    let c = some(none(int32?))
+    let d = none(int32??)
+    check(a) + check(b) + check(c) + check(d)

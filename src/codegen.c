@@ -2024,14 +2024,15 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     }
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
     if (t->kind == TYPE_SLICE) {
+        collect_types_in_type(t->slice.elem, slices, options, fns);
         typeset_add(slices, t);
     } else if (t->kind == TYPE_OPTION) {
+        /* Recurse into inner type FIRST so dependencies are emitted before this type */
+        collect_types_in_type(t->option.inner, slices, options, fns);
         /* Only non-pointer options need typedefs */
         if (!t->option.inner || t->option.inner->kind != TYPE_POINTER) {
             typeset_add(options, t);
         }
-        /* Recurse into inner type (e.g., T[]? needs slice typedef too) */
-        collect_types_in_type(t->option.inner, slices, options, fns);
     } else if (t->kind == TYPE_FUNC) {
         /* Recurse into param/return types FIRST so dependencies are emitted before this type */
         for (int i = 0; i < t->func.param_count; i++)

@@ -192,23 +192,6 @@ This affects struct literals, function calls with many arguments, and array lite
 
 ---
 
-## Codegen: nested option typedef ordering bug
-
-Nested option types (e.g. `int32??` = `option<option<int32>>`) produce incorrect C code. The outer typedef `fc_option_fc_option_int32_t` is emitted before the inner typedef `fc_option_int32_t` it depends on, causing a C compilation error (`unknown type name`).
-
-Reproducer:
-```fc
-let check = (x: int32??) ->
-    match x with
-    | some(some(v)) -> v
-    | some(none) -> 0
-    | none -> -1
-```
-
-The fix is in codegen's typedef emission — it needs to topologically sort option typedefs (and likely all composite typedefs) so that dependencies are emitted before dependents. This may also affect nested slices or other recursive type constructions.
-
----
-
 ## Eager type resolution in pass1
 
 Struct field types and union variant payload types are stored as unresolved stubs after pass1 — the parser creates `TYPE_STRUCT` placeholders with `fields = NULL` for any user-defined type name (since it can't distinguish structs from unions at parse time), and pass1 copies these stubs directly into the registered type objects without resolving them.
@@ -240,6 +223,11 @@ Examples that should warn:
 ---
 
 ## Resolved
+
+### Codegen: nested option/slice typedef ordering (resolved 2026-03-20)
+- `collect_types_in_type()` now recurses into inner types before adding the outer type to the typeset, ensuring dependency typedefs are emitted first in the generated C.
+- Fixed for both option types (`int32??`, `int32???`) and slice types (latent bug for nested slices).
+- Matches the existing `TYPE_FUNC` pattern which already recursed first.
 
 ### M9: std::sys module, main args as str[], conditional compilation, cstr→str cast (resolved 2026-03-17)
 - `std::sys` module (`stdlib/sys.fc`): `env`, `exit`, `time`, `sleep` — pure FC wrapping C stdlib via extern declarations. `time`/`sleep` use a private `timespec` struct passed to C via `any*` casts. `_POSIX_C_SOURCE` emitted only when `time.h` is used.

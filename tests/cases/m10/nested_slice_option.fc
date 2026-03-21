@@ -1,0 +1,10 @@
+let check = (x: int32[]?) ->
+    match x with
+    | some(s) -> s[0]
+    | none -> -1
+
+let main = (args: str[]) ->
+    let arr = int32[3] { 50, 60, 70 }
+    let a = some(arr)
+    let b = none(int32[])
+    check(a) + check(b)

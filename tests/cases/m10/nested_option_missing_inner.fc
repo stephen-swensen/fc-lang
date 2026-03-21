@@ -1,0 +1,8 @@
+let check = (x: int32??) ->
+    match x with
+    | some(some(v)) -> v
+    | none -> 0
+
+let main = (args: str[]) ->
+    let a = some(some(1))
+    check(a)

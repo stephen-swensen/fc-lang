@@ -1,0 +1,11 @@
+let check = (x: int32??) ->
+    match x with
+    | some(some(v)) -> v
+    | some(none) -> 0
+    | none -> -1
+
+let main = (args: str[]) ->
+    let a = some(some(42))
+    let b = some(none(int32))
+    let c = none(int32?)
+    check(a) + check(b) + check(c)
