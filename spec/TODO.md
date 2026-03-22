@@ -1,22 +1,16 @@
-# FC Spec TODO
+# Active
 
-Open design questions and topics for future discussion.
-
----
+Open design questions and topics for future work.
 
 ## Standard Library
 
 ### Namespace and structure
 - Standard library will live in a `std::` namespace (distinct from `global::` used by application code)
-- Flat module structure — one module per file, no nesting — because FC does not allow cross-file module definitions, so nested submodules would have to live in a single file
+- Flat module structure — one module per file, no nesting — because FC does not allow cross-file module definition, so nested submodules would have to live in a single file
 - Defined modules: `io` (file I/O — see spec §std::io), `sys` (system operations — see spec §std::sys)
 - Likely modules: `text`, `math`, plus others TBD
 - Import pattern: `import io from std::`, `import sys from std::`, etc.
 - Open: does stdlib require explicit import per file, or is any of it pre-imported?
-
----
-
----
 
 ## No `size_t` equivalent — extern declarations hardcode uint64
 
@@ -25,8 +19,6 @@ FC has no `size_t` type. Extern declarations for C functions that take or return
 **Current workaround**: Since FC doesn't emit its own extern forward declarations (the real C headers provide correct prototypes via `#include`), the C compiler sees the correct `size_t`-width parameters and implicitly narrows the `uint64` values FC passes. This is sub-optimal (unnecessary 64→32 bit operations) but valid — the same pattern as FC's general approach of using `int64` arithmetic on 32-bit platforms where `int32` is native. The values involved in I/O sizes always fit in 32 bits in practice.
 
 **If FC adds 32-bit target support**: Consider adding a `usize`/`isize` type that maps to the target's pointer width, or a `size_t` type alias that resolves at codegen time. Until then, `uint64` is the pragmatic choice.
-
----
 
 ## Slice/pointer provenance and safety
 
@@ -123,9 +115,22 @@ let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (
 - Runtime provenance tagging — conflicts with zero-cost philosophy
 - Automatic reference counting — same
 
+## Build targets (`--target`, embedded, bare-metal)
+
+The compiler currently only supports hosted targets (`target_hosted` is always set). The design calls for:
+
+- `--target <name>` CLI flag (e.g. `arduino-uno`, `esp32`, `bare-metal`)
+- Built-in flags `target_embedded` and `target_bare_metal` set automatically
+- `alloc`/`free` availability enforcement per target (compile error on bare-metal)
+- `import libc` scoped to functions available on the target
+
+The conditional compilation infrastructure (`#if`/`#else if`) is already in place and ready to use these flags once they are defined. The generated C is already portable — it can be compiled with embedded toolchains today by compiling the output manually. The `--target` flag would automate this and add compile-time enforcement.
+
 ---
 
-## Field access on type variables — structural generics (explored, deferred)
+# Resolved
+
+## Field access on type variables — structural generics (explored, deferred 2026-03-22)
 
 Explored allowing field access on bare type variables, e.g. `let sum = (p: 'a) -> p.x + p.y`, where `'a` is resolved to a concrete struct at monomorphization. This would enable duck-typed generic functions that operate on any struct with matching field names — similar to C++ templates or Go structural interfaces.
 
@@ -146,41 +151,24 @@ Explored allowing field access on bare type variables, e.g. `let sum = (p: 'a) -
 ### If revisited
 The `TYPE_FIELD_OF` approach is viable. Key remaining work: (1) extend `unify()` to handle `TYPE_FIELD_OF` in struct literal construction, (2) add monomorphization-time error reporting for invalid field access, (3) handle match/unwrap on deferred field types, (4) extend unary operator deferral. Consider whether the complexity is justified by real user demand before proceeding.
 
----
-
-## Build targets (`--target`, embedded, bare-metal)
-
-The compiler currently only supports hosted targets (`target_hosted` is always set). The design calls for:
-
-- `--target <name>` CLI flag (e.g. `arduino-uno`, `esp32`, `bare-metal`)
-- Built-in flags `target_embedded` and `target_bare_metal` set automatically
-- `alloc`/`free` availability enforcement per target (compile error on bare-metal)
-- `import libc` scoped to functions available on the target
-
-The conditional compilation infrastructure (`#if`/`#else if`) is already in place and ready to use these flags once they are defined. The generated C is already portable — it can be compiled with embedded toolchains today by compiling the output manually. The `--target` flag would automate this and add compile-time enforcement.
-
----
-
-## Resolved
-
-### Multiline struct literals, function calls, and array literals (resolved 2026-03-21)
+## Multiline struct literals, function calls, and array literals (resolved 2026-03-21)
 Bracket depth tracking added to the lexer layout pass. When inside `()`, `[]`, or `{}`, `INDENT`/`DEDENT`/`NEWLINE` tokens are suppressed. Multiline struct literals, function calls with many arguments, and array literals all parse naturally. Trailing commas permitted. No parser changes needed.
 
-### alloc/free/sizeof/default placement — no change (resolved 2026-03-21)
+## alloc/free/sizeof/default placement — no change (resolved 2026-03-21)
 Considered moving to a `sys` module. Resolved by convention: `drop` is the idiomatic name for user cleanup; `free` stays reserved for raw deallocation. Regularizing as generic functions in a module was rejected because `alloc(expr)` can't coexist with `alloc<T>()` under no-overloading, and `sys` would be compiler magic pretending to be a module.
 
-### Unreachable pattern detection — deferred (resolved 2026-03-21)
+## Unreachable pattern detection — deferred (resolved 2026-03-21)
 Low priority since it's a warning, not a correctness issue. The Maranget infrastructure is in place; unreachable arm detection is the dual of exhaustiveness (call `find_witness` against preceding arms). Small addition when needed.
 
-### Eager type resolution — not viable (deferred indefinitely, 2026-03-21)
+## Eager type resolution — not viable (deferred indefinitely, 2026-03-21)
 Resolving struct field types and union variant payloads in-place on registered types (the high-value part of the proposal) is blocked by self-referential structs. A struct like `node { next: node*? }` creates a cyclic type graph when its field type is resolved from `option(pointer(stub))` to `option(pointer(full_node))` — the full node's `next` field then points back to itself. Functions like `type_contains_type_var()`, `type_eq()`, and other recursive type walkers traverse struct fields and infinite-loop on these cycles. Resolving only AST annotations (param types, cast targets, etc.) is possible but adds ~170 lines of AST walker to eliminate ~10 one-line `resolve_type()` calls — not worth the complexity. The existing on-demand `resolve_type()` calls in pass2 and `resolve_struct_stub()` in codegen remain the correct approach.
 
-### Codegen: nested option/slice typedef ordering (resolved 2026-03-20)
+## Codegen: nested option/slice typedef ordering (resolved 2026-03-20)
 - `collect_types_in_type()` now recurses into inner types before adding the outer type to the typeset, ensuring dependency typedefs are emitted first in the generated C.
 - Fixed for both option types (`int32??`, `int32???`) and slice types (latent bug for nested slices).
 - Matches the existing `TYPE_FUNC` pattern which already recursed first.
 
-### M9: std::sys module, main args as str[], conditional compilation, cstr→str cast (resolved 2026-03-17)
+## M9: std::sys module, main args as str[], conditional compilation, cstr→str cast (resolved 2026-03-17)
 - `std::sys` module (`stdlib/sys.fc`): `env`, `exit`, `time`, `sleep` — pure FC wrapping C stdlib via extern declarations. `time`/`sleep` use a private `timespec` struct passed to C via `any*` casts. `_POSIX_C_SOURCE` emitted only when `time.h` is used.
 - Main function signature changed from `(args: int32)` to `(args: str[])`. Codegen emits `fc_main(fc_slice_fc_str args)` for user code plus a C `main` wrapper that converts `argc`/`argv` to `str[]` via `alloca`. Pass2 validates main takes exactly `str[]` and returns `int32`.
 - Conditional compilation: `#if`/`#else if`/`#else`/`#end` directives implemented as a token-level filter between raw tokenization and layout pass. Directives must appear at column 1. `target_hosted` is a built-in flag; user flags via `--flag name`. Inactive branches are stripped (syntax-checking deferred to M10).
@@ -189,16 +177,16 @@ Resolving struct field types and union variant payloads in-place on registered t
 - Parser fix: `parse_if_expr` now restores position when no `else` found, preventing `(cast)expr` after void `if` from being misparsed as a function call.
 - 413 tests passing.
 
-### Implicit widening in generic function calls (resolved 2026-03-15)
+## Implicit widening in generic function calls (resolved 2026-03-15)
 - Generic function arguments with concrete parameter types now auto-widen, matching non-generic call behavior.
 - e.g. `get(list, 0)` works when `index: int64` — the int32 literal widens to int64.
 - Widening only applies to parameters that contain no type variables. Type variable binding via unification still requires exact matches.
 
-### Implicit widening in struct literals and variant constructors (resolved 2026-03-15)
+## Implicit widening in struct literals and variant constructors (resolved 2026-03-15)
 - Struct literal fields and union variant payloads now auto-widen, matching function call argument behavior.
 - e.g. `point { x = 10 }` works when `x: int64`, and `holder.val(42)` works when `val(int64)`.
 
-### Structural equality, codegen safety, spec alignment (resolved 2026-03-15)
+## Structural equality, codegen safety, spec alignment (resolved 2026-03-15)
 - Structural `==`/`!=` implemented for all types: structs (field-by-field), unions (tag + payload), slices (element-wise), str/str32 (len + memcmp), options (has_value + inner), func (fn_ptr + ctx). Generated `fc_eq_T` comparison functions.
 - Codegen safety: signed overflow wrapping via cast-through-unsigned for `+`, `-`, `*`, unary `-`; shift amount masking (`& 31` for 32-bit, etc.); integer division/modulo by zero emits `abort()` check (float unaffected per IEEE 754).
 - str32 type parsing fixed (wrong length in lookup table, missing `type_str32()` constructor).
@@ -207,12 +195,12 @@ Resolving struct field types and union variant payloads in-place on registered t
 - String literal pattern matching in `match` implemented (was a no-op in codegen).
 - 326 tests covering all milestones M1–M8 plus cross-cutting features.
 
-### File handles are `any*`, not a built-in type (resolved 2026-03-11)
+## File handles are `any*`, not a built-in type (resolved 2026-03-11)
 - The `file` built-in type was removed. File handles are `any*` — the same opaque pointer type used for sqlite handles, pthread handles, and any other C resource.
 - No reason to privilege file I/O with a special type when all other C libraries use `any*`.
 - File operations moved from built-in `file.open`/`file.close`/etc. to `std::io` module (`io.open`, `io.close`, etc.).
 
-### Extern declarations, std::io module, print→io.write migration (resolved 2026-03-16)
+## Extern declarations, std::io module, print→io.write migration (resolved 2026-03-16)
 - `extern` declarations implemented: parse, pass1 registration, pass2 type-checking, codegen (no `_ctx` parameter).
 - `module ... from "lib"` syntax for C library source metadata.
 - `stdlib/io.fc` written as a physical FC file wrapping C stdio via extern declarations.
@@ -221,7 +209,7 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?` (not just `T*?`).
 
-### True type aliases for str/cstr/str32, import-as alias propagation (resolved 2026-03-17)
+## True type aliases for str/cstr/str32, import-as alias propagation (resolved 2026-03-17)
 - `TYPE_STR`, `TYPE_CSTR`, `TYPE_STR32` removed from `TypeKind` enum. `str` is now `TYPE_SLICE{uint8}`, `cstr` is `TYPE_POINTER{uint8}`, `str32` is `TYPE_SLICE{uint32}` — with a `const char *alias` field on `Type` for display names.
 - `str` and `uint8[]` are fully interchangeable (same for `cstr`/`uint8*`, `str32`/`uint32[]`). Eliminated ~15 duplicate `TYPE_SLICE || TYPE_STR` code paths in pass2 and codegen.
 - `const char*` emission confined to extern call boundaries only; within FC-generated code, `cstr` emits as `uint8_t*`.
