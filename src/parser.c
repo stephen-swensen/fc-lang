@@ -272,18 +272,31 @@ static Type *parse_type(Parser *p) {
         return parse_type_suffix(p, udt);
     }
 
-    /* Function type: (T1, T2) -> T */
+    /* Function type: (T1, T2) -> T  or  (T1, ...) -> T */
     if (t->kind == TOK_LPAREN) {
         advance_p(p);
         Type **params = NULL;
         int pcount = 0, pcap = 0;
+        bool is_variadic = false;
         if (!check(p, TOK_RPAREN)) {
-            do {
-                Type *pt = parse_type(p);
-                DA_APPEND(params, pcount, pcap, pt);
-                if (!check(p, TOK_COMMA)) break;
+            if (check(p, TOK_ELLIPSIS)) {
+                /* (...) -> T */
                 advance_p(p);
-            } while (1);
+                is_variadic = true;
+            } else {
+                do {
+                    Type *pt = parse_type(p);
+                    DA_APPEND(params, pcount, pcap, pt);
+                    if (!check(p, TOK_COMMA)) break;
+                    advance_p(p);
+                    if (check(p, TOK_ELLIPSIS)) {
+                        /* (T1, ...) -> T */
+                        advance_p(p);
+                        is_variadic = true;
+                        break;
+                    }
+                } while (1);
+            }
         }
         expect(p, TOK_RPAREN);
         expect(p, TOK_ARROW);
@@ -293,6 +306,7 @@ static Type *parse_type(Parser *p) {
         ft->kind = TYPE_FUNC;
         ft->func.param_count = pcount;
         ft->func.return_type = ret;
+        ft->func.is_variadic = is_variadic;
         if (pcount > 0) {
             ft->func.param_types = arena_alloc(p->arena, sizeof(Type*) * (size_t)pcount);
             memcpy(ft->func.param_types, params, sizeof(Type*) * (size_t)pcount);

@@ -160,6 +160,7 @@ bool type_eq(Type *a, Type *b) {
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
     case TYPE_FUNC:
         if (a->func.param_count != b->func.param_count) return false;
+        if (a->func.is_variadic != b->func.is_variadic) return false;
         for (int i = 0; i < a->func.param_count; i++)
             if (!type_eq(a->func.param_types[i], b->func.param_types[i])) return false;
         return type_eq(a->func.return_type, b->func.return_type);
@@ -211,6 +212,10 @@ const char *type_name(Type *t) {
         for (int i = 0; i < t->func.param_count; i++) {
             if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
             pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->func.param_types[i]));
+        }
+        if (t->func.is_variadic) {
+            if (t->func.param_count > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "...");
         }
         pos += snprintf(buf + pos, 256 - (size_t)pos, ") -> %s", type_name(t->func.return_type));
         return buf;
@@ -419,6 +424,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         nf->func.param_types = params;
         nf->func.param_count = t->func.param_count;
         nf->func.return_type = ret;
+        nf->func.is_variadic = t->func.is_variadic;
         return nf;
     }
     case TYPE_STRUCT: {

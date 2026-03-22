@@ -314,6 +314,17 @@ static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
         /* any** (void**) → void* at C boundary — void* converts to any T**
          * implicitly in C, but void** does not (e.g. sqlite3_open's sqlite3**) */
         fprintf(out, "(void*)");
+    } else if (!param_type && e->type) {
+        /* Variadic arg — apply C default argument promotions and boundary casts */
+        Type *at = e->type;
+        if (is_cstr_type(at)) {
+            fprintf(out, "(const char*)");
+        } else if (at->kind == TYPE_FLOAT32) {
+            fprintf(out, "(double)");
+        } else if (at->kind == TYPE_INT8 || at->kind == TYPE_INT16 ||
+                   at->kind == TYPE_UINT8 || at->kind == TYPE_UINT16) {
+            fprintf(out, "(int)");
+        }
     }
     emit_expr(e, out);
 }

@@ -1,0 +1,7 @@
+module c from "stdio.h" =
+    extern fprintf: (any*, cstr, ...) -> int32
+
+let main = (args: str[]) ->
+    // too few args — fprintf needs at least 2 (file, format)
+    c.fprintf(stderr)
+    0

@@ -423,7 +423,9 @@ static Token scan_token(Lexer *l) {
     case '&': return match(l, '&') ? make_token(l, TOK_AMPAMP) : make_token(l, TOK_AMP);
     case '|': return match(l, '|') ? make_token(l, TOK_PIPEPIPE) : make_token(l, TOK_PIPE);
     case '\'': return scan_char_lit(l);
-    case '.': return match(l, '.') ? make_token(l, TOK_DOTDOT) : make_token(l, TOK_DOT);
+    case '.':
+        if (match(l, '.')) return match(l, '.') ? make_token(l, TOK_ELLIPSIS) : make_token(l, TOK_DOTDOT);
+        return make_token(l, TOK_DOT);
     case ':': return match(l, ':') ? make_token(l, TOK_COLONCOLON) : make_token(l, TOK_COLON);
     case '#': {
         while (*l->current == ' ') advance(l);

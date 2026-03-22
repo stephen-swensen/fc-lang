@@ -1344,7 +1344,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
 
         /* Normal (non-generic) call */
-        if (e->call.arg_count != ft->func.param_count) {
+        if (ft->func.is_variadic) {
+            if (e->call.arg_count < ft->func.param_count) {
+                diag_error(e->loc, "expected at least %d arguments, got %d",
+                    ft->func.param_count, e->call.arg_count);
+                e->type = type_error();
+                return e->type;
+            }
+        } else if (e->call.arg_count != ft->func.param_count) {
             diag_error(e->loc, "expected %d arguments, got %d",
                 ft->func.param_count, e->call.arg_count);
             e->type = type_error();
@@ -1354,6 +1361,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *at = check_expr(ctx, e->call.args[i]);
             if (type_is_error(at)) { arg_err = true; continue; }
+            /* Variadic args beyond fixed params: type-check the expr but skip param matching */
+            if (i >= ft->func.param_count) continue;
             /* Skip strict type check if either side contains type vars
              * (inside a generic template — checked at monomorphization) */
             if (type_contains_type_var(at) || type_contains_type_var(ft->func.param_types[i]))

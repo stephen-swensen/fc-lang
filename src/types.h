@@ -55,6 +55,7 @@ struct Type {
             Type **param_types;
             int param_count;
             Type *return_type;
+            bool is_variadic;
         } func;
         struct {
             const char *name;

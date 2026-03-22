@@ -1,0 +1,9 @@
+module c from "stdio.h" =
+    extern fprintf: (any*, cstr, ...) -> int32
+
+let main = (args: str[]) ->
+    // printf with various types as variadic args
+    c.fprintf(stderr, c"int: %d\n", 42)
+    c.fprintf(stderr, c"str: %s\n", c"hello")
+    c.fprintf(stderr, c"two: %d %s\n", 7, c"world")
+    0

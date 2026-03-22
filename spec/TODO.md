@@ -59,6 +59,8 @@ Core mechanic is straightforward: add `const` to the type system, reject writes 
 
 None of these are blockers — FC's type system is simpler than C's, so the design should be cleaner. Defer until after core milestones, then add as a focused feature.
 
+**When const is added**, the `cstr` type alias can be split into `const cstr` (read-only, maps to `const char*`) and `cstr` (mutable, maps to `char*`). This would let extern declarations like `snprintf` use `cstr` for the mutable output buffer and `const cstr` for the format string — matching C's actual prototypes exactly. The compiler's automatic boundary casts would then emit `const char*` or `char*` depending on the const qualifier, eliminating the current need to use `any*` for mutable char buffer parameters. Spec examples and variadic extern tests should be updated accordingly.
+
 #### Why `const` is simpler in FC than in C
 
 In C, `const` can appear at every level of pointer indirection independently — `const int *`, `int *const`, `const int *const`, `const int **`, `int *const *`, etc. With N levels of indirection there are 2^N combinations, and the placement rules (`const` applies to whatever is left of it) are notoriously confusing.

@@ -1,0 +1,7 @@
+module c from "stdio.h" =
+    extern fprintf: (any*, cstr, ...) -> int32
+
+let main = (args: str[]) ->
+    // call variadic with only fixed args — no variadic args passed
+    c.fprintf(stderr, c"no extras\n")
+    0

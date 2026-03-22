@@ -145,7 +145,7 @@ Tests live in `tests/cases/`, organized into subdirectories by functional catego
 - `generics/` — generic functions/structs/unions, monomorphization, dedup
 - `type_properties/` — static type props (int32.min, float64.nan) + typevar props ('a.bits)
 - `native_types/` — isize/usize literals, arithmetic, casts, generics, error cases
-- `extern/` — extern declarations, conditional compilation (#if/#else/#end)
+- `extern/` — extern declarations, conditional compilation (#if/#else/#end), variadic extern calls
 - `io/` — print, io read/write, eprint, stdin/stdout, sys, main_args
 
 Each **single-file test** is an `.fc` file plus one of:

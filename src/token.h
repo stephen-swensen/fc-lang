@@ -76,6 +76,7 @@ typedef enum {
     TOK_PIPEPIPE,       /* || */
     TOK_ARROW,          /* -> */
     TOK_DOTDOT,         /* .. */
+    TOK_ELLIPSIS,       /* ... */
     TOK_DOT,            /* . */
     TOK_COLONCOLON,     /* :: */
     TOK_COLON,          /* : */

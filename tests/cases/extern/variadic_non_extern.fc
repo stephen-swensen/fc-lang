@@ -1,0 +1,4 @@
+let bad = (x: int32, ...) -> x
+
+let main = (args: str[]) ->
+    bad(1, 2, 3)

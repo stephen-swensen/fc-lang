@@ -2952,6 +2952,34 @@ let mut db = default(any*)
 let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (void*)
 ```
 
+### Variadic extern functions
+
+C functions that accept a variable number of arguments (`printf`, `snprintf`, `open`, etc.) are declared with `...` after the fixed parameters:
+
+```fc
+module c from "stdio.h" =
+    extern printf: (cstr, ...) -> int32
+    extern fprintf: (any*, cstr, ...) -> int32
+    extern snprintf: (any*, usize, cstr, ...) -> int32
+```
+
+The compiler type-checks the fixed parameters normally — the `cstr` format string, the `any*` file handle, the `usize` buffer size — but variadic arguments beyond the fixed parameters are not type-checked. The programmer is responsible for matching format specifiers to argument types, the same as in C.
+
+**Argument promotion.** C's default argument promotions apply to variadic arguments: sub-`int` types (`int8`, `int16`, `uint8`, `uint16`) are promoted to `int`, and `float32` is promoted to `double`. The compiler inserts these casts automatically in the generated C. Boundary casts also apply — `cstr` variadic arguments are cast to `const char*` at the C boundary.
+
+```fc
+module c from "stdio.h" =
+    extern fprintf: (any*, cstr, ...) -> int32
+
+let val = 42i8
+c.fprintf(stdout, c"value: %d name: %s\n", val, c"hello")
+// generated C: fprintf(stdout, "value: %d name: %s\n", (int)val, (const char*)"hello")
+```
+
+**Variadic declarations are extern-only** — FC functions cannot be variadic. The `...` syntax is only valid inside extern function type signatures. Attempting to use `...` in a regular function definition is a parse error.
+
+**Argument count.** A variadic call must provide at least the fixed parameters. Passing fewer arguments than the fixed parameter count is a compile error.
+
 ### Mapping C enums
 
 C enums are integer constants. In pure FC, use union types for sum types. When interoperating with a C API that uses an enum, model it as a module of `int32` constants and declare the extern function with an `int32` parameter:
