@@ -148,42 +148,23 @@ The `TYPE_FIELD_OF` approach is viable. Key remaining work: (1) extend `unify()`
 
 ---
 
-## Multiline struct literals (and other bracketed expressions)
+## Build targets (`--target`, embedded, bare-metal)
 
-FC's offside rule applies uniformly — braces `{ }`, parentheses `( )`, and brackets `[ ]` do not suppress layout. This means struct literals must be written on a single line:
+The compiler currently only supports hosted targets (`target_hosted` is always set). The design calls for:
 
-```fc
-let p = packet { hdr = header { code = status.ok, flag = true }, size = 100 }
-```
+- `--target <name>` CLI flag (e.g. `arduino-uno`, `esp32`, `bare-metal`)
+- Built-in flags `target_embedded` and `target_bare_metal` set automatically
+- `alloc`/`free` availability enforcement per target (compile error on bare-metal)
+- `import libc` scoped to functions available on the target
 
-The natural multiline style fails because the closing `}` at original indentation triggers DEDENT before the parser sees it:
-
-```fc
-// FAILS — lexer emits DEDENT before the closing }
-let p = packet {
-    hdr = header { code = status.ok, flag = true },
-    size = 100
-}
-```
-
-Continuation indentation works (lines indented deeper than the expression start suppress the newline), but the closing brace must stay on the last field's line or be indented deeper, which is awkward:
-
-```fc
-// Works but ugly — closing } must not drop back to original indentation
-let p = packet {
-        hdr = header { code = status.ok, flag = true },
-        size = 100 }
-```
-
-This affects struct literals, function calls with many arguments, and array literals. Languages like Python and Haskell suppress layout inside matched brackets, which allows natural multiline formatting.
-
-**Possible fix:** Track bracket depth in the lexer's layout pass. When inside `{ }`, `( )`, or `[ ]`, suppress INDENT/DEDENT/NEWLINE emission and let the parser handle newlines as whitespace. This is a well-understood technique (GHC, Python tokenizer) and would be a local change to the layout pass with no parser changes needed.
-
-**Risk:** Changing layout rules can subtly affect existing code if any patterns rely on the current behavior inside brackets. Needs careful testing against the full test suite.
+The conditional compilation infrastructure (`#if`/`#else if`) is already in place and ready to use these flags once they are defined. The generated C is already portable — it can be compiled with embedded toolchains today by compiling the output manually. The `--target` flag would automate this and add compile-time enforcement.
 
 ---
 
 ## Resolved
+
+### Multiline struct literals, function calls, and array literals (resolved 2026-03-21)
+Bracket depth tracking added to the lexer layout pass. When inside `()`, `[]`, or `{}`, `INDENT`/`DEDENT`/`NEWLINE` tokens are suppressed. Multiline struct literals, function calls with many arguments, and array literals all parse naturally. Trailing commas permitted. No parser changes needed.
 
 ### alloc/free/sizeof/default placement — no change (resolved 2026-03-21)
 Considered moving to a `sys` module. Resolved by convention: `drop` is the idiomatic name for user cleanup; `free` stays reserved for raw deallocation. Regularizing as generic functions in a module was rejected because `alloc(expr)` can't coexist with `alloc<T>()` under no-overloading, and `sys` would be compiler magic pretending to be a module.
