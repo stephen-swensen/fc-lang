@@ -122,6 +122,48 @@ The conditional compilation infrastructure (`#if`/`#else if`) is already in plac
 
 ---
 
+---
+
+# Notes
+
+## C interop and embedded: remaining gaps (2026-03-22)
+
+Overview of what's solved and what's still missing for full C interop and embedded platform support.
+
+**Solved:**
+- Extern declarations with automatic boundary casts (cstr → `const char*`, any* → `void*`, cstr* → `char**`, any** → `void*`)
+- Variadic extern functions (printf, snprintf, etc.) with C default argument promotions
+- `isize`/`usize` for platform-native types (size_t, ptrdiff_t)
+- Opaque pointers (`any*`) for C handles (FILE*, sqlite3*, etc.)
+- `c"..."` literals for null-terminated strings; `str` ↔ `cstr` casts
+- Raw pointer arithmetic as escape hatch from slice overhead
+- Function pointer params in extern (non-capturing lambdas extract fn_ptr automatically)
+- Conditional compilation (`#if`/`#else`/`#end`) with built-in and user-defined flags
+
+**Remaining gaps:**
+
+1. **`const` qualifier** — already in Active TODO. When added, enables `const cstr` (read-only, `const char*`) vs `cstr` (mutable, `char*`) distinction at extern boundaries. Currently must use `any*` for mutable char buffer params like snprintf's output buffer.
+
+2. **No C struct layout import** — can't reference C's `struct timeval` directly. Must define a matching FC struct manually or use `any*`. Risk of layout mismatch if fields are wrong. Workable but error-prone for complex C structs.
+
+3. **No `--target` flag** — `target_embedded` and `target_bare_metal` flags are designed (see Active TODO) but not implemented. Generated C already compiles with cross-compilers, but no compile-time enforcement (e.g., rejecting `alloc` on bare-metal).
+
+4. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file.
+
+5. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Reads/writes could be optimized away by the C compiler without it.
+
+6. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. FC structs don't support this.
+
+7. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). For raw C union interop, need `any*` or manual byte manipulation.
+
+8. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
+
+9. **No callback with context** — extern function pointer params must be non-capturing lambdas. C APIs that take a `void* userdata` + callback pair (pthreads, qsort_r, signal handlers) work but require the user to manage the context pointer manually.
+
+Items 1–3 are the most impactful. Items 4–8 are niche but matter for deep embedded work. Item 9 is a usability friction for common C callback patterns.
+
+---
+
 # Resolved
 
 ## Native platform-width types `isize`/`usize` (resolved 2026-03-22)
