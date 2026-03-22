@@ -517,6 +517,34 @@ let total = first_value
 
 The distinction between a new block and a continuation is unambiguous from context: a new block only opens after a block-forming construct. In any other case, a more-indented line is a continuation of the previous expression.
 
+### Layout Suppression Inside Brackets
+
+Inside matched bracket pairs — `()`, `[]`, and `{}` — the offside rule is suspended. `INDENT`, `DEDENT`, and `NEWLINE` tokens are not emitted, so expressions can span multiple lines freely without alignment requirements. This applies to function call arguments, array literals, and struct literals:
+
+```fc
+// Multiline function call — arguments can wrap freely inside ()
+let result = some_function(
+    arg_one,
+    arg_two,
+    arg_three
+)
+
+// Multiline array literal — elements can wrap freely inside []
+let data = [
+    1, 2, 3,
+    4, 5, 6
+]
+
+// Multiline struct literal — fields can wrap freely inside {}
+let p = point3d {
+    x = 1.0,
+    y = 2.0,
+    z = 3.0
+}
+```
+
+Bracket pairs nest correctly — `depth` is tracked, so brackets inside brackets are all accounted for before layout resumes.
+
 ### Spaces Only
 
 Tabs are not permitted in indentation. Using a tab character at the start of a line is a compile error. This avoids the class of bugs where mixed tab/space indentation causes layout to differ between editors and compilers.
@@ -1629,6 +1657,18 @@ let p = point { x = 1.0, y = 2.0 }           // all fields
 let p = point3d { z = 1, x = 3 }             // partial — y defaults to 0
 let p = point3d { }                           // all fields defaulted
 ```
+
+Fields may also span multiple lines — the `{` / `}` suspend the offside rule, so indentation is unrestricted inside the literal:
+
+```fc
+let p = point3d {
+    x = 1.0,
+    y = 2.0,
+    z = 3.0
+}
+```
+
+A trailing comma after the last field is permitted.
 
 > **Transpilation**
 > Struct literals transpile to C11 designated initializers. Unspecified fields are zero-initialized by C's rules:
