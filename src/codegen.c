@@ -576,6 +576,33 @@ static int shift_mask_for(Type *t) {
     }
 }
 
+/* Parse width and precision from an InterpSegment format spec string.
+ * Sets *width to the explicit width (0 if absent).
+ * Sets *precision to the explicit precision (-1 if absent, 0 for ".0"). */
+static void parse_format_width_prec(const char *text,
+                                     int *width, int *precision) {
+    const char *fs = text;
+    *width = 0;
+    *precision = -1;
+    /* Skip flags */
+    while (*fs == '-' || *fs == '+' || *fs == '0' ||
+           *fs == '#' || *fs == ' ') fs++;
+    /* Width */
+    while (*fs >= '0' && *fs <= '9') {
+        *width = *width * 10 + (*fs - '0');
+        fs++;
+    }
+    /* Precision */
+    if (*fs == '.') {
+        fs++;
+        *precision = 0;
+        while (*fs >= '0' && *fs <= '9') {
+            *precision = *precision * 10 + (*fs - '0');
+            fs++;
+        }
+    }
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -1649,14 +1676,9 @@ static void emit_expr(Expr *e, FILE *out) {
                 int bound = 0;
                 char conv = segs[i].conversion;
 
-                /* Parse width from format spec if present */
-                int explicit_width = 0;
-                const char *fs = segs[i].text;
-                while (*fs == '-' || *fs == '+' || *fs == '0' || *fs == '#' || *fs == ' ') fs++;
-                while (*fs >= '0' && *fs <= '9') {
-                    explicit_width = explicit_width * 10 + (*fs - '0');
-                    fs++;
-                }
+                int explicit_width = 0, explicit_prec = -1;
+                parse_format_width_prec(segs[i].text,
+                                        &explicit_width, &explicit_prec);
 
                 bool is_str_arg = (conv == 's' && segs[i].expr->type &&
                                    is_str_type(segs[i].expr->type));
@@ -1665,19 +1687,32 @@ static void emit_expr(Expr *e, FILE *out) {
 
                 if (is_str_arg) {
                     if (!first_term) fprintf(out, " + ");
-                    if (explicit_width > 0)
+                    if (explicit_prec >= 0) {
+                        /* Precision bounds the output — compile-time constant */
+                        int str_bound = explicit_prec;
+                        if (explicit_width > str_bound) str_bound = explicit_width;
+                        fprintf(out, "%d", str_bound);
+                    } else if (explicit_width > 0) {
                         fprintf(out, "(%d > _sa%d_%d.len ? %d : _sa%d_%d.len)",
                             explicit_width, tid, str_arg_idx, explicit_width, tid, str_arg_idx);
-                    else
+                    } else {
                         fprintf(out, "_sa%d_%d.len", tid, str_arg_idx);
+                    }
                     first_term = false;
                     str_arg_idx++;
                 } else if (is_cstr_arg) {
-                    /* cstr: need strlen at runtime */
                     if (!first_term) fprintf(out, " + ");
-                    fprintf(out, "(int64_t)strlen((const char*)");
-                    emit_expr(segs[i].expr, out);
-                    fprintf(out, ")");
+                    if (explicit_prec >= 0) {
+                        /* Precision bounds the output — compile-time constant */
+                        int str_bound = explicit_prec;
+                        if (explicit_width > str_bound) str_bound = explicit_width;
+                        fprintf(out, "%d", str_bound);
+                    } else {
+                        /* cstr: need strlen at runtime */
+                        fprintf(out, "(int64_t)strlen((const char*)");
+                        emit_expr(segs[i].expr, out);
+                        fprintf(out, ")");
+                    }
                     first_term = false;
                 } else {
                     /* Compute compile-time bound based on type and conversion */
@@ -1778,13 +1813,29 @@ static void emit_expr(Expr *e, FILE *out) {
                 bool is_str_arg = (segs[i].conversion == 's' &&
                                    segs[i].expr->type && is_str_type(segs[i].expr->type));
                 if (is_str_arg) {
-                    /* Rewrite %s to %.*s for str arguments */
+                    /* Rewrite %s to %.*s for str arguments.
+                     * Strip any .precision from the spec since .*
+                     * replaces it (precision passed as argument). */
                     fprintf(out, "%%");
-                    /* Emit flags/width/precision from original spec, but replace conversion */
                     const char *sp = segs[i].text;
                     int splen = segs[i].text_length;
-                    /* Copy everything except the last char (conversion), then .*s */
-                    for (int j = 0; j < splen - 1; j++) fputc(sp[j], out);
+                    int j = 0;
+                    /* Copy flags */
+                    while (j < splen - 1 && (sp[j] == '-' || sp[j] == '+' ||
+                           sp[j] == '0' || sp[j] == '#' || sp[j] == ' ')) {
+                        fputc(sp[j], out);
+                        j++;
+                    }
+                    /* Copy width */
+                    while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') {
+                        fputc(sp[j], out);
+                        j++;
+                    }
+                    /* Skip .precision if present (replaced by .*) */
+                    if (j < splen - 1 && sp[j] == '.') {
+                        j++;
+                        while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') j++;
+                    }
                     fprintf(out, ".*s");
                     str_arg_idx++;
                 } else {
@@ -1814,9 +1865,17 @@ static void emit_expr(Expr *e, FILE *out) {
             bool is_str_arg = (segs[i].conversion == 's' &&
                                segs[i].expr->type && is_str_type(segs[i].expr->type));
             if (is_str_arg) {
-                /* %.*s needs (int)len, ptr */
-                fprintf(out, "(int)_sa%d_%d.len, _sa%d_%d.ptr",
-                    tid, str_arg_idx, tid, str_arg_idx);
+                /* %.*s needs (int)precision, ptr */
+                int prec_w = 0, prec_p = -1;
+                parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
+                if (prec_p >= 0) {
+                    /* Clamp to min(precision, len) to avoid reading past str data */
+                    fprintf(out, "((int)_sa%d_%d.len < %d ? (int)_sa%d_%d.len : %d), _sa%d_%d.ptr",
+                        tid, str_arg_idx, prec_p, tid, str_arg_idx, prec_p, tid, str_arg_idx);
+                } else {
+                    fprintf(out, "(int)_sa%d_%d.len, _sa%d_%d.ptr",
+                        tid, str_arg_idx, tid, str_arg_idx);
+                }
                 str_arg_idx++;
             } else {
                 /* Cast arguments to match the printf format specifier */
@@ -1831,13 +1890,14 @@ static void emit_expr(Expr *e, FILE *out) {
                     }
                 } else if (t && t->kind == TYPE_FLOAT32) {
                     fprintf(out, "(double)");
-                } else if (t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR)) {
-                    fprintf(out, "(void*)");
                 } else if (t && is_cstr_type(t)) {
-                    if (segs[i].conversion == 'p')
+                    /* cstr (uint8*) check before generic pointer — needs (const char*) for %s */
+                    if (conv == 'p')
                         fprintf(out, "(void*)");
                     else
                         fprintf(out, "(const char*)");
+                } else if (t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR)) {
+                    fprintf(out, "(void*)");
                 }
                 emit_expr(segs[i].expr, out);
             }

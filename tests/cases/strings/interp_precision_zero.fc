@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let name = "hello"
+    let s = "a%.0s{name}b"
+    let mut r = 0
+    if s == "ab" then r = r + 1 else r = r
+    if s.len == 2 then r = r + 2 else r = r
+    r

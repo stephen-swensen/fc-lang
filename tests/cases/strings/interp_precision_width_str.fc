@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let name = "hello world"
+    let s = "%8.5s{name}"
+    let mut r = 0
+    // Precision truncates to "hello" (5), width pads to 8: "   hello"
+    if s == "   hello" then r = r + 1 else r = r
+    if s.len == 8 then r = r + 2 else r = r
+    r
