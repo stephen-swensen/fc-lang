@@ -132,7 +132,7 @@ The realistic embedded target set for FC is **Cortex-M, ESP32, and RISC-V** — 
 | `str` to `cstr` cast | `str.len + 1` | Unbounded — large string on small stack = fault |
 | String interpolation (bare `%s`) | Runtime-computed segment sum | Unbounded — format args control size |
 | String interpolation (`%.Ns`) | Compile-time constant | Bounded — static analysis works |
-| `main` argv wrapper | `argc * sizeof(fc_str)` | Low — argc is typically small |
+| `main` argv wrapper | `argc * sizeof(fc_str)` | Very low — only fat pointer structs, not string data |
 
 `alloca` cannot return NULL on failure. On embedded, a stack overflow from `alloca` causes silent corruption or a hard fault — not a recoverable error. Additionally, runtime-dependent `alloca` sizes make static worst-case stack analysis impossible, which is required for safety-critical RTOS task sizing.
 
@@ -158,7 +158,9 @@ When **all** segments in an interpolation have compile-time bounds — which is 
 
 ### `main` wrapper argv conversion
 
-The `main` wrapper allocates `argc * sizeof(fc_str)` to convert C's `argv` into an FC `str[]` slice. This is effectively bounded: `argc` is determined by the OS/shell and is small in practice (typically < 100 args, so < 1.6KB on 64-bit). On embedded targets, `main` is usually called once with fixed arguments, making this the lowest-risk case.
+The `main` wrapper allocates `argc * sizeof(fc_str)` to wrap C's `argv` into an FC `str[]` slice. Critically, **no string data is copied** — each `fc_str` is a fat pointer (`ptr` + `len`) wrapping the existing `argv[i]` pointer directly, with `strlen` used only to compute the length field. The argv strings themselves live in OS-managed memory.
+
+The alloca is therefore exactly `argc * 16 bytes` (on 64-bit). An `argc` of 512 costs 8KB — already an unusual number of arguments. The risk is a pathologically large `argc`, which is genuinely niche and well outside the range of normal program invocation.
 
 ---
 

@@ -1485,7 +1485,7 @@ let main = (args: str[]) ->
 >     return fc_main(args);
 > }
 > ```
-> Each `argv[i]` becomes a `str` (fat pointer) with its length computed via `strlen`. The slice itself is stack-allocated via `alloca` — no heap allocation occurs. The allocation size is `argc * sizeof(fc_str)`, which is effectively bounded since `argc` is determined by the OS and is small in practice.
+> Each `argv[i]` becomes a `str` (fat pointer) pointing directly at the existing `argv[i]` string — no string data is copied. The length is computed via `strlen`. The only allocation is the array of `fc_str` structs (`argc * 16 bytes` on 64-bit), stack-allocated via `alloca`. A pathologically large `argc` could overflow the stack, but this is outside the range of normal program invocation.
 
 ### Stack frames and lifetime
 
