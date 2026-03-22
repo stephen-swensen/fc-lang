@@ -1,0 +1,6 @@
+// Error: cannot free interpolated string (stack via alloca)
+let main = (args: str[]) ->
+    let n = 42
+    let s = "%d{n}"
+    free(s)
+    0

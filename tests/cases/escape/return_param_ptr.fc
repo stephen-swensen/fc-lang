@@ -1,0 +1,8 @@
+// Returning a pointer param is fine (PROV_UNKNOWN)
+let passthrough = (p: int32*) ->
+    p
+
+let main = (args: str[]) ->
+    let mut val = 10
+    let p = passthrough(&val)
+    *p

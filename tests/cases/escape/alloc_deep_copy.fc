@@ -1,0 +1,10 @@
+// alloc(stack_slice) deep-copies to heap — safe to return
+let make_slice = () ->
+    let arr = int32[3] { 10, 20, 30 }
+    alloc(arr)!
+
+let main = (args: str[]) ->
+    let s = make_slice()
+    let result = s[1]
+    free(s)
+    result

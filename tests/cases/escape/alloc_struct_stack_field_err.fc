@@ -1,0 +1,8 @@
+// Error: storing stack pointer in heap-allocated struct
+struct node =
+    data: int32*
+
+let main = (args: str[]) ->
+    let mut val = 42
+    let n = alloc(node { data = &val })
+    0

@@ -1,0 +1,7 @@
+// Freeing heap memory is fine
+let main = (args: str[]) ->
+    let p = alloc(int32)!
+    *p = 99
+    let val = *p
+    free(p)
+    val

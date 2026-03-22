@@ -1,0 +1,8 @@
+// Error: wrapping stack pointer in some doesn't hide provenance
+let bad = () ->
+    let mut x = 42
+    some(&x)
+
+let main = (args: str[]) ->
+    let p = bad()
+    0

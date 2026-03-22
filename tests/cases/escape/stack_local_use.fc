@@ -1,0 +1,9 @@
+// Using stack pointers locally (without escaping) is fine
+let main = (args: str[]) ->
+    let mut x = 10
+    let mut y = 20
+    let px = &x
+    let py = &y
+    *px = 30
+    *py = 40
+    *px + *py

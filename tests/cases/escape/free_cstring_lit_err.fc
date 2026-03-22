@@ -1,0 +1,4 @@
+// Error: cannot free a cstring literal (static memory)
+let main = (args: str[]) ->
+    free(c"hello")
+    0

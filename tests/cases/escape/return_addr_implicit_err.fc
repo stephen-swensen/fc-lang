@@ -1,0 +1,8 @@
+// Error: implicit return of stack pointer (last expression)
+let bad = (x: int32) ->
+    let mut val = x
+    &val
+
+let main = (args: str[]) ->
+    let p = bad(42)
+    0

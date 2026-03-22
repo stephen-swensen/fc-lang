@@ -1,0 +1,11 @@
+// Heap pointer in heap struct is fine
+struct node =
+    data: int32*
+
+let main = (args: str[]) ->
+    let p = alloc(42)!
+    let n = alloc(node { data = p })!
+    let result = *(n->data)
+    free(p)
+    free(n)
+    result

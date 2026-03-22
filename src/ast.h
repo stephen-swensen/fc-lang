@@ -3,6 +3,15 @@
 #include "types.h"
 #include "diag.h"
 
+/* ---- Provenance tracking for escape analysis ---- */
+
+typedef enum {
+    PROV_UNKNOWN,   /* default: function params, call returns, extern results */
+    PROV_STACK,     /* stack-allocated: &local, array literals, interp strings, cstr casts */
+    PROV_HEAP,      /* heap-allocated: alloc() results */
+    PROV_STATIC,    /* static storage: string/cstring literals */
+} Provenance;
+
 /* ---- Expression nodes ---- */
 
 typedef enum {
@@ -87,6 +96,7 @@ struct Expr {
     ExprKind kind;
     SrcLoc loc;
     Type *type;         /* filled in by pass2 */
+    Provenance prov;    /* filled in by pass2: storage provenance for escape analysis */
     union {
         /* EXPR_INT_LIT */
         struct { int64_t value; Type *lit_type; } int_lit;

@@ -1,0 +1,8 @@
+// Error: storing stack slice in heap-allocated struct
+struct holder =
+    data: int32[]
+
+let main = (args: str[]) ->
+    let arr = int32[3] { 1, 2, 3 }
+    let h = alloc(holder { data = arr })
+    0

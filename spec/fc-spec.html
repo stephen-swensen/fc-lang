@@ -721,7 +721,7 @@ The `%f` format requires an explicit width (e.g., `%8.2f`) because fixed-point f
 
 #### Allocation
 
-Interpolated strings are stack-allocated (via `alloca`). The compiler computes a buffer size guaranteed to be sufficient. Integer, char, and pointer formats are bounded at compile time by the type's maximum formatted width. String formats (`%s`) use the runtime `.len` by default. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size.
+Interpolated strings are stack-allocated (via `alloca`). The compiler computes a buffer size guaranteed to be sufficient. Integer, char, and pointer formats are bounded at compile time by the type's maximum formatted width. String formats (`%s`) use the runtime `.len` by default. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size. The compiler's escape analysis tracks interpolated strings as stack-allocated — returning one from a function or freeing one is a compile error. Use `alloc(s)!` to deep-copy to the heap if the string must outlive the function.
 
 When `%s` includes a precision (e.g., `%.256s{name}`), the precision acts as a compile-time bound on that segment. If the string is longer than the precision, it is truncated (standard printf truncation semantics). When **all** segments in an interpolated string have compile-time bounds — i.e., all `%s` segments use precision and all other segments are numeric/char/pointer — the entire buffer size is a compile-time constant. This allows the C compiler to hoist the allocation out of loops and enables static stack analysis.
 
@@ -770,7 +770,7 @@ let s = "hello"
 let cs = (cstr) s   // stack copy with null terminator
 ```
 
-The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
+The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. The compiler's escape analysis tracks the result as stack-allocated — returning a `(cstr)str` cast from a function is a compile error. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
 
 **Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
 
@@ -1535,6 +1535,8 @@ let f = () ->
 
 A pointer to a local binding is valid for the entire function call. It must not escape the function — storing it in a heap-allocated struct, returning it, or passing it to something that outlives the call will result in a dangling pointer. Use heap allocation for data that must outlive a function call.
 
+The compiler performs **escape analysis** on pointer and slice expressions, tracking whether they refer to stack, heap, or static memory. Returning a stack-derived pointer from a function, freeing a stack pointer, and storing a stack pointer in a heap-allocated struct are all compile errors. See §Stack Allocation for details.
+
 ---
 
 ## Closures & Capture
@@ -1958,7 +1960,7 @@ Two initialization forms for stack slices:
 
 There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
 
-`free` accepts a slice directly — the compiler emits `free(buf.ptr)`. Only free slices returned by `alloc`. Freeing a stack-allocated slice, a sub-slice, or a slice into string literal memory is undefined behavior.
+`free` accepts a slice directly — the compiler emits `free(buf.ptr)`. Only free slices returned by `alloc`. The compiler's escape analysis detects and rejects `free` on stack-allocated slices and string literals at compile time. Freeing a sub-slice or other non-heap memory that escapes detection is undefined behavior.
 
 ```fc
 free(buf)       // free heap-allocated slice
@@ -2222,15 +2224,48 @@ Stack slices are backed by a compiler-generated C array. The slice binding is th
 
 **Lifetime** — all local bindings share the stack frame of their enclosing function. A pointer or slice into stack memory is valid for the duration of the function call and must not escape it. Returning a stack-allocated pointer or slice, or storing it in heap memory that outlives the call, produces a dangling pointer. Use heap allocation for data that must outlive a function call.
 
-> **Warning — stack slice escape**
-> Stack slices are particularly prone to silent escape bugs because a slice is a value type — it can be passed to functions, stored in structs, and returned, all without any syntactic indication that it contains a pointer into stack memory. Returning a stack-allocated slice is a compile error. Other escape paths — storing a stack slice into heap memory, wrapping it in an option that outlives the function — are not currently detected and are undefined behavior:
-> ```fc
-> let buf = int32[128] { }
-> return buf                    // compile error — stack slice cannot be returned
-> heap_struct->data = buf       // undefined behavior — not detected
-> some(buf)                     // undefined behavior if result outlives function — not detected
-> ```
-> The safe rule: a stack-allocated slice must not outlive the function that created it. If you need a slice to outlive the function, use `alloc`.
+#### Escape analysis
+
+The compiler tracks the **provenance** of every pointer and slice expression — whether it refers to stack memory, heap memory, static memory, or is unknown (e.g. received as a function parameter). The following are compile errors:
+
+- **Returning stack memory** — returning a stack-derived pointer, slice, or option-wrapped pointer/slice from a function (both explicit `return` and implicit last-expression):
+
+```fc
+let bad = () ->
+    let mut x = 42
+    &x                              // compile error: cannot return stack-allocated int32*
+
+let also_bad = () ->
+    int32[4] { 1, 2, 3, 4 }        // compile error: cannot return stack-allocated int32[]
+```
+
+- **Freeing non-heap memory** — calling `free` on a string literal (static memory) or stack-allocated memory:
+
+```fc
+free("hello")                       // compile error: cannot free static memory
+let mut x = 42
+free(&x)                            // compile error: cannot free stack-allocated memory
+```
+
+- **Storing stack pointers in heap structs** — passing a stack-derived pointer or slice as a field value in `alloc(struct_lit)`:
+
+```fc
+struct node =
+    data: int32*
+
+let mut x = 42
+let n = alloc(node { data = &x })   // compile error: cannot store stack-allocated int32* in heap struct
+```
+
+Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, and `.ptr` on slices. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
+
+The analysis is **intraprocedural** — function parameters and call return values have unknown provenance. A function that receives a pointer parameter is allowed to return it; the caller is responsible for ensuring the pointer is valid. `alloc(stack_data)` produces heap provenance — the deep-copy promotes stack data to the heap, which is the intended escape hatch:
+
+```fc
+let make_slice = () ->
+    let arr = int32[3] { 10, 20, 30 }
+    alloc(arr)!                     // OK — deep copy to heap, safe to return
+```
 
 ---
 

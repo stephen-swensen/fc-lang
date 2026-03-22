@@ -1,0 +1,7 @@
+// Returning a string literal is fine (PROV_STATIC)
+let greeting = () ->
+    "hello"
+
+let main = (args: str[]) ->
+    let s = greeting()
+    (int32)s.len

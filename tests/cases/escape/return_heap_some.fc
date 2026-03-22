@@ -1,0 +1,12 @@
+// Returning heap pointer wrapped in some is fine
+let make = () ->
+    let p = alloc(77)!
+    some(p)
+
+let main = (args: str[]) ->
+    match make() with
+    | some(p) ->
+        let val = *p
+        free(p)
+        val
+    | none -> 0

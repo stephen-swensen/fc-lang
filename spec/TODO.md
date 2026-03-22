@@ -31,14 +31,9 @@ This is the same situation as C, with one exception: C has `const` which provide
 
 The `alloc(slice)` deep-copy pattern mitigates this — `alloc(s)!` promotes any stack slice to heap-owned memory. But the programmer must know when to use it.
 
-### Escape analysis (low-hanging fruit)
+### Escape analysis — implemented (see Resolved section)
 
-Lightweight compile-time checks for the obvious cases:
-- Returning a stack-derived pointer or slice from a function
-- Storing a stack pointer/slice in a heap-allocated struct
-- `free()` on a string literal or stack pointer
-
-GCC/Clang do this for the simplest C cases (`-Wreturn-local-addr`). FC could do better since the compiler has more information about slice origins (it generates the `alloca` calls and array literal backing arrays).
+The lightweight compile-time escape checks are now implemented. See the Resolved section for details.
 
 ### `const` qualifier (future)
 
@@ -139,6 +134,7 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - Raw pointer arithmetic as escape hatch from slice overhead
 - Function pointer params in extern (non-capturing lambdas extract fn_ptr automatically)
 - Conditional compilation (`#if`/`#else`/`#end`) with built-in and user-defined flags
+- Escape analysis: compile-time detection of returning stack pointers/slices, freeing non-heap memory, storing stack pointers in heap structs
 
 **Remaining gaps:**
 
@@ -165,6 +161,36 @@ Items 1–3 are the most impactful. Items 4–8 are niche but matter for deep em
 ---
 
 # Resolved
+
+## Stack escape analysis (resolved 2026-03-22)
+
+Lightweight intraprocedural escape analysis added to pass2. Every expression that produces a pointer or slice type is tagged with a **provenance** (`PROV_UNKNOWN`, `PROV_STACK`, `PROV_HEAP`, `PROV_STATIC`) tracking where its backing storage lives. The analysis catches three classes of bugs at compile time:
+
+1. **Returning stack-derived pointers/slices** — `return &local`, returning array literals, interpolated strings, `(cstr)str` casts, subslices of stack arrays, or any of these through let bindings, if/match branches, blocks, some-wrapping, pointer arithmetic, or pointer casts.
+2. **Freeing non-heap memory** — `free("hello")` (static), `free(&x)` (stack), `free(array_lit)` (stack), `free(interp_string)` (stack).
+3. **Storing stack pointers in heap structs** — `alloc(node { data = &local })` where a struct field is a stack-derived pointer or slice.
+
+### Provenance sources
+- `PROV_STACK`: `&x` (address-of local), array literals, interpolated strings, `(cstr)str` cast (alloca copy), subslice of stack
+- `PROV_HEAP`: all forms of `alloc()` — including `alloc(stack_slice)` which deep-copies to heap
+- `PROV_STATIC`: string literals `"..."`, cstring literals `c"..."`
+- `PROV_UNKNOWN`: function parameters, call return values, extern results (no interprocedural analysis)
+
+### Propagation
+Provenance flows through: let bindings, identifiers, if/match branches (conservative merge — any STACK branch → STACK), blocks (last expression), some/unwrap, pointer arithmetic, pointer casts, subslices, `.ptr` on slices.
+
+### Design decisions
+- **Intraprocedural only**: function parameters are `PROV_UNKNOWN`. A function receiving a pointer is allowed to return it — the caller is responsible for correctness.
+- **Conservative on reassignment**: `let mut` reassignment does not update provenance (tracks initial binding only). This may produce false positives if a stack pointer is later reassigned to heap, but is safe.
+- **`alloc(stack_data)` produces PROV_HEAP**: the whole point of `alloc(s)!` is to promote stack data to heap. The provenance of the input is not propagated.
+- **Option types checked recursively**: `some(&x)` returns `int32*?` which carries `PROV_STACK` — the option wrapper doesn't hide the provenance.
+
+### Implementation
+- `Provenance` enum and `prov` field added to `Expr` in `ast.h`
+- `LocalBinding` extended with `prov` in pass2; `scope_add_prov()` propagates through let bindings
+- Three check points in pass2: explicit `return`, implicit return (last expression in function body), `free()`, and `alloc(struct_lit)` fields
+- 36 new tests in `tests/cases/escape/` (18 error tests, 18 success tests)
+- 593 total tests passing
 
 ## Native platform-width types `isize`/`usize` (resolved 2026-03-22)
 

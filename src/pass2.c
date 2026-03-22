@@ -11,6 +11,7 @@ typedef struct {
     const char *codegen_name;   /* unique C name for shadowing */
     Type *type;
     bool is_mut;
+    Provenance prov;            /* provenance of the bound value */
 } LocalBinding;
 
 typedef struct Scope Scope;
@@ -39,9 +40,13 @@ static Scope *scope_new(Arena *a, Scope *parent) {
 
 static int local_id_counter = 0;
 
-static void scope_add(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut) {
-    LocalBinding b = { name, codegen_name, type, is_mut };
+static void scope_add_prov(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut, Provenance prov) {
+    LocalBinding b = { name, codegen_name, type, is_mut, prov };
     DA_APPEND(s->locals, s->local_count, s->local_cap, b);
+}
+
+static void scope_add(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut) {
+    scope_add_prov(s, name, codegen_name, type, is_mut, PROV_UNKNOWN);
 }
 
 /* Scope lookup with lambda boundary crossing and mutability tracking.
@@ -71,6 +76,34 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
     if (out_crossings) *out_crossings = 0;
     if (out_is_global) *out_is_global = false;
     return NULL;
+}
+
+/* Look up a binding's provenance by name */
+static Provenance scope_lookup_prov(Scope *s, const char *name) {
+    for (Scope *sc = s; sc; sc = sc->parent) {
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].name == name)
+                return sc->locals[i].prov;
+        }
+    }
+    return PROV_UNKNOWN;
+}
+
+/* Conservative merge: if any branch is STACK, result is STACK */
+static Provenance merge_prov(Provenance a, Provenance b) {
+    if (a == b) return a;
+    if (a == PROV_STACK || b == PROV_STACK) return PROV_STACK;
+    return PROV_UNKNOWN;
+}
+
+/* Does this type carry provenance (pointer-like or slice-like)? */
+static bool type_has_provenance(Type *t) {
+    if (!t) return false;
+    if (t->kind == TYPE_POINTER || t->kind == TYPE_SLICE ||
+        t->kind == TYPE_ANY_PTR) return true;
+    /* Option wrapping a pointer/slice also carries provenance */
+    if (t->kind == TYPE_OPTION) return type_has_provenance(t->option.inner);
+    return false;
 }
 
 /* ---- Type checking ---- */
@@ -698,10 +731,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_STRING_LIT:
         e->type = type_str();
+        e->prov = PROV_STATIC;
         return e->type;
 
     case EXPR_CSTRING_LIT:
         e->type = type_cstr();
+        e->prov = PROV_STATIC;
         return e->type;
 
     case EXPR_IDENT: {
@@ -742,6 +777,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->ident.codegen_name = cg_name;
             e->ident.is_local = !is_global_binding;
             e->type = t;
+            e->prov = scope_lookup_prov(ctx->scope, e->ident.name);
             return t;
         }
         /* Check module symtab (for within-module sibling references) */
@@ -843,6 +879,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* Allow pointer arithmetic: ptr + int, ptr - int */
             if (lt->kind == TYPE_POINTER && type_is_integer(rt)) {
                 e->type = lt;
+                e->prov = e->binary.left->prov;
                 return e->type;
             }
             if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
@@ -1045,6 +1082,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
             }
             e->type = type_pointer(ctx->arena, ot);
+            e->prov = PROV_STACK;
         } else if (op == TOK_STAR) {
             /* Dereference: operand must be pointer */
             if (ot->kind != TYPE_POINTER) {
@@ -1072,6 +1110,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             e->type = ot->option.inner;
+            e->prov = e->unary_postfix.operand->prov;
             return e->type;
         }
         diag_error(e->loc, "unsupported postfix operator");
@@ -1155,6 +1194,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Expr *last = e->func.body[e->func.body_count - 1];
             if (last->kind == EXPR_FUNC && last->func.capture_count > 0) {
                 diag_error(last->loc, "cannot return a capturing closure");
+            }
+            /* Check if implicitly returning a stack-derived pointer/slice */
+            if (last->prov == PROV_STACK && type_has_provenance(last->type)) {
+                diag_error(last->loc, "cannot return stack-allocated %s from function",
+                    type_name(last->type));
             }
         }
 
@@ -1436,6 +1480,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             e->type = tt;
+            e->prov = merge_prov(e->if_expr.then_body->prov, e->if_expr.else_body->prov);
         } else {
             /* No else → void */
             e->type = type_void();
@@ -1448,6 +1493,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Scope *saved = ctx->scope;
         ctx->scope = inner;
         e->type = check_block(ctx, e->block.stmts, e->block.count);
+        if (e->block.count > 0)
+            e->prov = e->block.stmts[e->block.count - 1]->prov;
         ctx->scope = saved;
         return e->type;
     }
@@ -1487,7 +1534,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
         memcpy(cg, buf, strlen(buf) + 1);
         e->let_expr.codegen_name = cg;
-        scope_add(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut);
+        scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
+                        e->let_expr.let_init->prov);
         e->type = type_void();
         return e->type;
     }
@@ -1526,6 +1574,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (e->return_expr.value->kind == EXPR_FUNC &&
                 e->return_expr.value->func.capture_count > 0) {
                 diag_error(e->loc, "cannot return a capturing closure");
+            }
+            /* Check if returning a stack-derived pointer/slice */
+            if (e->return_expr.value->prov == PROV_STACK &&
+                type_has_provenance(e->return_expr.value->type)) {
+                diag_error(e->loc, "cannot return stack-allocated %s from function",
+                    type_name(e->return_expr.value->type));
             }
         }
         e->type = type_void();
@@ -1570,6 +1624,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         e->type = to;
+        /* str→cstr creates alloca copy; cstr→str wraps with strlen on stack */
+        if (str_to_cstr)
+            e->prov = PROV_STACK;
+        else if (cstr_to_str)
+            e->prov = e->cast.operand->prov;  /* preserves source provenance */
+        else if (type_has_provenance(to))
+            e->prov = e->cast.operand->prov;   /* pointer casts preserve provenance */
         return e->type;
     }
 
@@ -1915,6 +1976,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
             if (strcmp(e->field.name, "ptr") == 0) {
                 e->type = type_pointer(ctx->arena, obj_type->slice.elem);
+                e->prov = e->field.object->prov;
                 return e->type;
             }
         }
@@ -2011,6 +2073,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         e->type = obj_type;
+        e->prov = e->slice.object->prov;
         return e->type;
     }
 
@@ -2038,6 +2101,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         if (elem_error) { e->type = type_error(); return e->type; }
         e->type = type_slice(ctx->arena, elem_type);
+        e->prov = PROV_STACK;
         return e->type;
     }
 
@@ -2045,6 +2109,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *inner = check_expr(ctx, e->some_expr.value);
         if (type_is_error(inner)) { e->type = type_error(); return e->type; }
         e->type = type_option(ctx->arena, inner);
+        e->prov = e->some_expr.value->prov;
         return e->type;
     }
 
@@ -2201,6 +2266,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             ot->kind != TYPE_ANY_PTR) {
             diag_error(e->loc, "free requires pointer or slice, got %s", type_name(ot));
         }
+        /* Escape analysis: reject free on non-heap memory */
+        if (e->free_expr.operand->prov == PROV_STATIC) {
+            diag_error(e->loc, "cannot free static memory (string literal)");
+        } else if (e->free_expr.operand->prov == PROV_STACK) {
+            diag_error(e->loc, "cannot free stack-allocated memory");
+        }
         e->type = type_void();
         return e->type;
     }
@@ -2220,9 +2291,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     return e->type;
                 }
                 e->type = type_option(ctx->arena, type_slice(ctx->arena, ty));
+                e->prov = PROV_HEAP;
             } else {
                 /* alloc(T) → T*? */
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, ty));
+                e->prov = PROV_HEAP;
             }
         } else {
             /* alloc(expr) — a bare identifier may be a type name rather than
@@ -2248,6 +2321,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         e->alloc_expr.alloc_type = ty;
                         e->alloc_expr.init_expr = NULL;
                         e->type = type_option(ctx->arena, type_pointer(ctx->arena, ty));
+                        e->prov = PROV_HEAP;
                         return e->type;
                     }
                     /* Neither variable nor type — fall through to check_expr
@@ -2257,12 +2331,24 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* alloc(expr) → T*? where T is the type of expr */
             Type *t = check_expr(ctx, e->alloc_expr.init_expr);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
+            /* Escape analysis: check for stack pointers in heap-allocated struct */
+            if (e->alloc_expr.init_expr->kind == EXPR_STRUCT_LIT) {
+                for (int i = 0; i < e->alloc_expr.init_expr->struct_lit.field_count; i++) {
+                    FieldInit *fi = &e->alloc_expr.init_expr->struct_lit.fields[i];
+                    if (fi->value->prov == PROV_STACK && type_has_provenance(fi->value->type)) {
+                        diag_error(fi->value->loc,
+                            "cannot store stack-allocated %s in heap-allocated struct",
+                            type_name(fi->value->type));
+                    }
+                }
+            }
             if (t->kind == TYPE_SLICE) {
                 /* alloc(slice_expr) → T[]? (deep-copy slice data to heap) */
                 e->type = type_option(ctx->arena, t);
             } else {
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
             }
+            e->prov = PROV_HEAP;
         }
         return e->type;
     }
@@ -2330,6 +2416,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
         }
         e->type = type_str();
+        e->prov = PROV_STACK;
         return e->type;
     }
 
@@ -3004,6 +3091,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     }
 
     Type *result_type = NULL;
+    Provenance result_prov = PROV_UNKNOWN;
 
     for (int i = 0; i < e->match_expr.arm_count; i++) {
         MatchArm *arm = &e->match_expr.arms[i];
@@ -3019,12 +3107,16 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 
         /* Type-check arm body */
         Type *arm_type = check_block(ctx, arm->body, arm->body_count);
+        Provenance arm_prov = PROV_UNKNOWN;
+        if (arm->body_count > 0)
+            arm_prov = arm->body[arm->body_count - 1]->prov;
         ctx->scope = saved;
 
         if (type_is_error(arm_type)) continue;
 
         if (!result_type || type_is_error(result_type)) {
             result_type = arm_type;
+            result_prov = arm_prov;
             /* Fill recursive return type from first concrete arm (base case) */
             if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
                 arm_type->kind != TYPE_VOID) {
@@ -3033,6 +3125,8 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         } else if (!type_eq(result_type, arm_type)) {
             diag_error(arm->loc, "match arms have different types: %s vs %s",
                 type_name(result_type), type_name(arm_type));
+        } else {
+            result_prov = merge_prov(result_prov, arm_prov);
         }
     }
 
@@ -3042,6 +3136,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     }
 
     e->type = result_type ? result_type : type_error();
+    e->prov = result_prov;
     return e->type;
 }
 

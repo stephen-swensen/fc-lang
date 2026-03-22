@@ -1,0 +1,11 @@
+// Error: match arms all return stack pointers
+let bad = (flag: bool) ->
+    let mut a = 1
+    let mut b = 2
+    match flag with
+    | true -> &a
+    | false -> &b
+
+let main = (args: str[]) ->
+    let p = bad(true)
+    0

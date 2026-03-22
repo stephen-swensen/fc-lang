@@ -1,0 +1,5 @@
+// Error: provenance propagates through let binding for static
+let main = (args: str[]) ->
+    let s = "hello"
+    free(s)
+    0

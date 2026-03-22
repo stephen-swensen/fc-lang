@@ -1,0 +1,10 @@
+// alloc(interp_string) promotes stack to heap — safe to return
+let make_str = (n: int32) ->
+    let s = "%d{n}"
+    alloc(s)!
+
+let main = (args: str[]) ->
+    let s = make_str(7)
+    let result = (int32)s.len
+    free(s)
+    result

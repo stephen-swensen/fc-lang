@@ -1,0 +1,11 @@
+// Error: stack pointer through a block expression
+let bad = () ->
+    let mut x = 99
+    let p =
+        let mut y = x
+        &y
+    return p
+
+let main = (args: str[]) ->
+    let p = bad()
+    0

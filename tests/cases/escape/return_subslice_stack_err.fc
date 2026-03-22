@@ -1,0 +1,8 @@
+// Error: returning subslice of a stack array
+let bad = () ->
+    let arr = int32[4] { 10, 20, 30, 40 }
+    arr[1..3]
+
+let main = (args: str[]) ->
+    let s = bad()
+    0

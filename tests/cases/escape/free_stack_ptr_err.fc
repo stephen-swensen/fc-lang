@@ -1,0 +1,5 @@
+// Error: cannot free address of a local variable (stack memory)
+let main = (args: str[]) ->
+    let mut x = 42
+    free(&x)
+    0

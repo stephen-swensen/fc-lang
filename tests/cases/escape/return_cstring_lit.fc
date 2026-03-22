@@ -1,0 +1,8 @@
+// Returning a cstring literal is fine (PROV_STATIC)
+let name = () ->
+    c"world"
+
+let main = (args: str[]) ->
+    let c = name()
+    // Just check we got something non-null
+    if c == default(cstr) then 1 else 0

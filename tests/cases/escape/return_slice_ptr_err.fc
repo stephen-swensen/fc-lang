@@ -1,0 +1,8 @@
+// Error: .ptr on stack slice preserves stack provenance
+let bad = () ->
+    let arr = int32[3] { 1, 2, 3 }
+    arr.ptr
+
+let main = (args: str[]) ->
+    let p = bad()
+    0

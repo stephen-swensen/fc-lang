@@ -1,0 +1,7 @@
+// Error: returning a stack-allocated array literal
+let bad = () ->
+    int32[4] { 1, 2, 3, 4 }
+
+let main = (args: str[]) ->
+    let s = bad()
+    0

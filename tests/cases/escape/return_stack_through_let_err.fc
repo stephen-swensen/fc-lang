@@ -1,0 +1,9 @@
+// Error: provenance propagates through let binding
+let bad = (x: int32) ->
+    let mut val = x
+    let p = &val
+    return p
+
+let main = (args: str[]) ->
+    let p = bad(42)
+    0

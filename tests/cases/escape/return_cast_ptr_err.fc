@@ -1,0 +1,8 @@
+// Error: pointer cast preserves stack provenance
+let bad = () ->
+    let mut x = 42
+    (any*)&x
+
+let main = (args: str[]) ->
+    let p = bad()
+    0

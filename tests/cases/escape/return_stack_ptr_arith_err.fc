@@ -1,0 +1,9 @@
+// Error: pointer arithmetic preserves stack provenance
+let bad = () ->
+    let mut val = 42
+    let p = &val
+    p + 0
+
+let main = (args: str[]) ->
+    let p = bad()
+    0
