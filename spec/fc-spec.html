@@ -2701,11 +2701,13 @@ Directives always appear at **column 1** (the first column), regardless of the s
 
 Flags are simple names — either set or not set. There are no valued flags. Two categories:
 
-**Built-in target flags** — automatically set by the compiler:
+**Built-in target flags** — automatically set by the compiler based on the build target:
 
 | Flag | Set when |
 |------|----------|
-| `target_hosted` | Always — the only currently supported target |
+| `target_hosted` | Building for hosted target (default; currently the only supported target) |
+| `target_embedded` | Building for embedded target with allocator (planned) |
+| `target_bare_metal` | Building for bare-metal target (planned) |
 
 **User-defined flags** — passed on the command line:
 
@@ -2766,16 +2768,31 @@ let platform = "unknown"
 
 ## Build Targets
 
-The compiler currently supports one build target: **hosted** — the standard target for desktop, server, and general-purpose programs. Full libc is available. `alloc` and `free` work via `calloc`/`free`. The `target_hosted` flag is always set.
+FC is designed to support multiple deployment targets beyond standard hosted environments. The build target determines what runtime facilities are available to the program, and automatically sets the corresponding built-in conditional compilation flag (see §Conditional Compilation).
+
+> **Implementation status**: only the hosted target is currently implemented. Embedded and bare-metal targets are designed but not yet supported by the compiler — see §TODO.
+
+**Hosted** (default) — the standard target for desktop, server, and general-purpose programs. Full libc is available. `alloc` and `free` work automatically. `import libc` exposes the full C standard library. `alloc` uses `calloc`, guaranteeing zero-initialized heap memory. Sets the `target_hosted` flag.
 
 ```
 fc src/
 fc src/*.fc vendor/acme/*.fc
 ```
 
-Because FC transpiles to C11, it is inherently portable — the generated C can be compiled with any C11 toolchain including embedded ones (arm-none-eabi-gcc, avr-gcc, xtensa-gcc, etc.). See §Why C as a target.
+**Embedded with allocator** — targets like Arduino Uno and ESP32 where `malloc` and `free` are available but the rest of libc is absent or limited. `alloc` and `free` still work. `import libc` only exposes functions available on the target — the compiler warns if unavailable functions are used. Where `calloc` is available, `alloc` uses it directly. Where it is not, the compiler emits `malloc` + `memset` to achieve the same zero-initialization guarantee. On these targets heap allocations are typically small and infrequent, so the `memset` overhead is negligible. Sets the `target_embedded` flag.
 
-Support for explicit embedded and bare-metal targets (`--target`, `target_embedded`, `target_bare_metal`, `alloc`/`free` availability enforcement) is planned but not yet implemented.
+```
+fc --target arduino-uno src/*.fc
+fc --target esp32 src/*.fc
+```
+
+**Bare metal / no allocator** — targets like ATtiny or custom hardware where no heap allocator is available and memory is severely constrained. `alloc` and `free` are unavailable — using them is a compile error. Programs must be entirely stack-based. Stack allocation is always zero-initialized via C declaration syntax, which works identically on all targets and requires no runtime support. This is analogous to Rust's `no_std` mode. Sets the `target_bare_metal` flag.
+
+```
+fc --target bare-metal src/*.fc
+```
+
+Target definitions specify the available libc subset, pointer width, endianness, and other platform characteristics. The compiler uses this to enforce correct usage at compile time rather than producing code that fails silently at runtime.
 
 # PART 8 — C Interop
 
