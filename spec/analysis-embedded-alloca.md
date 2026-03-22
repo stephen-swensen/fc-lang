@@ -20,11 +20,22 @@ buf[s.len] = '\0';
 
 ### 2. String interpolation
 
-Allocates the output buffer for `snprintf`. Size is a runtime-computed sum of segment bounds. `alloca` is used instead of a VLA because the result lives inside a GCC statement expression (`({...})`), and VLA storage would be scoped to that inner block, while `alloca` survives until the function returns.
+Allocates the output buffer for `snprintf`. `alloca` is used instead of a VLA because the result lives inside a GCC statement expression (`({...})`), and VLA storage would be scoped to that inner block, while `alloca` survives until the function returns.
+
+The buffer size is a sum of per-segment bounds. For numeric types (`%d`, `%x`, `%f`, etc.), bounds are compile-time constants derived from the type (e.g., `int32` → 11 bytes for `%d`). For `%s` with `str` or `cstr` arguments, the bound is runtime-dependent (`str.len` or `strlen()`).
+
+**Precision-bounded `%s`**: When `%s` has printf-style precision (e.g., `%.256s{name}`), the precision is used as a compile-time bound instead of the runtime length. When all segments in an interpolation have compile-time bounds, the `alloca` argument becomes a constant expression. This enables the C compiler to hoist the allocation out of loops (turning it into a fixed stack slot in the function prologue) and allows static stack analysis tools to bound worst-case usage.
+
+Truncation semantics follow printf: `snprintf` with `%.Ns` naturally truncates output to N bytes. For `str` arguments (which are not null-terminated), the emitted code passes `min(N, str.len)` as the `%.*s` precision argument to avoid reading past the slice data.
 
 ```c
-uint8_t *buf = (uint8_t*)alloca((size_t)(computed_len + 1));
-snprintf((char*)buf, (size_t)(computed_len + 1), fmt, ...);
+// Without precision — runtime-dependent size:
+int64_t _flen = _sa.len + 11;
+uint8_t *buf = (uint8_t*)alloca((size_t)(_flen + 1));
+
+// With precision (%.256s) — compile-time constant size:
+int64_t _flen = 256 + 11;
+uint8_t *buf = (uint8_t*)alloca((size_t)(_flen + 1));
 ```
 
 ### 3. `main` wrapper argv conversion
@@ -119,12 +130,39 @@ The realistic embedded target set for FC is **Cortex-M, ESP32, and RISC-V** — 
 | Case | Size bound | Risk |
 |------|-----------|------|
 | `str` to `cstr` cast | `str.len + 1` | Unbounded — large string on small stack = fault |
-| String interpolation | Runtime-computed segment sum | Unbounded — format args control size |
+| String interpolation (bare `%s`) | Runtime-computed segment sum | Unbounded — format args control size |
+| String interpolation (`%.Ns`) | Compile-time constant | Bounded — static analysis works |
 | `main` argv wrapper | `argc * sizeof(fc_str)` | Low — argc is typically small |
 
 `alloca` cannot return NULL on failure. On embedded, a stack overflow from `alloca` causes silent corruption or a hard fault — not a recoverable error. Additionally, runtime-dependent `alloca` sizes make static worst-case stack analysis impossible, which is required for safety-critical RTOS task sizing.
 
-### Possible mitigations
+---
+
+## Alloca implications by context
+
+### `str` to `cstr` cast
+
+The `(cstr)s` cast copies `s.len + 1` bytes onto the stack. The size is entirely data-dependent and unbounded at compile time. This is the highest-risk alloca usage in the compiler.
+
+Note that `str` and `cstr` **literals** do not involve alloca. String literals are compiled to static `const char[]` data in the C output — `str` literals are static fat pointers, and `cstr` literals (written as `c"..."`) are static null-terminated byte arrays. The alloca only occurs when a runtime `str` value is cast to `cstr`.
+
+### String interpolation
+
+With bare `%s{expr}`, the buffer size depends on the runtime length of the string argument. With precision-bounded `%.Ns{expr}`, the string segment contributes a compile-time constant `N` to the buffer size (or `max(N, width)` when a minimum width is also specified).
+
+When **all** segments in an interpolation have compile-time bounds — which is the case when all `%s` segments use precision and all other segments are numeric/char/pointer — the entire `alloca` argument is a constant expression. Benefits:
+
+- The C compiler can hoist the allocation out of loops, converting it to a fixed stack slot in the function prologue
+- Static stack analysis tools (used for RTOS task sizing) can bound the worst-case usage
+- No data-controlled allocation size (eliminates a class of stack overflow from untrusted input)
+
+### `main` wrapper argv conversion
+
+The `main` wrapper allocates `argc * sizeof(fc_str)` to convert C's `argv` into an FC `str[]` slice. This is effectively bounded: `argc` is determined by the OS/shell and is small in practice (typically < 100 args, so < 1.6KB on 64-bit). On embedded targets, `main` is usually called once with fixed arguments, making this the lowest-risk case.
+
+---
+
+## Possible further mitigations
 
 - **Size guard**: Emit `if (len > LIMIT) abort();` before `alloca` calls. Caps stack damage, makes failures deterministic, but the limit is arbitrary.
 - **Heap allocation**: Replace `alloca` with `malloc`/`free`. Safe and unbounded, but introduces hidden heap allocation in cast expressions — surprising in a manual-memory language.
