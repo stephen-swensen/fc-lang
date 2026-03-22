@@ -48,7 +48,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - **`pass2.c/h`** — Second pass (type checker). Walks expressions with a scope chain, infers types bottom-up, resolves identifiers, checks type compatibility, validates casts and widening. Assigns unique codegen names to local bindings for shadowing support. Registers monomorphized generic instances and resolves their concrete types. Uses `diag_error` (not `diag_fatal`) so multiple type errors are reported in a single compilation; erroneous expressions receive the poison type `TYPE_ERROR` which propagates silently to suppress cascading false positives.
 - **`monomorph.c/h`** — Monomorphization table and utilities. Tracks generic instantiations (functions, structs, unions) with their mangled names and concrete types. `mono_discover_transitive()` runs after pass2 to find all transitive instantiations (generic functions calling other generic functions) via a fixpoint AST walk. `mono_resolve_type_names()` resolves nested generic type references (e.g., self-referential struct fields) to mangled C identifiers.
 - **`codegen.c/h`** — C code emitter. Walks the typed AST and emits C11 source. Handles typedef generation for slices/options, function declarations, struct/union definitions, and expression emission. Emits monomorphized copies of generic functions/structs using a substitution context (`SubstCtx`) that replaces type variables with concrete types at emit time.
-- **`types.c/h`** — Type representation and utilities. Defines `Type` (int8–uint64, float32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
+- **`types.c/h`** — Type representation and utilities. Defines `Type` (int8–uint64, isize, usize, float32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
 - **`diag.c/h`** — Diagnostics. `diag_error()` reports an error with source location and continues (used by pass2 for error accumulation); `diag_fatal()` reports and exits immediately (used by lexer/parser for unrecoverable errors). `diag_error_count()` gates progression to later pipeline stages.
 - **`common.c/h`** — Shared utilities. Arena allocator, dynamic array macro (`DA_APPEND`).
 
@@ -78,6 +78,8 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 ### Types and Literals
 - Default integer: `int32`; default float: `float64`
 - Suffixed literals: `42i8`, `42u64`, `3.14f32`
+- Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42i`, `42u`
+- No implicit widening to/from `isize`/`usize` — explicit casts required
 - String types: `str` = `uint8[]` (fat pointer), `cstr` = `uint8*` (null-terminated, C interop), `str32` = `uint32[]`
 - `any*` = opaque pointer (`void*`), cannot be dereferenced
 
@@ -142,6 +144,7 @@ Tests live in `tests/cases/`, organized into subdirectories by functional catego
 - `closures/` — capture, lambda, closure semantics, globals
 - `generics/` — generic functions/structs/unions, monomorphization, dedup
 - `type_properties/` — static type props (int32.min, float64.nan) + typevar props ('a.bits)
+- `native_types/` — isize/usize literals, arithmetic, casts, generics, error cases
 - `extern/` — extern declarations, conditional compilation (#if/#else/#end)
 - `io/` — print, io read/write, eprint, stdin/stdout, sys, main_args
 

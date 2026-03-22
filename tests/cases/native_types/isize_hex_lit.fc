@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let a = 0xAi
+    let b = 0xAu
+    let c = 0b1010i
+    let d = 0o12u
+    (int32)a + (int32)b + (int32)c + (int32)d

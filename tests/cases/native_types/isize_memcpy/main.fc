@@ -1,0 +1,22 @@
+module c from "string.h" =
+    extern memcpy: (any*, any*, usize) -> any*
+    extern strlen: (cstr) -> usize
+
+module libc from "stdlib.h" =
+    extern malloc: (usize) -> any*
+
+let main = (args: str[]) ->
+    // allocate with usize — matches C's malloc(size_t)
+    let size = 6u
+    let buf = libc.malloc(size)
+
+    // memcpy with usize length
+    let src = c"hello"
+    let len = c.strlen(src)
+    c.memcpy(buf, (any*)src, len + 1u)
+
+    // verify the copy worked
+    let result = (cstr)buf
+    let rlen = c.strlen(result)
+    free((int32*)buf)
+    (int32)rlen

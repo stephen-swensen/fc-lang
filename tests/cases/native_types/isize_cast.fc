@@ -1,0 +1,16 @@
+let main = (args: str[]) ->
+    // cast from fixed to isize/usize
+    let a = (isize)42
+    let b = (usize)42
+    // cast from isize/usize to fixed
+    let c = (int32)a
+    let d = (int64)a
+    let e = (uint64)b
+    let f = (int32)b
+    // cast between isize and usize
+    let g = (usize)a
+    let h = (isize)b
+    // cast from/to float requires going through int
+    let i = (int32)a
+    let j = (float64)i
+    c + f

@@ -1,0 +1,15 @@
+let main = (args: str[]) ->
+    let a = 10i
+    let b = 20i
+    let r1 = if a < b then 1 else 0
+    let r2 = if a > b then 1 else 0
+    let r3 = if a <= b then 1 else 0
+    let r4 = if a >= b then 1 else 0
+    let r5 = if a == 10i then 1 else 0
+    let r6 = if a != b then 1 else 0
+    // usize comparisons
+    let c = 5u
+    let d = 10u
+    let r7 = if c < d then 1 else 0
+    let r8 = if c == 5u then 1 else 0
+    r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8

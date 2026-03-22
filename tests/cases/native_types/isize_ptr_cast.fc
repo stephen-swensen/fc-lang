@@ -1,0 +1,16 @@
+let main = (args: str[]) ->
+    // cast pointer to usize and back (round-trip)
+    let mut x = 42
+    let p = &x
+    let addr = (usize)p
+    let r1 = if addr > 0u then 1 else 0
+
+    // isize from pointer
+    let saddr = (isize)p
+    let r2 = if saddr > 0i then 1 else 0
+
+    // cast usize back to pointer
+    let p2 = (int32*)addr
+    let r3 = *p2
+
+    r1 + r2 + r3

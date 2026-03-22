@@ -76,6 +76,7 @@ static const char *resolve_type_prop_codegen(Type *t, const char *prop) {
         case TYPE_INT16: case TYPE_UINT16: return "16";
         case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: return "32";
         case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: return "64";
+        case TYPE_ISIZE: case TYPE_USIZE: return "((int32_t)(sizeof(ptrdiff_t)*8))";
         default: return NULL;
         }
     }
@@ -90,6 +91,8 @@ static const char *resolve_type_prop_codegen(Type *t, const char *prop) {
             case TYPE_UINT16: return "((uint16_t)0)";
             case TYPE_UINT32: return "((uint32_t)0)";
             case TYPE_UINT64: return "((uint64_t)0)";
+            case TYPE_ISIZE:  return "PTRDIFF_MIN";
+            case TYPE_USIZE:  return "((size_t)0)";
             default: return NULL;
             }
         }
@@ -103,6 +106,8 @@ static const char *resolve_type_prop_codegen(Type *t, const char *prop) {
             case TYPE_UINT16: return "UINT16_MAX";
             case TYPE_UINT32: return "UINT32_MAX";
             case TYPE_UINT64: return "UINT64_MAX";
+            case TYPE_ISIZE:  return "PTRDIFF_MAX";
+            case TYPE_USIZE:  return "SIZE_MAX";
             default: return NULL;
             }
         }
@@ -143,6 +148,8 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_UINT16:  fprintf(out, "uint16_t");  break;
     case TYPE_UINT32:  fprintf(out, "uint32_t");  break;
     case TYPE_UINT64:  fprintf(out, "uint64_t");  break;
+    case TYPE_ISIZE:   fprintf(out, "ptrdiff_t"); break;
+    case TYPE_USIZE:   fprintf(out, "size_t");    break;
     case TYPE_FLOAT32: fprintf(out, "float");     break;
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
@@ -220,6 +227,8 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_UINT16:  fprintf(out, "uint16_t");  break;
     case TYPE_UINT32:  fprintf(out, "uint32_t");  break;
     case TYPE_UINT64:  fprintf(out, "uint64_t");  break;
+    case TYPE_ISIZE:   fprintf(out, "ptrdiff_t"); break;
+    case TYPE_USIZE:   fprintf(out, "size_t");    break;
     case TYPE_FLOAT32: fprintf(out, "float");     break;
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
@@ -561,17 +570,20 @@ static const char *unsigned_counterpart(Type *t) {
     case TYPE_INT16: return "uint16_t";
     case TYPE_INT32: return "uint32_t";
     case TYPE_INT64: return "uint64_t";
+    case TYPE_ISIZE: return "size_t";
     default: return NULL;
     }
 }
 
-/* Helper: shift mask for an integer type's bit width */
+/* Helper: shift mask for an integer type's bit width.
+ * Returns -1 for platform-dependent types (isize/usize) — caller must handle. */
 static int shift_mask_for(Type *t) {
     switch (t->kind) {
     case TYPE_INT8:  case TYPE_UINT8:  return 7;
     case TYPE_INT16: case TYPE_UINT16: return 15;
     case TYPE_INT32: case TYPE_UINT32: return 31;
     case TYPE_INT64: case TYPE_UINT64: return 63;
+    case TYPE_ISIZE: case TYPE_USIZE:  return -1;
     default: return 0;
     }
 }
@@ -610,6 +622,10 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "INT64_C(%" PRId64 ")", e->int_lit.value);
         else if (e->int_lit.lit_type->kind == TYPE_UINT64)
             fprintf(out, "UINT64_C(%" PRId64 ")", e->int_lit.value);
+        else if (e->int_lit.lit_type->kind == TYPE_ISIZE)
+            fprintf(out, "((ptrdiff_t)%" PRId64 "LL)", e->int_lit.value);
+        else if (e->int_lit.lit_type->kind == TYPE_USIZE)
+            fprintf(out, "((size_t)%" PRId64 "ULL)", e->int_lit.value);
         else
             fprintf(out, "%" PRId64, e->int_lit.value);
         break;
@@ -725,6 +741,13 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Shift masking: a << (b & 31) for 32-bit, etc. */
         if ((op == TOK_LTLT || op == TOK_GTGT) && rt && type_is_integer(rt)) {
             int mask = shift_mask_for(rt);
+            /* For platform-dependent types, emit a computed mask */
+            const char *mask_expr = NULL;
+            char mask_buf[64];
+            if (mask < 0) {
+                snprintf(mask_buf, sizeof(mask_buf), "((int)(sizeof(size_t)*8)-1)");
+                mask_expr = mask_buf;
+            }
             if (op == TOK_LTLT && type_is_signed(rt)) {
                 /* Signed left shift: also wrap through unsigned */
                 const char *ut = unsigned_counterpart(rt);
@@ -734,13 +757,15 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_expr(e->binary.left, out);
                 fprintf(out, ") << (");
                 emit_expr(e->binary.right, out);
-                fprintf(out, " & %d))", mask);
+                if (mask_expr) fprintf(out, " & %s))", mask_expr);
+                else fprintf(out, " & %d))", mask);
             } else {
                 fprintf(out, "(");
                 emit_expr(e->binary.left, out);
                 fprintf(out, " %s (", op == TOK_LTLT ? "<<" : ">>");
                 emit_expr(e->binary.right, out);
-                fprintf(out, " & %d))", mask);
+                if (mask_expr) fprintf(out, " & %s))", mask_expr);
+                else fprintf(out, " & %d))", mask);
             }
             break;
         }
@@ -1444,6 +1469,7 @@ static void emit_expr(Expr *e, FILE *out) {
         switch (t->kind) {
         case TYPE_INT8: case TYPE_INT16: case TYPE_INT32: case TYPE_INT64:
         case TYPE_UINT8: case TYPE_UINT16: case TYPE_UINT32: case TYPE_UINT64:
+        case TYPE_ISIZE: case TYPE_USIZE:
         case TYPE_CHAR:
             fprintf(out, "0");
             break;
@@ -1841,7 +1867,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 } else {
                     /* Emit %<spec> with appropriate length modifier for 64-bit types */
                     Type *t = segs[i].expr->type;
-                    bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64);
+                    bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
                     const char *sp = segs[i].text;
                     int splen = segs[i].text_length;
                     fprintf(out, "%%");
@@ -1881,7 +1907,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 /* Cast arguments to match the printf format specifier */
                 Type *t = segs[i].expr->type;
                 char conv = segs[i].conversion;
-                bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64);
+                bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
                 if (t && type_is_integer(t)) {
                     if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
                         fprintf(out, is_64bit ? "(unsigned long long)" : "(unsigned int)");
@@ -2621,6 +2647,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     if (needs_posix)
         fprintf(out, "#define _POSIX_C_SOURCE 200809L\n");
     fprintf(out, "#include <stdint.h>\n");
+    fprintf(out, "#include <stddef.h>\n");
     fprintf(out, "#include <stdbool.h>\n");
     fprintf(out, "#include <inttypes.h>\n");
     fprintf(out, "#include <stdlib.h>\n");

@@ -10,6 +10,8 @@ typedef enum {
     TYPE_UINT16,
     TYPE_UINT32,
     TYPE_UINT64,
+    TYPE_ISIZE,
+    TYPE_USIZE,
     TYPE_FLOAT32,
     TYPE_FLOAT64,
     TYPE_BOOL,
@@ -81,6 +83,8 @@ Type *type_uint8(void);
 Type *type_uint16(void);
 Type *type_uint32(void);
 Type *type_uint64(void);
+Type *type_isize(void);
+Type *type_usize(void);
 Type *type_float32(void);
 Type *type_float64(void);
 Type *type_bool(void);

@@ -24,6 +24,8 @@ PRIM(uint8,   TYPE_UINT8)
 PRIM(uint16,  TYPE_UINT16)
 PRIM(uint32,  TYPE_UINT32)
 PRIM(uint64,  TYPE_UINT64)
+PRIM(isize,   TYPE_ISIZE)
+PRIM(usize,   TYPE_USIZE)
 PRIM(float32, TYPE_FLOAT32)
 PRIM(float64, TYPE_FLOAT64)
 PRIM(bool,    TYPE_BOOL)
@@ -115,15 +117,15 @@ Type *type_option(Arena *a, Type *inner) {
 }
 
 bool type_is_integer(Type *t) {
-    return t->kind >= TYPE_INT8 && t->kind <= TYPE_UINT64;
+    return t->kind >= TYPE_INT8 && t->kind <= TYPE_USIZE;
 }
 
 bool type_is_signed(Type *t) {
-    return t->kind >= TYPE_INT8 && t->kind <= TYPE_INT64;
+    return (t->kind >= TYPE_INT8 && t->kind <= TYPE_INT64) || t->kind == TYPE_ISIZE;
 }
 
 bool type_is_unsigned(Type *t) {
-    return t->kind >= TYPE_UINT8 && t->kind <= TYPE_UINT64;
+    return (t->kind >= TYPE_UINT8 && t->kind <= TYPE_UINT64) || t->kind == TYPE_USIZE;
 }
 
 bool type_is_float(Type *t) {
@@ -174,6 +176,8 @@ static const char *primitive_names[] = {
     [TYPE_UINT16]  = "uint16",
     [TYPE_UINT32]  = "uint32",
     [TYPE_UINT64]  = "uint64",
+    [TYPE_ISIZE]   = "isize",
+    [TYPE_USIZE]   = "usize",
     [TYPE_FLOAT32] = "float32",
     [TYPE_FLOAT64] = "float64",
     [TYPE_BOOL]    = "bool",
@@ -263,6 +267,7 @@ Type *type_from_int_suffix(const char *suffix, int len) {
         {"i32", 3, type_int32},  {"i64", 3, type_int64},
         {"u8",  2, type_uint8},  {"u16", 3, type_uint16},
         {"u32", 3, type_uint32}, {"u64", 3, type_uint64},
+        {"i",   1, type_isize},  {"u",   1, type_usize},
     };
 
     for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
@@ -283,6 +288,7 @@ Type *type_from_name(const char *s, int len) {
         {"bool",4, type_bool},     {"char",4, type_char},
         {"str",3, type_str},       {"str32",5, type_str32},
         {"cstr",4, type_cstr},     {"any",3, type_any_ptr},
+        {"isize",5, type_isize},   {"usize",5, type_usize},
     };
     for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
         if (map[i].l == len && memcmp(s, map[i].n, (size_t)len) == 0) {
@@ -489,6 +495,8 @@ const char *mangle_type_name(Type *t) {
     case TYPE_UINT16:  return "uint16";
     case TYPE_UINT32:  return "uint32";
     case TYPE_UINT64:  return "uint64";
+    case TYPE_ISIZE:   return "isize";
+    case TYPE_USIZE:   return "usize";
     case TYPE_FLOAT32: return "f32";
     case TYPE_FLOAT64: return "f64";
     case TYPE_BOOL:    return "bool";

@@ -137,6 +137,8 @@ static Token scan_number(Lexer *l) {
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
+            } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
+                advance(l);
             }
             return make_token(l, TOK_INT_LIT);
         }
@@ -146,6 +148,8 @@ static Token scan_number(Lexer *l) {
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
+            } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
+                advance(l);
             }
             return make_token(l, TOK_INT_LIT);
         }
@@ -155,6 +159,8 @@ static Token scan_number(Lexer *l) {
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
+            } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
+                advance(l);
             }
             return make_token(l, TOK_INT_LIT);
         }
@@ -172,6 +178,8 @@ static Token scan_number(Lexer *l) {
     if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
         advance(l);
         while (isdigit((unsigned char)peek(l))) advance(l);
+    } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
+        advance(l);
     }
     return make_token(l, TOK_INT_LIT);
 }

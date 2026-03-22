@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let a = 42u
+    let b = 10u
+    let sum = a + b
+    let diff = a - b
+    let prod = a * b
+    let zero = 0u
+    (int32)(sum + diff + prod + zero)

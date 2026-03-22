@@ -605,6 +605,7 @@ static Type *resolve_type_property(const char *type_name, const char *prop,
             case TYPE_INT16: case TYPE_UINT16: *codegen_out = "16"; break;
             case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: *codegen_out = "32"; break;
             case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: *codegen_out = "64"; break;
+            case TYPE_ISIZE: case TYPE_USIZE: *codegen_out = "((int32_t)(sizeof(ptrdiff_t)*8))"; break;
             default: return (Type *)-1;
         }
         return type_int32();
@@ -622,6 +623,8 @@ static Type *resolve_type_property(const char *type_name, const char *prop,
                 case TYPE_UINT16: *codegen_out = "((uint16_t)0)";  break;
                 case TYPE_UINT32: *codegen_out = "((uint32_t)0)";  break;
                 case TYPE_UINT64: *codegen_out = "((uint64_t)0)";  break;
+                case TYPE_ISIZE:  *codegen_out = "PTRDIFF_MIN";      break;
+                case TYPE_USIZE:  *codegen_out = "((size_t)0)";     break;
                 default: return (Type *)-1;
             }
             return t;
@@ -636,6 +639,8 @@ static Type *resolve_type_property(const char *type_name, const char *prop,
                 case TYPE_UINT16: *codegen_out = "UINT16_MAX"; break;
                 case TYPE_UINT32: *codegen_out = "UINT32_MAX"; break;
                 case TYPE_UINT64: *codegen_out = "UINT64_MAX"; break;
+                case TYPE_ISIZE:  *codegen_out = "PTRDIFF_MAX"; break;
+                case TYPE_USIZE:  *codegen_out = "SIZE_MAX";    break;
                 default: return (Type *)-1;
             }
             return t;

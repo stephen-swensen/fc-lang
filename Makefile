@@ -9,7 +9,9 @@ all: $(BIN)
 $(BIN): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-src/%.o: src/%.c
+HDRS = $(wildcard src/*.h)
+
+src/%.o: src/%.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:

@@ -12,14 +12,6 @@ Open design questions and topics for future work.
 - Import pattern: `import io from std::`, `import sys from std::`, etc.
 - Open: does stdlib require explicit import per file, or is any of it pre-imported?
 
-## No `size_t` equivalent — extern declarations hardcode uint64
-
-FC has no `size_t` type. Extern declarations for C functions that take or return `size_t` (e.g., `fwrite`, `fread`, `malloc`) must use a fixed-width integer — currently `uint64`. This is correct on 64-bit platforms but wrong on 32-bit, where `size_t` is `uint32`.
-
-**Current workaround**: Since FC doesn't emit its own extern forward declarations (the real C headers provide correct prototypes via `#include`), the C compiler sees the correct `size_t`-width parameters and implicitly narrows the `uint64` values FC passes. This is sub-optimal (unnecessary 64→32 bit operations) but valid — the same pattern as FC's general approach of using `int64` arithmetic on 32-bit platforms where `int32` is native. The values involved in I/O sizes always fit in 32 bits in practice.
-
-**If FC adds 32-bit target support**: Consider adding a `usize`/`isize` type that maps to the target's pointer width, or a `size_t` type alias that resolves at codegen time. Until then, `uint64` is the pragmatic choice.
-
 ## Slice/pointer provenance and safety
 
 ### Current situation
@@ -129,6 +121,18 @@ The conditional compilation infrastructure (`#if`/`#else if`) is already in plac
 ---
 
 # Resolved
+
+## Native platform-width types `isize`/`usize` (resolved 2026-03-22)
+
+Added `isize` (signed, pointer-width) and `usize` (unsigned, pointer-width) as opt-in types for C interop and embedded targets. FC's defaults remain fixed-width: `int32` for default integers, `int64` for `sizeof` and slice `.len`. The native types are escape hatches for when exact platform type matching matters.
+
+- **Codegen**: `isize` → `ptrdiff_t`, `usize` → `size_t` (resolved by the C compiler, not FC)
+- **Literal suffixes**: `42i` (isize), `42u` (usize) — bare `i`/`u` without width digits
+- **No implicit widening**: explicit casts required in both directions between isize/usize and fixed-width types. `isize + int32` is a type error; write `(isize)x + y` or `(int32)x + y`
+- **Type properties**: `.bits`, `.min`, `.max` are platform-dependent (emitted as C expressions like `PTRDIFF_MAX`, `SIZE_MAX`, `(int32_t)(sizeof(ptrdiff_t)*8)`)
+- **Generics**: type variables can bind to isize/usize; monomorphization works normally
+- **Operators**: arithmetic, comparison, bitwise, shifts all work between same-type operands; signed overflow wrapping and shift masking use platform-dependent expressions
+- 548 tests passing (18 new native_types tests).
 
 ## Field access on type variables — structural generics (explored, deferred 2026-03-22)
 

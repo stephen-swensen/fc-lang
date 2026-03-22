@@ -1,0 +1,17 @@
+let main = (args: str[]) ->
+    // bits is platform-dependent (32 or 64)
+    let bits = isize.bits
+    let r1 = if bits == 32 then 1 else if bits == 64 then 1 else 0
+    // min/max for isize
+    let imin = isize.min
+    let imax = isize.max
+    let r2 = if imin < 0i then 1 else 0
+    let r3 = if imax > 0i then 1 else 0
+    // min/max for usize
+    let umin = usize.min
+    let umax = usize.max
+    let r4 = if umin == 0u then 1 else 0
+    let r5 = if umax > 0u then 1 else 0
+    // usize.bits same as isize.bits
+    let r6 = if usize.bits == bits then 1 else 0
+    r1 + r2 + r3 + r4 + r5 + r6

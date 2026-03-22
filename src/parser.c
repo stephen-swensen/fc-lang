@@ -162,6 +162,7 @@ static bool is_type_name(const char *s, int len) {
         {"bool",4}, {"char",4},
         {"str",3}, {"str32",5}, {"cstr",4},
         {"any",3},
+        {"isize",5}, {"usize",5},
     };
     (void)names;
     for (int i = 0; i < (int)(sizeof(types)/sizeof(types[0])); i++) {

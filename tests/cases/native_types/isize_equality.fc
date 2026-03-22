@@ -1,0 +1,12 @@
+let main = (args: str[]) ->
+    let a = 42i
+    let b = 42i
+    let c = 99i
+    let r1 = if a == b then 1 else 0
+    let r2 = if a != c then 1 else 0
+    let d = 10u
+    let e = 10u
+    let f = 20u
+    let r3 = if d == e then 1 else 0
+    let r4 = if d != f then 1 else 0
+    r1 + r2 + r3 + r4

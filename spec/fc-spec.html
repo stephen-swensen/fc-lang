@@ -606,7 +606,7 @@ The following are **built-in globals** — predefined identifiers typed `any*` t
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
-`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, `bool`, `char`, `str`, `str32`, `cstr`
+`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `str`, `str32`, `cstr`
 
 ---
 
@@ -624,6 +624,8 @@ The following are **built-in type names** and may not be used as user-defined ty
 | uint16 | Unsigned 16-bit integer | uint16_t |
 | uint32 | Unsigned 32-bit integer | uint32_t |
 | uint64 | Unsigned 64-bit integer | uint64_t |
+| isize | Signed pointer-width integer — width matches the target's pointer size | ptrdiff_t |
+| usize | Unsigned pointer-width integer — width matches the target's pointer size | size_t |
 | float32 | 32-bit IEEE 754 float | float |
 | float64 | 64-bit IEEE 754 float (default float) | double |
 | bool | Boolean — true or false | bool (stdbool.h) |
@@ -636,6 +638,8 @@ The following are **built-in type names** and may not be used as user-defined ty
 
 Implicit widening conversions are allowed in binary expressions and comparisons where no information can be lost — see §Operators & Access. All other numeric conversions require an explicit cast. `if` conditions must be `bool` typed — numeric values do not implicitly coerce to bool.
 
+**Platform-width types (`isize`, `usize`)** have no implicit widening to or from fixed-width types. Since their width varies by target (32-bit or 64-bit), no fixed-width conversion is guaranteed lossless on all platforms. All conversions require explicit casts: `(isize)x`, `(int64)y`, etc. FC's default types (`int32` for integers, `int64` for `sizeof` and slice `.len`) remain fixed-width — `isize`/`usize` are opt-in for C interop and embedded targets where matching the platform's native size types matters.
+
 ### Literals
 
 | Literal | Type |
@@ -643,6 +647,8 @@ Implicit widening conversions are allowed in binary expressions and comparisons 
 | 42 | int32 (default) |
 | 42i8, 42i16, 42i64 | int8, int16, int64 |
 | 42u8, 42u16, 42u32, 42u64 | uint8, uint16, uint32, uint64 |
+| 42i | isize (platform-width signed) |
+| 42u | usize (platform-width unsigned) |
 | 42i32 | int32 (explicit, same as default) |
 | 3.14 | float64 (default) |
 | 3.14f32, 3.14f64 | float32, float64 |
@@ -950,7 +956,7 @@ Integer division truncates toward zero. `%` produces the remainder with the sign
 
 Unsigned integer overflow wraps modulo 2ⁿ — this is C's existing guarantee and FC inherits it directly.
 
-Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`int8`, `int16`, `int32`, `int64`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely.
+Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`int8`, `int16`, `int32`, `int64`, `isize`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely.
 
 In generated C, signed arithmetic is emitted as a cast through the unsigned equivalent for each type:
 
@@ -2042,6 +2048,28 @@ let buf = arr.ptr               // uint8* into stack memory — no fat pointer, 
 
 From this point the programmer is responsible for tracking the length and staying within bounds — the same responsibility as in C.
 
+For full control over allocation, `isize` and `usize` allow direct use of C's `malloc`/`memcpy`/etc. with platform-correct types — no `int64` overhead on smaller targets:
+
+```fc
+module c from "stdlib.h" =
+    extern malloc: (usize) -> any*?
+    extern free as c_free: (any*) -> void
+
+module mem from "string.h" =
+    extern memcpy: (any*, any*, usize) -> any*
+    extern memset: (any*, int32, usize) -> any*
+    extern strlen: (cstr) -> usize
+
+let main = (args: str[]) ->
+    let size = 256u                           // usize — matches C's size_t exactly
+    let buf = (uint8*)c.malloc(size)!         // raw pointer, no slice overhead
+    mem.memset((any*)buf, 0, size)            // zero-fill with platform-native size
+    // ... use buf with pointer arithmetic ...
+    c.c_free((any*)buf)
+```
+
+This compiles to the same C you would write by hand — `malloc(256)`, `memset(buf, 0, 256)` — with no intermediate slice construction and no `int64` arithmetic. The `usize` type emits `size_t` in the generated C, so on an 8-bit AVR it is 16 bits, on a 32-bit ARM it is 32 bits, and on a 64-bit host it is 64 bits — matching the target's native address width in every case.
+
 ---
 
 ## Function Types
@@ -2816,18 +2844,18 @@ C library bindings are declared using `extern` inside a module with a `from` cla
 ```fc
 module c_stdlib from "stdlib.h" =
     extern free as c_free: (any*) -> void
-    extern malloc:  (int64) -> any*?
+    extern malloc:  (usize) -> any*?
 
 module c_stdio from "stdio.h" =
     extern fopen:   (cstr, cstr) -> any*?
 
 module c_string from "string.h" =
-    extern memcpy:  (any*, any*, int64) -> any*
-    extern strlen:  (cstr) -> int64
+    extern memcpy:  (any*, any*, usize) -> any*
+    extern strlen:  (cstr) -> usize
 ```
 
 > **Note on the examples above**
-> Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `int64` parameters for `malloc`, `memcpy`, and `strlen` map C's `size_t` — a reasonable upper bound that is never incorrect. The compiler implicitly narrows these at the C boundary via the real header prototypes.
+> Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `usize` parameters for `malloc`, `memcpy`, and `strlen` map directly to C's `size_t` — the generated C uses `size_t` at the call boundary, matching the real C prototypes exactly on every target. Using `int64` here also works (the C compiler narrows it via the real header prototypes) but `usize` is more precise and avoids unnecessary 64-bit arithmetic on smaller targets.
 
 ### Reserved identifiers and `extern as`
 
@@ -2855,7 +2883,7 @@ The `extern as` form is shown here for completeness and is more relevant when a 
 C functions that can return null must be declared with a `?` return type. This keeps null out of FC's type system — the programmer is forced to handle the absent case explicitly before using the value:
 
 ```fc
-let buf = libc.malloc(1024)    // type is any*?
+let buf = libc.malloc(1024u)   // type is any*? — usize argument matches C's size_t
 let ptr = buf!                 // unwrap — crash on null
 // or
 match buf with
@@ -2981,11 +3009,11 @@ module c_stdio from "stdio.h" =
     extern fwrite: (any*, int64, int64, any*) -> int64
 
 module c_stdlib from "stdlib.h" =
-    extern malloc: (int64) -> any*?
+    extern malloc: (usize) -> any*?
     extern free:   (any*) -> void
 ```
 
-Note that `fread` and `fwrite` take `any*` for both the data buffer and the `FILE*` handle — both are `void*` in C. `int64` maps C's `size_t` parameters using the same principle as elsewhere: a reasonable signed upper bound that lets FC lengths pass through without casts.
+Note that `fread` and `fwrite` take `any*` for both the data buffer and the `FILE*` handle — both are `void*` in C. `int64` maps C's `size_t` parameters — a reasonable signed upper bound. For exact platform matching, use `usize` instead (see §Embedded targets and raw pointer arrays).
 
 The programmer is responsible for passing handles to the correct functions — FC's type system does not distinguish a `sqlite3*` from a `FILE*` at the `any*` level. This is an acceptable tradeoff: opaque handles are passed to a small number of known functions, and mixing them up is no more likely than passing the wrong integer argument.
 

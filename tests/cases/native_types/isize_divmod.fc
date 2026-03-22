@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    let a = 100i
+    let b = 7i
+    let q = a / b
+    let r = a % b
+    let c = 100u
+    let d = 7u
+    let q2 = c / d
+    let r2 = c % d
+    (int32)q + (int32)r + (int32)q2 + (int32)r2

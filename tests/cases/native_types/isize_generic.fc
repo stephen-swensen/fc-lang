@@ -1,0 +1,10 @@
+let identity = (x: 'a) -> x
+
+let add_them = (a: 'a, b: 'a) -> a + b
+
+let main = (args: str[]) ->
+    let a = identity(42i)
+    let b = identity(10u)
+    let c = add_them(20i, 22i)
+    let d = add_them(5u, 7u)
+    (int32)a + (int32)b + (int32)c + (int32)d

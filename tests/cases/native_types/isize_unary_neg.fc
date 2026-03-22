@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let a = 50i
+    let b = -a
+    let c = -(-a)
+    (int32)(c + b) + 100

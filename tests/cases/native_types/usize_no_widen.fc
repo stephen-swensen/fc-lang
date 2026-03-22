@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let a = 42u
+    let b = 10u64
+    let c = a + b
+    0
