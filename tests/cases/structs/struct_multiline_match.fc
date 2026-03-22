@@ -1,0 +1,17 @@
+// Multiline struct literal inside a match arm
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let n = 1
+    let p = match n with
+        | 1 -> point {
+            x = 10,
+            y = 20
+        }
+        | _ -> point {
+            x = 0,
+            y = 0
+        }
+    p.x + p.y

@@ -1,0 +1,6 @@
+// Multiline parenthesized expression
+let main = (args: str[]) ->
+    let r = (
+        1 + 2 + 3
+    )
+    r

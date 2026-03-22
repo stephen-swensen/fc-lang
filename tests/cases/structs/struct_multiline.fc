@@ -1,5 +1,4 @@
-// Multiline struct literal with closing brace at original indentation
-// Fails because the offside rule emits DEDENT before the }
+// Basic multiline struct literal
 struct point =
     x: int32
     y: int32

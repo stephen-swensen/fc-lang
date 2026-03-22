@@ -1,0 +1,18 @@
+// Nested multiline struct literals
+struct inner =
+    x: int32
+    y: int32
+
+struct outer =
+    a: inner
+    b: int32
+
+let main = (args: str[]) ->
+    let o = outer {
+        a = inner {
+            x = 1,
+            y = 2
+        },
+        b = 3
+    }
+    o.a.x + o.a.y + o.b

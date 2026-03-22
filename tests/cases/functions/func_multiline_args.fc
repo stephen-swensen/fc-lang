@@ -1,0 +1,10 @@
+// Multiline function call arguments
+let add3 = (a: int32, b: int32, c: int32) -> a + b + c
+
+let main = (args: str[]) ->
+    let r = add3(
+        10,
+        20,
+        30
+    )
+    r

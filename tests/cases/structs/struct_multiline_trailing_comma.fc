@@ -1,0 +1,11 @@
+// Trailing comma in multiline struct literal
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p = point {
+        x = 7,
+        y = 8,
+    }
+    p.x + p.y

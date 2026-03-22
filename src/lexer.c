@@ -653,11 +653,17 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     bool saw_for = false;             /* for on current line (before in) */
     bool saw_for_in = false;          /* saw 'for ... in' — line is block-former */
     TokenKind last_kind = TOK_EOF;    /* last non-NEWLINE token emitted */
+    int bracket_depth = 0;            /* depth inside () [] {} — suppresses layout */
 
     for (int i = 0; i < raw_count; i++) {
         Token t = raw[i];
 
         if (t.kind == TOK_NEWLINE) {
+            /* Inside matched brackets: suppress all layout tokens */
+            if (bracket_depth > 0) {
+                while (i + 1 < raw_count && raw[i + 1].kind == TOK_NEWLINE) i++;
+                continue;
+            }
             /* Find next non-newline token */
             int j = i + 1;
             while (j < raw_count && raw[j].kind == TOK_NEWLINE) j++;
@@ -756,6 +762,13 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
 
         /* Skip raw EOF — we emit our own after DEDENTs */
         if (t.kind == TOK_EOF) continue;
+
+        /* Track bracket depth for layout suppression */
+        if (t.kind == TOK_LPAREN || t.kind == TOK_LBRACKET || t.kind == TOK_LBRACE)
+            bracket_depth++;
+        else if (t.kind == TOK_RPAREN || t.kind == TOK_RBRACKET || t.kind == TOK_RBRACE) {
+            if (bracket_depth > 0) bracket_depth--;
+        }
 
         /* Non-newline token: emit it */
         DA_APPEND(out, olen, ocap, t);

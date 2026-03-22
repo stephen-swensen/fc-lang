@@ -1,0 +1,13 @@
+// Expressions in multiline struct field values
+struct point =
+    x: int32
+    y: int32
+
+let double = (n: int32) -> n * 2
+
+let main = (args: str[]) ->
+    let p = point {
+        x = 1 + 2 + 3,
+        y = double(10)
+    }
+    p.x + p.y
