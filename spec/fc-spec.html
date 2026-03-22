@@ -685,9 +685,19 @@ Width, precision, and flag modifiers are allowed: `%04d{x}`, `%.2f{pi}`, `%20s{n
 
 The `%f` format requires an explicit width (e.g., `%8.2f`) because fixed-point float output can be arbitrarily long. Other float formats (`%e`, `%g`) are bounded by type and do not require explicit width.
 
-#### Bounded allocation
+#### Allocation
 
-Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, and pointer formats are bounded at compile time by the type's maximum formatted width. String formats (`%s`) use the runtime `.len`. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size.
+Interpolated strings are stack-allocated (via `alloca`). The compiler computes a buffer size guaranteed to be sufficient. Integer, char, and pointer formats are bounded at compile time by the type's maximum formatted width. String formats (`%s`) use the runtime `.len` by default. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size.
+
+When `%s` includes a precision (e.g., `%.256s{name}`), the precision acts as a compile-time bound on that segment. If the string is longer than the precision, it is truncated (standard printf truncation semantics). When **all** segments in an interpolated string have compile-time bounds — i.e., all `%s` segments use precision and all other segments are numeric/char/pointer — the entire buffer size is a compile-time constant. This allows the C compiler to hoist the allocation out of loops and enables static stack analysis.
+
+```fc
+// Runtime-dependent buffer size (bare %s):
+let msg = "hello %s{name}"
+
+// Compile-time constant buffer size (precision-bounded %s):
+let msg = "hello %.64s{name}"
+```
 
 #### Escape rules
 
@@ -719,12 +729,14 @@ let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer resp
 let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
 ```
 
-**str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string. The copy lives until the enclosing function returns (uses `alloca`). This is the safe way to pass FC strings to C functions that expect null-terminated strings:
+**str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string via `alloca`. The copy lives until the enclosing function returns. This is the safe way to pass FC strings to C functions that expect null-terminated strings:
 
 ```fc
 let s = "hello"
 let cs = (cstr) s   // stack copy with null terminator
 ```
+
+The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
 
 **Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
 
@@ -1473,7 +1485,7 @@ let main = (args: str[]) ->
 >     return fc_main(args);
 > }
 > ```
-> Each `argv[i]` becomes a `str` (fat pointer) with its length computed via `strlen`. The slice itself is stack-allocated — no heap allocation occurs.
+> Each `argv[i]` becomes a `str` (fat pointer) with its length computed via `strlen`. The slice itself is stack-allocated via `alloca` — no heap allocation occurs. The allocation size is `argc * sizeof(fc_str)`, which is effectively bounded since `argc` is determined by the OS and is small in practice.
 
 ### Stack frames and lifetime
 
