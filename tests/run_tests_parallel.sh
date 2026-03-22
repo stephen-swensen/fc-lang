@@ -91,7 +91,7 @@ export FC CC TMPDIR
 # Build the list of tests (one per line: display|fc_files|error|exit|expected|flags)
 test_list="$TMPDIR/test_list"
 
-for milestone_dir in "$TESTDIR"/m*/; do
+for milestone_dir in "$TESTDIR"/*/; do
     milestone=$(basename "$milestone_dir")
 
     for fc_file in "$milestone_dir"*.fc; do

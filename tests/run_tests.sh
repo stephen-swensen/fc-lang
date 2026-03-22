@@ -101,11 +101,11 @@ run_test() {
 
 # Discover and run tests
 # Two kinds:
-#   1. Single-file: a .fc file directly in a milestone dir (m1/foo.fc)
+#   1. Single-file: a .fc file directly in a category dir (expressions/foo.fc)
 #   2. Multi-file:  a subdirectory containing *.fc files + expected_exit or error
-#      (m6/cross_ns_import/{main.fc, lib.fc, expected_exit})
+#      (modules/cross_ns_import/{main.fc, lib.fc, expected_exit})
 
-for milestone_dir in "$TESTDIR"/m*/; do
+for milestone_dir in "$TESTDIR"/*/; do
     milestone=$(basename "$milestone_dir")
 
     # Single-file tests: .fc files directly in this directory

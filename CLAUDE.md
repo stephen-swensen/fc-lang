@@ -121,15 +121,29 @@ match x with
 
 ## Testing
 
-Tests live in `tests/cases/`, organized into subdirectories by milestone:
+Tests live in `tests/cases/`, organized into subdirectories by functional category:
 
-- `m1/` — expressions, operators
-- `m2/` — control flow, functions
-- `m3/` — structs, unions, match
-- `m4/` — types: options, slices, pointers, casts, widening
-- `m5/` — memory: alloc, free, sizeof, default
-- `m6/` — modules, imports, namespaces (single-file tests as `.fc` files, multi-file tests as subdirectories)
-- `m10/` — polish: range checking, exhaustiveness, escape detection
+- `expressions/` — arithmetic, bitwise, boolean, comparison, literals, overflow, shifts, div/mod, comments, int range checks
+- `bindings/` — shadow, void_bind, let_void, unused_local
+- `functions/` — func definitions, recursion, early return, func types, top_level_as_value
+- `control_flow/` — if, else, loop, for, break, continue
+- `structs/` — struct creation, destructuring, field mutation, omitted fields
+- `unions/` — union creation, variants, mixed/no payload
+- `pattern_matching/` — match syntax and patterns (struct, union, option, wildcard, complex)
+- `exhaustiveness/` — Maranget algorithm (bool, int, option, union, struct, nested, generic)
+- `equality/` — structural equality codegen (struct, union, slice, option, string, widen, generic)
+- `casts_widening/` — cast, widen (type conversions)
+- `options/` — option, unwrap, none, nested options
+- `pointers/` — pointer, deref, ptr arithmetic/ordering, addr_of, ptr_to_ptr
+- `slices/` — slice, subslice, stack_array, bounds checks
+- `strings/` — string, cstr, str interop, interpolation, alloc_str
+- `memory/` — alloc, free, sizeof, default, linked_list
+- `modules/` — module, import, namespace, private (single-file tests as `.fc` files, multi-file tests as subdirectories)
+- `closures/` — capture, lambda, closure semantics, globals
+- `generics/` — generic functions/structs/unions, monomorphization, dedup
+- `type_properties/` — static type props (int32.min, float64.nan) + typevar props ('a.bits)
+- `extern/` — extern declarations, conditional compilation (#if/#else/#end)
+- `io/` — print, io read/write, eprint, stdin/stdout, sys, main_args
 
 Each **single-file test** is an `.fc` file plus one of:
 - `.expected_exit` — expected exit code (0–255); the test compiles and runs
@@ -140,13 +154,13 @@ Each **multi-file test** is a subdirectory containing:
 - `expected_exit` or `error` (no dot prefix) — the expected result
 - `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
 
-Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `m6/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
+Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
 
 ### Multi-file tests
 
-Multi-file tests each get their own subdirectory under `m6/`, making it clear which files belong together. For example:
+Multi-file tests each get their own subdirectory within a category dir, making it clear which files belong together. For example:
 ```
-m6/cross_ns_import/
+modules/cross_ns_import/
     main.fc          # file with main, imports from lib
     lib.fc           # file defining the namespace/module
     expected_exit    # expected exit code
@@ -168,22 +182,17 @@ When adding a feature or fixing a bug, add tests that exercise:
 
 Aim for dozens of test cases per feature, not a handful. A bug caught by a test during development costs minutes; a bug discovered in user code costs hours.
 
-Each milestone must fully implement all spec features for that area — no deferring aspects to later milestones.
-
 Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
 
 ## Workflow
 
-- After completing each implementation milestone, pause and present a summary for user review before proceeding to the next
-- Run `make test` to confirm all tests pass before presenting the summary
-- Update the README.md milestone status table after each milestone is completed
+- Run `make test` to confirm all tests pass before presenting a summary of changes
 
 ## Spec Reference
 
 The `spec/` folder contains:
 - **`fc-spec.html`** — Full language specification. Self-contained HTML with embedded markdown rendered by `marked.js`. Open in a browser to read.
 - **`grammar.bnf`** — BNF grammar for the language syntax.
-- **`fc-compiler-plan.md`** — Milestone-based compiler implementation roadmap (M1–M10).
 - **`TODO.md`** — Outstanding spec/compiler tasks.
 
 Spec sections are organized as:
