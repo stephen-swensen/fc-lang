@@ -196,8 +196,39 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
     return base;
 }
 
+static Type *apply_const(Arena *a, Type *inner, SrcLoc loc) {
+    if (inner->kind == TYPE_POINTER || inner->kind == TYPE_SLICE ||
+        inner->kind == TYPE_ANY_PTR) {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *inner;
+        c->is_const = true;
+        return c;
+    }
+    if (inner->kind == TYPE_OPTION &&
+        inner->option.inner &&
+        (inner->option.inner->kind == TYPE_POINTER ||
+         inner->option.inner->kind == TYPE_SLICE ||
+         inner->option.inner->kind == TYPE_ANY_PTR)) {
+        Type *ci = arena_alloc(a, sizeof(Type));
+        *ci = *inner->option.inner;
+        ci->is_const = true;
+        Type *opt = type_option(a, ci);
+        return opt;
+    }
+    diag_fatal(loc, "'const' can only modify pointer (*) or slice ([]) types, got %s",
+               type_name(inner));
+    return NULL; /* unreachable */
+}
+
 static Type *parse_type(Parser *p) {
     Token *t = current(p);
+
+    if (t->kind == TOK_CONST) {
+        SrcLoc loc = loc_from_token(t);
+        advance_p(p);
+        Type *inner = parse_type(p);
+        return apply_const(p->arena, inner, loc);
+    }
 
     if (t->kind == TOK_VOID) {
         advance_p(p);
@@ -874,10 +905,11 @@ static Expr *parse_prefix(Parser *p) {
         if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_COLON) {
             return parse_func_literal(p);
         }
-        /* (Type)expr : cast — check if next token is a type name or type var */
+        /* (Type)expr : cast — check if next token is a type name, type var, or const */
         if ((peek_at(p, 1)->kind == TOK_IDENT &&
              is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length)) ||
-            peek_at(p, 1)->kind == TOK_TYPE_VAR) {
+            peek_at(p, 1)->kind == TOK_TYPE_VAR ||
+            peek_at(p, 1)->kind == TOK_CONST) {
             /* Try to parse as cast with backtracking */
             int save = p->pos;
             advance_p(p); /* ( */

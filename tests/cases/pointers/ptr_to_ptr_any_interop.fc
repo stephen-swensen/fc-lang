@@ -5,7 +5,7 @@
 // Here we test with strtol, declaring the out-param as any** to simulate
 // an opaque handle pattern where the caller passes &handle.
 module c from "stdlib.h" =
-    extern strtol: (cstr, any**, int32) -> int64
+    extern strtol: (const cstr, any**, int32) -> int64
 
 let main = (args: str[]) ->
     let s = "99end"

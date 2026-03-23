@@ -1,1 +1,1 @@
-argument 1: expected str, got int32
+argument 1: expected const str, got int32

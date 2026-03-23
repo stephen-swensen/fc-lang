@@ -1,0 +1,12 @@
+let read_val = (p: const int32*) ->
+    *p
+
+let read_first = (s: const int32[]) ->
+    s[0]
+
+let main = (args: str[]) ->
+    let mut x = 42
+    let p = &x
+    let v1 = read_val(p)
+    let v2 = read_first(int32[3] { 10, 20, 30 })
+    v1 + v2 - 42 - 10

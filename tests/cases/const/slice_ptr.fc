@@ -1,0 +1,7 @@
+let get_ptr = (s: const int32[]) ->
+    let p = s.ptr
+    *p
+
+let main = (args: str[]) ->
+    let arr = int32[3] { 77, 88, 99 }
+    get_ptr(arr) - 77

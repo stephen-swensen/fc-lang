@@ -1,0 +1,10 @@
+// Writing through a const pointer field in a struct should fail
+
+struct holder =
+    data: const int32*
+
+let main = (args: str[]) ->
+    let mut x = 10
+    let h = holder { data = &x }
+    *h.data = 20
+    0

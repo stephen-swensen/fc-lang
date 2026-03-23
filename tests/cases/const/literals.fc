@@ -1,0 +1,12 @@
+let str_len = (s: const str) ->
+    s.len
+
+let cstr_check = (c: const cstr) ->
+    *c
+
+let main = (args: str[]) ->
+    let s = "hello"
+    let c = c"world"
+    let len = str_len(s)
+    let ch = cstr_check(c)
+    if len == 5 then 0 else 1

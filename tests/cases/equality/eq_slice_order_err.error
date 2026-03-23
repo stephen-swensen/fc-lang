@@ -1,1 +1,1 @@
-ordering comparison requires numeric or pointer types, got str and str
+ordering comparison requires numeric or pointer types, got const str and const str

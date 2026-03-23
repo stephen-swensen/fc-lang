@@ -156,6 +156,7 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_VOID:    fprintf(out, "void");      break;
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_POINTER:
+        if (t->is_const) fprintf(out, "const ");
         emit_type(t->pointer.pointee, out);
         fprintf(out, "*");
         break;
@@ -199,6 +200,7 @@ static void emit_type(Type *t, FILE *out) {
         emit_fn_type_suffix(t, out);
         break;
     case TYPE_ANY_PTR:
+        if (t->is_const) fprintf(out, "const ");
         fprintf(out, "void*");
         break;
     default:
@@ -304,7 +306,10 @@ static void emit_eq_func_name(Type *t, FILE *out);
  * but void** does not). */
 static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     if (param_type && is_cstr_type(param_type)) {
-        fprintf(out, "(const char*)");
+        if (param_type->is_const)
+            fprintf(out, "(const char*)");
+        else
+            fprintf(out, "(char*)");
     } else if (param_type && param_type->kind == TYPE_POINTER &&
                is_cstr_type(param_type->pointer.pointee)) {
         /* uint8** → char** at C boundary (e.g. strtol's char** out-param) */
@@ -1082,9 +1087,11 @@ static void emit_expr(Expr *e, FILE *out) {
         } else if (e->cast.operand->type && is_cstr_type(e->cast.operand->type) &&
                    is_str_type(e->cast.target)) {
             int tid = temp_counter++;
-            fprintf(out, "({ uint8_t *_cp%d = ", tid);
+            bool src_const = e->cast.operand->type->is_const;
+            fprintf(out, "({ %suint8_t *_cp%d = ", src_const ? "const " : "", tid);
             emit_expr(e->cast.operand, out);
-            fprintf(out, "; (fc_str){ .ptr = _cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })", tid, tid);
+            fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
+                    src_const ? "(uint8_t*)" : "", tid, tid);
         } else {
             fprintf(out, "((");
             emit_type(e->cast.target, out);
@@ -2098,7 +2105,7 @@ struct TypeSet {
 
 static bool typeset_contains(TypeSet *ts, Type *t) {
     for (int i = 0; i < ts->count; i++) {
-        if (type_eq(ts->types[i], t)) return true;
+        if (type_eq_ignore_const(ts->types[i], t)) return true;
     }
     return false;
 }
@@ -2189,6 +2196,13 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
     if (type_contains_type_var(t)) return;
     if (!type_needs_eq_func(t)) return;
     t = resolve_struct_stub(t);
+    /* Strip const for eq function collection — constness doesn't affect equality */
+    if (t->is_const) {
+        Type *nc = arena_alloc(g_arena, sizeof(Type));
+        *nc = *t;
+        nc->is_const = false;
+        t = nc;
+    }
     if (typeset_contains(eqs, t)) return;
     typeset_add(eqs, t);
     switch (t->kind) {
@@ -2477,6 +2491,9 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
 /* ---- Eq function generation ---- */
 
 static void emit_eq_func_name(Type *t, FILE *out) {
+    /* Strip const — equality semantics don't depend on constness */
+    Type tmp;
+    if (t->is_const) { tmp = *t; tmp.is_const = false; t = &tmp; }
     fprintf(out, "fc_eq_");
     emit_type_ident(t, out);
 }

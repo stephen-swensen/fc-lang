@@ -763,6 +763,8 @@ let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer resp
 let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
 ```
 
+Pointer-to-pointer casts include const changes: `(const int32*)ptr` freezes a pointer (safe), `(int32*)const_ptr` strips const (unsafe). For slices, `(const str)s` and `(str)const_s` work similarly. See §The const qualifier.
+
 **str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string via `alloca`. The copy lives until the enclosing function returns. This is the safe way to pass FC strings to C functions that expect null-terminated strings:
 
 ```fc
@@ -818,6 +820,113 @@ q = point { x = 5.0, y = 6.0 }   // ok — reassigning q to a new value
 ```
 
 This is consistent with the pointer rule — writing through a `let` binding pointer (`*px = 99`) is valid because you are not changing the pointer, you are changing what it points to.
+
+### The const qualifier
+
+`let` vs `let mut` controls whether a *binding* can be reassigned. The `const` qualifier controls whether data can be *written through* a pointer or slice. These are orthogonal:
+
+| | `let` binding | `let mut` binding |
+|--|--|--|
+| Non-const pointer/slice | Can't reassign binding, can write through pointer | Can reassign and write through pointer |
+| Const pointer/slice | Can't reassign binding, can't write through pointer | Can reassign binding, can't write through pointer |
+
+`const` is a prefix on pointer, slice, and `any*` types:
+
+```fc
+const int32*     // pointer to read-only int32
+const int32[]    // slice with read-only elements
+const str        // read-only string (alias for const uint8[])
+const cstr       // read-only C string (alias for const uint8*)
+const any*       // read-only opaque pointer (maps to const void* in C)
+```
+
+`const` is not valid on bare value types — `const int32` is a compile error. Value-level immutability is handled by `let`.
+
+#### Const sources
+
+Const enters the type system at three sites and propagates from there through inference:
+
+- **String and cstring literals**: `"hello"` has type `const str`, `c"hello"` has type `const cstr`. The data lives in static read-only memory.
+- **Function parameter annotations**: `let f = (s: const str) -> ...` declares that `f` will not modify `s`.
+- **Struct field declarations**: `struct config = name: const str` declares a read-only field.
+
+Since FC has no type annotations on `let` bindings, local variable types are always inferred from the right-hand side. A binding inherits whatever constness the expression produces.
+
+#### Implicit coercion
+
+Non-const implicitly widens to const (the safe direction). Const to non-const requires an explicit cast:
+
+```fc
+let f = (s: const str) -> s.len
+
+let mut buf = alloc(uint8[100])!
+f(buf)                     // ok — str widens to const str
+```
+
+Typed pointers implicitly widen to `any*`, respecting const: `T*` widens to `any*`, and `const T*` widens to `const any*`. However, `const T*` does **not** widen to `any*` — that would silently drop the const guarantee.
+
+#### Explicit casts
+
+Both directions are available via regular cast syntax:
+
+```fc
+let mut x = 42
+let cp = (const int32*)&x    // freeze — non-const to const (safe)
+let mp = (int32*)cp           // strip const (unsafe, for C interop escape hatches)
+```
+
+Slice const casts also work: `(const str)s` to freeze, `(str)const_s` to strip.
+
+#### Deep const
+
+Accessing a field through a const pointer preserves const on pointer and slice fields. Value fields are simply not writable — no type change needed:
+
+```fc
+struct node =
+    data: int32
+    next: node*?
+
+let f = (n: const node*) ->
+    n->data              // int32 — readable, not writable
+    n->next              // const node*? — deep const propagated
+```
+
+Deep const chains naturally: `const_ptr->a->b.c.d->e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
+
+`.ptr` on a const slice gives a const pointer: if `s` is `const int32[]`, then `s.ptr` is `const int32*`.
+
+#### Write rejection
+
+The compiler rejects these operations through const:
+
+```fc
+let mut x = 42
+let cp = (const int32*)&x
+*cp = 10                 // compile error: cannot assign through const pointer/slice
+cp->field = 10           // compile error (for struct pointers)
+const_slice[0] = 10      // compile error
+&(cp->field)             // compile error: cannot take mutable address through const pointer
+free(cp)                 // compile error: cannot free const pointer/slice
+```
+
+These are `diag_error` (non-fatal) — the compiler reports all const violations in a single pass.
+
+#### Generics
+
+Type variables can bind to const types. `const` composes with type variable syntax:
+
+```fc
+let deref = (p: const 'a*) -> *p    // works for any T — const preserved through monomorphization
+
+deref(&x)                            // 'a = int32, param is const int32*
+```
+
+`alloc` always returns non-const, even when the input is const — it creates a fresh mutable heap copy:
+
+```fc
+let s = "hello"           // const str
+let copy = alloc(s)!      // str (non-const — new heap memory)
+```
 
 ### Statements vs. expressions
 
@@ -1992,18 +2101,18 @@ FC's `str` type makes no null-termination guarantee. A `str` is a fat pointer �
 
 String literal memory lives in static read-only storage — the compiler emits the bytes into the binary's read-only data section, and the `str` fat pointer is constructed with `.ptr` pointing to that static data. This has two consequences:
 
-- **Mutating a string literal element is undefined behavior.** Writing to a string literal (`s[0] = 65u8`) writes to read-only memory. On platforms with memory protection this will crash; on embedded platforms without an MMU it may silently corrupt the binary's data section.
-- **Freeing a string literal is undefined behavior.** `free(s)` on a string literal passes a static address to `free`, which expects a heap address.
+- **Mutating a string literal element is a compile error.** String literals have type `const str` — the compiler rejects writes through const slices. Casting away const with `(str)s` and then writing is undefined behavior — the data is physically in read-only memory.
+- **Freeing a string literal is a compile error.** The compiler's escape analysis rejects `free` on static memory, and the const qualifier additionally prevents freeing const pointers/slices.
 
-These are the same hazards as in C for string literals. FC does not currently distinguish read-only slices from mutable slices at the type level — introducing such a distinction would require a const/mut qualifier system with significant type system implications. The hazard is narrow in practice: most code reads string literals, and the failure mode is a crash on most targets.
+These hazards are caught at compile time via the const type system and escape analysis, unlike C where they are only detected at runtime (if at all).
 
 ```fc
-let s = "hello"          // s.ptr points to static read-only memory
-s[0] = 72u8              // undefined behavior — writing to read-only memory
-free(s)                  // undefined behavior — freeing static memory
+let s = "hello"          // s: const str — points to static read-only memory
+s[0] = 72u8              // compile error: cannot assign through const pointer/slice
+free(s)                  // compile error: cannot free const pointer/slice
 
 let mut buf = alloc(uint8[5])!
-buf[0] = 72u8            // ok — heap-allocated, mutable
+buf[0] = 72u8            // ok — heap-allocated, mutable (non-const str)
 free(buf)                // ok — heap-allocated
 ```
 
@@ -2952,8 +3061,8 @@ module pthreads from "pthread.h" =
 
 Higher-level FC types must be explicitly lowered at C call sites:
 
-- `str` — use `(cstr)s` to create a null-terminated stack copy, or `c"..."` for constant strings. Do not pass `s.ptr` directly to functions expecting null-terminated strings.
-- `cstr` — pass directly. Use `c"..."` literals for constant strings.
+- `str` — use `(cstr)s` to create a null-terminated stack copy, or `c"..."` for constant strings. The `cstr` is always non-const (fresh stack copy). If the extern expects `const char*`, declare the parameter as `const cstr`.
+- `const cstr` / `cstr` — pass directly. `const cstr` maps to `const char*` (read-only), `cstr` maps to `char*` (mutable). Use `c"..."` literals for constant strings (type is `const cstr`).
 - `T?` — unwrap with `x!` or `match` before passing
 - Structs — memory-compatible with C structs if declared in the same field order
 
@@ -2963,28 +3072,29 @@ The compiler automatically inserts C-level casts at extern call boundaries to br
 
 | FC parameter type | C cast inserted | Reason |
 |---|---|---|
-| `cstr` (`uint8*`) | `(const char*)` | C string functions expect `const char*`, FC emits `uint8_t*` |
+| `const cstr` (`const uint8*`) | `(const char*)` | C read-only string functions expect `const char*` |
+| `cstr` (`uint8*`) | `(char*)` | C mutable string functions expect `char*` |
 | `cstr*` (`uint8**`) | `(char**)` | Out-parameter variant (e.g. `strtol`'s `endptr`) |
 | `any**` (`void**`) | `(void*)` | `void**` doesn't implicitly convert to `T**` in C; `void*` does |
 
-The `cstr` casts are safe because `char` and `uint8_t` have the same size and alignment — the signedness difference is irrelevant for string data. The `any**` cast leverages C's special rule that `void*` implicitly converts to any pointer type, including `T**` — but `void**` does not have this property.
+The `const cstr` / `cstr` distinction maps directly to C's `const char*` / `char*`. Use `const cstr` for C functions that read a string (most of them), and `cstr` for C functions that write into a char buffer. Typed pointers (`T*`, `const T*`) implicitly widen to `any*` / `const any*` at extern boundaries, matching C's implicit `T*` → `void*` conversion.
 
 ```fc
 module c from "stdlib.h" =
-    extern strtol: (cstr, cstr*, int32) -> int64
+    extern strtol: (const cstr, cstr*, int32) -> int64
 
 let mut end = default(uint8*)
-let val = c.strtol((cstr)s, &end, 10)   // cstr → (const char*), &end → (char**)
+let val = c.strtol((cstr)s, &end, 10)   // const cstr → (const char*), &end → (char**)
 ```
 
 The `any**` cast covers opaque handle APIs where a C function writes a handle through a `T**` out-parameter:
 
 ```fc
 module sqlite from "sqlite3.h" =
-    extern sqlite3_open: (cstr, any**) -> int32
+    extern sqlite3_open: (const cstr, any**) -> int32
 
 let mut db = default(any*)
-let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (void*)
+let rc = sqlite.sqlite3_open(c"test.db", &db)   // const cstr → (const char*), &db → (void*)
 ```
 
 ### Variadic extern functions
@@ -2993,22 +3103,24 @@ C functions that accept a variable number of arguments (`printf`, `snprintf`, `o
 
 ```fc
 module c from "stdio.h" =
-    extern printf: (cstr, ...) -> int32
-    extern fprintf: (any*, cstr, ...) -> int32
-    extern snprintf: (any*, usize, cstr, ...) -> int32
+    extern printf: (const cstr, ...) -> int32
+    extern fprintf: (any*, const cstr, ...) -> int32
+    extern snprintf: (cstr, usize, const cstr, ...) -> int32
 ```
 
-The compiler type-checks the fixed parameters normally — the `cstr` format string, the `any*` file handle, the `usize` buffer size — but variadic arguments beyond the fixed parameters are not type-checked. The programmer is responsible for matching format specifiers to argument types, the same as in C.
+Note: `snprintf`'s first param is `cstr` (mutable output buffer), format string is `const cstr` (read-only).
+
+The compiler type-checks the fixed parameters normally — the `const cstr` format string, the `any*` file handle, the `usize` buffer size — but variadic arguments beyond the fixed parameters are not type-checked. The programmer is responsible for matching format specifiers to argument types, the same as in C.
 
 **Argument promotion.** C's default argument promotions apply to variadic arguments: sub-`int` types (`int8`, `int16`, `uint8`, `uint16`) are promoted to `int`, and `float32` is promoted to `double`. The compiler inserts these casts automatically in the generated C. Boundary casts also apply — `cstr` variadic arguments are cast to `const char*` at the C boundary.
 
 ```fc
 module c from "stdio.h" =
-    extern fprintf: (any*, cstr, ...) -> int32
+    extern fprintf: (any*, const cstr, ...) -> int32
 
 let val = 42i8
 c.fprintf(stdout, c"value: %d name: %s\n", val, c"hello")
-// generated C: fprintf(stdout, "value: %d name: %s\n", (int)val, (const char*)"hello")
+// generated C: fprintf(stdout, (const char*)"value: %d name: %s\n", (int)val, (const char*)"hello")
 ```
 
 **Variadic declarations are extern-only** — FC functions cannot be variadic. The `...` syntax is only valid inside extern function type signatures. Attempting to use `...` in a regular function definition is a parse error.

@@ -142,7 +142,11 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     /* Recurse into compound types */
     if (t->kind == TYPE_POINTER) {
         Type *inner = resolve_type(ctx, t->pointer.pointee);
-        if (inner != t->pointer.pointee) return type_pointer(ctx->arena, inner);
+        if (inner != t->pointer.pointee) {
+            Type *r = type_pointer(ctx->arena, inner);
+            r->is_const = t->is_const;
+            return r;
+        }
         return t;
     }
     if (t->kind == TYPE_OPTION) {
@@ -152,7 +156,11 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     }
     if (t->kind == TYPE_SLICE) {
         Type *inner = resolve_type(ctx, t->slice.elem);
-        if (inner != t->slice.elem) return type_slice(ctx->arena, inner);
+        if (inner != t->slice.elem) {
+            Type *r = type_slice(ctx->arena, inner);
+            r->is_const = t->is_const;
+            return r;
+        }
         return t;
     }
     if (t->kind == TYPE_FUNC) {
@@ -339,9 +347,17 @@ static bool unify(Type *param_type, Type *arg_type,
 
     switch (param_type->kind) {
     case TYPE_POINTER:
+        if (param_type->is_const != arg_type->is_const) {
+            if (param_type->is_const && !arg_type->is_const) { /* non-const→const ok */ }
+            else return false;
+        }
         return unify(param_type->pointer.pointee, arg_type->pointer.pointee,
                      var_names, bindings, var_count);
     case TYPE_SLICE:
+        if (param_type->is_const != arg_type->is_const) {
+            if (param_type->is_const && !arg_type->is_const) { /* non-const→const ok */ }
+            else return false;
+        }
         return unify(param_type->slice.elem, arg_type->slice.elem,
                      var_names, bindings, var_count);
     case TYPE_OPTION:
@@ -452,7 +468,11 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
     switch (t->kind) {
     case TYPE_POINTER: {
         Type *inner = resolve_generic_types_in_ret(ctx, t->pointer.pointee);
-        if (inner != t->pointer.pointee) return type_pointer(ctx->arena, inner);
+        if (inner != t->pointer.pointee) {
+            Type *r = type_pointer(ctx->arena, inner);
+            r->is_const = t->is_const;
+            return r;
+        }
         return t;
     }
     case TYPE_OPTION: {
@@ -462,7 +482,11 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
     }
     case TYPE_SLICE: {
         Type *inner = resolve_generic_types_in_ret(ctx, t->slice.elem);
-        if (inner != t->slice.elem) return type_slice(ctx->arena, inner);
+        if (inner != t->slice.elem) {
+            Type *r = type_slice(ctx->arena, inner);
+            r->is_const = t->is_const;
+            return r;
+        }
         return t;
     }
     case TYPE_STRUCT:
@@ -710,6 +734,29 @@ static Type *resolve_type_property(const char *type_name, const char *prop,
     return (Type *)-1;  /* valid type, invalid property */
 }
 
+static bool is_write_through_const(Expr *target) {
+    if (!target) return false;
+    switch (target->kind) {
+    case EXPR_UNARY_PREFIX:
+        if (target->unary_prefix.op == TOK_STAR)
+            return target->unary_prefix.operand->type &&
+                   target->unary_prefix.operand->type->is_const;
+        return false;
+    case EXPR_DEREF_FIELD:
+        return (target->field.object->type &&
+                target->field.object->type->is_const) ||
+               is_write_through_const(target->field.object);
+    case EXPR_FIELD:
+        return is_write_through_const(target->field.object);
+    case EXPR_INDEX:
+        return (target->index.object->type &&
+                target->index.object->type->is_const) ||
+               is_write_through_const(target->index.object);
+    default:
+        return false;
+    }
+}
+
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -730,12 +777,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         return e->type;
 
     case EXPR_STRING_LIT:
-        e->type = type_str();
+        e->type = type_const_str();
         e->prov = PROV_STATIC;
         return e->type;
 
     case EXPR_CSTRING_LIT:
-        e->type = type_cstr();
+        e->type = type_const_cstr();
         e->prov = PROV_STATIC;
         return e->type;
 
@@ -1080,6 +1127,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->type = type_error();
                     return e->type;
                 }
+            }
+            if (is_write_through_const(operand)) {
+                diag_error(e->loc, "cannot take mutable address through const pointer");
+                e->type = type_error();
+                return e->type;
             }
             e->type = type_pointer(ctx->arena, ot);
             e->prov = PROV_STACK;
@@ -1600,6 +1652,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 diag_error(e->loc, "assignment type mismatch: %s vs %s", type_name(lt), type_name(vt));
             }
         }
+        if (is_write_through_const(e->assign.target)) {
+            diag_error(e->loc, "cannot assign through const pointer/slice");
+        }
         e->type = type_void();
         return e->type;
     }
@@ -1616,9 +1671,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         bool to_int = type_is_integer(to);
         bool str_to_cstr = (is_str_type(from) && is_cstr_type(to));
         bool cstr_to_str = (is_cstr_type(from) && is_str_type(to));
-        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str <-> cstr */
+        bool const_change_slice = (from->kind == TYPE_SLICE && to->kind == TYPE_SLICE &&
+            type_eq_ignore_const(from, to));
+        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str <-> cstr, slice const cast */
         if (!((from_num && to_num) || (from_ptr && to_ptr) ||
-              (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr || cstr_to_str)) {
+              (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr || cstr_to_str || const_change_slice)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
             e->type = type_error();
             return e->type;
@@ -1627,9 +1684,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* str→cstr creates alloca copy; cstr→str wraps with strlen on stack */
         if (str_to_cstr)
             e->prov = PROV_STACK;
-        else if (cstr_to_str)
+        else if (cstr_to_str) {
             e->prov = e->cast.operand->prov;  /* preserves source provenance */
-        else if (type_has_provenance(to))
+            if (from->is_const && is_str_type(to)) {
+                Type *ct = type_make_const(ctx->arena, to);
+                e->type = ct;
+            }
+        } else if (type_has_provenance(to))
             e->prov = e->cast.operand->prov;   /* pointer casts preserve provenance */
         return e->type;
     }
@@ -1975,7 +2036,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             if (strcmp(e->field.name, "ptr") == 0) {
-                e->type = type_pointer(ctx->arena, obj_type->slice.elem);
+                Type *ptr_type = type_pointer(ctx->arena, obj_type->slice.elem);
+                if (obj_type->is_const) ptr_type->is_const = true;
+                e->type = ptr_type;
                 e->prov = e->field.object->prov;
                 return e->type;
             }
@@ -2002,6 +2065,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_DEREF_FIELD: {
         Type *obj_type = check_expr(ctx, e->field.object);
         if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
+        bool through_const = obj_type->is_const;
         if (obj_type->kind != TYPE_POINTER) {
             diag_error(e->loc, "-> requires pointer type, got %s", type_name(obj_type));
             e->type = type_error();
@@ -2016,6 +2080,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         for (int i = 0; i < pointee->struc.field_count; i++) {
             if (pointee->struc.fields[i].name == e->field.name) {
                 e->type = resolve_type(ctx, pointee->struc.fields[i].type);
+                if (through_const) e->type = type_make_const(ctx->arena, e->type);
                 return e->type;
             }
         }
@@ -2272,6 +2337,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         } else if (e->free_expr.operand->prov == PROV_STACK) {
             diag_error(e->loc, "cannot free stack-allocated memory");
         }
+        if (ot->is_const) {
+            diag_error(e->loc, "cannot free const pointer/slice");
+        }
         e->type = type_void();
         return e->type;
     }
@@ -2344,7 +2412,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
             if (t->kind == TYPE_SLICE) {
                 /* alloc(slice_expr) → T[]? (deep-copy slice data to heap) */
-                e->type = type_option(ctx->arena, t);
+                /* Strip const: alloc creates fresh mutable memory */
+                Type *rt = t;
+                if (rt->is_const) {
+                    rt = arena_alloc(ctx->arena, sizeof(Type));
+                    *rt = *t;
+                    rt->is_const = false;
+                }
+                e->type = type_option(ctx->arena, rt);
             } else {
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
             }
@@ -2467,7 +2542,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
         }
         break;
     case PAT_STRING_LIT:
-        if (!type_eq(type, type_str())) {
+        if (!is_str_type(type)) {
             diag_error(pat->loc, "string pattern on non-str type %s", type_name(type));
             return;
         }

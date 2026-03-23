@@ -1,0 +1,14 @@
+// Struct with const pointer field — tests that the field
+// is usable and maintains constness
+
+struct holder =
+    data: const int32*
+    len: int32
+
+let sum = (h: holder) ->
+    *h.data + h.len
+
+let main = (args: str[]) ->
+    let mut x = 10
+    let h = holder { data = &x, len = 5 }
+    sum(h) - 15

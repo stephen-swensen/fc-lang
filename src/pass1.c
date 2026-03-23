@@ -193,6 +193,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 Symbol *msym = symtab_lookup(members, src_name);
                 msym->is_private = child->is_private;
                 Type *st = malloc(sizeof(Type));
+                memset(st, 0, sizeof(Type));
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
                 st->struc.fields = child->struc.fields;
@@ -216,6 +217,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 Symbol *msym = symtab_lookup(members, src_name);
                 msym->is_private = child->is_private;
                 Type *ut = malloc(sizeof(Type));
+                memset(ut, 0, sizeof(Type));
                 ut->kind = TYPE_UNION;
                 ut->unio.name = mangled;
                 ut->unio.variants = child->unio.variants;

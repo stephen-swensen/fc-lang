@@ -1,0 +1,17 @@
+struct node =
+    data: int32
+    next: node*?
+
+let get_data = (n: const node*) ->
+    n->data
+
+let get_next_data = (n: const node*) ->
+    match n->next with
+    | some(next) -> next->data
+    | none -> 0
+
+let main = (args: str[]) ->
+    let mut b = node { data = 20, next = none(node*) }
+    let mut a = node { data = 10, next = some(&b) }
+    let result = get_data(&a) + get_next_data(&a)
+    result - 30

@@ -1,5 +1,5 @@
 module c from "stdio.h" =
-    extern fprintf: (any*, cstr, ...) -> int32
+    extern fprintf: (any*, const cstr, ...) -> int32
 
 let main = (args: str[]) ->
     // printf with various types as variadic args

@@ -1,0 +1,8 @@
+let modify = (s: str) ->
+    s[0] = 65
+    return
+
+let main = (args: str[]) ->
+    let s = "hello"
+    modify(s)
+    0

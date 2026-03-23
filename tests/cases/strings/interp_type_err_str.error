@@ -1,1 +1,1 @@
-format specifier %d expects integer type, got str
+format specifier %d expects integer type, got const str

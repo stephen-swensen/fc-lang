@@ -1,0 +1,11 @@
+// Option inner widening: int32*? widens to const int32*?
+
+let read_opt = (p: const int32*?) ->
+    match p with
+    | some(ptr) -> *ptr
+    | none -> 0
+
+let main = (args: str[]) ->
+    let mut x = 77
+    let p = some(&x)        // int32*? (non-const)
+    read_opt(p) - 77        // widens to const int32*?

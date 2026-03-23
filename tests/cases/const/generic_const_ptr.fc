@@ -1,0 +1,11 @@
+// Generic function with const pointer param — tests const preservation
+// through type resolution and monomorphization
+
+let deref = (p: const 'a*) -> *p
+
+let main = (args: str[]) ->
+    let mut x = 42
+    let mut y = 3.14f32
+    let v1 = deref((const int32*)&x)
+    let v2 = deref((const float32*)&y)
+    v1 - 42

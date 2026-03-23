@@ -1,0 +1,19 @@
+struct leaf =
+    val: int32
+
+struct branch =
+    leaf: leaf
+    next: branch*?
+
+struct tree =
+    name: leaf
+    root: branch*
+
+let main = (args: str[]) ->
+    let mut c = branch { leaf = leaf { val = 3 }, next = none(branch*) }
+    let mut b = branch { leaf = leaf { val = 2 }, next = some(&c) }
+    let mut t = tree { name = leaf { val = 1 }, root = &b }
+    let cp = (const tree*)&t
+    // deep write through const: cp->root->leaf.val = ...
+    cp->root->leaf.val = 99
+    0

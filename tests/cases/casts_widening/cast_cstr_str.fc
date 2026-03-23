@@ -1,5 +1,5 @@
 module c from "stdlib.h" =
-    extern getenv: (cstr) -> cstr?
+    extern getenv: (const cstr) -> const cstr?
 
 let main = (args: str[]) ->
     match c.getenv(c"PATH") with

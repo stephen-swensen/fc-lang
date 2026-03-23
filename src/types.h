@@ -47,6 +47,7 @@ struct UnionVariant {
 struct Type {
     TypeKind kind;
     const char *alias;  /* display name override (e.g. "str" for uint8[], "cstr" for uint8*) */
+    bool is_const;      /* const qualifier for pointer/slice types */
     union {
         struct { Type *pointee; } pointer;
         struct { Type *elem; } slice;
@@ -93,10 +94,13 @@ Type *type_void(void);
 Type *type_str(void);
 Type *type_str32(void);
 Type *type_cstr(void);
+Type *type_const_str(void);
+Type *type_const_cstr(void);
 Type *type_char(void);
 Type *type_any_ptr(void);
 Type *type_error(void);
 bool type_is_error(Type *t);
+bool type_is_const(Type *t);
 
 /* Type construction */
 Type *type_pointer(Arena *a, Type *pointee);
@@ -108,6 +112,9 @@ bool is_str_type(Type *t);
 bool is_cstr_type(Type *t);
 bool is_str32_type(Type *t);
 
+/* Const helpers */
+Type *type_make_const(Arena *a, Type *t);
+
 /* Queries */
 bool type_is_integer(Type *t);
 bool type_is_signed(Type *t);
@@ -115,6 +122,7 @@ bool type_is_unsigned(Type *t);
 bool type_is_float(Type *t);
 bool type_is_numeric(Type *t);
 bool type_eq(Type *a, Type *b);
+bool type_eq_ignore_const(Type *a, Type *b);
 const char *type_name(Type *t);
 
 /* Implicit widening: can 'from' widen to 'to' without explicit cast? */

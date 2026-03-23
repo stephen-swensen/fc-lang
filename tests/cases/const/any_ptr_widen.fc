@@ -1,0 +1,16 @@
+// T* implicitly widens to any*, const T* widens to const any*
+
+let use_any = (p: any*) ->
+    0
+
+let use_const_any = (p: const any*) ->
+    0
+
+let main = (args: str[]) ->
+    let mut x = 42
+    let p = &x                  // int32*
+    let r1 = use_any(p)         // int32* → any* (implicit)
+    let r2 = use_const_any(p)   // int32* → const any* (implicit, safe)
+    let cp = (const int32*)&x
+    let r3 = use_const_any(cp)  // const int32* → const any* (implicit)
+    r1 + r2 + r3

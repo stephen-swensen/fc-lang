@@ -1,0 +1,12 @@
+struct inner =
+    val: int32
+
+struct outer =
+    data: inner*
+
+let main = (args: str[]) ->
+    let mut i = inner { val = 10 }
+    let mut o = outer { data = &i }
+    let cp = (const outer*)&o
+    cp->data->val = 20
+    0

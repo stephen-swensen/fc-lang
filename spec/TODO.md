@@ -35,37 +35,11 @@ The `alloc(slice)` deep-copy pattern mitigates this — `alloc(s)!` promotes any
 
 The lightweight compile-time escape checks are now implemented. See the Resolved section for details.
 
-### `const` qualifier (future)
+### Branch widening in if/match (future)
 
-Adding a `const` qualifier to pointer/slice types would let FC match C's convention where `const T*` / `const T[]` means "borrowed, don't modify, don't free" and `T*` / `T[]` means "you own this, you're responsible for it." This is widely used in C APIs:
+Currently, if/match branches require exact type equality. Adding implicit widening would allow branches returning different-but-compatible types to unify automatically — e.g., `const str` + `str` → `const str`, or `int8` + `int32` → `int32`. This also affects loop return type unification via `break value`. Deferred because it opens a can of worms (numeric widening, const widening, loop types all interact). For now, users manually cast to unify: `(const str)non_const_expr`.
 
-```
-const char *getenv(...)     // returns internal pointer — don't free
-char *strdup(...)           // returns heap copy — caller must free
-```
-
-Core mechanic is straightforward: add `const` to the type system, reject writes through const pointers/slices in pass2, emit `const` in codegen. Key design questions:
-
-- **Depth**: does `const int32*[]` mean the ints are const, the slice is const, or both? FC's simpler type system (no multi-level `const * const *` chains) should allow a cleaner design than C.
-- **Inference**: should `let s = "hello"` infer `const str`? Probably yes for literals. Need coercion rules (non-const to const is safe, const to non-const requires explicit cast).
-- **Transitivity**: if you have a const pointer to a struct, are the struct's fields const? (C says yes.)
-- **Generics**: how does `box<const int32>` interact with monomorphization?
-- **Cast-away**: C allows `(char*)const_ptr` to strip const. FC should probably allow this for C interop but could warn.
-
-None of these are blockers — FC's type system is simpler than C's, so the design should be cleaner. Defer until after core milestones, then add as a focused feature.
-
-**When const is added**, the `cstr` type alias can be split into `const cstr` (read-only, maps to `const char*`) and `cstr` (mutable, maps to `char*`). This would let extern declarations like `snprintf` use `cstr` for the mutable output buffer and `const cstr` for the format string — matching C's actual prototypes exactly. The compiler's automatic boundary casts would then emit `const char*` or `char*` depending on the const qualifier, eliminating the current need to use `any*` for mutable char buffer parameters. Spec examples and variadic extern tests should be updated accordingly.
-
-#### Why `const` is simpler in FC than in C
-
-In C, `const` can appear at every level of pointer indirection independently — `const int *`, `int *const`, `const int *const`, `const int **`, `int *const *`, etc. With N levels of indirection there are 2^N combinations, and the placement rules (`const` applies to whatever is left of it) are notoriously confusing.
-
-FC's `const` would be simpler because:
-
-1. **`let` vs `let mut` already handles reassignment.** C uses `const` for two things: "data is read-only" (`const int *p`) and "variable can't be reassigned" (`int *const p`). FC's `let`/`let mut` distinction covers the second case, so FC's `const` would only mean "the pointed-to data is read-only" — one meaning, not two.
-2. **Multi-level pointers are rare in practice.** FC supports `T**` (the spec and compiler both allow it), but idiomatic FC code rarely needs it — option types, struct fields, and multiple return values via structs cover the common cases. So while `const` would technically need to compose through pointer levels, the N=1 case (`const T*`, `const T[]`) would cover the vast majority of real usage.
-
-#### `T**` and C interop
+### `T**` and C interop
 
 FC supports `T**` in the type system — the compiler, parser, and type checker all handle multi-level pointers. The main C use case for double pointers is out-parameters, where a function writes a pointer back through `T**`:
 
@@ -82,17 +56,17 @@ long strtol(const char *str, char **endptr, int base);
 
 ```fc
 module c from "stdlib.h" =
-    extern strtol: (cstr, cstr*, int32) -> int64
+    extern strtol: (const cstr, cstr*, int32) -> int64
 
 let mut end = default(uint8*)
-let val = c.strtol((cstr)s, &end, 10)   // &end is uint8**, codegen emits (char**)
+let val = c.strtol((const cstr)s, &end, 10)   // &end is uint8**, codegen emits (char**)
 ```
 
 **Opaque handle out-parameters** (e.g. `sqlite3_open`'s `sqlite3**`) are also handled automatically. Since FC represents opaque C types as `any*`, the out-parameter type is `any**` — which emits as `void**` in C. But `void**` is not implicitly convertible to `sqlite3**` in C (only `void*` has that special property). The compiler handles this by emitting a `(void*)` cast at the extern boundary, collapsing `void**` to `void*` which C then implicitly converts to the target `T**`:
 
 ```fc
 module sqlite from "sqlite3.h" =
-    extern sqlite3_open: (cstr, any**) -> int32
+    extern sqlite3_open: (const cstr, any**) -> int32
 
 let mut db = default(any*)
 let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (void*)
@@ -135,32 +109,67 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - Function pointer params in extern (non-capturing lambdas extract fn_ptr automatically)
 - Conditional compilation (`#if`/`#else`/`#end`) with built-in and user-defined flags
 - Escape analysis: compile-time detection of returning stack pointers/slices, freeing non-heap memory, storing stack pointers in heap structs
+- `const` qualifier for pointer/slice types: deep const, `const cstr` → `const char*` vs `cstr` → `char*` at extern boundaries, string/cstring literals infer const, write/free/address-of rejection through const
 
 **Remaining gaps:**
 
-1. **`const` qualifier** — already in Active TODO. When added, enables `const cstr` (read-only, `const char*`) vs `cstr` (mutable, `char*`) distinction at extern boundaries. Currently must use `any*` for mutable char buffer params like snprintf's output buffer.
+1. **No C struct layout import** — can't reference C's `struct timeval` directly. Must define a matching FC struct manually or use `any*`. Risk of layout mismatch if fields are wrong. Workable but error-prone for complex C structs.
 
-2. **No C struct layout import** — can't reference C's `struct timeval` directly. Must define a matching FC struct manually or use `any*`. Risk of layout mismatch if fields are wrong. Workable but error-prone for complex C structs.
+2. **No `--target` flag** — `target_embedded` and `target_bare_metal` flags are designed (see Active TODO) but not implemented. Generated C already compiles with cross-compilers, but no compile-time enforcement (e.g., rejecting `alloc` on bare-metal).
 
-3. **No `--target` flag** — `target_embedded` and `target_bare_metal` flags are designed (see Active TODO) but not implemented. Generated C already compiles with cross-compilers, but no compile-time enforcement (e.g., rejecting `alloc` on bare-metal).
+3. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file.
 
-4. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file.
+4. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Reads/writes could be optimized away by the C compiler without it.
 
-5. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Reads/writes could be optimized away by the C compiler without it.
+5. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. FC structs don't support this.
 
-6. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. FC structs don't support this.
+6. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). For raw C union interop, need `any*` or manual byte manipulation.
 
-7. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). For raw C union interop, need `any*` or manual byte manipulation.
+7. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
 
-8. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
+8. **No callback with context** — extern function pointer params must be non-capturing lambdas. C APIs that take a `void* userdata` + callback pair (pthreads, qsort_r, signal handlers) work but require the user to manage the context pointer manually.
 
-9. **No callback with context** — extern function pointer params must be non-capturing lambdas. C APIs that take a `void* userdata` + callback pair (pthreads, qsort_r, signal handlers) work but require the user to manage the context pointer manually.
-
-Items 1–3 are the most impactful. Items 4–8 are niche but matter for deep embedded work. Item 9 is a usability friction for common C callback patterns.
+Items 1–2 are the most impactful. Items 3–7 are niche but matter for deep embedded work. Item 8 is a usability friction for common C callback patterns.
 
 ---
 
 # Resolved
+
+## `const` qualifier for pointer/slice types (resolved 2026-03-22)
+
+Added `const` as a type qualifier for pointer and slice types. `const` means "can't write through this indirection" — orthogonal to `let`/`let mut` which controls binding reassignment.
+
+### Design
+- **Syntax**: `const` prefix on pointer/slice types only: `const int32*`, `const str`, `const int32[]`
+- **Deep const**: accessing pointer/slice fields through a const pointer gives const versions. If `const node*` and node has `next: node*`, then `p->next` is `const node*`. Value fields are simply not writable through const (no type change needed). Chains naturally: `const_ptr->next->next` propagates.
+- **Literal inference**: `"hello"` → `const str`, `c"hello"` → `const cstr` (data is in read-only .rodata)
+- **Coercion**: non-const → const implicit (safe direction via `type_can_widen`). Const → non-const requires explicit cast: `(str)const_str_value`
+- **Casts both directions**: `(const int32*)ptr` to freeze, `(int32*)const_ptr` to strip. Regular cast syntax.
+- **Struct fields**: can be declared `const` — `struct config = name: const str`
+- **`.ptr` on const slice**: gives `const T*`
+- **Write rejection**: assignment through const pointer/slice, address-of through const, free of const — all rejected with `diag_error`
+- **Generics**: type variables can bind to const types; `type_substitute` preserves `is_const`; unification allows non-const → const
+- **Extern boundaries**: `const cstr` → `const char*`, non-const `cstr` → `char*`
+- **Equality**: constness ignored for eq function generation/dedup
+- **Orthogonal to provenance**: const = write permission, provenance = storage location
+
+### What const is NOT
+- No `const` at binding sites (FC has no type annotations on `let` — always inferred from RHS)
+- No branch widening (if/match branches with `const T*` and `T*` require explicit cast — deferred to future branch widening feature)
+- No `const` on bare value types (`const int32` is a parse error)
+
+### Implementation
+- `bool is_const` field added to `struct Type` in `types.h`
+- Singleton const types: `type_const_str()`, `type_const_cstr()` for literal inference
+- `type_make_const()` helper: shallow-copies pointer/slice with `is_const=true`
+- `type_eq()` checks `is_const` for pointer/slice; `type_eq_ignore_const()` for eq dedup
+- `type_can_widen()` extended with non-const → const widening and option inner widening
+- `TOK_CONST` keyword, `apply_const()` parser helper (handles pointer/slice/option-wrapping)
+- `is_write_through_const()` recursive checker in pass2 for assignment targets
+- `mangle_type_name()` prefixes `const_` for mangled names
+- `emit_type()` emits `const ` prefix on C pointers; same slice typedefs for const/non-const
+- 21 new tests in `tests/cases/const/` (13 success, 8 error)
+- 614 total tests passing
 
 ## Stack escape analysis (resolved 2026-03-22)
 

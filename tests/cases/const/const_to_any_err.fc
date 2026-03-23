@@ -1,0 +1,10 @@
+// const T* should NOT widen to any* (would drop const)
+
+let use_any = (p: any*) ->
+    0
+
+let main = (args: str[]) ->
+    let mut x = 42
+    let cp = (const int32*)&x
+    use_any(cp)
+    0

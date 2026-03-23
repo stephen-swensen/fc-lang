@@ -1,13 +1,13 @@
-let get_len_str = (s: str) ->
+let get_len_str = (s: const str) ->
     s.len
 
-let get_len_u8slice = (s: uint8[]) ->
+let get_len_u8slice = (s: const uint8[]) ->
     s.len
 
-let first_byte_str = (s: str) ->
+let first_byte_str = (s: const str) ->
     s[0]
 
-let first_byte_u8slice = (s: uint8[]) ->
+let first_byte_u8slice = (s: const uint8[]) ->
     s[0]
 
 let main = (args: str[]) ->

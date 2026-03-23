@@ -1,5 +1,5 @@
 module c from "stdlib.h" =
-    extern atoi: (cstr) -> int32
+    extern atoi: (const cstr) -> int32
 
 let parse_num = (p: uint8*) ->
     c.atoi(p)

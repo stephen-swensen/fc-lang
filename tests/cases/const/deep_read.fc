@@ -1,0 +1,27 @@
+struct leaf =
+    val: int32
+
+struct branch =
+    leaf: leaf
+    next: branch*?
+
+struct tree =
+    name: leaf
+    root: branch*
+
+let deep_read = (t: const tree*) ->
+    // t->root->leaf.val reads through const ptr, then struct fields
+    let v1 = t->root->leaf.val
+    // t->root->next reads through const ptr chain
+    let v2 = match t->root->next with
+    | some(b) -> b->leaf.val
+    | none -> 0
+    // t->name.val reads through const ptr then value field
+    let v3 = t->name.val
+    v1 + v2 + v3
+
+let main = (args: str[]) ->
+    let mut c = branch { leaf = leaf { val = 3 }, next = none(branch*) }
+    let mut b = branch { leaf = leaf { val = 2 }, next = some(&c) }
+    let mut t = tree { name = leaf { val = 1 }, root = &b }
+    deep_read(&t) - 6

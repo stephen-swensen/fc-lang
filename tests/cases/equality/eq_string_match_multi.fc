@@ -1,4 +1,4 @@
-let score = (s: str) ->
+let score = (s: const str) ->
     match s with
     | "a" -> 1
     | "bb" -> 2

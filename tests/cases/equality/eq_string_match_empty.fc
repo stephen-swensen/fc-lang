@@ -1,4 +1,4 @@
-let classify = (s: str) ->
+let classify = (s: const str) ->
     match s with
     | "" -> 1
     | "hello" -> 2

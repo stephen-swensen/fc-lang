@@ -1,6 +1,6 @@
 module c from "string.h" =
-    extern memcpy: (any*, any*, usize) -> any*
-    extern strlen: (cstr) -> usize
+    extern memcpy: (any*, const any*, usize) -> any*
+    extern strlen: (const cstr) -> usize
 
 module libc from "stdlib.h" =
     extern malloc: (usize) -> any*
@@ -13,7 +13,7 @@ let main = (args: str[]) ->
     // memcpy with usize length
     let src = c"hello"
     let len = c.strlen(src)
-    c.memcpy(buf, (any*)src, len + 1u)
+    c.memcpy(buf, src, len + 1u)
 
     // verify the copy worked
     let result = (cstr)buf

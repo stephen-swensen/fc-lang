@@ -1,6 +1,6 @@
 module c from "string.h" =
-    extern strlen: (cstr) -> usize
-    extern memcmp: (any*, any*, usize) -> int32
+    extern strlen: (const cstr) -> usize
+    extern memcmp: (const any*, const any*, usize) -> int32
 
 let main = (args: str[]) ->
     // strlen returns usize — matches C's size_t
@@ -12,7 +12,7 @@ let main = (args: str[]) ->
 
     // pass usize to C function expecting size_t
     let s2 = c"hello"
-    let cmp = c.memcmp((any*)s, (any*)s2, len)
+    let cmp = c.memcmp(s, s2, len)
     let r2 = if cmp == 0 then 1 else 0
 
     // cast usize to int32 for return

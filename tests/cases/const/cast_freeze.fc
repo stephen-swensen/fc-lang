@@ -1,0 +1,7 @@
+let read_only = (p: const int32*) ->
+    *p
+
+let main = (args: str[]) ->
+    let mut x = 99
+    let cp = (const int32*)&x
+    read_only(cp) - 99

@@ -1,0 +1,9 @@
+// Generic function with const slice param — tests const preservation
+// through type resolution and monomorphization
+
+let first = (s: const 'a[]) -> s[0]
+
+let main = (args: str[]) ->
+    let arr = int32[3] { 10, 20, 30 }
+    let v = first(arr)
+    v - 10

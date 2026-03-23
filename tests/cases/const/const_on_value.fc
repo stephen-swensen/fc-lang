@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let f = (x: const int32) ->
+        x
+    f(42)

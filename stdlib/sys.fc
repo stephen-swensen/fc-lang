@@ -6,13 +6,13 @@ module sys =
         tv_nsec: int64
 
     private module c from "stdlib.h" =
-        extern getenv: (cstr) -> cstr?
+        extern getenv: (const cstr) -> cstr?
         extern exit: (int32) -> void
     private module t from "time.h" =
         extern clock_gettime: (int32, any*) -> int32
         extern nanosleep: (any*, any*?) -> int32
 
-    let env = (name: str) ->
+    let env = (name: const str) ->
         match c.getenv((cstr)name) with
         | some(cs) -> some((str)cs)
         | none -> none(str)
@@ -22,10 +22,10 @@ module sys =
 
     let time = () ->
         let mut ts = default(timespec)
-        t.clock_gettime(0, (any*)&ts)
+        t.clock_gettime(0, &ts)
         ts.tv_sec * 1000 + ts.tv_nsec / 1000000
 
     let sleep = (ms: int64) ->
         let mut req = timespec { tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-        t.nanosleep((any*)&req, none(any*))
+        t.nanosleep(&req, none(any*))
         return

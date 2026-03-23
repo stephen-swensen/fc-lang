@@ -76,6 +76,48 @@ Type *type_cstr(void) {
     return &cstr_type;
 }
 
+/* const str = const uint8[] */
+Type *type_const_str(void) {
+    static Type const_str_type = {0};
+    static bool init = false;
+    if (!init) {
+        const_str_type.kind = TYPE_SLICE;
+        const_str_type.alias = "str";
+        const_str_type.is_const = true;
+        const_str_type.slice.elem = type_uint8();
+        init = true;
+    }
+    return &const_str_type;
+}
+
+/* const cstr = const uint8* */
+Type *type_const_cstr(void) {
+    static Type const_cstr_type = {0};
+    static bool init = false;
+    if (!init) {
+        const_cstr_type.kind = TYPE_POINTER;
+        const_cstr_type.alias = "cstr";
+        const_cstr_type.is_const = true;
+        const_cstr_type.pointer.pointee = type_uint8();
+        init = true;
+    }
+    return &const_cstr_type;
+}
+
+bool type_is_const(Type *t) {
+    return t && t->is_const;
+}
+
+Type *type_make_const(Arena *a, Type *t) {
+    if (!t) return NULL;
+    if (t->is_const) return t;
+    if (t->kind != TYPE_POINTER && t->kind != TYPE_SLICE && t->kind != TYPE_ANY_PTR) return t;
+    Type *c = arena_alloc(a, sizeof(Type));
+    *c = *t;
+    c->is_const = true;
+    return c;
+}
+
 bool is_str_type(Type *t) {
     return t && t->kind == TYPE_SLICE && t->slice.elem &&
            t->slice.elem->kind == TYPE_UINT8;
@@ -152,9 +194,12 @@ bool type_eq(Type *a, Type *b) {
         return false;
     }
     switch (a->kind) {
-    case TYPE_POINTER: return type_eq(a->pointer.pointee, b->pointer.pointee);
-    case TYPE_SLICE:   return type_eq(a->slice.elem, b->slice.elem);
+    case TYPE_POINTER: return a->is_const == b->is_const &&
+                              type_eq(a->pointer.pointee, b->pointer.pointee);
+    case TYPE_SLICE:   return a->is_const == b->is_const &&
+                              type_eq(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq(a->option.inner, b->option.inner);
+    case TYPE_ANY_PTR: return a->is_const == b->is_const;
     case TYPE_STRUCT:  return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
@@ -165,6 +210,35 @@ bool type_eq(Type *a, Type *b) {
             if (!type_eq(a->func.param_types[i], b->func.param_types[i])) return false;
         return type_eq(a->func.return_type, b->func.return_type);
     default: return true;   /* primitives match by kind */
+    }
+}
+
+bool type_eq_ignore_const(Type *a, Type *b) {
+    if (a == b) return true;
+    if (a->kind == TYPE_ERROR || b->kind == TYPE_ERROR) return true;
+    if (a->kind != b->kind) {
+        if ((a->kind == TYPE_STRUCT && b->kind == TYPE_UNION) ||
+            (a->kind == TYPE_UNION && b->kind == TYPE_STRUCT)) {
+            const char *na = a->kind == TYPE_STRUCT ? a->struc.name : a->unio.name;
+            const char *nb = b->kind == TYPE_STRUCT ? b->struc.name : b->unio.name;
+            return na == nb;
+        }
+        return false;
+    }
+    switch (a->kind) {
+    case TYPE_POINTER: return type_eq_ignore_const(a->pointer.pointee, b->pointer.pointee);
+    case TYPE_SLICE:   return type_eq_ignore_const(a->slice.elem, b->slice.elem);
+    case TYPE_OPTION:  return type_eq_ignore_const(a->option.inner, b->option.inner);
+    case TYPE_STRUCT:  return a->struc.name == b->struc.name;
+    case TYPE_UNION:   return a->unio.name == b->unio.name;
+    case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
+    case TYPE_FUNC:
+        if (a->func.param_count != b->func.param_count) return false;
+        if (a->func.is_variadic != b->func.is_variadic) return false;
+        for (int i = 0; i < a->func.param_count; i++)
+            if (!type_eq_ignore_const(a->func.param_types[i], b->func.param_types[i])) return false;
+        return type_eq_ignore_const(a->func.return_type, b->func.return_type);
+    default: return true;
     }
 }
 
@@ -190,6 +264,24 @@ static const char *primitive_names[] = {
 
 const char *type_name(Type *t) {
     if (!t) return "<null-type>";
+    /* Handle const types */
+    if (t->is_const) {
+        if (is_str_type(t)) return "const str";
+        if (is_cstr_type(t)) return "const cstr";
+        if (is_str32_type(t)) return "const str32";
+        static char cbufs[4][256];
+        static int cidx = 0;
+        char *buf = cbufs[cidx & 3]; cidx++;
+        if (t->kind == TYPE_POINTER)
+            snprintf(buf, 256, "const %s*", type_name(t->pointer.pointee));
+        else if (t->kind == TYPE_SLICE)
+            snprintf(buf, 256, "const %s[]", type_name(t->slice.elem));
+        else if (t->kind == TYPE_ANY_PTR)
+            snprintf(buf, 256, "const any*");
+        else
+            snprintf(buf, 256, "const ?");
+        return buf;
+    }
     if (t->alias) return t->alias;
     if (t->kind < TYPE_POINTER) {
         return primitive_names[t->kind];
@@ -222,6 +314,7 @@ const char *type_name(Type *t) {
     }
     case TYPE_STRUCT:    return t->struc.name;
     case TYPE_UNION:     return t->unio.name;
+    case TYPE_ANY_PTR:   return "any*";
     case TYPE_TYPE_VAR:  return t->type_var.name;
     case TYPE_ERROR:     return "<error>";
     default:             return "?";
@@ -231,6 +324,31 @@ const char *type_name(Type *t) {
 bool type_can_widen(Type *from, Type *to) {
     if (from->kind == TYPE_ERROR || to->kind == TYPE_ERROR) return true;
     if (type_eq(from, to)) return true;
+
+    /* non-const pointer/slice/any* → const pointer/slice/any* */
+    if (to->is_const && !from->is_const) {
+        if (from->kind == TYPE_POINTER && to->kind == TYPE_POINTER &&
+            type_eq(from->pointer.pointee, to->pointer.pointee))
+            return true;
+        if (from->kind == TYPE_SLICE && to->kind == TYPE_SLICE &&
+            type_eq(from->slice.elem, to->slice.elem))
+            return true;
+        if (from->kind == TYPE_ANY_PTR && to->kind == TYPE_ANY_PTR)
+            return true;
+    }
+
+    /* T* → any* (like C's T* → void*), respecting const */
+    if (to->kind == TYPE_ANY_PTR && from->kind == TYPE_POINTER) {
+        /* const T* → const any* OK, T* → any* OK, const T* → any* NOT OK */
+        if (from->is_const && !to->is_const) return false;
+        return true;
+    }
+
+    /* option inner widening (e.g., int32*? → const int32*?) */
+    if (from->kind == TYPE_OPTION && to->kind == TYPE_OPTION &&
+        from->option.inner && to->option.inner)
+        return type_can_widen(from->option.inner, to->option.inner);
+
     TypeKind f = from->kind, t = to->kind;
 
     /* int8 → int16, int32, int64 */
@@ -397,12 +515,16 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
     case TYPE_POINTER: {
         Type *inner = type_substitute(a, t->pointer.pointee, var_names, concrete, count);
         if (inner == t->pointer.pointee) return t;
-        return type_pointer(a, inner);
+        Type *result = type_pointer(a, inner);
+        result->is_const = t->is_const;
+        return result;
     }
     case TYPE_SLICE: {
         Type *inner = type_substitute(a, t->slice.elem, var_names, concrete, count);
         if (inner == t->slice.elem) return t;
-        return type_slice(a, inner);
+        Type *result = type_slice(a, inner);
+        result->is_const = t->is_const;
+        return result;
     }
     case TYPE_OPTION: {
         Type *inner = type_substitute(a, t->option.inner, var_names, concrete, count);
@@ -489,6 +611,16 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
 
 const char *mangle_type_name(Type *t) {
     if (!t) return "void";
+    /* Const types get a "const_" prefix */
+    if (t->is_const) {
+        static char cbufs[4][256];
+        static int cidx = 0;
+        char *buf = cbufs[cidx & 3]; cidx++;
+        Type tmp = *t;
+        tmp.is_const = false;
+        snprintf(buf, 256, "const_%s", mangle_type_name(&tmp));
+        return buf;
+    }
     if (is_str_type(t)) return "str";
     if (is_cstr_type(t)) return "cstr";
     if (is_str32_type(t)) return "str32";

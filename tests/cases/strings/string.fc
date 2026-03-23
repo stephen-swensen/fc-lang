@@ -1,4 +1,4 @@
-let get_len = (s: str) ->
+let get_len = (s: const str) ->
     s.len
 
 let main = (args: str[]) ->

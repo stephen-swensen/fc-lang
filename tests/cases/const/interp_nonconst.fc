@@ -1,0 +1,8 @@
+let check = (s: str) ->
+    s.len
+
+let main = (args: str[]) ->
+    let x = 42
+    let s = "val=%d{x}"
+    let len = check(s)
+    if len > 0 then 0 else 1
