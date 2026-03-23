@@ -32,6 +32,7 @@ FC is a C-targeting language with these core design constraints:
 - **Comments**: `//` line comments, `/* */` block comments (nestable). No `#` comments.
 - **Type inference**: Directional (bottom-up, inside-out), never global unification
 - **Generics**: Monomorphized at compile time, zero runtime cost
+- **Completeness over partiality**: Prefer conservative-but-complete restrictions over partial solutions that only cover some cases. A feature that works correctly in all scenarios (even if limited) is better than one that works in common cases but has subtle unsound edge cases. Don't ship a partial fix — either solve the full problem space or keep the restriction until you can.
 
 ## Compiler Architecture
 

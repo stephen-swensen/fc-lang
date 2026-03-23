@@ -89,6 +89,38 @@ The compiler currently only supports hosted targets (`target_hosted` is always s
 
 The conditional compilation infrastructure (`#if`/`#else if`) is already in place and ready to use these flags once they are defined. The generated C is already portable — it can be compiled with embedded toolchains today by compiling the output manually. The `--target` flag would automate this and add compile-time enforcement.
 
+## Closures at extern boundaries — wrapper function pattern (future)
+
+Currently, only top-level functions and non-capturing lambdas can be passed to extern C functions. The compiler generates static trampolines (`_ctramp_*`) that strip the `void* _ctx` parameter and call the known function directly with `NULL`. This is conservative but complete — it is correct for all C callback APIs.
+
+The limitation shows up when writing FC stdlib wrappers. A wrapper like `let sort = (arr: int32[], compare: (int32, int32) -> int32) -> ...` receives `compare` as a fat pointer `{fn_ptr, ctx}`. When forwarding to the extern `qsort`, it's rejected because it's a local function value, not a top-level function or literal lambda. This prevents the idiomatic pattern of wrapping C APIs with nicer FC signatures.
+
+### Design space explored
+
+C callback APIs fall into three categories:
+
+1. **Synchronous callbacks** (`qsort`, `bsearch`) — callback is invoked before the extern returns. A thread-local stash approach works: stash the fat pointer's `fn_ptr` and `ctx` before the extern call, generate a static trampoline that reads from the stash. Sound because the stash is valid for the duration of the call.
+
+2. **Deferred callbacks with user-data** (`pthread_create`, most event loops) — the C API provides a `void*` parameter that gets passed through to the callback. The context could be threaded through this parameter without a stash. Fully sound but requires different codegen than category 1.
+
+3. **Deferred callbacks without user-data** (`signal`, `atexit`) — no mechanism to carry context. Closures fundamentally cannot work here without runtime code generation. The non-capturing restriction is the only correct answer.
+
+### Why this is deferred
+
+Implementing only category 1 (stash approach) would be a partial solution — it handles `qsort`-style wrappers but not `pthread_create`-style wrappers. Per the project's completeness principle, a partial solution that covers some APIs but silently breaks on others is worse than a conservative restriction that is uniformly correct. The current restriction (category 3 behavior for all extern boundaries) is complete.
+
+### Possible approaches if revisited
+
+- **Thread-local stash for synchronous callbacks**: per-callsite `_Thread_local` fn_ptr/ctx slots with a static trampoline that reads from them. Simple codegen, works for the common case. Unsound if the C function stores the pointer for later or the same callsite is reentered.
+
+- **Inferred restriction propagation**: if pass2 detects that a function parameter flows to an extern call, mark that parameter as "must be non-capturing" and enforce at call sites transitively. No new syntax, but requires cross-function dataflow analysis.
+
+- **Explicit `extern` function type annotation**: e.g. `compare: extern (int32, int32) -> int32` to mark a parameter as a bare C function pointer. Simple local checking, visible in the API, better error messages. Adds a new concept to the type system.
+
+- **User-data threading for deferred callbacks**: for APIs like `pthread_create` that provide a `void*` arg, the compiler could pack the fat pointer context into that parameter and generate a trampoline that unpacks it. Requires recognizing the pattern (which parameter is the user-data?) — possibly via annotation on the extern declaration.
+
+A complete solution would need to handle at least categories 1 and 2 together. Category 3 always keeps the non-capturing restriction.
+
 ---
 
 ---
