@@ -305,6 +305,19 @@ static void emit_eq_func_name(Type *t, FILE *out);
  * and any** (void**) → void* (C's void* converts to any T** implicitly,
  * but void** does not). */
 static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
+    if (param_type && param_type->kind == TYPE_FUNC) {
+        /* Function at C extern boundary — emit C-compatible trampoline name */
+        if (e->kind == EXPR_IDENT && !e->ident.is_local) {
+            const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
+            fprintf(out, "_ctramp_%s", name);
+            return;
+        }
+        if (e->kind == EXPR_FUNC && e->func.capture_count == 0 && e->func.lifted_name) {
+            fprintf(out, "_ctramp_%s", e->func.lifted_name);
+            return;
+        }
+        /* Capturing lambda at C boundary — fall through, will produce type error */
+    }
     if (param_type && is_cstr_type(param_type)) {
         if (param_type->is_const)
             fprintf(out, "(const char*)");
@@ -2382,6 +2395,162 @@ typedef struct {
     int cap;
 } LambdaSet;
 
+/* ---- Trampoline set ---- */
+/* Tracks FC functions that need C-compatible trampolines for extern call boundaries.
+ * A trampoline wraps an FC function (which has an extra void* _ctx param) into a
+ * plain C function pointer compatible with the extern's expected signature. */
+
+typedef struct {
+    const char *name;   /* C function name (codegen_name or lifted_name) */
+    Type *type;         /* TYPE_FUNC — the function's type */
+} TrampolineEntry;
+
+typedef struct {
+    TrampolineEntry *entries;
+    int count;
+    int cap;
+} TrampolineSet;
+
+static bool trampolineset_contains(TrampolineSet *ts, const char *name) {
+    for (int i = 0; i < ts->count; i++) {
+        if (strcmp(ts->entries[i].name, name) == 0) return true;
+    }
+    return false;
+}
+
+static void trampolineset_add(TrampolineSet *ts, const char *name, Type *type) {
+    if (!trampolineset_contains(ts, name)) {
+        TrampolineEntry entry = { name, type };
+        DA_APPEND(ts->entries, ts->count, ts->cap, entry);
+    }
+}
+
+static void collect_trampolines_expr(Expr *e, TrampolineSet *ts);
+
+static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_CALL:
+        /* Check if this is an extern call with function-type arguments */
+        if (e->call.is_extern_call) {
+            Type *call_ft = e->call.func->type;
+            for (int i = 0; i < e->call.arg_count; i++) {
+                Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
+                    ? call_ft->func.param_types[i] : NULL;
+                if (!pt || pt->kind != TYPE_FUNC) continue;
+                Expr *arg = e->call.args[i];
+                if (arg->kind == EXPR_IDENT && !arg->ident.is_local && arg->type &&
+                    arg->type->kind == TYPE_FUNC) {
+                    /* Top-level function passed at extern boundary */
+                    const char *fname = arg->ident.codegen_name
+                        ? arg->ident.codegen_name : arg->ident.name;
+                    trampolineset_add(ts, fname, arg->type);
+                } else if (arg->kind == EXPR_FUNC && arg->func.capture_count == 0 &&
+                           arg->func.lifted_name && arg->type &&
+                           arg->type->kind == TYPE_FUNC) {
+                    /* Non-capturing lambda passed at extern boundary */
+                    trampolineset_add(ts, arg->func.lifted_name, arg->type);
+                }
+            }
+        }
+        collect_trampolines_expr(e->call.func, ts);
+        for (int i = 0; i < e->call.arg_count; i++)
+            collect_trampolines_expr(e->call.args[i], ts);
+        break;
+    case EXPR_BINARY:
+        collect_trampolines_expr(e->binary.left, ts);
+        collect_trampolines_expr(e->binary.right, ts);
+        break;
+    case EXPR_UNARY_PREFIX:
+        collect_trampolines_expr(e->unary_prefix.operand, ts);
+        break;
+    case EXPR_UNARY_POSTFIX:
+        collect_trampolines_expr(e->unary_postfix.operand, ts);
+        break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        collect_trampolines_expr(e->field.object, ts);
+        break;
+    case EXPR_INDEX:
+        collect_trampolines_expr(e->index.object, ts);
+        collect_trampolines_expr(e->index.index, ts);
+        break;
+    case EXPR_SLICE:
+        collect_trampolines_expr(e->slice.object, ts);
+        if (e->slice.lo) collect_trampolines_expr(e->slice.lo, ts);
+        if (e->slice.hi) collect_trampolines_expr(e->slice.hi, ts);
+        break;
+    case EXPR_IF:
+        collect_trampolines_expr(e->if_expr.cond, ts);
+        collect_trampolines_expr(e->if_expr.then_body, ts);
+        if (e->if_expr.else_body) collect_trampolines_expr(e->if_expr.else_body, ts);
+        break;
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            collect_trampolines_expr(e->block.stmts[i], ts);
+        break;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.body_count; i++)
+            collect_trampolines_expr(e->func.body[i], ts);
+        break;
+    case EXPR_LET:
+        collect_trampolines_expr(e->let_expr.let_init, ts);
+        break;
+    case EXPR_LET_DESTRUCT:
+        collect_trampolines_expr(e->let_destruct.init, ts);
+        break;
+    case EXPR_RETURN:
+        if (e->return_expr.value) collect_trampolines_expr(e->return_expr.value, ts);
+        break;
+    case EXPR_ASSIGN:
+        collect_trampolines_expr(e->assign.target, ts);
+        collect_trampolines_expr(e->assign.value, ts);
+        break;
+    case EXPR_CAST:
+        collect_trampolines_expr(e->cast.operand, ts);
+        break;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            collect_trampolines_expr(e->struct_lit.fields[i].value, ts);
+        break;
+    case EXPR_SOME:
+        collect_trampolines_expr(e->some_expr.value, ts);
+        break;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            collect_trampolines_expr(e->array_lit.elems[i], ts);
+        break;
+    case EXPR_MATCH:
+        collect_trampolines_expr(e->match_expr.subject, ts);
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                collect_trampolines_expr(e->match_expr.arms[i].body[j], ts);
+        break;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            collect_trampolines_expr(e->loop_expr.body[i], ts);
+        break;
+    case EXPR_FOR:
+        collect_trampolines_expr(e->for_expr.iter, ts);
+        if (e->for_expr.range_end) collect_trampolines_expr(e->for_expr.range_end, ts);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            collect_trampolines_expr(e->for_expr.body[i], ts);
+        break;
+    case EXPR_BREAK:
+        if (e->break_expr.value) collect_trampolines_expr(e->break_expr.value, ts);
+        break;
+    case EXPR_ALLOC:
+        if (e->alloc_expr.size_expr) collect_trampolines_expr(e->alloc_expr.size_expr, ts);
+        if (e->alloc_expr.init_expr) collect_trampolines_expr(e->alloc_expr.init_expr, ts);
+        break;
+    case EXPR_FREE:
+        collect_trampolines_expr(e->free_expr.operand, ts);
+        break;
+    default:
+        break;
+    }
+}
+
 static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
     if (!e) return;
     if (e->kind == EXPR_FUNC && e->func.lifted_name) {
@@ -2496,6 +2665,26 @@ static void emit_eq_func_name(Type *t, FILE *out) {
     if (t->is_const) { tmp = *t; tmp.is_const = false; t = &tmp; }
     fprintf(out, "fc_eq_");
     emit_type_ident(t, out);
+}
+
+/* Returns true if the function type references any struct/union/option-of-struct/union
+   by value in params or return — such typedefs must be emitted after struct defs. */
+static bool fn_type_uses_struct_option(Type *f) {
+    Type *rt = f->func.return_type;
+    if (rt) {
+        if (rt->kind == TYPE_STRUCT || rt->kind == TYPE_UNION) return true;
+        if (rt->kind == TYPE_OPTION && rt->option.inner &&
+            (rt->option.inner->kind == TYPE_STRUCT || rt->option.inner->kind == TYPE_UNION))
+            return true;
+    }
+    for (int i = 0; i < f->func.param_count; i++) {
+        Type *pt = f->func.param_types[i];
+        if (pt->kind == TYPE_STRUCT || pt->kind == TYPE_UNION) return true;
+        if (pt->kind == TYPE_OPTION && pt->option.inner &&
+            (pt->option.inner->kind == TYPE_STRUCT || pt->option.inner->kind == TYPE_UNION))
+            return true;
+    }
+    return false;
 }
 
 static void emit_eq_forward(Type *t, FILE *out) {
@@ -2645,6 +2834,7 @@ static void collect_from_libs(Decl *d, const char **seen, int *count, int cap) {
     for (int i = 0; i < d->module.decl_count; i++)
         collect_from_libs(d->module.decls[i], seen, count, cap);
 }
+
 
 static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) {
     Decl **all = NULL;
@@ -2828,6 +3018,25 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, ";\n");
     }
 
+    /* Phase 1: function typedefs that only use primitive/pointer/slice types.
+       These are safe before struct defs (e.g. structs with callback fields).
+       Typedefs referencing struct/union/option-of-struct are deferred to phase 2. */
+    for (int i = 0; i < fns.count; i++) {
+        Type *f = fns.types[i];
+        if (fn_type_uses_struct_option(f)) continue;
+        fprintf(out, "typedef struct { ");
+        emit_type(f->func.return_type, out);
+        fprintf(out, " (*fn_ptr)(");
+        for (int j = 0; j < f->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(f->func.param_types[j], out);
+        }
+        if (f->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void*); void* ctx; } ");
+        emit_type(f, out);
+        fprintf(out, ";\n");
+    }
+
     /* Emit full struct and union definitions (skip generics), interleaved with
        option typedefs that wrap them. */
     bool *opt_emitted = calloc(options.count, sizeof(bool));
@@ -2896,9 +3105,11 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
     }
 
-    /* Emit function type typedefs */
+    /* Phase 2: deferred function typedefs that reference struct/union/option-of-struct.
+       All struct defs and option-of-struct typedefs are now emitted above. */
     for (int i = 0; i < fns.count; i++) {
         Type *f = fns.types[i];
+        if (!fn_type_uses_struct_option(f)) continue;
         fprintf(out, "typedef struct { ");
         emit_type(f->func.return_type, out);
         fprintf(out, " (*fn_ptr)(");
@@ -2993,6 +3204,29 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
     }
 
+    /* Collect trampolines: FC functions passed at extern call boundaries.
+     * Walk all non-generic bodies and all monomorphized bodies. */
+    TrampolineSet trampolines = {0};
+    for (int i = 0; i < all_count; i++) {
+        if (all_decls[i]->kind == DECL_LET && all_decls[i]->let.init &&
+            !is_generic_decl(all_decls[i])) {
+            collect_trampolines_expr(all_decls[i]->let.init, &trampolines);
+        }
+    }
+    /* Also walk monomorphized function bodies */
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind != DECL_LET || !inst->template_decl) continue;
+        Decl *tmpl = inst->template_decl;
+        if (!tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
+        Expr *fn = tmpl->let.init;
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        for (int j = 0; j < fn->func.body_count; j++)
+            collect_trampolines_expr(fn->func.body[j], &trampolines);
+        g_subst = NULL;
+    }
+
     /* Emit non-function global variable definitions.
      * Must come before lifted lambdas so they can reference globals.
      * Pass2 enforces that initializers are constant expressions, so these
@@ -3039,6 +3273,21 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
         if (lam->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
+    }
+    /* Emit forward declarations for C-boundary trampolines */
+    for (int i = 0; i < trampolines.count; i++) {
+        TrampolineEntry *te = &trampolines.entries[i];
+        Type *ft = te->type;
+        fprintf(out, "static ");
+        emit_type(ft->func.return_type, out);
+        fprintf(out, " _ctramp_%s(", te->name);
+        for (int j = 0; j < ft->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(ft->func.param_types[j], out);
+            fprintf(out, " _p%d", j);
+        }
+        if (ft->func.param_count == 0) fprintf(out, "void");
+        fprintf(out, ");\n");
     }
     fprintf(out, "\n");
 
@@ -3135,6 +3384,35 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "}\n\n");
         g_subst = NULL;
     }
+
+    /* Emit C-boundary trampoline definitions */
+    for (int i = 0; i < trampolines.count; i++) {
+        TrampolineEntry *te = &trampolines.entries[i];
+        Type *ft = te->type;
+        fprintf(out, "static ");
+        emit_type(ft->func.return_type, out);
+        fprintf(out, " _ctramp_%s(", te->name);
+        for (int j = 0; j < ft->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(ft->func.param_types[j], out);
+            fprintf(out, " _p%d", j);
+        }
+        if (ft->func.param_count == 0) fprintf(out, "void");
+        fprintf(out, ") {\n");
+        if (ft->func.return_type->kind == TYPE_VOID) {
+            fprintf(out, "    %s(", te->name);
+        } else {
+            fprintf(out, "    return %s(", te->name);
+        }
+        for (int j = 0; j < ft->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            fprintf(out, "_p%d", j);
+        }
+        if (ft->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "NULL);\n");
+        fprintf(out, "}\n");
+    }
+    free(trampolines.entries);
 
     /* If no main function, wrap non-func decls in synthetic main */
     if (!has_main && has_non_func) {

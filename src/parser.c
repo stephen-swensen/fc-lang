@@ -905,9 +905,12 @@ static Expr *parse_prefix(Parser *p) {
         if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_COLON) {
             return parse_func_literal(p);
         }
-        /* (Type)expr : cast — check if next token is a type name, type var, or const */
+        /* (Type)expr : cast — check if next token is a type name, type var, or const.
+         * Also try when (IDENT*) pattern is seen — user-defined struct pointer casts.
+         * Backtracking handles false positives like (a * b). */
         if ((peek_at(p, 1)->kind == TOK_IDENT &&
-             is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length)) ||
+             (is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
+              peek_at(p, 2)->kind == TOK_STAR)) ||
             peek_at(p, 1)->kind == TOK_TYPE_VAR ||
             peek_at(p, 1)->kind == TOK_CONST) {
             /* Try to parse as cast with backtracking */

@@ -3194,37 +3194,45 @@ The programmer is responsible for passing handles to the correct functions — F
 
 **Function pointer parameters in C interop**
 
-When a function type appears as a parameter in an `extern` declaration, the compiler maps it to a C function pointer at the boundary. The programmer passes a non-capturing lambda directly — no `&` required:
+FC functions internally carry an extra `void* _ctx` parameter for closure support. When a non-capturing function or lambda is passed to a C extern, the compiler generates a **trampoline** — a thin static wrapper that drops the `_ctx` and matches the C calling convention. This happens automatically; the programmer just passes the function:
 
 ```fc
-module c_stdlib from "stdlib.h" =
-    extern qsort: (any*, int64, int64, (any*, any*) -> int32) -> void
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> int32) -> void
 
-// pass a non-capturing lambda directly — compiler handles C function pointer mapping
-c_stdlib.qsort(data.ptr, data.len, sizeof(int32), (a: any*, b: any*) ->
-    *(int32*) a - *(int32*) b)
+// Named top-level comparator — non-capturing, so the compiler generates a trampoline
+let int_compare = (a: const any*, b: const any*) ->
+    let ia = *((const int32*) a)
+    let ib = *((const int32*) b)
+    ia - ib
+
+let main = (args: str[]) ->
+    let mut nums = int32[5] { 5, 2, 8, 1, 9 }
+
+    // Pass a named function — trampoline bridges FC's (a, b, _ctx) to C's (a, b)
+    libc.qsort(nums.ptr, 5u, (usize)sizeof(int32), int_compare)
+
+    // Pass a non-capturing lambda directly — same trampoline mechanism
+    libc.qsort(nums.ptr, 5u, (usize)sizeof(int32),
+        (a: const any*, b: const any*) ->
+            *((const int32*) b) - *((const int32*) a))
 ```
 
-Passing a capturing lambda to a C function pointer parameter is a compile error — the fat-pointer representation cannot be expressed as a plain C function pointer.
+**What can be passed to extern function parameters:**
 
-**C interop — FFI callbacks with user-data**
+The compiler accepts only two forms at an extern call boundary:
 
-C APIs commonly pass a `void*` user_data alongside a function pointer so the callback can recover its context. Declare the callback parameter as an FC function type and the user-data as `any*`:
+1. **A top-level function name** — `int_compare` in the example above.
+2. **A non-capturing lambda literal** — written directly at the call site.
 
-```fc
-module pthreads from "pthread.h" =
-    extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
+Anything else is a compile error. In particular:
 
-let my_cb = (data: any*) ->
-    let s = (my_state*) data
-    // use s->...
-    none(any*)
+- **Capturing lambdas** are rejected — a C function pointer has no way to carry the closure's captured environment.
+- **Local variables of function type** are rejected, even if the value they hold is non-capturing. Once a lambda is assigned to a binding, the compiler only sees the type `(A, B) -> C`, which does not encode whether the value captures. Since the variable could hold either a capturing or non-capturing function at runtime (e.g. from different branches of an `if`), the compiler conservatively rejects it.
 
-let mut state = my_state { ... }
-pthread_create(none(any*), none(any*), my_cb, some((any*) &state))
-```
+The workaround is straightforward: inline the lambda at the call site, or hoist it to a top-level `let`.
 
-`my_cb` is non-capturing so it passes cleanly to `pthread_create`. The `any*` user-data is cast to the concrete type inside the callback.
+C APIs that need stateful callbacks typically provide a `void*` context parameter for this purpose — define a context struct, pass it as `any*`, and cast back inside a non-capturing callback.
 
 **`any*` vs `void*` in C — a note on naming**
 

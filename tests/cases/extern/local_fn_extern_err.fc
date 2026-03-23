@@ -1,0 +1,10 @@
+// Local function variable cannot be passed to extern — only top-level functions
+// and non-capturing lambda literals can be used as C function pointers
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> int32) -> void
+
+let main = (args: str[]) ->
+    let cmp = (a: const any*, b: const any*) -> *(const int32*) a - *(const int32*) b
+    let mut nums = int32[3] { 3, 1, 2 }
+    libc.qsort(nums.ptr, 3u, (usize)sizeof(int32), cmp)
+    0

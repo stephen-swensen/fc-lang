@@ -127,13 +127,17 @@ Overview of what's solved and what's still missing for full C interop and embedd
 
 7. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
 
-8. **No callback with context** — extern function pointer params must be non-capturing lambdas. C APIs that take a `void* userdata` + callback pair (pthreads, qsort_r, signal handlers) work but require the user to manage the context pointer manually.
+8. **No preprocessor define control** — The compiler hardcodes `_POSIX_C_SOURCE 200809L` when it sees `time.h` (needed by the stdlib for `clock_gettime`/`struct timespec`), but there's no general mechanism for users to request feature-test macros (e.g. `_GNU_SOURCE` for `qsort_r`, `_DEFAULT_SOURCE`). The `time.h` hack should be replaced once a general solution exists — could be a compiler flag (`./fc -D _GNU_SOURCE`) or a pragma/annotation on the `module from` declaration. This also factors into the embedded/bare-metal story: on targets with no glibc (musl, newlib, none), these macros are meaningless and some standard headers may not exist at all.
 
-Items 1–2 are the most impactful. Items 3–7 are niche but matter for deep embedded work. Item 8 is a usability friction for common C callback patterns.
+Items 1–2 are the most impactful. Items 3–8 are niche but matter for deep embedded work or non-POSIX platform APIs.
 
 ---
 
 # Resolved
+
+## Function pointer trampolines at extern boundaries (resolved 2026-03-22)
+
+FC functions internally carry an extra `void* _ctx` parameter for closure support. When a non-capturing function or lambda is passed to a C extern expecting a plain function pointer, the compiler now generates a static trampoline that drops the `_ctx` and matches the C calling convention. This happens automatically — the programmer just passes the function. Documented in spec §C interop with a `qsort` example.
 
 ## `const` qualifier for pointer/slice types (resolved 2026-03-22)
 

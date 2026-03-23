@@ -1,0 +1,11 @@
+// Capturing lambda cannot be passed to extern — C function pointers can't carry context
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> int32) -> void
+
+let main = (args: str[]) ->
+    let offset = 10
+    let mut nums = int32[3] { 3, 1, 2 }
+    libc.qsort(nums.ptr, 3u, (usize)sizeof(int32),
+        (a: const any*, b: const any*) ->
+            (*(const int32*) a + offset) - (*(const int32*) b + offset))
+    0

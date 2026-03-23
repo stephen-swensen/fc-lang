@@ -1,0 +1,20 @@
+// Cast between any* and user-defined struct pointers
+struct point =
+    x: int32
+    y: int32
+
+let round_trip = (p: point*) ->
+    let opaque = (any*) p
+    let back = (point*) opaque
+    back->x + back->y
+
+let main = (args: str[]) ->
+    let mut p = point { x = 10, y = 20 }
+    // Cast to any* and back, verify fields survive
+    if round_trip(&p) != 30 then return 1
+    // Cast through any* and mutate
+    let opaque = (any*) &p
+    let q = (point*) opaque
+    q->x = 99
+    if p.x != 99 then return 2
+    0

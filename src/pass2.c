@@ -1486,6 +1486,21 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* Detect extern calls — these skip the _ctx parameter */
         if (callee_sym && callee_sym->kind == DECL_EXTERN) {
             e->call.is_extern_call = true;
+            /* Validate function-type args: only top-level functions and
+             * non-capturing lambdas can be passed as C function pointers. */
+            for (int i = 0; i < e->call.arg_count && i < ft->func.param_count; i++) {
+                if (ft->func.param_types[i]->kind != TYPE_FUNC) continue;
+                Expr *arg = e->call.args[i];
+                if (arg->kind == EXPR_IDENT && !arg->ident.is_local) continue;
+                if (arg->kind == EXPR_FUNC && arg->func.capture_count == 0) continue;
+                if (arg->kind == EXPR_FUNC && arg->func.capture_count > 0)
+                    diag_error(arg->loc, "cannot pass capturing closure to extern — "
+                        "C function pointers cannot represent closures");
+                else
+                    diag_error(arg->loc, "cannot pass function value to extern — "
+                        "only top-level functions and non-capturing lambdas "
+                        "can be used as C function pointers");
+            }
         }
 
         e->type = ft->func.return_type;

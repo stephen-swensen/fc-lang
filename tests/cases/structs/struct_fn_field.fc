@@ -1,0 +1,19 @@
+// Struct with a function-type field — exercises function typedef ordering
+// (function typedef must be emitted before struct definition in generated C)
+struct handler =
+    process: (int32) -> int32
+
+let apply = (h: handler, val: int32) ->
+    h.process(val)
+
+let main = (args: str[]) ->
+    let double = handler { process = (x: int32) -> x * 2 }
+    if apply(double, 5) != 10 then return 1
+    // Swap handler
+    let negate = handler { process = (x: int32) -> 0 - x }
+    if apply(negate, 7) != -7 then return 2
+    // Handler with capturing lambda
+    let offset = 100
+    let add_offset = handler { process = (x: int32) -> x + offset }
+    if apply(add_offset, 5) != 105 then return 3
+    0
