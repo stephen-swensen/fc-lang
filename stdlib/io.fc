@@ -8,19 +8,38 @@ module io =
         extern fclose: (any*) -> int32
         extern fflush: (any*) -> int32
 
+    // write: writes the bytes of s to file handle f.
+    // s: const str — the data to write; const because write does not modify the buffer.
+    // f: any* — opaque FILE* handle (e.g. stdout, or from open).
+    // returns: int64 — number of bytes actually written.
     let write = (s: const str, f: any*) ->
         (int64) c.fwrite(s.ptr, 1u64, (uint64)s.len, f)
 
+    // read: reads up to n bytes from file handle f into buf.
+    // buf: uint8[] — mutable destination buffer; non-const because read fills it.
+    // n: int64 — maximum number of bytes to read.
+    // f: any* — opaque FILE* handle.
+    // returns: int64 — number of bytes actually read, or 0 on EOF/error.
     let read = (buf: uint8[], n: int64, f: any*) ->
         (int64) c.fread(buf.ptr, 1u64, (uint64)n, f)
 
+    // open: opens a file at path with the given mode (e.g. "r", "w", "rb").
+    // path: const str — file path; const because open only reads it.
+    // mode: const str — fopen mode string; const because open only reads it.
+    // returns: any*? — opaque FILE* on success, none on failure.
     let open = (path: const str, mode: const str) ->
         c.fopen((cstr)path, (cstr)mode)
 
+    // close: closes a file handle. The handle must not be used after this call.
+    // f: any* — opaque FILE* handle to close.
+    // returns: void.
     let close = (f: any*) ->
         c.fclose(f)
         return
 
+    // flush: flushes any buffered output on file handle f.
+    // f: any* — opaque FILE* handle to flush.
+    // returns: void.
     let flush = (f: any*) ->
         c.fflush(f)
         return
