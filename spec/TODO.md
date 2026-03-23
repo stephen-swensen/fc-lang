@@ -78,16 +78,135 @@ let rc = sqlite.sqlite3_open(c"test.db", &db)   // &db is any**, codegen emits (
 - Runtime provenance tagging — conflicts with zero-cost philosophy
 - Automatic reference counting — same
 
-## Build targets (`--target`, embedded, bare-metal)
+## Platform contract, core language, and stdlib
 
-The compiler currently only supports hosted targets (`target_hosted` is always set). The design calls for:
+### Platform contract
 
-- `--target <name>` CLI flag (e.g. `arduino-uno`, `esp32`, `bare-metal`)
-- Built-in flags `target_embedded` and `target_bare_metal` set automatically
-- `alloc`/`free` availability enforcement per target (compile error on bare-metal)
-- `import libc` scoped to functions available on the target
+FC targets **C11 hosted implementations with heap allocation** — specifically, GCC or Clang with a libc that provides heap allocation and standard string/formatting functions. This covers:
 
-The conditional compilation infrastructure (`#if`/`#else if`) is already in place and ready to use these flags once they are defined. The generated C is already portable — it can be compiled with embedded toolchains today by compiling the output manually. The `--target` flag would automate this and add compile-time enforcement.
+- Desktop/server (Linux, macOS, Windows/MinGW)
+- Mobile (iOS, Android NDK)
+- "Rich" embedded (Raspberry Pi, ESP32 with ESP-IDF, Arduino with avr-libc, ARM Cortex-M with newlib/picolibc)
+
+The common thread: these all provide `malloc`, `free`, `abort`, `memcmp`, `strlen`, `snprintf`, and stack-dynamic allocation (`__builtin_alloca`). That's FC's platform contract.
+
+**Not supported:** C11 freestanding (no libc), static-memory-only bare metal, custom allocator-only environments. Those users are writing C directly — FC adds no value there because too much of the core language (alloc, string interpolation, bounds-check abort) depends on a hosted-like environment.
+
+### Core language headers
+
+The compiler emits C code that depends on a small set of C headers. These are split into two tiers:
+
+**Always emitted** (FC's platform contract — every FC program needs these):
+```c
+#include <stdint.h>     // FC's fixed-width type system (int8_t, uint64_t, etc.)
+#include <stddef.h>     // isize/usize → ptrdiff_t/size_t, NULL
+#include <stdbool.h>    // bool
+#include <stdlib.h>     // malloc, free, abort
+#include <string.h>     // memcmp, strlen
+```
+
+**Feature-gated** (emitted only when the program uses the relevant feature):
+```c
+#include <stdio.h>      // string interpolation (snprintf)
+#include <inttypes.h>   // string interpolation (PRId64, PRIu64, etc.)
+#include <math.h>       // float type properties (NAN, INFINITY)
+#include <float.h>      // float type properties (FLT_MAX, DBL_MAX)
+```
+
+A pure-integer program with no string interpolation and no floats gets a 5-header preamble. These 5 headers are available on essentially every platform with a libc.
+
+**`alloca` portability:** Replace all `alloca()` calls in codegen with `__builtin_alloca()`. GCC and Clang both support this intrinsic on every target. This eliminates the `<alloca.h>` header, which is not in the C standard and has inconsistent availability across platforms.
+
+### C functions the core language emits
+
+| Function | Used by | Header |
+|----------|---------|--------|
+| `malloc` | `alloc` expressions | stdlib.h |
+| `free` | `free` expressions | stdlib.h |
+| `abort` | bounds checks, div-by-zero, option unwrap failure | stdlib.h |
+| `memcmp` | structural equality for slices/strings | string.h |
+| `strlen` | `(str)cstr` cast (wrap pointer with length) | string.h |
+| `__builtin_alloca` | string interpolation buffers, `(cstr)str` cast | (compiler builtin, no header) |
+| `snprintf` | string interpolation formatting | stdio.h (feature-gated) |
+
+### Stdlib is just FC files
+
+The FC standard library (`stdlib/`) is ordinary FC source code that uses extern declarations to wrap C functions. It receives **no special compiler treatment**. Users include it by passing the files to the compiler:
+
+```bash
+# No stdlib — pure computation, only core headers emitted
+./fc main.fc -o out.c
+
+# With I/O — io.fc's `module c from "stdio.h"` pulls in <stdio.h>
+./fc main.fc stdlib/io.fc -o out.c
+
+# Full stdlib
+./fc main.fc stdlib/io.fc stdlib/sys.fc -o out.c
+```
+
+The extern `from_lib` declarations in stdlib files (and any user-written extern modules) drive additional `#include` emissions. If you don't compile a stdlib file, you don't get its headers. This is the intended mechanism, not a workaround.
+
+### Stdlib surface area
+
+The stdlib wraps C APIs organized by portability tier:
+
+**Tier 1 — C11 standard** (works everywhere FC's platform contract holds):
+- `io` — fopen, fread, fwrite, fclose, fflush (stdio.h)
+- `math` — sin, cos, sqrt, pow, etc. (math.h) — future
+- `text` — string manipulation utilities — future
+
+**Tier 2 — POSIX** (Linux, macOS, BSDs, most embedded with newlib/picolibc):
+- `sys` — getenv, exit (C11 portion), clock_gettime, nanosleep (POSIX portion)
+- Future: `fs` (filesystem operations), `thread` (pthreads)
+
+**Tier 3 — Platform-specific** (user-provided, not part of FC's stdlib):
+- Windows APIs, vendor SDKs, hardware-specific libraries — users write their own extern bindings
+
+Tier 1 modules should work on every platform FC targets. Tier 2 modules work on POSIX systems. Users choose what to include by which files they pass to the compiler.
+
+### `define` annotation on extern modules
+
+C libraries sometimes require feature-test macros (`_POSIX_C_SOURCE`, `_GNU_SOURCE`, `_WIN32_WINNT`, etc.) to be `#define`d before their headers are included. Rather than requiring users to know which flags each library needs at the build command level, this information lives with the extern declaration:
+
+```fc
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern clock_gettime: (int32, any*) -> int32
+    extern nanosleep: (any*, any*?) -> int32
+```
+
+Codegen emits `#define _POSIX_C_SOURCE 200809L` before `#include <time.h>`. Rules:
+- Multiple modules defining the same macro with the same value: deduplicated silently
+- Multiple modules defining the same macro with different values: compile error
+- Defines are emitted before all `#include` lines (feature-test macros must precede headers per POSIX spec)
+
+This replaces the current `_POSIX_C_SOURCE` auto-detection hack for `time.h`. The define is co-located with the declaration that needs it — passing `sys.fc` to the compiler brings everything it needs with it.
+
+### Conditional compilation
+
+The `#if`/`#else if`/`#else`/`#end` system and `--flag` CLI option remain for **user-defined** conditional compilation:
+
+```bash
+./fc main.fc --flag posix stdlib/io.fc stdlib/sys.fc -o out.c
+```
+```fc
+#if posix
+    import sys from std::
+    let t = sys.time()
+#end
+```
+
+The previously planned `--target` flag with automatic `target_embedded` / `target_bare_metal` built-in flags is dropped. The `target_hosted` built-in flag is also dropped — since every FC program targets a hosted environment per the platform contract, the flag is always true and therefore meaningless. Platform-specific behavior is controlled by user-defined flags and by which files are passed to the compiler.
+
+### Implementation changes required
+
+| Current state | Target state |
+|---------------|--------------|
+| 10 headers always emitted in preamble | 5 core headers always + feature-gated |
+| `alloca()` + `<alloca.h>` | `__builtin_alloca()`, no header |
+| `_POSIX_C_SOURCE` auto-detected for `time.h` | `define` annotation on extern module declarations |
+| `target_hosted` built-in flag always set | Drop (platform contract makes it redundant) |
+| Planned `--target` with `target_embedded`/`target_bare_metal` | Drop entirely |
+| Stdlib implicitly expected | Stdlib is explicitly passed as source files |
 
 ## Closures at extern boundaries — wrapper function pattern (future)
 
@@ -127,7 +246,7 @@ A complete solution would need to handle at least categories 1 and 2 together. C
 
 # Notes
 
-## C interop and embedded: remaining gaps (2026-03-22)
+## C interop and embedded: remaining gaps (2026-03-22, updated 2026-03-23)
 
 Overview of what's solved and what's still missing for full C interop and embedded platform support.
 
@@ -143,25 +262,25 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - Escape analysis: compile-time detection of returning stack pointers/slices, freeing non-heap memory, storing stack pointers in heap structs
 - `const` qualifier for pointer/slice types: deep const, `const cstr` → `const char*` vs `cstr` → `char*` at extern boundaries, string/cstring literals infer const, write/free/address-of rejection through const
 
+**Addressed by platform contract / core / stdlib redesign (see Active TODO):**
+- ~~No `--target` flag~~ — dropped. Platform contract is "C11 with libc and heap." No bare-metal support. Conditional compilation uses user-defined `--flag` only.
+- ~~No preprocessor define control~~ — solved by `define` annotation on extern module declarations. Replaces the `_POSIX_C_SOURCE` auto-detection hack.
+
 **Remaining gaps:**
 
 1. **No C struct layout import** — can't reference C's `struct timeval` directly. Must define a matching FC struct manually or use `any*`. Risk of layout mismatch if fields are wrong. Workable but error-prone for complex C structs.
 
-2. **No `--target` flag** — `target_embedded` and `target_bare_metal` flags are designed (see Active TODO) but not implemented. Generated C already compiles with cross-compilers, but no compile-time enforcement (e.g., rejecting `alloc` on bare-metal).
+2. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file.
 
-3. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file.
+3. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Reads/writes could be optimized away by the C compiler without it.
 
-4. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Reads/writes could be optimized away by the C compiler without it.
+4. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. FC structs don't support this.
 
-5. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. FC structs don't support this.
+5. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). For raw C union interop, need `any*` or manual byte manipulation.
 
-6. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). For raw C union interop, need `any*` or manual byte manipulation.
+6. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
 
-7. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
-
-8. **No preprocessor define control** — The compiler hardcodes `_POSIX_C_SOURCE 200809L` when it sees `time.h` (needed by the stdlib for `clock_gettime`/`struct timespec`), but there's no general mechanism for users to request feature-test macros (e.g. `_GNU_SOURCE` for `qsort_r`, `_DEFAULT_SOURCE`). The `time.h` hack should be replaced once a general solution exists — could be a compiler flag (`./fc -D _GNU_SOURCE`) or a pragma/annotation on the `module from` declaration. This also factors into the embedded/bare-metal story: on targets with no glibc (musl, newlib, none), these macros are meaningless and some standard headers may not exist at all.
-
-Items 1–2 are the most impactful. Items 3–8 are niche but matter for deep embedded work or non-POSIX platform APIs.
+Item 1 is the most impactful. Items 2–6 are niche but matter for deep embedded work or non-POSIX platform APIs.
 
 ---
 
