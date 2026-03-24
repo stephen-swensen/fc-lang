@@ -289,8 +289,10 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                         sym->type_params, ntp);
                     /* Update the concrete type's name to the mangled name */
                     if (concrete->kind == TYPE_STRUCT) {
+                        if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
                         concrete->struc.name = mangled;
                     } else if (concrete->kind == TYPE_UNION) {
+                        if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                         concrete->unio.name = mangled;
                     }
                     /* Build resolved concrete_type for codegen (separate copy
@@ -592,10 +594,12 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
         Type *result = arena_alloc(ctx->arena, sizeof(Type));
         *result = *t;
         if (result->kind == TYPE_STRUCT) {
+            if (!result->struc.base_name) result->struc.base_name = result->struc.name;
             result->struc.name = type_mangled;
             result->struc.type_args = type_bindings;
             result->struc.type_arg_count = tntp;
         } else {
+            if (!result->unio.base_name) result->unio.base_name = result->unio.name;
             result->unio.name = type_mangled;
             result->unio.type_args = type_bindings;
             result->unio.type_arg_count = tntp;
@@ -610,8 +614,13 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
                 *cp = *ct;
                 ct = cp;
             }
-            if (ct->kind == TYPE_STRUCT) ct->struc.name = type_mangled;
-            else ct->unio.name = type_mangled;
+            if (ct->kind == TYPE_STRUCT) {
+                if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
+                ct->struc.name = type_mangled;
+            } else {
+                if (!ct->unio.base_name) ct->unio.base_name = ct->unio.name;
+                ct->unio.name = type_mangled;
+            }
             mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
             mi->concrete_type = ct;
         }
@@ -796,17 +805,21 @@ static bool is_write_through_const(Expr *target) {
 
 /* ---- Generic body validation after type variable resolution ---- */
 
-/* Format "func_name<type1, type2>" for generic validation error messages */
-static const char *fmt_generic_inst(const char *func_name,
-    const char **type_params, Type **bindings, int ntp)
+/* Format "func_name(param_type1, param_type2)" for generic validation error messages.
+ * Shows concrete parameter types (after substitution), not type variable bindings. */
+static const char *fmt_generic_inst(const char *func_name, Arena *arena,
+    Type *func_type, const char **type_params, Type **bindings, int ntp)
 {
-    (void)type_params;
     static char buf[512];
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s(", func_name);
-    for (int i = 0; i < ntp; i++) {
-        if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ", ");
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", type_name(bindings[i]));
+    if (func_type && func_type->kind == TYPE_FUNC) {
+        for (int i = 0; i < func_type->func.param_count; i++) {
+            if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ", ");
+            Type *pt = type_substitute(arena, func_type->func.param_types[i],
+                type_params, bindings, ntp);
+            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", type_name(pt));
+        }
     }
     snprintf(buf + pos, sizeof(buf) - (size_t)pos, ")");
     return buf;
@@ -1696,8 +1709,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         tmpl_has_errors = last->type && type_is_error(last->type);
                     }
                     if (!tmpl_has_errors) {
-                        const char *inst_desc = fmt_generic_inst(callee_sym->name,
-                            callee_sym->type_params, bindings, ntp);
+                        const char *inst_desc = fmt_generic_inst(callee_sym->name, ctx->arena,
+                            ft, callee_sym->type_params, bindings, ntp);
                         for (int i = 0; i < func_expr->func.body_count; i++) {
                             if (!validate_generic_body(func_expr->func.body[i], ctx->arena,
                                     callee_sym->type_params, bindings, ntp,
@@ -2121,6 +2134,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     sym->name, sym->ns_prefix,
                     bindings, ntp, sym->decl,
                     DECL_STRUCT, sym->type_params, ntp);
+                if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
                 concrete->struc.name = mangled;
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                 if (mi && !mi->concrete_type) {
@@ -2327,12 +2341,18 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         *copy = *sym->type;
                         concrete = copy;
                     }
+                    /* Ensure type_args are set for diagnostics (template may lack them) */
+                    if (concrete->unio.type_arg_count == 0) {
+                        concrete->unio.type_args = bindings;
+                        concrete->unio.type_arg_count = ntp;
+                    }
 
                     if (!bindings_contain_type_vars(bindings, ntp)) {
                         const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
                             sym->name, sym->ns_prefix,
                             bindings, ntp, sym->decl,
                             DECL_UNION, sym->type_params, ntp);
+                        if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                         concrete->unio.name = mangled;
                         MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                         if (mi) mi->concrete_type = concrete;
@@ -2707,6 +2727,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     memset(stub, 0, sizeof(Type));
                     stub->kind = TYPE_STRUCT;
                     stub->struc.name = name;
+                    stub->struc.base_name = name;
                     Type *ty = resolve_type(ctx, stub);
                     if (ty != stub) {
                         /* Resolved as type — treat as alloc(T) */

@@ -381,6 +381,23 @@ Added `isize` (signed, pointer-width) and `usize` (unsigned, pointer-width) as o
 - **Operators**: arithmetic, comparison, bitwise, shifts all work between same-type operands; signed overflow wrapping and shift masking use platform-dependent expressions
 - 548 tests passing (18 new native_types tests).
 
+## Generic type variable soundness — mixed type-var arithmetic (2026-03-24)
+
+### Problem
+Binary operations on different type variables (`'a + 'b`, `'a > 'b`) are currently allowed at template time, but the result type is unsound when widening is involved. During template checking, the type-var early return (pass2.c) picks one operand's type arbitrarily as the result. When instantiated with types that widen (e.g., `'a = int32`, `'b = int64`), the inferred return type (`int32`) doesn't match the actual computed type (`int64`).
+
+Example:
+```fc
+let ff = <'b, 'c>(x: (int32, int32) -> int32) -> x(32, 32) + default('b) + default('c)
+```
+Template infers return type = `'b`. But `ff<int32, int64>(...)` computes `int32 + int32 + int64` = `int64` via widening, while the return type says `int32`.
+
+### Proposed fix
+Restrict mixed type-var binary operations: require both operands to have the same type variable (e.g., `'a + 'a` ok, `'a + 'b` error at template time, concrete + `'a` ok since it pins `'a`). This is conservative-but-complete — prevents silent type mismatches without requiring trait bounds or return type re-inference.
+
+### Also deferred
+`type_name()` for generic function types doesn't show explicit type parameters (e.g., shows `((int32, int32) -> int32) -> 'b` instead of `<'b, 'c>((int32, int32) -> int32) -> 'b`). Would require carrying type param info on `TYPE_FUNC`. Low priority — `%T` is most useful on concrete values.
+
 ## Field access on type variables — structural generics (explored, deferred 2026-03-22)
 
 Explored allowing field access on bare type variables, e.g. `let sum = (p: 'a) -> p.x + p.y`, where `'a` is resolved to a concrete struct at monomorphization. This would enable duck-typed generic functions that operate on any struct with matching field names — similar to C++ templates or Go structural interfaces.

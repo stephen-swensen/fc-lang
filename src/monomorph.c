@@ -73,11 +73,10 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
     case TYPE_STRUCT:
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (!mono_find(t, type->struc.name)) {
+                if (!type->struc.base_name) type->struc.base_name = type->struc.name;
                 type->struc.name = mangle_generic_name(a, intern,
                     type->struc.name, type->struc.type_args, type->struc.type_arg_count);
             }
-            type->struc.type_args = NULL;
-            type->struc.type_arg_count = 0;
         }
         for (int i = 0; i < type->struc.field_count; i++)
             mono_resolve_type_names(t, a, intern, type->struc.fields[i].type);
@@ -85,11 +84,10 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (!mono_find(t, type->unio.name)) {
+                if (!type->unio.base_name) type->unio.base_name = type->unio.name;
                 type->unio.name = mangle_generic_name(a, intern,
                     type->unio.name, type->unio.type_args, type->unio.type_arg_count);
             }
-            type->unio.type_args = NULL;
-            type->unio.type_arg_count = 0;
         }
         for (int i = 0; i < type->unio.variant_count; i++)
             mono_resolve_type_names(t, a, intern, type->unio.variants[i].payload);
@@ -199,6 +197,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                             *cp = *ct;
                             ct = cp;
                         }
+                        if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;

@@ -178,6 +178,7 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     memset(st, 0, sizeof(Type));
     st->kind = TYPE_STRUCT;
     st->struc.name = d->struc.name;
+    st->struc.base_name = d->struc.name;
     st->struc.c_name = d->struc.c_name;
     st->struc.fields = d->struc.fields;
     st->struc.field_count = d->struc.field_count;
@@ -197,6 +198,7 @@ static Type *register_union_sym(SymbolTable *tab, Decl *d) {
     memset(ut, 0, sizeof(Type));
     ut->kind = TYPE_UNION;
     ut->unio.name = d->unio.name;
+    ut->unio.base_name = d->unio.name;
     ut->unio.variants = d->unio.variants;
     ut->unio.variant_count = d->unio.variant_count;
     ut->unio.type_args = NULL;
@@ -265,6 +267,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 memset(st, 0, sizeof(Type));
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
+                st->struc.base_name = src_name;
                 st->struc.c_name = child->struc.c_name;
                 st->struc.fields = child->struc.fields;
                 st->struc.field_count = child->struc.field_count;
@@ -290,6 +293,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 memset(ut, 0, sizeof(Type));
                 ut->kind = TYPE_UNION;
                 ut->unio.name = mangled;
+                ut->unio.base_name = src_name;
                 ut->unio.variants = child->unio.variants;
                 ut->unio.variant_count = child->unio.variant_count;
                 ut->unio.type_args = NULL;

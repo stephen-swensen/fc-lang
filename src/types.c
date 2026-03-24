@@ -330,8 +330,38 @@ const char *type_name(Type *t) {
         pos += snprintf(buf + pos, 256 - (size_t)pos, ") -> %s", type_name(t->func.return_type));
         return buf;
     }
-    case TYPE_STRUCT:    return t->struc.name;
-    case TYPE_UNION:     return t->unio.name;
+    case TYPE_STRUCT: {
+        if (t->struc.type_arg_count > 0 && t->struc.base_name) {
+            static char stbufs[4][256];
+            static int stidx = 0;
+            char *buf = stbufs[stidx & 3]; stidx++;
+            int pos = 0;
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", t->struc.base_name);
+            for (int i = 0; i < t->struc.type_arg_count; i++) {
+                if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
+                pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->struc.type_args[i]));
+            }
+            snprintf(buf + pos, 256 - (size_t)pos, ">");
+            return buf;
+        }
+        return t->struc.name;
+    }
+    case TYPE_UNION: {
+        if (t->unio.type_arg_count > 0 && t->unio.base_name) {
+            static char utbufs[4][256];
+            static int utidx = 0;
+            char *buf = utbufs[utidx & 3]; utidx++;
+            int pos = 0;
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", t->unio.base_name);
+            for (int i = 0; i < t->unio.type_arg_count; i++) {
+                if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
+                pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->unio.type_args[i]));
+            }
+            snprintf(buf + pos, 256 - (size_t)pos, ">");
+            return buf;
+        }
+        return t->unio.name;
+    }
     case TYPE_ANY_PTR:   return "any*";
     case TYPE_TYPE_VAR:  return t->type_var.name;
     case TYPE_ERROR:     return "<error>";
@@ -589,6 +619,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *ns = arena_alloc(a, sizeof(Type));
         ns->kind = TYPE_STRUCT;
         ns->struc.name = t->struc.name;
+        ns->struc.base_name = t->struc.base_name;
         ns->struc.c_name = t->struc.c_name;
         ns->struc.fields = fields;
         ns->struc.field_count = t->struc.field_count;
@@ -618,6 +649,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *nu = arena_alloc(a, sizeof(Type));
         nu->kind = TYPE_UNION;
         nu->unio.name = t->unio.name;
+        nu->unio.base_name = t->unio.base_name;
         nu->unio.variants = vars;
         nu->unio.variant_count = t->unio.variant_count;
         nu->unio.type_args = new_targs;

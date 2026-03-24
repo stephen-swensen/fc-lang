@@ -1,0 +1,10 @@
+struct box =
+    val: 'a
+
+let cmp = (a: 'a, b: 'a) -> a > b
+
+let main = (args: str[]) ->
+    let a = box { val = 1 }
+    let b = box { val = 2 }
+    cmp(a, b)
+    0

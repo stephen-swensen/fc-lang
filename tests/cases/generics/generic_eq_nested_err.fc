@@ -1,0 +1,14 @@
+struct box =
+    val: 'a
+
+struct pair =
+    x: 'a
+    y: 'b
+
+let check = (a: 'a, b: 'b) -> a == b
+
+let main = (args: str[]) ->
+    let a = box { val = 1 }
+    let b = pair { x = 1, y = true }
+    check(a, b)
+    0

@@ -1,1 +1,1 @@
-in both(int32) at 1:32: logical operator requires bool operands
+in both(int32, int32) at 1:32: logical operator requires bool operands

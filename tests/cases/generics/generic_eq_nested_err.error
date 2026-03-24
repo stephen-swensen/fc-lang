@@ -1,0 +1,1 @@
+in check(box<int32>, pair<int32, bool>) at 8:33: comparison type mismatch: box<int32> vs pair<int32, bool>

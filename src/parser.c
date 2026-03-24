@@ -273,6 +273,7 @@ static Type *parse_type(Parser *p) {
         Type *udt = arena_alloc(p->arena, sizeof(Type));
         udt->kind = TYPE_STRUCT;  /* will be resolved to correct kind in pass2 */
         udt->struc.name = type_name;
+        udt->struc.base_name = type_name;
         udt->struc.fields = NULL;
         udt->struc.field_count = 0;
         udt->struc.type_args = NULL;
@@ -869,6 +870,7 @@ static Expr *parse_prefix(Parser *p) {
                     elem_type = arena_alloc(p->arena, sizeof(Type));
                     elem_type->kind = TYPE_STRUCT;
                     elem_type->struc.name = type_name_str;
+                    elem_type->struc.base_name = type_name_str;
                     elem_type->struc.fields = NULL;
                     elem_type->struc.field_count = 0;
                 }

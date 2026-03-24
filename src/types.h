@@ -60,6 +60,7 @@ struct Type {
         } func;
         struct {
             const char *name;
+            const char *base_name;  /* original FC name before mangling (for diagnostics) */
             const char *c_name;     /* C struct tag name for extern structs, NULL for normal */
             StructField *fields;
             int field_count;
@@ -68,6 +69,7 @@ struct Type {
         } struc;
         struct {
             const char *name;
+            const char *base_name;  /* original FC name before mangling (for diagnostics) */
             UnionVariant *variants;
             int variant_count;
             Type **type_args;

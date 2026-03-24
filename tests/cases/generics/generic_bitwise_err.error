@@ -1,1 +1,1 @@
-in band(float64) at 1:32: bitwise/shift operator requires integer operands
+in band(float64, float64) at 1:32: bitwise/shift operator requires integer operands
