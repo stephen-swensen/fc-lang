@@ -1,0 +1,23 @@
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+    extern strcmp: (const cstr, const cstr) -> int32
+
+let main = (args: str[]) ->
+    let x = 42
+    let s = alloc(c"value: %d{x}")
+    let mut r = 0
+    match s with
+    | some(v) ->
+        if c.strcmp(v, c"value: 42") == 0 then r = r + 1 else r = r
+        let len = c.strlen(v)
+        if len == 9u then r = r + 2 else r = r
+        free(v)
+    | none -> r = r
+    let name = c"world"
+    let s2 = alloc(c"hello %s{name}!")
+    match s2 with
+    | some(v2) ->
+        if c.strcmp(v2, c"hello world!") == 0 then r = r + 4 else r = r
+        free(v2)
+    | none -> r = r
+    r

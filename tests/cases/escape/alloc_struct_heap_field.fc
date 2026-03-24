@@ -3,7 +3,8 @@ struct node =
     data: int32*
 
 let main = (args: str[]) ->
-    let p = alloc(42)!
+    let p = alloc(int32)!
+    *p = 42
     let n = alloc(node { data = p })!
     let result = *(n->data)
     free(p)

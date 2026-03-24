@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let mut x = 5
+    let p = &x
+    alloc(p)
+    0

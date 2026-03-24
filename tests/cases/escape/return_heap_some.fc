@@ -1,6 +1,7 @@
 // Returning heap pointer wrapped in some is fine
 let make = () ->
-    let p = alloc(77)!
+    let p = alloc(int32)!
+    *p = 77
     some(p)
 
 let main = (args: str[]) ->

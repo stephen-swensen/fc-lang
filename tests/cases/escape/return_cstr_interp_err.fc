@@ -1,0 +1,6 @@
+let make = (x: int32) ->
+    c"val: %d{x}"
+
+let main = (args: str[]) ->
+    let s = make(5)
+    0

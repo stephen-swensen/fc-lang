@@ -286,9 +286,9 @@ static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
         return t;
     }
 
-    /* Plain string or first call that found no interpolation — TOK_STRING_LIT */
+    /* Plain string or cstring that found no interpolation */
     advance(l); /* consume closing " */
-    return make_token(l, TOK_STRING_LIT);
+    return make_token(l, tok_kind == TOK_CINTERP_START ? TOK_CSTRING_LIT : TOK_STRING_LIT);
 }
 
 static Token scan_string(Lexer *l) {
@@ -298,13 +298,7 @@ static Token scan_string(Lexer *l) {
 
 static Token scan_cstring(Lexer *l) {
     advance(l); /* opening " */
-    while (!at_end(l) && peek(l) != '"') {
-        if (peek(l) == '\\') advance(l);
-        if (!at_end(l)) advance(l);
-    }
-    if (at_end(l)) return error_token(l, "unterminated cstring");
-    advance(l);
-    return make_token(l, TOK_CSTRING_LIT);
+    return scan_string_body(l, TOK_CINTERP_START);
 }
 
 static Token scan_char_lit(Lexer *l) {

@@ -735,8 +735,9 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_CINTERP_START:
     case TOK_INTERP_START: {
-        advance_p(p); /* consume INTERP_START */
+        advance_p(p); /* consume INTERP_START / CINTERP_START */
         InterpSegment *segs = NULL;
         int seg_count = 0, seg_cap = 0;
 
@@ -799,6 +800,7 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_INTERP_STRING, loc);
         e->interp_string.segments = arena_segs;
         e->interp_string.segment_count = seg_count;
+        e->interp_string.is_cstr = (t->kind == TOK_CINTERP_START);
         return e;
     }
 
@@ -1127,7 +1129,7 @@ static Expr *parse_prefix(Parser *p) {
                 is_type = true;
             } else {
                 Token *next = peek_at(p, 1);
-                if (next->kind == TOK_LBRACKET) {
+                if (next->kind == TOK_LBRACKET || next->kind == TOK_COMMA) {
                     is_type = true;
                 } else if (next->kind == TOK_DOT) {
                     /* Could be module-qualified type — try type with backtracking */
@@ -1153,10 +1155,40 @@ static Expr *parse_prefix(Parser *p) {
                 return e;
             }
             if (check(p, TOK_LBRACKET)) {
-                /* alloc(T[N]) — array alloc */
+                /* alloc(T[N]) or alloc(T[N] { elems }) */
                 advance_p(p);
                 Expr *size = parse_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RBRACKET);
+                if (check(p, TOK_LBRACE)) {
+                    /* alloc(T[N] { elems }) — array literal alloc */
+                    advance_p(p);
+                    Expr **elems = NULL;
+                    int elem_count = 0, elem_cap = 0;
+                    if (!check(p, TOK_RBRACE)) {
+                        do {
+                            Expr *el = parse_expr(p, PREC_NONE + 1);
+                            DA_APPEND(elems, elem_count, elem_cap, el);
+                        } while (check(p, TOK_COMMA) && advance_p(p));
+                    }
+                    expect(p, TOK_RBRACE);
+                    expect(p, TOK_RPAREN);
+                    /* Build array literal as init_expr */
+                    Expr **arena_elems = arena_alloc(p->arena,
+                        sizeof(Expr*) * (size_t)(elem_count > 0 ? elem_count : 1));
+                    if (elem_count > 0)
+                        memcpy(arena_elems, elems, sizeof(Expr*) * (size_t)elem_count);
+                    free(elems);
+                    Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
+                    arr->array_lit.elem_type = ty;
+                    arr->array_lit.size_expr = size;
+                    arr->array_lit.elems = arena_elems;
+                    arr->array_lit.elem_count = elem_count;
+                    Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+                    e->alloc_expr.alloc_type = NULL;
+                    e->alloc_expr.size_expr = NULL;
+                    e->alloc_expr.init_expr = arr;
+                    return e;
+                }
                 expect(p, TOK_RPAREN);
                 Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
                 e->alloc_expr.alloc_type = ty;
@@ -1164,11 +1196,23 @@ static Expr *parse_prefix(Parser *p) {
                 e->alloc_expr.init_expr = NULL;
                 return e;
             }
+            if (check(p, TOK_COMMA)) {
+                /* alloc(T, N) — raw buffer alloc */
+                advance_p(p);
+                Expr *size = parse_expr(p, PREC_NONE + 1);
+                expect(p, TOK_RPAREN);
+                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+                e->alloc_expr.alloc_type = ty;
+                e->alloc_expr.size_expr = size;
+                e->alloc_expr.init_expr = NULL;
+                e->alloc_expr.alloc_raw = true;
+                return e;
+            }
             if (try_type) {
                 /* Generic type args didn't pan out — backtrack */
                 p->pos = save;
             } else {
-                diag_fatal(loc, "expected ')' or '[' after type in alloc");
+                diag_fatal(loc, "expected ')', '[', or ',' after type in alloc");
             }
         }
 

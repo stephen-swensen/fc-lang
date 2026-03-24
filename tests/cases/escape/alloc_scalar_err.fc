@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    alloc(42)
+    0

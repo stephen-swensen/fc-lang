@@ -1,0 +1,15 @@
+let main = (args: str[]) ->
+    let buf = alloc(uint8, 64)
+    let mut r = 0
+    match buf with
+    | some(p) ->
+        r = r + 1
+        // Write and read back
+        *p = 42u8
+        let p1 = p + 1i
+        *p1 = 99u8
+        if *p == 42u8 then r = r + 1 else r = r
+        if *p1 == 99u8 then r = r + 1 else r = r
+        free(p)
+    | none -> r = r
+    r

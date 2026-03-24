@@ -211,8 +211,9 @@ struct Expr {
         /* EXPR_ALLOC */
         struct {
             Type *alloc_type;     /* type to allocate (NULL for init-from-expr form) */
-            Expr *size_expr;      /* array size for alloc(T[N]) — NULL for single */
+            Expr *size_expr;      /* array size for alloc(T[N])/alloc(T,N) — NULL for single */
             Expr *init_expr;      /* init expression for alloc(expr) — NULL for type-only */
+            bool alloc_raw;       /* true for alloc(T, N) → T*?, false for alloc(T[N]) → T[]? */
         } alloc_expr;
 
         /* EXPR_FREE */
@@ -228,6 +229,7 @@ struct Expr {
         struct {
             InterpSegment *segments;
             int segment_count;
+            bool is_cstr;       /* true for c"..." interpolation → cstr result */
         } interp_string;
 
         /* EXPR_SOME */

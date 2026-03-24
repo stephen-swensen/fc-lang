@@ -1,6 +1,8 @@
 // Unwrapping a heap option preserves heap provenance
 let make = () ->
-    alloc(99)!
+    let p = alloc(int32)!
+    *p = 99
+    p
 
 let main = (args: str[]) ->
     let p = make()

@@ -1,6 +1,8 @@
 // Freeing a pointer received from a function is fine (PROV_UNKNOWN)
 let get_ptr = () ->
-    alloc(55)!
+    let p = alloc(int32)!
+    *p = 55
+    p
 
 let main = (args: str[]) ->
     let p = get_ptr()

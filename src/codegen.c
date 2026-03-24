@@ -650,6 +650,296 @@ static void parse_format_width_prec(const char *text,
     }
 }
 
+/* Emit interpolated string code.
+ * alloc_opt_type: NULL → standalone (alloca), non-NULL → inside alloc() (malloc).
+ * Handles both str and cstr interpolation (e->interp_string.is_cstr). */
+static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
+    bool use_heap = (alloc_opt_type != NULL);
+    bool is_cstr = e->interp_string.is_cstr;
+    int tid = temp_counter++;
+    int seg_count = e->interp_string.segment_count;
+    InterpSegment *segs = e->interp_string.segments;
+
+    fprintf(out, "({ ");
+
+    /* Pre-evaluate str arguments and compute their lengths */
+    int str_arg_idx = 0;
+    for (int i = 0; i < seg_count; i++) {
+        if (!segs[i].is_literal && segs[i].conversion == 's' &&
+            segs[i].expr->type && is_str_type(segs[i].expr->type)) {
+            fprintf(out, "fc_str _sa%d_%d = ", tid, str_arg_idx);
+            emit_expr(segs[i].expr, out);
+            fprintf(out, "; ");
+            str_arg_idx++;
+        }
+    }
+
+    /* Compute buffer size expression */
+    fprintf(out, "int64_t _flen%d = ", tid);
+    bool first_term = true;
+    str_arg_idx = 0;
+    for (int i = 0; i < seg_count; i++) {
+        if (segs[i].is_literal) {
+            int actual_len = 0;
+            const char *s = segs[i].text;
+            int slen = segs[i].text_length;
+            for (int j = 0; j < slen; j++) {
+                if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
+                else if (s[j] == '\\' && j + 1 < slen) {
+                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
+                    else j++;
+                }
+                actual_len++;
+            }
+            if (actual_len > 0) {
+                if (!first_term) fprintf(out, " + ");
+                fprintf(out, "%d", actual_len);
+                first_term = false;
+            }
+        } else {
+            int bound = 0;
+            char conv = segs[i].conversion;
+            int explicit_width = 0, explicit_prec = -1;
+            parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
+            bool is_str_arg = (conv == 's' && segs[i].expr->type &&
+                               is_str_type(segs[i].expr->type));
+            bool is_cstr_arg = (conv == 's' && segs[i].expr->type &&
+                                is_cstr_type(segs[i].expr->type));
+
+            if (is_str_arg) {
+                if (!first_term) fprintf(out, " + ");
+                if (explicit_prec >= 0) {
+                    int str_bound = explicit_prec;
+                    if (explicit_width > str_bound) str_bound = explicit_width;
+                    fprintf(out, "%d", str_bound);
+                } else if (explicit_width > 0) {
+                    fprintf(out, "(%d > _sa%d_%d.len ? %d : _sa%d_%d.len)",
+                        explicit_width, tid, str_arg_idx, explicit_width, tid, str_arg_idx);
+                } else {
+                    fprintf(out, "_sa%d_%d.len", tid, str_arg_idx);
+                }
+                first_term = false;
+                str_arg_idx++;
+            } else if (is_cstr_arg) {
+                if (!first_term) fprintf(out, " + ");
+                if (explicit_prec >= 0) {
+                    int str_bound = explicit_prec;
+                    if (explicit_width > str_bound) str_bound = explicit_width;
+                    fprintf(out, "%d", str_bound);
+                } else {
+                    fprintf(out, "(int64_t)strlen((const char*)");
+                    emit_expr(segs[i].expr, out);
+                    fprintf(out, ")");
+                }
+                first_term = false;
+            } else if (conv == 'T') {
+                const char *tname = type_name(segs[i].expr->type);
+                bound = (int)strlen(tname);
+                if (!first_term) fprintf(out, " + ");
+                fprintf(out, "%d", bound);
+                first_term = false;
+            } else {
+                Type *t = segs[i].expr->type;
+                switch (conv) {
+                case 'd': case 'i': case 'u':
+                    switch (t ? t->kind : 0) {
+                    case TYPE_INT8: bound = 4; break;
+                    case TYPE_UINT8: bound = 3; break;
+                    case TYPE_INT16: bound = 6; break;
+                    case TYPE_UINT16: bound = 5; break;
+                    case TYPE_INT32: bound = 11; break;
+                    case TYPE_UINT32: bound = 10; break;
+                    case TYPE_INT64: bound = 20; break;
+                    case TYPE_UINT64: bound = 20; break;
+                    default: bound = 20; break;
+                    }
+                    break;
+                case 'x': case 'X':
+                    switch (t ? t->kind : 0) {
+                    case TYPE_INT8: case TYPE_UINT8: bound = 2; break;
+                    case TYPE_INT16: case TYPE_UINT16: bound = 4; break;
+                    case TYPE_INT32: case TYPE_UINT32: bound = 8; break;
+                    case TYPE_INT64: case TYPE_UINT64: bound = 16; break;
+                    default: bound = 16; break;
+                    }
+                    break;
+                case 'o':
+                    switch (t ? t->kind : 0) {
+                    case TYPE_INT8: case TYPE_UINT8: bound = 3; break;
+                    case TYPE_INT16: case TYPE_UINT16: bound = 6; break;
+                    case TYPE_INT32: case TYPE_UINT32: bound = 11; break;
+                    case TYPE_INT64: case TYPE_UINT64: bound = 22; break;
+                    default: bound = 22; break;
+                    }
+                    break;
+                case 'f':
+                    bound = explicit_width > 0 ? explicit_width : 24;
+                    break;
+                case 'e': case 'E': case 'g': case 'G':
+                    bound = (t && t->kind == TYPE_FLOAT32) ? 15 : 24;
+                    break;
+                case 'c': bound = 1; break;
+                case 'p': bound = 18; break;
+                default: bound = 24; break;
+                }
+                const char *flags = segs[i].text;
+                while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
+                    if (*flags == '+' || *flags == ' ') bound++;
+                    if (*flags == '#') bound += 2;
+                    flags++;
+                }
+                if (explicit_width > bound) bound = explicit_width;
+                if (!first_term) fprintf(out, " + ");
+                fprintf(out, "%d", bound);
+                first_term = false;
+            }
+        }
+    }
+    if (first_term) fprintf(out, "0");
+    fprintf(out, "; ");
+
+    /* Allocate buffer */
+    if (use_heap)
+        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)malloc((size_t)(_flen%d + 1)); ", tid, tid);
+    else
+        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)__builtin_alloca((size_t)(_flen%d + 1)); ", tid, tid);
+
+    /* Build snprintf call */
+    if (use_heap)
+        fprintf(out, "int _fw%d = _fbuf%d ? snprintf((char*)_fbuf%d, (size_t)(_flen%d + 1), \"",
+            tid, tid, tid, tid);
+    else
+        fprintf(out, "int _fw%d = snprintf((char*)_fbuf%d, (size_t)(_flen%d + 1), \"",
+            tid, tid, tid);
+
+    /* Emit format string */
+    str_arg_idx = 0;
+    for (int i = 0; i < seg_count; i++) {
+        if (segs[i].is_literal) {
+            const char *s = segs[i].text;
+            int slen = segs[i].text_length;
+            for (int j = 0; j < slen; j++) {
+                if (s[j] == '%') {
+                    fprintf(out, "%%%%");
+                    if (j + 1 < slen && s[j+1] == '%') j++;
+                } else if (s[j] == '"') {
+                    fprintf(out, "\\\"");
+                } else {
+                    fputc(s[j], out);
+                }
+            }
+        } else if (segs[i].conversion == 'T') {
+            const char *tname = type_name(segs[i].expr->type);
+            fputs(tname, out);
+        } else {
+            bool is_str_arg2 = (segs[i].conversion == 's' &&
+                               segs[i].expr->type && is_str_type(segs[i].expr->type));
+            if (is_str_arg2) {
+                fprintf(out, "%%");
+                const char *sp = segs[i].text;
+                int splen = segs[i].text_length;
+                int j = 0;
+                while (j < splen - 1 && (sp[j] == '-' || sp[j] == '+' ||
+                       sp[j] == '0' || sp[j] == '#' || sp[j] == ' ')) {
+                    fputc(sp[j], out);
+                    j++;
+                }
+                while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') {
+                    fputc(sp[j], out);
+                    j++;
+                }
+                if (j < splen - 1 && sp[j] == '.') {
+                    j++;
+                    while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') j++;
+                }
+                fprintf(out, ".*s");
+                str_arg_idx++;
+            } else {
+                Type *t = segs[i].expr->type;
+                bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
+                const char *sp = segs[i].text;
+                int splen = segs[i].text_length;
+                fprintf(out, "%%");
+                if (is_64bit) {
+                    for (int j = 0; j < splen - 1; j++) fputc(sp[j], out);
+                    fprintf(out, "ll%c", sp[splen - 1]);
+                } else {
+                    fwrite(sp, 1, (size_t)splen, out);
+                }
+            }
+        }
+    }
+    fprintf(out, "\"");
+
+    /* Emit arguments */
+    str_arg_idx = 0;
+    for (int i = 0; i < seg_count; i++) {
+        if (segs[i].is_literal) continue;
+        if (segs[i].conversion == 'T') continue;
+        fprintf(out, ", ");
+        bool is_str_arg2 = (segs[i].conversion == 's' &&
+                           segs[i].expr->type && is_str_type(segs[i].expr->type));
+        if (is_str_arg2) {
+            int prec_w = 0, prec_p = -1;
+            parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
+            if (prec_p >= 0) {
+                fprintf(out, "((int)_sa%d_%d.len < %d ? (int)_sa%d_%d.len : %d), _sa%d_%d.ptr",
+                    tid, str_arg_idx, prec_p, tid, str_arg_idx, prec_p, tid, str_arg_idx);
+            } else {
+                fprintf(out, "(int)_sa%d_%d.len, _sa%d_%d.ptr",
+                    tid, str_arg_idx, tid, str_arg_idx);
+            }
+            str_arg_idx++;
+        } else {
+            Type *t = segs[i].expr->type;
+            char conv = segs[i].conversion;
+            bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
+            if (t && type_is_integer(t)) {
+                if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
+                    fprintf(out, is_64bit ? "(unsigned long long)" : "(unsigned int)");
+                } else {
+                    fprintf(out, is_64bit ? "(long long)" : "(int)");
+                }
+            } else if (t && t->kind == TYPE_FLOAT32) {
+                fprintf(out, "(double)");
+            } else if (t && is_cstr_type(t)) {
+                if (conv == 'p')
+                    fprintf(out, "(void*)");
+                else
+                    fprintf(out, "(const char*)");
+            } else if (t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR)) {
+                fprintf(out, "(void*)");
+            }
+            emit_expr(segs[i].expr, out);
+        }
+    }
+    fprintf(out, ")");
+    if (use_heap) fprintf(out, " : 0");  /* close the _fbuf ? snprintf(...) : 0 ternary */
+    fprintf(out, "; ");
+    if (is_cstr) fprintf(out, "(void)_fw%d; ", tid);  /* suppress -Wunused-variable for cstr paths */
+
+    /* Construct result */
+    if (use_heap && is_cstr) {
+        /* cstr? = bare pointer (null sentinel) */
+        fprintf(out, "_fbuf%d; })", tid);
+    } else if (use_heap) {
+        /* str? = fc_option_fc_str */
+        fprintf(out, "_fbuf%d ? (", tid);
+        emit_type(alloc_opt_type, out);
+        fprintf(out, "){ .value = (fc_str){ .ptr = _fbuf%d, .len = _fw%d >= 0 && _fw%d <= _flen%d ? _fw%d : _flen%d }, .has_value = true } : (",
+            tid, tid, tid, tid, tid, tid);
+        emit_type(alloc_opt_type, out);
+        fprintf(out, "){ .has_value = false }; })");
+    } else if (is_cstr) {
+        /* standalone cstr = bare pointer */
+        fprintf(out, "_fbuf%d; })", tid);
+    } else {
+        /* standalone str = fc_str */
+        fprintf(out, "(fc_str){ .ptr = _fbuf%d, .len = _fw%d >= 0 && _fw%d <= _flen%d ? _fw%d : _flen%d }; })",
+            tid, tid, tid, tid, tid, tid);
+    }
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -1560,7 +1850,16 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_ALLOC: {
-        if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
+        if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
+            /* alloc(T, N) → T*? (raw buffer, null sentinel) */
+            fprintf(out, "(");
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, "*)calloc((size_t)");
+            emit_expr(e->alloc_expr.size_expr, out);
+            fprintf(out, ", sizeof(");
+            emit_type(e->alloc_expr.alloc_type, out);
+            fprintf(out, "))");
+        } else if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
             /* alloc(T[N]) → T[]? */
             int tid = temp_counter++;
             fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
@@ -1574,7 +1873,6 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ")); _aptr%d ? (", tid);
             emit_type(e->type, out);
             fprintf(out, "){ .value = (");
-            /* inner slice type */
             Type *slice_type = e->type->option.inner;
             emit_type(slice_type, out);
             fprintf(out, "){ .ptr = _aptr%d, .len = _asz%d }, .has_value = true } : (", tid, tid);
@@ -1587,14 +1885,121 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "*)calloc(1, sizeof(");
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "))");
+        } else if (e->alloc_expr.init_expr->kind == EXPR_STRING_LIT) {
+            /* alloc("literal") → str? (direct to heap) */
+            int tid = temp_counter++;
+            Expr *ie = e->alloc_expr.init_expr;
+            /* Compute actual byte length after escape processing */
+            int actual_len = 0;
+            const char *s = ie->string_lit.value;
+            int slen = ie->string_lit.length;
+            for (int j = 0; j < slen; j++) {
+                if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
+                else if (s[j] == '\\' && j + 1 < slen) {
+                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
+                    else j++;
+                }
+                actual_len++;
+            }
+            fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d); ", tid, actual_len);
+            fprintf(out, "_ap%d ? (memcpy(_ap%d, (uint8_t*)\"%.*s\", %d), (",
+                tid, tid, ie->string_lit.length, ie->string_lit.value, actual_len);
+            emit_type(e->type, out);
+            fprintf(out, "){ .value = (fc_str){ .ptr = _ap%d, .len = %d }, .has_value = true }) : (",
+                tid, actual_len);
+            emit_type(e->type, out);
+            fprintf(out, "){ .has_value = false }; })");
+        } else if (e->alloc_expr.init_expr->kind == EXPR_CSTRING_LIT) {
+            /* alloc(c"literal") → cstr? (direct to heap, null sentinel) */
+            int tid = temp_counter++;
+            Expr *ie = e->alloc_expr.init_expr;
+            /* Compute actual byte length after escape processing */
+            int actual_len = 0;
+            const char *s = ie->cstring_lit.value;
+            int slen = ie->cstring_lit.length;
+            for (int j = 0; j < slen; j++) {
+                if (s[j] == '\\' && j + 1 < slen) {
+                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
+                    else j++;
+                }
+                actual_len++;
+            }
+            fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d + 1); ", tid, actual_len);
+            fprintf(out, "if (_ap%d) memcpy(_ap%d, (uint8_t*)\"%.*s\", %d + 1); _ap%d; })",
+                tid, tid, ie->cstring_lit.length, ie->cstring_lit.value, actual_len, tid);
+        } else if (e->alloc_expr.init_expr->kind == EXPR_INTERP_STRING) {
+            /* alloc("interp %d{x}") or alloc(c"interp %d{x}") → str?/cstr? */
+            emit_interp_string_impl(e->alloc_expr.init_expr, out, e->type);
+        } else if (e->alloc_expr.init_expr->kind == EXPR_ARRAY_LIT) {
+            /* alloc(T[N] { elems }) → T[]? (direct to heap) */
+            int tid = temp_counter++;
+            Expr *ie = e->alloc_expr.init_expr;
+            Type *elem_type = ie->array_lit.elem_type;
+            int64_t size = ie->array_lit.size_expr->int_lit.value;
+            int ec = ie->array_lit.elem_count;
+            fprintf(out, "({ ");
+            emit_type(elem_type, out);
+            if (ec == 0) {
+                fprintf(out, " *_ap%d = (", tid);
+                emit_type(elem_type, out);
+                fprintf(out, "*)calloc(%d, sizeof(", (int)size);
+            } else {
+                fprintf(out, " *_ap%d = (", tid);
+                emit_type(elem_type, out);
+                fprintf(out, "*)malloc(%d * sizeof(", (int)size);
+            }
+            emit_type(elem_type, out);
+            fprintf(out, ")); ");
+            fprintf(out, "_ap%d ? (", tid);
+            for (int i = 0; i < ec; i++) {
+                fprintf(out, "_ap%d[%d] = ", tid, i);
+                emit_expr(ie->array_lit.elems[i], out);
+                fprintf(out, ", ");
+            }
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .value = (");
+            /* inner slice type */
+            Type *sl = e->type->option.inner;
+            emit_type(sl, out);
+            fprintf(out, "){ .ptr = _ap%d, .len = %d }, .has_value = true }) : (", tid, (int)size);
+            emit_type(e->type, out);
+            fprintf(out, "){ .has_value = false }; })");
+        } else if (e->alloc_expr.init_expr->kind == EXPR_STRUCT_LIT) {
+            /* alloc(struct_lit) → T*? (malloc + compound literal, null sentinel) */
+            int tid = temp_counter++;
+            Type *val_type = e->alloc_expr.init_expr->type;
+            fprintf(out, "({ ");
+            emit_type(val_type, out);
+            fprintf(out, "* _ap%d = (", tid);
+            emit_type(val_type, out);
+            fprintf(out, "*)malloc(sizeof(");
+            emit_type(val_type, out);
+            fprintf(out, ")); if (_ap%d) *_ap%d = ", tid, tid);
+            emit_expr(e->alloc_expr.init_expr, out);
+            fprintf(out, "; _ap%d; })", tid);
+        } else if (e->alloc_expr.init_expr->type &&
+                   e->alloc_expr.init_expr->type->kind == TYPE_UNION) {
+            /* alloc(union_variant) → T*? (malloc + compound literal, null sentinel) */
+            int tid = temp_counter++;
+            Type *val_type = e->alloc_expr.init_expr->type;
+            fprintf(out, "({ ");
+            emit_type(val_type, out);
+            fprintf(out, "* _ap%d = (", tid);
+            emit_type(val_type, out);
+            fprintf(out, "*)malloc(sizeof(");
+            emit_type(val_type, out);
+            fprintf(out, ")); if (_ap%d) *_ap%d = ", tid, tid);
+            emit_expr(e->alloc_expr.init_expr, out);
+            fprintf(out, "; _ap%d; })", tid);
         } else if (e->alloc_expr.init_expr->type &&
                    e->alloc_expr.init_expr->type->kind == TYPE_SLICE) {
             /* alloc(slice_expr) → T[]? (deep-copy slice data to heap) */
             int tid = temp_counter++;
-            Type *slice_type = e->alloc_expr.init_expr->type;
-            Type *elem_type = slice_type->slice.elem;
+            Type *st = e->alloc_expr.init_expr->type;
+            Type *elem_type = st->slice.elem;
             fprintf(out, "({ ");
-            emit_type(slice_type, out);
+            emit_type(st, out);
             fprintf(out, " _as%d = ", tid);
             emit_expr(e->alloc_expr.init_expr, out);
             fprintf(out, "; ");
@@ -1610,24 +2015,14 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ")), (");
             emit_type(e->type, out);
             fprintf(out, "){ .value = (");
-            emit_type(slice_type, out);
+            emit_type(st, out);
             fprintf(out, "){ .ptr = _ap%d, .len = _as%d.len }, .has_value = true }) : (",
                 tid, tid);
             emit_type(e->type, out);
             fprintf(out, "){ .has_value = false }; })");
         } else {
-            /* alloc(expr) → T*? with initialization */
-            int tid = temp_counter++;
-            Type *val_type = e->alloc_expr.init_expr->type;
-            fprintf(out, "({ ");
-            emit_type(val_type, out);
-            fprintf(out, "* _aptr%d = (", tid);
-            emit_type(val_type, out);
-            fprintf(out, "*)calloc(1, sizeof(");
-            emit_type(val_type, out);
-            fprintf(out, ")); if (_aptr%d) *_aptr%d = ", tid, tid);
-            emit_expr(e->alloc_expr.init_expr, out);
-            fprintf(out, "; _aptr%d; })", tid);
+            /* Unreachable — pass2 rejects unsupported alloc(expr) forms */
+            fprintf(out, "((void)0 /* unsupported alloc form */)");
         }
         break;
     }
@@ -1691,306 +2086,10 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
-    case EXPR_INTERP_STRING: {
-        /* Compute buffer size and build format string */
-        int tid = temp_counter++;
-        int seg_count = e->interp_string.segment_count;
-        InterpSegment *segs = e->interp_string.segments;
-
-        /* Always use alloca — VLAs in statement expressions have block scope,
-         * but alloca memory survives until the function returns */
-        (void)seg_count; /* may be used only in loops below */
-
-        fprintf(out, "({ ");
-
-        /* Pre-evaluate str arguments and compute their lengths */
-        int str_arg_idx = 0;
-        for (int i = 0; i < seg_count; i++) {
-            if (!segs[i].is_literal && segs[i].conversion == 's' &&
-                segs[i].expr->type && is_str_type(segs[i].expr->type)) {
-                fprintf(out, "fc_str _sa%d_%d = ", tid, str_arg_idx);
-                emit_expr(segs[i].expr, out);
-                fprintf(out, "; ");
-                str_arg_idx++;
-            }
-        }
-
-        /* Compute buffer size expression */
-        fprintf(out, "int64_t _flen%d = ", tid);
-        bool first_term = true;
-        str_arg_idx = 0;
-        for (int i = 0; i < seg_count; i++) {
-            if (segs[i].is_literal) {
-                /* Count actual bytes after escape processing */
-                int actual_len = 0;
-                const char *s = segs[i].text;
-                int slen = segs[i].text_length;
-                for (int j = 0; j < slen; j++) {
-                    if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++; /* %% -> 1 byte */
-                    else if (s[j] == '\\' && j + 1 < slen) {
-                        if (s[j+1] == 'x' && j + 3 < slen) j += 3; /* \xNN -> 1 byte */
-                        else j++; /* \n etc -> 1 byte */
-                    }
-                    actual_len++;
-                }
-                if (actual_len > 0) {
-                    if (!first_term) fprintf(out, " + ");
-                    fprintf(out, "%d", actual_len);
-                    first_term = false;
-                }
-            } else {
-                int bound = 0;
-                char conv = segs[i].conversion;
-
-                int explicit_width = 0, explicit_prec = -1;
-                parse_format_width_prec(segs[i].text,
-                                        &explicit_width, &explicit_prec);
-
-                bool is_str_arg = (conv == 's' && segs[i].expr->type &&
-                                   is_str_type(segs[i].expr->type));
-                bool is_cstr_arg = (conv == 's' && segs[i].expr->type &&
-                                    is_cstr_type(segs[i].expr->type));
-
-                if (is_str_arg) {
-                    if (!first_term) fprintf(out, " + ");
-                    if (explicit_prec >= 0) {
-                        /* Precision bounds the output — compile-time constant */
-                        int str_bound = explicit_prec;
-                        if (explicit_width > str_bound) str_bound = explicit_width;
-                        fprintf(out, "%d", str_bound);
-                    } else if (explicit_width > 0) {
-                        fprintf(out, "(%d > _sa%d_%d.len ? %d : _sa%d_%d.len)",
-                            explicit_width, tid, str_arg_idx, explicit_width, tid, str_arg_idx);
-                    } else {
-                        fprintf(out, "_sa%d_%d.len", tid, str_arg_idx);
-                    }
-                    first_term = false;
-                    str_arg_idx++;
-                } else if (is_cstr_arg) {
-                    if (!first_term) fprintf(out, " + ");
-                    if (explicit_prec >= 0) {
-                        /* Precision bounds the output — compile-time constant */
-                        int str_bound = explicit_prec;
-                        if (explicit_width > str_bound) str_bound = explicit_width;
-                        fprintf(out, "%d", str_bound);
-                    } else {
-                        /* cstr: need strlen at runtime */
-                        fprintf(out, "(int64_t)strlen((const char*)");
-                        emit_expr(segs[i].expr, out);
-                        fprintf(out, ")");
-                    }
-                    first_term = false;
-                } else if (conv == 'T') {
-                    /* %T: compile-time type name literal */
-                    const char *tname = type_name(segs[i].expr->type);
-                    bound = (int)strlen(tname);
-                    if (!first_term) fprintf(out, " + ");
-                    fprintf(out, "%d", bound);
-                    first_term = false;
-                } else {
-                    /* Compute compile-time bound based on type and conversion */
-                    Type *t = segs[i].expr->type;
-                    switch (conv) {
-                    case 'd': case 'i': case 'u':
-                        switch (t ? t->kind : 0) {
-                        case TYPE_INT8: bound = 4; break;
-                        case TYPE_UINT8: bound = 3; break;
-                        case TYPE_INT16: bound = 6; break;
-                        case TYPE_UINT16: bound = 5; break;
-                        case TYPE_INT32: bound = 11; break;
-                        case TYPE_UINT32: bound = 10; break;
-                        case TYPE_INT64: bound = 20; break;
-                        case TYPE_UINT64: bound = 20; break;
-                        default: bound = 20; break;
-                        }
-                        break;
-                    case 'x': case 'X':
-                        switch (t ? t->kind : 0) {
-                        case TYPE_INT8: case TYPE_UINT8: bound = 2; break;
-                        case TYPE_INT16: case TYPE_UINT16: bound = 4; break;
-                        case TYPE_INT32: case TYPE_UINT32: bound = 8; break;
-                        case TYPE_INT64: case TYPE_UINT64: bound = 16; break;
-                        default: bound = 16; break;
-                        }
-                        break;
-                    case 'o':
-                        switch (t ? t->kind : 0) {
-                        case TYPE_INT8: case TYPE_UINT8: bound = 3; break;
-                        case TYPE_INT16: case TYPE_UINT16: bound = 6; break;
-                        case TYPE_INT32: case TYPE_UINT32: bound = 11; break;
-                        case TYPE_INT64: case TYPE_UINT64: bound = 22; break;
-                        default: bound = 22; break;
-                        }
-                        break;
-                    case 'f':
-                        bound = explicit_width > 0 ? explicit_width : 24;
-                        break;
-                    case 'e': case 'E': case 'g': case 'G':
-                        bound = (t && t->kind == TYPE_FLOAT32) ? 15 : 24;
-                        break;
-                    case 'c':
-                        bound = 1;
-                        break;
-                    case 'p':
-                        bound = 18;
-                        break;
-                    default:
-                        bound = 24;
-                        break;
-                    }
-
-                    /* Account for flags: + or space adds 1, # adds 2 for 0x */
-                    const char *flags = segs[i].text;
-                    while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
-                        if (*flags == '+' || *flags == ' ') bound++;
-                        if (*flags == '#') bound += 2;
-                        flags++;
-                    }
-
-                    if (explicit_width > bound) bound = explicit_width;
-
-                    if (!first_term) fprintf(out, " + ");
-                    fprintf(out, "%d", bound);
-                    first_term = false;
-                }
-            }
-        }
-        if (first_term) fprintf(out, "0");
-        fprintf(out, "; ");
-
-        /* Allocate buffer with alloca (survives until function return) */
-        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)__builtin_alloca((size_t)(_flen%d + 1)); ", tid, tid);
-
-        /* Build snprintf call */
-        fprintf(out, "int _fw%d = snprintf((char*)_fbuf%d, (size_t)(_flen%d + 1), \"",
-            tid, tid, tid);
-
-        /* Emit format string */
-        str_arg_idx = 0;
-        for (int i = 0; i < seg_count; i++) {
-            if (segs[i].is_literal) {
-                /* Emit literal text, escaping % to %% for snprintf */
-                const char *s = segs[i].text;
-                int slen = segs[i].text_length;
-                for (int j = 0; j < slen; j++) {
-                    if (s[j] == '%') {
-                        fprintf(out, "%%%%");
-                        if (j + 1 < slen && s[j+1] == '%') j++; /* skip second % of %% */
-                    } else if (s[j] == '"') {
-                        fprintf(out, "\\\"");
-                    } else {
-                        fputc(s[j], out);
-                    }
-                }
-            } else if (segs[i].conversion == 'T') {
-                /* Emit type name as literal text in the format string */
-                const char *tname = type_name(segs[i].expr->type);
-                fputs(tname, out);
-            } else {
-                bool is_str_arg = (segs[i].conversion == 's' &&
-                                   segs[i].expr->type && is_str_type(segs[i].expr->type));
-                if (is_str_arg) {
-                    /* Rewrite %s to %.*s for str arguments.
-                     * Strip any .precision from the spec since .*
-                     * replaces it (precision passed as argument). */
-                    fprintf(out, "%%");
-                    const char *sp = segs[i].text;
-                    int splen = segs[i].text_length;
-                    int j = 0;
-                    /* Copy flags */
-                    while (j < splen - 1 && (sp[j] == '-' || sp[j] == '+' ||
-                           sp[j] == '0' || sp[j] == '#' || sp[j] == ' ')) {
-                        fputc(sp[j], out);
-                        j++;
-                    }
-                    /* Copy width */
-                    while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') {
-                        fputc(sp[j], out);
-                        j++;
-                    }
-                    /* Skip .precision if present (replaced by .*) */
-                    if (j < splen - 1 && sp[j] == '.') {
-                        j++;
-                        while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') j++;
-                    }
-                    fprintf(out, ".*s");
-                    str_arg_idx++;
-                } else {
-                    /* Emit %<spec> with appropriate length modifier for 64-bit types */
-                    Type *t = segs[i].expr->type;
-                    bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
-                    const char *sp = segs[i].text;
-                    int splen = segs[i].text_length;
-                    fprintf(out, "%%");
-                    if (is_64bit) {
-                        /* Insert "ll" before the conversion character */
-                        for (int j = 0; j < splen - 1; j++) fputc(sp[j], out);
-                        fprintf(out, "ll%c", sp[splen - 1]);
-                    } else {
-                        fwrite(sp, 1, (size_t)splen, out);
-                    }
-                }
-            }
-        }
-        fprintf(out, "\"");
-
-        /* Emit arguments */
-        str_arg_idx = 0;
-        for (int i = 0; i < seg_count; i++) {
-            if (segs[i].is_literal) continue;
-            if (segs[i].conversion == 'T') continue; /* type name is literal, no arg */
-            fprintf(out, ", ");
-            bool is_str_arg = (segs[i].conversion == 's' &&
-                               segs[i].expr->type && is_str_type(segs[i].expr->type));
-            if (is_str_arg) {
-                /* %.*s needs (int)precision, ptr */
-                int prec_w = 0, prec_p = -1;
-                parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
-                if (prec_p >= 0) {
-                    /* Clamp to min(precision, len) to avoid reading past str data */
-                    fprintf(out, "((int)_sa%d_%d.len < %d ? (int)_sa%d_%d.len : %d), _sa%d_%d.ptr",
-                        tid, str_arg_idx, prec_p, tid, str_arg_idx, prec_p, tid, str_arg_idx);
-                } else {
-                    fprintf(out, "(int)_sa%d_%d.len, _sa%d_%d.ptr",
-                        tid, str_arg_idx, tid, str_arg_idx);
-                }
-                str_arg_idx++;
-            } else {
-                /* Cast arguments to match the printf format specifier */
-                Type *t = segs[i].expr->type;
-                char conv = segs[i].conversion;
-                bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
-                if (t && type_is_integer(t)) {
-                    if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
-                        fprintf(out, is_64bit ? "(unsigned long long)" : "(unsigned int)");
-                    } else {
-                        fprintf(out, is_64bit ? "(long long)" : "(int)");
-                    }
-                } else if (t && t->kind == TYPE_FLOAT32) {
-                    fprintf(out, "(double)");
-                } else if (t && is_cstr_type(t)) {
-                    /* cstr (uint8*) check before generic pointer — needs (const char*) for %s */
-                    if (conv == 'p')
-                        fprintf(out, "(void*)");
-                    else
-                        fprintf(out, "(const char*)");
-                } else if (t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR)) {
-                    fprintf(out, "(void*)");
-                }
-                emit_expr(segs[i].expr, out);
-            }
-        }
-        fprintf(out, "); ");
-
-        /* Use int64 format types for snprintf format string */
-        /* For int64/uint64, we need to use format macros - let's fix the format string */
-        /* Actually, we've already cast all args above, so %d, %u, %x etc will work with int/unsigned/long long */
-
-        /* Construct result fc_str */
-        fprintf(out, "(fc_str){ .ptr = _fbuf%d, .len = _fw%d >= 0 && _fw%d <= _flen%d ? _fw%d : _flen%d }; })",
-            tid, tid, tid, tid, tid, tid);
+    case EXPR_INTERP_STRING:
+        emit_interp_string_impl(e, out, NULL);
         break;
-    }
+
 
     default:
         fprintf(out, "/* TODO: expr kind %d */", e->kind);

@@ -49,6 +49,7 @@ typedef enum {
     TOK_CONST,
     /* String interpolation */
     TOK_INTERP_START,       /* leading text of interpolated string */
+    TOK_CINTERP_START,      /* leading text of interpolated cstring */
     TOK_INTERP_MID,         /* middle text between interpolation segments */
     TOK_INTERP_END,         /* trailing text of interpolated string */
     TOK_FMT_SPEC,           /* format specifier e.g. "d", "04x", "8.2f" */

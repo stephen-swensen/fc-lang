@@ -1,6 +1,8 @@
 // Returning a heap pointer is fine
 let make_ptr = (x: int32) ->
-    alloc(x)!
+    let p = alloc(int32)!
+    *p = x
+    p
 
 let main = (args: str[]) ->
     let p = make_ptr(42)

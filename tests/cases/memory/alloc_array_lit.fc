@@ -1,0 +1,11 @@
+let main = (args: str[]) ->
+    let arr = alloc(int32[4] { 10, 20, 30, 40 })
+    let mut r = 0
+    match arr with
+    | some(v) ->
+        if v[0] == 10 then r = r + 1 else r = r
+        if v[1] == 20 then r = r + 2 else r = r
+        if v[3] == 40 then r = r + 4 else r = r
+        free(v)
+    | none -> r = r
+    r

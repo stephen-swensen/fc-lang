@@ -1,0 +1,12 @@
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let make_str = () ->
+    alloc(c"hello")!
+
+let main = (args: str[]) ->
+    let s = make_str()
+    let len = c.strlen(s)
+    free(s)
+    let r = (int32)(usize)len
+    r

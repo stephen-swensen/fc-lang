@@ -2693,7 +2693,18 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Type *ty = resolve_type(ctx, e->alloc_expr.alloc_type);
             e->alloc_expr.alloc_type = ty;
 
-            if (e->alloc_expr.size_expr) {
+            if (e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
+                /* alloc(T, N) → T*? (raw buffer) */
+                Type *st = check_expr(ctx, e->alloc_expr.size_expr);
+                if (type_is_error(st)) { e->type = type_error(); return e->type; }
+                if (!type_is_integer(st)) {
+                    diag_error(e->loc, "alloc buffer size must be integer, got %s", type_name(st));
+                    e->type = type_error();
+                    return e->type;
+                }
+                e->type = type_option(ctx->arena, type_pointer(ctx->arena, ty));
+                e->prov = PROV_HEAP;
+            } else if (e->alloc_expr.size_expr) {
                 /* alloc(T[N]) → T[]? */
                 Type *st = check_expr(ctx, e->alloc_expr.size_expr);
                 if (type_is_error(st)) { e->type = type_error(); return e->type; }
@@ -2741,13 +2752,31 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                      * which will report the undeclared identifier error */
                 }
             }
-            /* alloc(expr) → T*? where T is the type of expr */
+            /* alloc(expr) — only specific literal/slice forms allowed */
             Type *t = check_expr(ctx, e->alloc_expr.init_expr);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
+
+            Expr *ie = e->alloc_expr.init_expr;
+
+            /* alloc(c"literal") → cstr? */
+            if (ie->kind == EXPR_CSTRING_LIT) {
+                Type *rt = type_pointer(ctx->arena, type_uint8());
+                e->type = type_option(ctx->arena, rt);
+                e->prov = PROV_HEAP;
+                return e->type;
+            }
+            /* alloc(c"interp %d{x}") → cstr? */
+            if (ie->kind == EXPR_INTERP_STRING && ie->interp_string.is_cstr) {
+                Type *rt = type_pointer(ctx->arena, type_uint8());
+                e->type = type_option(ctx->arena, rt);
+                e->prov = PROV_HEAP;
+                return e->type;
+            }
+
             /* Escape analysis: check for stack pointers in heap-allocated struct */
-            if (e->alloc_expr.init_expr->kind == EXPR_STRUCT_LIT) {
-                for (int i = 0; i < e->alloc_expr.init_expr->struct_lit.field_count; i++) {
-                    FieldInit *fi = &e->alloc_expr.init_expr->struct_lit.fields[i];
+            if (ie->kind == EXPR_STRUCT_LIT) {
+                for (int i = 0; i < ie->struct_lit.field_count; i++) {
+                    FieldInit *fi = &ie->struct_lit.fields[i];
                     if (fi->value->prov == PROV_STACK && type_has_provenance(fi->value->type)) {
                         diag_error(fi->value->loc,
                             "cannot store stack-allocated %s in heap-allocated struct",
@@ -2755,9 +2784,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     }
                 }
             }
+
             if (t->kind == TYPE_SLICE) {
-                /* alloc(slice_expr) → T[]? (deep-copy slice data to heap) */
-                /* Strip const: alloc creates fresh mutable memory */
+                /* alloc(slice_expr) → T[]? (deep-copy to heap) */
+                /* Also handles alloc("str_lit"), alloc("interp %d{x}"), alloc(slice_var) */
                 Type *rt = t;
                 if (rt->is_const) {
                     rt = arena_alloc(ctx->arena, sizeof(Type));
@@ -2765,8 +2795,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     rt->is_const = false;
                 }
                 e->type = type_option(ctx->arena, rt);
-            } else {
+            } else if (ie->kind == EXPR_STRUCT_LIT) {
+                /* alloc(struct_literal) → T*? */
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
+            } else if (t->kind == TYPE_UNION) {
+                /* alloc(union_variant) → T*? */
+                e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
+            } else {
+                diag_error(e->loc,
+                    "alloc(expr) requires a literal or slice expression; "
+                    "use alloc(%s) for uninitialized heap allocation",
+                    type_name(t));
+                e->type = type_error();
+                return e->type;
             }
             e->prov = PROV_HEAP;
         }
@@ -2839,8 +2880,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 break;
             }
         }
-        e->type = type_str();
-        e->prov = PROV_STACK;
+        if (e->interp_string.is_cstr) {
+            e->type = type_pointer(ctx->arena, type_uint8());
+            e->prov = PROV_STACK;
+        } else {
+            e->type = type_str();
+            e->prov = PROV_STACK;
+        }
         return e->type;
     }
 

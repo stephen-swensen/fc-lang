@@ -752,6 +752,21 @@ let msg = "hello %.64s{name}"
 "use %d format"            // static — %d not followed by {
 ```
 
+#### cstr Interpolation
+
+The `c"..."` prefix produces a **null-terminated cstr** instead of a `str` slice. All the same format specifiers and interpolation rules apply — the only difference is that the result is a `uint8*` (cstr) with a null terminator appended, rather than a `uint8[]` (str) with an explicit length.
+
+```fc
+let name = "world"
+let msg = c"hello %s{name}"   // cstr — null-terminated, stack-allocated via alloca
+```
+
+Like str interpolation, cstr interpolation is stack-allocated — the result cannot be returned from a function or freed. Use `alloc(c"...")` to promote an interpolated cstr to heap-owned memory:
+
+```fc
+let heap_msg = alloc(c"hello %s{name}")!   // heap-allocated cstr, caller must free
+```
+
 ### Casting
 
 Explicit casts use C-style prefix cast syntax: `(T) expr`. All conversions not covered by the implicit widening rules require an explicit cast.
@@ -2151,13 +2166,19 @@ For C functions that take a pointer and length (e.g. `fwrite`), pass `.ptr` and 
 
 On memory-constrained embedded targets, the slice fat pointer — a pointer plus an `int64` length — may be undesirable. `int64` arithmetic is expensive on 8-bit and 16-bit hardware, and bounds checking adds overhead that may be unacceptable in tight loops.
 
-The programmer can drop down to raw pointer style by discarding the slice after allocation:
+The `alloc(T, N)` form allocates a raw buffer directly without constructing a slice:
+
+```fc
+let buf = alloc(uint8, 128)!        // uint8* — raw buffer, no slice overhead
+```
+
+Alternatively, `alloc(T[N])` creates a slice which the programmer can narrow to a raw pointer:
 
 ```fc
 let buf = alloc(uint8[128])!.ptr    // uint8* — 128 bytes allocated, slice header discarded
 ```
 
-The underlying heap allocation is identical — `calloc(128, sizeof(uint8))`. The fat pointer is constructed momentarily on the stack and then discarded; there is no heap overhead. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C.
+The underlying heap allocation is identical in both cases — `calloc(128, sizeof(uint8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C.
 
 Alternatively, take the pointer from a stack slice:
 
@@ -2272,7 +2293,8 @@ Four built-in compile-time operators handle memory-related operations that requi
 |----------|-------------|
 | `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
 | `alloc(T[N])` | Heap-allocate a slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
-| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. If `expr` is a slice, **deep-copies the data** — allocates `len * sizeof(elem)` bytes and copies the contents — returning `T[]?`. Otherwise allocates a single `T` and writes the value, returning `T*?`. |
+| `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), array literals, struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
@@ -2393,11 +2415,12 @@ let make_slice = () ->
 let n = alloc(node)          // returns node*? — may fail
 let n = alloc(node)!         // unwrap — crash on failure
 let buf = alloc(node[128])   // heap-allocated slice of 128 nodes, returns node[]?
+let raw = alloc(uint8, 256)  // raw buffer of 256 bytes, returns uint8*?
 free(ptr)                    // free a heap-allocated pointer
 free(buf)                    // free a heap-allocated slice — compiler emits free(buf.ptr)
 ```
 
-`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N])` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
+`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N])` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
 
 ### alloc forms summary
 
@@ -2405,13 +2428,22 @@ free(buf)                    // free a heap-allocated slice — compiler emits f
 |------|---------|----------|
 | `alloc(T)` | `T*?` | Zero-initialized single value |
 | `alloc(T[N])` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
-| `alloc(expr)` where expr is a struct/union/scalar | `T*?` | Heap-allocate and copy value |
-| `alloc(expr)` where expr is a slice | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
+| `alloc(T, N)` | `T*?` | Raw buffer of `N` elements, zero-initialized (no length tracking) |
+| `alloc("literal")` | `str?` | Heap copy of string literal |
+| `alloc(c"literal")` | `cstr?` | Heap copy of cstr literal |
+| `alloc("...%d{x}...")` | `str?` | Interpolated string written directly to heap |
+| `alloc(c"...%d{x}...")` | `cstr?` | Interpolated cstr written directly to heap |
+| `alloc(T[N] { elems })` | `T[]?` | Heap array initialized with provided elements |
+| `alloc(struct { fields })` | `T*?` | Heap struct initialized from literal |
+| `alloc(union.variant(val))` | `T*?` | Heap union initialized from variant |
+| `alloc(slice_expr)` | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
+
+`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), array literals, struct literals, union variant constructors, and slice expressions. Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
 
 The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
 
 ```fc
-let s = "count: \{n}"       // stack-allocated (alloca) — unsafe to return
+let s = "hello %d{n}"       // stack-allocated (alloca) — unsafe to return
 let owned = alloc(s)!        // heap copy — safe to return, caller must free
 
 let mut buf = int32[3] { }
@@ -2419,7 +2451,28 @@ buf.ptr[0] = 10
 let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
 ```
 
-`alloc(variable)` works for any binding — the compiler resolves the parser ambiguity between type names and variable names. If the name refers to a variable in scope, it is treated as `alloc(expr)`, not `alloc(T)`.
+#### alloc with string and cstr literals
+
+`alloc("hello")` creates a heap copy of the string literal, returning `str?`. `alloc(c"hello")` creates a heap copy of the cstr literal including the null terminator, returning `cstr?` (= `uint8*?`). The caller must free the result.
+
+```fc
+let s = alloc("hello")!         // str? — heap copy of literal
+let c = alloc(c"hello")!        // cstr? — heap copy with null terminator
+```
+
+#### Direct-to-heap optimization
+
+When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or array literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `calloc`'d buffer. This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
+
+#### Raw buffer allocation
+
+`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N])`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
+
+```fc
+let buf = alloc(uint8, 256)!    // uint8*? — raw buffer, no length tracking
+```
+
+`alloc(T, N)` transpiles to `calloc(N, sizeof(T))`. Like all alloc forms, the memory is zero-initialized.
 
 `alloc` and `free` require a hosted C environment with heap allocation (FC's platform contract — see §Platform contract).
 
@@ -2448,7 +2501,7 @@ let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
 let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
 ```
 
-In all cases the return type follows from the value's type — `T*?` for structs, unions, and scalars; `T[]?` for slices (deep-copied).
+In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
 > `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
