@@ -2209,6 +2209,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
+        /* Size must be a compile-time constant (integer literal) */
+        if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
+            diag_error(e->array_lit.size_expr->loc,
+                "array size must be a compile-time constant");
+            e->type = type_error();
+            return e->type;
+        }
         /* Type-check elements */
         Type *elem_type = resolve_type(ctx, e->array_lit.elem_type);
         e->array_lit.elem_type = elem_type;
