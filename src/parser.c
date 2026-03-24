@@ -1035,17 +1035,6 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
-    case TOK_NONE: {
-        advance_p(p);
-        expect(p, TOK_LPAREN);
-        Type *ty = parse_type(p);
-        expect(p, TOK_RPAREN);
-        Type *opt = type_option(p->arena, ty);
-        Expr *e = alloc_expr(p, EXPR_NONE, loc);
-        e->none_expr.target = opt;
-        return e;
-    }
-
     case TOK_LOOP: {
         advance_p(p);
         int body_count;

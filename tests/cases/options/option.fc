@@ -2,7 +2,7 @@ let find_first_positive = (a: int32, b: int32, c: int32) ->
     if a > 0 then some(a)
     else if b > 0 then some(b)
     else if c > 0 then some(c)
-    else none(int32)
+    else default(int32?)
 
 let main = (args: str[]) ->
     let result = find_first_positive(-1, 42, 99)

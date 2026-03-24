@@ -48,7 +48,6 @@ typedef enum {
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
     EXPR_SOME,
-    EXPR_NONE,
     EXPR_DEREF_FIELD,   /* x->f */
     EXPR_LET,           /* let binding inside a block */
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
@@ -233,9 +232,6 @@ struct Expr {
 
         /* EXPR_SOME */
         struct { Expr *value; } some_expr;
-
-        /* EXPR_NONE */
-        struct { Type *target; } none_expr;
 
         /* EXPR_MATCH */
         struct {

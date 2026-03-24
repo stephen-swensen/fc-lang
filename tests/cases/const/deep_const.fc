@@ -11,7 +11,7 @@ let get_next_data = (n: const node*) ->
     | none -> 0
 
 let main = (args: str[]) ->
-    let mut b = node { data = 20, next = none(node*) }
+    let mut b = node { data = 20, next = default(node*?) }
     let mut a = node { data = 10, next = some(&b) }
     let result = get_data(&a) + get_next_data(&a)
     result - 30

@@ -1246,18 +1246,6 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
-    case EXPR_NONE: {
-        if (is_null_sentinel(e->type)) {
-            /* T*?/any*?/cstr? → plain pointer, none = NULL */
-            fprintf(out, "NULL");
-        } else {
-            fprintf(out, "(");
-            emit_type(e->type, out);
-            fprintf(out, "){ .has_value = false }");
-        }
-        break;
-    }
-
     case EXPR_ARRAY_LIT: {
         /* Stack array literal → alloca + slice struct.
          * Uses __builtin_alloca for function-frame lifetime — the backing memory
@@ -1544,7 +1532,7 @@ static void emit_expr(Expr *e, FILE *out) {
             else {
                 fprintf(out, "(");
                 emit_type(t, out);
-                fprintf(out, "){0}");
+                fprintf(out, "){ .has_value = false }");
             }
             break;
         default:
@@ -3033,7 +3021,6 @@ static void detect_features_expr(Expr *e) {
     case EXPR_CHAR_LIT:
     case EXPR_STRING_LIT:
     case EXPR_CSTRING_LIT:
-    case EXPR_NONE:
     case EXPR_CONTINUE:
     case EXPR_TYPE_VAR_REF:
         return;

@@ -526,7 +526,6 @@ primary_expr     = INT_LIT
                  | CHAR_LIT
                  | STR_LIT
                  | CSTR_LIT
-                 | "none"
                  | "void"
                  | lambda_expr
                  | if_expr
@@ -655,16 +654,15 @@ slice_literal    = type_expr , "[" , expr , "]" , "{" , [ expr_list ] , "}" ;
 expr_list        = expr , { "," , expr } ;
 
 (* Variant construction: shape.circle(3.14)  or  result.ok(42)        *)
-(* Also covers type property access: int32.max, node<'b>.none         *)
+(* Also covers type property access: int32.max, node<'b>.min          *)
 variant_construction = IDENT , [ "<" , type_arg_list , ">" ]
                      , "." , IDENT , [ "(" , [ arg_list ] , ")" ]
                      ;
 
 (* Type property access covers:                                        *)
-(*   - built-in type properties:   int32.max, float64.nan, str.none    *)
-(*   - any* properties:            any*.none                           *)
-(*   - type variable properties:   'a.min, 'a.none                    *)
-(*   - parameterized type props:   node<'b>.none                      *)
+(*   - built-in type properties:   int32.max, float64.nan              *)
+(*   - type variable properties:   'a.min, 'a.max                     *)
+(*   - parameterized type props:   node<'b>.min                       *)
 (* Also covers module.member access: math.add, io.stdout               *)
 (* Note: IDENT.IDENT is handled by the postfix "." rule on             *)
 (* primary_expr -> IDENT, so type_property_access is only needed for   *)

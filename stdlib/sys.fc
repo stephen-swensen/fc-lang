@@ -18,7 +18,7 @@ module sys =
     let env = (name: const str) ->
         match c.getenv((cstr)name) with
         | some(cs) -> some((const str)cs)
-        | none -> none(const str)
+        | none -> default(const str?)
 
     // exit: terminates the process immediately with the given exit code.
     // code: int32 — exit status (0 = success, nonzero = failure).
@@ -38,5 +38,5 @@ module sys =
     // returns: void.
     let sleep = (ms: int64) ->
         let mut req = t.timespec { tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-        t.nanosleep(&req, none(t.timespec*))
+        t.nanosleep(&req, default(t.timespec*?))
         return

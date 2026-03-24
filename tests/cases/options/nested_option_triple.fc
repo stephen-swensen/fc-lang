@@ -7,7 +7,7 @@ let check = (x: int32???) ->
 
 let main = (args: str[]) ->
     let a = some(some(some(5)))
-    let b = some(some(none(int32)))
-    let c = some(none(int32?))
-    let d = none(int32??)
+    let b = some(some(default(int32?)))
+    let c = some(default(int32??))
+    let d = default(int32???)
     check(a) + check(b) + check(c) + check(d)

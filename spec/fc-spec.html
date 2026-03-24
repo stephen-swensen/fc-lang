@@ -988,7 +988,7 @@ let { center = { x = cx, y = cy }, radius = r } = green_circle
 Any binding can shadow any other binding of the same name, regardless of mutability:
 
 ```fc
-let x = none(int32)
+let x = default(int32?)
 let x = some(32)       // let shadows let
 
 let mut y = 42
@@ -1014,7 +1014,7 @@ FC uses simple right-to-left (inside-out) inference. The type of a binding is al
 ```fc
 let double = (x: int32) -> x * 2    // return type inferred as int32
 let n = alloc(node)!                 // inferred as node*
-let x = none(int32)                  // inferred as int32?
+let x = default(int32?)              // inferred as int32?
 let x = some(42)                     // inferred as int32?
 ```
 
@@ -1409,7 +1409,7 @@ loop
 // loop as expression — type inferred from break value
 let mut i = 0
 let result = loop
-    if i >= data.len then break none(int32)
+    if i >= data.len then break default(int32?)
     if matches(data[i]) then break some(i)
     i = i + 1
 ```
@@ -1488,7 +1488,7 @@ loop
     if i >= 9 then break
 
 // break and continue in for
-let mut result = none(point)
+let mut result = default(point?)
 for p in points
     if p.x < 0.0 then continue       // skip negative x
     if p.x == 0.0 then
@@ -1596,9 +1596,9 @@ let factorial = (n: int32) ->
 
 ```fc
 let find = (haystack: str, needle: str) ->
-    if needle.len > haystack.len then return none(str)
+    if needle.len > haystack.len then return default(str?)
     // ... rest of body
-    none(str)
+    default(str?)
 
 let log_nop = (msg: str) -> return     // void — does nothing
 
@@ -1894,7 +1894,7 @@ let parse = (input: str) ->
 
 ## Option Types
 
-Option is a built-in generic type (see §Generics). Null is not expressible in FC — option is the only way to intentionally express the absence of a value. The `?` suffix creates an option type: `T?` is sugar for `option<T>`.
+Option is a built-in generic type (see §Generics). Null is not expressible in FC — option is the only way to intentionally express the absence of a value. The `?` suffix creates an option type.
 
 ```fc
 int32?      // optional int32
@@ -1905,12 +1905,12 @@ node*?      // optional pointer to node
 ### Constructing options
 
 ```fc
-some(x)        // wrap a value — type inferred from x
-none(int32)    // typed none — int32? with no value
-none(node*)    // node*? with no value
+some(x)            // wrap a value — type inferred from x
+default(int32?)    // int32? with no value
+default(node*?)    // node*? with no value
 ```
 
-`some` and `none` are built-in operators. `some(expr)` infers the option type from the expression. `none(type)` takes a type name as its argument (like `sizeof` and `default`) and produces a value of type `type?` with no value present.
+`some` is a built-in operator that infers the option type from its argument expression. To create a none value, use `default(T?)` — conceptually, `none` is the first variant of the option type, so its default value is none (see §Default Values).
 
 ### Unwrapping
 
@@ -2292,7 +2292,7 @@ let f = default(float64)   // 0.0
 let b = default(bool)      // false
 let s = default(str)       // empty slice — { ptr = null, len = 0 }
 let p = default(point)     // point { x = 0.0, y = 0.0 }
-let o = default(int32?)    // none(int32)
+let o = default(int32?)    // int32? with no value
 let n = sizeof(int32)      // 4 — int64
 ```
 
@@ -2834,10 +2834,10 @@ let main = (args: str[]) ->
     let size = sizeof(geometry.point)            // sizeof
     let ptr = (geometry.point*)&p3              // cast
     let heap = alloc(geometry.point)             // alloc
-    let opt = none(geometry.point)               // none
+    let opt = default(geometry.point?)             // none
 ```
 
-Module-qualified names work everywhere a type name is accepted: function parameter types, return types (inferred), pointer types, slice types, option types, struct literal constructors, `default`, `sizeof`, `alloc`, `none`, and casts. This applies to both regular FC structs and extern structs in `from` modules.
+Module-qualified names work everywhere a type name is accepted: function parameter types, return types (inferred), pointer types, slice types, option types, struct literal constructors, `default`, `sizeof`, `alloc`, and casts. This applies to both regular FC structs and extern structs in `from` modules.
 
 Direct dot notation works for modules visible in the current scope — same-file modules, modules compiled together, and imported modules. Cross-namespace modules must still be imported first (see §Importing); dot notation then accesses their members.
 
@@ -3149,7 +3149,7 @@ if fd == -1 then handle_error()
 
 ### Null arguments to C
 
-If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `none(T*)` or `some(ptr)` at the call site:
+If a C function accepts null for a pointer parameter, declare it as `T*?` and pass `default(T*?)` or `some(ptr)` at the call site:
 
 ```fc
 module pthreads from "pthread.h" =
@@ -3550,13 +3550,13 @@ module box =
     let map = (b: box<'a>, f: ('a) -> 'b) -> box { value = f(b.value) }
 ```
 
-Built-in operators `default(T)`, `sizeof(T)`, and `none(T)`, as well as static module member access, follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
+Built-in operators `default(T)` and `sizeof(T)`, as well as static module member access, follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
 
 ```fc
 let make_default = (x: 'a) -> default('a)     // ok — checked at call site
 let size_of_val  = (x: 'a) -> sizeof('a)       // ok — checked at call site
 let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type has .min
-let make_none    = (x: 'a) -> none('a)         // ok — produces 'a? with no value
+let make_none    = (x: 'a) -> default('a?)     // ok — produces 'a? with no value
 ```
 
 A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
@@ -3573,7 +3573,7 @@ union option =
     | some('a)
 ```
 
-`none` is declared first so that zero-initialized memory is always a valid `none` — consistent with the union default value rules (see §Default Values). `'a?` is syntactic sugar for `option<'a>` — the two are interchangeable in all type positions. The built-in `none(type)` and `some(expr)` operators (see §Constructing options), pattern matching, and `!` unwrapping all apply unchanged. Unlike user-defined generic unions which require explicit type arguments at construction sites, `none` and `some` have dedicated operator syntax for ergonomic use.
+The syntax for option types is `T?` — there is no `option<T>` type syntax. Conceptually, `option` follows the same design as a union with `none` as its first variant: `default(T?)` produces a none value (first-variant-is-default, see §Default Values), and `| none ->` / `| some(v) ->` work as match patterns with exhaustiveness checking. The built-in `some(expr)` operator (see §Constructing options) wraps a value and infers the option type, and `x!` unwraps it (crashing if none).
 
 The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
 
@@ -3607,7 +3607,7 @@ Two uses of the same generic at the same concrete types share a single instantia
 > int32_t identity_int32(int32_t x) { return x; }
 > double  identity_float64(double x) { return x; }
 > ```
-> `option<'a>` follows the existing option transpilation rules per instantiation — pointer types use the null-sentinel form, all others use the tagged struct form.
+> Option types (`T?`) follow the existing option transpilation rules per instantiation — pointer types use the null-sentinel form, all others use the tagged struct form.
 
 ### Errors at monomorphization
 
@@ -3630,7 +3630,7 @@ The error message identifies the call site and the substitution: something like 
 The following operations are valid on type variables within a generic body, with validation deferred to monomorphization:
 
 - **Operators**: arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`)
-- **Built-in type operators**: `default('a)`, `sizeof('a)`, `none('a)`
+- **Built-in type operators**: `default('a)`, `sizeof('a)`
 - **Built-in static type properties**: `'a.min`, `'a.max`, `'a.bits`, `'a.nan`, `'a.inf`, `'a.neg_inf`, `'a.epsilon`
 
 The following are **not** supported on type variables:
@@ -3788,7 +3788,7 @@ module node =
 
     let map = (head: node<'a>*?, f: ('a) -> 'b) ->
         match head with
-        | none      -> none(node<'b>*)
+        | none      -> default(node<'b>*?)
         | some(ptr) ->
             let n = node.make(f(ptr->value))
             n->next = node.map(ptr->next, f)
@@ -3805,7 +3805,7 @@ module node =
                 current = next
 
 let main = (args: str[]) ->
-    let list = some(node.prepend(some(node.prepend(none(node<int32>*), 1)), 2))
+    let list = some(node.prepend(some(node.prepend(default(node<int32>*?), 1)), 2))
     let doubled = node.map(list, (x: int32) -> x * 2)
     node.drop(list)
     node.drop(doubled)
@@ -3820,11 +3820,11 @@ Demonstrates slice operations, loops, and early return.
 import libc
 
 let find_substring = (haystack: str, needle: str) ->
-    if needle.len > haystack.len then return none(str)
+    if needle.len > haystack.len then return default(str?)
     let mut i = 0
     loop
         // safe: needle.len <= haystack.len guaranteed by early return above
-        if i > haystack.len - needle.len then break none(str)
+        if i > haystack.len - needle.len then break default(str?)
         let candidate = haystack[i .. i + needle.len]
         if candidate == needle then break some(candidate)
         i = i + 1
@@ -3909,7 +3909,7 @@ module arraylist =
         acc
 
     let reduce = (l: arraylist<'a>, f: ('a, 'a) -> 'a) ->
-        if l.len == 0 then none('a)
+        if l.len == 0 then default('a?)
         else
             let mut acc = l.data[0]
             for x in l.data[1..l.len]
@@ -3928,7 +3928,7 @@ module arraylist =
     let try_find = (l: arraylist<'a>, pred: ('a) -> bool) ->
         let mut i = 0
         loop
-            if i >= l.len then break none('a)
+            if i >= l.len then break default('a?)
             if pred(l.data[i]) then break some(l.data[i])
             i = i + 1
 

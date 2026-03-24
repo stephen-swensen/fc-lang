@@ -11,7 +11,7 @@ let main = (args: str[]) ->
     let a = some(buf1)
     let b = some(buf2)
     let c = some(buf3)
-    let d = none(int32[])
+    let d = default(int32[]?)
     let mut r = 0
     if a == b then r = r + 1 else r = r
     if a != c then r = r + 2 else r = r

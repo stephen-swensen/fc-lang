@@ -2244,14 +2244,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
-    case EXPR_NONE: {
-        /* none(type) — resolve type stubs in the option's inner type */
-        e->type = resolve_type(ctx, e->none_expr.target);
-        if (e->type->kind == TYPE_OPTION)
-            e->type->option.inner = resolve_type(ctx, e->type->option.inner);
-        return e->type;
-    }
-
     case EXPR_LOOP: {
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         Scope *saved = ctx->scope;
@@ -3293,7 +3285,6 @@ static bool is_const_expr(Expr *e) {
     case EXPR_CSTRING_LIT:
     case EXPR_SIZEOF:
     case EXPR_DEFAULT:
-    case EXPR_NONE:
         return true;
     case EXPR_UNARY_PREFIX:
         return is_const_expr(e->unary_prefix.operand);

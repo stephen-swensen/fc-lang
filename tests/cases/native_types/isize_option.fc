@@ -1,8 +1,8 @@
 let main = (args: str[]) ->
     let a = some(42i)
     let b = some(10u)
-    let c = none(isize)
-    let d = none(usize)
+    let c = default(isize?)
+    let d = default(usize?)
     let r1 = match a with
     | some(v) -> (int32)v
     | none -> 0

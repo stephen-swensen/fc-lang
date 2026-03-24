@@ -10,7 +10,7 @@ struct tree =
     root: branch*
 
 let main = (args: str[]) ->
-    let mut c = branch { leaf = leaf { val = 3 }, next = none(branch*) }
+    let mut c = branch { leaf = leaf { val = 3 }, next = default(branch*?) }
     let mut b = branch { leaf = leaf { val = 2 }, next = some(&c) }
     let mut t = tree { name = leaf { val = 1 }, root = &b }
     let cp = (const tree*)&t

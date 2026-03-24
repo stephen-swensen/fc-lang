@@ -5,7 +5,7 @@ struct node =
 module node =
     let make = (value: 'a) ->
         let n = alloc(node { value = value })!
-        n->next = none(node<'a>*)
+        n->next = default(node<'a>*?)
         n
 
     let prepend = (head: node<'a>*?, value: 'a) ->
@@ -15,7 +15,7 @@ module node =
 
     let map = (head: node<'a>*?, f: ('a) -> 'b) ->
         match head with
-        | none      -> none(node<'b>*)
+        | none      -> default(node<'b>*?)
         | some(ptr) ->
             let n = node.make(f(ptr->value))
             n->next = node.map(ptr->next, f)
@@ -33,7 +33,7 @@ module node =
 
 let main = (args: str[]) ->
     // build list: 3 -> 2 -> 1
-    let n1 = node.prepend(none(node<int32>*), 1)
+    let n1 = node.prepend(default(node<int32>*?), 1)
     let n2 = node.prepend(some(n1), 2)
     let n3 = node.prepend(some(n2), 3)
     let list = some(n3)

@@ -6,6 +6,6 @@ let check = (x: int32??) ->
 
 let main = (args: str[]) ->
     let a = some(some(42))
-    let b = some(none(int32))
-    let c = none(int32?)
+    let b = some(default(int32?))
+    let c = default(int32??)
     check(a) + check(b) + check(c)

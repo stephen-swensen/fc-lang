@@ -17,6 +17,6 @@ let classify = (l: located) ->
 let main = (args: str[]) ->
     let p = point { x = 3, y = 7 }
     let l1 = located.at(some(p))
-    let l2 = located.at(none(point))
+    let l2 = located.at(default(point?))
     let l3 = located.nowhere
     classify(l1) + classify(l2) + classify(l3)

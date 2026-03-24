@@ -6,7 +6,7 @@ module geometry =
 
 let find_point = (flag: bool) ->
     if flag then some(geometry.point { x = 10, y = 20 })
-    else none(geometry.point)
+    else default(geometry.point?)
 
 let main = (args: str[]) ->
     match find_point(true) with

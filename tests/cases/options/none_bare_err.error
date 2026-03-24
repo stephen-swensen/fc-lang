@@ -1,1 +1,1 @@
-expected '(', got newline
+unexpected token 'none' in expression
