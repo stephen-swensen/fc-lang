@@ -1259,24 +1259,35 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_ARRAY_LIT: {
-        /* Stack array literal → C array + slice struct */
+        /* Stack array literal → alloca + slice struct.
+         * Uses __builtin_alloca for function-frame lifetime — the backing memory
+         * survives until the function returns, unlike a block-scope VLA which
+         * the optimizer can reclaim after the statement expression closes.
+         * Per spec, N is always a compile-time literal. */
         int tid = temp_counter++;
         fprintf(out, "({ ");
         emit_type(e->array_lit.elem_type, out);
-        fprintf(out, " _arr%d[", tid);
+        fprintf(out, " *_arr%d = (", tid);
+        emit_type(e->array_lit.elem_type, out);
+        fprintf(out, "*)__builtin_alloca((size_t)(");
         emit_expr(e->array_lit.size_expr, out);
-        fprintf(out, "]");
+        fprintf(out, ") * sizeof(");
+        emit_type(e->array_lit.elem_type, out);
+        fprintf(out, ")); ");
         if (e->array_lit.elem_count == 0) {
-            fprintf(out, " = {0}");
+            fprintf(out, "memset(_arr%d, 0, (size_t)(", tid);
+            emit_expr(e->array_lit.size_expr, out);
+            fprintf(out, ") * sizeof(");
+            emit_type(e->array_lit.elem_type, out);
+            fprintf(out, ")); ");
         } else {
-            fprintf(out, " = { ");
             for (int i = 0; i < e->array_lit.elem_count; i++) {
-                if (i > 0) fprintf(out, ", ");
+                fprintf(out, "_arr%d[%d] = ", tid, i);
                 emit_expr(e->array_lit.elems[i], out);
+                fprintf(out, "; ");
             }
-            fprintf(out, " }");
         }
-        fprintf(out, "; (");
+        fprintf(out, "(");
         emit_type(e->type, out);
         fprintf(out, "){ .ptr = _arr%d, .len = ", tid);
         emit_expr(e->array_lit.size_expr, out);

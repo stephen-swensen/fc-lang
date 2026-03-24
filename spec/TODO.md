@@ -35,15 +35,17 @@ The `alloc(slice)` deep-copy pattern mitigates this — `alloc(s)!` promotes any
 
 The lightweight compile-time escape checks are now implemented. See the Resolved section for details.
 
-### Stack array literal lifetime (bug)
+### Capturing lambda context lifetime (bug)
 
-Stack array literals compile to GCC statement expressions: `({ T _arr[N] = {...}; (slice){ .ptr = _arr, .len = N }; })`. The C array `_arr` is declared inside the block scope. With compiler optimizations, the stack slot can be reused after the statement expression ends, causing the slice's `ptr` to point at stale/reused memory.
+Capturing lambdas store their context in a compound literal: `&(_ctx_fn){ .captured_x = x }`. The compound literal has block scope in C11. This is safe when the lambda is used within the same function (the compound literal's scope covers the lambda's usage). However, FC allows returning capturing lambdas from functions, which creates a dangling context pointer — the compound literal's storage is reclaimed when the function returns.
 
-Observed: comparing two struct array slices with `==` returned incorrect results at default optimization but passed at `-O0`. The optimizer reuses the stack frame occupied by the first array for the second.
+GCC detects this at `-Werror -Wdangling-pointer` (C compilation fails), so it cannot produce a silently wrong binary. But FC should catch this at the FC level: extend escape analysis to track closure provenance and reject returning capturing lambdas.
 
-Affects any pattern that holds references to multiple stack array slices simultaneously (equality comparison, passing to functions that also create stack arrays). Simple reads (indexing, iteration) work because the array is accessed immediately.
+Note: non-capturing lambdas are not affected — their `.ctx` is `NULL`.
 
-**Fix**: hoist array declarations to function scope instead of emitting them inside statement expressions. The slice fat pointer construction can remain inline, but the backing array must live at function scope so its lifetime extends to the function return. This matches how `alloca`-based allocations (string interpolation, cstr casts) already work — they allocate in the function frame, not a block scope.
+### Stack array literal size must be compile-time literal (enforcement gap)
+
+Per spec, `N` in `T[N] { }` must be a compile-time integer literal. The compiler currently accepts runtime expressions (e.g., `int32[n] { }`) without error — the failure only surfaces at C compilation. Pass2 should validate that the size expression is a constant (literal or constant-foldable expression) and emit a clear FC error otherwise. Low priority since the failure mode is a C compilation error, not silent wrong behavior.
 
 ### Branch widening in if/match (future)
 
