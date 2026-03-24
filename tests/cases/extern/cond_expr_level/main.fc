@@ -1,10 +1,10 @@
 let main = (args: str[]) ->
     let mut r = 0
-#if target_hosted
+#if platform_a
     r = 20
 #end
     let mut s = 0
-#if target_embedded
+#if platform_b
     s = 99
 #else
     s = 22

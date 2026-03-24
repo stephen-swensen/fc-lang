@@ -1093,7 +1093,7 @@ static void emit_expr(Expr *e, FILE *out) {
             int tid = temp_counter++;
             fprintf(out, "({ fc_str _sc%d = ", tid);
             emit_expr(e->cast.operand, out);
-            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)alloca((size_t)(_sc%d.len + 1))", tid, tid);
+            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca((size_t)(_sc%d.len + 1))", tid, tid);
             fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, (size_t)_sc%d.len)", tid, tid, tid);
             fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
         /* cstr -> str: wrap pointer with strlen-computed length */
@@ -1843,7 +1843,7 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "; ");
 
         /* Allocate buffer with alloca (survives until function return) */
-        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)alloca((size_t)(_flen%d + 1)); ", tid, tid);
+        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)__builtin_alloca((size_t)(_flen%d + 1)); ", tid, tid);
 
         /* Build snprintf call */
         fprintf(out, "int _fw%d = snprintf((char*)_fbuf%d, (size_t)(_flen%d + 1), \"",
@@ -2045,7 +2045,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
     /* Emit C main wrapper that converts argc/argv to str[] */
     if (is_main) {
         fprintf(out, "int main(int argc, char **argv) {\n");
-        fprintf(out, "    fc_str *_args = (fc_str*)alloca((size_t)argc * sizeof(fc_str));\n");
+        fprintf(out, "    fc_str *_args = (fc_str*)__builtin_alloca((size_t)argc * sizeof(fc_str));\n");
         fprintf(out, "    for (int _i = 0; _i < argc; _i++) {\n");
         fprintf(out, "        _args[_i].ptr = (uint8_t*)argv[_i];\n");
         fprintf(out, "        _args[_i].len = (int64_t)strlen(argv[_i]);\n");
@@ -2835,6 +2835,212 @@ static void collect_from_libs(Decl *d, const char **seen, int *count, int cap) {
         collect_from_libs(d->module.decls[i], seen, count, cap);
 }
 
+/* ---- Define collection ---- */
+/* Tracks #define macros from module `define` annotations */
+typedef struct {
+    const char *macro;
+    const char *value;
+} CDefine;
+
+static void collect_defines(Decl *d, CDefine *defs, int *count, int cap) {
+    if (d->kind != DECL_MODULE) return;
+    if (d->module.define_macro) {
+        for (int i = 0; i < *count; i++) {
+            if (strcmp(defs[i].macro, d->module.define_macro) == 0) {
+                if (strcmp(defs[i].value, d->module.define_value) != 0) {
+                    diag_error(d->loc,
+                        "conflicting define for '%s': '%s' vs '%s'",
+                        d->module.define_macro, defs[i].value, d->module.define_value);
+                }
+                return;
+            }
+        }
+        if (*count < cap) {
+            defs[*count].macro = d->module.define_macro;
+            defs[*count].value = d->module.define_value;
+            (*count)++;
+        }
+    }
+    for (int i = 0; i < d->module.decl_count; i++)
+        collect_defines(d->module.decls[i], defs, count, cap);
+}
+
+/* ---- Feature detection ---- */
+/* Lightweight AST scan to determine which feature-gated headers are needed */
+static bool g_needs_stdio;
+static bool g_needs_math;
+static bool g_needs_float;
+
+static void detect_features_expr(Expr *e) {
+    if (!e) return;
+    if (g_needs_stdio && g_needs_math && g_needs_float) return; /* all found */
+
+    switch (e->kind) {
+    case EXPR_INTERP_STRING:
+        g_needs_stdio = true;
+        for (int i = 0; i < e->interp_string.segment_count; i++) {
+            if (e->interp_string.segments[i].expr)
+                detect_features_expr(e->interp_string.segments[i].expr);
+        }
+        return;
+
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        /* Direct float type properties resolved by pass2 */
+        if (e->field.codegen_name) {
+            const char *cn = e->field.codegen_name;
+            if (strstr(cn, "NAN") || strstr(cn, "INFINITY"))
+                g_needs_math = true;
+            if (strstr(cn, "FLT_") || strstr(cn, "DBL_"))
+                g_needs_float = true;
+        }
+        /* Type variable property access — conservatively check property name */
+        if (e->field.object && e->field.object->kind == EXPR_TYPE_VAR_REF) {
+            const char *prop = e->field.name;
+            if (strcmp(prop, "nan") == 0 || strcmp(prop, "inf") == 0 ||
+                strcmp(prop, "neg_inf") == 0)
+                g_needs_math = true;
+            if (strcmp(prop, "min") == 0 || strcmp(prop, "max") == 0 ||
+                strcmp(prop, "epsilon") == 0)
+                g_needs_float = true;
+        }
+        detect_features_expr(e->field.object);
+        return;
+
+    case EXPR_BINARY:
+        detect_features_expr(e->binary.left);
+        detect_features_expr(e->binary.right);
+        return;
+    case EXPR_UNARY_PREFIX:
+    case EXPR_UNARY_POSTFIX:
+        detect_features_expr(e->unary_prefix.operand);
+        return;
+    case EXPR_CALL:
+        detect_features_expr(e->call.func);
+        for (int i = 0; i < e->call.arg_count; i++)
+            detect_features_expr(e->call.args[i]);
+        return;
+    case EXPR_CAST:
+        detect_features_expr(e->cast.operand);
+        return;
+    case EXPR_IF:
+        detect_features_expr(e->if_expr.cond);
+        detect_features_expr(e->if_expr.then_body);
+        detect_features_expr(e->if_expr.else_body);
+        return;
+    case EXPR_MATCH:
+        detect_features_expr(e->match_expr.subject);
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                detect_features_expr(e->match_expr.arms[i].body[j]);
+        }
+        return;
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            detect_features_expr(e->block.stmts[i]);
+        return;
+    case EXPR_LET:
+        detect_features_expr(e->let_expr.let_init);
+        return;
+    case EXPR_LET_DESTRUCT:
+        detect_features_expr(e->let_destruct.init);
+        return;
+    case EXPR_ASSIGN:
+        detect_features_expr(e->assign.target);
+        detect_features_expr(e->assign.value);
+        return;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            detect_features_expr(e->loop_expr.body[i]);
+        return;
+    case EXPR_FOR:
+        detect_features_expr(e->for_expr.iter);
+        if (e->for_expr.range_end) detect_features_expr(e->for_expr.range_end);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            detect_features_expr(e->for_expr.body[i]);
+        return;
+    case EXPR_RETURN:
+        detect_features_expr(e->return_expr.value);
+        return;
+    case EXPR_BREAK:
+        detect_features_expr(e->break_expr.value);
+        return;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.body_count; i++)
+            detect_features_expr(e->func.body[i]);
+        return;
+    case EXPR_SOME:
+        detect_features_expr(e->some_expr.value);
+        return;
+    case EXPR_ALLOC:
+        detect_features_expr(e->alloc_expr.init_expr);
+        detect_features_expr(e->alloc_expr.size_expr);
+        return;
+    case EXPR_FREE:
+        detect_features_expr(e->free_expr.operand);
+        return;
+    case EXPR_INDEX:
+        detect_features_expr(e->index.object);
+        detect_features_expr(e->index.index);
+        return;
+    case EXPR_SLICE:
+        detect_features_expr(e->slice.object);
+        detect_features_expr(e->slice.lo);
+        detect_features_expr(e->slice.hi);
+        return;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            detect_features_expr(e->struct_lit.fields[i].value);
+        return;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            detect_features_expr(e->array_lit.elems[i]);
+        return;
+    case EXPR_IDENT:
+        /* Built-in globals stdin/stdout/stderr require stdio.h */
+        if (e->ident.name &&
+            (strcmp(e->ident.name, "stdin") == 0 ||
+             strcmp(e->ident.name, "stdout") == 0 ||
+             strcmp(e->ident.name, "stderr") == 0))
+            g_needs_stdio = true;
+        return;
+    case EXPR_SIZEOF:
+    case EXPR_DEFAULT:
+    case EXPR_INT_LIT:
+    case EXPR_FLOAT_LIT:
+    case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT:
+    case EXPR_CSTRING_LIT:
+    case EXPR_NONE:
+    case EXPR_CONTINUE:
+    case EXPR_TYPE_VAR_REF:
+        return;
+    }
+}
+
+static void detect_features_decl(Decl *d) {
+    if (!d) return;
+    switch (d->kind) {
+    case DECL_LET: {
+        Expr *fn = d->let.init;
+        if (fn && fn->kind == EXPR_FUNC) {
+            for (int i = 0; i < fn->func.body_count; i++)
+                detect_features_expr(fn->func.body[i]);
+        } else if (fn) {
+            detect_features_expr(fn);
+        }
+        break;
+    }
+    case DECL_MODULE:
+        for (int i = 0; i < d->module.decl_count; i++)
+            detect_features_decl(d->module.decls[i]);
+        break;
+    default:
+        break;
+    }
+}
+
 
 static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) {
     Decl **all = NULL;
@@ -2851,43 +3057,61 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_intern = intern_tbl;
     g_symtab = symtab;
 
-    /* Collect from_libs early so we can gate _POSIX_C_SOURCE */
+    /* Collect from_libs and defines from extern module declarations */
     const char *from_libs[64];
     int from_lib_count = 0;
-    for (int i = 0; i < prog->decl_count; i++)
+    CDefine defines[64];
+    int define_count = 0;
+    for (int i = 0; i < prog->decl_count; i++) {
         collect_from_libs(prog->decls[i], from_libs, &from_lib_count, 64);
+        collect_defines(prog->decls[i], defines, &define_count, 64);
+    }
 
-    bool needs_posix = false;
-    for (int i = 0; i < from_lib_count; i++)
-        if (strcmp(from_libs[i], "time.h") == 0) { needs_posix = true; break; }
+    /* Flatten module decls into a single array (needed for feature detection) */
+    Decl **all_decls;
+    int all_count;
+    collect_all_decls(prog, &all_decls, &all_count);
 
-    /* Preamble — compiler-required headers */
-    if (needs_posix)
-        fprintf(out, "#define _POSIX_C_SOURCE 200809L\n");
+    /* Detect which feature-gated headers are needed */
+    g_needs_stdio = false;
+    g_needs_math = false;
+    g_needs_float = false;
+    for (int i = 0; i < all_count; i++)
+        detect_features_decl(all_decls[i]);
+    /* Also scan monomorphized template bodies */
+    for (int mi = 0; mi < mono->count; mi++) {
+        if (mono->entries[mi].decl_kind == DECL_LET && mono->entries[mi].template_decl)
+            detect_features_decl(mono->entries[mi].template_decl);
+    }
+
+    /* Preamble — emit defines before all includes */
+    for (int i = 0; i < define_count; i++)
+        fprintf(out, "#define %s %s\n", defines[i].macro, defines[i].value);
+
+    /* Core headers — always emitted (FC's platform contract) */
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stddef.h>\n");
     fprintf(out, "#include <stdbool.h>\n");
-    fprintf(out, "#include <inttypes.h>\n");
     fprintf(out, "#include <stdlib.h>\n");
     fprintf(out, "#include <string.h>\n");
-    fprintf(out, "#include <stdio.h>\n");
-    fprintf(out, "#include <alloca.h>\n");
-    fprintf(out, "#include <math.h>\n");
-    fprintf(out, "#include <float.h>\n");
+
+    /* Feature-gated headers — emitted only when needed */
+    if (g_needs_stdio) fprintf(out, "#include <stdio.h>\n");
+    if (g_needs_math)  fprintf(out, "#include <math.h>\n");
+    if (g_needs_float) fprintf(out, "#include <float.h>\n");
 
     /* Emit #include for each unique from_lib in extern modules */
     for (int i = 0; i < from_lib_count; i++) {
-        /* Skip headers already in the preamble */
+        /* Skip headers already emitted in core or feature-gated preamble */
         if (strcmp(from_libs[i], "stdint.h") == 0 ||
+            strcmp(from_libs[i], "stddef.h") == 0 ||
             strcmp(from_libs[i], "stdbool.h") == 0 ||
-            strcmp(from_libs[i], "inttypes.h") == 0 ||
             strcmp(from_libs[i], "stdlib.h") == 0 ||
-            strcmp(from_libs[i], "string.h") == 0 ||
-            strcmp(from_libs[i], "stdio.h") == 0 ||
-            strcmp(from_libs[i], "alloca.h") == 0 ||
-            strcmp(from_libs[i], "math.h") == 0 ||
-            strcmp(from_libs[i], "float.h") == 0)
+            strcmp(from_libs[i], "string.h") == 0)
             continue;
+        if (g_needs_stdio && strcmp(from_libs[i], "stdio.h") == 0) continue;
+        if (g_needs_math  && strcmp(from_libs[i], "math.h") == 0) continue;
+        if (g_needs_float && strcmp(from_libs[i], "float.h") == 0) continue;
         fprintf(out, "#include <%s>\n", from_libs[i]);
     }
     fprintf(out, "\n");
@@ -2895,11 +3119,6 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     /* Always emit fc_str and fc_str32 (aliases for uint8/uint32 slices) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
     fprintf(out, "typedef struct { uint32_t* ptr; int64_t len; } fc_str32;\n");
-
-    /* Flatten module decls into a single array */
-    Decl **all_decls;
-    int all_count;
-    collect_all_decls(prog, &all_decls, &all_count);
 
     /* Collect all slice, option, function, and eq types used in the program */
     TypeSet slices = {0};

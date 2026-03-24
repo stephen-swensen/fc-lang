@@ -329,7 +329,7 @@ variant_decl     = "|" , IDENT , [ "(" , type_expr , ")" ] ;
 (* extern declarations. A module without "from" may not contain       *)
 (* extern declarations.                                               *)
 
-module_decl      = [ "private" ] , "module" , IDENT , [ "from" , STR_LIT ] , "="
+module_decl      = [ "private" ] , "module" , IDENT , [ "from" , STR_LIT , [ "define" , STR_LIT , STR_LIT ] ] , "="
                  , INDENT , module_body , DEDENT ;
 
 module_body      = { module_item , NEWLINE } ;

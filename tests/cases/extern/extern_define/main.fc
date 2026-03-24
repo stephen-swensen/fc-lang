@@ -1,0 +1,12 @@
+// Test: define annotation on extern module emits #define before #include
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern clock_gettime: (int32, any*) -> int32
+
+struct ts =
+    tv_sec: int64
+    tv_nsec: int64
+
+let main = (args: str[]) ->
+    let mut buf = default(ts)
+    let rc = t.clock_gettime(0, &buf)
+    if rc == 0 then 42 else 1

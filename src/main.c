@@ -55,9 +55,6 @@ int main(int argc, char **argv) {
     const char **flags = NULL;
     int flag_count = 0, flag_cap = 0;
 
-    /* Built-in default flag */
-    DA_APPEND(flags, flag_count, flag_cap, "target_hosted");
-
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_path = argv[++i];

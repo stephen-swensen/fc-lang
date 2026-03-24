@@ -1,0 +1,15 @@
+// Test: two modules with same define macro+value are silently deduplicated
+module t1 from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern clock_gettime: (int32, any*) -> int32
+
+module t2 from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern nanosleep: (any*, any*?) -> int32
+
+struct ts =
+    tv_sec: int64
+    tv_nsec: int64
+
+let main = (args: str[]) ->
+    let mut buf = default(ts)
+    let rc = t1.clock_gettime(0, &buf)
+    if rc == 0 then 42 else 1

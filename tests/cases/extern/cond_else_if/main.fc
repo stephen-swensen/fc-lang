@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
-#if target_embedded
+#if platform_b
     1
-#else if target_hosted
+#else if platform_a
     42
 #else
     99

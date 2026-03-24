@@ -1,4 +1,4 @@
 let main = (args: str[]) ->
-    #if target_hosted
+    #if some_flag
     42
     #end

@@ -448,9 +448,15 @@ The one nuance is mutually recursive top-level functions: since the first compil
 
 ### Why C as a target
 
-Targeting C is a deliberate strength of the design, not a limitation. Every platform that matters already has a C compiler — GCC, Clang, avr-gcc for Arduino, xtensa-gcc for ESP32, arm-none-eabi-gcc for bare metal ARM. By targeting C, FC inherits all of these backends for free, including niche embedded toolchains that have no LLVM backend. The generated C is also human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
+Targeting C is a deliberate strength of the design, not a limitation. Every platform that matters already has a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets. By targeting C, FC inherits all of these backends for free, including niche embedded toolchains that have no LLVM backend. The generated C is also human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
 
 FC targets **C11** specifically. C11 adoption is broad including most embedded toolchains. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output) and `_Static_assert` (compiler-generated sanity checks in emitted code). FC avoids C11 features with known gaps in embedded compiler support.
+
+### Platform contract
+
+FC targets **C11 hosted implementations with heap allocation** — specifically, GCC or Clang with a libc that provides `malloc`, `free`, `abort`, `memcmp`, `strlen`, `snprintf`, and `__builtin_alloca`. This covers desktop, server, mobile (iOS, Android NDK), and "rich" embedded platforms (Raspberry Pi, ESP32 with ESP-IDF, Arduino with avr-libc, ARM Cortex-M with newlib/picolibc).
+
+**Not supported:** C11 freestanding (no libc), static-memory-only bare metal, or custom allocator-only environments. FC's core language features — heap allocation (`alloc`/`free`), string interpolation, bounds-check traps (`abort`) — depend on a hosted-like environment. Platforms without these facilities are better served by C directly.
 
 ---
 
@@ -2150,7 +2156,7 @@ let buf = alloc(uint8[128])!.ptr    // uint8* — 128 bytes allocated, slice hea
 
 The underlying heap allocation is identical — `calloc(128, sizeof(uint8))`. The fat pointer is constructed momentarily on the stack and then discarded; there is no heap overhead. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C.
 
-On bare-metal targets where `alloc` is unavailable, take the pointer from a stack slice:
+Alternatively, take the pointer from a stack slice:
 
 ```fc
 let mut arr = uint8[128] { }
@@ -2412,7 +2418,7 @@ let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
 
 `alloc(variable)` works for any binding — the compiler resolves the parser ambiguity between type names and variable names. If the name refers to a variable in scope, it is treated as `alloc(expr)`, not `alloc(T)`.
 
-`alloc` and `free` require a hosted environment or an embedded target with a heap allocator. They are unavailable on bare-metal targets and are a compile error if used there. See §Build Targets.
+`alloc` and `free` require a hosted C environment with heap allocation (FC's platform contract — see §Platform contract).
 
 ### Initialized alloc
 
@@ -2871,21 +2877,12 @@ Directives always appear at **column 1** (the first column), regardless of the s
 
 ### Flags
 
-Flags are simple names — either set or not set. There are no valued flags. Two categories:
-
-**Built-in target flags** — automatically set by the compiler based on the build target:
-
-| Flag | Set when |
-|------|----------|
-| `target_hosted` | Building for hosted target (default; currently the only supported target) |
-| `target_embedded` | Building for embedded target with allocator (planned) |
-| `target_bare_metal` | Building for bare-metal target (planned) |
-
-**User-defined flags** — passed on the command line:
+Flags are simple names — either set or not set. There are no valued flags, and there are no built-in flags. All flags are user-defined, passed on the command line:
 
 ```
 fc --flag debug main.fc
 fc --flag feature_x --flag debug main.fc
+fc --flag posix main.fc stdlib/io.fc stdlib/sys.fc
 ```
 
 ### Usage
@@ -2895,8 +2892,8 @@ fc --flag feature_x --flag debug main.fc
 Top-level usage — conditionally including declarations, imports, and definitions:
 
 ```fc
-#if target_hosted
-import libc
+#if posix
+import sys from std::
 #end
 
 #if debug
@@ -2919,10 +2916,10 @@ let process = (data: uint8[]) ->
 Chaining with `#else if`:
 
 ```fc
-#if target_hosted
-let platform = "hosted"
-#else if debug
-let platform = "debug-build"
+#if linux
+let platform = "linux"
+#else if macos
+let platform = "macos"
 #else
 let platform = "unknown"
 #end
@@ -2938,33 +2935,31 @@ let platform = "unknown"
 
 ---
 
-## Build Targets
+## Generated C Headers
 
-FC is designed to support multiple deployment targets beyond standard hosted environments. The build target determines what runtime facilities are available to the program, and automatically sets the corresponding built-in conditional compilation flag (see §Conditional Compilation).
+The compiler emits a small set of C headers in the generated output. These are organized into three tiers:
 
-> **Implementation status**: only the hosted target is currently implemented. Embedded and bare-metal targets are designed but not yet supported by the compiler — see §TODO.
+**Core headers** — always emitted. These are FC's platform contract — every FC program requires them:
 
-**Hosted** (default) — the standard target for desktop, server, and general-purpose programs. Full libc is available. `alloc` and `free` work automatically. `import libc` exposes the full C standard library. `alloc` uses `calloc`, guaranteeing zero-initialized heap memory. Sets the `target_hosted` flag.
+| Header | Provides |
+|--------|----------|
+| `<stdint.h>` | Fixed-width integer types (`int8_t`, `uint64_t`, etc.) |
+| `<stddef.h>` | `ptrdiff_t`, `size_t`, `NULL` |
+| `<stdbool.h>` | `bool` |
+| `<stdlib.h>` | `malloc`, `free`, `abort` |
+| `<string.h>` | `memcmp`, `strlen` |
 
-```
-fc src/
-fc src/*.fc vendor/acme/*.fc
-```
+**Feature-gated headers** — emitted only when the program uses the corresponding feature:
 
-**Embedded with allocator** — targets like Arduino Uno and ESP32 where `malloc` and `free` are available but the rest of libc is absent or limited. `alloc` and `free` still work. `import libc` only exposes functions available on the target — the compiler warns if unavailable functions are used. Where `calloc` is available, `alloc` uses it directly. Where it is not, the compiler emits `malloc` + `memset` to achieve the same zero-initialization guarantee. On these targets heap allocations are typically small and infrequent, so the `memset` overhead is negligible. Sets the `target_embedded` flag.
+| Header | Triggered by |
+|--------|-------------|
+| `<stdio.h>` | String interpolation (`"\{expr}"`), or `stdin`/`stdout`/`stderr` globals |
+| `<math.h>` | Float type properties using `NAN`/`INFINITY` (`.nan`, `.inf`, `.neg_inf`) |
+| `<float.h>` | Float type properties using `FLT_*`/`DBL_*` (`.min`, `.max`, `.epsilon`) |
 
-```
-fc --target arduino-uno src/*.fc
-fc --target esp32 src/*.fc
-```
+**Extern-driven headers** — emitted from `module ... from "header.h"` declarations in user code or the standard library. See §C Interop.
 
-**Bare metal / no allocator** — targets like ATtiny or custom hardware where no heap allocator is available and memory is severely constrained. `alloc` and `free` are unavailable — using them is a compile error. Programs must be entirely stack-based. Stack allocation is always zero-initialized via C declaration syntax, which works identically on all targets and requires no runtime support. This is analogous to Rust's `no_std` mode. Sets the `target_bare_metal` flag.
-
-```
-fc --target bare-metal src/*.fc
-```
-
-Target definitions specify the available libc subset, pointer width, endianness, and other platform characteristics. The compiler uses this to enforce correct usage at compile time rather than producing code that fails silently at runtime.
+A pure-integer program with no string interpolation and no floats gets a 5-header preamble. Stack-dynamic allocation uses `__builtin_alloca` (a GCC/Clang intrinsic), avoiding any `<alloca.h>` dependency.
 
 # PART 8 — C Interop
 
@@ -3000,6 +2995,26 @@ module c_string from "string.h" =
 
 > **Note on the examples above**
 > Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `usize` parameters for `malloc`, `memcpy`, and `strlen` map directly to C's `size_t` — the generated C uses `size_t` at the call boundary, matching the real C prototypes exactly on every target. Using `int64` here also works (the C compiler narrows it via the real header prototypes) but `usize` is more precise and avoids unnecessary 64-bit arithmetic on smaller targets.
+
+### Feature-test macro defines
+
+Some C headers require feature-test macros (e.g., `_POSIX_C_SOURCE`, `_GNU_SOURCE`) to be `#define`d before the header is included. The `define` clause on a `from` module declaration places this requirement alongside the extern declarations that need it:
+
+```fc
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern clock_gettime: (int32, any*) -> int32
+    extern nanosleep:     (any*, any*?) -> int32
+```
+
+The compiler emits `#define _POSIX_C_SOURCE 200809L` before all `#include` lines in the generated C output. This follows the POSIX requirement that feature-test macros must precede any header inclusion.
+
+**Rules:**
+- If multiple modules define the same macro with the same value, the define is emitted once (silent deduplication).
+- If multiple modules define the same macro with **different** values, the compiler reports an error.
+- The `define` clause is only valid on modules with a `from` clause.
+- The macro name and value are both string literals.
+
+This keeps the header's requirements co-located with the declaration that needs them — passing a file that uses POSIX time functions to the compiler brings everything it needs, with no extra build flags required.
 
 ### Reserved identifiers and `extern as`
 
@@ -4018,7 +4033,6 @@ FC has minimal runtime needs — no garbage collector, no scheduler, no standard
 
 - `abort()`-based trap functions for bounds check, unwrap, and division-by-zero failures
 - Generated equality functions for structs and unions where `==` is used
-- Platform-specific trap instructions for bare-metal targets
 
 ### Test infrastructure
 

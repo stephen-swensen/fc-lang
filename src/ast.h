@@ -366,6 +366,8 @@ struct Decl {
             const char *name;
             const char *ns_prefix;  /* namespace prefix (mangled, e.g. "acme_graphics"), NULL = global */
             const char *from_lib;   /* NULL unless module X from "lib" */
+            const char *define_macro; /* NULL unless define "MACRO" "VALUE" */
+            const char *define_value; /* NULL unless define present */
             Decl **decls;
             int decl_count;
         } module;

@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let mut r = 7
-#if target_embedded
+#if platform_b
     r = 99
 #end
     r

@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-#if target_embedded
+#if platform_b
     1
 #else
     42

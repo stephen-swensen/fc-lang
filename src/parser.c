@@ -1748,6 +1748,19 @@ static Decl *parse_module_decl(Parser *p) {
         from_lib = intern(p->intern, lib_tok->start + 1, lib_tok->length - 2);
     }
 
+    /* Optional define "MACRO" "VALUE" clause (only valid with from) */
+    const char *define_macro = NULL;
+    const char *define_value = NULL;
+    if (from_lib && check(p, TOK_IDENT) &&
+        current(p)->length == 6 &&
+        memcmp(current(p)->start, "define", 6) == 0) {
+        advance_p(p);
+        Token *macro_tok = expect(p, TOK_STRING_LIT);
+        define_macro = intern(p->intern, macro_tok->start + 1, macro_tok->length - 2);
+        Token *value_tok = expect(p, TOK_STRING_LIT);
+        define_value = intern(p->intern, value_tok->start + 1, value_tok->length - 2);
+    }
+
     expect(p, TOK_EQ);
 
     /* Parse body: INDENT { decl } DEDENT */
@@ -1776,6 +1789,8 @@ static Decl *parse_module_decl(Parser *p) {
     d->module.name = name;
     d->module.ns_prefix = NULL;
     d->module.from_lib = from_lib;
+    d->module.define_macro = define_macro;
+    d->module.define_value = define_value;
     d->module.decl_count = count;
     if (count > 0) {
         d->module.decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
