@@ -1,0 +1,12 @@
+// Test: module-qualified struct type in cast target (pointer cast)
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let mut p = geometry.point { x = 7, y = 8 }
+    let ptr = &p
+    let void_ptr = (any*)ptr
+    let back = (geometry.point*)void_ptr
+    back->x + back->y

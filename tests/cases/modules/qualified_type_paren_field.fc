@@ -1,0 +1,9 @@
+// Test: parenthesized field access is not misparsed as a cast
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let mut p = point { x = 3, y = 4 }
+    let r = (p.x) + (p.y)
+    r

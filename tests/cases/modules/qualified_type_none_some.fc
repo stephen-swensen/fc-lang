@@ -1,0 +1,12 @@
+// Test: none(m.type) and some(m.type { ... }) with qualified types
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let a = none(m.point)
+    let b = some(m.point { x = 1, y = 2 })
+    match b with
+    | some(p) -> p.x + p.y
+    | none -> 99

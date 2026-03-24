@@ -1,0 +1,15 @@
+// Test: module-qualified type access across files
+// geometry module is defined in lib.fc, compiled together
+
+let main = (args: str[]) ->
+    // Qualified struct literal from another file
+    let p = geometry.point { x = 10, y = 20 }
+    // Qualified function call from another file
+    let d = geometry.manhattan(p)
+    // Qualified type in default and sizeof
+    let mut p2 = default(geometry.point)
+    let s = sizeof(geometry.point)
+    if d == 30 then
+        if s == 8 then 0
+        else 2
+    else 1

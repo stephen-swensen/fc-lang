@@ -1,0 +1,28 @@
+// Test: module-qualified type names in all type contexts
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern clock_gettime: (int32, timespec*) -> int32
+    extern struct timespec =
+        tv_sec: int64
+        tv_nsec: int64
+
+let main = (args: str[]) ->
+    // Module-qualified struct literal
+    let ts = t.timespec { tv_sec = 42, tv_nsec = 100 }
+
+    // Module-qualified default + typed pointer to extern function
+    let mut ts2 = default(t.timespec)
+    let rc = t.clock_gettime(0, &ts2)
+
+    // Module-qualified sizeof
+    let s = sizeof(t.timespec)
+
+    if ts.tv_sec == 42 then
+        if ts.tv_nsec == 100 then
+            if s == 16 then
+                if rc == 0 then
+                    if ts2.tv_sec > 0 then 0
+                    else 5
+                else 4
+            else 3
+        else 2
+    else 1

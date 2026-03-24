@@ -1,16 +1,15 @@
 namespace std::
 
 module sys =
-    private struct timespec =
-        tv_sec: int64
-        tv_nsec: int64
-
     private module c from "stdlib.h" =
         extern getenv: (const cstr) -> const cstr?
         extern exit: (int32) -> void
     private module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
-        extern clock_gettime: (int32, any*) -> int32
-        extern nanosleep: (any*, any*?) -> int32
+        extern clock_gettime: (int32, timespec*) -> int32
+        extern nanosleep: (timespec*, timespec*?) -> int32
+        extern struct timespec =
+            tv_sec: int64
+            tv_nsec: int64
 
     // env: looks up an environment variable by name.
     // name: const str — variable name; const because env only reads it.
@@ -30,7 +29,7 @@ module sys =
     // time: returns the current wall-clock time as milliseconds since the Unix epoch.
     // returns: int64 — milliseconds since 1970-01-01 00:00:00 UTC.
     let time = () ->
-        let mut ts = default(timespec)
+        let mut ts = default(t.timespec)
         t.clock_gettime(0, &ts)
         ts.tv_sec * 1000 + ts.tv_nsec / 1000000
 
@@ -38,6 +37,6 @@ module sys =
     // ms: int64 — duration to sleep in milliseconds.
     // returns: void.
     let sleep = (ms: int64) ->
-        let mut req = timespec { tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-        t.nanosleep(&req, none(any*))
+        let mut req = t.timespec { tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
+        t.nanosleep(&req, none(t.timespec*))
         return

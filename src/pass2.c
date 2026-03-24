@@ -135,6 +135,38 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
     return last;
 }
 
+/* Look up a dotted name (e.g., "module.type" or "a.b.type") by walking the module chain.
+ * Returns the symbol for the final member, or NULL if any segment is not found. */
+static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
+    const char *dot = strchr(dotted_name, '.');
+    if (!dot) return NULL;
+
+    const char *path = dotted_name;
+    Symbol *mod_sym = NULL;
+    while (dot) {
+        int seg_len = (int)(dot - path);
+        const char *seg_name = intern(ctx->intern, path, seg_len);
+        if (!mod_sym) {
+            if (ctx->module_symtab)
+                mod_sym = symtab_lookup_kind(ctx->module_symtab, seg_name, DECL_MODULE);
+            if (!mod_sym)
+                mod_sym = symtab_lookup_kind(ctx->symtab, seg_name, DECL_MODULE);
+        } else {
+            mod_sym = mod_sym->members ?
+                symtab_lookup_kind(mod_sym->members, seg_name, DECL_MODULE) : NULL;
+        }
+        if (!mod_sym) return NULL;
+        path = dot + 1;
+        dot = strchr(path, '.');
+    }
+    if (!mod_sym || !mod_sym->members) return NULL;
+    const char *member_name = intern_cstr(ctx->intern, path);
+    Symbol *sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_STRUCT);
+    if (!sym) sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_UNION);
+    if (!sym) sym = symtab_lookup(mod_sym->members, member_name);
+    return sym;
+}
+
 /* Resolve a named type stub (TYPE_STRUCT with no fields) to the actual type from symtab */
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
@@ -185,7 +217,12 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         /* Look up as struct/union first, then fall back to general lookup.
          * This handles the case where a module shares the same name as a type. */
         Symbol *sym = NULL;
-        if (ctx->module_symtab) {
+
+        /* Check for module-qualified name: "module.type", "a.b.type", etc. */
+        if (strchr(t->struc.name, '.'))
+            sym = resolve_dotted_name(ctx, t->struc.name);
+
+        if (!sym && ctx->module_symtab) {
             sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_STRUCT);
             if (!sym)
                 sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_UNION);
@@ -1677,7 +1714,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_CAST: {
         Type *from = check_expr(ctx, e->cast.operand);
         if (type_is_error(from)) { e->type = type_error(); return e->type; }
-        Type *to = e->cast.target;
+        Type *to = resolve_type(ctx, e->cast.target);
+        e->cast.target = to;
         bool from_num = type_is_numeric(from);
         bool to_num = type_is_numeric(to);
         bool from_ptr = (from->kind == TYPE_POINTER || from->kind == TYPE_ANY_PTR);
@@ -1713,7 +1751,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_STRUCT_LIT: {
         /* Look up the struct type */
         Symbol *sym = NULL;
-        if (ctx->module_symtab)
+
+        /* Check for module-qualified name: "module.type", "a.b.type", etc. */
+        if (strchr(e->struct_lit.type_name, '.'))
+            sym = resolve_dotted_name(ctx, e->struct_lit.type_name);
+
+        if (!sym && ctx->module_symtab)
             sym = symtab_lookup_kind(ctx->module_symtab, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
             sym = symtab_lookup_kind(ctx->symtab, e->struct_lit.type_name, DECL_STRUCT);

@@ -1,0 +1,10 @@
+namespace vendor::
+
+module shapes =
+    struct rect =
+        x: int32
+        y: int32
+        w: int32
+        h: int32
+
+    let area = (r: rect) -> r.w * r.h

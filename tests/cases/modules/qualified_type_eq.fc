@@ -1,0 +1,14 @@
+// Test: equality on module-qualified struct type
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let a = geometry.point { x = 1, y = 2 }
+    let b = geometry.point { x = 1, y = 2 }
+    let c = geometry.point { x = 1, y = 3 }
+    if a == b then
+        if a != c then 0
+        else 2
+    else 1

@@ -1,0 +1,20 @@
+// Test: deeply nested module-qualified struct type (three levels)
+module a =
+    module b =
+        module c =
+            struct triple =
+                x: int32
+                y: int32
+                z: int32
+
+let main = (args: str[]) ->
+    let t = a.b.c.triple { x = 1, y = 2, z = 3 }
+    let s = sizeof(a.b.c.triple)
+    let mut t2 = default(a.b.c.triple)
+    t2.z = 99
+    if t.x + t.y + t.z == 6 then
+        if s == 12 then
+            if t2.z == 99 then 0
+            else 3
+        else 2
+    else 1

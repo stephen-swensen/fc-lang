@@ -1,0 +1,14 @@
+// Test: nested module function call + qualified struct type together
+module geo =
+    module shapes =
+        struct rect =
+            x: int32
+            y: int32
+            w: int32
+            h: int32
+
+        let area = (r: rect) -> r.w * r.h
+
+let main = (args: str[]) ->
+    let r = geo.shapes.rect { x = 0, y = 0, w = 10, h = 5 }
+    geo.shapes.area(r)

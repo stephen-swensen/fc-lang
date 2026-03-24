@@ -1,0 +1,19 @@
+// Test: module-qualified struct type in option type
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let find_point = (flag: bool) ->
+    if flag then some(geometry.point { x = 10, y = 20 })
+    else none(geometry.point)
+
+let main = (args: str[]) ->
+    match find_point(true) with
+    | some(p) ->
+        if p.x == 10 then
+            match find_point(false) with
+            | some(_) -> 2
+            | none -> 0
+        else 1
+    | none -> 3

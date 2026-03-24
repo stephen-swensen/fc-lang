@@ -1,0 +1,16 @@
+// Test: module-qualified struct type as pointer type
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let set_x = (p: geometry.point*, val: int32) ->
+    p->x = val
+
+let main = (args: str[]) ->
+    let mut p = geometry.point { x = 0, y = 5 }
+    set_x(&p, 42)
+    if p.x == 42 then
+        if p.y == 5 then 0
+        else 2
+    else 1

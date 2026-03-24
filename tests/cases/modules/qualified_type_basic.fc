@@ -1,0 +1,20 @@
+// Test: module-qualified struct type in all type contexts
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    // Qualified struct literal
+    let p = geometry.point { x = 10, y = 20 }
+    // Qualified default
+    let mut p2 = default(geometry.point)
+    p2.x = 5
+    // Qualified sizeof
+    let s = sizeof(geometry.point)
+    if p.x + p.y == 30 then
+        if p2.x == 5 then
+            if s == 8 then 0
+            else 3
+        else 2
+    else 1

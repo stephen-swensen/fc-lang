@@ -1,0 +1,20 @@
+// Test: module-qualified type access across namespaces
+// shapes module is in vendor:: namespace, defined in lib.fc
+import shapes from vendor::
+
+let main = (args: str[]) ->
+    // Qualified struct literal via imported module
+    let r = shapes.rect { x = 0, y = 0, w = 10, h = 5 }
+    // Qualified function call
+    let a = shapes.area(r)
+    // Qualified type in function param
+    let s = sizeof(shapes.rect)
+    let mut r2 = default(shapes.rect)
+    r2.w = 3
+    r2.h = 7
+    if a == 50 then
+        if s == 16 then
+            if shapes.area(r2) == 21 then 0
+            else 3
+        else 2
+    else 1

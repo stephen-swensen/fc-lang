@@ -1,0 +1,25 @@
+// Test: module-qualified struct type in function parameter and return
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let make = (x: int32, y: int32) ->
+    geometry.point { x = x, y = y }
+
+let manhattan = (p: geometry.point) ->
+    p.x + p.y
+
+let scale = (p: geometry.point, factor: int32) ->
+    geometry.point { x = p.x * factor, y = p.y * factor }
+
+let main = (args: str[]) ->
+    let p = make(3, 4)
+    let d = manhattan(p)
+    let p2 = scale(p, 10)
+    if d == 7 then
+        if p2.x == 30 then
+            if p2.y == 40 then 0
+            else 3
+        else 2
+    else 1

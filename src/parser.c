@@ -258,11 +258,21 @@ static Type *parse_type(Parser *p) {
             }
             return parse_type_suffix(p, base);
         }
-        /* User-defined type name (struct/union) — create a stub with just the name */
+        /* User-defined type name (struct/union) — create a stub with just the name.
+         * Support module-qualified names: module.type, module.sub.type, etc. */
         advance_p(p);
+        const char *type_name = tok_intern(p, t);
+        while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
+            advance_p(p); /* consume . */
+            Token *member = current(p);
+            advance_p(p); /* consume member name */
+            char buf[512];
+            snprintf(buf, sizeof(buf), "%s.%.*s", type_name, member->length, member->start);
+            type_name = intern(p->intern, buf, (int)strlen(buf));
+        }
         Type *udt = arena_alloc(p->arena, sizeof(Type));
         udt->kind = TYPE_STRUCT;  /* will be resolved to correct kind in pass2 */
-        udt->struc.name = tok_intern(p, t);
+        udt->struc.name = type_name;
         udt->struc.fields = NULL;
         udt->struc.field_count = 0;
         udt->struc.type_args = NULL;
@@ -889,6 +899,39 @@ static Expr *parse_prefix(Parser *p) {
                 return parse_struct_literal(p, name, loc);
             }
         }
+        /* Check for module-qualified struct literal: mod.name { ... }, mod.sub.name { ... }
+         * Scan ahead past (. IDENT)* to find a { that looks like a struct literal */
+        if (peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT) {
+            int ahead = 1; /* start after first IDENT */
+            while (peek_at(p, ahead)->kind == TOK_DOT &&
+                   peek_at(p, ahead + 1)->kind == TOK_IDENT) {
+                ahead += 2; /* skip . IDENT */
+            }
+            /* Now peek_at(p, ahead) should be { if this is a struct literal */
+            if (peek_at(p, ahead)->kind == TOK_LBRACE) {
+                Token *after_brace = peek_at(p, ahead + 1);
+                bool is_struct_lit = false;
+                if (after_brace->kind == TOK_RBRACE) is_struct_lit = true;
+                if (after_brace->kind == TOK_IDENT && peek_at(p, ahead + 2)->kind == TOK_EQ)
+                    is_struct_lit = true;
+                if (is_struct_lit) {
+                    /* Build dotted name by consuming IDENT (. IDENT)* */
+                    char buf[512];
+                    int pos = snprintf(buf, sizeof(buf), "%s", name);
+                    advance_p(p); /* consume first IDENT */
+                    while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
+                        advance_p(p); /* consume . */
+                        Token *seg = current(p);
+                        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ".%.*s",
+                                        seg->length, seg->start);
+                        advance_p(p); /* consume IDENT */
+                    }
+                    advance_p(p); /* consume { */
+                    const char *dotted_name = intern(p->intern, buf, (int)strlen(buf));
+                    return parse_struct_literal(p, dotted_name, loc);
+                }
+            }
+        }
         advance_p(p);
         Expr *e = alloc_expr(p, EXPR_IDENT, loc);
         e->ident.name = name;
@@ -907,11 +950,31 @@ static Expr *parse_prefix(Parser *p) {
         }
         /* (Type)expr : cast — check if next token is a type name, type var, or const.
          * Also try when (IDENT*) pattern is seen — user-defined struct pointer casts.
+         * For module-qualified casts like (mod.type*)expr, scan past dots to find
+         * a type suffix (*, ?, []) — bare (mod.name) is parenthesized field access.
          * Backtracking handles false positives like (a * b). */
-        if ((peek_at(p, 1)->kind == TOK_IDENT &&
-             (is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
-              peek_at(p, 2)->kind == TOK_STAR)) ||
-            peek_at(p, 1)->kind == TOK_TYPE_VAR ||
+        {
+        bool try_cast = false;
+        if (peek_at(p, 1)->kind == TOK_IDENT &&
+            (is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
+             peek_at(p, 2)->kind == TOK_STAR)) {
+            try_cast = true;
+        } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_DOT) {
+            /* Scan past IDENT (.IDENT)* and check for type suffix */
+            int ca = 1; /* start at first IDENT */
+            while (peek_at(p, ca)->kind == TOK_IDENT && peek_at(p, ca + 1)->kind == TOK_DOT)
+                ca += 2; /* skip IDENT . */
+            /* ca now points to the last IDENT; check what follows */
+            if (peek_at(p, ca)->kind == TOK_IDENT) {
+                TokenKind after = peek_at(p, ca + 1)->kind;
+                if (after == TOK_STAR || after == TOK_QUESTION || after == TOK_LBRACKET)
+                    try_cast = true;
+                /* Also allow (mod.type) as cast when followed by RPAREN and the
+                 * final ident is a known type name — but we can't check that here.
+                 * Only trigger for pointer/option/slice casts to avoid (a.b) ambiguity. */
+            }
+        }
+        if (try_cast || peek_at(p, 1)->kind == TOK_TYPE_VAR ||
             peek_at(p, 1)->kind == TOK_CONST) {
             /* Try to parse as cast with backtracking */
             int save = p->pos;
@@ -928,6 +991,7 @@ static Expr *parse_prefix(Parser *p) {
             /* Not a cast — backtrack */
             p->pos = save;
         }
+        } /* end try_cast block */
         /* Parenthesized expression */
         advance_p(p);
         Expr *e = parse_expr(p, PREC_NONE + 1);
@@ -1054,6 +1118,10 @@ static Expr *parse_prefix(Parser *p) {
                 Token *next = peek_at(p, 1);
                 if (next->kind == TOK_LBRACKET) {
                     is_type = true;
+                } else if (next->kind == TOK_DOT) {
+                    /* Could be module-qualified type — try type with backtracking */
+                    try_type = true;
+                    save = p->pos;
                 } else if (next->kind == TOK_LT) {
                     /* Could be generic type args or comparison — try type */
                     try_type = true;

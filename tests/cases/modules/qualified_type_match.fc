@@ -1,0 +1,10 @@
+// Test: pattern matching on module-qualified struct type
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let p = geometry.point { x = 42, y = 58 }
+    match p with
+    | { x = a, y = b } -> a + b

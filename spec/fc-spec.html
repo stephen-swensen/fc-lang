@@ -2803,6 +2803,44 @@ let main = (args: int32) ->
     move(a, 10)                       // passing coord where pt is expected — OK
 ```
 
+### Direct Module Access
+
+Module members can be accessed directly using dot notation without importing them first. This works for functions, values, struct types, and union types at any nesting depth:
+
+```fc
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+    let manhattan = (p: point) -> p.x + p.y
+
+    module transforms =
+        let scale = (p: point, factor: int32) ->
+            point { x = p.x * factor, y = p.y * factor }
+
+let main = (args: str[]) ->
+    // Module-qualified struct literal
+    let p = geometry.point { x = 3, y = 4 }
+
+    // Module-qualified function call
+    let d = geometry.manhattan(p)
+
+    // Nested module access
+    let p2 = geometry.transforms.scale(p, 10)
+
+    // Module-qualified types in all type contexts
+    let mut p3 = default(geometry.point)        // default
+    let size = sizeof(geometry.point)            // sizeof
+    let ptr = (geometry.point*)&p3              // cast
+    let heap = alloc(geometry.point)             // alloc
+    let opt = none(geometry.point)               // none
+```
+
+Module-qualified names work everywhere a type name is accepted: function parameter types, return types (inferred), pointer types, slice types, option types, struct literal constructors, `default`, `sizeof`, `alloc`, `none`, and casts. This applies to both regular FC structs and extern structs in `from` modules.
+
+Direct dot notation works for modules visible in the current scope — same-file modules, modules compiled together, and imported modules. Cross-namespace modules must still be imported first (see §Importing); dot notation then accesses their members.
+
 Circular references between modules are not allowed — whether via `import` or direct qualified access. If module A references anything in module B, module B may not reference anything in module A, directly or transitively. This applies even when both modules are defined in the same file. The compiler detects cycles during the first pass and reports them as compile errors.
 
 If two types need mutual pointer references, they must live in the same module — intra-module mutual recursion via pointer fields is always valid (see §Structs).

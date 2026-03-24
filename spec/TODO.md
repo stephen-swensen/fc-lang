@@ -273,9 +273,7 @@ Overview of what's solved and what's still missing for full C interop and embedd
 
 2. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC. Platform-dependent values (e.g., `O_RDONLY`) make manual redeclaration error-prone. Needed for any non-trivial C library (SDL has hundreds of constants).
 
-3. **No module-qualified type names in type contexts** — `default(m.type)`, `sizeof(m.type)`, and `m.type { ... }` don't work because the parser treats type names as simple identifiers. This limits extern struct usage: the struct must be `import`ed to use it in type contexts. Discovered during the extern struct implementation — blocks migrating `sys.fc` to use extern struct timespec directly from its `from` sub-module.
-
-Items 1–2 are needed for the SDL use case (a motivating goal for FC's C interop story). Item 3 is an ergonomic gap that affects any module-qualified type usage.
+Items 1–2 are needed for the SDL use case (a motivating goal for FC's C interop story).
 
 **Deferred gaps:**
 
