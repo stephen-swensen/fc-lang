@@ -825,12 +825,20 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_IDENT: {
         const char *name = tok_intern(p, t);
 
-        /* Check for array literal: type_name[size] { ... } */
-        if (is_type_name(t->start, t->length) && peek_at(p, 1)->kind == TOK_LBRACKET) {
+        /* Check for array literal: type_name[size] { ... }
+         * Supports built-in types, user-defined structs, and module-qualified types.
+         * Disambiguate from indexing: scan past [expr] and check for { */
+        {
+        int arr_start = 1; /* offset past first IDENT to find [ */
+        /* Scan past optional dot-qualified path: name.sub.type */
+        while (peek_at(p, arr_start)->kind == TOK_DOT &&
+               peek_at(p, arr_start + 1)->kind == TOK_IDENT)
+            arr_start += 2;
+        if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
             /* Look ahead: type[expr] { — the { after ] means array literal */
             int save = p->pos;
-            advance_p(p);  /* consume ident */
-            advance_p(p);  /* consume [ */
+            /* Advance past IDENT (.IDENT)* [ */
+            for (int skip = 0; skip < arr_start + 1; skip++) advance_p(p);
             /* Skip tokens until we find matching ] */
             int depth = 1;
             while (depth > 0 && !at_end_p(p)) {
@@ -843,13 +851,24 @@ static Expr *parse_prefix(Parser *p) {
             p->pos = save;
 
             if (is_array_lit) {
-                advance_p(p);  /* consume ident */
+                /* Build the type name (possibly dotted) */
+                char buf[512];
+                int pos = snprintf(buf, sizeof(buf), "%s", name);
+                advance_p(p);  /* consume first ident */
+                while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
+                    advance_p(p); /* consume . */
+                    Token *seg = current(p);
+                    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ".%.*s",
+                                    seg->length, seg->start);
+                    advance_p(p); /* consume ident */
+                }
+                const char *type_name_str = intern(p->intern, buf, (int)strlen(buf));
                 Type *elem_type = type_from_name(t->start, t->length);
                 if (!elem_type) {
                     /* User-defined type — create stub */
                     elem_type = arena_alloc(p->arena, sizeof(Type));
                     elem_type->kind = TYPE_STRUCT;
-                    elem_type->struc.name = name;
+                    elem_type->struc.name = type_name_str;
                     elem_type->struc.fields = NULL;
                     elem_type->struc.field_count = 0;
                 }
@@ -879,6 +898,7 @@ static Expr *parse_prefix(Parser *p) {
                 return e;
             }
         }
+        } /* end array literal check */
 
         /* Check for struct literal: name { field = expr, ... }
          * Disambiguate from block: peek past { for IDENT = or } */

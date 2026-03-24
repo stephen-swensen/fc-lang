@@ -35,6 +35,16 @@ The `alloc(slice)` deep-copy pattern mitigates this — `alloc(s)!` promotes any
 
 The lightweight compile-time escape checks are now implemented. See the Resolved section for details.
 
+### Stack array literal lifetime (bug)
+
+Stack array literals compile to GCC statement expressions: `({ T _arr[N] = {...}; (slice){ .ptr = _arr, .len = N }; })`. The C array `_arr` is declared inside the block scope. With compiler optimizations, the stack slot can be reused after the statement expression ends, causing the slice's `ptr` to point at stale/reused memory.
+
+Observed: comparing two struct array slices with `==` returned incorrect results at default optimization but passed at `-O0`. The optimizer reuses the stack frame occupied by the first array for the second.
+
+Affects any pattern that holds references to multiple stack array slices simultaneously (equality comparison, passing to functions that also create stack arrays). Simple reads (indexing, iteration) work because the array is accessed immediately.
+
+**Fix**: hoist array declarations to function scope instead of emitting them inside statement expressions. The slice fat pointer construction can remain inline, but the backing array must live at function scope so its lifetime extends to the function return. This matches how `alloca`-based allocations (string interpolation, cstr casts) already work — they allocate in the function frame, not a block scope.
+
 ### Branch widening in if/match (future)
 
 Currently, if/match branches require exact type equality. Adding implicit widening would allow branches returning different-but-compatible types to unify automatically — e.g., `const str` + `str` → `const str`, or `int8` + `int32` → `int32`. This also affects loop return type unification via `break value`. Deferred because it opens a can of worms (numeric widening, const widening, loop types all interact). For now, users manually cast to unify: `(const str)non_const_expr`.

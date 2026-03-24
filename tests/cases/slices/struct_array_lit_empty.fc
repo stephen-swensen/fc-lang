@@ -1,0 +1,9 @@
+// Test: zero-initialized stack array of structs
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let arr = point[3] { }
+    // All fields should be zero-initialized
+    arr[0].x + arr[1].x + arr[2].x + arr[0].y + arr[1].y + arr[2].y

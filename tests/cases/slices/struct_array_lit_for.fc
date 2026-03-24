@@ -1,0 +1,16 @@
+// Test: iterating over a struct array with for loop
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let arr = point[4] {
+        point { x = 10, y = 0 },
+        point { x = 20, y = 0 },
+        point { x = 5, y = 0 },
+        point { x = 7, y = 0 }
+    }
+    let mut sum = 0
+    for p in arr
+        sum = sum + p.x
+    sum

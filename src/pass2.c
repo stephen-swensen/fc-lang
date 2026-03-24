@@ -2211,6 +2211,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         /* Type-check elements */
         Type *elem_type = resolve_type(ctx, e->array_lit.elem_type);
+        e->array_lit.elem_type = elem_type;
         bool elem_error = false;
         for (int i = 0; i < e->array_lit.elem_count; i++) {
             Type *et = check_expr(ctx, e->array_lit.elems[i]);

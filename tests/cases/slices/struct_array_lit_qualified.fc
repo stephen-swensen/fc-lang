@@ -1,0 +1,9 @@
+// Test: module-qualified struct array literal
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let arr = m.point[2] { m.point { x = 10, y = 0 }, m.point { x = 20, y = 0 } }
+    arr[0].x + arr[1].x

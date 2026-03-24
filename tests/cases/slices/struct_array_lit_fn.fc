@@ -1,0 +1,14 @@
+// Test: passing struct array to function
+struct point =
+    x: int32
+    y: int32
+
+let sum_x = (pts: point[]) ->
+    let mut total = 0
+    for p in pts
+        total = total + p.x
+    total
+
+let main = (args: str[]) ->
+    let arr = point[3] { point { x = 10, y = 0 }, point { x = 20, y = 0 }, point { x = 12, y = 0 } }
+    sum_x(arr)

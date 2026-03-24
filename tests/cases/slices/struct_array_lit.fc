@@ -1,0 +1,8 @@
+// Test: stack array literal with struct element type
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let arr = point[3] { point { x = 1, y = 2 }, point { x = 3, y = 4 }, point { x = 5, y = 6 } }
+    arr[0].x + arr[1].x + arr[2].x
