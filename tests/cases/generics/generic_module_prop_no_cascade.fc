@@ -1,0 +1,13 @@
+struct pair =
+    x: 'a
+    y: 'a
+
+module pair =
+    let zero = 0
+
+let use_prop = (p: 'a) -> 'a.zero + p
+
+let main = (args: str[]) ->
+    let p = pair { x = 1, y = 2 }
+    use_prop(p)
+    0

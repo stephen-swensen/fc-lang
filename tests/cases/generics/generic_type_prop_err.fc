@@ -1,0 +1,5 @@
+let get_nan = (x: 'a) -> 'a.nan
+
+let main = (args: str[]) ->
+    get_nan(42)
+    0

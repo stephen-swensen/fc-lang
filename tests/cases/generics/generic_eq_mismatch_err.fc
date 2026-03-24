@@ -1,0 +1,5 @@
+let eq = (x: 'a, y: 'b) -> x == y
+
+let main = (args: str[]) ->
+    eq(42, "hello")
+    0

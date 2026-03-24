@@ -794,6 +794,244 @@ static bool is_write_through_const(Expr *target) {
     }
 }
 
+/* ---- Generic body validation after type variable resolution ---- */
+
+/* Format "func_name<type1, type2>" for generic validation error messages */
+static const char *fmt_generic_inst(const char *func_name,
+    const char **type_params, Type **bindings, int ntp)
+{
+    (void)type_params;
+    static char buf[512];
+    int pos = 0;
+    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s(", func_name);
+    for (int i = 0; i < ntp; i++) {
+        if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ", ");
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", type_name(bindings[i]));
+    }
+    snprintf(buf + pos, sizeof(buf) - (size_t)pos, ")");
+    return buf;
+}
+
+/* Walk a generic function body with concrete type bindings and validate
+ * operations that were deferred during template type-checking (i.e. binary
+ * operations on type variables and type property access).
+ * Returns true if validation passed. */
+static bool validate_generic_body(Expr *e, Arena *arena,
+    const char **type_params, Type **bindings, int ntp,
+    SrcLoc call_loc, const char *inst_desc)
+{
+    if (!e) return true;
+    bool ok = true;
+
+    switch (e->kind) {
+    case EXPR_BINARY: {
+        /* Recurse into children first */
+        ok &= validate_generic_body(e->binary.left, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->binary.right, arena, type_params, bindings, ntp, call_loc, inst_desc);
+
+        Type *lt_raw = e->binary.left->type;
+        Type *rt_raw = e->binary.right->type;
+        if (!lt_raw || !rt_raw) break;
+
+        /* Only check operations that were deferred (involve type vars) */
+        if (!type_contains_type_var(lt_raw) && !type_contains_type_var(rt_raw)) break;
+
+        Type *lt = type_substitute(arena, lt_raw, type_params, bindings, ntp);
+        Type *rt = type_substitute(arena, rt_raw, type_params, bindings, ntp);
+        TokenKind op = e->binary.op;
+
+        if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
+            op == TOK_SLASH || op == TOK_PERCENT) {
+            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+                diag_error(call_loc, "in %s at %d:%d: arithmetic requires numeric operands, got %s and %s",
+                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                ok = false;
+            } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+                diag_error(call_loc, "in %s at %d:%d: type mismatch: %s vs %s",
+                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                ok = false;
+            }
+        } else if (op == TOK_EQEQ || op == TOK_BANGEQ) {
+            if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+                diag_error(call_loc, "in %s at %d:%d: comparison type mismatch: %s vs %s",
+                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                ok = false;
+            }
+        } else if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
+            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+                diag_error(call_loc, "in %s at %d:%d: ordering comparison requires numeric or pointer types, got %s and %s",
+                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                ok = false;
+            } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+                diag_error(call_loc, "in %s at %d:%d: comparison type mismatch: %s vs %s",
+                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                ok = false;
+            }
+        } else if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
+            if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
+                diag_error(call_loc, "in %s at %d:%d: logical operator requires bool operands",
+                    inst_desc, e->loc.line, e->loc.col);
+                ok = false;
+            }
+        } else if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET ||
+                   op == TOK_LTLT || op == TOK_GTGT) {
+            if (!type_is_integer(lt) || !type_is_integer(rt)) {
+                diag_error(call_loc, "in %s at %d:%d: bitwise/shift operator requires integer operands",
+                    inst_desc, e->loc.line, e->loc.col);
+                ok = false;
+            } else if (op != TOK_LTLT && op != TOK_GTGT &&
+                       !type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+                diag_error(call_loc, "in %s at %d:%d: type mismatch: %s vs %s",
+                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                ok = false;
+            }
+        }
+        break;
+    }
+
+    /* Type variable property access: 'a.nan, 'a.min, etc. */
+    case EXPR_FIELD: case EXPR_DEREF_FIELD: {
+        ok &= validate_generic_body(e->field.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->field.object->kind == EXPR_TYPE_VAR_REF) {
+            const char *tv_name = e->field.object->type_var_ref.name;
+            const char *prop = e->field.name;
+            /* Resolve the type variable to its concrete type */
+            Type *concrete = NULL;
+            for (int i = 0; i < ntp; i++) {
+                if (type_params[i] == tv_name || strcmp(type_params[i], tv_name) == 0) {
+                    concrete = bindings[i];
+                    break;
+                }
+            }
+            if (concrete) {
+                bool is_int = type_is_integer(concrete);
+                bool is_float = type_is_float(concrete);
+                bool valid = false;
+                if (strcmp(prop, "bits") == 0) {
+                    valid = is_int || is_float;
+                } else if (strcmp(prop, "min") == 0 || strcmp(prop, "max") == 0) {
+                    valid = is_int || is_float;
+                } else if (strcmp(prop, "nan") == 0 || strcmp(prop, "inf") == 0 ||
+                           strcmp(prop, "neg_inf") == 0 || strcmp(prop, "epsilon") == 0) {
+                    valid = is_float;
+                }
+                if (!valid) {
+                    diag_error(call_loc, "in %s at %d:%d: type '%s' has no property '%s'",
+                        inst_desc, e->loc.line, e->loc.col, type_name(concrete), prop);
+                    ok = false;
+                }
+            }
+        }
+        break;
+    }
+
+    /* Recurse into all sub-expressions */
+    case EXPR_UNARY_PREFIX:
+        ok &= validate_generic_body(e->unary_prefix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_UNARY_POSTFIX:
+        ok &= validate_generic_body(e->unary_postfix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_CALL:
+        ok &= validate_generic_body(e->call.func, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        for (int i = 0; i < e->call.arg_count; i++)
+            ok &= validate_generic_body(e->call.args[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_INDEX:
+        ok &= validate_generic_body(e->index.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->index.index, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_SLICE:
+        ok &= validate_generic_body(e->slice.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->slice.lo) ok &= validate_generic_body(e->slice.lo, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->slice.hi) ok &= validate_generic_body(e->slice.hi, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_CAST:
+        ok &= validate_generic_body(e->cast.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_IF:
+        ok &= validate_generic_body(e->if_expr.cond, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->if_expr.then_body, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->if_expr.else_body)
+            ok &= validate_generic_body(e->if_expr.else_body, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            ok &= validate_generic_body(e->loop_expr.body[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_FOR:
+        ok &= validate_generic_body(e->for_expr.iter, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->for_expr.range_end)
+            ok &= validate_generic_body(e->for_expr.range_end, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            ok &= validate_generic_body(e->for_expr.body[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_BREAK:
+        if (e->break_expr.value)
+            ok &= validate_generic_body(e->break_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_RETURN:
+        if (e->return_expr.value)
+            ok &= validate_generic_body(e->return_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            ok &= validate_generic_body(e->block.stmts[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.body_count; i++)
+            ok &= validate_generic_body(e->func.body[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_ALLOC:
+        if (e->alloc_expr.init_expr)
+            ok &= validate_generic_body(e->alloc_expr.init_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->alloc_expr.size_expr)
+            ok &= validate_generic_body(e->alloc_expr.size_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_FREE:
+        ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_SOME:
+        ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_ASSIGN:
+        ok &= validate_generic_body(e->assign.target, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->assign.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            ok &= validate_generic_body(e->struct_lit.fields[i].value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (!e->interp_string.segments[i].is_literal && e->interp_string.segments[i].expr)
+                ok &= validate_generic_body(e->interp_string.segments[i].expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_MATCH:
+        ok &= validate_generic_body(e->match_expr.subject, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                ok &= validate_generic_body(e->match_expr.arms[i].body[j], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_LET:
+        if (e->let_expr.let_init)
+            ok &= validate_generic_body(e->let_expr.let_init, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_LET_DESTRUCT:
+        ok &= validate_generic_body(e->let_destruct.init, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+
+    /* Leaf nodes — no children to walk */
+    default:
+        break;
+    }
+    return ok;
+}
+
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -1441,6 +1679,34 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         callee_sym->type_params[i]);
                     e->type = type_error();
                     return e->type;
+                }
+            }
+
+            /* Validate generic body with concrete types.
+             * Skip if the template itself has errors (TYPE_ERROR in return type)
+             * to avoid cascading call-site noise from template-level problems. */
+            if (!bindings_contain_type_vars(bindings, ntp)) {
+                Decl *tmpl = callee_sym->decl;
+                if (tmpl && tmpl->kind == DECL_LET && tmpl->let.init &&
+                    tmpl->let.init->kind == EXPR_FUNC) {
+                    Expr *func_expr = tmpl->let.init;
+                    bool tmpl_has_errors = false;
+                    if (func_expr->func.body_count > 0) {
+                        Expr *last = func_expr->func.body[func_expr->func.body_count - 1];
+                        tmpl_has_errors = last->type && type_is_error(last->type);
+                    }
+                    if (!tmpl_has_errors) {
+                        const char *inst_desc = fmt_generic_inst(callee_sym->name,
+                            callee_sym->type_params, bindings, ntp);
+                        for (int i = 0; i < func_expr->func.body_count; i++) {
+                            if (!validate_generic_body(func_expr->func.body[i], ctx->arena,
+                                    callee_sym->type_params, bindings, ntp,
+                                    e->loc, inst_desc)) {
+                                e->type = type_error();
+                                return e->type;
+                            }
+                        }
+                    }
                 }
             }
 

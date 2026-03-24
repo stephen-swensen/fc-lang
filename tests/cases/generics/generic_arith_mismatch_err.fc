@@ -1,0 +1,5 @@
+let add = (x: 'a, y: 'b) -> x + y
+
+let main = (args: str[]) ->
+    add(1, 3.14)
+    0

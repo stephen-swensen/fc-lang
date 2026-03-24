@@ -1,0 +1,5 @@
+let both = (x: 'a, y: 'a) -> x && y
+
+let main = (args: str[]) ->
+    both(1, 2)
+    0

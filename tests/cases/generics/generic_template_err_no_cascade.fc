@@ -1,0 +1,5 @@
+let bad = (x: 'a) -> 'a.foo + x
+
+let main = (args: str[]) ->
+    bad(42)
+    0

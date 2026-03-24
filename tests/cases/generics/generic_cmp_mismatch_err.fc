@@ -1,0 +1,5 @@
+let f = (x: 'a, y: 'b) -> x > y
+
+let main = (args: str[]) ->
+    f(23, 23.3)
+    0
