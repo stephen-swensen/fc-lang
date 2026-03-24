@@ -290,11 +290,29 @@ const char *type_name(Type *t) {
     if (is_str_type(t)) return "str";
     if (is_cstr_type(t)) return "cstr";
     if (is_str32_type(t)) return "str32";
-    /* For compound types, return a placeholder */
+    /* For compound types, build a recursive name */
     switch (t->kind) {
-    case TYPE_POINTER: return "T*";
-    case TYPE_SLICE:   return "T[]";
-    case TYPE_OPTION:  return "T?";
+    case TYPE_POINTER: {
+        static char pbufs[4][256];
+        static int pidx = 0;
+        char *buf = pbufs[pidx & 3]; pidx++;
+        snprintf(buf, 256, "%s*", type_name(t->pointer.pointee));
+        return buf;
+    }
+    case TYPE_SLICE: {
+        static char sbufs[4][256];
+        static int sidx = 0;
+        char *buf = sbufs[sidx & 3]; sidx++;
+        snprintf(buf, 256, "%s[]", type_name(t->slice.elem));
+        return buf;
+    }
+    case TYPE_OPTION: {
+        static char obufs[4][256];
+        static int oidx = 0;
+        char *buf = obufs[oidx & 3]; oidx++;
+        snprintf(buf, 256, "%s?", type_name(t->option.inner));
+        return buf;
+    }
     case TYPE_FUNC: {
         static char bufs[2][256];
         static int bidx = 0;

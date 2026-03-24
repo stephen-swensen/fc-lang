@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let x = 42
+    let s = "val=%d{x} type=%T{x}"
+    let mut r = 0
+    if s == "val=42 type=int32" then r = r + 1 else r = r
+    r

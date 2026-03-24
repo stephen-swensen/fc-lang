@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let x = 42
+    let y = 3.14
+    let b = true
+    let s = "%T{x},%T{y},%T{b}"
+    let mut r = 0
+    if s == "int32,float64,bool" then r = r + 1 else r = r
+    r

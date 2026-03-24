@@ -719,7 +719,10 @@ The compiler validates that each format specifier is compatible with the express
 | `%s` | `str`, `cstr` | string |
 | `%c` | `char` | single character |
 | `%p` | any pointer type | pointer address |
+| `%T` | any type | compile-time type name |
 | `%%` | — | literal `%`, no expression |
+
+The `%T` format emits the compile-time type name of the expression as a string literal. The expression is type-checked but **not evaluated** at runtime — only its static type is used. This is useful for debugging inferred types. For example, `"%T{x}"` where `x` is an `int32` produces `"int32"`. Since the type name is a compile-time constant, `%T` segments always contribute a fixed number of bytes to the buffer size.
 
 Width, precision, and flag modifiers are allowed: `%04d{x}`, `%.2f{pi}`, `%20s{name}`.
 

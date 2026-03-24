@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let name = "hello"
+    let s = "%T{name}"
+    let mut r = 0
+    if s == "const str" then r = r + 1 else r = r
+    r

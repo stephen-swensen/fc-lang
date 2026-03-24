@@ -2542,6 +2542,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     "format specifier %%p expects pointer type, got %s",
                     type_name(et));
                 break;
+            case 'T':
+                /* %T accepts any type — emits compile-time type name */
+                ok = true;
+                break;
             default:
                 diag_error(seg->expr->loc,
                     "unknown format specifier %%%c", conv);

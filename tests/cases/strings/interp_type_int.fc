@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let x = 42
+    let s = "%T{x}"
+    let mut r = 0
+    if s == "int32" then r = r + 1 else r = r
+    if s.len == 5 then r = r + 2 else r = r
+    r

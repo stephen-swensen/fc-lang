@@ -201,7 +201,7 @@ static int check_interp_spec(const char *p) {
         while (*s >= '0' && *s <= '9') s++;
     }
     /* required conversion character */
-    const char *convs = "diuxXofeEgGscp";
+    const char *convs = "diuxXofeEgGscpT";
     const char *conv = s;
     bool found = false;
     for (const char *c = convs; *c; c++) {

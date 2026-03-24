@@ -1780,6 +1780,13 @@ static void emit_expr(Expr *e, FILE *out) {
                         fprintf(out, ")");
                     }
                     first_term = false;
+                } else if (conv == 'T') {
+                    /* %T: compile-time type name literal */
+                    const char *tname = type_name(segs[i].expr->type);
+                    bound = (int)strlen(tname);
+                    if (!first_term) fprintf(out, " + ");
+                    fprintf(out, "%d", bound);
+                    first_term = false;
                 } else {
                     /* Compute compile-time bound based on type and conversion */
                     Type *t = segs[i].expr->type;
@@ -1875,6 +1882,10 @@ static void emit_expr(Expr *e, FILE *out) {
                         fputc(s[j], out);
                     }
                 }
+            } else if (segs[i].conversion == 'T') {
+                /* Emit type name as literal text in the format string */
+                const char *tname = type_name(segs[i].expr->type);
+                fputs(tname, out);
             } else {
                 bool is_str_arg = (segs[i].conversion == 's' &&
                                    segs[i].expr->type && is_str_type(segs[i].expr->type));
@@ -1927,6 +1938,7 @@ static void emit_expr(Expr *e, FILE *out) {
         str_arg_idx = 0;
         for (int i = 0; i < seg_count; i++) {
             if (segs[i].is_literal) continue;
+            if (segs[i].conversion == 'T') continue; /* type name is literal, no arg */
             fprintf(out, ", ");
             bool is_str_arg = (segs[i].conversion == 's' &&
                                segs[i].expr->type && is_str_type(segs[i].expr->type));

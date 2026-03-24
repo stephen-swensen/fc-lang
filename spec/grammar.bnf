@@ -169,7 +169,7 @@ fmt_width     = digit , { digit } ;
 fmt_precision = '.' , { digit } ;
 fmt_conv      = 'd' | 'i' | 'u' | 'x' | 'X' | 'o'
               | 'f' | 'e' | 'E' | 'g' | 'G'
-              | 's' | 'c' | 'p' ;
+              | 's' | 'c' | 'p' | 'T' ;
 fmt_spec      = { fmt_flag } , [ fmt_width ] , [ fmt_precision ] , fmt_conv ;
 
 interp_seg    = '%' , fmt_spec , '{' , expr , '}' ;
