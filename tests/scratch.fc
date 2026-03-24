@@ -1,5 +1,7 @@
 import io from std::
 
+let println = (s:str) ->  io.write("%s{s}\n", stdout)
+
 struct container =
     label: int32
     value: int32
@@ -12,7 +14,30 @@ let check = (w: wrapped) ->
     match w with
     | boxed({ label = 3, value = v }) -> v
     | empty -> 0
+    | _ -> -1
+
+struct tuple2 =
+    e1: 'a
+    e2: 'b
+
+let f = (x:'a, y:'b) -> x > y
+let g = (x:int32, y:float64) -> x > y
 
 let main = (args: str[]) ->
-    check(wrapped.boxed(container { label = 10, value = 20 }))
+    println("fcall: %T{f(23, 23.3)}")
+    println("gcall: %T{g(23, 23.3)}")
+    let t = tuple2 { e1 = 32, e2 = "asdf" }
+    println("t: %T{t}")
+    let buf = uint8[10] { }
+    println("buf: %T{buf}")
+    let x = "hello world"
+    println("%s{x}: %T{x}")
+    let x = (uint8[]) x
+    println("%s{x}: %T{x}")
+    let x = (const cstr) "hello world"
+    println("%s{x}: %T{x}")
+    println("%T{wrapped.boxed(container{label=3, value=2})}")
+    println("%T{check(wrapped.boxed(container{label=3, value=2}))}")
+    println("%T{args}")
+    0
 
