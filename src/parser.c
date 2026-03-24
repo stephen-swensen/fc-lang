@@ -2001,6 +2001,53 @@ static Decl *parse_extern_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
     expect(p, TOK_EXTERN);
+
+    /* extern struct — C struct layout import */
+    if (check(p, TOK_STRUCT)) {
+        advance_p(p);
+        const char *c_name = tok_intern(p, expect(p, TOK_IDENT));
+        const char *fc_name = c_name;
+        if (check(p, TOK_AS)) {
+            advance_p(p);
+            fc_name = tok_intern(p, expect(p, TOK_IDENT));
+        }
+        expect(p, TOK_EQ);
+        expect(p, TOK_INDENT);
+        StructField *fields = NULL;
+        int field_count = 0, field_cap = 0;
+        while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
+            skip_newlines(p);
+            if (check(p, TOK_DEDENT)) break;
+            const char *fname = tok_intern(p, expect(p, TOK_IDENT));
+            expect(p, TOK_COLON);
+            Type *ftype = parse_type(p);
+            StructField f = { .name = fname, .type = ftype };
+            DA_APPEND(fields, field_count, field_cap, f);
+            skip_newlines(p);
+        }
+        expect(p, TOK_DEDENT);
+        Decl *d = arena_alloc(p->arena, sizeof(Decl));
+        d->kind = DECL_STRUCT;
+        d->loc = loc;
+        d->is_private = false;
+        d->struc.name = fc_name;
+        d->struc.c_name = c_name;
+        d->struc.is_extern = true;
+        d->struc.is_generic = false;
+        d->struc.type_params = NULL;
+        d->struc.type_param_count = 0;
+        d->struc.field_count = field_count;
+        if (field_count > 0) {
+            d->struc.fields = arena_alloc(p->arena, sizeof(StructField) * (size_t)field_count);
+            memcpy(d->struc.fields, fields, sizeof(StructField) * (size_t)field_count);
+            free(fields);
+        } else {
+            d->struc.fields = NULL;
+        }
+        return d;
+    }
+
+    /* extern function declaration */
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
     const char *alias = NULL;
     if (check(p, TOK_AS)) {

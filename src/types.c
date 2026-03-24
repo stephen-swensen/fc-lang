@@ -571,6 +571,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *ns = arena_alloc(a, sizeof(Type));
         ns->kind = TYPE_STRUCT;
         ns->struc.name = t->struc.name;
+        ns->struc.c_name = t->struc.c_name;
         ns->struc.fields = fields;
         ns->struc.field_count = t->struc.field_count;
         ns->struc.type_args = new_targs;

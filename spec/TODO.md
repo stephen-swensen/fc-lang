@@ -258,6 +258,7 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - `c"..."` literals for null-terminated strings; `str` ↔ `cstr` casts
 - Raw pointer arithmetic as escape hatch from slice overhead
 - Function pointer params in extern (non-capturing lambdas extract fn_ptr automatically)
+- Extern struct: C struct layout import via `extern struct C_NAME [as fc_name]` in `from` modules
 - Conditional compilation (`#if`/`#else`/`#end`) with built-in and user-defined flags
 - Escape analysis: compile-time detection of returning stack pointers/slices, freeing non-heap memory, storing stack pointers in heap structs
 - `const` qualifier for pointer/slice types: deep const, `const cstr` → `const char*` vs `cstr` → `char*` at extern boundaries, string/cstring literals infer const, write/free/address-of rejection through const
@@ -266,21 +267,23 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - ~~No `--target` flag~~ — dropped. Platform contract is "C11 with libc and heap." No bare-metal support. Conditional compilation uses user-defined `--flag` only.
 - ~~No preprocessor define control~~ — solved by `define` annotation on extern module declarations. Replaces the `_POSIX_C_SOURCE` auto-detection hack.
 
-**Remaining gaps:**
+**Remaining gaps (active):**
 
-1. **No C struct layout import** — can't reference C's `struct timeval` directly. Must define a matching FC struct manually or use `any*`. Risk of layout mismatch if fields are wrong. Workable but error-prone for complex C structs.
+1. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). Needed for C libraries like SDL (`SDL_Event`). Workaround is `any*` + pointer casts, but that's ergonomically poor for heavily-used types.
 
-2. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file.
+2. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC. Platform-dependent values (e.g., `O_RDONLY`) make manual redeclaration error-prone. Needed for any non-trivial C library (SDL has hundreds of constants).
 
-3. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Reads/writes could be optimized away by the C compiler without it.
+3. **No module-qualified type names in type contexts** — `default(m.type)`, `sizeof(m.type)`, and `m.type { ... }` don't work because the parser treats type names as simple identifiers. This limits extern struct usage: the struct must be `import`ed to use it in type contexts. Discovered during the extern struct implementation — blocks migrating `sys.fc` to use extern struct timespec directly from its `from` sub-module.
 
-4. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. FC structs don't support this.
+Items 1–2 are needed for the SDL use case (a motivating goal for FC's C interop story). Item 3 is an ergonomic gap that affects any module-qualified type usage.
 
-5. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). For raw C union interop, need `any*` or manual byte manipulation.
+**Deferred gaps:**
 
-6. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC.
+4. **No inline assembly** — can't emit platform-specific instructions. For GPIO toggling, interrupt handlers, etc., need a C wrapper file. Outside FC's problem space per the platform contract.
 
-Item 1 is the most impactful. Items 2–6 are niche but matter for deep embedded work or non-POSIX platform APIs.
+5. **No `volatile`** — relevant for memory-mapped I/O registers on embedded. Outside FC's problem space per the platform contract.
+
+6. **No bitfield structs** — C bitfields (`uint32_t flags : 4`) are common in hardware register definitions. Outside FC's problem space per the platform contract.
 
 ---
 

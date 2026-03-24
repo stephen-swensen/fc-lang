@@ -1,0 +1,14 @@
+// Test: extern struct with as alias
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern struct timespec as ts =
+        tv_sec: int64
+        tv_nsec: int64
+
+import ts from t
+
+let main = (args: str[]) ->
+    let v = ts { tv_sec = 7, tv_nsec = 42 }
+    if v.tv_sec == 7 then
+        if v.tv_nsec == 42 then 0
+        else 2
+    else 1

@@ -107,6 +107,68 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
     return intern_cstr(intern, buf);
 }
 
+/* Resolve struct type stubs in a type tree against a symbol table.
+ * Replaces TYPE_STRUCT stubs (field_count == 0) with the actual type from the symtab.
+ * Used to resolve extern function parameter types against sibling extern structs
+ * within the same from-module. */
+static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
+    if (!t) return t;
+    if (t->kind == TYPE_POINTER) {
+        Type *inner = resolve_type_stubs(t->pointer.pointee, members);
+        if (inner != t->pointer.pointee) {
+            Type *r = malloc(sizeof(Type));
+            *r = *t;
+            r->pointer.pointee = inner;
+            return r;
+        }
+        return t;
+    }
+    if (t->kind == TYPE_SLICE) {
+        Type *inner = resolve_type_stubs(t->slice.elem, members);
+        if (inner != t->slice.elem) {
+            Type *r = malloc(sizeof(Type));
+            *r = *t;
+            r->slice.elem = inner;
+            return r;
+        }
+        return t;
+    }
+    if (t->kind == TYPE_OPTION) {
+        Type *inner = resolve_type_stubs(t->option.inner, members);
+        if (inner != t->option.inner) {
+            Type *r = malloc(sizeof(Type));
+            *r = *t;
+            r->option.inner = inner;
+            return r;
+        }
+        return t;
+    }
+    if (t->kind == TYPE_FUNC) {
+        bool changed = false;
+        Type **params = malloc(sizeof(Type*) * (size_t)t->func.param_count);
+        for (int i = 0; i < t->func.param_count; i++) {
+            params[i] = resolve_type_stubs(t->func.param_types[i], members);
+            if (params[i] != t->func.param_types[i]) changed = true;
+        }
+        Type *ret = resolve_type_stubs(t->func.return_type, members);
+        if (ret != t->func.return_type) changed = true;
+        if (!changed) { free(params); return t; }
+        Type *r = malloc(sizeof(Type));
+        *r = *t;
+        r->func.param_types = params;
+        r->func.return_type = ret;
+        return r;
+    }
+    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name) {
+        Symbol *sym = symtab_lookup_kind(members, t->struc.name, DECL_STRUCT);
+        if (sym && sym->type) return sym->type;
+        /* Also check for union stubs */
+        sym = symtab_lookup_kind(members, t->struc.name, DECL_UNION);
+        if (sym && sym->type) return sym->type;
+    }
+    return t;
+}
+
 /* Register a struct type symbol and return the created type */
 static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     symtab_add(tab, d->struc.name, DECL_STRUCT, d);
@@ -116,6 +178,7 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     memset(st, 0, sizeof(Type));
     st->kind = TYPE_STRUCT;
     st->struc.name = d->struc.name;
+    st->struc.c_name = d->struc.c_name;
     st->struc.fields = d->struc.fields;
     st->struc.field_count = d->struc.field_count;
     st->struc.type_args = NULL;
@@ -152,7 +215,8 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
      * and non-from modules may not contain extern declarations. */
     for (int j = 0; j < d->module.decl_count; j++) {
         Decl *child = d->module.decls[j];
-        if (d->module.from_lib && child->kind != DECL_EXTERN) {
+        if (d->module.from_lib && child->kind != DECL_EXTERN &&
+            !(child->kind == DECL_STRUCT && child->struc.is_extern)) {
             diag_error(child->loc,
                 "module '%s' has a 'from' clause — only extern declarations are allowed",
                 mod_name);
@@ -160,6 +224,11 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
         if (!d->module.from_lib && child->kind == DECL_EXTERN) {
             diag_error(child->loc,
                 "extern declaration in module '%s' requires a 'from' clause on the module",
+                mod_name);
+        }
+        if (!d->module.from_lib && child->kind == DECL_STRUCT && child->struc.is_extern) {
+            diag_error(child->loc,
+                "extern struct in module '%s' requires a 'from' clause on the module",
                 mod_name);
         }
     }
@@ -196,6 +265,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 memset(st, 0, sizeof(Type));
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
+                st->struc.c_name = child->struc.c_name;
                 st->struc.fields = child->struc.fields;
                 st->struc.field_count = child->struc.field_count;
                 st->struc.type_args = NULL;
@@ -277,6 +347,24 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
         }
         default:
             break;
+        }
+    }
+
+    /* Resolve struct type stubs in extern function signatures against sibling
+     * extern structs within the same module. This allows e.g.:
+     *   extern struct timespec = ...
+     *   extern clock_gettime: (int32, timespec*) -> int32
+     * where timespec* in the function type resolves to the extern struct. */
+    for (int j = 0; j < d->module.decl_count; j++) {
+        Decl *child = d->module.decls[j];
+        if (child->kind != DECL_EXTERN) continue;
+        Type *resolved = resolve_type_stubs(child->ext.type, members);
+        if (resolved != child->ext.type) {
+            child->ext.type = resolved;
+            /* Update the symbol table entry too */
+            const char *src_name = child->ext.alias ? child->ext.alias : child->ext.name;
+            Symbol *msym = symtab_lookup(members, src_name);
+            if (msym) msym->type = resolved;
         }
     }
 }
@@ -372,6 +460,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             break;
         }
         case DECL_STRUCT: {
+            if (d->struc.is_extern) {
+                diag_error(d->loc, "extern struct must be inside a module with a 'from' clause");
+                break;
+            }
             Symbol *existing = symtab_lookup(symtab, d->struc.name);
             if (existing && existing->kind != DECL_MODULE) {
                 diag_error(d->loc, "redefinition of '%s'", d->struc.name);

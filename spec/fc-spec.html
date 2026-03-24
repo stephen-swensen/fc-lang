@@ -3016,6 +3016,53 @@ The compiler emits `#define _POSIX_C_SOURCE 200809L` before all `#include` lines
 
 This keeps the header's requirements co-located with the declaration that needs them — passing a file that uses POSIX time functions to the compiler brings everything it needs, with no extra build flags required.
 
+### Extern structs
+
+C struct types can be imported using `extern struct` inside a `from` module. This tells the compiler that the struct is defined in the C header — the compiler uses the C struct directly instead of generating its own typedef.
+
+```fc
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern struct timespec =
+        tv_sec: int64
+        tv_nsec: int64
+```
+
+The generated C uses `struct timespec` (the real C type) wherever the FC type is referenced. No `typedef` or `struct` definition is emitted — the header's definition is used directly. The C compiler validates field names at C compilation time.
+
+**With alias** — when the C name doesn't match FC naming conventions:
+
+```fc
+module sdl from "SDL2/SDL.h" =
+    extern struct SDL_Rect as sdl_rect =
+        x: int32
+        y: int32
+        w: int32
+        h: int32
+```
+
+The `as` clause follows the same convention as `extern ... as` for functions: `SDL_Rect` is the C name (emitted in generated code as `struct SDL_Rect`), `sdl_rect` is the FC name (used in FC source code). Without `as`, the C name and FC name are the same.
+
+**Usage** — extern structs support all FC struct features:
+
+```fc
+import timespec from t
+
+let ts = timespec { tv_sec = 42, tv_nsec = 0 }     // struct literal
+let s = ts.tv_sec                                    // field access
+let mut ts2 = default(timespec)                      // zero initialization
+let size = sizeof(timespec)                          // size query
+let eq = ts == ts2                                   // structural equality
+match ts with                                        // pattern matching
+| { tv_sec = s } -> use(s)
+```
+
+**Rules:**
+- Extern structs can only appear inside a `module ... from "header"` block.
+- Extern structs cannot be generic (no type parameters).
+- All fields must be declared with FC types that are assignment-compatible with the actual C field types.
+- The compiler always emits `struct C_name` in the generated C. This works for both `struct timespec` (no typedef) and `typedef struct SDL_Rect { ... } SDL_Rect;` (where the struct tag matches the typedef name).
+- Structs with union members, bitfields, or anonymous inner structs are not supported — use `any*` for those types.
+
 ### Reserved identifiers and `extern as`
 
 FC reserves `alloc`, `free`, `sizeof`, and `default` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.

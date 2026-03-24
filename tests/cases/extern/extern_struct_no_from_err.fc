@@ -1,0 +1,7 @@
+// Test: extern struct in module without from clause is an error
+module m =
+    extern struct foo =
+        x: int32
+
+let main = (args: str[]) ->
+    0

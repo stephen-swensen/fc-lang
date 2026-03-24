@@ -1,0 +1,23 @@
+// Test: extern struct basic usage — literal, field access, default, mutation
+module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern struct timespec =
+        tv_sec: int64
+        tv_nsec: int64
+
+import timespec from t
+
+let main = (args: str[]) ->
+    // Struct literal
+    let ts = timespec { tv_sec = 42, tv_nsec = 100 }
+    // Field access
+    let sec = ts.tv_sec
+    let nsec = ts.tv_nsec
+    // Default
+    let mut ts2 = default(timespec)
+    ts2.tv_sec = 10
+    if sec == 42 then
+        if nsec == 100 then
+            if ts2.tv_sec == 10 then 0
+            else 3
+        else 2
+    else 1

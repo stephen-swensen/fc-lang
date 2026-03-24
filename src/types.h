@@ -60,6 +60,7 @@ struct Type {
         } func;
         struct {
             const char *name;
+            const char *c_name;     /* C struct tag name for extern structs, NULL for normal */
             StructField *fields;
             int field_count;
             Type **type_args;

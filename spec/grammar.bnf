@@ -339,6 +339,7 @@ module_item      = let_decl
                  | union_decl
                  | module_decl
                  | extern_decl       (* only valid when enclosing module has "from" *)
+                 | extern_struct     (* only valid when enclosing module has "from" *)
                  | import_decl
                  | cond_comp_block
                  ;
@@ -346,6 +347,9 @@ module_item      = let_decl
 (* --- extern ------------------------------------------------------- *)
 
 extern_decl      = "extern" , IDENT , [ "as" , IDENT ] , ":" , type_expr ;
+
+extern_struct    = "extern" , "struct" , IDENT , [ "as" , IDENT ] , "="
+                 , INDENT , struct_fields , DEDENT ;
 
 
 (* ================================================================== *)

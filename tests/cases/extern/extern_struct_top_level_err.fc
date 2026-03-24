@@ -1,0 +1,6 @@
+// Test: extern struct at top level is an error
+extern struct foo =
+    x: int32
+
+let main = (args: str[]) ->
+    0

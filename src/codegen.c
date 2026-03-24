@@ -186,7 +186,11 @@ static void emit_type(Type *t, FILE *out) {
             fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
             return;
         }
-        fprintf(out, "%s", t->struc.name);
+        if (t->struc.c_name) {
+            fprintf(out, "struct %s", t->struc.c_name);
+        } else {
+            fprintf(out, "%s", t->struc.name);
+        }
         break;
     case TYPE_UNION:
         if (g_subst && type_contains_type_var(t)) {
@@ -239,6 +243,8 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_STRUCT:
         if (g_subst && type_contains_type_var(t))
             fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
+        else if (t->struc.c_name)
+            fprintf(out, "%s", t->struc.c_name);
         else
             fprintf(out, "%s", t->struc.name);
         break;
@@ -1287,7 +1293,11 @@ static void emit_expr(Expr *e, FILE *out) {
             type_contains_type_var(e->type)) {
             sname = mangle_generic_with_subst(sname, e->type);
         }
-        fprintf(out, "(%s){ ", sname);
+        if (e->type && e->type->kind == TYPE_STRUCT && e->type->struc.c_name) {
+            fprintf(out, "(struct %s){ ", e->type->struc.c_name);
+        } else {
+            fprintf(out, "(%s){ ", sname);
+        }
         for (int i = 0; i < e->struct_lit.field_count; i++) {
             if (i > 0) fprintf(out, ", ");
             fprintf(out, ".%s = ", e->struct_lit.fields[i].name);
@@ -3176,7 +3186,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (is_generic_decl(d)) continue;
-        if (d->kind == DECL_STRUCT) emit_struct_forward(d, out);
+        if (d->kind == DECL_STRUCT && !d->struc.is_extern) emit_struct_forward(d, out);
         else if (d->kind == DECL_UNION) emit_union_forward(d, out);
     }
     /* Forward declarations for monomorphized structs/unions */
@@ -3264,7 +3274,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (is_generic_decl(d)) continue;
         const char *def_name = NULL;
         if (d->kind == DECL_STRUCT) {
-            emit_struct_def(d, out);
+            if (!d->struc.is_extern) emit_struct_def(d, out);
             def_name = d->struc.name;
         } else if (d->kind == DECL_UNION) {
             emit_union_def(d, out);
