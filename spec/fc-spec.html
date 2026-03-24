@@ -525,7 +525,7 @@ The distinction between a new block and a continuation is unambiguous from conte
 
 ### Layout Suppression Inside Brackets
 
-Inside matched bracket pairs — `()`, `[]`, and `{}` — the offside rule is suspended. `INDENT`, `DEDENT`, and `NEWLINE` tokens are not emitted, so expressions can span multiple lines freely without alignment requirements. This applies to function call arguments, array literals, and struct literals:
+Inside matched bracket pairs — `()`, `[]`, and `{}` — the offside rule is suspended. `INDENT`, `DEDENT`, and `NEWLINE` tokens are not emitted, so expressions can span multiple lines freely without alignment requirements. This applies to function call arguments, slice literals, and struct literals:
 
 ```fc
 // Multiline function call — arguments can wrap freely inside ()
@@ -535,11 +535,11 @@ let result = some_function(
     arg_three
 )
 
-// Multiline array literal — elements can wrap freely inside []
-let data = [
+// Multiline slice literal — elements can wrap freely inside {}
+let data = int32[6] {
     1, 2, 3,
     4, 5, 6
-]
+}
 
 // Multiline struct literal — fields can wrap freely inside {}
 let p = point3d {
@@ -612,7 +612,7 @@ The following are **built-in globals** — predefined identifiers typed `any*` t
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
-`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `str`, `str32`, `cstr`
+`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `any`, `str`, `str32`, `cstr`
 
 ---
 

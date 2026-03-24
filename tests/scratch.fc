@@ -18,7 +18,7 @@ let check = (w: wrapped) ->
 
 struct tuple2 =
     e1: 'a
-    e2: 'b
+    e2: const 'b*
 
 module tuple2 =
     let test = 23
@@ -30,9 +30,11 @@ let f = (x:'a, y:'b) -> x > y
 let ff = <'b, 'c>(x: (int32, int32) -> int32) -> x(32, 32) + default('b) + default('c)
 
 let main = (args: str[]) ->
+    
     println("%T{f}")
     println("%T{ff}")
-    let t = tuple2 { e1 = 32, e2 = "asdf" }
+    let mut x = 3
+    let t = tuple2 { e1 = 32, e2 = &x }
     //println("ffcall: %T{ff(t)}")
     //println("fcall: %T{f(23, 23.3)}")
     //println("gcall: %T{g(23, 23.3)}")

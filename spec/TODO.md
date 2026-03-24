@@ -381,6 +381,17 @@ Added `isize` (signed, pointer-width) and `usize` (unsigned, pointer-width) as o
 - **Operators**: arithmetic, comparison, bitwise, shifts all work between same-type operands; signed overflow wrapping and shift masking use platform-dependent expressions
 - 548 tests passing (18 new native_types tests).
 
+## `char32` type and `str32` status (2026-03-24)
+
+FC defines `char` as an alias for `uint8` with character literal syntax (`'a'`, `'\n'`, `'\x41'`). For symmetry, `str32` (alias for `uint32[]`) implies a corresponding `char32` alias for `uint32` — a single Unicode code point.
+
+However, `str32` itself is only partially implemented: it parses and type-checks, but has no runtime support (no `str32` literals, no `str32` interpolation, no `str32`↔`str` conversion). Two options:
+
+1. **Add `char32`** — alias for `uint32`, supports 32-bit character literals (e.g., `'😀'c32` or similar syntax). Only worth doing if `str32` gets full runtime support.
+2. **Remove `str32`** — remove it from the type system, built-in type names list, and spec until Unicode support is actually designed and implemented. Avoids shipping a half-implemented feature.
+
+Leaning toward option 2 — remove `str32` until it's real.
+
 ## Generic type variable soundness — mixed type-var arithmetic (2026-03-24)
 
 ### Problem

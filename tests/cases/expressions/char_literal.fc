@@ -5,6 +5,8 @@ let main = (args: str[]) ->
     let zero = '\0'
     let tab = '\t'
     let esc_slash = '\\'
+    let esc_quote = '\''
+    let cr = '\r'
     let mut r = 0
     if a == 65 then r = r + 1
     if nl == 10 then r = r + 1
@@ -12,4 +14,6 @@ let main = (args: str[]) ->
     if zero == 0 then r = r + 1
     if tab == 9 then r = r + 1
     if esc_slash == 92 then r = r + 1
+    if esc_quote == 39 then r = r + 1
+    if cr == 13 then r = r + 1
     r
