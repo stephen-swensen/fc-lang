@@ -439,6 +439,16 @@ Considered moving to a `sys` module. Resolved by convention: `drop` is the idiom
 ## Unreachable pattern detection — deferred (resolved 2026-03-21)
 Low priority since it's a warning, not a correctness issue. The Maranget infrastructure is in place; unreachable arm detection is the dual of exhaustiveness (call `find_witness` against preceding arms). Small addition when needed.
 
+## Module-scoped imports — deferred (2026-03-24)
+
+Explored allowing `import` declarations inside module bodies, with lexical scoping so that parent module imports are visible to nested child modules at any depth. Implemented and reverted.
+
+**Why it was deferred:** The feature introduced substantial architectural complexity — dual registration of import symbols (in both the module's `SymbolTable` and the pass2 scope chain), a separate pass1 phase (`resolve_module_scoped_imports_rec`), re-export suppression via `is_import` flags, and scope chain injection in `check_module_members`. A review revealed the nested child visibility was fundamentally broken: imported symbols copied during pass1 have NULL types (types aren't set until pass2), so the `scope_add` gate in `check_module_members` (`isym->type` check) never fires, and nested modules can't see parent imports. Same-module use worked via a different path (module_symtab + on-demand type-checking), masking the bug.
+
+File-level imports already provide full functionality without the dual-path complexity. The organizational benefit of module-scoped imports (keeping imports close to usage) doesn't justify the architectural cost, especially given FC's convention of small, composable modules across multiple files.
+
+If revisited, the approach would need to either: (a) resolve import types eagerly when injecting into the scope chain, or (b) unify the module_symtab and scope chain lookup paths so nested modules use the same on-demand resolution as same-module siblings.
+
 ## Eager type resolution — not viable (deferred indefinitely, 2026-03-21)
 Resolving struct field types and union variant payloads in-place on registered types (the high-value part of the proposal) is blocked by self-referential structs. A struct like `node { next: node*? }` creates a cyclic type graph when its field type is resolved from `option(pointer(stub))` to `option(pointer(full_node))` — the full node's `next` field then points back to itself. Functions like `type_contains_type_var()`, `type_eq()`, and other recursive type walkers traverse struct fields and infinite-loop on these cycles. Resolving only AST annotations (param types, cast targets, etc.) is possible but adds ~170 lines of AST walker to eliminate ~10 one-line `resolve_type()` calls — not worth the complexity. The existing on-demand `resolve_type()` calls in pass2 and `resolve_struct_stub()` in codegen remain the correct approach.
 
