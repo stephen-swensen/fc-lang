@@ -954,7 +954,7 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 ### Statements vs. expressions
 
-At the top level of a file or module, `let`, `let mut`, `struct`, `union`, `module`, and `import` are **statements** — they are processed by the first compiler pass, have no type, and produce no value.
+At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, and `extern` — but `import` is not allowed inside modules (see §Importing).
 
 Top-level and module-level non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `default`, and struct literals with constant fields. Variable references and function calls are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions, avoids hidden startup code, and ensures that top-level state can be fully determined at compile time.
 
@@ -2843,6 +2843,7 @@ import func_a from acme::graphics::module_a           // symbol from named modul
 - `.` navigates into modules and submodules — module territory only
 - A path ending in `::` is a namespace; a path not ending in `::` is a module or symbol
 - `import *` works on modules only — you cannot wildcard-import from a bare namespace
+- `import` declarations are **file-level only** — they may not appear inside module bodies. All imports must be at the top level of the file, before or between module declarations.
 
 `import T from M` brings both the type `T` and the module `T` (if it exists) into scope together. There is no need to import them separately.
 

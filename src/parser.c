@@ -1897,6 +1897,11 @@ static Decl *parse_module_decl(Parser *p) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
         Decl *child = parse_decl(p);
+        if (child->kind == DECL_IMPORT) {
+            diag_fatal(child->loc,
+                "import declarations are not allowed inside modules; "
+                "move imports to file level");
+        }
         DA_APPEND(decls, count, cap, child);
         /* Drain any pending decls from multi-symbol imports */
         while (p->pending_count > 0) {

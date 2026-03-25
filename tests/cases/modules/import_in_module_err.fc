@@ -1,0 +1,10 @@
+module helper =
+    let double = (x: int32) -> x * 2
+
+module broken =
+    import double from helper
+
+    let use_it = (x: int32) -> double(x)
+
+let main = (args: str[]) ->
+    broken.use_it(5)
