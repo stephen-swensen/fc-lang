@@ -1,0 +1,11 @@
+// Module-scoped import: import a module and use it via dot-access
+module math =
+    let add = (a: int32, b: int32) -> a + b
+    let mul = (a: int32, b: int32) -> a * b
+
+module wrapper =
+    import math
+    let compute = () -> math.add(10, math.mul(3, 4))
+
+let main = (args: str[]) ->
+    wrapper.compute()

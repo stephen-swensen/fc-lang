@@ -1,0 +1,11 @@
+// Cannot import a private member inside a module body
+module math =
+    private let secret = 42
+    let public_val = 10
+
+module wrapper =
+    import secret from math
+    let get = () -> secret
+
+let main = (args: str[]) ->
+    wrapper.get()

@@ -1,0 +1,10 @@
+// Module-scoped import: import with alias inside a module
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+module wrapper =
+    import math as m
+    let compute = () -> m.add(15, 25)
+
+let main = (args: str[]) ->
+    wrapper.compute()

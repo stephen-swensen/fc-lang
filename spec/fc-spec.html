@@ -2859,6 +2859,23 @@ let main = (args: int32) ->
     move(a, 10)                       // passing coord where pt is expected — OK
 ```
 
+### Module-Scoped Imports
+
+Imports may appear inside module bodies. Such imports are **lexically scoped** to the enclosing module — they are visible to the module's own members and to all nested child modules at any depth, following the same rules as other lexical bindings. Module-scoped imports are **not re-exported**: `import * from` a module will not pull in that module's internal imports, and `import name from` a module cannot import a name that the module itself imported.
+
+```fc
+module prelude =
+    import io from std::              // io available inside prelude and its children
+    let print = (s: str) -> io.write(s, stdout)
+
+    module inner =
+        let greet = () -> io.write("hi", stdout)  // inherits io from parent
+
+import * from prelude               // gets print, inner — but NOT io
+```
+
+All import forms (`import M`, `import M as N`, `import X from M`, `import * from M`, `import M from ns::`) are valid inside module bodies with identical syntax and semantics.
+
 ### Direct Module Access
 
 Module members can be accessed directly using dot notation without importing them first. This works for functions, values, struct types, and union types at any nesting depth:

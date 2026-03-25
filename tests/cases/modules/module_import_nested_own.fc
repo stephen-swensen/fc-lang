@@ -1,0 +1,16 @@
+// Nested child module has its own import alongside parent's import
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+module helpers =
+    let double = (x: int32) -> x * 2
+
+module outer =
+    import math
+
+    module inner =
+        import helpers
+        let compute = () -> helpers.double(math.add(5, 10))
+
+let main = (args: str[]) ->
+    outer.inner.compute()
