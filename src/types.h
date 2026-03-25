@@ -155,8 +155,9 @@ void type_collect_vars(Type *t, const char ***vars, int *count, int *cap);
 /* Substitute type variables: replace TYPE_TYPE_VAR with concrete types */
 Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete, int count);
 
-/* Mangle a type name for use in C identifiers */
-const char *mangle_type_name(Type *t);
+/* Mangle a type name for use in C identifiers.
+ * Returns a malloc'd string that the caller must free. */
+char *mangle_type_name(Type *t);
 
 /* Build mangled name for a generic instantiation, e.g. "fc_identity_int32" */
 const char *mangle_generic_name(Arena *a, InternTable *intern,

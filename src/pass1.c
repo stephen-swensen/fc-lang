@@ -102,9 +102,12 @@ Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_pr
 
 /* Build a mangled name: prefix_name */
 static const char *make_mangled(InternTable *intern, const char *prefix, const char *name) {
-    char buf[512];
-    snprintf(buf, sizeof(buf), "%s_%s", prefix, name);
-    return intern_cstr(intern, buf);
+    int needed = snprintf(NULL, 0, "%s_%s", prefix, name) + 1;
+    char *buf = malloc((size_t)needed);
+    snprintf(buf, (size_t)needed, "%s_%s", prefix, name);
+    const char *result = intern_cstr(intern, buf);
+    free(buf);
+    return result;
 }
 
 /* Resolve struct type stubs in a type tree against a symbol table.

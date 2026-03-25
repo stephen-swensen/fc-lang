@@ -40,6 +40,14 @@ static Scope *scope_new(Arena *a, Scope *parent) {
 
 static int local_id_counter = 0;
 
+/* Generate a unique codegen name like "_l_varname_42" with no fixed buffer limit. */
+static const char *make_local_name(Arena *a, const char *prefix, const char *name, int id) {
+    int needed = snprintf(NULL, 0, "%s%s_%d", prefix, name, id) + 1;
+    char *buf = arena_alloc(a, (size_t)needed);
+    snprintf(buf, (size_t)needed, "%s%s_%d", prefix, name, id);
+    return buf;
+}
+
 static void scope_add_prov(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut, Provenance prov) {
     LocalBinding b = { name, codegen_name, type, is_mut, prov };
     DA_APPEND(s->locals, s->local_count, s->local_cap, b);
@@ -666,10 +674,7 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
         if (inner->kind == PAT_BINDING) {
             const char *orig_name = inner->binding.name;
             int id = local_id_counter++;
-            char buf[128];
-            snprintf(buf, sizeof(buf), "_l_%s_%d", orig_name, id);
-            char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
-            memcpy(cg, buf, strlen(buf) + 1);
+            const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
             inner->binding.name = cg;  /* overwrite with codegen name */
             scope_add(ctx->scope, orig_name, cg, field_type, is_mut);
         } else if (inner->kind == PAT_WILDCARD) {
@@ -1887,10 +1892,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (type_is_error(t)) {
             /* Add binding with error type so subsequent uses don't cascade "undefined" */
             int id = local_id_counter++;
-            char buf[128];
-            snprintf(buf, sizeof(buf), "_l_%s_%d", e->let_expr.let_name, id);
-            char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
-            memcpy(cg, buf, strlen(buf) + 1);
+            const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
             e->let_expr.codegen_name = cg;
             e->let_expr.let_type = type_error();
             scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
@@ -1900,10 +1902,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (t->kind == TYPE_VOID) {
             diag_error(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
             int id = local_id_counter++;
-            char buf[128];
-            snprintf(buf, sizeof(buf), "_l_%s_%d", e->let_expr.let_name, id);
-            char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
-            memcpy(cg, buf, strlen(buf) + 1);
+            const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
             e->let_expr.codegen_name = cg;
             e->let_expr.let_type = type_error();
             scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
@@ -1912,10 +1911,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         e->let_expr.let_type = t;
         int id = local_id_counter++;
-        char buf[128];
-        snprintf(buf, sizeof(buf), "_l_%s_%d", e->let_expr.let_name, id);
-        char *cg = arena_alloc(ctx->arena, strlen(buf) + 1);
-        memcpy(cg, buf, strlen(buf) + 1);
+        const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
         e->let_expr.codegen_name = cg;
         scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
                         e->let_expr.let_init->prov);
@@ -1938,10 +1934,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
         /* Generate temp name for the RHS struct value */
         int tmp_id = local_id_counter++;
-        char tmp_buf[128];
-        snprintf(tmp_buf, sizeof(tmp_buf), "_ds_%d", tmp_id);
-        char *tmp_name = arena_alloc(ctx->arena, strlen(tmp_buf) + 1);
-        memcpy(tmp_name, tmp_buf, strlen(tmp_buf) + 1);
+        int ds_len = snprintf(NULL, 0, "_ds_%d", tmp_id) + 1;
+        char *tmp_name = arena_alloc(ctx->arena, (size_t)ds_len);
+        snprintf(tmp_name, (size_t)ds_len, "_ds_%d", tmp_id);
         e->let_destruct.tmp_name = tmp_name;
 
         check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
@@ -2227,11 +2222,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* Walk up the nested EXPR_FIELD chain to find the deepest module. */
             /* We need to re-resolve: the object is already type-checked and set to void.
              * Walk the chain from root to find the module. */
-            Expr *chain[32];
-            int depth = 0;
+            Expr **chain = NULL;
+            int depth = 0, chain_cap = 0;
             Expr *cur = e->field.object;
-            while (cur->kind == EXPR_FIELD && depth < 31) {
-                chain[depth++] = cur;
+            while (cur->kind == EXPR_FIELD) {
+                DA_APPEND(chain, depth, chain_cap, cur);
                 cur = cur->field.object;
             }
             if (cur->kind == EXPR_IDENT) {
@@ -2250,6 +2245,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     if (walk) mod_sym = walk;
                 }
             }
+            free(chain);
         }
 
         if (mod_sym && mod_sym->members) {

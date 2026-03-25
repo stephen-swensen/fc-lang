@@ -1,6 +1,13 @@
 #include "types.h"
 #include <stdio.h>
 
+static char *str_dup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = malloc(len);
+    memcpy(copy, s, len);
+    return copy;
+}
+
 /* Singleton primitive types */
 static Type primitives[TYPE_COUNT];
 static bool primitives_init = false;
@@ -660,53 +667,58 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
     }
 }
 
-const char *mangle_type_name(Type *t) {
-    if (!t) return "void";
+/* Returns a type name suitable for mangling. The result is always a malloc'd
+ * string that the caller must free (even for primitive types). */
+char *mangle_type_name(Type *t) {
+    if (!t) return str_dup("void");
     /* Const types get a "const_" prefix */
     if (t->is_const) {
-        static char cbufs[4][256];
-        static int cidx = 0;
-        char *buf = cbufs[cidx & 3]; cidx++;
         Type tmp = *t;
         tmp.is_const = false;
-        snprintf(buf, 256, "const_%s", mangle_type_name(&tmp));
+        char *inner = mangle_type_name(&tmp);
+        int needed = snprintf(NULL, 0, "const_%s", inner) + 1;
+        char *buf = malloc((size_t)needed);
+        snprintf(buf, (size_t)needed, "const_%s", inner);
+        free(inner);
         return buf;
     }
-    if (is_str_type(t)) return "str";
-    if (is_cstr_type(t)) return "cstr";
-    if (is_str32_type(t)) return "str32";
+    if (is_str_type(t)) return str_dup("str");
+    if (is_cstr_type(t)) return str_dup("cstr");
+    if (is_str32_type(t)) return str_dup("str32");
     switch (t->kind) {
-    case TYPE_INT8:    return "int8";
-    case TYPE_INT16:   return "int16";
-    case TYPE_INT32:   return "int32";
-    case TYPE_INT64:   return "int64";
-    case TYPE_UINT8:   return "uint8";
-    case TYPE_UINT16:  return "uint16";
-    case TYPE_UINT32:  return "uint32";
-    case TYPE_UINT64:  return "uint64";
-    case TYPE_ISIZE:   return "isize";
-    case TYPE_USIZE:   return "usize";
-    case TYPE_FLOAT32: return "f32";
-    case TYPE_FLOAT64: return "f64";
-    case TYPE_BOOL:    return "bool";
-    case TYPE_VOID:    return "void";
-    case TYPE_STRUCT:  return t->struc.name;
-    case TYPE_UNION:   return t->unio.name;
-    case TYPE_TYPE_VAR: return t->type_var.name;
+    case TYPE_INT8:    return str_dup("int8");
+    case TYPE_INT16:   return str_dup("int16");
+    case TYPE_INT32:   return str_dup("int32");
+    case TYPE_INT64:   return str_dup("int64");
+    case TYPE_UINT8:   return str_dup("uint8");
+    case TYPE_UINT16:  return str_dup("uint16");
+    case TYPE_UINT32:  return str_dup("uint32");
+    case TYPE_UINT64:  return str_dup("uint64");
+    case TYPE_ISIZE:   return str_dup("isize");
+    case TYPE_USIZE:   return str_dup("usize");
+    case TYPE_FLOAT32: return str_dup("f32");
+    case TYPE_FLOAT64: return str_dup("f64");
+    case TYPE_BOOL:    return str_dup("bool");
+    case TYPE_VOID:    return str_dup("void");
+    case TYPE_STRUCT:  return str_dup(t->struc.name);
+    case TYPE_UNION:   return str_dup(t->unio.name);
+    case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
     default: {
-        /* Rotating buffers to avoid corruption during recursive calls */
-        static char bufs[4][256];
-        static int bidx = 0;
-        char *buf = bufs[bidx & 3]; bidx++;
+        const char *prefix;
+        char *inner;
         if (t->kind == TYPE_POINTER) {
-            snprintf(buf, 256, "ptr_%s", mangle_type_name(t->pointer.pointee));
+            prefix = "ptr_"; inner = mangle_type_name(t->pointer.pointee);
         } else if (t->kind == TYPE_SLICE) {
-            snprintf(buf, 256, "slice_%s", mangle_type_name(t->slice.elem));
+            prefix = "slice_"; inner = mangle_type_name(t->slice.elem);
         } else if (t->kind == TYPE_OPTION) {
-            snprintf(buf, 256, "opt_%s", mangle_type_name(t->option.inner));
+            prefix = "opt_"; inner = mangle_type_name(t->option.inner);
         } else {
-            snprintf(buf, 256, "unknown");
+            return str_dup("unknown");
         }
+        int needed = snprintf(NULL, 0, "%s%s", prefix, inner) + 1;
+        char *buf = malloc((size_t)needed);
+        snprintf(buf, (size_t)needed, "%s%s", prefix, inner);
+        free(inner);
         return buf;
     }
     }
@@ -714,13 +726,23 @@ const char *mangle_type_name(Type *t) {
 
 const char *mangle_generic_name(Arena *a, InternTable *intern_tbl,
                                 const char *base, Type **type_args, int count) {
-    char buf[512];
-    int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", base);
+    /* Measure total length needed */
+    char **names = malloc(sizeof(char*) * (size_t)count);
+    int needed = (int)strlen(base);
     for (int i = 0; i < count; i++) {
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "_%s",
-                        mangle_type_name(type_args[i]));
+        names[i] = mangle_type_name(type_args[i]);
+        needed += 1 + (int)strlen(names[i]); /* "_" + name */
     }
+    char *buf = malloc((size_t)(needed + 1));
+    int pos = 0;
+    pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "%s", base);
+    for (int i = 0; i < count; i++) {
+        pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "_%s", names[i]);
+        free(names[i]);
+    }
+    free(names);
     (void)a;
-    return intern_cstr(intern_tbl, buf);
+    const char *result = intern_cstr(intern_tbl, buf);
+    free(buf);
+    return result;
 }
