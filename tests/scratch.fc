@@ -2,53 +2,16 @@ import io from std::
 
 let println = (s:str) ->  io.write("%s{s}\n", stdout)
 
-struct container =
-    label: int32
-    value: int32
-
-union wrapped =
-    | boxed(container)
-    | empty
-
-let check = (w: wrapped) ->
-    match w with
-    | boxed({ label = 3, value = v }) -> v
-    | empty -> 0
-    | _ -> -1
-
 struct tuple2 =
     e1: 'a
-    e2: const 'b*
-
-module tuple2 =
-    let test = 23
-
-let f = (x:'a, y:'b) -> x > y
-//let g = (x: int32, y: float64) -> x > y
-//let ff = (x: 'a) -> 'a.test + x
-
-let ff = <'b, 'c>(x: (int32, int32) -> int32) -> x(32, 32) + default('b) + default('c)
+    e2: 'b*
 
 let main = (args: str[]) ->
-    
-    println("%T{f}")
-    println("%T{ff}")
-    let mut x = 3
-    let t = tuple2 { e1 = 32, e2 = &x }
-    //println("ffcall: %T{ff(t)}")
-    //println("fcall: %T{f(23, 23.3)}")
-    //println("gcall: %T{g(23, 23.3)}")
+    let x = alloc(int64)!
+    //let t = (tuple2<int32,int64>*) alloc(tuple2 { e1 = 32, e2 = x })!
+    let t = (const tuple2<int32,int64>*) alloc(tuple2 { e1 = 32, e2 = x })!
+    let y = t->e2
     println("t: %T{t}")
-    let buf = uint8[10] { }
-    println("buf: %T{buf}")
-    let x = "hello world"
-    println("%s{x}: %T{x}")
-    let x = (uint8[]) x
-    println("%s{x}: %T{x}")
-    let x = (const cstr) "hello world"
-    println("%s{x}: %T{x}")
-    println("%T{wrapped.boxed(container{label=3, value=2})}")
-    println("%T{check(wrapped.boxed(container{label=3, value=2}))}")
-    println("%T{args}")
+    println("y: %T{y}")
     0
 

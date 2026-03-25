@@ -981,7 +981,8 @@ static Expr *parse_prefix(Parser *p) {
         bool try_cast = false;
         if (peek_at(p, 1)->kind == TOK_IDENT &&
             (is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
-             peek_at(p, 2)->kind == TOK_STAR)) {
+             peek_at(p, 2)->kind == TOK_STAR ||
+             peek_at(p, 2)->kind == TOK_LT)) {
             try_cast = true;
         } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_DOT) {
             /* Scan past IDENT (.IDENT)* and check for type suffix */
