@@ -588,6 +588,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                     Symbol *new_sym = &symtab->symbols[symtab->count - 1];
                     new_sym->type = msym->type;
                     new_sym->members = msym->members;
+                    new_sym->is_generic = msym->is_generic;
+                    new_sym->type_params = msym->type_params;
+                    new_sym->type_param_count = msym->type_param_count;
+                    new_sym->explicit_type_param_count = msym->explicit_type_param_count;
                 }
             }
         } else {
@@ -621,6 +625,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                     new_sym->type = msym->type;
                 }
                 new_sym->members = msym->members;
+                new_sym->is_generic = msym->is_generic;
+                new_sym->type_params = msym->type_params;
+                new_sym->type_param_count = msym->type_param_count;
+                new_sym->explicit_type_param_count = msym->explicit_type_param_count;
             }
             /* Type-associated module: if importing a type, also import the
              * associated module (if any) under the same name.
