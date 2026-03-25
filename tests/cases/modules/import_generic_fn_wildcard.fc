@@ -1,0 +1,11 @@
+module utils =
+    let identity = (x: 'a) -> x
+    let add_one = (x: int32) -> x + 1
+
+import * from utils
+
+let main = (args: str[]) ->
+    let a = identity(10)
+    let b = identity(true)
+    let c = add_one(a)
+    if b then c else 0

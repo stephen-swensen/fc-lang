@@ -1,0 +1,11 @@
+module utils =
+    let identity = (x: 'a) -> x
+    let pair_first = (a: 'a, b: 'b) -> a
+
+import identity from utils
+import pair_first from utils
+
+let main = (args: str[]) ->
+    let a = identity(42)
+    let b = pair_first(10, true)
+    a + b
