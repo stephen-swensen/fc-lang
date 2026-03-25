@@ -1131,30 +1131,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name) {
                     e->ident.codegen_name = msym->decl->let.codegen_name;
                 }
-                if (!msym->type && msym->is_import && msym->decl &&
-                    msym->decl->kind == DECL_LET) {
-                    /* On-demand type-check for imported symbol. Find the
-                     * source module that owns this decl and check it there. */
-                    for (int si = 0; si < ctx->symtab->count && !msym->type; si++) {
-                        Symbol *s = &ctx->symtab->symbols[si];
-                        if (s->kind != DECL_MODULE || !s->members) continue;
-                        for (int sj = 0; sj < s->members->count; sj++) {
-                            Symbol *orig = &s->members->symbols[sj];
-                            if (orig->decl == msym->decl && !orig->is_import) {
-                                SymbolTable *saved_mod = ctx->module_symtab;
-                                Scope *saved_scope = ctx->scope;
-                                ctx->module_symtab = s->members;
-                                ctx->scope = scope_new(ctx->arena, NULL);
-                                check_decl_let(ctx, msym->decl);
-                                ctx->scope = saved_scope;
-                                ctx->module_symtab = saved_mod;
-                                /* Propagate type to the import symbol */
-                                msym->type = orig->type;
-                                break;
-                            }
-                        }
-                    }
-                }
                 if (!msym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();
@@ -3736,37 +3712,6 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 diag_error(child->loc,
                     "top-level initializer for '%s' must be a constant expression",
                     child->let.name);
-            }
-        } else if (child->kind == DECL_IMPORT) {
-            /* Add imported symbols to scope chain so nested child modules
-             * can see them via lexical scoping. For wildcard imports, we
-             * need to add all the symbols that were resolved into members. */
-            if (child->import.is_wildcard) {
-                /* Wildcard: all is_import symbols from this import are in members */
-                for (int j = 0; j < ctx->module_symtab->count; j++) {
-                    Symbol *isym = &ctx->module_symtab->symbols[j];
-                    if (!isym->is_import) continue;
-                    if (isym->kind == DECL_MODULE) {
-                        scope_add(ctx->scope, isym->name, isym->name, type_void(), false);
-                    } else if (isym->type) {
-                        const char *cg = (isym->decl && isym->decl->kind == DECL_LET
-                                          && isym->decl->let.codegen_name)
-                            ? isym->decl->let.codegen_name : isym->name;
-                        scope_add(ctx->scope, isym->name, cg, isym->type, false);
-                    }
-                }
-            } else {
-                const char *import_name = child->import.alias
-                    ? child->import.alias : child->import.name;
-                Symbol *isym = symtab_lookup(ctx->module_symtab, import_name);
-                if (isym && isym->kind == DECL_MODULE) {
-                    scope_add(ctx->scope, import_name, import_name, type_void(), false);
-                } else if (isym && isym->type) {
-                    const char *cg = (isym->decl && isym->decl->kind == DECL_LET
-                                      && isym->decl->let.codegen_name)
-                        ? isym->decl->let.codegen_name : import_name;
-                    scope_add(ctx->scope, import_name, cg, isym->type, false);
-                }
             }
         } else if (child->kind == DECL_MODULE) {
             Symbol *sub_sym = symtab_lookup_kind(parent_members,

@@ -1,7 +1,0 @@
-// Importing from a nonexistent module inside a module body
-module wrapper =
-    import nonexistent
-    let compute = () -> 42
-
-let main = (args: str[]) ->
-    wrapper.compute()

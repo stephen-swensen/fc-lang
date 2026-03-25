@@ -85,8 +85,7 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
     Symbol sym = { .name = name, .ns_prefix = NULL, .kind = kind, .decl = decl,
                    .type = NULL, .members = NULL, .is_private = false,
-                   .is_import = false, .is_generic = false,
-                   .type_params = NULL, .type_param_count = 0 };
+                   .is_generic = false, .type_params = NULL, .type_param_count = 0 };
     DA_APPEND(t->symbols, t->count, t->capacity, sym);
 }
 
@@ -350,8 +349,6 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             register_module_members(child, sub_prefix, sub_members, intern, global_symtab);
             break;
         }
-        case DECL_IMPORT:
-            break;  /* resolved later in Phase 3 */
         default:
             break;
         }
@@ -373,190 +370,6 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             Symbol *msym = symtab_lookup(members, src_name);
             if (msym) msym->type = resolved;
         }
-    }
-}
-
-/* Resolve a single import declaration, adding results to target_symtab.
- * global_symtab is used for module lookups. current_ns is the active namespace.
- * When mark_import is true, added symbols get is_import=true. */
-static void resolve_import_fn(Decl *d, SymbolTable *target_symtab,
-                              SymbolTable *global_symtab, const char *current_ns,
-                              bool mark_import) {
-    if (!d) return; /* no-op for suppress-warning call */
-
-    const char *mod_name = d->import.from_module;
-    const char *from_ns = d->import.from_namespace;
-
-    if (!mod_name && !from_ns) {
-        /* import MODULE [as ALIAS] — whole module import */
-        const char *name = d->import.name;
-        Symbol *sym = symtab_lookup_module(global_symtab, name, current_ns);
-        if (!sym) sym = symtab_lookup_module(global_symtab, name, NULL);
-        if (!sym || sym->kind != DECL_MODULE) {
-            diag_error(d->loc, "unknown module '%s'", name);
-            return;
-        }
-        if (d->import.alias) {
-            const char *alias = d->import.alias;
-            if (symtab_lookup(target_symtab, alias)) {
-                diag_error(d->loc, "import '%s' conflicts with existing name", alias);
-            } else {
-                symtab_add(target_symtab, alias, DECL_MODULE, sym->decl);
-                Symbol *alias_sym = &target_symtab->symbols[target_symtab->count - 1];
-                alias_sym->members = sym->members;
-                alias_sym->type = sym->type;
-                alias_sym->ns_prefix = current_ns;
-                alias_sym->is_import = mark_import;
-            }
-        } else if (mark_import) {
-            /* For module-scoped `import MODULE` (no alias), add the module
-             * to the target symtab so it's accessible within the module body */
-            if (!symtab_lookup(target_symtab, name)) {
-                symtab_add(target_symtab, name, DECL_MODULE, sym->decl);
-                Symbol *new_sym = &target_symtab->symbols[target_symtab->count - 1];
-                new_sym->members = sym->members;
-                new_sym->type = sym->type;
-                new_sym->ns_prefix = sym->ns_prefix;
-                new_sym->is_import = true;
-            }
-        }
-        return;
-    }
-
-    if (from_ns && !mod_name) {
-        if (d->import.is_wildcard) {
-            diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
-            return;
-        }
-        /* import MODULE from namespace:: */
-        const char *name = d->import.name;
-        Symbol *sym = symtab_lookup_module(global_symtab, name, from_ns);
-        if (!sym || sym->kind != DECL_MODULE) {
-            diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, from_ns);
-            return;
-        }
-        const char *import_name = d->import.alias ? d->import.alias : name;
-        Symbol *existing = symtab_lookup_module(target_symtab, import_name, current_ns);
-        if (existing) {
-            if (existing->decl != sym->decl) {
-                diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
-            }
-        } else {
-            symtab_add(target_symtab, import_name, DECL_MODULE, sym->decl);
-            Symbol *new_sym = &target_symtab->symbols[target_symtab->count - 1];
-            new_sym->members = sym->members;
-            new_sym->type = sym->type;
-            new_sym->ns_prefix = current_ns;
-            new_sym->is_import = mark_import;
-        }
-        return;
-    }
-
-    /* Have a from_module — look up the source module */
-    const char *lookup_ns = from_ns ? from_ns : current_ns;
-    Symbol *mod_sym = symtab_lookup_module(global_symtab, mod_name, lookup_ns);
-    if (!mod_sym) mod_sym = symtab_lookup_module(global_symtab, mod_name, NULL);
-    if (!mod_sym || mod_sym->kind != DECL_MODULE) {
-        diag_error(d->loc, "unknown module '%s'", mod_name);
-        return;
-    }
-
-    if (d->import.is_wildcard) {
-        /* import * from MODULE */
-        SymbolTable *members = mod_sym->members;
-        for (int j = 0; j < members->count; j++) {
-            Symbol *msym = &members->symbols[j];
-            if (msym->is_private) continue;
-            if (msym->is_import) continue;  /* don't re-export imports */
-            const char *import_name = msym->name;
-            if (symtab_lookup(target_symtab, import_name)) {
-                diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
-            } else {
-                symtab_add(target_symtab, import_name, msym->kind, msym->decl);
-                Symbol *new_sym = &target_symtab->symbols[target_symtab->count - 1];
-                new_sym->type = msym->type;
-                new_sym->members = msym->members;
-                new_sym->is_import = mark_import;
-            }
-        }
-    } else {
-        /* import NAME [as ALIAS] from MODULE */
-        Symbol *msym = symtab_lookup(mod_sym->members, d->import.name);
-        if (!msym) {
-            diag_error(d->loc, "module '%s' has no member '%s'",
-                mod_name, d->import.name);
-            return;
-        }
-        if (msym->is_private) {
-            diag_error(d->loc, "cannot import private member '%s' from module '%s'",
-                d->import.name, mod_name);
-            return;
-        }
-        if (msym->is_import) {
-            diag_error(d->loc, "cannot import '%s' from '%s' — it is itself an import, not a defined member",
-                d->import.name, mod_name);
-            return;
-        }
-        const char *import_name = d->import.alias ? d->import.alias : d->import.name;
-        if (symtab_lookup(target_symtab, import_name)) {
-            diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
-        } else {
-            symtab_add(target_symtab, import_name, msym->kind, msym->decl);
-            Symbol *new_sym = &target_symtab->symbols[target_symtab->count - 1];
-            if (d->import.alias && msym->type &&
-                (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION)) {
-                Type *copy = malloc(sizeof(Type));
-                *copy = *msym->type;
-                copy->alias = d->import.alias;
-                new_sym->type = copy;
-            } else {
-                new_sym->type = msym->type;
-            }
-            new_sym->members = msym->members;
-            new_sym->is_import = mark_import;
-        }
-        /* Type-associated module */
-        if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
-            Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members, d->import.name, DECL_MODULE);
-            if (assoc_mod && !assoc_mod->is_private) {
-                symtab_add(target_symtab, import_name, DECL_MODULE, assoc_mod->decl);
-                Symbol *mod_entry = &target_symtab->symbols[target_symtab->count - 1];
-                mod_entry->members = assoc_mod->members;
-                mod_entry->type = assoc_mod->type;
-                mod_entry->is_import = mark_import;
-            }
-        }
-    }
-}
-
-/* Recursively resolve module-scoped imports in a module and its nested submodules */
-static void resolve_module_scoped_imports_rec(Decl *mod_decl, SymbolTable *members,
-                                              SymbolTable *global_symtab, const char *ns) {
-    for (int i = 0; i < mod_decl->module.decl_count; i++) {
-        Decl *child = mod_decl->module.decls[i];
-        if (child->kind == DECL_IMPORT) {
-            resolve_import_fn(child, members, global_symtab, ns, true);
-        }
-    }
-    /* Recurse into nested submodules */
-    for (int i = 0; i < mod_decl->module.decl_count; i++) {
-        Decl *child = mod_decl->module.decls[i];
-        if (child->kind == DECL_MODULE && !child->module.from_lib) {
-            Symbol *sub = symtab_lookup_kind(members, child->module.name, DECL_MODULE);
-            if (sub && sub->members) {
-                resolve_module_scoped_imports_rec(child, sub->members, global_symtab, ns);
-            }
-        }
-    }
-}
-
-/* Walk all modules in the global symtab and resolve their internal imports */
-static void resolve_module_scoped_imports(SymbolTable *global_symtab, SymbolTable *symtab) {
-    for (int i = 0; i < symtab->count; i++) {
-        Symbol *sym = &symtab->symbols[i];
-        if (sym->kind != DECL_MODULE || !sym->members || !sym->decl) continue;
-        if (sym->decl->module.from_lib) continue;  /* extern modules can't have imports */
-        resolve_module_scoped_imports_rec(sym->decl, sym->members, global_symtab, sym->ns_prefix);
     }
 }
 
@@ -677,11 +490,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         }
     }
 
-    /* Phase 3: Process imports.
-     * resolve_import() handles a single import declaration, adding the resolved
-     * symbol(s) to target_symtab. global_symtab is used for module lookups.
-     * When mark_import is true, added symbols get is_import=true (for module-scoped
-     * imports that should not be re-exported). */
+    /* Phase 3: Process imports */
     current_ns = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
@@ -692,14 +501,139 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         }
 
         if (d->kind != DECL_IMPORT) continue;
-        resolve_import_fn(d, symtab, symtab, current_ns, false);
+
+        const char *mod_name = d->import.from_module;
+        const char *from_ns = d->import.from_namespace;
+
+        if (!mod_name && !from_ns) {
+            /* import MODULE [as ALIAS] — whole module import */
+            const char *name = d->import.name;
+            /* Look up module, trying current namespace first, then global */
+            Symbol *sym = symtab_lookup_module(symtab, name, current_ns);
+            if (!sym) sym = symtab_lookup_module(symtab, name, NULL);
+            if (!sym || sym->kind != DECL_MODULE) {
+                diag_error(d->loc, "unknown module '%s'", name);
+                continue;
+            }
+            if (d->import.alias) {
+                /* import MODULE as ALIAS: add alias to symtab */
+                const char *alias = d->import.alias;
+                if (symtab_lookup(symtab, alias)) {
+                    diag_error(d->loc, "import '%s' conflicts with existing name", alias);
+                } else {
+                    symtab_add(symtab, alias, DECL_MODULE, sym->decl);
+                    Symbol *alias_sym = &symtab->symbols[symtab->count - 1];
+                    alias_sym->members = sym->members;
+                    alias_sym->type = sym->type;
+                    alias_sym->ns_prefix = current_ns;
+                }
+            }
+            continue;
+        }
+
+        if (from_ns && !mod_name) {
+            /* Wildcard import from bare namespace is invalid per spec */
+            if (d->import.is_wildcard) {
+                diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
+                continue;
+            }
+            /* import MODULE from namespace:: — cross-namespace whole module import */
+            const char *name = d->import.name;
+            Symbol *sym = symtab_lookup_module(symtab, name, from_ns);
+            if (!sym || sym->kind != DECL_MODULE) {
+                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, from_ns);
+                continue;
+            }
+            const char *import_name = d->import.alias ? d->import.alias : name;
+            /* Check for existing entry in importer's namespace */
+            Symbol *existing = symtab_lookup_module(symtab, import_name, current_ns);
+            if (existing) {
+                if (existing->decl != sym->decl) {
+                    diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
+                }
+            } else {
+                /* Add entry accessible from importer's namespace */
+                symtab_add(symtab, import_name, DECL_MODULE, sym->decl);
+                Symbol *new_sym = &symtab->symbols[symtab->count - 1];
+                new_sym->members = sym->members;
+                new_sym->type = sym->type;
+                new_sym->ns_prefix = current_ns;
+            }
+            continue;
+        }
+
+        /* Have a from_module — look up the source module */
+        const char *lookup_ns = from_ns ? from_ns : current_ns;
+        Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
+        if (!mod_sym) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
+        if (!mod_sym || mod_sym->kind != DECL_MODULE) {
+            diag_error(d->loc, "unknown module '%s'", mod_name);
+            continue;
+        }
+
+        if (d->import.is_wildcard) {
+            /* import * from MODULE: add all non-private members to global symtab */
+            SymbolTable *members = mod_sym->members;
+            for (int j = 0; j < members->count; j++) {
+                Symbol *msym = &members->symbols[j];
+                if (msym->is_private) continue;
+                const char *import_name = msym->name;
+                if (symtab_lookup(symtab, import_name)) {
+                    diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
+                } else {
+                    symtab_add(symtab, import_name, msym->kind, msym->decl);
+                    Symbol *new_sym = &symtab->symbols[symtab->count - 1];
+                    new_sym->type = msym->type;
+                    new_sym->members = msym->members;
+                }
+            }
+        } else {
+            /* import NAME [as ALIAS] from MODULE */
+            Symbol *msym = symtab_lookup(mod_sym->members, d->import.name);
+            if (!msym) {
+                diag_error(d->loc, "module '%s' has no member '%s'",
+                    mod_name, d->import.name);
+                continue;
+            }
+            if (msym->is_private) {
+                diag_error(d->loc, "cannot import private member '%s' from module '%s'",
+                    d->import.name, mod_name);
+                continue;
+            }
+            const char *import_name = d->import.alias ? d->import.alias : d->import.name;
+            if (symtab_lookup(symtab, import_name)) {
+                diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
+            } else {
+                symtab_add(symtab, import_name, msym->kind, msym->decl);
+                Symbol *new_sym = &symtab->symbols[symtab->count - 1];
+                /* If importing a type with an alias, shallow-copy the Type so
+                 * the alias field doesn't mutate the original shared type. */
+                if (d->import.alias && msym->type &&
+                    (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION)) {
+                    Type *copy = malloc(sizeof(Type));
+                    *copy = *msym->type;
+                    copy->alias = d->import.alias;
+                    new_sym->type = copy;
+                } else {
+                    new_sym->type = msym->type;
+                }
+                new_sym->members = msym->members;
+            }
+            /* Type-associated module: if importing a type, also import the
+             * associated module (if any) under the same name.
+             * Per spec: "import T from M brings both the type T and the module T
+             * (if it exists) into scope together." */
+            if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+                Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members, d->import.name, DECL_MODULE);
+                if (assoc_mod && !assoc_mod->is_private) {
+                    symtab_add(symtab, import_name, DECL_MODULE, assoc_mod->decl);
+                    Symbol *mod_entry = &symtab->symbols[symtab->count - 1];
+                    mod_entry->members = assoc_mod->members;
+                    mod_entry->type = assoc_mod->type;
+                }
+            }
+        }
     }
-
-    /* Phase 3b: Resolve module-scoped imports.
-     * Walk all modules and resolve DECL_IMPORT children into the module's
-     * members symtab. Recurse into nested submodules. */
-    resolve_module_scoped_imports(symtab, symtab);
-
 
     /* Phase 4: Detect circular references between modules.
      * Scan module member expressions for EXPR_FIELD on other modules,
@@ -723,17 +657,6 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             /* Scan all expressions in module i for IDENT references to other modules */
             for (int d = 0; d < mods[i]->module.decl_count; d++) {
                 Decl *child = mods[i]->module.decls[d];
-                /* Module-scoped imports create dependency edges */
-                if (child->kind == DECL_IMPORT) {
-                    const char *target = child->import.from_module
-                        ? child->import.from_module : child->import.name;
-                    for (int j = 0; j < mod_count; j++) {
-                        if (j == i) continue;
-                        if (target == mods[j]->module.name)
-                            deps[i * mod_count + j] = true;
-                    }
-                    continue;
-                }
                 if (child->kind != DECL_LET || !child->let.init) continue;
                 /* Walk expression tree looking for EXPR_IDENT matching other module names */
                 Expr **stack = NULL;

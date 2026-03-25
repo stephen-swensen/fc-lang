@@ -1,7 +1,0 @@
-// Module-scoped cross-namespace import
-module wrapper =
-    import math from acme::
-    let compute = () -> math.add(17, 25)
-
-let main = (args: str[]) ->
-    wrapper.compute()
