@@ -1,15 +1,25 @@
-import io from std::
+module prelude =
+    import io from std::
+    let print = (s:const str) ->  io.write(s, stdout)
+    let println = (s:const str) ->  io.write("%s{s}\n", stdout)
+    let freeze = (x: 'a*) -> (const 'a*) x
 
-let println = (s:str) ->  io.write("%s{s}\n", stdout)
+import prelude
 
 struct tuple2 =
     e1: 'a
     e2: 'b*
 
 let main = (args: str[]) ->
+    print("hello ")
+    print("world")
+    print("\n")
+
     let x = alloc(int64)!
-    //let t = (tuple2<int32,int64>*) alloc(tuple2 { e1 = 32, e2 = x })!
-    let t = (const tuple2<int32,int64>*) alloc(tuple2 { e1 = 32, e2 = x })!
+    let t = (tuple2<int32,int64>*) alloc(tuple2 { e1 = 32, e2 = x })!
+    //let t = (const tuple2<int32,int64>*) alloc(tuple2 { e1 = 32, e2 = x })!
+    let t = freeze(freeze(alloc(tuple2 { e1 = 32, e2 = x })!))
+    t->e2 = x
     let y = t->e2
     println("t: %T{t}")
     println("y: %T{y}")
