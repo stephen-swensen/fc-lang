@@ -1,0 +1,4 @@
+import helper from test::
+
+module consumer =
+    let get = () -> helper.value

@@ -1,0 +1,5 @@
+import math from acme::
+import add from math
+
+let main = (args: str[]) ->
+    add(20, 5)

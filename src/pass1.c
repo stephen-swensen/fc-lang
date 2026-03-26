@@ -101,6 +101,7 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
             tbl->entries[i].source_name = source_name;
             tbl->entries[i].kind = kind;
             tbl->entries[i].source_members = source_members;
+            tbl->entries[i].module_members = msym->members;
             tbl->entries[i].is_generic = msym->is_generic;
             tbl->entries[i].type_params = msym->type_params;
             tbl->entries[i].type_param_count = msym->type_param_count;
@@ -113,10 +114,41 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
         .source_name = source_name,
         .kind = kind,
         .source_members = source_members,
+        .module_members = msym->members,
         .is_generic = msym->is_generic,
         .type_params = msym->type_params,
         .type_param_count = msym->type_param_count,
         .explicit_type_param_count = msym->explicit_type_param_count,
+    };
+    DA_APPEND(tbl->entries, tbl->count, tbl->capacity, ref);
+}
+
+/* Add a whole-module import to an import table.
+ * source_name = module's name in global symtab (for lookup).
+ * module_members = the imported module's member table (for dotted access). */
+static void import_table_add_module(ImportTable *tbl, const char *local_name,
+                                     Symbol *mod_sym, SymbolTable *global_symtab) {
+    for (int i = 0; i < tbl->count; i++) {
+        if (tbl->entries[i].local_name == local_name) {
+            tbl->entries[i].kind = DECL_MODULE;
+            tbl->entries[i].source_members = global_symtab;
+            tbl->entries[i].source_name = mod_sym->name;
+            tbl->entries[i].ns_prefix = mod_sym->ns_prefix;
+            tbl->entries[i].module_members = mod_sym->members;
+            tbl->entries[i].is_generic = false;
+            tbl->entries[i].type_params = NULL;
+            tbl->entries[i].type_param_count = 0;
+            tbl->entries[i].explicit_type_param_count = 0;
+            return;
+        }
+    }
+    ImportRef ref = {
+        .local_name = local_name,
+        .kind = DECL_MODULE,
+        .source_members = global_symtab,
+        .source_name = mod_sym->name,
+        .ns_prefix = mod_sym->ns_prefix,
+        .module_members = mod_sym->members,
     };
     DA_APPEND(tbl->entries, tbl->count, tbl->capacity, ref);
 }
@@ -142,10 +174,24 @@ static void process_member_import(Decl *d, ImportTable *target,
     const char *mod_name = d->import.from_module;
     const char *from_ns = d->import.from_namespace;
 
-    /* Look up the source module */
+    /* Look up the source module: global symtab first, then import table
+     * (a prior whole-module import in the same scope may have brought it in) */
     const char *lookup_ns = from_ns ? from_ns : current_ns;
     Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
     if (!mod_sym) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
+    if (!mod_sym || mod_sym->kind != DECL_MODULE) {
+        /* Check the target import table for a whole-module import */
+        for (int k = 0; k < target->count; k++) {
+            ImportRef *ref = &target->entries[k];
+            if (ref->local_name == mod_name && ref->kind == DECL_MODULE && ref->module_members) {
+                /* Found via import — resolve using namespace-aware lookup */
+                mod_sym = ref->ns_prefix
+                    ? symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix)
+                    : symtab_lookup(ref->source_members, ref->source_name);
+                break;
+            }
+        }
+    }
     if (!mod_sym || mod_sym->kind != DECL_MODULE) {
         diag_error(d->loc, "unknown module '%s'", mod_name);
         return;
@@ -517,8 +563,10 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
         const char *imp_ns = d->import.from_namespace;
 
         if (imp_mod) {
+            /* import X from MODULE or import * from MODULE */
             process_member_import(d, imports, global_symtab, intern, mod_ns);
         } else if (imp_ns && !imp_mod) {
+            /* import MODULE from NS:: */
             if (d->import.is_wildcard) {
                 diag_error(d->loc, "cannot wildcard-import from a namespace");
                 continue;
@@ -530,14 +578,9 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
                 continue;
             }
             const char *import_name = d->import.alias ? d->import.alias : name;
-            if (!symtab_lookup_module(global_symtab, import_name, mod_ns)) {
-                symtab_add(global_symtab, import_name, DECL_MODULE, src->decl);
-                Symbol *new_sym = &global_symtab->symbols[global_symtab->count - 1];
-                new_sym->members = src->members;
-                new_sym->type = src->type;
-                new_sym->ns_prefix = mod_ns;
-            }
+            import_table_add_module(imports, import_name, src, global_symtab);
         } else {
+            /* import MODULE [as ALIAS] */
             const char *name = d->import.name;
             Symbol *src = symtab_lookup_module(global_symtab, name, mod_ns);
             if (!src) src = symtab_lookup_module(global_symtab, name, NULL);
@@ -545,16 +588,8 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
                 diag_error(d->loc, "unknown module '%s'", name);
                 continue;
             }
-            if (d->import.alias) {
-                const char *alias = d->import.alias;
-                if (!symtab_lookup_module(global_symtab, alias, mod_ns)) {
-                    symtab_add(global_symtab, alias, DECL_MODULE, src->decl);
-                    Symbol *new_sym = &global_symtab->symbols[global_symtab->count - 1];
-                    new_sym->members = src->members;
-                    new_sym->type = src->type;
-                    new_sym->ns_prefix = mod_ns;
-                }
-            }
+            const char *import_name = d->import.alias ? d->import.alias : name;
+            import_table_add_module(imports, import_name, src, global_symtab);
         }
     }
 }
@@ -664,9 +699,63 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab);
     }
 
-    /* Phase 2: Register top-level (non-module) decls */
+    /* Phase 2: Register top-level (non-module) decls.
+     *
+     * Restrictions:
+     * - Non-global namespaces: only modules allowed at top level.
+     * - Global namespace: non-module top-level decls (let, struct, union)
+     *   must all be in a single file (the entry-point file with let main).
+     *   This prevents cross-file ordering dependencies. */
+
+    /* Pre-scan: find the entry-point file (the one containing let main).
+     * Only that file may have non-module top-level declarations. */
+    const char *entry_file = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
+        if (d->kind == DECL_LET && strcmp(d->let.name, "main") == 0) {
+            entry_file = d->loc.filename;
+            break;
+        }
+    }
+    if (!entry_file) {
+        diag_error((SrcLoc){0}, "no entry point: program must contain 'let main'");
+    }
+    current_ns = NULL;
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_NAMESPACE) { current_ns = d->ns.name; continue; }
+        if (current_ns) continue; /* non-global namespace — checked below */
+        if (d->kind == DECL_LET || d->kind == DECL_STRUCT || d->kind == DECL_UNION) {
+            if (d->loc.filename != entry_file) {
+                diag_error(d->loc,
+                    "top-level %s '%s' not allowed here — "
+                    "non-module top-level declarations are only allowed "
+                    "in the entry-point file (the file containing let main)",
+                    d->kind == DECL_LET ? "let" :
+                    d->kind == DECL_STRUCT ? "struct" : "union",
+                    d->kind == DECL_LET ? d->let.name :
+                    d->kind == DECL_STRUCT ? d->struc.name : d->unio.name);
+            }
+        }
+    }
+
+    current_ns = NULL;
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_NAMESPACE) {
+            current_ns = d->ns.name;
+            continue;
+        }
+        /* Non-global namespaces may only contain module declarations at top level */
+        if (current_ns && (d->kind == DECL_LET || d->kind == DECL_STRUCT || d->kind == DECL_UNION)) {
+            diag_error(d->loc,
+                "top-level %s not allowed in namespace '%s::' — "
+                "wrap it in a module or move it to a global:: file",
+                d->kind == DECL_LET ? "let" :
+                d->kind == DECL_STRUCT ? "struct" : "union",
+                current_ns);
+            continue;
+        }
         switch (d->kind) {
         case DECL_LET: {
             if (symtab_lookup(symtab, d->let.name)) {
@@ -741,8 +830,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         const char *mod_name = d->import.from_module;
         const char *from_ns = d->import.from_namespace;
 
+        /* All imports go to the file's ImportTable */
+        ImportTable *file_tbl = get_file_imports(file_scopes, d->loc.filename);
+
         if (!mod_name && !from_ns) {
-            /* import MODULE [as ALIAS] — whole module import (global symtab) */
+            /* import MODULE [as ALIAS] — whole module import */
             const char *name = d->import.name;
             Symbol *sym = symtab_lookup_module(symtab, name, current_ns);
             if (!sym) sym = symtab_lookup_module(symtab, name, NULL);
@@ -750,18 +842,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 diag_error(d->loc, "unknown module '%s'", name);
                 continue;
             }
-            if (d->import.alias) {
-                const char *alias = d->import.alias;
-                if (symtab_lookup(symtab, alias)) {
-                    diag_error(d->loc, "import '%s' conflicts with existing name", alias);
-                } else {
-                    symtab_add(symtab, alias, DECL_MODULE, sym->decl);
-                    Symbol *alias_sym = &symtab->symbols[symtab->count - 1];
-                    alias_sym->members = sym->members;
-                    alias_sym->type = sym->type;
-                    alias_sym->ns_prefix = current_ns;
-                }
-            }
+            const char *import_name = d->import.alias ? d->import.alias : name;
+            import_table_add_module(file_tbl, import_name, sym, symtab);
             continue;
         }
 
@@ -770,7 +852,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
                 continue;
             }
-            /* import MODULE from namespace:: — cross-namespace whole module import (global symtab) */
+            /* import MODULE from namespace:: — cross-namespace whole module import */
             const char *name = d->import.name;
             Symbol *sym = symtab_lookup_module(symtab, name, from_ns);
             if (!sym || sym->kind != DECL_MODULE) {
@@ -778,23 +860,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 continue;
             }
             const char *import_name = d->import.alias ? d->import.alias : name;
-            Symbol *existing = symtab_lookup_module(symtab, import_name, current_ns);
-            if (existing) {
-                if (existing->decl != sym->decl) {
-                    diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
-                }
-            } else {
-                symtab_add(symtab, import_name, DECL_MODULE, sym->decl);
-                Symbol *new_sym = &symtab->symbols[symtab->count - 1];
-                new_sym->members = sym->members;
-                new_sym->type = sym->type;
-                new_sym->ns_prefix = current_ns;
-            }
+            import_table_add_module(file_tbl, import_name, sym, symtab);
             continue;
         }
 
-        /* Member import (import X from M / import * from M) — goes to file scope */
-        ImportTable *file_tbl = get_file_imports(file_scopes, d->loc.filename);
+        /* Member import (import X from M / import * from M) */
         process_member_import(d, file_tbl, symtab, intern, current_ns);
     }
 

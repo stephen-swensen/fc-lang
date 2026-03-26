@@ -146,8 +146,12 @@ static Symbol *import_chain_lookup(ImportScope *scope, const char *name) {
         if (scope->table) {
             for (int i = scope->table->count - 1; i >= 0; i--) {
                 ImportRef *ref = &scope->table->entries[i];
-                if (ref->local_name == name)
+                if (ref->local_name == name) {
+                    /* General lookup: return first match by name in source table.
+                     * For kind-specific module lookups, use import_chain_lookup_kind
+                     * which does namespace-aware resolution. */
                     return symtab_lookup(ref->source_members, ref->source_name);
+                }
             }
         }
         scope = scope->parent;
@@ -160,8 +164,11 @@ static Symbol *import_chain_lookup_kind(ImportScope *scope, const char *name, De
         if (scope->table) {
             for (int i = scope->table->count - 1; i >= 0; i--) {
                 ImportRef *ref = &scope->table->entries[i];
-                if (ref->local_name == name && ref->kind == kind)
+                if (ref->local_name == name && ref->kind == kind) {
+                    if (kind == DECL_MODULE)
+                        return symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix);
                     return symtab_lookup_kind(ref->source_members, ref->source_name, kind);
+                }
             }
         }
         scope = scope->parent;

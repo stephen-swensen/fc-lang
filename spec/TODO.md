@@ -2,10 +2,6 @@
 
 Open design questions and topics for future work.
 
-## Restrict top-level declarations in non-global namespaces
-
-Consider requiring that non-global namespaces (e.g., `std::`, library namespaces) only contain module declarations at the top level — no bare `struct`, `union`, or `let` outside a module body. This would prevent name collisions in the flat global symtab when multiple library files are compiled together. Application code in the default `global::` namespace would remain unrestricted (top-level `let main`, one-off structs, etc. are fine there). The rule: if you're writing library code under a namespace, everything goes in modules.
-
 ## Standard Library
 
 ### Namespace and structure
@@ -512,4 +508,3 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `const char*` emission confined to extern call boundaries only; within FC-generated code, `cstr` emits as `uint8_t*`.
 - `import T as alias from M` now propagates the alias name to diagnostics and type signatures via shallow-copied `Type` with `alias` set. Multiple aliases for the same type are independent and interchangeable.
 - Spec updated with alias name propagation semantics in §Static Type Properties and §Importing.
-- 396 tests covering all milestones M1–M9.

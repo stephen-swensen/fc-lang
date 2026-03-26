@@ -954,7 +954,7 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 ### Statements vs. expressions
 
-At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, and `extern` — but `import` is not allowed inside modules (see §Importing).
+At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
 
 Top-level and module-level non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `default`, and struct literals with constant fields. Variable references and function calls are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions, avoids hidden startup code, and ensures that top-level state can be fully determined at compile time.
 
@@ -1637,7 +1637,7 @@ let main = (args: str[]) ->
     0
 ```
 
-`main` at the top level of any file in the build is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `int32`. If more than one file defines a top-level `main`, that is a compile error. `main` is not required — library code and partial builds compile without one.
+`main` at the top level is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `int32`. Every program must have exactly one `let main`. The file containing `let main` is the **entry-point file** — it is the only file that may have non-module top-level declarations (see §Module System & Visibility).
 
 > **Transpilation**
 > The compiler generates a C `main` wrapper that converts `argc`/`argv` into a `str[]` slice:
@@ -2755,211 +2755,9 @@ If any errors are accumulated during passes 1 or 2, code generation is skipped a
 
 ## Module System & Visibility
 
-Modules are logical organizational units, fully contained within a single file. Multiple modules may exist in one file. The same module name may not be declared more than once within the same namespace across the build.
+### Modules
 
-```fc
-// file: geometry.fc
-
-module math =
-    let add = (a: int32, b: int32) -> a + b
-
-module shapes =
-    struct point =
-        x: float64
-        y: float64
-
-// top-level — file-scoped private, not importable
-let helper = (x: int32) -> x * 2
-```
-
-Module names are flat — `module math` inside any file declares a module named `math`. The filename has no effect on module naming.
-
-### Namespaces
-
-A file may optionally declare a namespace as its first line, before any `import` or `module` declarations. Namespaces group modules across files and prevent name collisions between independently developed code.
-
-```fc
-namespace acme::
-namespace acme::graphics::
-namespace acme::graphics::rendering::
-```
-
-A namespace name consists of one or more `::` separated segments and always ends with a trailing `::`. The trailing `::` is what syntactically distinguishes a namespace from a module everywhere it appears. Namespace names may be arbitrarily deep, though shallow is idiomatic — a company or product name is usually sufficient.
-
-**Files with no namespace declaration are in `global::`** — the implicit default namespace. This is the normal case for application code. Vendor libraries should always declare a namespace to avoid collisions.
-
-Namespaces have no presence in code beyond import and namespace declarations — they are purely an organizational and disambiguation mechanism. You cannot access a namespace by name in an expression.
-
-### Visibility
-
-Everything declared inside a module is public by default. Use `private` to hide a symbol from importers.
-
-```fc
-module math =
-    let add = (a: int32, b: int32) -> a + b    // public
-
-    private let clamp = (x: int32, lo: int32, hi: int32) ->
-        if x < lo then lo
-        else if x > hi then hi
-        else x
-```
-
-Top-level declarations outside any module block are always file-scoped private. The `private` keyword is not needed or meaningful there.
-
-`private` applies to all declarable things — functions, structs, union types, and nested modules.
-
-### Importing
-
-Imports are **transparent aliases** — they introduce names into a lexical scope, following the same scoping and shadowing rules as `let` bindings. An import does not create a new type or copy a declaration; it creates a name that resolves to the original definition. Imports may appear at file level or inside module bodies.
-
-The `from` clause locates the source of the import. Its right-hand side is either a bare namespace (ending in `::`) or a qualified module name (namespace path followed by a module, optionally dotted into submodules). `global::` is the implicit namespace when no `from` clause is given or when `from global::` is written explicitly.
-
-The left-hand side is what comes into scope — a module, submodule, or symbol — with an optional `as` alias. The namespace is consumed at the import site and never appears in code.
-
-**Same-namespace imports** — `global::` is implicit, no qualification needed:
-
-```fc
-import module_a                                       // imports module_a from global::
-import module_a from global::                         // equivalent
-import module_a as m_a                                // alias
-import func_a from module_a                           // symbol from global::module_a
-import func_a from global::module_a                   // equivalent
-import func_a as f_a, func_b as f_b from module_a    // multiple with aliases
-import module_a.module_b                              // submodule — available as module_b
-import module_b from module_a                         // equivalent
-import * from module_a                                // everything public in module_a
-```
-
-**Cross-namespace imports** — namespace path required in `from`:
-
-```fc
-import module_a from acme::graphics::                 // module from named namespace
-import module_b from acme::graphics::module_a         // submodule
-import acme::graphics::module_a.module_b              // equivalent — available as module_b
-import module_a as m_a from acme::graphics::          // alias
-import func_a from acme::graphics::module_a           // symbol from named module
-```
-
-**Syntax rules:**
-- `::` separates namespace segments and terminates a namespace path
-- `.` navigates into modules and submodules — module territory only
-- A path ending in `::` is a namespace; a path not ending in `::` is a module or symbol
-- `import *` works on modules only — you cannot wildcard-import from a bare namespace
-
-`import T from M` brings both the type `T` and the module `T` (if it exists) into scope together. There is no need to import them separately.
-
-**Alias name propagation.** When a type is imported with `as`, the alias name becomes the display name for that type within the importing scope — it appears in error messages, type signatures, and diagnostics. The alias does not create a new type; it is purely a naming convenience. The same type may be imported under multiple aliases, and values of any alias are freely interchangeable:
-
-```fc
-import point as pt from geometry
-import point as coord from geometry
-
-let move = (p: pt, dx: int32) -> pt { x = p.x + dx, y = p.y }
-
-let main = (args: int32) ->
-    let a = coord { x = 1, y = 2 }  // coord and pt are the same type
-    move(a, 10)                       // passing coord where pt is expected — OK
-```
-
-### Import scoping and shadowing
-
-Imports follow the same lexical scoping rules as `let` bindings:
-
-**File-level imports** are scoped to the file. They are visible to all modules defined in that file, but not to modules in other files compiled together. This prevents a library's internal imports from leaking into consumer code:
-
-```fc
-// lib.fc
-namespace mylib::
-import * from std::types               // visible only within lib.fc
-module lib =
-    let make = (a: 'a, b: 'b) -> tuple2 { e1 = a, e2 = b }
-
-// main.fc — cannot see std::types unless it imports them independently
-import lib from mylib::
-import * from std::types                // must import separately
-```
-
-**Module-level imports** are scoped to the declaring module and visible to all child modules (lexical scoping). They are never re-exported — `import * from M` only exports M's own declarations, not things M imported for internal use:
-
-```fc
-module helpers =
-    let double = (x: int32) -> x * 2
-
-module parent =
-    import double from helpers          // visible to parent and its children
-
-    module child =
-        let quad = (x: int32) -> double(double(x))  // sees parent's import
-
-import * from parent                    // brings child — does NOT bring double
-```
-
-**Non-forwarding rule.** `import * from M` exports only M's own member declarations (structs, unions, functions, nested modules). It never exports names that M itself imported. This ensures that a module's public API is exactly its declared members:
-
-```fc
-module inner =
-    let secret = 42
-
-module outer =
-    import secret from inner            // internal use only
-    let get = () -> secret              // own declaration — exported
-
-import * from outer                     // brings get, does NOT bring secret
-```
-
-**Shadowing.** Later imports shadow earlier imports in the same scope. Imports in inner scopes shadow outer scopes. This matches how `let` bindings work:
-
-```fc
-module mod_a =
-    let value = 10
-module mod_b =
-    let value = 20
-
-import value from mod_a
-import value from mod_b                 // shadows mod_a's value
-// value is now 20
-```
-
-Imports also shadow top-level declarations and names from outer scopes:
-
-```fc
-let add = (a: int32, b: int32) -> a + b + 100
-
-module math =
-    let add = (a: int32, b: int32) -> a + b
-
-import add from math                    // shadows the top-level add
-// add(1, 2) is now 3, not 103
-```
-
-### Name resolution order
-
-When the compiler encounters an identifier, it resolves it through a scope chain from innermost to outermost:
-
-1. **Local scope** — `let` bindings in the current function body (innermost block first)
-2. **Module members** — the declaring module's own structs, unions, functions, and nested modules
-3. **Import scope chain** — imports at each nesting level, innermost module first:
-   - Current module's imports
-   - Parent module's imports
-   - Grandparent module's imports (and so on, to any depth)
-   - File-level imports
-4. **Global declarations** — top-level declarations and module definitions visible across all files
-
-At each level, later declarations shadow earlier ones. The first match wins. Module members always take priority over the module's own imports.
-
-### Qualified type names in diagnostics
-
-Types defined inside modules display with their fully qualified path in error messages and diagnostics. This makes it clear where a type comes from, especially when two modules define types with the same base name:
-
-```
-error: comparison type mismatch: std::types.tuple2<int32, uint8> vs local.tuple2<int32, uint8>
-```
-
-Top-level types (outside any module) display without qualification. The format is `[namespace::]module.name` for module-scoped types.
-
-### Direct Module Access
-
-Module members can be accessed directly using dot notation without importing them first. This works for functions, values, struct types, and union types at any nesting depth:
+Modules are the primary organizational unit. All reusable code lives in modules. A module is declared with `module name =` followed by an indented body containing functions, types, nested modules, and imports:
 
 ```fc
 module geometry =
@@ -2972,85 +2770,235 @@ module geometry =
     module transforms =
         let scale = (p: point, factor: int32) ->
             point { x = p.x * factor, y = p.y * factor }
-
-let main = (args: str[]) ->
-    // Module-qualified struct literal
-    let p = geometry.point { x = 3, y = 4 }
-
-    // Module-qualified function call
-    let d = geometry.manhattan(p)
-
-    // Nested module access
-    let p2 = geometry.transforms.scale(p, 10)
-
-    // Module-qualified types in all type contexts
-    let mut p3 = default(geometry.point)        // default
-    let size = sizeof(geometry.point)            // sizeof
-    let ptr = (geometry.point*)&p3              // cast
-    let heap = alloc(geometry.point)             // alloc
-    let opt = default(geometry.point?)             // none
 ```
 
-Module-qualified names work everywhere a type name is accepted: function parameter types, return types (inferred), pointer types, slice types, option types, struct literal constructors, `default`, `sizeof`, `alloc`, and casts. This applies to both regular FC structs and extern structs in `from` modules.
+Modules are fully contained within a single file. Multiple modules may exist in one file. Module names are flat — `module math` inside any file declares a module named `math`. The filename has no effect on module naming.
 
-Direct dot notation works for modules visible in the current scope — same-file modules, modules compiled together, and modules made visible via imports (including module-level imports). Cross-namespace modules must still be imported first (see §Importing); dot notation then accesses their members.
+### Namespaces
 
-Circular references between modules are not allowed — whether via `import` or direct qualified access. If module A references anything in module B, module B may not reference anything in module A, directly or transitively. This applies even when both modules are defined in the same file. The compiler detects cycles during the first pass and reports them as compile errors.
+A file may declare a namespace as its first line. Namespaces group modules across files and prevent name collisions between independently developed code:
 
-If two types need mutual pointer references, they must live in the same module — intra-module mutual recursion via pointer fields is always valid (see §Structs).
+```fc
+namespace acme::graphics::
+```
+
+A namespace name consists of one or more `::` separated segments and always ends with `::`. Files with no namespace declaration are in `global::` — the implicit default. Application code normally lives in `global::`; libraries should declare a namespace.
+
+Namespaces are purely a compile-time disambiguation mechanism. They have no presence in expressions or at runtime.
+
+### Top-level declarations and the entry-point file
+
+Non-module top-level declarations (`let`, `struct`, `union`) are only allowed in the **entry-point file** — the file containing `let main`. Every program must have exactly one `let main`. All other files may only contain `module` declarations (and file-level imports). Files in non-global namespaces may only contain modules.
+
+```fc
+// main.fc — the entry-point file
+module utils =
+    let double = (x: int32) -> x * 2
+
+struct config =                           // OK — this is the entry-point file
+    width: int32
+    height: int32
+
+let main = (args: str[]) ->
+    utils.double(21)
+```
+
+This restriction ensures that file ordering never affects compilation — all cross-file code is in modules, which the compiler resolves regardless of order.
+
+### Visibility
+
+Everything inside a module is public by default. Use `private` to hide a symbol from importers:
+
+```fc
+module math =
+    let add = (a: int32, b: int32) -> a + b            // public
+
+    private let clamp = (x: int32, lo: int32, hi: int32) ->
+        if x < lo then lo
+        else if x > hi then hi
+        else x
+```
+
+`private` applies to functions, structs, unions, and nested modules.
+
+### Importing
+
+Imports are **transparent aliases** that introduce names into a lexical scope, following the same scoping and shadowing rules as `let` bindings. An import does not create a new type; it creates a name that resolves to the original definition. Imports may appear at file level or inside module bodies.
+
+**Import forms:**
+
+```fc
+// Same-namespace (global:: implicit)
+import module_a                                       // whole module
+import module_a as m                                  // aliased
+import func_a from module_a                           // named member
+import func_a as f, func_b from module_a              // multiple
+import * from module_a                                // all public members
+
+// Cross-namespace
+import module_a from acme::graphics::                 // whole module
+import func_a from acme::graphics::module_a           // named member
+```
+
+**Rules:**
+- `::` terminates namespace paths; `.` navigates into modules/submodules
+- `import *` works on modules only — not bare namespaces
+- `import T from M` brings both the type `T` and its type-associated module `T` (if any) into scope
+
+**Aliases** do not create new types. The same type can be imported under multiple aliases, and values of any alias are interchangeable:
+
+```fc
+import point as pt from geometry
+import point as coord from geometry
+// pt and coord are the same type — freely interchangeable
+```
+
+### Import scoping
+
+Imports follow lexical scoping. Each import is visible only in the scope where it appears:
+
+**File-level imports** are visible to all code in that file, but not to other files:
+
+```fc
+// lib.fc
+namespace mylib::
+import * from std::types               // visible only within lib.fc
+
+module lib =
+    let make = (a: 'a, b: 'b) -> tuple2 { e1 = a, e2 = b }
+```
+
+```fc
+// main.fc — must import std::types independently
+import lib from mylib::
+import * from std::types
+```
+
+**Module-level imports** are visible within the declaring module and all its child modules:
+
+```fc
+module parent =
+    import double from helpers          // visible to parent and children
+
+    module child =
+        let quad = (x: int32) -> double(double(x))   // sees parent's import
+```
+
+### Non-forwarding rule
+
+`import * from M` exports only M's own declarations — never names that M imported for internal use. A module's public API is exactly its declared members:
+
+```fc
+module outer =
+    import secret from inner            // internal use only
+    let get = () -> secret              // own declaration — exported
+
+import * from outer                     // brings get — does NOT bring secret
+```
+
+### Shadowing
+
+Later imports shadow earlier ones in the same scope. Inner scopes shadow outer scopes. Imports shadow top-level declarations. This matches `let` binding semantics:
+
+```fc
+module mod_a =
+    let value = 10
+module mod_b =
+    let value = 20
+
+import value from mod_a
+import value from mod_b                 // shadows — value is now 20
+```
+
+### Name resolution order
+
+The compiler resolves identifiers through a scope chain, innermost to outermost:
+
+1. **Local scope** — `let` bindings in the current function body
+2. **Module members** — the enclosing module's own declarations
+3. **Import chain** — imports from innermost to outermost scope:
+   - Current module's imports
+   - Parent module's imports (and so on, to any depth)
+   - File-level imports
+4. **Global declarations** — module definitions and entry-point file declarations
+
+Module members always take priority over imports. Later declarations shadow earlier ones at each level.
+
+### Direct module access
+
+Module members can be accessed with dot notation without importing:
+
+```fc
+let main = (args: str[]) ->
+    let p = geometry.point { x = 3, y = 4 }      // struct literal
+    let d = geometry.manhattan(p)                   // function call
+    let p2 = geometry.transforms.scale(p, 10)      // nested module
+    let size = sizeof(geometry.point)               // type context
+```
+
+Dot notation works for all modules visible in the current scope — same-namespace modules, imported modules, and modules in the import chain. Cross-namespace modules must be imported first; dot notation then accesses their members.
+
+**Circular references** between modules are not allowed. If A references B, B may not reference A (directly or transitively). The compiler detects cycles during the first pass. Mutual pointer references between types must be within the same module.
 
 ### Type-associated modules
 
-A module may share a name with a type defined in the same scope. This is the idiomatic way to define static properties and constructors for a type — there is no separate language feature for this. The dot notation `vec2.zero` is simply module access.
+A module may share a name with a type in the same scope — the idiomatic way to define constructors and static operations:
 
 ```fc
 module geometry =
-
     struct vec2 =
         x: float64
         y: float64
 
     module vec2 =
         let zero = vec2 { x = 0.0, y = 0.0 }
-        let from_angle = (angle: float64) -> vec2 { x = cos(angle), y = sin(angle) }
+        let add = (a: vec2, b: vec2) -> vec2 { x = a.x + b.x, y = a.y + b.y }
 ```
 
-Inside `module vec2`, the `vec2` struct is visible because it was defined in the enclosing module's members, which are checked before the import chain during name resolution (see §Name resolution order). Outside, `vec2 { ... }` is unambiguously struct construction and `vec2.zero` is unambiguously module access — the parser distinguishes these by context.
+`vec2 { ... }` is struct construction; `vec2.zero` is module access. Inside `module vec2`, the struct is visible from the enclosing scope (module members are checked before imports in the resolution order).
+
+### Qualified type names in diagnostics
+
+Types defined inside modules display with their fully qualified path in error messages:
+
+```
+error: comparison type mismatch: std::types.tuple2<int32, uint8> vs local.tuple2<int32, uint8>
+```
+
+The format is `[namespace::]module.name`. Top-level types (outside any module) display without qualification.
 
 ### Multi-file builds
 
-All `.fc` files involved in a build are passed to the compiler together. The compiler accepts individual files, glob patterns, or directories (non-recursive):
+All `.fc` files are passed to the compiler together:
 
 ```
-fc main.fc
-fc src/*.fc
-fc src/
+fc main.fc lib.fc
+fc src/*.fc vendor/acme/*.fc
+```
+
+The first pass scans all files and builds a global module map before type-checking. Modules can reference each other regardless of file order. File ordering never affects correctness.
+
+**Per-file import scoping:** each file's imports are scoped to that file. A library's internal imports never leak to consumers.
+
+**Duplicate module names** within the same namespace are a compile error. Different namespaces never conflict — `acme::` and `widget::` can both define a module named `utils`.
+
+**Vendor libraries** are source `.fc` files with a namespace declaration, included in the build like any other file:
+
+```
 fc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
 ```
 
-The first compiler pass scans all provided files, collects every namespace and module declaration, and builds a global module map before any type-checking occurs. This means modules can reference each other regardless of file order, and mutual recursion across files requires no special syntax.
+### Transpilation
 
-**Per-file import scoping.** Each file's `import` declarations are scoped to that file — they do not leak to other files in the same build. A library file that imports utility types for internal use does not force those types into scope for the library's consumers. Each file must independently import what it needs.
+The module system is entirely compile-time — no runtime representation in generated C:
 
-**Duplicate module names** within the same namespace across different files are a compile error. Module names in different namespaces never conflict — `acme::graphics::` and `widget::ui::` can both contain a module named `renderer` without collision.
+- **Namespaces** — erased. Exist only in the compiler's module map.
+- **Modules** — become C symbol prefixes. `geometry.manhattan(p)` transpiles to `geometry_manhattan(p)`.
+- **Imports** — become nothing. The import scope chain is resolved at compile time.
+- **`private`** — enforced at compile time only.
+- **Type-associated modules** — pure naming convention. `vec2.zero` is a prefixed global; no vtable or indirection.
 
-**Vendor libraries** are distributed as source — `.fc` files with a namespace declaration. They are included in the build the same way as any other file. The namespace prevents their module names from colliding with application code or other vendors:
-
-```
-fc src/*.fc vendor/acme/graphics/*.fc vendor/widget/ui/*.fc
-```
-
-### Transpilation note
-
-The entire module and namespace system is a compiler-time concept — none of it has any runtime representation in the generated C output. This is an important guiding principle for compiler implementation:
-
-- **Namespaces** — erased entirely. They exist only in the compiler's module map during the first pass.
-- **Modules** — become C symbol prefixes. `vec2.add(a, b)` transpiles to a call like `geom_vectors_vec2_add(a, b)`. The dot notation is purely a source-level convenience.
-- **`import`** — becomes nothing in the output, whether at file level or inside module bodies. Imports inform the compiler which declarations are in scope; the transpiled C either uses `#include` for extern declarations or assumes all generated code compiles together as a single translation unit. The import scope chain (file imports, module imports, parent module imports) is resolved entirely at compile time.
-- **`private`** — enforced at compile time only. The generated C does not distinguish between public and private symbols; visibility is checked during type-checking and import resolution.
-- **Type-associated modules** — pure naming convention in the C output. `vec2.zero` is a prefixed global constant; `vec2.add` is a prefixed function. No vtable, no struct, no indirection.
-
-The result is that FC provides enforced module structure, namespace isolation, visibility control, and type-associated namespacing at zero runtime cost. The C compiler sees well-named, flat, idiomatic C. This property should be preserved in all future work on the module system — any new feature that would require a runtime representation in C needs strong justification.
+Zero runtime cost. The C compiler sees flat, idiomatic C.
 
 ---
 

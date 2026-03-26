@@ -1,1 +1,6 @@
-let x = 5 > 3
+let main = (args: str[]) ->
+    let x = 5 > 3
+    let y = 3 > 5
+    if x then
+        if y then 0 else 1
+    else 0

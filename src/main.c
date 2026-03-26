@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
 
         Parser parser;
         parser_init(&parser, all_tokens[i], token_count, &arena, &intern_table);
-        parser.filename = (input_count > 1) ? input_paths[i] : NULL;
+        parser.filename = input_paths[i];
         programs[i] = parse_program(&parser);
     }
 

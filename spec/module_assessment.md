@@ -59,7 +59,11 @@ The previous attempt (reverted 2026-03-24) was more complex — dual registratio
 
 ## Priority Items
 
-1. **Unify whole-module imports into ImportTable** — eliminates the dual-path inconsistency and completes the scoping story. This is the most impactful remaining architectural debt.
+1. ~~**Unify whole-module imports into ImportTable**~~ — **Done (2026-03-26).** Whole-module imports now go to ImportTable with `module_members` field. Global symtab contains only declarations, never imports.
 2. **Fix generic union identity through import aliases** — bounded fix in the variant construction path, not an architectural issue.
 3. **Import cycle detection** — low urgency if expression-level cycle detection catches most cases, but should be verified.
 4. **`qualified_name` propagation audit** — worth doing once to prevent diagnostic regressions.
+
+## Additional restrictions (2026-03-26)
+
+- **Non-global namespaces**: top-level struct/union/let declarations are now an error. Only modules are allowed. This ensures library code is properly modular and doesn't pollute the global symtab. The main file (global namespace) retains unrestricted top-level declarations for convenience.

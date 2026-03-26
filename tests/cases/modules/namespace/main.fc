@@ -1,0 +1,4 @@
+import math from acme::
+
+let main = (args: str[]) ->
+    math.add(15, 7)

@@ -1,0 +1,2 @@
+let main = (args: str[]) ->
+    helper(21)

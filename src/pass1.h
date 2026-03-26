@@ -32,6 +32,8 @@ typedef struct {
     const char *source_name;       /* interned — name in source module's members */
     DeclKind kind;
     SymbolTable *source_members;   /* source module's member table (stable pointer) */
+    SymbolTable *module_members;   /* for DECL_MODULE imports: the imported module's members */
+    const char *ns_prefix;         /* for DECL_MODULE imports: source module's namespace */
     bool is_generic;
     const char **type_params;
     int type_param_count;

@@ -1,0 +1,1 @@
+let helper = (x: int32) -> x * 2
