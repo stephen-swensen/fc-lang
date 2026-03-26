@@ -1,0 +1,11 @@
+module shapes =
+    union holder =
+        | val(int32)
+        | empty
+
+import holder as h from shapes
+
+let main = (args: str[]) ->
+    let a = shapes.holder.val(42)
+    let b = h.val(42)
+    if a == b then 42 else 1

@@ -183,8 +183,9 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                     }
                 }
                 if (all_concrete) {
+                    /* Use canonical C type name (already includes module/ns prefix) */
                     const char *mangled = mono_register(t, a, intern,
-                        struct_sym->name, struct_sym->ns_prefix,
+                        struct_sym->type->struc.name, NULL,
                         concrete_args, vc, struct_sym->decl,
                         DECL_STRUCT, struct_sym->type_params, struct_sym->type_param_count);
                     MonoInstance *mi = mono_find(t, mangled);

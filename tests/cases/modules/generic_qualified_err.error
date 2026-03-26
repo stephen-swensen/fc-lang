@@ -1,0 +1,1 @@
+comparison type mismatch: ns_a.pair<int32, int8> vs ns_b.pair<int32, int8>

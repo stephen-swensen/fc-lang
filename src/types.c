@@ -342,8 +342,9 @@ const char *type_name(Type *t) {
             static char stbufs[4][256];
             static int stidx = 0;
             char *buf = stbufs[stidx & 3]; stidx++;
+            const char *display = t->struc.qualified_name ? t->struc.qualified_name : t->struc.base_name;
             int pos = 0;
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", t->struc.base_name);
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", display);
             for (int i = 0; i < t->struc.type_arg_count; i++) {
                 if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
                 pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->struc.type_args[i]));
@@ -351,6 +352,7 @@ const char *type_name(Type *t) {
             snprintf(buf + pos, 256 - (size_t)pos, ">");
             return buf;
         }
+        if (t->struc.qualified_name) return t->struc.qualified_name;
         return t->struc.name;
     }
     case TYPE_UNION: {
@@ -358,8 +360,9 @@ const char *type_name(Type *t) {
             static char utbufs[4][256];
             static int utidx = 0;
             char *buf = utbufs[utidx & 3]; utidx++;
+            const char *display = t->unio.qualified_name ? t->unio.qualified_name : t->unio.base_name;
             int pos = 0;
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", t->unio.base_name);
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", display);
             for (int i = 0; i < t->unio.type_arg_count; i++) {
                 if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
                 pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->unio.type_args[i]));
@@ -367,6 +370,7 @@ const char *type_name(Type *t) {
             snprintf(buf + pos, 256 - (size_t)pos, ">");
             return buf;
         }
+        if (t->unio.qualified_name) return t->unio.qualified_name;
         return t->unio.name;
     }
     case TYPE_ANY_PTR:   return "any*";
@@ -627,6 +631,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         ns->kind = TYPE_STRUCT;
         ns->struc.name = t->struc.name;
         ns->struc.base_name = t->struc.base_name;
+        ns->struc.qualified_name = t->struc.qualified_name;
         ns->struc.c_name = t->struc.c_name;
         ns->struc.fields = fields;
         ns->struc.field_count = t->struc.field_count;
@@ -657,6 +662,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         nu->kind = TYPE_UNION;
         nu->unio.name = t->unio.name;
         nu->unio.base_name = t->unio.base_name;
+        nu->unio.qualified_name = t->unio.qualified_name;
         nu->unio.variants = vars;
         nu->unio.variant_count = t->unio.variant_count;
         nu->unio.type_args = new_targs;

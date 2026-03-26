@@ -12,6 +12,7 @@ typedef struct {
     Decl *decl;
     Type *type;             /* NULL until pass2 resolves it */
     SymbolTable *members;   /* non-NULL for DECL_MODULE */
+    struct ImportTable *imports; /* non-NULL for modules with internal imports */
     bool is_private;
     bool is_generic;
     const char **type_params;    /* ["'a", "'b"] — explicit vars first, then implicit */
@@ -25,6 +26,36 @@ struct SymbolTable {
     int capacity;
 };
 
+/* Import reference: transparent alias pointing to a source module's member */
+typedef struct {
+    const char *local_name;        /* interned — name visible in importing scope */
+    const char *source_name;       /* interned — name in source module's members */
+    DeclKind kind;
+    SymbolTable *source_members;   /* source module's member table (stable pointer) */
+    bool is_generic;
+    const char **type_params;
+    int type_param_count;
+    int explicit_type_param_count;
+} ImportRef;
+
+typedef struct ImportTable {
+    ImportRef *entries;
+    int count;
+    int capacity;
+} ImportTable;
+
+/* Per-file import scope */
+typedef struct {
+    const char *filename;          /* interned, or NULL for single-file mode */
+    ImportTable imports;
+} FileImportScope;
+
+typedef struct {
+    FileImportScope *scopes;
+    int count;
+    int capacity;
+} FileImportScopes;
+
 void symtab_init(SymbolTable *t);
 Symbol *symtab_lookup(SymbolTable *t, const char *name);
 Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind);
@@ -32,4 +63,5 @@ Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_pr
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
 
 /* Run pass 1: collect top-level declarations into symbol table */
-void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern);
+void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
+                   FileImportScopes *file_scopes);

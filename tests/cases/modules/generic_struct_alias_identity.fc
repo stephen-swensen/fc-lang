@@ -1,0 +1,11 @@
+module containers =
+    struct pair =
+        first: 'a
+        second: 'b
+
+import pair as p from containers
+
+let main = (args: str[]) ->
+    let a = containers.pair { first = 10, second = 20 }
+    let b = p { first = 10, second = 20 }
+    if a == b then 42 else 1

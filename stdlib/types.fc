@@ -1,0 +1,29 @@
+namespace std::
+
+module types =
+    struct tuple1 =
+        e1: 'a
+
+    struct tuple2 =
+        e1: 'a
+        e2: 'b
+
+    struct tuple3 =
+        e1: 'a
+        e2: 'b
+        e3: 'c
+
+    struct tuple4 =
+        e1: 'a
+        e2: 'b
+        e3: 'c
+        e4: 'd
+
+    struct tuple5 =
+        e1: 'a
+        e2: 'b
+        e3: 'c
+        e4: 'd
+        e5: 'e
+
+    //go to 12

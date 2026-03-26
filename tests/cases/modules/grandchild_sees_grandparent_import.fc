@@ -1,0 +1,12 @@
+module helpers =
+    let triple = (x: int32) -> x * 3
+
+module top =
+    import triple from helpers
+
+    module mid =
+        module bottom =
+            let compute = (x: int32) -> triple(x)
+
+let main = (args: str[]) ->
+    top.mid.bottom.compute(7)

@@ -1,0 +1,6 @@
+namespace lib::
+
+module types =
+    struct pair =
+        first: 'a
+        second: 'b

@@ -1,0 +1,11 @@
+module mod_a =
+    let value = 10
+
+module mod_b =
+    let value = 20
+
+import value from mod_a
+import value from mod_b
+
+let main = (args: str[]) ->
+    value

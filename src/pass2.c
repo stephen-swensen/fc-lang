@@ -116,6 +116,11 @@ static bool type_has_provenance(Type *t) {
 
 /* ---- Type checking ---- */
 
+typedef struct ImportScope {
+    ImportTable *table;
+    struct ImportScope *parent;
+} ImportScope;
+
 typedef struct {
     SymbolTable *symtab;
     Scope *scope;
@@ -129,10 +134,54 @@ typedef struct {
     bool is_top_level_init;      /* true when checking the init of a top-level DECL_LET */
     MonoTable *mono_table;       /* global instantiation registry */
     InternTable *intern;         /* for name mangling */
+    ImportScope *import_scope;   /* lexically scoped import chain */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
 static void check_decl_let(CheckCtx *ctx, Decl *d);
+
+/* Look up a name in the import scope chain (innermost first = shadowing) */
+static Symbol *import_chain_lookup(ImportScope *scope, const char *name) {
+    while (scope) {
+        if (scope->table) {
+            for (int i = scope->table->count - 1; i >= 0; i--) {
+                ImportRef *ref = &scope->table->entries[i];
+                if (ref->local_name == name)
+                    return symtab_lookup(ref->source_members, ref->source_name);
+            }
+        }
+        scope = scope->parent;
+    }
+    return NULL;
+}
+
+static Symbol *import_chain_lookup_kind(ImportScope *scope, const char *name, DeclKind kind) {
+    while (scope) {
+        if (scope->table) {
+            for (int i = scope->table->count - 1; i >= 0; i--) {
+                ImportRef *ref = &scope->table->entries[i];
+                if (ref->local_name == name && ref->kind == kind)
+                    return symtab_lookup_kind(ref->source_members, ref->source_name, kind);
+            }
+        }
+        scope = scope->parent;
+    }
+    return NULL;
+}
+
+/* Look up ImportRef metadata from import chain (for generic info) */
+static ImportRef *import_chain_find_ref(ImportScope *scope, const char *name) {
+    while (scope) {
+        if (scope->table) {
+            for (int i = scope->table->count - 1; i >= 0; i--) {
+                ImportRef *ref = &scope->table->entries[i];
+                if (ref->local_name == name) return ref;
+            }
+        }
+        scope = scope->parent;
+    }
+    return NULL;
+}
 
 static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
     if (count == 0) return type_void();
@@ -157,6 +206,8 @@ static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
         if (!mod_sym) {
             if (ctx->module_symtab)
                 mod_sym = symtab_lookup_kind(ctx->module_symtab, seg_name, DECL_MODULE);
+            if (!mod_sym)
+                mod_sym = import_chain_lookup_kind(ctx->import_scope, seg_name, DECL_MODULE);
             if (!mod_sym)
                 mod_sym = symtab_lookup_kind(ctx->symtab, seg_name, DECL_MODULE);
         } else {
@@ -236,6 +287,11 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_UNION);
         }
         if (!sym) {
+            sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_STRUCT);
+            if (!sym)
+                sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_UNION);
+        }
+        if (!sym) {
             sym = symtab_lookup_kind(ctx->symtab, t->struc.name, DECL_STRUCT);
             if (!sym)
                 sym = symtab_lookup_kind(ctx->symtab, t->struc.name, DECL_UNION);
@@ -243,6 +299,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         if (!sym) {
             if (ctx->module_symtab)
                 sym = symtab_lookup(ctx->module_symtab, t->struc.name);
+            if (!sym)
+                sym = import_chain_lookup(ctx->import_scope, t->struc.name);
             if (!sym)
                 sym = symtab_lookup(ctx->symtab, t->struc.name);
         }
@@ -479,6 +537,8 @@ static Symbol *lookup_module(CheckCtx *ctx, const char *name) {
     if (!mod && ctx->module_symtab)
         mod = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
     if (!mod)
+        mod = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
+    if (!mod)
         mod = symtab_lookup_kind(ctx->symtab, name, DECL_MODULE);
     return mod;
 }
@@ -496,6 +556,8 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
         Symbol *sym = NULL;
         if (ctx->module_symtab)
             sym = symtab_lookup(ctx->module_symtab, callee->ident.name);
+        if (!sym)
+            sym = import_chain_lookup(ctx->import_scope, callee->ident.name);
         if (!sym)
             sym = symtab_lookup(ctx->symtab, callee->ident.name);
         return sym;
@@ -1145,6 +1207,45 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
         }
+        /* Check import chain (lexically scoped imports) */
+        {
+            Symbol *isym = import_chain_lookup(ctx->import_scope, e->ident.name);
+            if (isym) {
+                if (isym->kind == DECL_STRUCT || isym->kind == DECL_UNION) {
+                    e->type = isym->type;
+                    return e->type;
+                }
+                if (isym->kind == DECL_MODULE) {
+                    e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
+                    return e->type;
+                }
+                /* Use the mangled codegen_name */
+                if (isym->decl && isym->decl->kind == DECL_LET && isym->decl->let.codegen_name) {
+                    e->ident.codegen_name = isym->decl->let.codegen_name;
+                }
+                if (!isym->type && isym->decl && isym->decl->kind == DECL_LET) {
+                    /* On-demand type check for imported symbol */
+                    ImportRef *ref = import_chain_find_ref(ctx->import_scope, e->ident.name);
+                    if (ref) {
+                        SymbolTable *saved_mod = ctx->module_symtab;
+                        Scope *saved_scope = ctx->scope;
+                        ctx->module_symtab = ref->source_members;
+                        ctx->scope = scope_new(ctx->arena, NULL);
+                        ctx->scope->is_global = true;
+                        check_decl_let(ctx, isym->decl);
+                        ctx->scope = saved_scope;
+                        ctx->module_symtab = saved_mod;
+                    }
+                }
+                if (!isym->type) {
+                    diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+                    e->type = type_error();
+                    return e->type;
+                }
+                e->type = isym->type;
+                return e->type;
+            }
+        }
         /* Check global symbol table */
         Symbol *sym = symtab_lookup(ctx->symtab, e->ident.name);
         if (!sym) {
@@ -1572,6 +1673,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 union_sym = symtab_lookup(ctx->symtab, e->call.func->field.object->ident.name);
                 if (!union_sym && ctx->module_symtab)
                     union_sym = symtab_lookup(ctx->module_symtab, e->call.func->field.object->ident.name);
+                if (!union_sym)
+                    union_sym = import_chain_lookup(ctx->import_scope, e->call.func->field.object->ident.name);
             }
 
             /* Find the variant */
@@ -2033,11 +2136,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (!sym && ctx->module_symtab)
             sym = symtab_lookup_kind(ctx->module_symtab, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
+            sym = import_chain_lookup_kind(ctx->import_scope, e->struct_lit.type_name, DECL_STRUCT);
+        if (!sym)
             sym = symtab_lookup_kind(ctx->symtab, e->struct_lit.type_name, DECL_STRUCT);
         /* Fallback: try general lookup (for within-module struct references) */
         if (!sym) {
             if (ctx->module_symtab)
                 sym = symtab_lookup(ctx->module_symtab, e->struct_lit.type_name);
+            if (!sym)
+                sym = import_chain_lookup(ctx->import_scope, e->struct_lit.type_name);
             if (!sym)
                 sym = symtab_lookup(ctx->symtab, e->struct_lit.type_name);
         }
@@ -2125,8 +2232,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
             if (!bindings_contain_type_vars(bindings, ntp)) {
                 /* Register and build concrete type */
+                /* Use canonical C type name (already includes module/ns prefix) */
                 const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
-                    sym->name, sym->ns_prefix,
+                    st->struc.name, NULL,
                     bindings, ntp, sym->decl,
                     DECL_STRUCT, sym->type_params, ntp);
                 if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
@@ -2214,6 +2322,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* Also check module symtab for within-module references */
             if (!mod_sym && ctx->module_symtab)
                 mod_sym = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
+            if (!mod_sym)
+                mod_sym = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
         }
 
         /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
@@ -2235,6 +2345,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
                 if (!root && ctx->module_symtab)
                     root = symtab_lookup_kind(ctx->module_symtab, cur->ident.name, DECL_MODULE);
+                if (!root)
+                    root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
                 if (root && root->members) {
                     Symbol *walk = root;
                     for (int k = depth - 1; k >= 0; k--) {
@@ -2308,6 +2420,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Symbol *sym = symtab_lookup(ctx->symtab, e->field.object->ident.name);
             if (!sym && ctx->module_symtab)
                 sym = symtab_lookup(ctx->module_symtab, e->field.object->ident.name);
+            if (!sym)
+                sym = import_chain_lookup(ctx->import_scope, e->field.object->ident.name);
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
                 if (sym->is_generic) {
                     /* Generic union no-payload variant: require explicit type args */
@@ -2344,8 +2458,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     }
 
                     if (!bindings_contain_type_vars(bindings, ntp)) {
+                        /* Use canonical C type name (already includes module/ns prefix) */
                         const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
-                            sym->name, sym->ns_prefix,
+                            sym->type->unio.name, NULL,
                             bindings, ntp, sym->decl,
                             DECL_UNION, sym->type_params, ntp);
                         if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
@@ -3643,6 +3758,9 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
         sym = symtab_lookup(ctx->module_symtab, lookup_name);
     }
     if (!sym) {
+        sym = import_chain_lookup(ctx->import_scope, lookup_name);
+    }
+    if (!sym) {
         sym = symtab_lookup(ctx->symtab, lookup_name);
     }
 
@@ -3715,18 +3833,26 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
             if (sub_sym && sub_sym->members) {
                 SymbolTable *saved_symtab = ctx->module_symtab;
                 Scope *saved_scope = ctx->scope;
+                ImportScope *saved_imports = ctx->import_scope;
+
+                /* Push sub-module's imports onto chain */
+                ImportScope sub_import_scope = { .table = sub_sym->imports, .parent = ctx->import_scope };
+                if (sub_sym->imports) ctx->import_scope = &sub_import_scope;
+
                 ctx->module_symtab = sub_sym->members;
                 ctx->scope = scope_new(ctx->arena, ctx->scope);
                 ctx->scope->is_global = true;
                 check_module_members(ctx, child, sub_sym->members);
                 ctx->scope = saved_scope;
                 ctx->module_symtab = saved_symtab;
+                ctx->import_scope = saved_imports;
             }
         }
     }
 }
 
-void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, MonoTable *mono) {
+void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, MonoTable *mono,
+                 FileImportScopes *file_scopes) {
     Arena arena;
     arena_init(&arena);
 
@@ -3746,6 +3872,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         .is_top_level_init = false,
         .mono_table = mono,
         .intern = intern_tbl,
+        .import_scope = NULL,
     };
 
     /* First pass: type-check all module member decls (including nested submodules) */
@@ -3763,12 +3890,30 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         ctx.current_ns = mod_sym->ns_prefix;
         SymbolTable *saved_mod = ctx.module_symtab;
         Scope *saved_scope = ctx.scope;
+        ImportScope *saved_imports = ctx.import_scope;
+
+        /* Build import scope chain: module imports -> file imports */
+        ImportTable *file_tbl = NULL;
+        if (file_scopes) {
+            const char *fn = d->loc.filename;
+            for (int fi = 0; fi < file_scopes->count; fi++) {
+                if (file_scopes->scopes[fi].filename == fn) {
+                    file_tbl = &file_scopes->scopes[fi].imports;
+                    break;
+                }
+            }
+        }
+        ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
+        ImportScope mod_import_scope = { .table = mod_sym->imports, .parent = &file_import_scope };
+        ctx.import_scope = mod_sym->imports ? &mod_import_scope : (file_tbl ? &file_import_scope : NULL);
+
         ctx.module_symtab = mod_sym->members;
         ctx.scope = scope_new(&arena, NULL);
         ctx.scope->is_global = true;
         check_module_members(&ctx, d, mod_sym->members);
         ctx.scope = saved_scope;
         ctx.module_symtab = saved_mod;
+        ctx.import_scope = saved_imports;
     }
 
     /* Update imported symbols' types from resolved module members */
@@ -3802,7 +3947,48 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             ctx.current_ns = d->ns.name;
             continue;
         }
+        if (d->kind == DECL_IMPORT && d->import.from_module) {
+            /* Member import: add imported symbol to scope so it shadows
+             * any earlier top-level let with the same name. */
+            ImportTable *file_tbl = NULL;
+            if (file_scopes) {
+                const char *fn = d->loc.filename;
+                for (int fi = 0; fi < file_scopes->count; fi++) {
+                    if (file_scopes->scopes[fi].filename == fn) {
+                        file_tbl = &file_scopes->scopes[fi].imports;
+                        break;
+                    }
+                }
+            }
+            if (file_tbl) {
+                const char *local_name = d->import.alias ? d->import.alias : d->import.name;
+                ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
+                Symbol *isym = import_chain_lookup(&file_import_scope, local_name);
+                if (isym && isym->decl && isym->decl->kind == DECL_LET) {
+                    const char *cg = isym->decl->let.codegen_name
+                                     ? isym->decl->let.codegen_name
+                                     : isym->decl->let.name;
+                    scope_add(ctx.scope, local_name, cg,
+                              isym->type ? isym->type : type_void(), false);
+                }
+            }
+            continue;
+        }
         if (d->kind == DECL_LET) {
+            /* Set up file-level import scope for this decl's file */
+            ImportTable *file_tbl = NULL;
+            if (file_scopes) {
+                const char *fn = d->loc.filename;
+                for (int fi = 0; fi < file_scopes->count; fi++) {
+                    if (file_scopes->scopes[fi].filename == fn) {
+                        file_tbl = &file_scopes->scopes[fi].imports;
+                        break;
+                    }
+                }
+            }
+            ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
+            ctx.import_scope = file_tbl ? &file_import_scope : NULL;
+
             check_decl_let(&ctx, d);
             if (d->let.init && d->let.init->kind != EXPR_FUNC &&
                 !is_const_expr(d->let.init)) {
@@ -3810,6 +3996,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
                     "top-level initializer for '%s' must be a constant expression",
                     d->let.name);
             }
+            ctx.import_scope = NULL;
         }
     }
 

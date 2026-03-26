@@ -1,0 +1,11 @@
+module utils =
+    let identity = (x: 'a) -> x
+    let add_one = (x: int32) -> x + 1
+
+module logic =
+    import identity from utils
+    import add_one from utils
+    let process = (x: int32) -> identity(add_one(x))
+
+let main = (args: str[]) ->
+    logic.process(9)

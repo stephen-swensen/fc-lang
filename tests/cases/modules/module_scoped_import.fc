@@ -1,0 +1,13 @@
+module types =
+    struct point =
+        x: int32
+        y: int32
+
+module geometry =
+    import point from types
+    let origin = point { x = 0, y = 0 }
+    let make = (x: int32, y: int32) -> point { x = x, y = y }
+
+let main = (args: str[]) ->
+    let p = geometry.make(3, 4)
+    p.x + p.y

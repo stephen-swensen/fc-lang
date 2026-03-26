@@ -1,0 +1,10 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+    let mul = (a: int32, b: int32) -> a * b
+
+module calculator =
+    import * from math
+    let compute = (a: int32, b: int32) -> add(a, mul(a, b))
+
+let main = (args: str[]) ->
+    calculator.compute(3, 4)

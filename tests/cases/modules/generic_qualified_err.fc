@@ -1,0 +1,14 @@
+module ns_a =
+    struct pair =
+        first: 'a
+        second: 'b
+
+module ns_b =
+    struct pair =
+        first: 'a
+        second: 'b
+
+let main = (args: str[]) ->
+    let a = ns_a.pair { first = 1, second = 2i8 }
+    let b = ns_b.pair { first = 1, second = 2i8 }
+    if a == b then 1 else 0

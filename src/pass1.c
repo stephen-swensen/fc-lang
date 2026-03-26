@@ -84,9 +84,109 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
 
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
     Symbol sym = { .name = name, .ns_prefix = NULL, .kind = kind, .decl = decl,
-                   .type = NULL, .members = NULL, .is_private = false,
+                   .type = NULL, .members = NULL, .imports = NULL, .is_private = false,
                    .is_generic = false, .type_params = NULL, .type_param_count = 0 };
     DA_APPEND(t->symbols, t->count, t->capacity, sym);
+}
+
+/* ---- Import table helpers ---- */
+
+/* Add or replace (shadow) an import ref in an import table */
+static void import_table_add(ImportTable *tbl, const char *local_name,
+                              const char *source_name, DeclKind kind,
+                              SymbolTable *source_members, Symbol *msym) {
+    /* Check for existing entry with same local_name (shadowing: replace) */
+    for (int i = 0; i < tbl->count; i++) {
+        if (tbl->entries[i].local_name == local_name) {
+            tbl->entries[i].source_name = source_name;
+            tbl->entries[i].kind = kind;
+            tbl->entries[i].source_members = source_members;
+            tbl->entries[i].is_generic = msym->is_generic;
+            tbl->entries[i].type_params = msym->type_params;
+            tbl->entries[i].type_param_count = msym->type_param_count;
+            tbl->entries[i].explicit_type_param_count = msym->explicit_type_param_count;
+            return;
+        }
+    }
+    ImportRef ref = {
+        .local_name = local_name,
+        .source_name = source_name,
+        .kind = kind,
+        .source_members = source_members,
+        .is_generic = msym->is_generic,
+        .type_params = msym->type_params,
+        .type_param_count = msym->type_param_count,
+        .explicit_type_param_count = msym->explicit_type_param_count,
+    };
+    DA_APPEND(tbl->entries, tbl->count, tbl->capacity, ref);
+}
+
+/* Find or create a per-file import scope */
+static ImportTable *get_file_imports(FileImportScopes *scopes, const char *filename) {
+    for (int i = 0; i < scopes->count; i++) {
+        if (scopes->scopes[i].filename == filename)
+            return &scopes->scopes[i].imports;
+    }
+    FileImportScope scope = { .filename = filename };
+    memset(&scope.imports, 0, sizeof(ImportTable));
+    DA_APPEND(scopes->scopes, scopes->count, scopes->capacity, scope);
+    return &scopes->scopes[scopes->count - 1].imports;
+}
+
+/* Process a member import (wildcard or named) into an ImportTable.
+ * Handles: import * from MODULE, import NAME [as ALIAS] from MODULE.
+ * Does NOT handle whole-module imports (import MODULE [as ALIAS]). */
+static void process_member_import(Decl *d, ImportTable *target,
+                                   SymbolTable *symtab, InternTable *intern  __attribute__((unused)),
+                                   const char *current_ns) {
+    const char *mod_name = d->import.from_module;
+    const char *from_ns = d->import.from_namespace;
+
+    /* Look up the source module */
+    const char *lookup_ns = from_ns ? from_ns : current_ns;
+    Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
+    if (!mod_sym) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
+    if (!mod_sym || mod_sym->kind != DECL_MODULE) {
+        diag_error(d->loc, "unknown module '%s'", mod_name);
+        return;
+    }
+
+    if (d->import.is_wildcard) {
+        /* import * from MODULE: add all non-private members */
+        SymbolTable *members = mod_sym->members;
+        for (int j = 0; j < members->count; j++) {
+            Symbol *msym = &members->symbols[j];
+            if (msym->is_private) continue;
+            import_table_add(target, msym->name, msym->name, msym->kind,
+                             members, msym);
+        }
+    } else {
+        /* import NAME [as ALIAS] from MODULE */
+        Symbol *msym = symtab_lookup(mod_sym->members, d->import.name);
+        if (!msym) {
+            diag_error(d->loc, "module '%s' has no member '%s'",
+                mod_name, d->import.name);
+            return;
+        }
+        if (msym->is_private) {
+            diag_error(d->loc, "cannot import private member '%s' from module '%s'",
+                d->import.name, mod_name);
+            return;
+        }
+        const char *import_name = d->import.alias ? d->import.alias : d->import.name;
+        import_table_add(target, import_name, d->import.name, msym->kind,
+                         mod_sym->members, msym);
+        /* Type-associated module: if importing a type, also import its
+         * associated module under the same name. */
+        if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+            Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members,
+                d->import.name, DECL_MODULE);
+            if (assoc_mod && !assoc_mod->is_private) {
+                import_table_add(target, import_name, d->import.name,
+                                 DECL_MODULE, mod_sym->members, assoc_mod);
+            }
+        }
+    }
 }
 
 /* Find a module symbol by name and namespace prefix */
@@ -212,7 +312,18 @@ static Type *register_union_sym(SymbolTable *tab, Decl *d) {
 }
 
 /* Register module members: compute mangled names, populate sub-symtab */
+/* Build a qualified display name: prefix.name */
+static const char *make_qualified(InternTable *intern, const char *prefix, const char *name) {
+    int needed = snprintf(NULL, 0, "%s.%s", prefix, name) + 1;
+    char *buf = malloc((size_t)needed);
+    snprintf(buf, (size_t)needed, "%s.%s", prefix, name);
+    const char *result = intern_cstr(intern, buf);
+    free(buf);
+    return result;
+}
+
 static void register_module_members(Decl *d, const char *mangle_prefix,
+                                    const char *display_prefix,
                                     SymbolTable *members, InternTable *intern,
                                     SymbolTable *global_symtab) {
     const char *mod_name = d->module.name;
@@ -271,6 +382,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
                 st->struc.base_name = src_name;
+                st->struc.qualified_name = make_qualified(intern, display_prefix, src_name);
                 st->struc.c_name = child->struc.c_name;
                 st->struc.fields = child->struc.fields;
                 st->struc.field_count = child->struc.field_count;
@@ -297,6 +409,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 ut->kind = TYPE_UNION;
                 ut->unio.name = mangled;
                 ut->unio.base_name = src_name;
+                ut->unio.qualified_name = make_qualified(intern, display_prefix, src_name);
                 ut->unio.variants = child->unio.variants;
                 ut->unio.variant_count = child->unio.variant_count;
                 ut->unio.type_args = NULL;
@@ -335,7 +448,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 SymbolTable *sub_members = malloc(sizeof(SymbolTable));
                 symtab_init(sub_members);
                 sub_sym->members = sub_members;
-                register_module_members(child, sub_prefix, sub_members, intern, global_symtab);
+                register_module_members(child, sub_prefix, make_qualified(intern, display_prefix, sub_name), sub_members, intern, global_symtab);
                 break;
             }
             if (existing) {
@@ -349,7 +462,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             SymbolTable *sub_members = malloc(sizeof(SymbolTable));
             symtab_init(sub_members);
             sub_sym->members = sub_members;
-            register_module_members(child, sub_prefix, sub_members, intern, global_symtab);
+            register_module_members(child, sub_prefix, make_qualified(intern, display_prefix, sub_name), sub_members, intern, global_symtab);
             break;
         }
         default:
@@ -376,7 +489,100 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
     }
 }
 
-void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
+/* Process imports for a single module symbol */
+static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
+                                          InternTable *intern) {
+    Decl *mod_decl = ms->decl;
+    if (!mod_decl) return;
+
+    bool has_imports = false;
+    for (int j = 0; j < mod_decl->module.decl_count; j++) {
+        if (mod_decl->module.decls[j]->kind == DECL_IMPORT) {
+            has_imports = true;
+            break;
+        }
+    }
+    if (!has_imports) return;
+
+    ImportTable *imports = malloc(sizeof(ImportTable));
+    memset(imports, 0, sizeof(ImportTable));
+    ms->imports = imports;
+
+    const char *mod_ns = ms->ns_prefix;
+    for (int j = 0; j < mod_decl->module.decl_count; j++) {
+        Decl *d = mod_decl->module.decls[j];
+        if (d->kind != DECL_IMPORT) continue;
+
+        const char *imp_mod = d->import.from_module;
+        const char *imp_ns = d->import.from_namespace;
+
+        if (imp_mod) {
+            process_member_import(d, imports, global_symtab, intern, mod_ns);
+        } else if (imp_ns && !imp_mod) {
+            if (d->import.is_wildcard) {
+                diag_error(d->loc, "cannot wildcard-import from a namespace");
+                continue;
+            }
+            const char *name = d->import.name;
+            Symbol *src = symtab_lookup_module(global_symtab, name, imp_ns);
+            if (!src || src->kind != DECL_MODULE) {
+                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, imp_ns);
+                continue;
+            }
+            const char *import_name = d->import.alias ? d->import.alias : name;
+            if (!symtab_lookup_module(global_symtab, import_name, mod_ns)) {
+                symtab_add(global_symtab, import_name, DECL_MODULE, src->decl);
+                Symbol *new_sym = &global_symtab->symbols[global_symtab->count - 1];
+                new_sym->members = src->members;
+                new_sym->type = src->type;
+                new_sym->ns_prefix = mod_ns;
+            }
+        } else {
+            const char *name = d->import.name;
+            Symbol *src = symtab_lookup_module(global_symtab, name, mod_ns);
+            if (!src) src = symtab_lookup_module(global_symtab, name, NULL);
+            if (!src || src->kind != DECL_MODULE) {
+                diag_error(d->loc, "unknown module '%s'", name);
+                continue;
+            }
+            if (d->import.alias) {
+                const char *alias = d->import.alias;
+                if (!symtab_lookup_module(global_symtab, alias, mod_ns)) {
+                    symtab_add(global_symtab, alias, DECL_MODULE, src->decl);
+                    Symbol *new_sym = &global_symtab->symbols[global_symtab->count - 1];
+                    new_sym->members = src->members;
+                    new_sym->type = src->type;
+                    new_sym->ns_prefix = mod_ns;
+                }
+            }
+        }
+    }
+}
+
+/* Process imports for all top-level modules in global symtab */
+static void resolve_module_imports(SymbolTable *symtab, InternTable *intern) {
+    for (int i = 0; i < symtab->count; i++) {
+        Symbol *ms = &symtab->symbols[i];
+        if (ms->kind != DECL_MODULE) continue;
+        process_module_level_imports(ms, symtab, intern);
+    }
+}
+
+/* Recursively process imports for nested submodules */
+static void resolve_nested_module_imports(SymbolTable *members,
+                                           SymbolTable *global_symtab,
+                                           InternTable *intern,
+                                           const char *ns_prefix __attribute__((unused))) {
+    for (int i = 0; i < members->count; i++) {
+        Symbol *ms = &members->symbols[i];
+        if (ms->kind != DECL_MODULE || !ms->members) continue;
+        process_module_level_imports(ms, global_symtab, intern);
+        resolve_nested_module_imports(ms->members, global_symtab, intern, ms->ns_prefix);
+    }
+}
+
+void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
+                   FileImportScopes *file_scopes) {
     /* Phase 1: Register modules.
      * Track current namespace as we iterate — DECL_NAMESPACE resets it. */
     const char *current_ns = NULL;
@@ -402,6 +608,18 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             mangle_prefix = mod_name;
         }
 
+        /* Build display prefix for qualified names: [namespace::]module */
+        const char *display_prefix;
+        if (ns_prefix) {
+            int needed = snprintf(NULL, 0, "%s::%s", ns_prefix, mod_name) + 1;
+            char *buf = malloc((size_t)needed);
+            snprintf(buf, (size_t)needed, "%s::%s", ns_prefix, mod_name);
+            display_prefix = intern_cstr(intern, buf);
+            free(buf);
+        } else {
+            display_prefix = mod_name;
+        }
+
         /* Check for duplicate module name within the same namespace */
         Symbol *existing = symtab_lookup_module(symtab, mod_name, ns_prefix);
         if (existing) {
@@ -422,7 +640,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                 SymbolTable *members = malloc(sizeof(SymbolTable));
                 symtab_init(members);
                 mod_sym->members = members;
-                register_module_members(d, mangle_prefix, members, intern, symtab);
+                register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab);
                 continue;
             }
             if (existing->kind == DECL_MODULE) {
@@ -443,7 +661,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         mod_sym->members = members;
 
         /* Walk child decls, compute mangled names, register in members */
-        register_module_members(d, mangle_prefix, members, intern, symtab);
+        register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab);
     }
 
     /* Phase 2: Register top-level (non-module) decls */
@@ -493,7 +711,22 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         }
     }
 
-    /* Phase 3: Process imports */
+    /* Phase 3: Process imports.
+     * Imports are lexically scoped: module-level imports are scoped to the
+     * module (visible to children), file-level member imports go into per-file
+     * tables. Whole-module imports (import MODULE [as ALIAS]) still go to the
+     * global symtab for dotted-name resolution. */
+
+    /* Phase 3a: Module-level imports — process recursively (including nested submodules) */
+    resolve_module_imports(symtab, intern);
+    /* Also process nested submodules within each top-level module */
+    for (int i = 0; i < symtab->count; i++) {
+        Symbol *ms = &symtab->symbols[i];
+        if (ms->kind != DECL_MODULE || !ms->members) continue;
+        resolve_nested_module_imports(ms->members, symtab, intern, ms->ns_prefix);
+    }
+
+    /* Phase 3b: File-level imports */
     current_ns = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
@@ -509,9 +742,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         const char *from_ns = d->import.from_namespace;
 
         if (!mod_name && !from_ns) {
-            /* import MODULE [as ALIAS] — whole module import */
+            /* import MODULE [as ALIAS] — whole module import (global symtab) */
             const char *name = d->import.name;
-            /* Look up module, trying current namespace first, then global */
             Symbol *sym = symtab_lookup_module(symtab, name, current_ns);
             if (!sym) sym = symtab_lookup_module(symtab, name, NULL);
             if (!sym || sym->kind != DECL_MODULE) {
@@ -519,7 +751,6 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                 continue;
             }
             if (d->import.alias) {
-                /* import MODULE as ALIAS: add alias to symtab */
                 const char *alias = d->import.alias;
                 if (symtab_lookup(symtab, alias)) {
                     diag_error(d->loc, "import '%s' conflicts with existing name", alias);
@@ -535,12 +766,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
         }
 
         if (from_ns && !mod_name) {
-            /* Wildcard import from bare namespace is invalid per spec */
             if (d->import.is_wildcard) {
                 diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
                 continue;
             }
-            /* import MODULE from namespace:: — cross-namespace whole module import */
+            /* import MODULE from namespace:: — cross-namespace whole module import (global symtab) */
             const char *name = d->import.name;
             Symbol *sym = symtab_lookup_module(symtab, name, from_ns);
             if (!sym || sym->kind != DECL_MODULE) {
@@ -548,14 +778,12 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
                 continue;
             }
             const char *import_name = d->import.alias ? d->import.alias : name;
-            /* Check for existing entry in importer's namespace */
             Symbol *existing = symtab_lookup_module(symtab, import_name, current_ns);
             if (existing) {
                 if (existing->decl != sym->decl) {
                     diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
                 }
             } else {
-                /* Add entry accessible from importer's namespace */
                 symtab_add(symtab, import_name, DECL_MODULE, sym->decl);
                 Symbol *new_sym = &symtab->symbols[symtab->count - 1];
                 new_sym->members = sym->members;
@@ -565,85 +793,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern) {
             continue;
         }
 
-        /* Have a from_module — look up the source module */
-        const char *lookup_ns = from_ns ? from_ns : current_ns;
-        Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
-        if (!mod_sym) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
-        if (!mod_sym || mod_sym->kind != DECL_MODULE) {
-            diag_error(d->loc, "unknown module '%s'", mod_name);
-            continue;
-        }
-
-        if (d->import.is_wildcard) {
-            /* import * from MODULE: add all non-private members to global symtab */
-            SymbolTable *members = mod_sym->members;
-            for (int j = 0; j < members->count; j++) {
-                Symbol *msym = &members->symbols[j];
-                if (msym->is_private) continue;
-                const char *import_name = msym->name;
-                if (symtab_lookup(symtab, import_name)) {
-                    diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
-                } else {
-                    symtab_add(symtab, import_name, msym->kind, msym->decl);
-                    Symbol *new_sym = &symtab->symbols[symtab->count - 1];
-                    new_sym->type = msym->type;
-                    new_sym->members = msym->members;
-                    new_sym->is_generic = msym->is_generic;
-                    new_sym->type_params = msym->type_params;
-                    new_sym->type_param_count = msym->type_param_count;
-                    new_sym->explicit_type_param_count = msym->explicit_type_param_count;
-                }
-            }
-        } else {
-            /* import NAME [as ALIAS] from MODULE */
-            Symbol *msym = symtab_lookup(mod_sym->members, d->import.name);
-            if (!msym) {
-                diag_error(d->loc, "module '%s' has no member '%s'",
-                    mod_name, d->import.name);
-                continue;
-            }
-            if (msym->is_private) {
-                diag_error(d->loc, "cannot import private member '%s' from module '%s'",
-                    d->import.name, mod_name);
-                continue;
-            }
-            const char *import_name = d->import.alias ? d->import.alias : d->import.name;
-            if (symtab_lookup(symtab, import_name)) {
-                diag_error(d->loc, "import '%s' conflicts with existing name", import_name);
-            } else {
-                symtab_add(symtab, import_name, msym->kind, msym->decl);
-                Symbol *new_sym = &symtab->symbols[symtab->count - 1];
-                /* If importing a type with an alias, shallow-copy the Type so
-                 * the alias field doesn't mutate the original shared type. */
-                if (d->import.alias && msym->type &&
-                    (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION)) {
-                    Type *copy = malloc(sizeof(Type));
-                    *copy = *msym->type;
-                    copy->alias = d->import.alias;
-                    new_sym->type = copy;
-                } else {
-                    new_sym->type = msym->type;
-                }
-                new_sym->members = msym->members;
-                new_sym->is_generic = msym->is_generic;
-                new_sym->type_params = msym->type_params;
-                new_sym->type_param_count = msym->type_param_count;
-                new_sym->explicit_type_param_count = msym->explicit_type_param_count;
-            }
-            /* Type-associated module: if importing a type, also import the
-             * associated module (if any) under the same name.
-             * Per spec: "import T from M brings both the type T and the module T
-             * (if it exists) into scope together." */
-            if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
-                Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members, d->import.name, DECL_MODULE);
-                if (assoc_mod && !assoc_mod->is_private) {
-                    symtab_add(symtab, import_name, DECL_MODULE, assoc_mod->decl);
-                    Symbol *mod_entry = &symtab->symbols[symtab->count - 1];
-                    mod_entry->members = assoc_mod->members;
-                    mod_entry->type = assoc_mod->type;
-                }
-            }
-        }
+        /* Member import (import X from M / import * from M) — goes to file scope */
+        ImportTable *file_tbl = get_file_imports(file_scopes, d->loc.filename);
+        process_member_import(d, file_tbl, symtab, intern, current_ns);
     }
 
     /* Phase 4: Detect circular references between modules.

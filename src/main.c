@@ -144,7 +144,8 @@ int main(int argc, char **argv) {
     /* Pass 1: collect declarations */
     SymbolTable symtab;
     symtab_init(&symtab);
-    pass1_collect(prog, &symtab, &intern_table);
+    FileImportScopes file_scopes = { .scopes = NULL, .count = 0, .capacity = 0 };
+    pass1_collect(prog, &symtab, &intern_table, &file_scopes);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
@@ -153,7 +154,7 @@ int main(int argc, char **argv) {
 
     /* Pass 2: type check */
     MonoTable mono = {0};
-    pass2_check(prog, &symtab, &intern_table, &mono);
+    pass2_check(prog, &symtab, &intern_table, &mono, &file_scopes);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());

@@ -1,0 +1,12 @@
+module factory =
+    struct box =
+        value: 'a
+    let wrap = (x: 'a) -> box { value = x }
+
+import box from factory
+import wrap from factory
+
+let main = (args: str[]) ->
+    let a = box { value = 99 }
+    let b = wrap(99)
+    if a == b then 42 else 1

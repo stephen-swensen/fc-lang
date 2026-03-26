@@ -1,0 +1,6 @@
+namespace test::
+
+import * from std::types
+
+module lib =
+    let make_pair = (a: 'a, b: 'b) -> tuple2 { e1 = a, e2 = b }

@@ -1,0 +1,9 @@
+module math =
+    let add = (a: int32, b: int32) -> a + b
+
+let add = (a: int32, b: int32) -> a + b + 100
+
+import add from math
+
+let main = (args: str[]) ->
+    add(1, 2)

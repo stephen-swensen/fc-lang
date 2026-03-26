@@ -1,0 +1,10 @@
+module lib =
+    private let secret = 42
+    let public_val = 10
+
+module consumer =
+    import secret from lib
+    let get = () -> secret
+
+let main = (args: str[]) ->
+    consumer.get()

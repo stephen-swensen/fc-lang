@@ -1,0 +1,1 @@
+comparison type mismatch: lib::types.pair<int32, int8> vs local.pair<int32, int8>

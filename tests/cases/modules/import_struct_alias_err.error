@@ -1,1 +1,1 @@
-arithmetic requires numeric operands, got pt and int32
+arithmetic requires numeric operands, got geometry.point and int32

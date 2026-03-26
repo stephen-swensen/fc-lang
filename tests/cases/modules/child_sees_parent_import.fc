@@ -1,0 +1,11 @@
+module helpers =
+    let double = (x: int32) -> x * 2
+
+module parent =
+    import double from helpers
+
+    module child =
+        let quad = (x: int32) -> double(double(x))
+
+let main = (args: str[]) ->
+    parent.child.quad(5)

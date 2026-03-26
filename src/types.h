@@ -60,8 +60,9 @@ struct Type {
         } func;
         struct {
             const char *name;
-            const char *base_name;  /* original FC name before mangling (for diagnostics) */
-            const char *c_name;     /* C struct tag name for extern structs, NULL for normal */
+            const char *base_name;      /* original FC name before mangling (for diagnostics) */
+            const char *qualified_name;  /* fully qualified FC path (e.g. "std::types.tuple2") */
+            const char *c_name;         /* C struct tag name for extern structs, NULL for normal */
             StructField *fields;
             int field_count;
             Type **type_args;
@@ -69,7 +70,8 @@ struct Type {
         } struc;
         struct {
             const char *name;
-            const char *base_name;  /* original FC name before mangling (for diagnostics) */
+            const char *base_name;      /* original FC name before mangling (for diagnostics) */
+            const char *qualified_name;  /* fully qualified FC path (e.g. "geometry.shape") */
             UnionVariant *variants;
             int variant_count;
             Type **type_args;

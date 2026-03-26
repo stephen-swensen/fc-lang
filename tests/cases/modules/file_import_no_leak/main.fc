@@ -1,0 +1,6 @@
+import * from std::types
+import lib from test::
+
+let main = (args: str[]) ->
+    let p = lib.make_pair(3, 4)
+    p.e1 + p.e2
