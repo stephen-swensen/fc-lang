@@ -4,14 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This is an early-stage compiler project for **FC** (version 0.7 draft), a systems programming language that transpiles to C11. The compiler (`./fc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`.
+This is an early-stage compiler project for **FC** (version 0.8-draft), a systems programming language that transpiles to C11. The compiler (`./fc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`.
 
 ## Build & Run
 
 - **`make`** — Build the compiler (produces `./fc` in the project root)
 - **`make test`** — Build and run all tests
+- **`make test-parallel`** — Build and run all tests in parallel
 - **`make clean`** — Remove build artifacts
 - **`./fc input.fc -o output.c`** — Compile a single FC file to C
+- **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
 
 The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g`. Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean.
 
@@ -147,12 +149,15 @@ Tests live in `tests/cases/`, organized into subdirectories by functional catego
 - `type_properties/` — static type props (int32.min, float64.nan) + typevar props ('a.bits)
 - `native_types/` — isize/usize literals, arithmetic, casts, generics, error cases
 - `extern/` — extern declarations, conditional compilation (#if/#else/#end), variadic extern calls
+- `const/` — const pointers/slices, const coercion, freeze/strip casts, deep const, const errors
 - `escape/` — stack escape analysis (return stack ptr/slice, free non-heap, alloc struct with stack fields)
 - `io/` — print, io read/write, eprint, stdin/stdout, sys, main_args
 
-Each **single-file test** is an `.fc` file plus one of:
-- `.expected_exit` — expected exit code (0–255); the test compiles and runs
-- `.error` — substring expected in compiler stderr; the test must fail to compile
+Each **single-file test** is an `.fc` file optionally paired with:
+- `.expected_exit` — expected exit code (0–255). If omitted, the expected exit code is 0.
+- `.error` — substring expected in compiler stderr; the test must fail to compile.
+
+Most tests use `assert` (which calls `abort()`, exit code 134) for correctness checks and omit `.expected_exit`, so a passing test simply exits 0.
 
 Each **multi-file test** is a subdirectory containing:
 - Multiple `.fc` files (e.g. `main.fc`, `lib.fc`) — all compiled together
@@ -191,7 +196,7 @@ Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
 
 ## Workflow
 
-- Run `make test` to confirm all tests pass before presenting a summary of changes
+- Run `make test-parallel` to confirm all tests pass before presenting a summary of changes
 
 ## Spec Reference
 
@@ -199,6 +204,7 @@ The `spec/` folder contains:
 - **`fc-spec.html`** — Full language specification. Self-contained HTML with embedded markdown rendered by `marked.js`. Open in a browser to read.
 - **`grammar.bnf`** — BNF grammar for the language syntax.
 - **`TODO.md`** — Outstanding spec/compiler tasks.
+- **`hist/`** — Historical design artifacts and analysis documents.
 
 Spec sections are organized as:
 - Part 1 — Foundations (types, literals, operators, let/mut, inference)
