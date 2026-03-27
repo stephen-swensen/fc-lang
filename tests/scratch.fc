@@ -1,7 +1,16 @@
 import * from std::prelude
 
+#if main1
+let main_version = "main1"
 let main = (args: str[]) ->
-    2 == "adsf"
-    assert("asdf".len == 2, "expecting lenght 2")
+    println(main_version)
+    assert(main_version == "main1")
     0
+#else
+let main_version = "main_else"
+let main = (args: str[]) ->
+    println(main_version)
+    assert(main_version == "main_else")
+    0
+#end
 
