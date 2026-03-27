@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    // alignof(T[N]) returns alignment of element type T, not the array
+    assert(alignof(int32[4]) == alignof(int32))
+    assert(alignof(int64[8]) == alignof(int64))
+    assert(alignof(int8[16]) == alignof(int8))
+
+    0

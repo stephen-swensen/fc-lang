@@ -1904,6 +1904,13 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_ALIGNOF: {
+        fprintf(out, "(int64_t)_Alignof(");
+        emit_type(e->alignof_expr.target, out);
+        fprintf(out, ")");
+        break;
+    }
+
     case EXPR_DEFAULT: {
         Type *t = e->default_expr.target;
         switch (t->kind) {
@@ -2698,6 +2705,9 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_SIZEOF:
         collect_types_in_type(e->sizeof_expr.target, slices, options, fns);
         break;
+    case EXPR_ALIGNOF:
+        collect_types_in_type(e->alignof_expr.target, slices, options, fns);
+        break;
     case EXPR_DEFAULT:
         collect_types_in_type(e->default_expr.target, slices, options, fns);
         break;
@@ -3375,6 +3385,7 @@ static void detect_features_expr(Expr *e) {
             g_needs_stdio = true;
         return;
     case EXPR_SIZEOF:
+    case EXPR_ALIGNOF:
     case EXPR_DEFAULT:
     case EXPR_INT_LIT:
     case EXPR_FLOAT_LIT:

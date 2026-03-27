@@ -44,6 +44,7 @@ typedef enum {
     EXPR_ALLOC,
     EXPR_FREE,
     EXPR_SIZEOF,
+    EXPR_ALIGNOF,
     EXPR_DEFAULT,
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
@@ -223,6 +224,9 @@ struct Expr {
 
         /* EXPR_SIZEOF */
         struct { Type *target; } sizeof_expr;
+
+        /* EXPR_ALIGNOF */
+        struct { Type *target; } alignof_expr;
 
         /* EXPR_DEFAULT */
         struct { Type *target; } default_expr;

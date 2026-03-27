@@ -1,0 +1,34 @@
+let main = (args: str[]) ->
+    let a1 = alignof(int8)
+    let a2 = alignof(int16)
+    let a4 = alignof(int32)
+    let a8 = alignof(int64)
+    let ab = alignof(bool)
+
+    // int8 alignment is always 1
+    assert(a1 == 1i64)
+
+    // int16 alignment is at least 2
+    assert(a2 >= 2i64)
+
+    // int32 alignment is at least 4
+    assert(a4 >= 4i64)
+
+    // int64 alignment is at least 8
+    assert(a8 >= 8i64)
+
+    // bool alignment is at least 1
+    assert(ab >= 1i64)
+
+    // unsigned types have same alignment as signed
+    assert(alignof(uint8) == alignof(int8))
+    assert(alignof(uint16) == alignof(int16))
+    assert(alignof(uint32) == alignof(int32))
+    assert(alignof(uint64) == alignof(int64))
+
+    // platform-width types
+    assert(alignof(isize) >= 4i64)
+    assert(alignof(usize) >= 4i64)
+    assert(alignof(isize) == alignof(usize))
+
+    0

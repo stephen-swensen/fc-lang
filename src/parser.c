@@ -1115,6 +1115,18 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_ALIGNOF: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        p->allow_fixed_array = true;
+        Type *ty = parse_type(p);
+        p->allow_fixed_array = false;
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ALIGNOF, loc);
+        e->alignof_expr.target = ty;
+        return e;
+    }
+
     case TOK_DEFAULT: {
         advance_p(p);
         expect(p, TOK_LPAREN);

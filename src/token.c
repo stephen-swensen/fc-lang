@@ -38,6 +38,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_ALLOC]        = "'alloc'",
     [TOK_FREE]         = "'free'",
     [TOK_SIZEOF]       = "'sizeof'",
+    [TOK_ALIGNOF]      = "'alignof'",
     [TOK_DEFAULT]      = "'default'",
     [TOK_ASSERT]       = "'assert'",
     [TOK_INTERP_START]  = "interpolation start",

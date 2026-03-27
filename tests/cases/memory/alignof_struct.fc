@@ -1,0 +1,18 @@
+struct pair =
+    a: int32
+    b: int32
+
+struct mixed =
+    x: int8
+    y: int64
+
+let main = (args: str[]) ->
+    // struct alignment is at least the alignment of its most-aligned field
+    assert(alignof(pair) >= alignof(int32))
+    assert(alignof(mixed) >= alignof(int64))
+
+    // struct alignment is consistent with sizeof (size is a multiple of alignment)
+    assert(sizeof(pair) % alignof(pair) == 0i64)
+    assert(sizeof(mixed) % alignof(mixed) == 0i64)
+
+    0

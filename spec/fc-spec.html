@@ -604,7 +604,7 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `default`, `assert`
+`alloc`, `free`, `sizeof`, `alignof`, `default`, `assert`
 
 The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
 
@@ -966,7 +966,7 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
 
-Top-level and module-level non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `default`, and struct literals with constant fields. Variable references and function calls are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions, avoids hidden startup code, and ensures that top-level state can be fully determined at compile time.
+Top-level and module-level non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, and struct literals with constant fields. Variable references and function calls are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions, avoids hidden startup code, and ensures that top-level state can be fully determined at compile time.
 
 ```fc
 let max_size = 1024             // ok — integer literal
@@ -2281,7 +2281,7 @@ Omitted fields are zero-initialized (the entire inline array is zeroed).
 ### Restrictions
 
 - `N` must be a compile-time integer literal (no expressions, no type variables for size).
-- `T[N]` is valid only in struct field declarations (including extern structs) and as a `sizeof` operand. It cannot appear as a function parameter type, return type, or binding type.
+- `T[N]` is valid only in struct field declarations (including extern structs) and as a `sizeof`/`alignof` operand. It cannot appear as a function parameter type, return type, or binding type.
 - `&s.data` is a compile error — use `s.data.ptr` for the raw pointer.
 
 ### sizeof
@@ -2292,6 +2292,32 @@ Omitted fields are zero-initialized (the entire inline array is zeroed).
 sizeof(int32[4])     // 16
 sizeof(packet)       // >= 257 (256 bytes of data + 4 bytes of len, plus padding)
 ```
+
+### alignof
+
+`alignof(T)` returns the alignment requirement of type `T` in bytes as `int64`. Like `sizeof`, it is a constant expression and works with type variables in generic functions.
+
+```fc
+alignof(int8)        // 1
+alignof(int32)       // 4 (on most platforms)
+alignof(int64)       // 8 (on most platforms)
+```
+
+For fixed arrays, `alignof(T[N])` returns the alignment of the element type `T`, not the array — matching C11 semantics.
+
+```fc
+alignof(int32[4])    // same as alignof(int32)
+```
+
+In generic functions, `alignof('a)` is resolved at monomorphization time:
+
+```fc
+let get_align = <'a>() -> alignof('a)
+get_align<int32>()   // 4
+get_align<int64>()   // 8
+```
+
+Transpiles to `(int64_t)_Alignof(...)` in C11.
 
 ### Equality
 
@@ -2408,12 +2434,13 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
+| `alignof(T)` | Return the alignment in bytes of type `T` as an `int64`. For fixed arrays `T[N]`, returns alignment of element type `T`. |
 | `assert(cond)` | Check that `cond` (a `bool` expression) is true at runtime. If false, prints a diagnostic message to stderr and calls `abort()`. |
 | `assert(cond, msg)` | Same as `assert(cond)`, but additionally includes the string `msg` (type `str`) in the diagnostic output. |
 
 These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
 
-`alloc`, `free`, `sizeof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
+`alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
 
 The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
 
@@ -2431,6 +2458,7 @@ let s = default(str)       // empty slice — { ptr = null, len = 0 }
 let p = default(point)     // point { x = 0.0, y = 0.0 }
 let o = default(int32?)    // int32? with no value
 let n = sizeof(int32)      // 4 — int64
+let a = alignof(int64)     // 8 — int64 (on most platforms)
 ```
 
 Default values by type category:
@@ -3401,7 +3429,7 @@ let eq = v == default(int_or_float)            // byte-level equality (memcmp)
 
 ### Reserved identifiers and `extern as`
 
-FC reserves `alloc`, `free`, `sizeof`, `default`, and `assert` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.
+FC reserves `alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.
 
 The `extern as` form resolves this by binding the C function under a different name in the FC module:
 

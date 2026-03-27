@@ -45,6 +45,7 @@ typedef enum {
     TOK_ALLOC,
     TOK_FREE,
     TOK_SIZEOF,
+    TOK_ALIGNOF,
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,

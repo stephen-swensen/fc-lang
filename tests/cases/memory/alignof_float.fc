@@ -1,0 +1,11 @@
+let main = (args: str[]) ->
+    let af32 = alignof(float32)
+    let af64 = alignof(float64)
+
+    // float32 alignment is at least 4
+    assert(af32 >= 4i64)
+
+    // float64 alignment is at least 8
+    assert(af64 >= 8i64)
+
+    0

@@ -1,0 +1,13 @@
+let get_align = <'a>() -> alignof('a)
+
+let main = (args: str[]) ->
+    let a32 = get_align<int32>()
+    let a64 = get_align<int64>()
+
+    assert(a32 >= 4i64)
+    assert(a64 >= 8i64)
+
+    // different instantiations produce different alignments
+    assert(a64 >= a32)
+
+    0

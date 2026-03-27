@@ -3029,6 +3029,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    case EXPR_ALIGNOF: {
+        Type *ty = resolve_type(ctx, e->alignof_expr.target);
+        e->alignof_expr.target = ty;
+        e->type = type_int64();
+        return e->type;
+    }
+
     case EXPR_DEFAULT: {
         Type *ty = resolve_type(ctx, e->default_expr.target);
         e->default_expr.target = ty;
@@ -4028,6 +4035,7 @@ static bool is_const_expr(Expr *e) {
     case EXPR_STRING_LIT:
     case EXPR_CSTRING_LIT:
     case EXPR_SIZEOF:
+    case EXPR_ALIGNOF:
     case EXPR_DEFAULT:
         return true;
     case EXPR_UNARY_PREFIX:
