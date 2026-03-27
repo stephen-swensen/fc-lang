@@ -2247,6 +2247,16 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (is_write_through_const(e->assign.target)) {
             diag_error(e->loc, "cannot assign through const pointer/slice");
         }
+        /* Reject assignment to slice .len and .ptr fields */
+        if (e->assign.target->kind == EXPR_FIELD) {
+            Expr *obj = e->assign.target->field.object;
+            Type *ot = obj->type;
+            if (ot && ot->kind == TYPE_SLICE &&
+                (strcmp(e->assign.target->field.name, "len") == 0 ||
+                 strcmp(e->assign.target->field.name, "ptr") == 0)) {
+                diag_error(e->loc, "cannot assign to slice .%s field", e->assign.target->field.name);
+            }
+        }
         e->type = type_void();
         return e->type;
     }

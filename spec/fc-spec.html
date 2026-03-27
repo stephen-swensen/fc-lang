@@ -2121,6 +2121,8 @@ s[..j]      // sub-slice from start up to but not including j
 s[i..]      // sub-slice from i to end
 ```
 
+Both `.ptr` and `.len` are **read-only** — assigning to either field is a compile error. Independent mutation of these fields would break the slice invariant (that `.ptr` points to at least `.len` valid elements). To reshape a slice, use sub-slicing (`s[i..j]`) or construct a new slice from raw parts using struct literal syntax (see §Slice construction from raw pointer).
+
 `s.len` is always `int64`. This is a deliberate design choice with two motivations. First, a platform-native length type would leak the target architecture into the type system, making struct layouts, arithmetic, and stored lengths all implicitly platform-dependent — reintroducing one of the footguns FC is designed to eliminate. Second, a signed length means `int32` — the default integer type — widens to `int64` naturally, so common patterns like `0..slice.len`, `i < slice.len`, and `slice.len - 1` all work without explicit casts. An unsigned `uint64` length would not widen from `int32` (since negative values would change meaning), forcing casts at nearly every slice boundary. A signed length also avoids the well-known C bug class where `a.len - b.len` underflows to a huge positive number — signed subtraction produces a negative result, which is almost always what the programmer intended.
 
 The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), which exceeds the addressable memory of any current or foreseeable hardware.
