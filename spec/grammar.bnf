@@ -390,6 +390,7 @@ type_primary     = type_atom , { type_postfix } ;
 
 type_postfix     = "*"                           (* pointer type:  T*     *)
                  | "[" , "]"                     (* slice type:    T[]    *)
+                 | "[" , INT_LIT , "]"           (* fixed array:   T[N] — struct fields and sizeof only *)
                  | "?"                           (* option type:   T?     *)
                  ;
 
@@ -622,12 +623,14 @@ alloc_expr       = "alloc" , "(" , alloc_arg , ")" ;
 
 (* alloc accepts:                                                      *)
 (*   - a bare type name:               alloc(node)                     *)
-(*   - a slice type with length:       alloc(int32[128])               *)
+(*   - a slice literal (empty):        alloc(int32[128] { })           *)
+(*   - a slice literal (with values):  alloc(int32[4] { 1,2,3,4 })   *)
 (*   - a value expression:             alloc(point { x = 1 })         *)
-(*   - a slice literal:                alloc(int32[4] { 1,2,3,4 })   *)
 (*   - a variant:                      alloc(shape.circle(3.14))      *)
-alloc_arg        = type_expr , "[" , expr , "]" , [ "{" , [ expr_list ] , "}" ]
-                                                 (* slice alloc with optional init *)
+(* Note: alloc(T[N]) without { } is not valid — use alloc(T[N] { })   *)
+(* N may be runtime for empty { }; explicit elements require literal N *)
+alloc_arg        = type_expr , "[" , expr , "]" , "{" , [ expr_list ] , "}"
+                                                 (* slice alloc — { } required  *)
                  | type_expr                     (* bare type alloc             *)
                  | expr                          (* value expression alloc      *)
                  ;

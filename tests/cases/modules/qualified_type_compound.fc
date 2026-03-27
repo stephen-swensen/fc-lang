@@ -14,7 +14,7 @@ let use_option = (p: m.point?) ->
 let main = (args: str[]) ->
     let mut p = m.point { x = 42, y = 0 }
     let r1 = use_ptr(&p)
-    let mut arr = alloc(m.point[2])!
+    let mut arr = alloc(m.point[2] { })!
     arr[0] = m.point { x = 99, y = 0 }
     let r2 = use_slice(arr)
     let r3 = use_option(some(m.point { x = 7, y = 0 }))

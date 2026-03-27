@@ -1,0 +1,7 @@
+struct holder =
+    data: int32[4]
+
+let main = (args: str[]) ->
+    let mut h = holder { }
+    let _p = &h.data
+    0

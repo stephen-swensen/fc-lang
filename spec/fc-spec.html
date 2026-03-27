@@ -2182,10 +2182,10 @@ The `alloc(T, N)` form allocates a raw buffer directly without constructing a sl
 let buf = alloc(uint8, 128)!        // uint8* — raw buffer, no slice overhead
 ```
 
-Alternatively, `alloc(T[N])` creates a slice which the programmer can narrow to a raw pointer:
+Alternatively, `alloc(T[N] { })` creates a slice which the programmer can narrow to a raw pointer:
 
 ```fc
-let buf = alloc(uint8[128])!.ptr    // uint8* — 128 bytes allocated, slice header discarded
+let buf = alloc(uint8[128] { })!.ptr    // uint8* — 128 bytes allocated, slice header discarded
 ```
 
 The underlying heap allocation is identical in both cases — `calloc(128, sizeof(uint8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C.
@@ -2220,6 +2220,103 @@ let main = (args: str[]) ->
 ```
 
 This compiles to the same C you would write by hand — `malloc(256)`, `memset(buf, 0, 256)` — with no intermediate slice construction and no `int64` arithmetic. The `usize` type emits `size_t` in the generated C, so on an 8-bit AVR it is 16 bits, on a 32-bit ARM it is 32 bits, and on a 64-bit host it is 64 bits — matching the target's native address width in every case.
+
+---
+
+## Fixed-Size Inline Arrays
+
+A struct field declared with `T[N]` stores `N` elements of type `T` inline in the struct, just like a C array member. In the FC type system, the field is accessed as a `T[]` slice — the compiler creates a fat-pointer view automatically on every field access.
+
+```fc
+struct packet =
+    data: uint8[256]
+    len: int32
+```
+
+This produces the C struct `struct packet { uint8_t data[256]; int32_t len; };`.
+
+### Access
+
+Accessing a fixed-array field yields a `T[]` slice with `.ptr` pointing to the inline data and `.len` equal to `N`:
+
+```fc
+let p = packet { len = 0 }
+p.data.len        // always 256
+p.data[0]         // bounds-checked element access
+p.data[10..20]    // subslicing
+for b in p.data   // iteration
+    use(b)
+p.data.ptr        // raw uint8* to the start of the inline array
+```
+
+The object must be an lvalue (a named binding, not a temporary). Accessing a fixed-array field on a function return value or struct literal is a compile error — bind the struct first.
+
+### Assignment
+
+Assigning a slice to a fixed-array field copies data via `memcpy`:
+
+- If `src.len > N`: runtime abort (prevents data loss).
+- If `src.len <= N`: copy `src.len` elements, zero-fill the remaining `N - src.len` elements.
+
+```fc
+let mut p = packet { len = 0 }
+let msg = uint8[4] { 0x48u8, 0x45u8, 0x4Cu8, 0x4Fu8 }
+p.data = msg   // copies 4 bytes, zeros remaining 252
+p.len = 4
+```
+
+### Struct Literals
+
+Fixed-array fields in struct literals accept slice values. The data is copied inline:
+
+```fc
+let src = uint8[8] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
+let p = packet { data = src, len = 8 }
+```
+
+Omitted fields are zero-initialized (the entire inline array is zeroed).
+
+### Restrictions
+
+- `N` must be a compile-time integer literal (no expressions, no type variables for size).
+- `T[N]` is valid only in struct field declarations (including extern structs) and as a `sizeof` operand. It cannot appear as a function parameter type, return type, or binding type.
+- `&s.data` is a compile error — use `s.data.ptr` for the raw pointer.
+
+### sizeof
+
+`sizeof(T[N])` returns `N * sizeof(T)` as `int64`. A struct containing inline arrays includes them in its size:
+
+```fc
+sizeof(int32[4])     // 16
+sizeof(packet)       // >= 257 (256 bytes of data + 4 bytes of len, plus padding)
+```
+
+### Equality
+
+Struct equality (`==`) compares fixed-array fields element-by-element (or via `memcmp` for simple types).
+
+### C Interop
+
+Extern structs can declare fixed-array fields to match C struct layouts:
+
+```fc
+module net from "netinet/in.h" =
+    extern struct in6_addr =
+        s6_addr: uint8[16]
+```
+
+The field maps directly to `uint8_t s6_addr[16]` in the C header.
+
+### Generics
+
+Generic structs may use fixed arrays with a type variable element:
+
+```fc
+struct buffer =
+    data: 'a[256]
+```
+
+Each monomorphized instance (e.g. `buffer<int32>`) produces a concrete C struct with the appropriate inline array.
 
 ---
 
@@ -2302,9 +2399,10 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 | Operator | Description |
 |----------|-------------|
 | `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
-| `alloc(T[N])` | Heap-allocate a slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
+| `alloc(T[N] { })` | Heap-allocate a zero-initialized slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
+| `alloc(T[N] { elems })` | Heap-allocate a slice initialized with provided elements. `N` must be a literal. |
 | `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
-| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), array literals, struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
@@ -2407,7 +2505,7 @@ let rgb = uint8[3] { 255, 0, 128 }  // stack slice, exhaustive element list
 
 Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
 
-`N` in `T[N]` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N])`), `N` may be a runtime value since `calloc` accepts a runtime count.
+`N` in `T[N] { }` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
 
 > **Transpilation**
 > `int32[128] { }` transpiles to `int32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
@@ -2462,33 +2560,33 @@ let make_slice = () ->
 ## Heap Allocation
 
 ```fc
-let n = alloc(node)          // returns node*? — may fail
-let n = alloc(node)!         // unwrap — crash on failure
-let buf = alloc(node[128])   // heap-allocated slice of 128 nodes, returns node[]?
-let raw = alloc(uint8, 256)  // raw buffer of 256 bytes, returns uint8*?
-free(ptr)                    // free a heap-allocated pointer
-free(buf)                    // free a heap-allocated slice — compiler emits free(buf.ptr)
+let n = alloc(node)              // returns node*? — may fail
+let n = alloc(node)!             // unwrap — crash on failure
+let buf = alloc(node[128] { })   // heap-allocated slice of 128 nodes, returns node[]?
+let raw = alloc(uint8, 256)      // raw buffer of 256 bytes, returns uint8*?
+free(ptr)                        // free a heap-allocated pointer
+free(buf)                        // free a heap-allocated slice — compiler emits free(buf.ptr)
 ```
 
-`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N])` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
+`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N] { })` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
 
 ### alloc forms summary
 
 | Form | Returns | Behavior |
 |------|---------|----------|
 | `alloc(T)` | `T*?` | Zero-initialized single value |
-| `alloc(T[N])` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
+| `alloc(T[N] { })` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
+| `alloc(T[N] { elems })` | `T[]?` | Heap array initialized with provided elements; `N` must be literal |
 | `alloc(T, N)` | `T*?` | Raw buffer of `N` elements, zero-initialized (no length tracking) |
 | `alloc("literal")` | `str?` | Heap copy of string literal |
 | `alloc(c"literal")` | `cstr?` | Heap copy of cstr literal |
 | `alloc("...%d{x}...")` | `str?` | Interpolated string written directly to heap |
 | `alloc(c"...%d{x}...")` | `cstr?` | Interpolated cstr written directly to heap |
-| `alloc(T[N] { elems })` | `T[]?` | Heap array initialized with provided elements |
 | `alloc(struct { fields })` | `T*?` | Heap struct initialized from literal |
 | `alloc(union.variant(val))` | `T*?` | Heap union initialized from variant |
 | `alloc(slice_expr)` | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
 
-`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), array literals, struct literals, union variant constructors, and slice expressions. Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
+`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. The bare form `alloc(T[N])` is not valid — the `{ }` initializer is always required, even when empty. This keeps `T[N]` unambiguously a type and `T[N] { }` unambiguously a value expression. For runtime-sized allocation, `N` may be any integer expression but explicit element values are not allowed (the array is zero-initialized). Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
 
 The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
 

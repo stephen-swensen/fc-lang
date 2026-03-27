@@ -1,0 +1,10 @@
+struct frame =
+    data: uint8[32]
+    len: int32
+
+let main = (args: str[]) ->
+    let f = default(frame)
+    assert(f.data[0] == 0u8)
+    assert(f.data[31] == 0u8)
+    assert(f.len == 0)
+    0

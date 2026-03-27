@@ -1,0 +1,15 @@
+struct vec =
+    data: int32[4]
+    len: int32
+
+let main = (args: str[]) ->
+    let mut v = vec { len = 0 }
+
+    v.data[0] = 100
+    v.data[1] = 200
+    v.len = 2
+
+    assert(v.data[0] == 100)
+    assert(v.data[1] == 200)
+    assert(v.len == 2)
+    0

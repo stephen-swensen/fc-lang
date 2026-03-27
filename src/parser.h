@@ -12,6 +12,7 @@ typedef struct {
     Decl **pending_decls;   /* extra decls from multi-symbol imports */
     int pending_count;
     int pending_cap;
+    bool allow_fixed_array; /* true when parsing struct/extern struct field types */
 } Parser;
 
 void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable *intern);

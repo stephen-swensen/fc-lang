@@ -25,6 +25,7 @@ typedef enum {
     TYPE_UNION,
     TYPE_ANY_PTR,
     TYPE_TYPE_VAR,
+    TYPE_FIXED_ARRAY, /* fixed-size inline array: T[N] */
     TYPE_ERROR,      /* poison type for error recovery */
 
     TYPE_COUNT
@@ -78,6 +79,7 @@ struct Type {
             Type **type_args;
             int type_arg_count;
         } unio;
+        struct { Type *elem; int64_t size; } fixed_array;
         struct { const char *name; } type_var;
     };
 };
@@ -112,6 +114,7 @@ bool type_is_const(Type *t);
 Type *type_pointer(Arena *a, Type *pointee);
 Type *type_slice(Arena *a, Type *elem);
 Type *type_option(Arena *a, Type *inner);
+Type *type_fixed_array(Arena *a, Type *elem, int64_t size);
 
 /* Alias type helpers: str = uint8[], cstr = uint8*, str32 = uint32[] */
 bool is_str_type(Type *t);

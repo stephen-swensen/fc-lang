@@ -1,12 +1,12 @@
 let main = (args: str[]) ->
     let _result =
-        let buf1 = alloc(int32[2])!
+        let buf1 = alloc(int32[2] { })!
         buf1[0] = 1
         buf1[1] = 2
-        let buf2 = alloc(int32[2])!
+        let buf2 = alloc(int32[2] { })!
         buf2[0] = 1
         buf2[1] = 2
-        let buf3 = alloc(int32[2])!
+        let buf3 = alloc(int32[2] { })!
         buf3[0] = 9
         buf3[1] = 9
         let a = some(buf1)

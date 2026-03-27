@@ -1,0 +1,11 @@
+struct block =
+    data: int32[4]
+
+let main = (args: str[]) ->
+    let a = block { data = int32[4] { 1, 2, 3, 4 } }
+    let b = block { data = int32[4] { 1, 2, 3, 4 } }
+    let c = block { data = int32[4] { 1, 2, 3, 5 } }
+
+    assert(a == b)
+    assert(!(a == c))
+    0

@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let a = alloc(int32[1])!
+        let a = alloc(int32[1] { })!
         a[0] = 99
         let s1 = a[0..0]
         let s2 = a[0..0]

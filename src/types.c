@@ -172,6 +172,14 @@ Type *type_option(Arena *a, Type *inner) {
     return t;
 }
 
+Type *type_fixed_array(Arena *a, Type *elem, int64_t size) {
+    Type *t = arena_alloc(a, sizeof(Type));
+    t->kind = TYPE_FIXED_ARRAY;
+    t->fixed_array.elem = elem;
+    t->fixed_array.size = size;
+    return t;
+}
+
 bool type_is_integer(Type *t) {
     return t->kind >= TYPE_INT8 && t->kind <= TYPE_USIZE;
 }
@@ -213,6 +221,8 @@ bool type_eq(Type *a, Type *b) {
     case TYPE_SLICE:   return a->is_const == b->is_const &&
                               type_eq(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq(a->option.inner, b->option.inner);
+    case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
+                                  type_eq(a->fixed_array.elem, b->fixed_array.elem);
     case TYPE_ANY_PTR: return a->is_const == b->is_const;
     case TYPE_STRUCT:  return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
@@ -243,6 +253,8 @@ bool type_eq_ignore_const(Type *a, Type *b) {
     case TYPE_POINTER: return type_eq_ignore_const(a->pointer.pointee, b->pointer.pointee);
     case TYPE_SLICE:   return type_eq_ignore_const(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq_ignore_const(a->option.inner, b->option.inner);
+    case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
+                                  type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
     case TYPE_STRUCT:  return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
@@ -273,6 +285,7 @@ static const char *primitive_names[] = {
     [TYPE_VOID]    = "void",
     [TYPE_CHAR]    = "char",
     [TYPE_ANY_PTR] = "any*",
+    [TYPE_FIXED_ARRAY] = NULL,   /* compound — handled in type_name() */
     [TYPE_ERROR]   = "<error>",
 };
 
@@ -325,6 +338,14 @@ const char *type_name(Type *t) {
         static int oidx = 0;
         char *buf = obufs[oidx & 3]; oidx++;
         snprintf(buf, 256, "%s?", type_name(t->option.inner));
+        return buf;
+    }
+    case TYPE_FIXED_ARRAY: {
+        static char fabufs[4][256];
+        static int faidx = 0;
+        char *buf = fabufs[faidx & 3]; faidx++;
+        snprintf(buf, 256, "%s[%lld]", type_name(t->fixed_array.elem),
+                 (long long)t->fixed_array.size);
         return buf;
     }
     case TYPE_FUNC: {
@@ -501,6 +522,7 @@ bool type_needs_eq_func(Type *t) {
     case TYPE_UNION:
     case TYPE_SLICE:
     case TYPE_FUNC:
+    case TYPE_FIXED_ARRAY:
         return true;
     case TYPE_OPTION:
         /* Pointer options use C native == (NULL for none) */
@@ -517,6 +539,7 @@ bool type_contains_type_var(Type *t) {
     case TYPE_POINTER:  return type_contains_type_var(t->pointer.pointee);
     case TYPE_SLICE:    return type_contains_type_var(t->slice.elem);
     case TYPE_OPTION:   return type_contains_type_var(t->option.inner);
+    case TYPE_FIXED_ARRAY: return type_contains_type_var(t->fixed_array.elem);
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
             if (type_contains_type_var(t->func.param_types[i])) return true;
@@ -549,6 +572,7 @@ void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
     case TYPE_POINTER: type_collect_vars(t->pointer.pointee, vars, count, cap); return;
     case TYPE_SLICE:   type_collect_vars(t->slice.elem, vars, count, cap); return;
     case TYPE_OPTION:  type_collect_vars(t->option.inner, vars, count, cap); return;
+    case TYPE_FIXED_ARRAY: type_collect_vars(t->fixed_array.elem, vars, count, cap); return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
             type_collect_vars(t->func.param_types[i], vars, count, cap);
@@ -596,6 +620,11 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *inner = type_substitute(a, t->option.inner, var_names, concrete, count);
         if (inner == t->option.inner) return t;
         return type_option(a, inner);
+    }
+    case TYPE_FIXED_ARRAY: {
+        Type *inner = type_substitute(a, t->fixed_array.elem, var_names, concrete, count);
+        if (inner == t->fixed_array.elem) return t;
+        return type_fixed_array(a, inner, t->fixed_array.size);
     }
     case TYPE_FUNC: {
         bool changed = false;
@@ -716,6 +745,14 @@ char *mangle_type_name(Type *t) {
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
+    case TYPE_FIXED_ARRAY: {
+        char *inner = mangle_type_name(t->fixed_array.elem);
+        int needed = snprintf(NULL, 0, "fixarr%lld_%s", (long long)t->fixed_array.size, inner) + 1;
+        char *buf = malloc((size_t)needed);
+        snprintf(buf, (size_t)needed, "fixarr%lld_%s", (long long)t->fixed_array.size, inner);
+        free(inner);
+        return buf;
+    }
     default: {
         const char *prefix;
         char *inner;

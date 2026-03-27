@@ -1,0 +1,12 @@
+struct packet =
+    header: uint8[4]
+    payload: uint8[8]
+
+let main = (args: str[]) ->
+    let h = uint8[4] { 0xAAu8, 0xBBu8, 0xCCu8, 0xDDu8 }
+    let p = packet { header = h }
+    assert(p.header[0] == 0xAAu8)
+    assert(p.header[3] == 0xDDu8)
+    // payload zero-initialized (not provided in literal)
+    assert(p.payload[0] == 0u8)
+    0

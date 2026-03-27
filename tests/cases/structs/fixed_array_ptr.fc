@@ -1,0 +1,16 @@
+struct buffer =
+    data: int32[4]
+
+let main = (args: str[]) ->
+    let mut b = buffer { data = int32[4] { 10, 20, 30, 40 } }
+    let p = &b
+
+    // access through pointer
+    assert(p->data[0] == 10)
+    assert(p->data[3] == 40)
+    assert(p->data.len == 4)
+
+    // mutate through pointer
+    p->data[0] = 99
+    assert(b.data[0] == 99)
+    0

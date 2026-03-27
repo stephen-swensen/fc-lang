@@ -204,6 +204,11 @@ static void emit_type(Type *t, FILE *out) {
         fprintf(out, "fc_fn_");
         emit_fn_type_suffix(t, out);
         break;
+    case TYPE_FIXED_ARRAY:
+        /* Emitted as C array type — used by sizeof(T[N]) */
+        emit_type(t->fixed_array.elem, out);
+        fprintf(out, "[%lld]", (long long)t->fixed_array.size);
+        break;
     case TYPE_ANY_PTR:
         if (t->is_const) fprintf(out, "const ");
         fprintf(out, "void*");
@@ -277,6 +282,10 @@ static void emit_type_ident(Type *t, FILE *out) {
         fprintf(out, "fc_option_");
         if (t->option.inner) emit_type_ident(t->option.inner, out);
         else fprintf(out, "void");
+        break;
+    case TYPE_FIXED_ARRAY:
+        fprintf(out, "fixarr%lld_", (long long)t->fixed_array.size);
+        emit_type_ident(t->fixed_array.elem, out);
         break;
     case TYPE_VOID:
         fprintf(out, "void");
@@ -1478,12 +1487,40 @@ static void emit_expr(Expr *e, FILE *out) {
                 break;
             }
         }
+        /* Fixed-array field: create slice view */
+        if (e->field.fixed_array_type) {
+            Type *fat = e->field.fixed_array_type;
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .ptr = ");
+            emit_expr(e->field.object, out);
+            fprintf(out, ".%s, .len = %lld }", e->field.name,
+                    (long long)fat->fixed_array.size);
+            break;
+        }
         emit_expr(e->field.object, out);
         fprintf(out, ".%s", e->field.name);
         break;
     }
 
     case EXPR_DEREF_FIELD: {
+        if (e->field.fixed_array_type) {
+            Type *fat = e->field.fixed_array_type;
+            /* Strip const from emitted slice type — FC enforces const at type-check level */
+            Type *slice_type = e->type;
+            if (slice_type->is_const) {
+                slice_type = type_slice(g_arena, fat->fixed_array.elem);
+            }
+            fprintf(out, "(");
+            emit_type(slice_type, out);
+            fprintf(out, "){ .ptr = (");
+            emit_type(fat->fixed_array.elem, out);
+            fprintf(out, "*)");
+            emit_expr(e->field.object, out);
+            fprintf(out, "->%s, .len = %lld }", e->field.name,
+                    (long long)fat->fixed_array.size);
+            break;
+        }
         emit_expr(e->field.object, out);
         fprintf(out, "->%s", e->field.name);
         break;
@@ -1603,18 +1640,69 @@ static void emit_expr(Expr *e, FILE *out) {
             type_contains_type_var(e->type)) {
             sname = mangle_generic_with_subst(sname, e->type);
         }
-        if (e->type && e->type->kind == TYPE_STRUCT && e->type->struc.c_name) {
-            fprintf(out, "(%s %s){ ", e->type->struc.is_c_union ? "union" : "struct",
-                e->type->struc.c_name);
+        /* Check if struct has any fixed-array fields — requires statement expression */
+        bool has_fixed_array = false;
+        Type *st = e->type;
+        if (st && st->kind == TYPE_STRUCT) {
+            for (int f = 0; f < st->struc.field_count; f++) {
+                if (st->struc.fields[f].type->kind == TYPE_FIXED_ARRAY) {
+                    has_fixed_array = true;
+                    break;
+                }
+            }
+        }
+        if (has_fixed_array) {
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            if (st->struc.c_name) {
+                fprintf(out, "%s %s", st->struc.is_c_union ? "union" : "struct",
+                    st->struc.c_name);
+            } else {
+                fprintf(out, "%s", sname);
+            }
+            fprintf(out, " _sl%d = {0}; ", tid);
+            for (int i = 0; i < e->struct_lit.field_count; i++) {
+                const char *fname = e->struct_lit.fields[i].name;
+                /* Find the field type in the struct */
+                Type *field_type = NULL;
+                for (int f = 0; f < st->struc.field_count; f++) {
+                    if (st->struc.fields[f].name == fname) {
+                        field_type = st->struc.fields[f].type;
+                        break;
+                    }
+                }
+                if (field_type && field_type->kind == TYPE_FIXED_ARRAY) {
+                    int sid = temp_counter++;
+                    emit_type(e->struct_lit.fields[i].value->type, out);
+                    fprintf(out, " _fas%d = ", sid);
+                    emit_expr(e->struct_lit.fields[i].value, out);
+                    fprintf(out, "; if (_fas%d.len > %lld) abort(); ",
+                            sid, (long long)field_type->fixed_array.size);
+                    fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, (size_t)_fas%d.len * sizeof(",
+                            tid, fname, sid, sid);
+                    emit_type(field_type->fixed_array.elem, out);
+                    fprintf(out, ")); ");
+                } else {
+                    fprintf(out, "_sl%d.%s = ", tid, fname);
+                    emit_expr(e->struct_lit.fields[i].value, out);
+                    fprintf(out, "; ");
+                }
+            }
+            fprintf(out, "_sl%d; })", tid);
         } else {
-            fprintf(out, "(%s){ ", sname);
+            if (st && st->kind == TYPE_STRUCT && st->struc.c_name) {
+                fprintf(out, "(%s %s){ ", st->struc.is_c_union ? "union" : "struct",
+                    st->struc.c_name);
+            } else {
+                fprintf(out, "(%s){ ", sname);
+            }
+            for (int i = 0; i < e->struct_lit.field_count; i++) {
+                if (i > 0) fprintf(out, ", ");
+                fprintf(out, ".%s = ", e->struct_lit.fields[i].name);
+                emit_expr(e->struct_lit.fields[i].value, out);
+            }
+            fprintf(out, " }");
         }
-        for (int i = 0; i < e->struct_lit.field_count; i++) {
-            if (i > 0) fprintf(out, ", ");
-            fprintf(out, ".%s = ", e->struct_lit.fields[i].name);
-            emit_expr(e->struct_lit.fields[i].value, out);
-        }
-        fprintf(out, " }");
         break;
     }
 
@@ -2077,8 +2165,49 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_ASSIGN: {
-        /* Special case: assignment to slice/str element needs bounds check inside */
+        /* Special case: assignment to fixed-array field — bounded memcpy */
         Expr *target = e->assign.target;
+        if ((target->kind == EXPR_FIELD || target->kind == EXPR_DEREF_FIELD) &&
+            target->field.fixed_array_type) {
+            Type *fat = target->field.fixed_array_type;
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            /* Evaluate source slice */
+            emit_type(e->assign.value->type, out);
+            fprintf(out, " _fas%d = ", tid);
+            emit_expr(e->assign.value, out);
+            fprintf(out, "; if (_fas%d.len > %lld) abort(); ",
+                    tid, (long long)fat->fixed_array.size);
+            /* memcpy the data */
+            fprintf(out, "memcpy(");
+            if (target->kind == EXPR_DEREF_FIELD) {
+                emit_expr(target->field.object, out);
+                fprintf(out, "->%s", target->field.name);
+            } else {
+                emit_expr(target->field.object, out);
+                fprintf(out, ".%s", target->field.name);
+            }
+            fprintf(out, ", _fas%d.ptr, (size_t)_fas%d.len * sizeof(",
+                    tid, tid);
+            emit_type(fat->fixed_array.elem, out);
+            fprintf(out, ")); ");
+            /* Zero-fill remainder */
+            fprintf(out, "if (_fas%d.len < %lld) memset(",
+                    tid, (long long)fat->fixed_array.size);
+            if (target->kind == EXPR_DEREF_FIELD) {
+                emit_expr(target->field.object, out);
+                fprintf(out, "->%s", target->field.name);
+            } else {
+                emit_expr(target->field.object, out);
+                fprintf(out, ".%s", target->field.name);
+            }
+            fprintf(out, " + _fas%d.len, 0, (size_t)(%lld - _fas%d.len) * sizeof(",
+                    tid, (long long)fat->fixed_array.size, tid);
+            emit_type(fat->fixed_array.elem, out);
+            fprintf(out, ")); })");
+            break;
+        }
+        /* Special case: assignment to slice/str element needs bounds check inside */
         if (target->kind == EXPR_INDEX) {
             Type *obj_type = target->index.object->type;
             if (obj_type && obj_type->kind == TYPE_SLICE) {
@@ -2230,12 +2359,22 @@ static void emit_struct_forward(Decl *d, FILE *out) {
     fprintf(out, "typedef struct %s %s;\n", d->struc.name, d->struc.name);
 }
 
+static void emit_struct_field(Type *ft, const char *name, FILE *out) {
+    if (ft->kind == TYPE_FIXED_ARRAY) {
+        fprintf(out, " ");
+        emit_type(ft->fixed_array.elem, out);
+        fprintf(out, " %s[%lld];", name, (long long)ft->fixed_array.size);
+    } else {
+        fprintf(out, " ");
+        emit_type(ft, out);
+        fprintf(out, " %s;", name);
+    }
+}
+
 static void emit_struct_def(Decl *d, FILE *out) {
     fprintf(out, "struct %s {", d->struc.name);
     for (int i = 0; i < d->struc.field_count; i++) {
-        fprintf(out, " ");
-        emit_type(d->struc.fields[i].type, out);
-        fprintf(out, " %s;", d->struc.fields[i].name);
+        emit_struct_field(d->struc.fields[i].type, d->struc.fields[i].name, out);
     }
     fprintf(out, " };\n");
 }
@@ -2309,7 +2448,12 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
             mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
-    if (t->kind == TYPE_SLICE) {
+    if (t->kind == TYPE_FIXED_ARRAY) {
+        /* Fixed-array field: need slice typedef for the element type (field access returns slice) */
+        collect_types_in_type(t->fixed_array.elem, slices, options, fns);
+        Type *slice_t = type_slice(g_arena, t->fixed_array.elem);
+        typeset_add(slices, slice_t);
+    } else if (t->kind == TYPE_SLICE) {
         collect_types_in_type(t->slice.elem, slices, options, fns);
         typeset_add(slices, t);
     } else if (t->kind == TYPE_OPTION) {
@@ -2376,6 +2520,11 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
             mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;
+    /* Fixed-array types: recurse into element, don't generate standalone eq func */
+    if (t->kind == TYPE_FIXED_ARRAY) {
+        collect_eq_types(t->fixed_array.elem, eqs);
+        return;
+    }
     if (!type_needs_eq_func(t)) return;
     t = resolve_struct_stub(t);
     /* Strip const for eq function collection — constness doesn't affect equality */
@@ -2919,10 +3068,32 @@ static void emit_eq_func(Type *t, FILE *out) {
                 fprintf(out, "    return ");
                 for (int i = 0; i < fc; i++) {
                     if (i > 0) fprintf(out, " && ");
-                    char a_buf[256], b_buf[256];
-                    snprintf(a_buf, sizeof(a_buf), "a.%s", t->struc.fields[i].name);
-                    snprintf(b_buf, sizeof(b_buf), "b.%s", t->struc.fields[i].name);
-                    emit_value_eq(t->struc.fields[i].type, a_buf, b_buf, out);
+                    Type *ft = t->struc.fields[i].type;
+                    const char *fname = t->struc.fields[i].name;
+                    if (ft->kind == TYPE_FIXED_ARRAY) {
+                        Type *elem = ft->fixed_array.elem;
+                        if (!type_needs_eq_func(elem) && !type_is_float(elem)) {
+                            fprintf(out, "memcmp(a.%s, b.%s, sizeof(a.%s)) == 0",
+                                    fname, fname, fname);
+                        } else {
+                            /* Element-wise comparison for complex types */
+                            fprintf(out, "({ bool _eq = true; "
+                                    "for (int _k = 0; _k < %lld; _k++) if (!",
+                                    (long long)ft->fixed_array.size);
+                            if (type_needs_eq_func(elem)) {
+                                emit_eq_func_name(elem, out);
+                                fprintf(out, "(a.%s[_k], b.%s[_k])", fname, fname);
+                            } else {
+                                fprintf(out, "(a.%s[_k] == b.%s[_k])", fname, fname);
+                            }
+                            fprintf(out, ") { _eq = false; break; } _eq; })");
+                        }
+                    } else {
+                        char a_buf[256], b_buf[256];
+                        snprintf(a_buf, sizeof(a_buf), "a.%s", fname);
+                        snprintf(b_buf, sizeof(b_buf), "b.%s", fname);
+                        emit_value_eq(ft, a_buf, b_buf, out);
+                    }
                 }
                 fprintf(out, ";\n");
             }
@@ -3497,9 +3668,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (inst->decl_kind == DECL_STRUCT) {
             fprintf(out, "struct %s {", inst->mangled_name);
             for (int f = 0; f < ct->struc.field_count; f++) {
-                fprintf(out, " ");
-                emit_type(ct->struc.fields[f].type, out);
-                fprintf(out, " %s;", ct->struc.fields[f].name);
+                emit_struct_field(ct->struc.fields[f].type, ct->struc.fields[f].name, out);
             }
             fprintf(out, " };\n");
         } else if (inst->decl_kind == DECL_UNION) {

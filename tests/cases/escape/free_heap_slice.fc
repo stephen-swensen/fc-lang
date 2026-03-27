@@ -1,6 +1,6 @@
 // Freeing heap-allocated slice is fine
 let main = (args: str[]) ->
-    let s = alloc(int32[5])!
+    let s = alloc(int32[5] { })!
     s[0] = 42
     let result = s[0]
     free(s)

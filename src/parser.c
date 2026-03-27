@@ -173,8 +173,10 @@ static bool is_type_name(const char *s, int len) {
 
 /* type_from_name is now in types.c/h */
 
+static int64_t parse_int_value(const char *start, int length);
+
 static Type *parse_type_suffix(Parser *p, Type *base) {
-    /* T*, T[], T? — left to right */
+    /* T*, T[], T[N], T? — left to right */
     for (;;) {
         if (check(p, TOK_STAR)) {
             advance_p(p);
@@ -184,6 +186,21 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
         if (check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_RBRACKET) {
             advance_p(p); advance_p(p);
             base = type_slice(p->arena, base);
+            continue;
+        }
+        /* T[N] — fixed-size inline array, only in struct/extern field declarations */
+        if (p->allow_fixed_array && check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_INT_LIT) {
+            advance_p(p); /* consume [ */
+            Token *size_tok = current(p);
+            int64_t size = parse_int_value(size_tok->start, size_tok->length);
+            if (size <= 0) {
+                SrcLoc loc = loc_from_token(size_tok);
+                diag_fatal(loc, "fixed array size must be a positive integer, got %lld",
+                           (long long)size);
+            }
+            advance_p(p); /* consume INT_LIT */
+            expect(p, TOK_RBRACKET);
+            base = type_fixed_array(p->arena, base, size);
             continue;
         }
         if (check(p, TOK_QUESTION)) {
@@ -1089,7 +1106,9 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_SIZEOF: {
         advance_p(p);
         expect(p, TOK_LPAREN);
+        p->allow_fixed_array = true;
         Type *ty = parse_type(p);
+        p->allow_fixed_array = false;
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_SIZEOF, loc);
         e->sizeof_expr.target = ty;
@@ -1190,45 +1209,51 @@ static Expr *parse_prefix(Parser *p) {
                 return e;
             }
             if (check(p, TOK_LBRACKET)) {
-                /* alloc(T[N]) or alloc(T[N] { elems }) */
+                /* alloc(T[N] { elems }) — heap array allocation */
                 advance_p(p);
                 Expr *size = parse_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RBRACKET);
-                if (check(p, TOK_LBRACE)) {
-                    /* alloc(T[N] { elems }) — array literal alloc */
-                    advance_p(p);
-                    Expr **elems = NULL;
-                    int elem_count = 0, elem_cap = 0;
-                    if (!check(p, TOK_RBRACE)) {
-                        do {
-                            Expr *el = parse_expr(p, PREC_NONE + 1);
-                            DA_APPEND(elems, elem_count, elem_cap, el);
-                        } while (check(p, TOK_COMMA) && advance_p(p));
+                if (!check(p, TOK_LBRACE)) {
+                    SrcLoc eloc = loc_from_token(current(p));
+                    diag_fatal(eloc, "expected '{' after alloc(T[N] — use alloc(T[N] { })");
+                }
+                advance_p(p);
+                Expr **elems = NULL;
+                int elem_count = 0, elem_cap = 0;
+                if (!check(p, TOK_RBRACE)) {
+                    do {
+                        Expr *el = parse_expr(p, PREC_NONE + 1);
+                        DA_APPEND(elems, elem_count, elem_cap, el);
+                    } while (check(p, TOK_COMMA) && advance_p(p));
+                }
+                expect(p, TOK_RBRACE);
+                expect(p, TOK_RPAREN);
+                /* Runtime-sized alloc: alloc(T[n] { }) where n is not a literal */
+                if (size->kind != EXPR_INT_LIT) {
+                    if (elem_count > 0) {
+                        diag_fatal(loc, "alloc with runtime size cannot have explicit elements");
                     }
-                    expect(p, TOK_RBRACE);
-                    expect(p, TOK_RPAREN);
-                    /* Build array literal as init_expr */
-                    Expr **arena_elems = arena_alloc(p->arena,
-                        sizeof(Expr*) * (size_t)(elem_count > 0 ? elem_count : 1));
-                    if (elem_count > 0)
-                        memcpy(arena_elems, elems, sizeof(Expr*) * (size_t)elem_count);
                     free(elems);
-                    Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
-                    arr->array_lit.elem_type = ty;
-                    arr->array_lit.size_expr = size;
-                    arr->array_lit.elems = arena_elems;
-                    arr->array_lit.elem_count = elem_count;
                     Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                    e->alloc_expr.alloc_type = NULL;
-                    e->alloc_expr.size_expr = NULL;
-                    e->alloc_expr.init_expr = arr;
+                    e->alloc_expr.alloc_type = ty;
+                    e->alloc_expr.size_expr = size;
+                    e->alloc_expr.init_expr = NULL;
                     return e;
                 }
-                expect(p, TOK_RPAREN);
+                Expr **arena_elems = arena_alloc(p->arena,
+                    sizeof(Expr*) * (size_t)(elem_count > 0 ? elem_count : 1));
+                if (elem_count > 0)
+                    memcpy(arena_elems, elems, sizeof(Expr*) * (size_t)elem_count);
+                free(elems);
+                Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
+                arr->array_lit.elem_type = ty;
+                arr->array_lit.size_expr = size;
+                arr->array_lit.elems = arena_elems;
+                arr->array_lit.elem_count = elem_count;
                 Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                e->alloc_expr.alloc_type = ty;
-                e->alloc_expr.size_expr = size;
-                e->alloc_expr.init_expr = NULL;
+                e->alloc_expr.alloc_type = NULL;
+                e->alloc_expr.size_expr = NULL;
+                e->alloc_expr.init_expr = arr;
                 return e;
             }
             if (check(p, TOK_COMMA)) {
@@ -1826,7 +1851,9 @@ static Decl *parse_struct_decl(Parser *p) {
 
         const char *fname = tok_intern(p, expect(p, TOK_IDENT));
         expect(p, TOK_COLON);
+        p->allow_fixed_array = true;
         Type *ftype = parse_type(p);
+        p->allow_fixed_array = false;
 
         StructField f = { .name = fname, .type = ftype };
         DA_APPEND(fields, field_count, field_cap, f);
@@ -2180,7 +2207,9 @@ static Decl *parse_extern_decl(Parser *p) {
             if (check(p, TOK_DEDENT)) break;
             const char *fname = tok_intern(p, expect(p, TOK_IDENT));
             expect(p, TOK_COLON);
+            p->allow_fixed_array = true;
             Type *ftype = parse_type(p);
+            p->allow_fixed_array = false;
             StructField f = { .name = fname, .type = ftype };
             DA_APPEND(fields, field_count, field_cap, f);
             skip_newlines(p);

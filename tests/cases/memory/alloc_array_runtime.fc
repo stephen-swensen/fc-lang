@@ -1,0 +1,18 @@
+let main = (args: str[]) ->
+    // runtime-sized heap allocation with empty initializer
+    let n = 5
+    let buf = alloc(int32[n] { })!
+
+    // zero-initialized
+    assert(buf[0] == 0)
+    assert(buf[4] == 0)
+    assert(buf.len == 5)
+
+    // write and read back
+    buf[0] = 10
+    buf[4] = 50
+    assert(buf[0] == 10)
+    assert(buf[4] == 50)
+
+    free(buf)
+    0

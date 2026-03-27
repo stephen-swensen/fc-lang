@@ -1,0 +1,10 @@
+struct holder =
+    vals: int32[5]
+
+let main = (args: str[]) ->
+    let h = holder { vals = int32[5] { 1, 2, 3, 4, 5 } }
+    let mut sum = 0
+    for v in h.vals
+        sum = sum + v
+    assert(sum == 15)
+    0

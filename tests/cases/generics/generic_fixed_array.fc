@@ -1,0 +1,9 @@
+struct container =
+    data: 'a[4]
+
+let main = (args: str[]) ->
+    let c = container { data = int32[4] { 1, 2, 3, 4 } }
+    assert(c.data[0] == 1)
+    assert(c.data[3] == 4)
+    assert(c.data.len == 4)
+    0

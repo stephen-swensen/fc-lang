@@ -268,6 +268,12 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         }
         return t;
     }
+    if (t->kind == TYPE_FIXED_ARRAY) {
+        Type *inner = resolve_type(ctx, t->fixed_array.elem);
+        if (inner != t->fixed_array.elem)
+            return type_fixed_array(ctx->arena, inner, t->fixed_array.size);
+        return t;
+    }
     if (t->kind == TYPE_FUNC) {
         bool changed = false;
         Type **params = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)t->func.param_count);
@@ -461,6 +467,10 @@ static bool unify(Type *param_type, Type *arg_type,
             const char *nb = arg_type->kind == TYPE_STRUCT ? arg_type->struc.name : arg_type->unio.name;
             return na == nb;
         }
+        /* Fixed-array field accepts slice of matching element type */
+        if (param_type->kind == TYPE_FIXED_ARRAY && arg_type->kind == TYPE_SLICE)
+            return unify(param_type->fixed_array.elem, arg_type->slice.elem,
+                         var_names, bindings, var_count);
         return false;
     }
 
@@ -481,6 +491,10 @@ static bool unify(Type *param_type, Type *arg_type,
                      var_names, bindings, var_count);
     case TYPE_OPTION:
         return unify(param_type->option.inner, arg_type->option.inner,
+                     var_names, bindings, var_count);
+    case TYPE_FIXED_ARRAY:
+        if (param_type->fixed_array.size != arg_type->fixed_array.size) return false;
+        return unify(param_type->fixed_array.elem, arg_type->fixed_array.elem,
                      var_names, bindings, var_count);
     case TYPE_FUNC:
         if (param_type->func.param_count != arg_type->func.param_count) return false;
@@ -1132,6 +1146,18 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     return ok;
 }
 
+/* Check if an expression is an lvalue (has addressable storage that outlives the expression).
+ * Used to prevent fixed-array field access on temporaries. */
+static bool is_lvalue_expr(Expr *e) {
+    switch (e->kind) {
+    case EXPR_IDENT:       return true;   /* named binding */
+    case EXPR_FIELD:       return is_lvalue_expr(e->field.object);   /* chain: s.inner.data */
+    case EXPR_DEREF_FIELD: return true;   /* p->field: pointee has own lifetime */
+    case EXPR_INDEX:       return true;   /* arr[i] is an lvalue */
+    default:               return false;  /* function calls, literals, etc. */
+    }
+}
+
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -1545,6 +1571,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
              * Exception: &f on a top-level (non-capturing) function gives a
              * raw C function pointer. */
             Expr *operand = e->unary_prefix.operand;
+            /* Cannot take address of inline array field — use .ptr instead */
+            if ((operand->kind == EXPR_FIELD || operand->kind == EXPR_DEREF_FIELD) &&
+                operand->field.fixed_array_type) {
+                diag_error(e->loc,
+                    "cannot take address of inline array field; use .ptr for the underlying pointer");
+                e->type = type_error();
+                return e->type;
+            }
             if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
                 bool op_is_mut = false;
                 scope_lookup_capture(ctx->scope, operand->ident.name,
@@ -1636,6 +1670,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         inner->is_lambda_boundary = true;
         for (int i = 0; i < pc; i++) {
             ptypes[i] = resolve_type(ctx, e->func.params[i].type);
+            if (ptypes[i]->kind == TYPE_FIXED_ARRAY) {
+                diag_error(e->func.params[i].loc,
+                    "fixed-size array types are only valid in struct field declarations");
+                ptypes[i] = type_error();
+            }
             e->func.params[i].type = ptypes[i];
             scope_add(inner, e->func.params[i].name, e->func.params[i].name, ptypes[i], false);
         }
@@ -2294,12 +2333,16 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     Type *fval = check_expr(ctx, fi->value);
                     if (type_is_error(fval)) { field_error = true; found = true; break; }
                     Type *expected = resolve_type(ctx, st->struc.fields[j].type);
-                    if (!type_eq(fval, expected) && !type_contains_type_var(expected)) {
-                        if (type_can_widen(fval, expected)) {
-                            fi->value = wrap_widen(ctx->arena, fi->value, expected);
+                    /* Fixed-array fields accept slice of matching element type */
+                    Type *check_type = expected;
+                    if (expected->kind == TYPE_FIXED_ARRAY)
+                        check_type = type_slice(ctx->arena, expected->fixed_array.elem);
+                    if (!type_eq(fval, check_type) && !type_contains_type_var(check_type)) {
+                        if (type_can_widen(fval, check_type)) {
+                            fi->value = wrap_widen(ctx->arena, fi->value, check_type);
                         } else {
                             diag_error(fi->value->loc, "field '%s': expected %s, got %s",
-                                fi->name, type_name(expected), type_name(fval));
+                                fi->name, type_name(check_type), type_name(fval));
                             field_error = true;
                         }
                     }
@@ -2687,7 +2730,26 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         for (int i = 0; i < obj_type->struc.field_count; i++) {
             if (obj_type->struc.fields[i].name == e->field.name) {
-                e->type = resolve_type(ctx, obj_type->struc.fields[i].type);
+                Type *ft = resolve_type(ctx, obj_type->struc.fields[i].type);
+                if (ft->kind == TYPE_FIXED_ARRAY) {
+                    /* Lvalue check: object must have stable storage */
+                    if (!is_lvalue_expr(e->field.object)) {
+                        diag_error(e->loc,
+                            "cannot access inline array field '%s' on a temporary; "
+                            "bind the struct to a variable first",
+                            e->field.name);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    e->field.fixed_array_type = ft;
+                    e->type = type_slice(ctx->arena, ft->fixed_array.elem);
+                    /* Slice view of fixed-array on stack struct → PROV_STACK */
+                    e->prov = e->field.object->prov;
+                    if (e->prov == PROV_UNKNOWN)
+                        e->prov = PROV_STACK;
+                } else {
+                    e->type = ft;
+                }
                 return e->type;
             }
         }
@@ -2714,8 +2776,16 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         for (int i = 0; i < pointee->struc.field_count; i++) {
             if (pointee->struc.fields[i].name == e->field.name) {
-                e->type = resolve_type(ctx, pointee->struc.fields[i].type);
-                if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                Type *ft = resolve_type(ctx, pointee->struc.fields[i].type);
+                if (ft->kind == TYPE_FIXED_ARRAY) {
+                    e->field.fixed_array_type = ft;
+                    e->type = type_slice(ctx->arena, ft->fixed_array.elem);
+                    if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                    e->prov = e->field.object->prov;
+                } else {
+                    e->type = ft;
+                    if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                }
                 return e->type;
             }
         }
@@ -3083,12 +3153,26 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
             /* Escape analysis: check for stack pointers in heap-allocated struct */
             if (ie->kind == EXPR_STRUCT_LIT) {
+                Type *st_type = ie->type;
                 for (int i = 0; i < ie->struct_lit.field_count; i++) {
                     FieldInit *fi = &ie->struct_lit.fields[i];
                     if (fi->value->prov == PROV_STACK && type_has_provenance(fi->value->type)) {
-                        diag_error(fi->value->loc,
-                            "cannot store stack-allocated %s in heap-allocated struct",
-                            type_name(fi->value->type));
+                        /* Fixed-array fields copy data inline — stack provenance is safe */
+                        bool is_fixed = false;
+                        if (st_type && st_type->kind == TYPE_STRUCT) {
+                            for (int f = 0; f < st_type->struc.field_count; f++) {
+                                if (st_type->struc.fields[f].name == fi->name &&
+                                    st_type->struc.fields[f].type->kind == TYPE_FIXED_ARRAY) {
+                                    is_fixed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!is_fixed) {
+                            diag_error(fi->value->loc,
+                                "cannot store stack-allocated %s in heap-allocated struct",
+                                type_name(fi->value->type));
+                        }
                     }
                 }
             }

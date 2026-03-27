@@ -6,7 +6,7 @@ module arraylist =
 
     private let grow = (l: arraylist<'a>*) ->
         let new_cap = l->data.len * 2
-        let mut new_data = alloc('a[new_cap])!
+        let mut new_data = alloc('a[new_cap] { })!
         let mut i = 0
         loop
             if i >= l->len then break
@@ -16,7 +16,7 @@ module arraylist =
         l->data = new_data
 
     let make = <'a>() ->
-        arraylist { data = alloc('a[4])!, len = 0 }
+        arraylist { data = alloc('a[4] { })!, len = 0 }
 
     let drop = (l: arraylist<'a>) ->
         free(l.data)

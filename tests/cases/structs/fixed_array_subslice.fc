@@ -1,0 +1,10 @@
+struct data_block =
+    arr: int32[8]
+
+let main = (args: str[]) ->
+    let d = data_block { arr = int32[8] { 10, 20, 30, 40, 50, 60, 70, 80 } }
+    let sub = d.arr[2..5]
+    assert(sub.len == 3)
+    assert(sub[0] == 30)
+    assert(sub[2] == 50)
+    0

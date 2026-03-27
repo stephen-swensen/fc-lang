@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
     let _result =
         let n = 5
-        let buf = alloc(int32[n])!
+        let buf = alloc(int32[n] { })!
         for i in 0..n
             buf[i] = i * i
         let mut sum = 0

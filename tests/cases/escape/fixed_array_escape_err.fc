@@ -1,0 +1,10 @@
+struct holder =
+    data: int32[4]
+
+let bad = () ->
+    let h = holder { data = int32[4] { 1, 2, 3, 4 } }
+    h.data
+
+let main = (args: str[]) ->
+    let _s = bad()
+    0

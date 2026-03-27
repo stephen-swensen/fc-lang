@@ -1,0 +1,13 @@
+struct inner =
+    data: uint8[4]
+
+struct outer =
+    a: inner
+    b: int32
+
+let main = (args: str[]) ->
+    let o = outer { a = inner { data = uint8[4] { 1u8, 2u8, 3u8, 4u8 } }, b = 42 }
+    assert(o.a.data[0] == 1u8)
+    assert(o.a.data[3] == 4u8)
+    assert(o.b == 42)
+    0

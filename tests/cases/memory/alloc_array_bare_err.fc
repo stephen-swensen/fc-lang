@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let buf = alloc(int32[5])!
+    free(buf)
+    0

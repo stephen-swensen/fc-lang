@@ -1,0 +1,21 @@
+struct buf =
+    data: int32[8]
+
+let main = (args: str[]) ->
+    let mut b = buf { }
+
+    // assign exact length
+    let src = int32[8] { 1, 2, 3, 4, 5, 6, 7, 8 }
+    b.data = src
+    assert(b.data[0] == 1)
+    assert(b.data[7] == 8)
+
+    // assign shorter — zero fills remainder
+    let short = int32[3] { 10, 20, 30 }
+    b.data = short
+    assert(b.data[0] == 10)
+    assert(b.data[2] == 30)
+    assert(b.data[3] == 0)
+    assert(b.data[7] == 0)
+
+    0

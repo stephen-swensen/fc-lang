@@ -1,0 +1,32 @@
+struct packet =
+    data: uint8[16]
+    id: int32
+
+let main = (args: str[]) ->
+    let mut p = packet { id = 42 }
+
+    // .len is always the fixed size
+    assert(p.data.len == 16)
+
+    // elements are zero-initialized
+    assert(p.data[0] == 0u8)
+    assert(p.data[15] == 0u8)
+
+    // write through slice view
+    p.data[0] = 1u8
+    p.data[1] = 2u8
+    p.data[15] = 255u8
+
+    // read back
+    assert(p.data[0] == 1u8)
+    assert(p.data[1] == 2u8)
+    assert(p.data[15] == 255u8)
+
+    // .ptr gives raw pointer
+    let raw = p.data.ptr
+    assert(*raw == 1u8)
+
+    // id field still intact
+    assert(p.id == 42)
+
+    0

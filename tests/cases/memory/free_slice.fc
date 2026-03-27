@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-    let buf = alloc(int32[10])!
+    let buf = alloc(int32[10] { })!
     buf[0] = 42
     let r = buf[0]
     free(buf)

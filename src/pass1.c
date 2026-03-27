@@ -295,6 +295,16 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
         }
         return t;
     }
+    if (t->kind == TYPE_FIXED_ARRAY) {
+        Type *inner = resolve_type_stubs(t->fixed_array.elem, members);
+        if (inner != t->fixed_array.elem) {
+            Type *r = malloc(sizeof(Type));
+            *r = *t;
+            r->fixed_array.elem = inner;
+            return r;
+        }
+        return t;
+    }
     if (t->kind == TYPE_FUNC) {
         bool changed = false;
         Type **params = malloc(sizeof(Type*) * (size_t)t->func.param_count);

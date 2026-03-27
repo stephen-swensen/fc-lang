@@ -1,0 +1,11 @@
+struct small =
+    data: int32[4]
+
+let main = (args: str[]) ->
+    // sizeof standalone type
+    assert(sizeof(int32[4]) == 16i64)
+    assert(sizeof(uint8[16]) == 16i64)
+
+    // sizeof struct includes inline array
+    assert(sizeof(small) >= 16i64)
+    0

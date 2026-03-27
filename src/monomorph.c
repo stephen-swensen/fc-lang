@@ -65,6 +65,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
     case TYPE_POINTER: mono_resolve_type_names(t, a, intern, type->pointer.pointee); return;
     case TYPE_SLICE:   mono_resolve_type_names(t, a, intern, type->slice.elem); return;
     case TYPE_OPTION:  mono_resolve_type_names(t, a, intern, type->option.inner); return;
+    case TYPE_FIXED_ARRAY: mono_resolve_type_names(t, a, intern, type->fixed_array.elem); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
             mono_resolve_type_names(t, a, intern, type->func.param_types[i]);
