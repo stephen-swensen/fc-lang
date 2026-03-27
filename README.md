@@ -42,6 +42,16 @@ cc -std=c11 -o hello hello.c
 ./hello
 ```
 
+## Quick Run
+
+`run.sh` compiles an FC file, links it with the standard library, runs the binary, and prints the exit code:
+
+```sh
+./run.sh hello.fc                       # compile + run
+./run.sh --flag debug hello.fc          # compile with a flag enabled
+./run.sh main.fc lib.fc                 # compile multiple files together
+```
+
 ## Testing
 
 ```sh
@@ -49,13 +59,18 @@ make test               # build (if needed) and run all tests
 make test-parallel      # build (if needed) and run all tests in parallel
 ```
 
-Tests live in `tests/cases/`. Each test is a `.fc` file paired with one of:
+Tests live in `tests/cases/`, organized into subdirectories by category (e.g., `expressions/`, `structs/`, `generics/`, `modules/`, etc.).
 
-- **`.expected_exit`** — expected exit code (e.g., `42`)
-- **`.expected`** — expected stdout output (diff-compared)
-- **`.error`** — expected compiler error message (substring match)
+**Single-file tests** are an `.fc` file optionally paired with:
 
-The test runner (`tests/run_tests.sh`) compiles each `.fc` file to C, compiles the C with `-Wall -Werror`, runs the binary, and checks the result. All intermediate files (generated C, binaries) go into a system temp directory that is automatically cleaned up on exit. Test names are prefixed by milestone (e.g., `m3_struct.fc`).
+- **`.expected_exit`** — expected exit code (0–255). If omitted, the expected exit code is 0.
+- **`.error`** — expected compiler error message (substring match); the test must fail to compile.
+
+Most tests use `assert` (which calls `abort()`, exit code 134) for correctness checks and omit `.expected_exit`, so a passing test simply exits 0.
+
+**Multi-file tests** use a subdirectory within a category dir, containing multiple `.fc` files plus an optional `expected_exit` or `error` file (no dot prefix), and an optional `deps` file listing external dependencies (one per line, e.g., `stdlib/io.fc`). Use subdirectories for tests that need multiple source files or dependencies.
+
+The test runner (`tests/run_tests.sh`) compiles each FC file to C, compiles the C with `-Wall -Werror`, runs the binary, and checks the result. All intermediate files go into a system temp directory that is automatically cleaned up on exit.
 
 ## Repository Layout
 
