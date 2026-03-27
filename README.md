@@ -14,20 +14,7 @@ FC is a systems programming language that transpiles to C11. It aims to combine 
 
 ## Status
 
-The compiler is under active development, targeting the v0.6 draft spec. Progress by milestone:
-
-| Milestone | Scope | Status |
-|-----------|-------|--------|
-| M1 | Arithmetic, literals, unary ops, type inference | Done |
-| M2 | Functions, control flow (`if`/`else`), blocks | Done |
-| M3 | Structs, unions, match expressions, patterns | Done |
-| M4 | Pointers, slices, options, loops | Done |
-| M5 | Memory (`alloc`, `free`, `sizeof`, `default`) | Done |
-| M6 | Modules, imports, namespaces | Done |
-| M7 | Closures, capture analysis | Done |
-| M8 | Generics, monomorphization | Done |
-| M9 | C interop, std::io, std::sys, conditional compilation | Done |
-| M10 | Polish, exhaustiveness, error detection | Planned |
+The compiler is under active development.
 
 ## Building
 
@@ -58,7 +45,8 @@ cc -std=c11 -o hello hello.c
 ## Testing
 
 ```sh
-make test     # build (if needed) and run all tests
+make test               # build (if needed) and run all tests
+make test-parallel      # build (if needed) and run all tests in parallel
 ```
 
 Tests live in `tests/cases/`. Each test is a `.fc` file paired with one of:
@@ -74,7 +62,7 @@ The test runner (`tests/run_tests.sh`) compiles each `.fc` file to C, compiles t
 - **`src/`** — The compiler, written in C11. Pipeline: lexer → parser → pass1 (declaration collection) → pass2 (type checking) → monomorphization → codegen (C11 emission).
 - **`stdlib/`** — Standard library modules (`std::io`, `std::sys`, etc.), written in FC.
 - **`spec/`** — Language specification (`fc-spec.html`, best viewed in a browser), formal grammar, and compiler roadmap.
-- **`tests/cases/`** — Integration tests organized by milestone (`m1/`, `m2/`, etc.). See `tests/run_tests.sh` for the test harness.
+- **`tests/cases/`** — Integration tests organized by functional areas.
 
 For code examples, see the full language specification in `spec/fc-spec.html`.
 
