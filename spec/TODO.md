@@ -285,7 +285,9 @@ Overview of what's solved and what's still missing for full C interop and embedd
 
 1. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC. Platform-dependent values (e.g., `O_RDONLY`) make manual redeclaration error-prone. Needed for any non-trivial C library (SDL has hundreds of constants).
 
-Item 1 is needed for the SDL use case (a motivating goal for FC's C interop story).
+2. **No fixed-size array fields in structs** — C structs and unions often contain fixed-size arrays (`uint8_t addr[16]`, `char name[256]`). FC has no way to declare a field that occupies `N * sizeof(T)` bytes inline. Design direction: `T[N]` syntax in struct field declarations as a storage annotation — the field is stored as a C array but accessed as a `T[]` slice (the compiler creates a fat pointer view on access). Slice assignment to a fixed-size field would emit a bounded `memcpy`. Works for both extern and first-class FC structs. Not blocking for SDL2 (whose types are mostly scalar/struct fields) but needed for networking, crypto, and other C APIs that use inline arrays.
+
+Items 1–2 are needed for full C interop coverage. Item 1 is the SDL2 blocker.
 
 **Deferred gaps:**
 
