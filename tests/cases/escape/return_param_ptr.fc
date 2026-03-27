@@ -5,4 +5,5 @@ let passthrough = (p: int32*) ->
 let main = (args: str[]) ->
     let mut val = 10
     let p = passthrough(&val)
-    *p
+    assert(*p == 10)
+    0

@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     create(&result)
     let v = *result
     free(result)
-    v
+    assert(v == 99)
+    0

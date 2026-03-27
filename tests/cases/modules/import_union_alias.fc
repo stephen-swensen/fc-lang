@@ -13,4 +13,5 @@ let area = (s: sh) ->
 let main = (args: str[]) ->
     let c = sh.circle(5)
     let r = sh.rect(4)
-    area(c) + area(r)
+    assert(area(c) + area(r) == 41)
+    0

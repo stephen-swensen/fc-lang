@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    assert(1 == 2)
+    0

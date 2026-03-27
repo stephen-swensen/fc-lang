@@ -1,6 +1,9 @@
 let main = (args: str[]) ->
-    let s = int32[1] { 77 }
-    let mut sum = 0
-    for x in s
-        sum = sum + x
-    sum
+    let _result =
+        let s = int32[1] { 77 }
+        let mut sum = 0
+        for x in s
+            sum = sum + x
+        sum
+    assert(_result == 77)
+    0

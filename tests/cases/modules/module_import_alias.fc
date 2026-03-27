@@ -6,4 +6,5 @@ module calculator =
     let compute = (a: int32, b: int32) -> plus(a, b)
 
 let main = (args: str[]) ->
-    calculator.compute(13, 29)
+    assert(calculator.compute(13, 29) == 42)
+    0

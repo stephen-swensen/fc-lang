@@ -1082,6 +1082,11 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_FREE:
         ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
+    case EXPR_ASSERT:
+        ok &= validate_generic_body(e->assert_expr.condition, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        if (e->assert_expr.message)
+            ok &= validate_generic_body(e->assert_expr.message, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
     case EXPR_SOME:
         ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
@@ -2965,6 +2970,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         if (ot->is_const) {
             diag_error(e->loc, "cannot free const pointer/slice");
+        }
+        e->type = type_void();
+        return e->type;
+    }
+
+    case EXPR_ASSERT: {
+        Type *ct = check_expr(ctx, e->assert_expr.condition);
+        if (!type_is_error(ct) && ct->kind != TYPE_BOOL) {
+            diag_error(e->loc, "assert condition must be bool, got %s", type_name(ct));
+        }
+        if (e->assert_expr.message) {
+            Type *mt = check_expr(ctx, e->assert_expr.message);
+            if (!type_is_error(mt)) {
+                if (mt->kind != TYPE_SLICE || mt->slice.elem->kind != TYPE_UINT8) {
+                    diag_error(e->loc, "assert message must be str, got %s", type_name(mt));
+                }
+            }
         }
         e->type = type_void();
         return e->type;

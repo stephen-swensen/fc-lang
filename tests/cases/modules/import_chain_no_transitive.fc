@@ -9,4 +9,5 @@ module middle =
 import * from middle
 
 let main = (args: str[]) ->
-    get_secret()
+    assert(get_secret() == 99)
+    0

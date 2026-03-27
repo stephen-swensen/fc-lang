@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     let n = c.snprintf(buf.ptr, 64u, c"%d plus %d is %d", 10, 20, 30)
     // verify length — "10 plus 20 is 30" = 16 chars
     let len = mem.strlen(buf.ptr)
-    (int32)len
+    assert((int32)len == 16)
+    0

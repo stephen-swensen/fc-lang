@@ -1,14 +1,17 @@
 let main = (args: str[]) ->
-    let buf = alloc(int32, 4)
-    let mut r = 0
-    match buf with
-    | some(p) ->
-        r = r + 1
-        *p = 100
-        let p1 = p + 1i
-        *p1 = 200
-        if *p == 100 then r = r + 1 else r = r
-        if *p1 == 200 then r = r + 1 else r = r
-        free(p)
-    | none -> r = r
-    r
+    let _result =
+        let buf = alloc(int32, 4)
+        let mut r = 0
+        match buf with
+        | some(p) ->
+            r = r + 1
+            *p = 100
+            let p1 = p + 1i
+            *p1 = 200
+            if *p == 100 then r = r + 1 else r = r
+            if *p1 == 200 then r = r + 1 else r = r
+            free(p)
+        | none -> r = r
+        r
+    assert(_result == 3)
+    0

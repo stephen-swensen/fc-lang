@@ -5,4 +5,5 @@ module beta =
     let transform = (x: int32) -> x * 2
 
 let main = (args: str[]) ->
-    alpha.compute(5)
+    assert(alpha.compute(5) == 11)
+    0

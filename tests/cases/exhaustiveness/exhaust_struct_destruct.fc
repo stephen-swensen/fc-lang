@@ -3,6 +3,9 @@ struct point =
     y: int32
 
 let main = (args: str[]) ->
-    let p = point { x = 10, y = 20 }
-    match p with
-    | { x = a, y = b } -> a + b
+    let _result =
+        let p = point { x = 10, y = 20 }
+        match p with
+        | { x = a, y = b } -> a + b
+    assert(_result == 30)
+    0

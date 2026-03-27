@@ -9,4 +9,5 @@ let check = (t: toggle) ->
     | { on = false } -> 0
 
 let main = (args: str[]) ->
-    check(toggle { value = 42, on = true })
+    assert(check(toggle { value = 42, on = true }) == 42)
+    0

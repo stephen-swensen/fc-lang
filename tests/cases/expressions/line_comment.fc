@@ -5,4 +5,6 @@ let add = (a: int32, b: int32) ->
 
 // comment between declarations
 let main = (args: str[]) ->
-    add(0, 1) // trailing comment
+    // trailing comment
+    assert(add(0, 1) == 1)
+    0

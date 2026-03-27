@@ -8,11 +8,14 @@ struct outer =
     b: int32
 
 let main = (args: str[]) ->
-    let o = outer {
-        a = inner {
-            x = 1,
-            y = 2
-        },
-        b = 3
-    }
-    o.a.x + o.a.y + o.b
+    let _result =
+        let o = outer {
+            a = inner {
+                x = 1,
+                y = 2
+            },
+            b = 3
+        }
+        o.a.x + o.a.y + o.b
+    assert(_result == 6)
+    0

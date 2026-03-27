@@ -11,4 +11,5 @@ import vec2 from geometry
 
 let main = (args: str[]) ->
     let p = vec2 { x = 3, y = 4 }
-    vec2.mag_sq(p)
+    assert(vec2.mag_sq(p) == 25)
+    0

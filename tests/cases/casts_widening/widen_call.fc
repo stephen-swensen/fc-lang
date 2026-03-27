@@ -1,4 +1,5 @@
 let add = (a: int64, b: int64) -> a + b
 
 let main = (args: str[]) ->
-    (int32)add(10, 20)
+    assert((int32)add(10, 20) == 30)
+    0

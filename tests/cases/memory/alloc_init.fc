@@ -6,4 +6,5 @@ let main = (args: str[]) ->
     let p = alloc(point { x = 15, y = 25 })!
     let result = p->x + p->y
     free(p)
-    result
+    assert(result == 40)
+    0

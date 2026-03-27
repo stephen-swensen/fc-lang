@@ -9,4 +9,5 @@ let main = (args: str[]) ->
     let ptr = &p
     let void_ptr = (any*)ptr
     let back = (geometry.point*)void_ptr
-    back->x + back->y
+    assert(back->x + back->y == 15)
+    0

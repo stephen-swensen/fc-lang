@@ -2,4 +2,5 @@ let deref = (p: 'a*) -> *p
 
 let main = (args: str[]) ->
     let mut x = 42
-    deref(&x)
+    assert(deref(&x) == 42)
+    0

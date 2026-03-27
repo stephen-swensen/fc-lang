@@ -8,4 +8,5 @@ let main = (args: str[]) ->
     let p = make()
     let val = *p
     free(p)
-    val
+    assert(val == 99)
+    0

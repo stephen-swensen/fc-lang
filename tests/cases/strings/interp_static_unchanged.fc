@@ -1,10 +1,13 @@
 let main = (args: str[]) ->
-    // strings without %spec{ remain static
-    let s = "hello world"
-    let mut r = 0
-    if s == "hello world" then r = r + 1 else r = r
-    if s.len == 11 then r = r + 2 else r = r
-    // bare % not followed by spec{ is static
-    let s2 = "100% done"
-    if s2.len == 9 then r = r + 4 else r = r
-    r
+    let _result =
+        // strings without %spec{ remain static
+        let s = "hello world"
+        let mut r = 0
+        if s == "hello world" then r = r + 1 else r = r
+        if s.len == 11 then r = r + 2 else r = r
+        // bare % not followed by spec{ is static
+        let s2 = "100% done"
+        if s2.len == 9 then r = r + 4 else r = r
+        r
+    assert(_result == 7)
+    0

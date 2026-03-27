@@ -1,9 +1,12 @@
 let main = (args: str[]) ->
-    let x = 127i8
-    let s = "%d{x}"
-    let mut r = 0
-    if s == "127" then r = r + 1 else r = r
-    let y = 255u8
-    let s2 = "%u{y}"
-    if s2 == "255" then r = r + 2 else r = r
-    r
+    let _result =
+        let x = 127i8
+        let s = "%d{x}"
+        let mut r = 0
+        if s == "127" then r = r + 1 else r = r
+        let y = 255u8
+        let s2 = "%u{y}"
+        if s2 == "255" then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

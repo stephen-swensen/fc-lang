@@ -6,4 +6,5 @@ struct point =
 let main = (args: str[]) ->
     let p = point { x = 10, y = 20, z = 30 }
     let { x = x, y = _, z = z } = p
-    x + z
+    assert(x + z == 40)
+    0

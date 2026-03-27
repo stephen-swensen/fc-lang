@@ -3,4 +3,5 @@ let main = (args: str[]) ->
     let b = sizeof(int32)
     let c = sizeof(int64)
     let d = sizeof(bool)
-    (int32)(a + b + c + d)
+    assert((int32)(a + b + c + d) == 14)
+    0

@@ -9,4 +9,5 @@ import point from geometry
 
 let main = (args: str[]) ->
     let p = point { x = 10, y = 20 }
-    geometry.manhattan(p)
+    assert(geometry.manhattan(p) == 30)
+    0

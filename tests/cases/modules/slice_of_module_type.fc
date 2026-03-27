@@ -4,12 +4,15 @@ module m =
         b: int32
 
 let main = (args: str[]) ->
-    let arr = m.pair[3] {
-        m.pair { a = 1, b = 2 },
-        m.pair { a = 10, b = 20 },
-        m.pair { a = 3, b = 4 }
-    }
-    let mut sum = 0
-    for i in arr
-        sum = sum + i.a + i.b
-    sum
+    let _result =
+        let arr = m.pair[3] {
+            m.pair { a = 1, b = 2 },
+            m.pair { a = 10, b = 20 },
+            m.pair { a = 3, b = 4 }
+        }
+        let mut sum = 0
+        for i in arr
+            sum = sum + i.a + i.b
+        sum
+    assert(_result == 40)
+    0

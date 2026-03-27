@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     let b = some(some(default(int32?)))
     let c = some(default(int32??))
     let d = default(int32???)
-    check(a) + check(b) + check(c) + check(d)
+    assert(check(a) + check(b) + check(c) + check(d) == 65)
+    0

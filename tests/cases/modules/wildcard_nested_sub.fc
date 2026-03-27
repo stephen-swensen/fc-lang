@@ -7,4 +7,5 @@ import ops from math
 import * from ops
 
 let main = (args: str[]) ->
-    add(mul(5, 8), 2)
+    assert(add(mul(5, 8), 2) == 42)
+    0

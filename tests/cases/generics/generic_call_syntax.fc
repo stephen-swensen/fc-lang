@@ -2,4 +2,5 @@ let make = <'a>() -> default('a)
 
 let main = (args: str[]) ->
     let x = make<int32>()
-    x + 42
+    assert(x + 42 == 42)
+    0

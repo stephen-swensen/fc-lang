@@ -1,2 +1,3 @@
 let main = (args: str[]) ->
-    math.add(11, 22)
+    assert(math.add(11, 22) == 33)
+    0

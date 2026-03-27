@@ -11,4 +11,5 @@ let take_coord = (p: coord) -> p.y
 let main = (args: str[]) ->
     let a = pt { x = 3, y = 4 }
     let b = coord { x = 5, y = 6 }
-    take_pt(b) + take_coord(a)
+    assert(take_pt(b) + take_coord(a) == 9)
+    0

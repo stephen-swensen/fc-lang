@@ -2,4 +2,5 @@ let main = (args: str[]) ->
     let x = 3.14
     let y = 2.0
     let z = x + y
-    (int32)z
+    assert((int32)z == 5)
+    0

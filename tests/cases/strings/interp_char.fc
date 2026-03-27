@@ -1,6 +1,9 @@
 let main = (args: str[]) ->
-    let c = 'A'
-    let s = "char=%c{c}"
-    let mut r = 0
-    if s == "char=A" then r = r + 1 else r = r
-    r
+    let _result =
+        let c = 'A'
+        let s = "char=%c{c}"
+        let mut r = 0
+        if s == "char=A" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

@@ -4,4 +4,5 @@ let main = (args: str[]) ->
     let val = 10
     let add_val = (n: int32) -> n + val
     let result = apply(add_val, 32)
-    result
+    assert(result == 42)
+    0

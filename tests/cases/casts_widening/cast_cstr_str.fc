@@ -2,8 +2,11 @@ module c from "stdlib.h" =
     extern getenv: (const cstr) -> const cstr?
 
 let main = (args: str[]) ->
-    match c.getenv(c"PATH") with
-    | some(cs) ->
-        let s = (str)cs
-        if s.len > 0i64 then 1 else 0
-    | none -> 0
+    let _result =
+        match c.getenv(c"PATH") with
+        | some(cs) ->
+            let s = (str)cs
+            if s.len > 0i64 then 1 else 0
+        | none -> 0
+    assert(_result == 1)
+    0

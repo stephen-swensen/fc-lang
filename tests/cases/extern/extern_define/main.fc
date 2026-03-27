@@ -7,6 +7,9 @@ struct ts =
     tv_nsec: int64
 
 let main = (args: str[]) ->
-    let mut buf = default(ts)
-    let rc = t.clock_gettime(0, &buf)
-    if rc == 0 then 42 else 1
+    let _result =
+        let mut buf = default(ts)
+        let rc = t.clock_gettime(0, &buf)
+        if rc == 0 then 42 else 1
+    assert(_result == 42)
+    0

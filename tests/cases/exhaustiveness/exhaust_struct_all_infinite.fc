@@ -9,4 +9,5 @@ let check = (p: point) ->
     | { x = x, y = y } -> x + y
 
 let main = (args: str[]) ->
-    check(point { x = 3, y = 4 })
+    assert(check(point { x = 3, y = 4 }) == 7)
+    0

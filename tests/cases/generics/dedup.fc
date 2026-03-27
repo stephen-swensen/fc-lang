@@ -3,4 +3,5 @@ let identity = (x: 'a) -> x
 let main = (args: str[]) ->
     let a = identity(20)
     let b = identity(22)
-    a + b
+    assert(a + b == 42)
+    0

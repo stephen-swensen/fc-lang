@@ -5,4 +5,5 @@ let first_two = (s: int32[]) ->
 let main = (args: str[]) ->
     let arr = int32[4] { 5, 10, 15, 20 }
     let sub = first_two(arr)
-    sub[0] + sub[1]
+    assert(sub[0] + sub[1] == 15)
+    0

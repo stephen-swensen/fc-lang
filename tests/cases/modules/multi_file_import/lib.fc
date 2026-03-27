@@ -3,4 +3,5 @@ import vec2 from math
 
 let main = (args: str[]) ->
     let v = vec2 { x = 3, y = 7 }
-    add(v.x, v.y)
+    assert(add(v.x, v.y) == 10)
+    0

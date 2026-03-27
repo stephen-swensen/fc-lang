@@ -1,11 +1,14 @@
 let main = (args: str[]) ->
-    let mut r = 0
-    // normal division still works
-    let a = 42 / 6
-    if a == 7 then r = r + 1 else r = r
-    // normal modulo still works
-    let b = 17 % 5
-    if b == 2 then r = r + 2 else r = r
-    // unsigned division by zero also aborts — tested separately
-    // float division by zero does NOT abort (IEEE 754)
-    r
+    let _result =
+        let mut r = 0
+        // normal division still works
+        let a = 42 / 6
+        if a == 7 then r = r + 1 else r = r
+        // normal modulo still works
+        let b = 17 % 5
+        if b == 2 then r = r + 2 else r = r
+        // unsigned division by zero also aborts — tested separately
+        // float division by zero does NOT abort (IEEE 754)
+        r
+    assert(_result == 3)
+    0

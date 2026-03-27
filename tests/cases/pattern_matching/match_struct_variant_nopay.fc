@@ -7,7 +7,10 @@ struct drawing =
     shape: shape
 
 let main = (args: str[]) ->
-    let d = drawing { x = 7, shape = shape.dot }
-    match d with
-    | { shape = circle(r) } -> r
-    | { x = x, shape = dot } -> x
+    let _result =
+        let d = drawing { x = 7, shape = shape.dot }
+        match d with
+        | { shape = circle(r) } -> r
+        | { x = x, shape = dot } -> x
+    assert(_result == 7)
+    0

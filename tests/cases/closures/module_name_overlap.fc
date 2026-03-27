@@ -7,4 +7,5 @@ module beta =
     let compute = (x: int32) -> x * 2
 
 let main = (args: str[]) ->
-    alpha.compute(0) + beta.compute(1) + beta.value - alpha.value
+    assert(alpha.compute(0) + beta.compute(1) + beta.value - alpha.value == 24)
+    0

@@ -7,4 +7,5 @@ let score = (s: const str) ->
     | _ -> 0
 
 let main = (args: str[]) ->
-    score("a") + score("bb") + score("ccc") + score("dddd") + score("unknown")
+    assert(score("a") + score("bb") + score("ccc") + score("dddd") + score("unknown") == 10)
+    0

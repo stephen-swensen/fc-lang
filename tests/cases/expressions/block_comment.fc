@@ -4,6 +4,9 @@ let add = (a: int32, b: int32) ->
     a + b /* inline comment */
 
 let main = (args: str[]) ->
-    /* multi-line
-       block comment */
-    add(0, 1)
+    let _result =
+        /* multi-line
+           block comment */
+        add(0, 1)
+    assert(_result == 1)
+    0

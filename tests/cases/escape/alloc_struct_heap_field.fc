@@ -9,4 +9,5 @@ let main = (args: str[]) ->
     let result = *(n->data)
     free(p)
     free(n)
-    result
+    assert(result == 42)
+    0

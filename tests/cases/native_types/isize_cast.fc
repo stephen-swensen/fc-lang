@@ -13,4 +13,5 @@ let main = (args: str[]) ->
     // cast from/to float requires going through int
     let i = (int32)a
     let j = (float64)i
-    c + f
+    assert(c + f == 84)
+    0

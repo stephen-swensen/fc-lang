@@ -1,5 +1,8 @@
 let main = (args: str[]) ->
-    let x = true
-    match x with
-    | true -> 1
-    | _ -> 0
+    let _result =
+        let x = true
+        match x with
+        | true -> 1
+        | _ -> 0
+    assert(_result == 1)
+    0

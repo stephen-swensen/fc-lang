@@ -9,4 +9,5 @@ struct circle =
 let main = (args: str[]) ->
     let c = circle { center = point { x = 10, y = 20 }, radius = 5 }
     let { center = { x = cx, y = cy }, radius = r } = c
-    cx + cy + r
+    assert(cx + cy + r == 35)
+    0

@@ -19,4 +19,5 @@ let main = (args: str[]) ->
     let result = (cstr)buf
     let rlen = c.strlen(result)
     free((int32*)buf)
-    (int32)rlen
+    assert((int32)rlen == 5)
+    0

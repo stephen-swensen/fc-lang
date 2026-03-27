@@ -1,2 +1,3 @@
 let main = (args: str[]) ->
-    consumer.get()
+    assert(consumer.get() == 42)
+    0

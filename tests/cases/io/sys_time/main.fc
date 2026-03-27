@@ -1,6 +1,9 @@
 import sys from std::
 
 let main = (args: str[]) ->
-    let t = sys.time()
-    if t > 0i64 then 1
-    else 0
+    let _result =
+        let t = sys.time()
+        if t > 0i64 then 1
+        else 0
+    assert(_result == 1)
+    0

@@ -16,4 +16,5 @@ let main = (args: str[]) ->
     let r = col.red
     let g = col.green
     let b = col.blue
-    to_num(r) + to_num(g) + to_num(b)
+    assert(to_num(r) + to_num(g) + to_num(b) == 6)
+    0

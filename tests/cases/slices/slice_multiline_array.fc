@@ -1,8 +1,11 @@
 // Multiline array literal
 let main = (args: str[]) ->
-    let arr = int32[3]{
-        10,
-        20,
-        30
-    }
-    arr[0] + arr[1] + arr[2]
+    let _result =
+        let arr = int32[3]{
+            10,
+            20,
+            30
+        }
+        arr[0] + arr[1] + arr[2]
+    assert(_result == 60)
+    0

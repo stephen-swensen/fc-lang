@@ -4,4 +4,5 @@ module c from "stdlib.h" =
 let main = (args: str[]) ->
     let a = c.abs(0 - 3)
     let b = c.abs(0 - 4)
-    a + b
+    assert(a + b == 7)
+    0

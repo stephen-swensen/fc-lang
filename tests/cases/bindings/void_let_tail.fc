@@ -3,4 +3,5 @@ let set_stuff = (x: int32) ->
 
 let main = (args: str[]) ->
     set_stuff(5)
-    42
+    assert(42 == 42)
+    0

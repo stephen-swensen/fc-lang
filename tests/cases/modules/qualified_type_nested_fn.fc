@@ -11,4 +11,5 @@ module geo =
 
 let main = (args: str[]) ->
     let r = geo.shapes.rect { x = 0, y = 0, w = 10, h = 5 }
-    geo.shapes.area(r)
+    assert(geo.shapes.area(r) == 50)
+    0

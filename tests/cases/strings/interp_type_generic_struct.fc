@@ -3,8 +3,11 @@ struct pair =
     y: 'b
 
 let main = (args: str[]) ->
-    let p = pair { x = 1, y = 2.0 }
-    let s = "%T{p}"
-    let mut r = 0
-    if s == "pair<int32, float64>" then r = r + 1 else r = r
-    r
+    let _result =
+        let p = pair { x = 1, y = 2.0 }
+        let s = "%T{p}"
+        let mut r = 0
+        if s == "pair<int32, float64>" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

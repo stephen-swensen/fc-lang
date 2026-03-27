@@ -8,4 +8,5 @@ let main = (args: str[]) ->
     let p = get_ptr()
     let val = *p
     free(p)
-    val
+    assert(val == 55)
+    0

@@ -2,10 +2,13 @@ let add_one = (x: int32) -> x + 1
 let add_two = (x: int32) -> x + 2
 
 let main = (args: str[]) ->
-    let f = add_one
-    let g = add_one
-    let h = add_two
-    let mut r = 0
-    if f == g then r = r + 1 else r = r
-    if f != h then r = r + 2 else r = r
-    r
+    let _result =
+        let f = add_one
+        let g = add_one
+        let h = add_two
+        let mut r = 0
+        if f == g then r = r + 1 else r = r
+        if f != h then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

@@ -6,4 +6,5 @@ let main = (args: str[]) ->
     buf[3] = 40
     let sum = buf[0] + buf[1] + buf[2] + buf[3]
     free(buf)
-    sum
+    assert(sum == 100)
+    0

@@ -1,3 +1,4 @@
 let main = (args: str[]) ->
     let triple = (x: int32) -> x * 3
-    triple(14)
+    assert(triple(14) == 42)
+    0

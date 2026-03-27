@@ -5,8 +5,11 @@ module m =
 #end
 
 let main = (args: str[]) ->
+    let mut _r = 0
 #if extra
-    m.base + m.bonus
+    _r = m.base + m.bonus
 #else
-    m.base
+    _r = m.base
 #end
+    assert(_r == 42)
+    0

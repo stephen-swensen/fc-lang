@@ -4,7 +4,10 @@ struct item =
     count: int32?
 
 let main = (args: str[]) ->
-    let i = item { name = 1, count = some(10) }
-    match i with
-    | { count = some(c) } -> c
-    | { count = none } -> 200
+    let _result =
+        let i = item { name = 1, count = some(10) }
+        match i with
+        | { count = some(c) } -> c
+        | { count = none } -> 200
+    assert(_result == 10)
+    0

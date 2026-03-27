@@ -4,4 +4,5 @@ module math =
     let compute = (x: int32) -> helper(x) + 5
 
 let main = (args: str[]) ->
-    math.compute(4)
+    assert(math.compute(4) == 45)
+    0

@@ -7,4 +7,5 @@ module geometry =
 let main = (args: str[]) ->
     let a = geometry.shapes.area(3, 4)
     let s = geometry.scale(5)
-    a + s
+    assert(a + s == 22)
+    0

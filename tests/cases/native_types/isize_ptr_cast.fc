@@ -13,4 +13,5 @@ let main = (args: str[]) ->
     let p2 = (int32*)addr
     let r3 = *p2
 
-    r1 + r2 + r3
+    assert(r1 + r2 + r3 == 44)
+    0

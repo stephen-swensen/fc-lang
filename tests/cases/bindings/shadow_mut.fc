@@ -5,4 +5,5 @@ let main = (args: str[]) ->
     let x = x * 2
     let mut x = x + 3
     x = x + 1
-    x
+    assert(x == 36)
+    0

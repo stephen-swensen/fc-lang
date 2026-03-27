@@ -52,6 +52,7 @@ typedef enum {
     EXPR_LET,           /* let binding inside a block */
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
     EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
+    EXPR_ASSERT,
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -265,6 +266,14 @@ struct Expr {
 
         /* EXPR_TYPE_VAR_REF — 'a in expression position (for 'a.min etc.) */
         struct { const char *name; } type_var_ref;
+
+        /* EXPR_ASSERT */
+        struct {
+            Expr *condition;        /* must be bool */
+            Expr *message;          /* optional str, NULL if single-arg */
+            const char *expr_text;  /* source text of condition */
+            int expr_text_len;
+        } assert_expr;
     };
 };
 

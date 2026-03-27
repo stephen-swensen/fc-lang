@@ -6,6 +6,9 @@ module containers =
 import pair as p from containers
 
 let main = (args: str[]) ->
-    let a = containers.pair { first = 10, second = 20 }
-    let b = p { first = 10, second = 20 }
-    if a == b then 42 else 1
+    let _result =
+        let a = containers.pair { first = 10, second = 20 }
+        let b = p { first = 10, second = 20 }
+        if a == b then 42 else 1
+    assert(_result == 42)
+    0

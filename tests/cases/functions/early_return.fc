@@ -11,4 +11,5 @@ let main = (args: str[]) ->
     let r1 = find_first_positive(-1, -2, 7)
     let r2 = find_first_positive(-1, 3, 99)
     let r3 = find_first_positive(5, 99, 99)
-    r1 + r2 * 10 + r3
+    assert(r1 + r2 * 10 + r3 == 42)
+    0

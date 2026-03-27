@@ -8,4 +8,5 @@ let main = (args: str[]) ->
     let a = classify(0)
     let b = classify(1)
     let c = classify(5)
-    a + b + c
+    assert(a + b + c == 109)
+    0

@@ -1,3 +1,4 @@
 let main = (args: str[]) ->
     let x = some(42)
-    x!
+    assert(x! == 42)
+    0

@@ -1,0 +1,19 @@
+let add = (a: int32, b: int32) -> a + b
+let mul = (a: int32, b: int32) -> a * b
+
+let main = (args: str[]) ->
+    assert(add(2, 3) == 5)
+    assert(mul(3, 4) == 12)
+    assert(add(mul(2, 3), 4) == 10)
+
+    let mut total = 0
+    for i in 1..5
+        total = total + i
+    assert(total == 10, "sum of 1..4")
+
+    let arr = int32[5] { 1, 2, 3, 4, 5 }
+    assert(arr[0] == 1)
+    assert(arr[4] == 5)
+    assert(arr.len == 5)
+
+    0

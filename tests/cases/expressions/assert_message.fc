@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    assert(true, "this should pass")
+    assert(1 + 1 == 2, "basic math")
+    let x = 10
+    assert(x > 0, "x must be positive")
+    0

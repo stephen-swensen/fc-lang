@@ -4,8 +4,11 @@ struct point =
     y: int32
 
 let main = (args: str[]) ->
-    let p = point {
-        x = 10,
-        y = 20
-    }
-    p.x + p.y
+    let _result =
+        let p = point {
+            x = 10,
+            y = 20
+        }
+        p.x + p.y
+    assert(_result == 30)
+    0

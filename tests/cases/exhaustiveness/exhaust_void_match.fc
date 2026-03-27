@@ -12,4 +12,5 @@ let process = (a: action) ->
 
 let main = (args: str[]) ->
     process(action.start)
-    counter
+    assert(counter == 1)
+    0

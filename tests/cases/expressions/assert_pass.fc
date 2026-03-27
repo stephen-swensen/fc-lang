@@ -1,0 +1,14 @@
+let main = (args: str[]) ->
+    assert(true)
+    assert(1 == 1)
+    assert(2 + 2 == 4)
+    assert(10 > 5)
+    assert(3 != 4)
+    assert(true && true)
+    assert(false || true)
+    assert(!false)
+    let x = 42
+    assert(x == 42)
+    let y = x + 8
+    assert(y == 50)
+    0

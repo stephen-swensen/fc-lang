@@ -117,7 +117,7 @@ keyword = "let" | "mut" | "struct" | "union" | "module"
 
 (* Reserved identifiers — built-in compile-time operators.             *)
 (* These may not be shadowed by user-defined bindings.                 *)
-reserved_ident = "alloc" | "free" | "sizeof" | "default" ;
+reserved_ident = "alloc" | "free" | "sizeof" | "default" | "assert" ;
 
 (* Built-in globals — predefined identifiers typed any*.                *)
 builtin_global = "stdin" | "stdout" | "stderr" ;
@@ -542,6 +542,7 @@ primary_expr     = INT_LIT
                  | free_expr
                  | sizeof_expr
                  | default_expr
+                 | assert_expr
                  | some_expr
                  | struct_literal
                  | slice_literal
@@ -632,6 +633,8 @@ free_expr        = "free" , "(" , expr , ")" ;
 sizeof_expr      = "sizeof" , "(" , type_expr , ")" ;
 
 default_expr     = "default" , "(" , type_expr , ")" ;
+
+assert_expr      = "assert" , "(" , expr , [ "," , expr ] , ")" ;
 
 some_expr        = "some" , "(" , expr , ")" ;
 

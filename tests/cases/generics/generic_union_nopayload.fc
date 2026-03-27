@@ -3,11 +3,14 @@ union maybe =
     | nothing
 
 let main = (args: str[]) ->
-    let x = maybe<int32>.just(42)
-    let y = maybe<int32>.nothing
-    match x with
-    | just(v) ->
-        match y with
-        | just(_) -> 0
-        | nothing -> v
-    | nothing -> 0
+    let _result =
+        let x = maybe<int32>.just(42)
+        let y = maybe<int32>.nothing
+        match x with
+        | just(v) ->
+            match y with
+            | just(_) -> 0
+            | nothing -> v
+        | nothing -> 0
+    assert(_result == 42)
+    0

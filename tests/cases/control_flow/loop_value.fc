@@ -13,4 +13,5 @@ let main = (args: str[]) ->
     data.ptr[3] = 40
     data.ptr[4] = 50
     let result = find_first(data, 30)
-    result!
+    assert(result! == 2)
+    0

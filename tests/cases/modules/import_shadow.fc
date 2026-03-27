@@ -8,4 +8,5 @@ import value from mod_a
 import value from mod_b
 
 let main = (args: str[]) ->
-    value
+    assert(value == 20)
+    0

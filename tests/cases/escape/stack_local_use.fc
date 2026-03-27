@@ -6,4 +6,5 @@ let main = (args: str[]) ->
     let py = &y
     *px = 30
     *py = 40
-    *px + *py
+    assert(*px + *py == 70)
+    0

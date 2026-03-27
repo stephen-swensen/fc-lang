@@ -6,4 +6,5 @@ import shapes from geometry
 import area_sq from shapes
 
 let main = (args: str[]) ->
-    area_sq(7)
+    assert(area_sq(7) == 49)
+    0

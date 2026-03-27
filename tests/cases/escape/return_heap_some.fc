@@ -5,9 +5,12 @@ let make = () ->
     some(p)
 
 let main = (args: str[]) ->
-    match make() with
-    | some(p) ->
-        let val = *p
-        free(p)
-        val
-    | none -> 0
+    let _result =
+        match make() with
+        | some(p) ->
+            let val = *p
+            free(p)
+            val
+        | none -> 0
+    assert(_result == 77)
+    0

@@ -5,4 +5,5 @@ let unwrap_or = (opt: 'a?, fallback: 'a) ->
 
 let main = (args: str[]) ->
     let v = some(42)
-    unwrap_or(v, 0)
+    assert(unwrap_or(v, 0) == 42)
+    0

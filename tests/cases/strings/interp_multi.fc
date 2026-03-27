@@ -1,8 +1,11 @@
 let main = (args: str[]) ->
-    let x = 10
-    let y = 20
-    let s = "(%d{x}, %d{y})"
-    let mut r = 0
-    if s == "(10, 20)" then r = r + 1 else r = r
-    if s.len == 8 then r = r + 2 else r = r
-    r
+    let _result =
+        let x = 10
+        let y = 20
+        let s = "(%d{x}, %d{y})"
+        let mut r = 0
+        if s == "(10, 20)" then r = r + 1 else r = r
+        if s.len == 8 then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

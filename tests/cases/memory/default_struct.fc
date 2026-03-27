@@ -4,4 +4,5 @@ struct point =
 
 let main = (args: str[]) ->
     let p = default(point)
-    p.x + p.y + 10
+    assert(p.x + p.y + 10 == 10)
+    0

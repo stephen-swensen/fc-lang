@@ -9,4 +9,5 @@ module middle =
 import * from middle
 
 let main = (args: str[]) ->
-    get()
+    assert(get() == 42)
+    0

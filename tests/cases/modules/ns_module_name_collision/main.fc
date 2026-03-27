@@ -2,4 +2,5 @@ import utils as acme_utils from acme::
 import utils as widget_utils from widget::
 
 let main = (args: str[]) ->
-    acme_utils.value + widget_utils.value
+    assert(acme_utils.value + widget_utils.value == 42)
+    0

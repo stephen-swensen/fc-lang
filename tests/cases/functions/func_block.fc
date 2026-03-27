@@ -4,4 +4,5 @@ let compute = (x: int32, y: int32) ->
     b - 1
 
 let main = (args: str[]) ->
-    compute(3, 4)
+    assert(compute(3, 4) == 13)
+    0

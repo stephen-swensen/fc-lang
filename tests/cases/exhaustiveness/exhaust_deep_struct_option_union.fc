@@ -19,4 +19,5 @@ let classify = (w: widget) ->
 let main = (args: str[]) ->
     let w1 = widget { id = 1, tint = some(color.red) }
     let w2 = widget { id = 2, tint = default(color?) }
-    classify(w1) + classify(w2)
+    assert(classify(w1) + classify(w2) == 1)
+    0

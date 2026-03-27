@@ -940,6 +940,26 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
     }
 }
 
+/* Emit text as a C string literal body, escaping special chars */
+static void emit_c_escaped(const char *text, int len, FILE *out) {
+    for (int i = 0; i < len; i++) {
+        switch (text[i]) {
+        case '\\': fprintf(out, "\\\\"); break;
+        case '"':  fprintf(out, "\\\""); break;
+        case '\n': fprintf(out, "\\n"); break;
+        case '\r': fprintf(out, "\\r"); break;
+        case '\t': fprintf(out, "\\t"); break;
+        case '%':  fprintf(out, "%%%%"); break;
+        default:
+            if ((unsigned char)text[i] < 0x20)
+                fprintf(out, "\\x%02x", (unsigned char)text[i]);
+            else
+                fputc(text[i], out);
+            break;
+        }
+    }
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -1849,6 +1869,33 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_ASSERT: {
+        const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+        int fn_len = (int)strlen(fn);
+        int line = e->loc.line;
+        fprintf(out, "({ if (!(");
+        emit_expr(e->assert_expr.condition, out);
+        fprintf(out, ")) { ");
+        if (e->assert_expr.message) {
+            int tid = temp_counter++;
+            fprintf(out, "fc_str _am%d = ", tid);
+            emit_expr(e->assert_expr.message, out);
+            fprintf(out, "; fprintf(stderr, \"");
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, ":%d: assertion failed: ", line);
+            emit_c_escaped(e->assert_expr.expr_text, e->assert_expr.expr_text_len, out);
+            fprintf(out, ": %%.*s\\n\", (int)_am%d.len, (const char*)_am%d.ptr); ", tid, tid);
+        } else {
+            fprintf(out, "fprintf(stderr, \"");
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, ":%d: assertion failed: ", line);
+            emit_c_escaped(e->assert_expr.expr_text, e->assert_expr.expr_text_len, out);
+            fprintf(out, "\\n\"); ");
+        }
+        fprintf(out, "abort(); } })");
+        break;
+    }
+
     case EXPR_ALLOC: {
         if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
             /* alloc(T, N) → T*? (raw buffer, null sentinel) */
@@ -2490,6 +2537,11 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_FREE:
         collect_types_expr(e->free_expr.operand, slices, options, fns);
         break;
+    case EXPR_ASSERT:
+        collect_types_expr(e->assert_expr.condition, slices, options, fns);
+        if (e->assert_expr.message)
+            collect_types_expr(e->assert_expr.message, slices, options, fns);
+        break;
     case EXPR_SIZEOF:
         collect_types_in_type(e->sizeof_expr.target, slices, options, fns);
         break;
@@ -2666,6 +2718,11 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
     case EXPR_FREE:
         collect_trampolines_expr(e->free_expr.operand, ts);
         break;
+    case EXPR_ASSERT:
+        collect_trampolines_expr(e->assert_expr.condition, ts);
+        if (e->assert_expr.message)
+            collect_trampolines_expr(e->assert_expr.message, ts);
+        break;
     default:
         break;
     }
@@ -2771,6 +2828,11 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         break;
     case EXPR_FREE:
         collect_lambdas_expr(e->free_expr.operand, ls);
+        break;
+    case EXPR_ASSERT:
+        collect_lambdas_expr(e->assert_expr.condition, ls);
+        if (e->assert_expr.message)
+            collect_lambdas_expr(e->assert_expr.message, ls);
         break;
     default:
         break;
@@ -3098,6 +3160,12 @@ static void detect_features_expr(Expr *e) {
         return;
     case EXPR_FREE:
         detect_features_expr(e->free_expr.operand);
+        return;
+    case EXPR_ASSERT:
+        g_needs_stdio = true;
+        detect_features_expr(e->assert_expr.condition);
+        if (e->assert_expr.message)
+            detect_features_expr(e->assert_expr.message);
         return;
     case EXPR_INDEX:
         detect_features_expr(e->index.object);

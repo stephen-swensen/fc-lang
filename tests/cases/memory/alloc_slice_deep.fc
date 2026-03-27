@@ -10,4 +10,5 @@ let main = (args: str[]) ->
 
     let v = copy[0] + copy[1] + copy[2]
     free(copy)
-    v
+    assert(v == 60)
+    0

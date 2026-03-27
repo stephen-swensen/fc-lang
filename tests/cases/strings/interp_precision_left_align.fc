@@ -1,8 +1,11 @@
 let main = (args: str[]) ->
-    let name = "hello world"
-    let s = "%-8.5s{name}!"
-    let mut r = 0
-    // Left-aligned: "hello   !"
-    if s == "hello   !" then r = r + 1 else r = r
-    if s.len == 9 then r = r + 2 else r = r
-    r
+    let _result =
+        let name = "hello world"
+        let s = "%-8.5s{name}!"
+        let mut r = 0
+        // Left-aligned: "hello   !"
+        if s == "hello   !" then r = r + 1 else r = r
+        if s.len == 9 then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

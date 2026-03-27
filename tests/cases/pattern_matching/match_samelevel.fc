@@ -24,4 +24,5 @@ let main = (args: str[]) ->
     let c = classify(5)
     let d = multiline_arm(0)
     let e = match_then_code(0)
-    a + b + c + d + e
+    assert(a + b + c + d + e == 213)
+    0

@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     let b = classify(0)
     let c = classify(42)
     let d = classify(99)
-    a + b + c + d
+    assert(a + b + c + d == 100)
+    0

@@ -1,25 +1,28 @@
 let main = (args: str[]) ->
-    let buf1 = alloc(int32[3])!
-    buf1[0] = 1
-    buf1[1] = 2
-    buf1[2] = 3
-    let buf2 = alloc(int32[3])!
-    buf2[0] = 1
-    buf2[1] = 2
-    buf2[2] = 3
-    let buf3 = alloc(int32[3])!
-    buf3[0] = 1
-    buf3[1] = 2
-    buf3[2] = 9
-    let buf4 = alloc(int32[2])!
-    buf4[0] = 1
-    buf4[1] = 2
-    let mut r = 0
-    if buf1 == buf2 then r = r + 1 else r = r
-    if buf1 != buf3 then r = r + 2 else r = r
-    if buf1 != buf4 then r = r + 4 else r = r
-    free(buf1)
-    free(buf2)
-    free(buf3)
-    free(buf4)
-    r
+    let _result =
+        let buf1 = alloc(int32[3])!
+        buf1[0] = 1
+        buf1[1] = 2
+        buf1[2] = 3
+        let buf2 = alloc(int32[3])!
+        buf2[0] = 1
+        buf2[1] = 2
+        buf2[2] = 3
+        let buf3 = alloc(int32[3])!
+        buf3[0] = 1
+        buf3[1] = 2
+        buf3[2] = 9
+        let buf4 = alloc(int32[2])!
+        buf4[0] = 1
+        buf4[1] = 2
+        let mut r = 0
+        if buf1 == buf2 then r = r + 1 else r = r
+        if buf1 != buf3 then r = r + 2 else r = r
+        if buf1 != buf4 then r = r + 4 else r = r
+        free(buf1)
+        free(buf2)
+        free(buf3)
+        free(buf4)
+        r
+    assert(_result == 7)
+    0

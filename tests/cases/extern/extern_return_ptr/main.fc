@@ -3,4 +3,5 @@ module c from "stdlib.h" =
     extern atoi: (const cstr) -> int32
 
 let main = (args: str[]) ->
-    c.abs(0 - 7) + c.atoi(c"3")
+    assert(c.abs(0 - 7) + c.atoi(c"3") == 10)
+    0

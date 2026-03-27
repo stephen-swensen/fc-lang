@@ -3,4 +3,5 @@ module c from "stdlib.h" =
 
 let main = (args: str[]) ->
     let s = "42"
-    c.atoi((cstr)s)
+    assert(c.atoi((cstr)s) == 42)
+    0

@@ -2,9 +2,12 @@ let add = (a: int32, b: int32) ->
     a + b
 
 let main = (args: str[]) ->
-    let x = add(10, 20)
-    let name = "result"
-    let s = "%s{name}=%d{x} (%T{x})"
-    let mut r = 0
-    if s == "result=30 (int32)" then r = r + 1 else r = r
-    r
+    let _result =
+        let x = add(10, 20)
+        let name = "result"
+        let s = "%s{name}=%d{x} (%T{x})"
+        let mut r = 0
+        if s == "result=30 (int32)" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

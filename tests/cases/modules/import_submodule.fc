@@ -5,4 +5,5 @@ module geometry =
 import shapes from geometry
 
 let main = (args: str[]) ->
-    shapes.area(3, 4)
+    assert(shapes.area(3, 4) == 12)
+    0

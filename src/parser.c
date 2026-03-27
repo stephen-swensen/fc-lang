@@ -1116,6 +1116,33 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_ASSERT: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        /* Capture source text of the condition expression */
+        Token *cond_start = current(p);
+        Expr *condition = parse_expr(p, PREC_NONE + 1);
+        /* Expression text: from cond_start to just before current token (, or )) */
+        const char *text_start = cond_start->start;
+        int text_len = (int)(current(p)->start - text_start);
+        while (text_len > 0 && (text_start[text_len-1] == ' ' ||
+               text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
+               text_start[text_len-1] == '\t'))
+            text_len--;
+        Expr *message = NULL;
+        if (check(p, TOK_COMMA)) {
+            advance_p(p);
+            message = parse_expr(p, PREC_NONE + 1);
+        }
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ASSERT, loc);
+        e->assert_expr.condition = condition;
+        e->assert_expr.message = message;
+        e->assert_expr.expr_text = arena_strdup(p->arena, text_start, text_len);
+        e->assert_expr.expr_text_len = text_len;
+        return e;
+    }
+
     case TOK_ALLOC: {
         advance_p(p);
         expect(p, TOK_LPAREN);

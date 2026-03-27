@@ -4,4 +4,5 @@ struct pair =
 
 let main = (args: str[]) ->
     let p = pair { first = 10, second = 32 }
-    p.first + p.second
+    assert(p.first + p.second == 42)
+    0

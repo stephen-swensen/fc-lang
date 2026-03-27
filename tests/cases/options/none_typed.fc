@@ -6,4 +6,5 @@ let check = (x: int32?) ->
 let main = (args: str[]) ->
     let a = check(default(int32?))
     let b = check(some(42))
-    a + b
+    assert(a + b == 42)
+    0

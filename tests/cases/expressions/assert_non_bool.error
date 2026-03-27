@@ -1,0 +1,1 @@
+assert condition must be bool, got int32

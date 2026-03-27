@@ -6,4 +6,5 @@ struct point =
 let main = (args: str[]) ->
     let mut p = point { x = 3, y = 4 }
     let r = (p.x) + (p.y)
-    r
+    assert(r == 7)
+    0

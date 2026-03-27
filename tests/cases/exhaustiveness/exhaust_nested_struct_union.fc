@@ -13,4 +13,5 @@ let check = (w: wrapped) ->
     | empty -> 0
 
 let main = (args: str[]) ->
-    check(wrapped.boxed(container { label = 10, value = 20 }))
+    assert(check(wrapped.boxed(container { label = 10, value = 20 })) == 30)
+    0

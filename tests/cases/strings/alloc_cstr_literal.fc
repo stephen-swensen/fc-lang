@@ -3,20 +3,23 @@ module c from "string.h" =
     extern strcmp: (const cstr, const cstr) -> int32
 
 let main = (args: str[]) ->
-    let s = alloc(c"hello")
-    let mut r = 0
-    match s with
-    | some(v) ->
-        let len = c.strlen(v)
-        if len == 5u then r = r + 1 else r = r
-        if c.strcmp(v, c"hello") == 0 then r = r + 2 else r = r
-        free(v)
-    | none -> r = r
-    let s2 = alloc(c"")
-    match s2 with
-    | some(v2) ->
-        let len2 = c.strlen(v2)
-        if len2 == 0u then r = r + 4 else r = r
-        free(v2)
-    | none -> r = r
-    r
+    let _result =
+        let s = alloc(c"hello")
+        let mut r = 0
+        match s with
+        | some(v) ->
+            let len = c.strlen(v)
+            if len == 5u then r = r + 1 else r = r
+            if c.strcmp(v, c"hello") == 0 then r = r + 2 else r = r
+            free(v)
+        | none -> r = r
+        let s2 = alloc(c"")
+        match s2 with
+        | some(v2) ->
+            let len2 = c.strlen(v2)
+            if len2 == 0u then r = r + 4 else r = r
+            free(v2)
+        | none -> r = r
+        r
+    assert(_result == 7)
+    0

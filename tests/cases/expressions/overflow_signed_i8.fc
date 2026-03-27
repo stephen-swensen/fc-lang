@@ -1,9 +1,12 @@
 let main = (args: str[]) ->
-    let a = 127i8
-    let b = a + 1i8
-    let mut r = 0
-    if b == -128i8 then r = r + 1 else r = r
-    let c = -128i8
-    let d = c - 1i8
-    if d == 127i8 then r = r + 2 else r = r
-    r
+    let _result =
+        let a = 127i8
+        let b = a + 1i8
+        let mut r = 0
+        if b == -128i8 then r = r + 1 else r = r
+        let c = -128i8
+        let d = c - 1i8
+        if d == 127i8 then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

@@ -12,4 +12,5 @@ module parent =
         let get = () -> value
 
 let main = (args: str[]) ->
-    parent.child.get()
+    assert(parent.child.get() == 20)
+    0

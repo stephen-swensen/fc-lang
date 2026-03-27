@@ -1,8 +1,11 @@
 let main = (args: str[]) ->
-    let x = 42
-    let name = "hello world"
-    let s = "val=%d{x} name=%.5s{name}"
-    let mut r = 0
-    if s == "val=42 name=hello" then r = r + 1 else r = r
-    if s.len == 17 then r = r + 2 else r = r
-    r
+    let _result =
+        let x = 42
+        let name = "hello world"
+        let s = "val=%d{x} name=%.5s{name}"
+        let mut r = 0
+        if s == "val=42 name=hello" then r = r + 1 else r = r
+        if s.len == 17 then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

@@ -1,6 +1,9 @@
 let main = (args: str[]) ->
+    let mut _r = 0
 #if platform_b
-    1
+    _r = 1
 #else
-    42
+    _r = 42
 #end
+    assert(_r == 42)
+    0

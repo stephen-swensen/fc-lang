@@ -5,4 +5,5 @@ module math =
 let main = (args: str[]) ->
     let x = math.add(3, 4)
     let y = math.mul(x, 2)
-    y
+    assert(y == 14)
+    0

@@ -1,10 +1,13 @@
 let main = (args: str[]) ->
-    let mut x = 10
-    let mut y = 20
-    let a = &x
-    let b = &x
-    let c = &y
-    let mut r = 0
-    if a == b then r = r + 1 else r = r
-    if a != c then r = r + 2 else r = r
-    r
+    let _result =
+        let mut x = 10
+        let mut y = 20
+        let a = &x
+        let b = &x
+        let c = &y
+        let mut r = 0
+        if a == b then r = r + 1 else r = r
+        if a != c then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

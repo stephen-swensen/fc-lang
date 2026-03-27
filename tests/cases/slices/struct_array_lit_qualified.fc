@@ -6,4 +6,5 @@ module m =
 
 let main = (args: str[]) ->
     let arr = m.point[2] { m.point { x = 10, y = 0 }, m.point { x = 20, y = 0 } }
-    arr[0].x + arr[1].x
+    assert(arr[0].x + arr[1].x == 30)
+    0

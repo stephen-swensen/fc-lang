@@ -2,9 +2,12 @@
 let add3 = (a: int32, b: int32, c: int32) -> a + b + c
 
 let main = (args: str[]) ->
-    let r = add3(
-        10,
-        20,
-        30
-    )
-    r
+    let _result =
+        let r = add3(
+            10,
+            20,
+            30
+        )
+        r
+    assert(_result == 60)
+    0

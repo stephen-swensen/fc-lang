@@ -9,4 +9,5 @@ let main = (args: str[]) ->
 #else
     s = 22
 #end
-    r + s
+    assert(r + s == 42)
+    0

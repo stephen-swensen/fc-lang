@@ -2,4 +2,7 @@ let fib = (n: int32) ->
     if n <= 1 then n
     else fib(n - 1) + fib(n - 2)
 
-let main = (args: str[]) -> fib(10)
+let main = (args: str[]) ->
+    let _result = fib(10)
+    assert(_result == 55)
+    0

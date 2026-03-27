@@ -4,4 +4,5 @@ module a_b =
     let value = 10
 
 let main = (args: str[]) ->
-    math.add(a_b.value, 32)
+    assert(math.add(a_b.value, 32) == 42)
+    0

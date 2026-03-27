@@ -7,4 +7,5 @@ let main = (args: str[]) ->
     let arr = int32[3] { 50, 60, 70 }
     let a = some(arr)
     let b = default(int32[]?)
-    check(a) + check(b)
+    assert(check(a) + check(b) == 49)
+    0

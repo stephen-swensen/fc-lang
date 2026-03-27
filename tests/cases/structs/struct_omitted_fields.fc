@@ -5,4 +5,5 @@ struct triple =
 
 let main = (args: str[]) ->
     let t = triple { b = 50 }
-    t.a + t.b + t.c
+    assert(t.a + t.b + t.c == 50)
+    0

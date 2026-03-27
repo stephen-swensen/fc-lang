@@ -5,4 +5,5 @@ let write_val = (p: int32*, val: int32) ->
 let main = (args: str[]) ->
     let mut x = 0
     write_val(&x, 42)
-    x
+    assert(x == 42)
+    0

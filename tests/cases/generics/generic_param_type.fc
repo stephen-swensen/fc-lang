@@ -6,6 +6,9 @@ let swap = (p: pair<'a, 'b>) ->
     pair { first = p.second, second = p.first }
 
 let main = (args: str[]) ->
-    let p = pair { first = 42, second = true }
-    let q = swap(p)
-    if q.first then q.second else 0
+    let _result =
+        let p = pair { first = 42, second = true }
+        let q = swap(p)
+        if q.first then q.second else 0
+    assert(_result == 42)
+    0

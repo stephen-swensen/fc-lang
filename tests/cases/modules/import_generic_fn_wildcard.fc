@@ -5,7 +5,10 @@ module utils =
 import * from utils
 
 let main = (args: str[]) ->
-    let a = identity(10)
-    let b = identity(true)
-    let c = add_one(a)
-    if b then c else 0
+    let _result =
+        let a = identity(10)
+        let b = identity(true)
+        let c = add_one(a)
+        if b then c else 0
+    assert(_result == 11)
+    0

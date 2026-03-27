@@ -8,4 +8,5 @@ module outer =
         let use_all = (x: int32) -> helper(x) + public_val + secret
 
 let main = (args: str[]) ->
-    outer.inner.use_all(2)
+    assert(outer.inner.use_all(2) == 24)
+    0

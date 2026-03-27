@@ -1,7 +1,10 @@
 let main = (args: str[]) ->
-    let x = 3.14
-    let y = 1.0f32
-    let s = "%T{x},%T{y}"
-    let mut r = 0
-    if s == "float64,float32" then r = r + 1 else r = r
-    r
+    let _result =
+        let x = 3.14
+        let y = 1.0f32
+        let s = "%T{x},%T{y}"
+        let mut r = 0
+        if s == "float64,float32" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

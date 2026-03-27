@@ -1,4 +1,5 @@
 let main = (args: str[]) ->
     let a = 100i64
     let b = 58i64
-    (int32)(a - b)
+    assert((int32)(a - b) == 42)
+    0

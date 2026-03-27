@@ -14,4 +14,5 @@ import shape_ops from shapes
 
 let main = (args: str[]) ->
     let c = shape.circle(1)
-    shape_ops.area_approx(c)
+    assert(shape_ops.area_approx(c) == 3)
+    0

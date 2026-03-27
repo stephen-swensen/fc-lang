@@ -1,3 +1,6 @@
 let seven = () -> 7
 
-let main = (args: str[]) -> seven()
+let main = (args: str[]) ->
+    let _result = seven()
+    assert(_result == 7)
+    0

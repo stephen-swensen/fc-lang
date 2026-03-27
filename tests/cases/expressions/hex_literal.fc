@@ -1,13 +1,16 @@
 let main = (args: str[]) ->
-    let hex = 0xFF
-    let bin = 0b1010
-    let oct = 0o77
-    let hex_u8 = 0xFFu8
-    let hex_i64 = 0x100i64
-    let mut r = 0
-    if hex == 255 then r = r + 1
-    if bin == 10 then r = r + 1
-    if oct == 63 then r = r + 1
-    if hex_u8 == 255u8 then r = r + 1
-    if hex_i64 == 256i64 then r = r + 1
-    r
+    let _result =
+        let hex = 0xFF
+        let bin = 0b1010
+        let oct = 0o77
+        let hex_u8 = 0xFFu8
+        let hex_i64 = 0x100i64
+        let mut r = 0
+        if hex == 255 then r = r + 1
+        if bin == 10 then r = r + 1
+        if oct == 63 then r = r + 1
+        if hex_u8 == 255u8 then r = r + 1
+        if hex_i64 == 256i64 then r = r + 1
+        r
+    assert(_result == 5)
+    0

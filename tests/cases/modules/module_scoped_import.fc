@@ -10,4 +10,5 @@ module geometry =
 
 let main = (args: str[]) ->
     let p = geometry.make(3, 4)
-    p.x + p.y
+    assert(p.x + p.y == 7)
+    0

@@ -7,4 +7,5 @@ module containers =
 
 let main = (args: str[]) ->
     let b = containers.wrap(42)
-    containers.unwrap(b)
+    assert(containers.unwrap(b) == 42)
+    0

@@ -5,4 +5,5 @@ module utils =
 let main = (args: str[]) ->
     let x = utils.identity(42)
     let y = utils.add(20, 22)
-    x + y
+    assert(x + y == 84)
+    0

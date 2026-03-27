@@ -82,6 +82,20 @@ run_one_test() {
         fi
     fi
 
+    # If no expected_exit and no expected stdout, run and expect exit code 0
+    if { [ -z "$expected_exit_file" ] || [ ! -f "$expected_exit_file" ]; } && \
+       { [ -z "$expected_file" ] || [ ! -f "$expected_file" ]; }; then
+        set +e
+        "$bin_file" > "$TMPDIR/${slug}.stdout" 2>"$TMPDIR/${slug}.run_stderr"
+        local actual_exit=$?
+        set -e
+        if [ "$actual_exit" != "0" ]; then
+            echo "FAIL  $test_display (exit code: expected 0, got $actual_exit)"
+            cat "$TMPDIR/${slug}.run_stderr" >&2
+            return
+        fi
+    fi
+
     echo "PASS  $test_display"
 }
 

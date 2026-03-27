@@ -6,4 +6,5 @@ let increment = (n: int32) ->
 
 let main = (args: str[]) ->
     increment(20)
-    increment(22)
+    assert(increment(22) == 42)
+    0

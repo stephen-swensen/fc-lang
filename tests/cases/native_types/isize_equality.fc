@@ -9,4 +9,5 @@ let main = (args: str[]) ->
     let f = 20u
     let r3 = if d == e then 1 else 0
     let r4 = if d != f then 1 else 0
-    r1 + r2 + r3 + r4
+    assert(r1 + r2 + r3 + r4 == 4)
+    0

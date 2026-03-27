@@ -38,4 +38,5 @@ let main = (args: str[]) ->
     let n4 = nested(default(int32?))
     let s1 = check_sign(-1)
     let s2 = check_sign(0)
-    a1 + a2 + n1 + n2 + n3 + n4 + s1 + s2
+    assert(a1 + a2 + n1 + n2 + n3 + n4 + s1 + s2 == 127)
+    0

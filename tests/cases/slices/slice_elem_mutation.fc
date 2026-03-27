@@ -1,4 +1,5 @@
 let main = (args: str[]) ->
     let s = int32[3] { 10, 20, 30 }
     s[1] = 99
-    s[1]
+    assert(s[1] == 99)
+    0

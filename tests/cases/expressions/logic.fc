@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     let r1 = check(5, 3)
     let r2 = check(5, -1)
     let r3 = check(-1, -2)
-    r1 + r2 * 10 + r3
+    assert(r1 + r2 * 10 + r3 == 24)
+    0

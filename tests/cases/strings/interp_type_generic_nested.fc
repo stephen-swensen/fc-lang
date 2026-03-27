@@ -6,8 +6,11 @@ struct pair =
     y: 'b
 
 let main = (args: str[]) ->
-    let b = box { val = pair { x = 1, y = true } }
-    let s = "%T{b}"
-    let mut r = 0
-    if s == "box<pair<int32, bool>>" then r = r + 1 else r = r
-    r
+    let _result =
+        let b = box { val = pair { x = 1, y = true } }
+        let s = "%T{b}"
+        let mut r = 0
+        if s == "box<pair<int32, bool>>" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

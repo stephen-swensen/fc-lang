@@ -9,4 +9,5 @@ let main = (args: str[]) ->
     let len = c.strlen(s)
     free(s)
     let r = (int32)(usize)len
-    r
+    assert(r == 5)
+    0

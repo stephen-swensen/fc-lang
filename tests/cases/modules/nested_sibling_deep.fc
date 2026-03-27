@@ -13,4 +13,5 @@ module outer =
 let main = (args: str[]) ->
     let x = outer.inner.sum_ab()
     let y = outer.inner.deep.sum_all()
-    x + y
+    assert(x + y == 9)
+    0

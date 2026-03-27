@@ -8,4 +8,5 @@ let check = (r: result<int32, int32>) ->
     | err(e) -> e
 
 let main = (args: str[]) ->
-    check(result<int32, int32>.ok(42))
+    assert(check(result<int32, int32>.ok(42)) == 42)
+    0

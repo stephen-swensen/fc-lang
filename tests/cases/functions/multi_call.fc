@@ -5,4 +5,5 @@ let main = (args: str[]) ->
     let add_offset = (n: int32) -> n + offset
     let a = apply(add_offset, 10)
     let b = apply(add_offset, 20)
-    a + b + 2
+    assert(a + b + 2 == 42)
+    0

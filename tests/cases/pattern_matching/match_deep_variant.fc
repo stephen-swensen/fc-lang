@@ -21,4 +21,5 @@ let main = (args: str[]) ->
     let c1 = canvas { bg = 0, shape = shape.circle(point { x = 3, y = 7 }) }
     let c2 = canvas { bg = 0, shape = shape.line(point { x = 0, y = 20 }) }
     let c3 = canvas { bg = 0, shape = shape.line(point { x = 5, y = 99 }) }
-    extract(c1) + extract(c2) + extract(c3)
+    assert(extract(c1) + extract(c2) + extract(c3) == 35)
+    0

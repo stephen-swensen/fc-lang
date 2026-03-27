@@ -1,10 +1,13 @@
 let main = (args: str[]) ->
-    let pi = 3.14
-    let s = "pi=%6.2f{pi}"
-    let mut r = 0
-    // "pi=  3.14" = 9 chars
-    if s.len == 9 then r = r + 1 else r = r
-    // test scientific notation (no width required)
-    let s2 = "%e{pi}"
-    if s2.len > 0 then r = r + 2 else r = r
-    r
+    let _result =
+        let pi = 3.14
+        let s = "pi=%6.2f{pi}"
+        let mut r = 0
+        // "pi=  3.14" = 9 chars
+        if s.len == 9 then r = r + 1 else r = r
+        // test scientific notation (no width required)
+        let s2 = "%e{pi}"
+        if s2.len > 0 then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

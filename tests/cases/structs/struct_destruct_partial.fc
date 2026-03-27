@@ -5,4 +5,5 @@ struct point =
 let main = (args: str[]) ->
     let p = point { x = 10, y = 32 }
     let { y = val } = p
-    val
+    assert(val == 32)
+    0

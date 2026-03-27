@@ -1,18 +1,21 @@
 let main = (args: str[]) ->
-    let a = some(42i)
-    let b = some(10u)
-    let c = default(isize?)
-    let d = default(usize?)
-    let r1 = match a with
-    | some(v) -> (int32)v
-    | none -> 0
-    let r2 = match b with
-    | some(v) -> (int32)v
-    | none -> 0
-    let r3 = match c with
-    | some(v) -> (int32)v
-    | none -> 1
-    let r4 = match d with
-    | some(v) -> (int32)v
-    | none -> 1
-    r1 + r2 + r3 + r4
+    let _result =
+        let a = some(42i)
+        let b = some(10u)
+        let c = default(isize?)
+        let d = default(usize?)
+        let r1 = match a with
+        | some(v) -> (int32)v
+        | none -> 0
+        let r2 = match b with
+        | some(v) -> (int32)v
+        | none -> 0
+        let r3 = match c with
+        | some(v) -> (int32)v
+        | none -> 1
+        let r4 = match d with
+        | some(v) -> (int32)v
+        | none -> 1
+        r1 + r2 + r3 + r4
+    assert(_result == 54)
+    0

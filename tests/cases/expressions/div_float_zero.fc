@@ -1,5 +1,8 @@
 let main = (args: str[]) ->
-    // float division by zero produces inf, NOT abort (IEEE 754)
-    let a = 1.0 / 0.0
-    // inf > 0.0 is true
-    if a > 0.0 then 1 else 0
+    let _result =
+        // float division by zero produces inf, NOT abort (IEEE 754)
+        let a = 1.0 / 0.0
+        // inf > 0.0 is true
+        if a > 0.0 then 1 else 0
+    assert(_result == 1)
+    0

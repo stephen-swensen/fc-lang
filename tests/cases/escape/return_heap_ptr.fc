@@ -8,4 +8,5 @@ let main = (args: str[]) ->
     let p = make_ptr(42)
     let val = *p
     free(p)
-    val
+    assert(val == 42)
+    0

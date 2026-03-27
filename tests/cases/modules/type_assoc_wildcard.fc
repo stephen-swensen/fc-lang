@@ -12,4 +12,5 @@ import * from geometry
 let main = (args: str[]) ->
     let a = vec2 { x = 3, y = 4 }
     let b = vec2.add(a, vec2.zero)
-    b.x + b.y
+    assert(b.x + b.y == 7)
+    0

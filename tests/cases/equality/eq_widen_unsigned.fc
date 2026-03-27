@@ -1,9 +1,12 @@
 let main = (args: str[]) ->
-    let a = 100u16
-    let b = 100i64
-    let c = 200u32
-    let d = 200i64
-    let mut r = 0
-    if a == b then r = r + 1 else r = r
-    if c == d then r = r + 2 else r = r
-    r
+    let _result =
+        let a = 100u16
+        let b = 100i64
+        let c = 200u32
+        let d = 200i64
+        let mut r = 0
+        if a == b then r = r + 1 else r = r
+        if c == d then r = r + 2 else r = r
+        r
+    assert(_result == 3)
+    0

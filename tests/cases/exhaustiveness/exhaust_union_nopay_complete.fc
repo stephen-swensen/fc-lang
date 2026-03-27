@@ -5,9 +5,12 @@ union direction =
     | west
 
 let main = (args: str[]) ->
-    let d = direction.east
-    match d with
-    | north -> 1
-    | south -> 2
-    | east -> 3
-    | west -> 4
+    let _result =
+        let d = direction.east
+        match d with
+        | north -> 1
+        | south -> 2
+        | east -> 3
+        | west -> 4
+    assert(_result == 3)
+    0

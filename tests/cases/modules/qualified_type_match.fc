@@ -5,6 +5,9 @@ module geometry =
         y: int32
 
 let main = (args: str[]) ->
-    let p = geometry.point { x = 42, y = 58 }
-    match p with
-    | { x = a, y = b } -> a + b
+    let _result =
+        let p = geometry.point { x = 42, y = 58 }
+        match p with
+        | { x = a, y = b } -> a + b
+    assert(_result == 100)
+    0

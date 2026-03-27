@@ -2,4 +2,5 @@ let main = (args: str[]) ->
     let mut x = 10
     let px = &x
     *px = 99
-    x
+    assert(x == 99)
+    0

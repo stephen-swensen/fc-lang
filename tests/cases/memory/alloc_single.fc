@@ -3,4 +3,5 @@ let main = (args: str[]) ->
     *p = 42
     let result = *p
     free(p)
-    result
+    assert(result == 42)
+    0

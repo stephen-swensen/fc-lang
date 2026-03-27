@@ -1,4 +1,5 @@
 let add = (a: 'a, b: 'a) -> a + b
 
 let main = (args: str[]) ->
-    add(30, 12)
+    assert(add(30, 12) == 42)
+    0

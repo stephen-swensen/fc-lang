@@ -12,4 +12,5 @@ let main = (args: str[]) ->
     let a = pt { x = 3, y = 4 }
     let b = coord { x = 5, y = 6 }
     let c = geometry.scale(a, 2)
-    c.x + c.y + b.x + b.y
+    assert(c.x + c.y + b.x + b.y == 25)
+    0

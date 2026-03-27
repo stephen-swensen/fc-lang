@@ -3,4 +3,5 @@ module config =
     let offset = 10
 
 let main = (args: str[]) ->
-    config.max_size + config.offset
+    assert(config.max_size + config.offset == 52)
+    0

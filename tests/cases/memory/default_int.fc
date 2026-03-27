@@ -1,5 +1,8 @@
 let main = (args: str[]) ->
-    let x = default(int32)
-    let y = default(uint8)
-    let z = default(bool)
-    if x == 0 && (int32)y == 0 && z == false then 42 else 1
+    let _result =
+        let x = default(int32)
+        let y = default(uint8)
+        let z = default(bool)
+        if x == 0 && (int32)y == 0 && z == false then 42 else 1
+    assert(_result == 42)
+    0

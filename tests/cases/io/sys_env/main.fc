@@ -1,6 +1,9 @@
 import sys from std::
 
 let main = (args: str[]) ->
-    match sys.env("PATH") with
-    | some(v) -> 1
-    | none -> 0
+    let _result =
+        match sys.env("PATH") with
+        | some(v) -> 1
+        | none -> 0
+    assert(_result == 1)
+    0

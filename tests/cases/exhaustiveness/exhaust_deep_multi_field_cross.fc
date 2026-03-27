@@ -17,4 +17,5 @@ let decode = (p: pair) ->
 
 let main = (args: str[]) ->
     let p = pair { a = bit.one, b = bit.one }
-    decode(p)
+    assert(decode(p) == 3)
+    0

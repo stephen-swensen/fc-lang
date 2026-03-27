@@ -20,4 +20,5 @@ let main = (args: str[]) ->
     let r4 = pick(99, idx)
     // r1=42, r2=10, r3=5, r4=99
     // 42 + 10 + 5 + 99 = 156
-    r1 + r2 + (int32)r3 + r4
+    assert(r1 + r2 + (int32)r3 + r4 == 156)
+    0

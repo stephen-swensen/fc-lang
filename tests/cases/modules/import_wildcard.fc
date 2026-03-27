@@ -5,4 +5,5 @@ module math =
 import * from math
 
 let main = (args: str[]) ->
-    add(mul(3, 4), 5)
+    assert(add(mul(3, 4), 5) == 17)
+    0

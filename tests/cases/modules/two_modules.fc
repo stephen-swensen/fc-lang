@@ -6,4 +6,5 @@ module util =
 
 let main = (args: str[]) ->
     let x = math.add(3, 4)
-    util.double(x)
+    assert(util.double(x) == 14)
+    0

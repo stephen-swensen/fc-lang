@@ -4,4 +4,5 @@ let get_len = (s: const str) ->
 let main = (args: str[]) ->
     let s = "hello"
     let n = get_len(s)
-    (int32)n
+    assert((int32)n == 5)
+    0

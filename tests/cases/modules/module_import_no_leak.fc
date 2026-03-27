@@ -9,4 +9,5 @@ module outer =
 import * from outer
 
 let main = (args: str[]) ->
-    public_val + get_secret()
+    assert(public_val + get_secret() == 52)
+    0

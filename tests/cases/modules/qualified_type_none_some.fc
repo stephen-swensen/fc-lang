@@ -5,8 +5,11 @@ module m =
         y: int32
 
 let main = (args: str[]) ->
-    let a = default(m.point?)
-    let b = some(m.point { x = 1, y = 2 })
-    match b with
-    | some(p) -> p.x + p.y
-    | none -> 99
+    let _result =
+        let a = default(m.point?)
+        let b = some(m.point { x = 1, y = 2 })
+        match b with
+        | some(p) -> p.x + p.y
+        | none -> 99
+    assert(_result == 3)
+    0

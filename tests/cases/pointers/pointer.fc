@@ -3,4 +3,5 @@ let main = (args: str[]) ->
     let px = &x
     *px = 20
     let y = *px + 5
-    y
+    assert(y == 25)
+    0

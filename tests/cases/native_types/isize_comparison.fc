@@ -12,4 +12,5 @@ let main = (args: str[]) ->
     let d = 10u
     let r7 = if c < d then 1 else 0
     let r8 = if c == 5u then 1 else 0
-    r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8
+    assert(r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 == 6)
+    0

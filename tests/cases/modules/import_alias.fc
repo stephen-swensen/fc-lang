@@ -4,4 +4,5 @@ module math =
 import add as plus from math
 
 let main = (args: str[]) ->
-    plus(20, 5)
+    assert(plus(20, 5) == 25)
+    0

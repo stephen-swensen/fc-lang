@@ -37,4 +37,5 @@ let main = (args: str[]) ->
     list = push(list, 5)
     let result = sum_list(list)
     free_list(list)
-    result
+    assert(result == 15)
+    0

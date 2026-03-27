@@ -4,4 +4,5 @@ let main = (args: str[]) ->
     *p = 99
     let val = *p
     free(p)
-    val
+    assert(val == 99)
+    0

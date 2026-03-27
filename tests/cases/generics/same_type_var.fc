@@ -1,4 +1,5 @@
 let choose_first = (a: 'a, b: 'a) -> a
 
 let main = (args: str[]) ->
-    choose_first(42, 10)
+    assert(choose_first(42, 10) == 42)
+    0

@@ -1,2 +1,3 @@
 let main = (args: str[]) ->
-    (int32)args.len
+    assert((int32)args.len == 1)
+    0

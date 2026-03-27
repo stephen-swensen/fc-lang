@@ -11,4 +11,5 @@ let main = (args: str[]) ->
     let d = 0x0Fu
     let r6 = (int32)(c & d)
     let r7 = (int32)(1u << 4u)
-    r1 + r4 + r5 + r6 + r7
+    assert(r1 + r4 + r5 + r6 + r7 == 70)
+    0

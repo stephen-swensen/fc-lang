@@ -1,6 +1,9 @@
 let main = (args: str[]) ->
-    let x = 5
-    match x with
-    | 1 -> 10
-    | 2 -> 20
-    | _ -> 30
+    let _result =
+        let x = 5
+        match x with
+        | 1 -> 10
+        | 2 -> 20
+        | _ -> 30
+    assert(_result == 30)
+    0

@@ -3,4 +3,5 @@ module m =
 
 let main = (args: str[]) ->
     let m = 42
-    m
+    assert(m == 42)
+    0

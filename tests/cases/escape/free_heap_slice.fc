@@ -4,4 +4,5 @@ let main = (args: str[]) ->
     s[0] = 42
     let result = s[0]
     free(s)
-    result
+    assert(result == 42)
+    0

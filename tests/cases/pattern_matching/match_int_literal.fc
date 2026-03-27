@@ -5,4 +5,5 @@ let classify = (n: int32) -> match n with
     | _ -> 99
 
 let main = (args: str[]) ->
-    classify(0) + classify(2) + classify(5)
+    assert(classify(0) + classify(2) + classify(5) == 139)
+    0

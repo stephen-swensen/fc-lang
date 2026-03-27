@@ -17,4 +17,5 @@ let score = (s: styled) ->
 let main = (args: str[]) ->
     let s1 = styled { shape = shape.circle(5), bold = true }
     let s2 = styled { shape = shape.square(3), bold = false }
-    score(s1) + score(s2)
+    assert(score(s1) + score(s2) == 105)
+    0

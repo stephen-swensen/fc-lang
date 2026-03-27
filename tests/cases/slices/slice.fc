@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     buf.ptr[1] = 2
     buf.ptr[2] = 3
     buf.ptr[3] = 4
-    sum_slice(buf)
+    assert(sum_slice(buf) == 10)
+    0

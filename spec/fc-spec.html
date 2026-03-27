@@ -604,7 +604,7 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `default`
+`alloc`, `free`, `sizeof`, `default`, `assert`
 
 The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
 
@@ -2297,7 +2297,7 @@ float64.bits    // 64
 
 FC's memory model is manual — no garbage collector, no borrow checker. Memory lives either on the stack or the heap, and the programmer is responsible for managing heap allocations explicitly.
 
-Four built-in compile-time operators handle memory-related operations that require compiler participation to resolve:
+Five built-in compile-time operators handle memory and runtime checking operations that require compiler participation to resolve:
 
 | Operator | Description |
 |----------|-------------|
@@ -2308,10 +2308,12 @@ Four built-in compile-time operators handle memory-related operations that requi
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
+| `assert(cond)` | Check that `cond` (a `bool` expression) is true at runtime. If false, prints a diagnostic message to stderr and calls `abort()`. |
+| `assert(cond, msg)` | Same as `assert(cond)`, but additionally includes the string `msg` (type `str`) in the diagnostic output. |
 
 These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
 
-`alloc`, `free`, `sizeof`, and `default` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
+`alloc`, `free`, `sizeof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
 
 The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
 
@@ -2350,6 +2352,44 @@ Default values by type category:
 > The first-variant convention means the programmer controls what `default(T)` produces for a union by ordering variants intentionally. If no variant is a sensible default, the programmer should avoid relying on `default` for that union and initialize explicitly instead.
 
 **Raw pointer and function-typed fields** — both `default(T)` and `alloc(T)` are zero-initialization under the hood. For types containing raw `T*` fields or function-typed fields, zero-init produces physically null bytes. The programmer is responsible for writing valid values to those fields before dereferencing or calling them, regardless of whether the value lives on the stack or the heap.
+
+---
+
+## Assert
+
+**`assert(condition)`** — evaluates `condition` (which must be a `bool` expression) at runtime. If the condition is true, execution continues normally. If the condition is false, `assert` prints a diagnostic message to stderr and terminates the program by calling `abort()`.
+
+**`assert(condition, message)`** — same as the single-argument form, but additionally includes `message` (which must be a `str` expression) in the diagnostic output.
+
+```fc
+assert(x > 0)
+assert(x > 0, "x must be positive")
+assert(count == items.len, "count mismatch")
+```
+
+The diagnostic output follows FC's error message format:
+
+```
+filename:line: assertion failed: x > 0
+filename:line: assertion failed: x > 0: x must be positive
+```
+
+The expression text is captured at compile time from the source code. The filename and line number refer to the location of the `assert` call in the FC source file.
+
+`assert` is a void-typed expression — it cannot be used where a value is expected. It is a built-in operator, not a function, and does not require any imports.
+
+**Type constraints:**
+- The condition must be `bool`. Passing a non-`bool` expression is a compile error.
+- The message (if present) must be `str`. Passing a non-`str` expression is a compile error.
+
+> **Transpilation**
+> ```c
+> // assert(x > 0)
+> ({ if (!(x > 0)) { fprintf(stderr, "file.fc:10: assertion failed: x > 0\n"); abort(); } })
+>
+> // assert(x > 0, "msg")
+> ({ if (!(x > 0)) { fc_str _am0 = msg; fprintf(stderr, "file.fc:10: assertion failed: x > 0: %.*s\n", (int)_am0.len, (const char*)_am0.ptr); abort(); } })
+> ```
 
 ---
 
@@ -3217,7 +3257,7 @@ match ts with                                        // pattern matching
 
 ### Reserved identifiers and `extern as`
 
-FC reserves `alloc`, `free`, `sizeof`, and `default` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.
+FC reserves `alloc`, `free`, `sizeof`, `default`, and `assert` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.
 
 The `extern as` form resolves this by binding the C function under a different name in the FC module:
 
@@ -4263,7 +4303,7 @@ hljs.registerLanguage('fc', function(hljs) {
       },
       {
         className: 'keyword',
-        begin: '\\b(let|mut|struct|union|module|namespace|import|from|as|extern|private|match|with|if|then|else|for|in|loop|break|continue|return|default|some|alloc|free|sizeof)\\b'
+        begin: '\\b(let|mut|struct|union|module|namespace|import|from|as|extern|private|match|with|if|then|else|for|in|loop|break|continue|return|default|some|alloc|free|sizeof|assert)\\b'
       },
       { className: 'literal', begin: '\\b(true|false|none|void)\\b' }
     ]

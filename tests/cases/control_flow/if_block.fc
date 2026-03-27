@@ -5,4 +5,5 @@ let classify = (x: int32) ->
     else 0
 
 let main = (args: str[]) ->
-    classify(50)
+    assert(classify(50) == 2)
+    0

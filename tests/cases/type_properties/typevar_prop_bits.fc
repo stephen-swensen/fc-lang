@@ -2,4 +2,5 @@
 let get_bits = <'a>() -> 'a.bits
 
 let main = (args: str[]) ->
-    get_bits<int64>()
+    assert(get_bits<int64>() == 64)
+    0

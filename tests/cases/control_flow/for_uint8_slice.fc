@@ -1,12 +1,15 @@
 let main = (args: str[]) ->
-    let mut buf = uint8[4] { }
-    buf.ptr[0] = 10u8
-    buf.ptr[1] = 20u8
-    buf.ptr[2] = 30u8
-    buf.ptr[3] = 40u8
+    let _result =
+        let mut buf = uint8[4] { }
+        buf.ptr[0] = 10u8
+        buf.ptr[1] = 20u8
+        buf.ptr[2] = 30u8
+        buf.ptr[3] = 40u8
 
-    let mut total = 0i32
-    for x in buf
-        total = total + (int32)x
+        let mut total = 0i32
+        for x in buf
+            total = total + (int32)x
 
-    total
+        total
+    assert(_result == 100)
+    0

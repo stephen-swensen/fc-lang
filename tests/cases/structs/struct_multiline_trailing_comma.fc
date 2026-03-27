@@ -4,8 +4,11 @@ struct point =
     y: int32
 
 let main = (args: str[]) ->
-    let p = point {
-        x = 7,
-        y = 8,
-    }
-    p.x + p.y
+    let _result =
+        let p = point {
+            x = 7,
+            y = 8,
+        }
+        p.x + p.y
+    assert(_result == 15)
+    0

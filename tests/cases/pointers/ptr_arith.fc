@@ -9,4 +9,5 @@ let main = (args: str[]) ->
     let b = *(p + 1)
     let c = *(p + 2)
     let d = *(p + 3)
-    a + b + c + d
+    assert(a + b + c + d == 100)
+    0

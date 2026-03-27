@@ -54,4 +54,5 @@ let main = (args: str[]) ->
     node.drop(doubled)
 
     // 3 + 2 + 1 + 6 = 12
-    v3 + v2 + v1 + dv
+    assert(v3 + v2 + v1 + dv == 12)
+    0

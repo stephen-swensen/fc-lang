@@ -11,4 +11,5 @@ let main = (args: str[]) ->
     let a = wrapper { val = some(some(10)) }
     let b = wrapper { val = some(default(int32?)) }
     let c = wrapper { val = default(int32??) }
-    check(a) + check(b) + check(c)
+    assert(check(a) + check(b) + check(c) == 9)
+    0

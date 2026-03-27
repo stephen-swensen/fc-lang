@@ -19,4 +19,5 @@ let main = (args: str[]) ->
     let l1 = located.at(some(p))
     let l2 = located.at(default(point?))
     let l3 = located.nowhere
-    classify(l1) + classify(l2) + classify(l3)
+    assert(classify(l1) + classify(l2) + classify(l3) == 110)
+    0

@@ -7,8 +7,11 @@ struct circle =
     radius: int32
 
 let main = (args: str[]) ->
-    let c = circle { center = some(point { x = 3, y = 4 }), radius = 5 }
-    match c with
-    | { center = some({ x = 0, y = 0 }), radius = r } -> r
-    | { center = some({ x = x, y = y }), radius = r } -> x + y + r
-    | { center = none } -> 0
+    let _result =
+        let c = circle { center = some(point { x = 3, y = 4 }), radius = 5 }
+        match c with
+        | { center = some({ x = 0, y = 0 }), radius = r } -> r
+        | { center = some({ x = x, y = y }), radius = r } -> x + y + r
+        | { center = none } -> 0
+    assert(_result == 12)
+    0

@@ -3,4 +3,5 @@ let twice = (x: int32) -> x * 2
 let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
 let main = (args: str[]) ->
-    apply(twice, 21)
+    assert(apply(twice, 21) == 42)
+    0

@@ -6,11 +6,14 @@ module lib =
 import result as res from lib
 
 let main = (args: str[]) ->
-    let r1 = lib.result<int32>.ok(42)
-    let r2 = res<int32>.ok(10)
-    let r3 = res<int32>.err(0)
-    match r1 with
-    | ok(v) -> match r2 with
-        | ok(w) -> v + w
-        | err(_) -> 1
-    | err(_) -> 2
+    let _result =
+        let r1 = lib.result<int32>.ok(42)
+        let r2 = res<int32>.ok(10)
+        let r3 = res<int32>.err(0)
+        match r1 with
+        | ok(v) -> match r2 with
+            | ok(w) -> v + w
+            | err(_) -> 1
+        | err(_) -> 2
+    assert(_result == 52)
+    0

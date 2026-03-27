@@ -3,8 +3,11 @@ struct point =
     y: int32
 
 let main = (args: str[]) ->
-    let p = point { x = 1, y = 2 }
-    let s = "%T{p}"
-    let mut r = 0
-    if s == "point" then r = r + 1 else r = r
-    r
+    let _result =
+        let p = point { x = 1, y = 2 }
+        let s = "%T{p}"
+        let mut r = 0
+        if s == "point" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

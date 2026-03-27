@@ -5,4 +5,5 @@ let classify = (s: const str) ->
     | _ -> 0
 
 let main = (args: str[]) ->
-    classify("yes") + classify("no") + classify("maybe")
+    assert(classify("yes") + classify("no") + classify("maybe") == 3)
+    0

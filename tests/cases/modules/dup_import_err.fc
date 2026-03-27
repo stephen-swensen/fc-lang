@@ -7,4 +7,7 @@ module mod_b =
 import x from mod_a
 import x from mod_b
 
-let main = (args: str[]) -> x
+let main = (args: str[]) ->
+    let _result = x
+    assert(_result == 20)
+    0

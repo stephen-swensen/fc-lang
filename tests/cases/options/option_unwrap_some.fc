@@ -9,4 +9,5 @@ let main = (args: str[]) ->
     let val_a = a!
     let val_b = b!
     let val_p = p!
-    val_a + val_b + val_p.x + val_p.y
+    assert(val_a + val_b + val_p.x + val_p.y == 37)
+    0

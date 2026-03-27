@@ -4,4 +4,5 @@ let sub = (a: int32, b: int32) -> a - b
 
 let main = (args: str[]) ->
     let x = add(30, 20)
-    sub(x, 8)
+    assert(sub(x, 8) == 42)
+    0

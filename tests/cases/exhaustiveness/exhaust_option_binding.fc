@@ -4,4 +4,5 @@ let check = (x: int32?) ->
     | other -> 0
 
 let main = (args: str[]) ->
-    check(some(42))
+    assert(check(some(42)) == 42)
+    0

@@ -7,4 +7,5 @@ module calculator =
     let compute = (a: int32, b: int32) -> add(a, mul(a, b))
 
 let main = (args: str[]) ->
-    calculator.compute(3, 4)
+    assert(calculator.compute(3, 4) == 15)
+    0

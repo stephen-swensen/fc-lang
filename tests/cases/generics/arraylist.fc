@@ -82,4 +82,5 @@ let main = (args: str[]) ->
     arraylist.drop(doubled)
 
     // 254 - 30 = 224
-    sum - dv
+    assert(sum - dv == 224)
+    0

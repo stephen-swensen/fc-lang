@@ -5,14 +5,17 @@ module mem from "string.h" =
     extern strlen: (const cstr) -> usize
 
 let main = (args: str[]) ->
-    let mut buf = uint8[128] { }
-    // exercise many variadic args of different types
-    let i8_val = 1i8
-    let i16_val = 2i16
-    let u8_val = 3u8
-    // sub-int types get promoted to int via (int) cast
-    c.snprintf(buf.ptr, 128u, c"%d %d %d %d %s",
-        42, i8_val, i16_val, u8_val, c"end")
-    // "42 1 2 3 end" = 12 chars
-    let len = mem.strlen(buf.ptr)
-    (int32)len
+    let _result =
+        let mut buf = uint8[128] { }
+        // exercise many variadic args of different types
+        let i8_val = 1i8
+        let i16_val = 2i16
+        let u8_val = 3u8
+        // sub-int types get promoted to int via (int) cast
+        c.snprintf(buf.ptr, 128u, c"%d %d %d %d %s",
+            42, i8_val, i16_val, u8_val, c"end")
+        // "42 1 2 3 end" = 12 chars
+        let len = mem.strlen(buf.ptr)
+        (int32)len
+    assert(_result == 12)
+    0

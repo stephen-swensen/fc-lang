@@ -4,8 +4,11 @@ union color =
     | blue
 
 let main = (args: str[]) ->
-    let c = default(color)
-    match c with
-    | red -> 10
-    | green -> 20
-    | blue -> 30
+    let _result =
+        let c = default(color)
+        match c with
+        | red -> 10
+        | green -> 20
+        | blue -> 30
+    assert(_result == 10)
+    0

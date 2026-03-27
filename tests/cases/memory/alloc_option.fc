@@ -1,9 +1,12 @@
 let main = (args: str[]) ->
-    let p = alloc(int32)
-    match p with
-    | some(ptr) ->
-        *ptr = 99
-        let r = *ptr
-        free(ptr)
-        r
-    | none -> 0
+    let _result =
+        let p = alloc(int32)
+        match p with
+        | some(ptr) ->
+            *ptr = 99
+            let r = *ptr
+            free(ptr)
+            r
+        | none -> 0
+    assert(_result == 99)
+    0

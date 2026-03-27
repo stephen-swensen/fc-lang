@@ -1,2 +1,3 @@
 let main = (args: str[]) ->
-    config.base + config.offset + 11
+    assert(config.base + config.offset + 11 == 42)
+    0

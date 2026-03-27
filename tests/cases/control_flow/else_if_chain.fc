@@ -11,4 +11,5 @@ let main = (args: str[]) ->
     let c = classify(7)
     let d = classify(42)
     let e = classify(200)
-    a + b + c + d + e
+    assert(a + b + c + d + e == 15)
+    0

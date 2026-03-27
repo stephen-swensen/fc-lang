@@ -15,4 +15,5 @@ let check = (d: dir?) ->
     | none -> 0
 
 let main = (args: str[]) ->
-    check(some(dir.east))
+    assert(check(some(dir.east)) == 3)
+    0

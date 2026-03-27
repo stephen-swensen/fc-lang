@@ -5,4 +5,5 @@ module math =
 import add from math
 
 let main = (args: str[]) ->
-    add(10, 3)
+    assert(add(10, 3) == 13)
+    0

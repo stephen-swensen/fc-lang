@@ -7,4 +7,5 @@ module broken =
     let use_it = (x: int32) -> double(x)
 
 let main = (args: str[]) ->
-    broken.use_it(5)
+    assert(broken.use_it(5) == 10)
+    0

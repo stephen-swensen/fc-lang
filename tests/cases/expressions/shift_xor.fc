@@ -3,4 +3,5 @@ let main = (args: str[]) ->
     let b = 255 >> 4
     let c = a ^ b
     let d = c << 1
-    d
+    assert(d == 62)
+    0

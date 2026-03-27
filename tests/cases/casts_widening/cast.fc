@@ -5,4 +5,5 @@ let main = (args: str[]) ->
     let d = (int32)c
     let e = (uint32)d
     let f = (int32)e
-    f
+    assert(f == 100)
+    0

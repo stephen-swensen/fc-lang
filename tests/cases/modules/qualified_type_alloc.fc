@@ -5,12 +5,15 @@ module geometry =
         y: int32
 
 let main = (args: str[]) ->
-    let p = alloc(geometry.point)
-    match p with
-    | some(ptr) ->
-        ptr->x = 10
-        ptr->y = 20
-        let sum = ptr->x + ptr->y
-        free(ptr)
-        sum
-    | none -> 99
+    let _result =
+        let p = alloc(geometry.point)
+        match p with
+        | some(ptr) ->
+            ptr->x = 10
+            ptr->y = 20
+            let sum = ptr->x + ptr->y
+            free(ptr)
+            sum
+        | none -> 99
+    assert(_result == 30)
+    0

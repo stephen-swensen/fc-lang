@@ -1,5 +1,8 @@
 let main = (args: str[]) ->
-    let x = 42
-    match x with
-    | 42 -> 1
-    | n -> 0
+    let _result =
+        let x = 42
+        match x with
+        | 42 -> 1
+        | n -> 0
+    assert(_result == 1)
+    0

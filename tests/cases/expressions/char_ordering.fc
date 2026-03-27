@@ -1,10 +1,13 @@
 let main = (args: str[]) ->
-    let a = 'a'
-    let b = 'b'
-    let z = 'z'
-    let mut r = 0
-    if a < z then r = r + 1
-    if z > a then r = r + 1
-    if a <= b then r = r + 1
-    if b >= a then r = r + 1
-    r
+    let _result =
+        let a = 'a'
+        let b = 'b'
+        let z = 'z'
+        let mut r = 0
+        if a < z then r = r + 1
+        if z > a then r = r + 1
+        if a <= b then r = r + 1
+        if b >= a then r = r + 1
+        r
+    assert(_result == 4)
+    0

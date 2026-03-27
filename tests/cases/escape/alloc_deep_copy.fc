@@ -7,4 +7,5 @@ let main = (args: str[]) ->
     let s = make_slice()
     let result = s[1]
     free(s)
-    result
+    assert(result == 20)
+    0

@@ -2,4 +2,5 @@ let main = (args: str[]) ->
     let mut x = 42
     let mut p = &x
     let pp = &p
-    **pp
+    assert(**pp == 42)
+    0

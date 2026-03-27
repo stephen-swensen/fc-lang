@@ -1,4 +1,5 @@
 let main = (args: str[]) ->
     let mut x = 0i64
     x = 42
-    (int32)x
+    assert((int32)x == 42)
+    0

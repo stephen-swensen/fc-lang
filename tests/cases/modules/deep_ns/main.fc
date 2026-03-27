@@ -1,3 +1,6 @@
 import shader from acme::graphics::rendering::
 
-let main = (args: str[]) -> shader.compile(5)
+let main = (args: str[]) ->
+    let _result = shader.compile(5)
+    assert(_result == 6)
+    0

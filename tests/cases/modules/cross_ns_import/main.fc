@@ -1,4 +1,5 @@
 import add from acme::math
 
 let main = (args: str[]) ->
-    add(20, 5)
+    assert(add(20, 5) == 25)
+    0

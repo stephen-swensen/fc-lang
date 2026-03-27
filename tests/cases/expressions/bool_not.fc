@@ -1,5 +1,8 @@
 let main = (args: str[]) ->
-    let mut r = 0
-    if !false then r = r + 1
-    if !true then r = r + 10
-    r
+    let _result =
+        let mut r = 0
+        if !false then r = r + 1
+        if !true then r = r + 10
+        r
+    assert(_result == 1)
+    0

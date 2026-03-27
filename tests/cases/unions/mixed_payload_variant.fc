@@ -4,14 +4,17 @@ union shape =
     | point
 
 let main = (args: str[]) ->
-    let s = shape.circle(5)
-    let r1 = match s with
-    | circle(r) -> r
-    | square(w) -> w
-    | point -> 0
-    let s2 = default(shape)
-    let r2 = match s2 with
-    | circle(r) -> r + 100
-    | square(_) -> 200
-    | point -> 99
-    r1 + r2
+    let _result =
+        let s = shape.circle(5)
+        let r1 = match s with
+        | circle(r) -> r
+        | square(w) -> w
+        | point -> 0
+        let s2 = default(shape)
+        let r2 = match s2 with
+        | circle(r) -> r + 100
+        | square(_) -> 200
+        | point -> 99
+        r1 + r2
+    assert(_result == 105)
+    0

@@ -10,4 +10,5 @@ let main = (args: str[]) ->
     let r2 = (int32)b[0] + (int32)b[1]
     free(a)
     free(b)
-    r1 + r2
+    assert(r1 + r2 == 72)
+    0

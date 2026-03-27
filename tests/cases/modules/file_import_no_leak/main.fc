@@ -3,4 +3,5 @@ import lib from test::
 
 let main = (args: str[]) ->
     let p = lib.make_pair(3, 4)
-    p.e1 + p.e2
+    assert(p.e1 + p.e2 == 7)
+    0

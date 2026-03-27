@@ -3,4 +3,5 @@ let main = (args: str[]) ->
 #if platform_b
     r = 99
 #end
-    r
+    assert(r == 7)
+    0

@@ -47,6 +47,7 @@ typedef enum {
     TOK_SIZEOF,
     TOK_DEFAULT,
     TOK_CONST,
+    TOK_ASSERT,
     /* String interpolation */
     TOK_INTERP_START,       /* leading text of interpolated string */
     TOK_CINTERP_START,      /* leading text of interpolated cstring */

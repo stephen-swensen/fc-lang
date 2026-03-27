@@ -3,24 +3,27 @@ union shape =
     | square(int32)
 
 let main = (args: str[]) ->
-    let s = alloc(shape.circle(42))
-    let mut r = 0
-    match s with
-    | some(p) ->
-        r = r + 1
-        match *p with
-        | circle(v) ->
-            if v == 42 then r = r + 2 else r = r
-        | square(_) -> r = r
-        free(p)
-    | none -> r = r
-    let s2 = alloc(shape.square(10))
-    match s2 with
-    | some(p2) ->
-        match *p2 with
-        | circle(_) -> r = r
-        | square(v) ->
-            if v == 10 then r = r + 4 else r = r
-        free(p2)
-    | none -> r = r
-    r
+    let _result =
+        let s = alloc(shape.circle(42))
+        let mut r = 0
+        match s with
+        | some(p) ->
+            r = r + 1
+            match *p with
+            | circle(v) ->
+                if v == 42 then r = r + 2 else r = r
+            | square(_) -> r = r
+            free(p)
+        | none -> r = r
+        let s2 = alloc(shape.square(10))
+        match s2 with
+        | some(p2) ->
+            match *p2 with
+            | circle(_) -> r = r
+            | square(v) ->
+                if v == 10 then r = r + 4 else r = r
+            free(p2)
+        | none -> r = r
+        r
+    assert(_result == 7)
+    0

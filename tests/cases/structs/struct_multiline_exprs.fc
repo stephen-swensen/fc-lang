@@ -6,8 +6,11 @@ struct point =
 let double = (n: int32) -> n * 2
 
 let main = (args: str[]) ->
-    let p = point {
-        x = 1 + 2 + 3,
-        y = double(10)
-    }
-    p.x + p.y
+    let _result =
+        let p = point {
+            x = 1 + 2 + 3,
+            y = double(10)
+        }
+        p.x + p.y
+    assert(_result == 26)
+    0

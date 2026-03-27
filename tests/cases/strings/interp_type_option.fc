@@ -3,8 +3,11 @@ let maybe = (x: int32) ->
     else default(int32?)
 
 let main = (args: str[]) ->
-    let x = maybe(10)
-    let s = "%T{x}"
-    let mut r = 0
-    if s == "int32?" then r = r + 1 else r = r
-    r
+    let _result =
+        let x = maybe(10)
+        let s = "%T{x}"
+        let mut r = 0
+        if s == "int32?" then r = r + 1 else r = r
+        r
+    assert(_result == 1)
+    0

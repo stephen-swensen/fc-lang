@@ -11,4 +11,5 @@ let check = (e: entry) ->
 
 let main = (args: str[]) ->
     let r = check(entry.found(some(42)))
-    r + 1
+    assert(r + 1 == 43)
+    0

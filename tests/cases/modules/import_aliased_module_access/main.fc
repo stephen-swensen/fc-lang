@@ -1,4 +1,5 @@
 import math as m from acme::
 
 let main = (args: str[]) ->
-    m.add(m.mul(5, 8), 2)
+    assert(m.add(m.mul(5, 8), 2) == 42)
+    0

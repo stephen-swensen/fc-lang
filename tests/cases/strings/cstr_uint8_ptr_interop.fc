@@ -7,4 +7,5 @@ let parse_num = (p: uint8*) ->
 let main = (args: str[]) ->
     let s = "99"
     let cs = (cstr)s
-    parse_num(cs)
+    assert(parse_num(cs) == 99)
+    0

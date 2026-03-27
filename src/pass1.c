@@ -971,6 +971,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                         if (ex->alloc_expr.init_expr) { PUSH(ex->alloc_expr.init_expr); }
                         break;
                     case EXPR_FREE: PUSH(ex->free_expr.operand); break;
+                    case EXPR_ASSERT:
+                        PUSH(ex->assert_expr.condition);
+                        if (ex->assert_expr.message) { PUSH(ex->assert_expr.message); }
+                        break;
                     default: break;
                     }
                     #undef PUSH

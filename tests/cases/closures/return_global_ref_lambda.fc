@@ -7,4 +7,5 @@ let apply = (f: (int32) -> int32, x: int32) -> f(x)
 
 let main = (args: str[]) ->
     let f = make_scaler(0)
-    apply(f, 21)
+    assert(apply(f, 21) == 42)
+    0

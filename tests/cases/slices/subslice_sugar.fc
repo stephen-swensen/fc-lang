@@ -11,4 +11,5 @@ let main = (args: str[]) ->
     let tail_sum = tail[0] + tail[1] + tail[2]
     let head_len = (int32)head.len
     let tail_len = (int32)tail.len
-    head_sum + tail_sum + head_len + tail_len
+    assert(head_sum + tail_sum + head_len + tail_len == 42)
+    0

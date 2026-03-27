@@ -14,4 +14,5 @@ let main = (args: str[]) ->
     let r5 = if umax > 0u then 1 else 0
     // usize.bits same as isize.bits
     let r6 = if usize.bits == bits then 1 else 0
-    r1 + r2 + r3 + r4 + r5 + r6
+    assert(r1 + r2 + r3 + r4 + r5 + r6 == 6)
+    0

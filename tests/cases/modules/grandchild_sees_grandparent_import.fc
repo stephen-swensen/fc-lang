@@ -9,4 +9,5 @@ module top =
             let compute = (x: int32) -> triple(x)
 
 let main = (args: str[]) ->
-    top.mid.bottom.compute(7)
+    assert(top.mid.bottom.compute(7) == 21)
+    0

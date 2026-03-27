@@ -1,6 +1,9 @@
 // Multiline parenthesized expression
 let main = (args: str[]) ->
-    let r = (
-        1 + 2 + 3
-    )
-    r
+    let _result =
+        let r = (
+            1 + 2 + 3
+        )
+        r
+    assert(_result == 6)
+    0

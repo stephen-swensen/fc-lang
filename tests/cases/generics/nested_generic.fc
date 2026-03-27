@@ -8,4 +8,5 @@ struct pair =
 let main = (args: str[]) ->
     let inner = box { value = 42 }
     let p = pair { first = inner, second = true }
-    p.first.value
+    assert(p.first.value == 42)
+    0

@@ -7,4 +7,5 @@ let classify = (c: char) ->
     | _ -> 0
 
 let main = (args: str[]) ->
-    classify('A') + classify('B') + classify('\n') + classify('\0') + classify('Z')
+    assert(classify('A') + classify('B') + classify('\n') + classify('\0') + classify('Z') == 10)
+    0

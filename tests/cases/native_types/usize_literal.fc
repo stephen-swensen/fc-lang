@@ -2,7 +2,12 @@ let main = (args: str[]) ->
     let a = 42u
     let b = 10u
     let sum = a + b
+    assert((int32)(sum) == 52)
     let diff = a - b
+    assert((int32)(diff) == 32)
     let prod = a * b
+    assert((int32)(prod) == 420)
     let zero = 0u
-    (int32)(sum + diff + prod + zero)
+    assert((int32)(zero) == 0)
+    assert((int32)(sum + diff + prod + zero) == 504)
+    0

@@ -9,4 +9,5 @@ module top =
             let compute = () -> base * multiplier
 
 let main = (args: str[]) ->
-    top.mid.bottom.compute()
+    assert(top.mid.bottom.compute() == 30)
+    0

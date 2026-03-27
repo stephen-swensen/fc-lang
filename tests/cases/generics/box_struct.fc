@@ -3,4 +3,5 @@ struct box =
 
 let main = (args: str[]) ->
     let b = box { value = 42 }
-    b.value
+    assert(b.value == 42)
+    0

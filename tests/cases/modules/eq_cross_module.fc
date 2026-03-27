@@ -4,10 +4,13 @@ module m =
         y: int32
 
 let main = (args: str[]) ->
-    let a = m.point { x = 3, y = 4 }
-    let b = m.point { x = 3, y = 4 }
-    let c = m.point { x = 1, y = 2 }
-    if a == b then
-        if a != c then 42
-        else 1
-    else 2
+    let _result =
+        let a = m.point { x = 3, y = 4 }
+        let b = m.point { x = 3, y = 4 }
+        let c = m.point { x = 1, y = 2 }
+        if a == b then
+            if a != c then 42
+            else 1
+        else 2
+    assert(_result == 42)
+    0

@@ -1,7 +1,10 @@
 let identity = (x: 'a) -> x
 
 let main = (args: str[]) ->
-    let a = identity(42)
-    let b = identity(true)
-    let c = identity(10)
-    if b then a + c else 0
+    let _result =
+        let a = identity(42)
+        let b = identity(true)
+        let c = identity(10)
+        if b then a + c else 0
+    assert(_result == 52)
+    0

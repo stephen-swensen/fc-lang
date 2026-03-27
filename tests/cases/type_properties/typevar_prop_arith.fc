@@ -3,4 +3,5 @@ let range_size = <'a>() -> 'a.max - 'a.min
 
 let main = (args: str[]) ->
     let r = range_size<uint8>()
-    (r + 0)
+    assert((r + 0) == 255)
+    0

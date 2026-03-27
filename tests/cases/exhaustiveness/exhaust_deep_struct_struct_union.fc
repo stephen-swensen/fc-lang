@@ -21,5 +21,11 @@ let classify = (p: packet) ->
 
 let main = (args: str[]) ->
     let p1 = packet { hdr = header { code = status.ok, flag = true }, size = 100 }
-    let p2 = packet { hdr = header { code = status.err(5), flag = false }, size = 200 }
-    classify(p1) + classify(p2)
+    let p2 = packet { hdr = header { code = status.ok, flag = false }, size = 200 }
+    let p3 = packet { hdr = header { code = status.err(5), flag = true }, size = 300 }
+    let p4 = packet { hdr = header { code = status.err(5), flag = false }, size = 400 }
+    assert(classify(p1) == 1)
+    assert(classify(p2) == 2)
+    assert(classify(p3) == 5)
+    assert(classify(p4) + 5 == 0)
+    0

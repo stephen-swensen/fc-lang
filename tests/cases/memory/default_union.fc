@@ -3,7 +3,10 @@ union shape =
     | rect(int32)
 
 let main = (args: str[]) ->
-    let s = default(shape)
-    match s with
-    | circle(r) -> r + 1
-    | rect(w) -> w + 2
+    let _result =
+        let s = default(shape)
+        match s with
+        | circle(r) -> r + 1
+        | rect(w) -> w + 2
+    assert(_result == 1)
+    0

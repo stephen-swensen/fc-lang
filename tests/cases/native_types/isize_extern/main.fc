@@ -18,4 +18,5 @@ let main = (args: str[]) ->
     // cast usize to int32 for return
     let r3 = (int32)len
 
-    r1 + r2 + r3
+    assert(r1 + r2 + r3 == 7)
+    0

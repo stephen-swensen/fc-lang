@@ -1,4 +1,7 @@
 let main = (args: str[]) ->
-    let a = 2147483647
-    let result = a * 2
-    if result == -2 then 1 else 0
+    let _result =
+        let a = 2147483647
+        let result = a * 2
+        if result == -2 then 1 else 0
+    assert(_result == 1)
+    0

@@ -7,6 +7,9 @@ let find = (x: int32) ->
     else default(m.item?)
 
 let main = (args: str[]) ->
-    match find(42) with
-    | some(it) -> it.value
-    | none -> 0
+    let _result =
+        match find(42) with
+        | some(it) -> it.value
+        | none -> 0
+    assert(_result == 42)
+    0

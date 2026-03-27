@@ -3,10 +3,13 @@ union shape =
     | square(int32)
 
 let main = (args: str[]) ->
-    let s = alloc(shape)!
-    *s = shape.circle(7)
-    let r = match *s with
-        | circle(v) -> v
-        | square(v) -> v
-    free(s)
-    r
+    let _result =
+        let s = alloc(shape)!
+        *s = shape.circle(7)
+        let r = match *s with
+            | circle(v) -> v
+            | square(v) -> v
+        free(s)
+        r
+    assert(_result == 7)
+    0

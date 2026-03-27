@@ -5,4 +5,5 @@ let is_max = (x: 'a) ->
 let main = (args: str[]) ->
     let r1 = is_max(127i8)
     let r2 = is_max(100i8)
-    r1 * 10 + r2
+    assert(r1 * 10 + r2 == 10)
+    0

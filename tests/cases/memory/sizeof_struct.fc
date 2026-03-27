@@ -3,5 +3,8 @@ struct pair =
     b: int32
 
 let main = (args: str[]) ->
-    let s = sizeof(pair)
-    if s >= 8i64 then 1 else 0
+    let _result =
+        let s = sizeof(pair)
+        if s >= 8i64 then 1 else 0
+    assert(_result == 1)
+    0

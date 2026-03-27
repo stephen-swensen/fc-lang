@@ -17,4 +17,5 @@ let main = (args: str[]) ->
     let a1 = shapes.area(c)
     let a2 = shapes.area(s)
     let a3 = shapes.area(e)
-    a1 + a2 + a3
+    assert(a1 + a2 + a3 == 91)
+    0

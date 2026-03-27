@@ -8,4 +8,5 @@ let main = (args: str[]) ->
     p->y = 20
     let result = p->x + p->y
     free(p)
-    result
+    assert(result == 30)
+    0

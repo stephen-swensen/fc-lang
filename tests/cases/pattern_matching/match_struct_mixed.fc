@@ -20,4 +20,5 @@ let main = (args: str[]) ->
     let r3 = record { id = 3, status = status.inactive, priority = some(7) }
     let r4 = record { id = 4, status = status.inactive, priority = default(int32?) }
     let sum = classify(r1) + classify(r2) + classify(r3) + classify(r4)
-    sum
+    assert(sum == 62)
+    0

@@ -9,8 +9,11 @@ struct drawing =
     shape: shape
 
 let main = (args: str[]) ->
-    let d = drawing { x = 5, shape = shape.circle(10) }
-    match d with
-    | { shape = circle(r) } -> r
-    | { shape = square(s) } -> s
-    | { shape = dot } -> 0
+    let _result =
+        let d = drawing { x = 5, shape = shape.circle(10) }
+        match d with
+        | { shape = circle(r) } -> r
+        | { shape = square(s) } -> s
+        | { shape = dot } -> 0
+    assert(_result == 10)
+    0

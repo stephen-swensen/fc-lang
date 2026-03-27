@@ -1,19 +1,22 @@
 let main = (args: str[]) ->
-    let a = 'A'
-    let nl = '\n'
-    let hex = '\x42'
-    let zero = '\0'
-    let tab = '\t'
-    let esc_slash = '\\'
-    let esc_quote = '\''
-    let cr = '\r'
-    let mut r = 0
-    if a == 65 then r = r + 1
-    if nl == 10 then r = r + 1
-    if hex == 66 then r = r + 1
-    if zero == 0 then r = r + 1
-    if tab == 9 then r = r + 1
-    if esc_slash == 92 then r = r + 1
-    if esc_quote == 39 then r = r + 1
-    if cr == 13 then r = r + 1
-    r
+    let _result =
+        let a = 'A'
+        let nl = '\n'
+        let hex = '\x42'
+        let zero = '\0'
+        let tab = '\t'
+        let esc_slash = '\\'
+        let esc_quote = '\''
+        let cr = '\r'
+        let mut r = 0
+        if a == 65 then r = r + 1
+        if nl == 10 then r = r + 1
+        if hex == 66 then r = r + 1
+        if zero == 0 then r = r + 1
+        if tab == 9 then r = r + 1
+        if esc_slash == 92 then r = r + 1
+        if esc_quote == 39 then r = r + 1
+        if cr == 13 then r = r + 1
+        r
+    assert(_result == 8)
+    0

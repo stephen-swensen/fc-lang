@@ -3,4 +3,5 @@ import rect from shapes
 
 let main = (args: str[]) ->
     let s = rect.square(6)
-    rect.area(s) + s.w
+    assert(rect.area(s) + s.w == 42)
+    0

@@ -7,8 +7,11 @@ module base =
     let value = 40
 
 let main = (args: str[]) ->
+    let mut _r = 0
 #if with_extra
-    base.value + extra.bonus
+    _r = base.value + extra.bonus
 #else
-    base.value
+    _r = base.value
 #end
+    assert(_r == 42)
+    0

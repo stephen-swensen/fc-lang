@@ -7,4 +7,5 @@ let main = (args: str[]) ->
     buf.ptr[1] = 55u8
     buf.ptr[2] = 0u8
     let s = buf[0..2]
-    c.atoi((cstr)s)
+    assert(c.atoi((cstr)s) == 77)
+    0

@@ -1,11 +1,14 @@
 let main = (args: str[]) ->
-    let a = 3
-    let b = 5
-    let mut r = 0
-    if a < b then r = r + 1
-    if b > a then r = r + 1
-    if a <= 3 then r = r + 1
-    if b >= 5 then r = r + 1
-    if a == 3 then r = r + 1
-    if a != b then r = r + 1
-    r
+    let _result =
+        let a = 3
+        let b = 5
+        let mut r = 0
+        if a < b then r = r + 1
+        if b > a then r = r + 1
+        if a <= 3 then r = r + 1
+        if b >= 5 then r = r + 1
+        if a == 3 then r = r + 1
+        if a != b then r = r + 1
+        r
+    assert(_result == 6)
+    0

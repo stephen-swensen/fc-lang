@@ -3,8 +3,9 @@ import add from math
 #end
 
 let main = (args: str[]) ->
+    let mut _r = 0
 #if use_math
-    add(20, 22)
-#else
-    0
+    _r = add(20, 22)
 #end
+    assert(_r == 42)
+    0

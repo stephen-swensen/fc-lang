@@ -1,4 +1,7 @@
 let main = (args: str[]) ->
-    let a = 2.5f32
-    let b = 2.5
-    if a == b then 1 else 0
+    let _result =
+        let a = 2.5f32
+        let b = 2.5
+        if a == b then 1 else 0
+    assert(_result == 1)
+    0

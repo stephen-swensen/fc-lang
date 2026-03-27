@@ -11,4 +11,5 @@ import identity from containers
 let main = (args: str[]) ->
     let p = geo.point { x = 20, y = 22 }
     let q = identity(p)
-    q.x + q.y
+    assert(q.x + q.y == 42)
+    0

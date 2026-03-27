@@ -12,4 +12,5 @@ module a =
                 let product = () -> x * y * z
 
 let main = (args: str[]) ->
-    a.b.c.d.product()
+    assert(a.b.c.d.product() == 30)
+    0

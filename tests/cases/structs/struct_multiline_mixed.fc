@@ -4,9 +4,12 @@ struct point =
     y: int32
 
 let main = (args: str[]) ->
-    let a = point { x = 1, y = 2 }
-    let b = point {
-        x = 3,
-        y = 4
-    }
-    a.x + a.y + b.x + b.y
+    let _result =
+        let a = point { x = 1, y = 2 }
+        let b = point {
+            x = 3,
+            y = 4
+        }
+        a.x + a.y + b.x + b.y
+    assert(_result == 10)
+    0

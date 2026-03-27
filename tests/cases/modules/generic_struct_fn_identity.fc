@@ -7,6 +7,9 @@ import box from factory
 import wrap from factory
 
 let main = (args: str[]) ->
-    let a = box { value = 99 }
-    let b = wrap(99)
-    if a == b then 42 else 1
+    let _result =
+        let a = box { value = 99 }
+        let b = wrap(99)
+        if a == b then 42 else 1
+    assert(_result == 42)
+    0

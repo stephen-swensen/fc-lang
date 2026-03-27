@@ -2,4 +2,5 @@ let identity = (x: 'a) -> x
 let apply_identity = (x: 'a) -> identity(x)
 
 let main = (args: str[]) ->
-    apply_identity(42)
+    assert(apply_identity(42) == 42)
+    0

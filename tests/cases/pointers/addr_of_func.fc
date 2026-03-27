@@ -3,4 +3,5 @@ let double = (x: int32) -> x * 2
 let main = (args: str[]) ->
     let p = &double
     let result = (*p)(21)
-    result
+    assert(result == 42)
+    0

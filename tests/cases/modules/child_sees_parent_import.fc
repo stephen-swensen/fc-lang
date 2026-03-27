@@ -8,4 +8,5 @@ module parent =
         let quad = (x: int32) -> double(double(x))
 
 let main = (args: str[]) ->
-    parent.child.quad(5)
+    assert(parent.child.quad(5) == 20)
+    0

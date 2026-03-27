@@ -1,4 +1,7 @@
 let main = (args: str[]) ->
-    let min = -2147483648
-    let result = -min
-    if result == -2147483648 then 1 else 0
+    let _result =
+        let min = -2147483648
+        let result = -min
+        if result == -2147483648 then 1 else 0
+    assert(_result == 1)
+    0

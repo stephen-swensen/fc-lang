@@ -14,4 +14,5 @@ let check = (i: item) ->
 
 let main = (args: str[]) ->
     let i = item { shape = shape.circle(7), label = some(99) }
-    check(i)
+    assert(check(i) == 7)
+    0

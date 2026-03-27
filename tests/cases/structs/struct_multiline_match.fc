@@ -4,14 +4,17 @@ struct point =
     y: int32
 
 let main = (args: str[]) ->
-    let n = 1
-    let p = match n with
-        | 1 -> point {
-            x = 10,
-            y = 20
-        }
-        | _ -> point {
-            x = 0,
-            y = 0
-        }
-    p.x + p.y
+    let _result =
+        let n = 1
+        let p = match n with
+            | 1 -> point {
+                x = 10,
+                y = 20
+            }
+            | _ -> point {
+                x = 0,
+                y = 0
+            }
+        p.x + p.y
+    assert(_result == 30)
+    0

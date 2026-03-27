@@ -1,0 +1,15 @@
+let main = (args: str[]) ->
+    for i in 0..10
+        assert(i >= 0)
+        assert(i < 10)
+
+    let mut count = 0
+    let mut n = 0
+    loop
+        if n >= 5 then break
+        assert(n == count)
+        n = n + 1
+        count = count + 1
+    assert(count == 5)
+
+    0

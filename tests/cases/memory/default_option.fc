@@ -1,5 +1,8 @@
 let main = (args: str[]) ->
-    let x = default(int32?)
-    match x with
-    | none -> 50
-    | some(v) -> v
+    let _result =
+        let x = default(int32?)
+        match x with
+        | none -> 50
+        | some(v) -> v
+    assert(_result == 50)
+    0

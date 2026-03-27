@@ -5,4 +5,5 @@ let get_value = (b: box<int32>) -> b.value
 
 let main = (args: str[]) ->
     let b = box { value = 42 }
-    get_value(b)
+    assert(get_value(b) == 42)
+    0

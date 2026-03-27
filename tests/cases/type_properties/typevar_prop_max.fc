@@ -3,4 +3,5 @@ let get_max = <'a>() -> 'a.max
 
 let main = (args: str[]) ->
     let m = get_max<int8>()
-    (m + 0)
+    assert((m + 0) == 127)
+    0

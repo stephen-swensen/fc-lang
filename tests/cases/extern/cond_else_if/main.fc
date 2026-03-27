@@ -1,8 +1,11 @@
 let main = (args: str[]) ->
+    let mut _r = 0
 #if platform_b
-    1
+    _r = 1
 #else if platform_a
-    42
+    _r = 42
 #else
-    99
+    _r = 99
 #end
+    assert(_r == 42)
+    0

@@ -1,11 +1,14 @@
 let main = (args: str[]) ->
-    let arr = alloc(int32[4] { })
-    let mut r = 0
-    match arr with
-    | some(v) ->
-        r = r + 1
-        if v[0] == 0 then r = r + 1 else r = r
-        if v[3] == 0 then r = r + 1 else r = r
-        free(v)
-    | none -> r = r
-    r
+    let _result =
+        let arr = alloc(int32[4] { })
+        let mut r = 0
+        match arr with
+        | some(v) ->
+            r = r + 1
+            if v[0] == 0 then r = r + 1 else r = r
+            if v[3] == 0 then r = r + 1 else r = r
+            free(v)
+        | none -> r = r
+        r
+    assert(_result == 3)
+    0

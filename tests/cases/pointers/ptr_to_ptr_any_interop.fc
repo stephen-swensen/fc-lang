@@ -11,4 +11,5 @@ let main = (args: str[]) ->
     let s = "99end"
     let mut end = default(any*)
     let val = c.strtol((cstr)s, &end, 10)
-    (int32)val
+    assert((int32)val == 99)
+    0
