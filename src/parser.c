@@ -376,25 +376,28 @@ static int64_t parse_int_value(const char *start, int length) {
     /* Check for 0x, 0b, 0o prefixes */
     if (length >= 2 && start[0] == '0') {
         if (start[1] == 'x' || start[1] == 'X') {
-            for (int i = 2; i < length && i < 63; i++) {
+            for (int i = 2; i < length && num_len < 63; i++) {
                 char c = start[i];
                 if (isxdigit((unsigned char)c)) buf[num_len++] = c;
+                else if (c == '_') continue;
                 else break;
             }
             buf[num_len] = '\0';
             return (int64_t)strtoll(buf, NULL, 16);
         }
         if (start[1] == 'b' || start[1] == 'B') {
-            for (int i = 2; i < length && i < 63; i++) {
+            for (int i = 2; i < length && num_len < 63; i++) {
                 if (start[i] == '0' || start[i] == '1') buf[num_len++] = start[i];
+                else if (start[i] == '_') continue;
                 else break;
             }
             buf[num_len] = '\0';
             return (int64_t)strtoll(buf, NULL, 2);
         }
         if (start[1] == 'o' || start[1] == 'O') {
-            for (int i = 2; i < length && i < 63; i++) {
+            for (int i = 2; i < length && num_len < 63; i++) {
                 if (start[i] >= '0' && start[i] <= '7') buf[num_len++] = start[i];
+                else if (start[i] == '_') continue;
                 else break;
             }
             buf[num_len] = '\0';
@@ -402,8 +405,9 @@ static int64_t parse_int_value(const char *start, int length) {
         }
     }
 
-    for (int i = 0; i < length && i < 63; i++) {
+    for (int i = 0; i < length && num_len < 63; i++) {
         if (start[i] >= '0' && start[i] <= '9') buf[num_len++] = start[i];
+        else if (start[i] == '_') continue;
         else break;
     }
     buf[num_len] = '\0';
@@ -416,22 +420,22 @@ static int int_num_end(const char *start, int length) {
     if (length >= 2 && start[0] == '0') {
         if (start[1] == 'x' || start[1] == 'X') {
             int i = 2;
-            while (i < length && isxdigit((unsigned char)start[i])) i++;
+            while (i < length && (isxdigit((unsigned char)start[i]) || start[i] == '_')) i++;
             return i;
         }
         if (start[1] == 'b' || start[1] == 'B') {
             int i = 2;
-            while (i < length && (start[i] == '0' || start[i] == '1')) i++;
+            while (i < length && (start[i] == '0' || start[i] == '1' || start[i] == '_')) i++;
             return i;
         }
         if (start[1] == 'o' || start[1] == 'O') {
             int i = 2;
-            while (i < length && start[i] >= '0' && start[i] <= '7') i++;
+            while (i < length && ((start[i] >= '0' && start[i] <= '7') || start[i] == '_')) i++;
             return i;
         }
     }
     int i = 0;
-    while (i < length && start[i] >= '0' && start[i] <= '9') i++;
+    while (i < length && ((start[i] >= '0' && start[i] <= '9') || start[i] == '_')) i++;
     return i;
 }
 
@@ -703,14 +707,17 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_FLOAT_LIT, loc);
         char buf[64];
         int num_len = 0;
-        for (int i = 0; i < t->length && i < 63; i++) {
-            if ((t->start[i] >= '0' && t->start[i] <= '9') || t->start[i] == '.') buf[num_len++] = t->start[i];
+        int scan_pos = 0;
+        for (scan_pos = 0; scan_pos < t->length && num_len < 63; scan_pos++) {
+            char c = t->start[scan_pos];
+            if ((c >= '0' && c <= '9') || c == '.') buf[num_len++] = c;
+            else if (c == '_') continue;
             else break;
         }
         buf[num_len] = '\0';
         e->float_lit.value = strtod(buf, NULL);
-        if (num_len < t->length && t->start[num_len] == 'f'
-            && t->length - num_len >= 3 && t->start[num_len+1] == '3' && t->start[num_len+2] == '2')
+        if (scan_pos < t->length && t->start[scan_pos] == 'f'
+            && t->length - scan_pos >= 3 && t->start[scan_pos+1] == '3' && t->start[scan_pos+2] == '2')
             e->float_lit.lit_type = type_float32();
         else
             e->float_lit.lit_type = type_float64();

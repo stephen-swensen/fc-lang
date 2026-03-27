@@ -663,6 +663,16 @@ Implicit widening conversions are allowed in binary expressions and comparisons 
 | "hello" | str |
 | c"hello" | cstr — null-terminated C string pointer |
 
+Numeric literals may contain single underscores (`_`) between digits as visual separators. Underscores do not affect the value and work with all literal forms:
+
+```fc
+let million = 1_000_000        // same as 1000000
+let bytes = 0xFF_FF            // hex with separator
+let bits = 0b1010_0101         // binary with separator
+let pi = 3.14_159              // float with separator
+let big = 1_000_000i64         // suffixed with separator
+```
+
 Suffixed integer literals are range-checked at compile time. A literal whose value does not fit in the specified type is a compile error:
 
 ```fc

@@ -1,0 +1,110 @@
+let main = (args: str[]) ->
+    // Decimal separators
+    let a = 1_000
+    if a != 1000 then
+        return 1
+
+    let b = 1_000_000
+    if b != 1000000 then
+        return 2
+
+    let c = 1_2_3
+    if c != 123 then
+        return 3
+
+    // Float separators — integer part
+    let d = 1_000.5
+    if d != 1000.5 then
+        return 4
+
+    // Float separators — fractional part
+    let e = 3.14_15
+    if e != 3.1415 then
+        return 5
+
+    // Float separators — both parts
+    let f = 1_000.123_456
+    if f != 1000.123456 then
+        return 6
+
+    // Suffixed integers with separators
+    let g = 1_000i64
+    if g != 1000i64 then
+        return 7
+
+    let h = 10_0u8
+    if h != 100u8 then
+        return 8
+
+    let i = 6_553u16
+    if i != 6553u16 then
+        return 9
+
+    let j = 1_000u32
+    if j != 1000u32 then
+        return 10
+
+    // Suffixed floats with separators
+    let k = 1_000.0f32
+    if k != 1000.0f32 then
+        return 11
+
+    let l = 3.14_15f64
+    if l != 3.1415f64 then
+        return 12
+
+    // Hex with separators
+    let m = 0xFF_FF
+    if m != 0xFFFF then
+        return 13
+
+    let n = 0xDE_AD_BE_EFi64
+    if n != 0xDEADBEEFi64 then
+        return 14
+
+    // Binary with separators
+    let o = 0b1010_0101
+    if o != 0b10100101 then
+        return 15
+
+    let p = 0b1111_0000_1111_0000
+    if p != 0b1111000011110000 then
+        return 16
+
+    // Octal with separators
+    let q = 0o77_77
+    if q != 0o7777 then
+        return 17
+
+    let r = 0o12_34
+    if r != 0o1234 then
+        return 18
+
+    // isize/usize suffixes with separators
+    let s = 1_000i
+    if s != 1000i then
+        return 19
+
+    let t = 1_000u
+    if t != 1000u then
+        return 20
+
+    // Arithmetic with separator literals
+    let u = 1_000 + 2_000
+    if u != 3000 then
+        return 21
+
+    let v = 10_000 - 3_000
+    if v != 7000 then
+        return 22
+
+    let w = 1_00 * 1_00
+    if w != 10000 then
+        return 23
+
+    // Single digit groups
+    let x = 1_0
+    if x != 10 then
+        return 24
+
+    0

@@ -146,7 +146,7 @@ static Token scan_number(Lexer *l) {
     if (l->current[-1] == '0') {
         if (peek(l) == 'x' || peek(l) == 'X') {
             advance(l); /* consume x */
-            while (isxdigit((unsigned char)peek(l))) advance(l);
+            while (isxdigit((unsigned char)peek(l)) || (peek(l) == '_' && isxdigit((unsigned char)peek_next(l)))) advance(l);
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
@@ -157,7 +157,7 @@ static Token scan_number(Lexer *l) {
         }
         if (peek(l) == 'b' || peek(l) == 'B') {
             advance(l); /* consume b */
-            while (peek(l) == '0' || peek(l) == '1') advance(l);
+            while (peek(l) == '0' || peek(l) == '1' || (peek(l) == '_' && (peek_next(l) == '0' || peek_next(l) == '1'))) advance(l);
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
@@ -168,7 +168,7 @@ static Token scan_number(Lexer *l) {
         }
         if (peek(l) == 'o' || peek(l) == 'O') {
             advance(l); /* consume o */
-            while (peek(l) >= '0' && peek(l) <= '7') advance(l);
+            while ((peek(l) >= '0' && peek(l) <= '7') || (peek(l) == '_' && peek_next(l) >= '0' && peek_next(l) <= '7')) advance(l);
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
@@ -178,10 +178,10 @@ static Token scan_number(Lexer *l) {
             return make_token(l, TOK_INT_LIT);
         }
     }
-    while (isdigit((unsigned char)peek(l))) advance(l);
+    while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
     if (peek(l) == '.' && isdigit((unsigned char)peek_next(l))) {
         advance(l);
-        while (isdigit((unsigned char)peek(l))) advance(l);
+        while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
         if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
             advance(l); advance(l);
             if (peek(l) == '2' || peek(l) == '4') advance(l);

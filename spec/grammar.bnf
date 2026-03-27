@@ -138,14 +138,15 @@ builtin_type = "int8" | "int16" | "int32" | "int64"
 
 int_suffix    = "i8" | "i16" | "i32" | "i64"
               | "u8" | "u16" | "u32" | "u64" ;
-INT_LIT       = digit , { digit } , [ int_suffix ] ;
+INT_LIT       = digit , { [ '_' ] , digit } , [ int_suffix ] ;
 
+(* Underscores may appear between digits for readability: 1_000_000.   *)
 (* Suffixed integer literals are range-checked at compile time.        *)
 
 (* --- Float literals ---                                              *)
 
 float_suffix  = "f32" | "f64" ;
-FLOAT_LIT     = digit , { digit } , '.' , digit , { digit } , [ float_suffix ] ;
+FLOAT_LIT     = digit , { [ '_' ] , digit } , '.' , digit , { [ '_' ] , digit } , [ float_suffix ] ;
 
 (* --- Boolean literals ---                                            *)
 
