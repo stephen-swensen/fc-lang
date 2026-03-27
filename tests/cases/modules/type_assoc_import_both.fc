@@ -1,0 +1,14 @@
+module geometry =
+    struct vec2 =
+        x: int32
+        y: int32
+
+    module vec2 =
+        let zero = vec2 { x = 0, y = 0 }
+        let mag_sq = (v: vec2) -> v.x * v.x + v.y * v.y
+
+import vec2 from geometry
+
+let main = (args: str[]) ->
+    let p = vec2 { x = 3, y = 4 }
+    vec2.mag_sq(p)

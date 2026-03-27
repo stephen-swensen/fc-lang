@@ -1955,9 +1955,10 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
                 *out_mod = part;
                 return;
             }
-            /* More :: follows — this is still namespace */
+            /* More :: follows — this is still namespace.
+             * Use __ to separate segments so foo::bar != foo_bar. */
             size_t cur = strlen(buf);
-            snprintf(buf + cur, sizeof(buf) - cur, "_%s", part);
+            snprintf(buf + cur, sizeof(buf) - cur, "__%s", part);
         } else {
             /* Bare namespace ending: from acme:: or from acme::graphics:: */
             *out_ns = intern_cstr(p->intern, buf);
@@ -2109,7 +2110,7 @@ static Decl *parse_namespace_decl(Parser *p) {
         if (check(p, TOK_IDENT)) {
             const char *part = tok_intern(p, expect(p, TOK_IDENT));
             size_t cur = strlen(buf);
-            snprintf(buf + cur, sizeof(buf) - cur, "_%s", part);
+            snprintf(buf + cur, sizeof(buf) - cur, "__%s", part);
         }
     }
 

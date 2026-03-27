@@ -1,0 +1,9 @@
+module outer =
+    let public_fn = () -> 42
+    private module internal =
+        let secret = 99
+
+import * from outer
+
+let main = (args: str[]) ->
+    internal.secret

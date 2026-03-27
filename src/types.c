@@ -115,6 +115,13 @@ bool type_is_const(Type *t) {
     return t && t->is_const;
 }
 
+Type *type_copy(Arena *a, Type *t) {
+    if (!t) return NULL;
+    Type *c = arena_alloc(a, sizeof(Type));
+    *c = *t;
+    return c;
+}
+
 Type *type_make_const(Arena *a, Type *t) {
     if (!t) return NULL;
     if (t->is_const) return t;

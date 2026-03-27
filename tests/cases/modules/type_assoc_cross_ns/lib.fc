@@ -1,0 +1,10 @@
+namespace vendor::
+
+module shapes =
+    struct rect =
+        w: int32
+        h: int32
+
+    module rect =
+        let area = (r: shapes.rect) -> r.w * r.h
+        let square = (side: int32) -> shapes.rect { w = side, h = side }

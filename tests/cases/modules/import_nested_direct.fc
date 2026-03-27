@@ -1,0 +1,9 @@
+module geometry =
+    module shapes =
+        let area_sq = (side: int32) -> side * side
+
+import shapes from geometry
+import area_sq from shapes
+
+let main = (args: str[]) ->
+    area_sq(7)

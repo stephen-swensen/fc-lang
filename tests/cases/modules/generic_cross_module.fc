@@ -1,0 +1,14 @@
+module containers =
+    let identity = (x: 'a) -> x
+
+module geo =
+    struct point =
+        x: int32
+        y: int32
+
+import identity from containers
+
+let main = (args: str[]) ->
+    let p = geo.point { x = 20, y = 22 }
+    let q = identity(p)
+    q.x + q.y

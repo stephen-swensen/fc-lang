@@ -1,0 +1,11 @@
+module geo =
+    struct point =
+        x: int32
+        y: int32
+
+    let origin = () -> point { x = 0, y = 0 }
+    let offset = (p: point, dx: int32, dy: int32) -> point { x = p.x + dx, y = p.y + dy }
+
+let main = (args: str[]) ->
+    let p = geo.offset(geo.origin(), 20, 22)
+    p.x + p.y

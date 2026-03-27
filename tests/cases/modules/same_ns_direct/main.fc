@@ -1,0 +1,4 @@
+import math from test::
+
+let main = (args: str[]) ->
+    math.quad(10)

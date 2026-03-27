@@ -1,0 +1,4 @@
+namespace test::
+
+module math =
+    let quad = (x: int32) -> helper.double(helper.double(x))

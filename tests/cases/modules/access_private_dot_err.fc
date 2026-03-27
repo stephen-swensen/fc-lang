@@ -1,0 +1,6 @@
+module m =
+    private let secret = 42
+    let public_val = 10
+
+let main = (args: str[]) ->
+    m.secret

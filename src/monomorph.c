@@ -13,7 +13,7 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
     const char *base = name;
     if (ns_prefix) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "%s_%s", ns_prefix, name);
+        snprintf(buf, sizeof(buf), "%s__%s", ns_prefix, name);
         base = intern_cstr(intern_tbl, buf);
     }
     const char *mangled = mangle_generic_name(a, intern_tbl, base, type_args, count);
@@ -194,9 +194,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                         Type *ct = type_substitute(a, struct_sym->type,
                             struct_sym->type_params, concrete_args, ntp);
                         if (ct == struct_sym->type) {
-                            Type *cp = arena_alloc(a, sizeof(Type));
-                            *cp = *ct;
-                            ct = cp;
+                            ct = type_copy(a, ct);
                         }
                         if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;

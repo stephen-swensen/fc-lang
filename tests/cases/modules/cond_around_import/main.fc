@@ -1,0 +1,10 @@
+#if use_math
+import add from math
+#end
+
+let main = (args: str[]) ->
+#if use_math
+    add(20, 22)
+#else
+    0
+#end

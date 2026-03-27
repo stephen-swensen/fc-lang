@@ -1,0 +1,15 @@
+module lib =
+    union wrapper =
+        | val('a)
+        | empty
+
+import wrapper as w from lib
+
+let check = (a: lib.wrapper<int32>, b: w<int32>) ->
+    if a == b then 10
+    else 20
+
+let main = (args: str[]) ->
+    let a = lib.wrapper<int32>.val(42)
+    let b = w<int32>.val(42)
+    check(a, b)

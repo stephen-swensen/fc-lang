@@ -1,0 +1,10 @@
+namespace test::
+
+union my_union =
+    | a(int32)
+    | b
+
+module m =
+    let x = 1
+
+let main = (args: str[]) -> 0

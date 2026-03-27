@@ -118,6 +118,7 @@ bool is_cstr_type(Type *t);
 bool is_str32_type(Type *t);
 
 /* Const helpers */
+Type *type_copy(Arena *a, Type *t);
 Type *type_make_const(Arena *a, Type *t);
 
 /* Queries */

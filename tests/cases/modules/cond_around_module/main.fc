@@ -1,0 +1,14 @@
+#if with_extra
+module extra =
+    let bonus = 2
+#end
+
+module base =
+    let value = 40
+
+let main = (args: str[]) ->
+#if with_extra
+    base.value + extra.bonus
+#else
+    base.value
+#end

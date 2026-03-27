@@ -10,7 +10,7 @@ Open design questions and topics for future work.
 - Defined modules: `io` (file I/O — see spec §std::io), `sys` (system operations — see spec §std::sys)
 - Likely modules: `text`, `math`, plus others TBD
 - Import pattern: `import io from std::`, `import sys from std::`, etc.
-- Open: does stdlib require explicit import per file, or is any of it pre-imported?
+- Resolved: explicit import required per file. No auto-imports — matches FC's "no magic" philosophy.
 
 ## Slice/pointer provenance and safety
 
@@ -120,10 +120,11 @@ The compiler emits C code that depends on a small set of C headers. These are sp
 **Feature-gated** (emitted only when the program uses the relevant feature):
 ```c
 #include <stdio.h>      // string interpolation (snprintf)
-#include <inttypes.h>   // string interpolation (PRId64, PRIu64, etc.)
 #include <math.h>       // float type properties (NAN, INFINITY)
 #include <float.h>      // float type properties (FLT_MAX, DBL_MAX)
 ```
+
+Note: `inttypes.h` is not needed in emitted C — string interpolation uses `%lld`/`%llu` with `(long long)` casts rather than `PRId64`/`PRIu64` macros.
 
 A pure-integer program with no string interpolation and no floats gets a 5-header preamble. These 5 headers are available on essentially every platform with a libc.
 
@@ -209,16 +210,16 @@ The `#if`/`#else if`/`#else`/`#end` system and `--flag` CLI option remain for **
 
 The previously planned `--target` flag with automatic `target_embedded` / `target_bare_metal` built-in flags is dropped. The `target_hosted` built-in flag is also dropped — since every FC program targets a hosted environment per the platform contract, the flag is always true and therefore meaningless. Platform-specific behavior is controlled by user-defined flags and by which files are passed to the compiler.
 
-### Implementation changes required
+### Implementation changes required — all complete
 
-| Current state | Target state |
-|---------------|--------------|
-| 10 headers always emitted in preamble | 5 core headers always + feature-gated |
-| `alloca()` + `<alloca.h>` | `__builtin_alloca()`, no header |
-| `_POSIX_C_SOURCE` auto-detected for `time.h` | `define` annotation on extern module declarations |
-| `target_hosted` built-in flag always set | Drop (platform contract makes it redundant) |
-| Planned `--target` with `target_embedded`/`target_bare_metal` | Drop entirely |
-| Stdlib implicitly expected | Stdlib is explicitly passed as source files |
+| Current state | Target state | Status |
+|---------------|--------------|--------|
+| 10 headers always emitted in preamble | 5 core headers always + feature-gated | Done |
+| `alloca()` + `<alloca.h>` | `__builtin_alloca()`, no header | Done |
+| `_POSIX_C_SOURCE` auto-detected for `time.h` | `define` annotation on extern module declarations | Done |
+| `target_hosted` built-in flag always set | Drop (platform contract makes it redundant) | Done |
+| Planned `--target` with `target_embedded`/`target_bare_metal` | Drop entirely | Done (never existed) |
+| Stdlib implicitly expected | Stdlib is explicitly passed as source files | Done |
 
 ## Closures at extern boundaries — wrapper function pattern (future)
 

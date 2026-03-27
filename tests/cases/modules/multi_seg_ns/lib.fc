@@ -1,4 +1,4 @@
-import add from acme_graphics::math
+import add from acme::graphics::math
 
 let main = (args: str[]) ->
     add(20, 5)

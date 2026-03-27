@@ -1,0 +1,14 @@
+module a =
+    import z from c
+    let x = (n: int32) -> z(n)
+
+module b =
+    import x from a
+    let y = (n: int32) -> x(n)
+
+module c =
+    import y from b
+    let z = (n: int32) -> y(n)
+
+let main = (args: str[]) ->
+    a.x(5)

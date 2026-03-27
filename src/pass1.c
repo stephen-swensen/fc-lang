@@ -246,11 +246,14 @@ Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_pr
     return NULL;
 }
 
-/* Build a mangled name: prefix_name */
+/* Build a mangled name: prefix__name
+ * Uses __ (double underscore) to separate namespace/module hierarchy levels.
+ * This avoids collisions between e.g. namespace foo:: module bar (foo__bar)
+ * and global module foo_bar (foo_bar). */
 static const char *make_mangled(InternTable *intern, const char *prefix, const char *name) {
-    int needed = snprintf(NULL, 0, "%s_%s", prefix, name) + 1;
+    int needed = snprintf(NULL, 0, "%s__%s", prefix, name) + 1;
     char *buf = malloc((size_t)needed);
-    snprintf(buf, (size_t)needed, "%s_%s", prefix, name);
+    snprintf(buf, (size_t)needed, "%s__%s", prefix, name);
     const char *result = intern_cstr(intern, buf);
     free(buf);
     return result;
@@ -973,6 +976,23 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     #undef PUSH
                 }
                 free(stack);
+            }
+        }
+
+        /* Also add edges from import statements: if module i imports from module j,
+         * record a dependency.  This catches cycles through imports that the
+         * expression-based scan above misses (import names are not module names). */
+        for (int i = 0; i < mod_count; i++) {
+            for (int d = 0; d < mods[i]->module.decl_count; d++) {
+                Decl *child = mods[i]->module.decls[d];
+                if (child->kind != DECL_IMPORT) continue;
+                const char *from = child->import.from_module;
+                if (!from) continue;
+                for (int j = 0; j < mod_count; j++) {
+                    if (j == i) continue;
+                    if (from == mods[j]->module.name)
+                        deps[i * mod_count + j] = true;
+                }
             }
         }
 

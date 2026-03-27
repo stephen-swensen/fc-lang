@@ -1,0 +1,11 @@
+module a =
+    let value = 10
+
+module b =
+    let value = 42
+
+import value from a
+import value from b
+
+let main = (args: str[]) ->
+    value

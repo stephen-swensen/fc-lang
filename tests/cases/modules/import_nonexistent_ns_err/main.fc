@@ -1,0 +1,4 @@
+import math from nonexistent::
+
+let main = (args: str[]) ->
+    math.add(1, 2)

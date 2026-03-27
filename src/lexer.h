@@ -22,7 +22,7 @@ typedef struct {
     int interp_fmt_line;                    /* line of format spec */
     int interp_fmt_col;                     /* col of format spec */
 
-    /* Conditional compilation flags (e.g., --flag target_hosted) */
+    /* Conditional compilation flags (e.g., --flag debug) */
     const char **flags;
     int flag_count;
 } Lexer;

@@ -1,0 +1,6 @@
+module m =
+    let value = 100
+
+let main = (args: str[]) ->
+    let m = 42
+    m

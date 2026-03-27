@@ -121,6 +121,12 @@ typedef struct ImportScope {
     struct ImportScope *parent;
 } ImportScope;
 
+/* On-demand type-check visited set — stack-allocated linked list to detect cycles */
+typedef struct OnDemandVisited {
+    Decl *decl;
+    struct OnDemandVisited *next;
+} OnDemandVisited;
+
 typedef struct {
     SymbolTable *symtab;
     Scope *scope;
@@ -135,6 +141,7 @@ typedef struct {
     MonoTable *mono_table;       /* global instantiation registry */
     InternTable *intern;         /* for name mangling */
     ImportScope *import_scope;   /* lexically scoped import chain */
+    OnDemandVisited *on_demand_visited;  /* cycle detection for on-demand type checking */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -338,9 +345,7 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
 
                 /* Ensure we don't mutate the original type */
                 if (concrete == sym->type) {
-                    Type *copy = arena_alloc(ctx->arena, sizeof(Type));
-                    *copy = *sym->type;
-                    concrete = copy;
+                    concrete = type_copy(ctx->arena, sym->type);
                 }
 
                 /* Preserve resolved type_args on the concrete type for unification */
@@ -353,11 +358,14 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 }
 
                 if (!has_tv) {
-                    /* Register mono instance only with concrete types */
-                    const char *ns_prefix = NULL;
+                    /* Register mono instance only with concrete types.
+                     * Use canonical name from sym->type (already mangled by pass1),
+                     * not the stub name t->struc.name which may contain dots. */
                     DeclKind dk = sym->kind;
+                    const char *canon_name = (sym->type->kind == TYPE_STRUCT)
+                        ? sym->type->struc.name : sym->type->unio.name;
                     const char *mangled = mono_register(ctx->mono_table, ctx->arena,
-                        ctx->intern, t->struc.name, ns_prefix,
+                        ctx->intern, canon_name, NULL,
                         resolved_args, nta, sym->decl, dk,
                         sym->type_params, ntp);
                     /* Update the concrete type's name to the mangled name */
@@ -373,8 +381,7 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                      * pass2 type still needed for unification) */
                     MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                     if (mi && !mi->concrete_type) {
-                        Type *ct = arena_alloc(ctx->arena, sizeof(Type));
-                        *ct = *concrete;
+                        Type *ct = type_copy(ctx->arena, concrete);
                         mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
                         mi->concrete_type = ct;
                     }
@@ -668,8 +675,7 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
             type_bindings, tntp, type_sym->decl,
             type_sym->kind, type_sym->type_params, tntp);
 
-        Type *result = arena_alloc(ctx->arena, sizeof(Type));
-        *result = *t;
+        Type *result = type_copy(ctx->arena, t);
         if (result->kind == TYPE_STRUCT) {
             if (!result->struc.base_name) result->struc.base_name = result->struc.name;
             result->struc.name = type_mangled;
@@ -687,9 +693,7 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
             Type *ct = type_substitute(ctx->arena, type_sym->type,
                 type_sym->type_params, type_bindings, tntp);
             if (ct == type_sym->type) {
-                Type *cp = arena_alloc(ctx->arena, sizeof(Type));
-                *cp = *ct;
-                ct = cp;
+                ct = type_copy(ctx->arena, ct);
             }
             if (ct->kind == TYPE_STRUCT) {
                 if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
@@ -1231,9 +1235,21 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->ident.codegen_name = isym->decl->let.codegen_name;
                 }
                 if (!isym->type && isym->decl && isym->decl->kind == DECL_LET) {
-                    /* On-demand type check for imported symbol */
+                    /* On-demand type check for imported symbol with cycle detection */
+                    bool cycle = false;
+                    for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                        if (v->decl == isym->decl) { cycle = true; break; }
+                    }
+                    if (cycle) {
+                        diag_error(e->loc, "circular dependency: '%s' depends on itself through imports",
+                            e->ident.name);
+                        e->type = type_error();
+                        return e->type;
+                    }
                     ImportRef *ref = import_chain_find_ref(ctx->import_scope, e->ident.name);
                     if (ref) {
+                        OnDemandVisited vis = { .decl = isym->decl, .next = ctx->on_demand_visited };
+                        ctx->on_demand_visited = &vis;
                         SymbolTable *saved_mod = ctx->module_symtab;
                         Scope *saved_scope = ctx->scope;
                         ctx->module_symtab = ref->source_members;
@@ -1242,6 +1258,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         check_decl_let(ctx, isym->decl);
                         ctx->scope = saved_scope;
                         ctx->module_symtab = saved_mod;
+                        ctx->on_demand_visited = vis.next;
                     }
                 }
                 if (!isym->type) {
@@ -1674,14 +1691,105 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Type *union_type = ft;
             const char *variant_name = e->call.func->field.name;
 
-            /* Check if the union is generic — need to unify and instantiate */
+            /* Look up the union symbol for generic instantiation */
             Symbol *union_sym = NULL;
             if (e->call.func->field.object->kind == EXPR_IDENT) {
-                union_sym = symtab_lookup(ctx->symtab, e->call.func->field.object->ident.name);
+                const char *uname = e->call.func->field.object->ident.name;
+                union_sym = symtab_lookup(ctx->symtab, uname);
                 if (!union_sym && ctx->module_symtab)
-                    union_sym = symtab_lookup(ctx->module_symtab, e->call.func->field.object->ident.name);
+                    union_sym = symtab_lookup(ctx->module_symtab, uname);
                 if (!union_sym)
-                    union_sym = import_chain_lookup(ctx->import_scope, e->call.func->field.object->ident.name);
+                    union_sym = import_chain_lookup(ctx->import_scope, uname);
+            } else if (e->call.func->field.object->kind == EXPR_FIELD) {
+                /* Module-qualified path: walk EXPR_FIELD chain to find module, then union */
+                Expr *cur = e->call.func->field.object;
+                while (cur->kind == EXPR_FIELD) cur = cur->field.object;
+                if (cur->kind == EXPR_IDENT) {
+                    Symbol *root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
+                    if (!root && ctx->current_ns)
+                        root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
+                    if (!root && ctx->module_symtab)
+                        root = symtab_lookup_kind(ctx->module_symtab, cur->ident.name, DECL_MODULE);
+                    if (!root)
+                        root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
+                    if (root && root->members) {
+                        /* Walk intermediate fields to find the innermost module */
+                        Symbol *walk = root;
+                        Expr *p = e->call.func->field.object;
+                        /* Collect intermediate segments (between root and the union name) */
+                        Expr **segs = NULL;
+                        int nseg = 0, seg_cap = 0;
+                        while (p->kind == EXPR_FIELD && p->field.object != cur) {
+                            DA_APPEND(segs, nseg, seg_cap, p);
+                            p = p->field.object;
+                        }
+                        /* p is now the EXPR_FIELD whose object is cur (the root ident) */
+                        /* Walk from the root module through any nested submodules */
+                        /* The last segment's name is the union type name */
+                        if (p->kind == EXPR_FIELD) {
+                            /* p->field.name is a member of root — look it up */
+                            Symbol *member = symtab_lookup_kind(walk->members, p->field.name, DECL_UNION);
+                            if (member) {
+                                union_sym = member;
+                            } else {
+                                /* It might be a submodule — walk deeper */
+                                Symbol *sub = symtab_lookup_kind(walk->members, p->field.name, DECL_MODULE);
+                                if (sub && sub->members) {
+                                    walk = sub;
+                                    for (int si = nseg - 1; si >= 0; si--) {
+                                        Symbol *next = symtab_lookup_kind(walk->members, segs[si]->field.name, DECL_MODULE);
+                                        if (!next) {
+                                            /* Last segment: must be the union */
+                                            union_sym = symtab_lookup_kind(walk->members, segs[si]->field.name, DECL_UNION);
+                                            break;
+                                        }
+                                        walk = next;
+                                    }
+                                }
+                            }
+                        }
+                        free(segs);
+                    }
+                }
+            }
+
+            /* Instantiate generic union if type args are present */
+            int ta_count = e->call.func->field.type_arg_count;
+            if (ta_count == 0) ta_count = e->call.type_arg_count;
+            Type **ta_types = e->call.func->field.type_args;
+            if (!ta_types) ta_types = e->call.type_args;
+
+            if (union_sym && union_sym->is_generic && ta_count > 0) {
+                int ntp = union_sym->type_param_count;
+                if (ta_count != ntp) {
+                    diag_error(e->loc, "expected %d type argument(s), got %d", ntp, ta_count);
+                    e->type = type_error();
+                    return e->type;
+                }
+                Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
+                for (int k = 0; k < ntp; k++)
+                    bindings[k] = resolve_type(ctx, ta_types[k]);
+
+                Type *concrete = type_substitute(ctx->arena, union_sym->type,
+                    union_sym->type_params, bindings, ntp);
+                if (concrete == union_sym->type) {
+                    concrete = type_copy(ctx->arena, union_sym->type);
+                }
+                if (concrete->unio.type_arg_count == 0) {
+                    concrete->unio.type_args = bindings;
+                    concrete->unio.type_arg_count = ntp;
+                }
+                if (!bindings_contain_type_vars(bindings, ntp)) {
+                    const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
+                        union_sym->type->unio.name, NULL,
+                        bindings, ntp, union_sym->decl,
+                        DECL_UNION, union_sym->type_params, ntp);
+                    if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
+                    concrete->unio.name = mangled;
+                    MonoInstance *mi = mono_find(ctx->mono_table, mangled);
+                    if (mi) mi->concrete_type = concrete;
+                }
+                union_type = concrete;
             }
 
             /* Find the variant */
@@ -2229,9 +2337,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Type *concrete = type_substitute(ctx->arena, st,
                 sym->type_params, bindings, ntp);
             if (concrete == st) {
-                Type *copy = arena_alloc(ctx->arena, sizeof(Type));
-                *copy = *st;
-                concrete = copy;
+                concrete = type_copy(ctx->arena, st);
             }
             /* Preserve type_args (bindings) on the concrete type for unification */
             concrete->struc.type_args = bindings;
@@ -2248,8 +2354,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 concrete->struc.name = mangled;
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                 if (mi && !mi->concrete_type) {
-                    Type *ct = arena_alloc(ctx->arena, sizeof(Type));
-                    *ct = *concrete;
+                    Type *ct = type_copy(ctx->arena, concrete);
                     mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
                     mi->concrete_type = ct;
                 }
@@ -2386,8 +2491,59 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = type_void();
                 return e->type;
             }
-            /* Struct/union type member */
+            /* Struct/union type member — handle generic instantiation if type args present */
             if (member->kind == DECL_STRUCT || member->kind == DECL_UNION) {
+                if (member->is_generic && e->field.type_arg_count > 0) {
+                    int ntp = member->type_param_count;
+                    if (e->field.type_arg_count != ntp) {
+                        diag_error(e->loc, "expected %d type argument(s), got %d",
+                            ntp, e->field.type_arg_count);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
+                    for (int k = 0; k < ntp; k++)
+                        bindings[k] = resolve_type(ctx, e->field.type_args[k]);
+
+                    Type *concrete = type_substitute(ctx->arena, member->type,
+                        member->type_params, bindings, ntp);
+                    if (concrete == member->type) {
+                        concrete = type_copy(ctx->arena, member->type);
+                    }
+                    /* Set type_args for diagnostics */
+                    if (member->kind == DECL_UNION) {
+                        if (concrete->unio.type_arg_count == 0) {
+                            concrete->unio.type_args = bindings;
+                            concrete->unio.type_arg_count = ntp;
+                        }
+                    } else {
+                        if (concrete->struc.type_arg_count == 0) {
+                            concrete->struc.type_args = bindings;
+                            concrete->struc.type_arg_count = ntp;
+                        }
+                    }
+                    if (!bindings_contain_type_vars(bindings, ntp)) {
+                        /* Use canonical C type name (already includes module/ns prefix) */
+                        DeclKind dk = member->kind;
+                        const char *canon_name = (dk == DECL_UNION)
+                            ? member->type->unio.name : member->type->struc.name;
+                        const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
+                            canon_name, NULL,
+                            bindings, ntp, member->decl,
+                            dk, member->type_params, ntp);
+                        if (dk == DECL_UNION) {
+                            if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
+                            concrete->unio.name = mangled;
+                        } else {
+                            if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
+                            concrete->struc.name = mangled;
+                        }
+                        MonoInstance *mi = mono_find(ctx->mono_table, mangled);
+                        if (mi) mi->concrete_type = concrete;
+                    }
+                    e->type = concrete;
+                    return e->type;
+                }
                 e->type = member->type;
                 return e->type;
             }
@@ -2402,8 +2558,17 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->field.codegen_name = member->decl->let.codegen_name;
             }
             if (!member->type && member->decl && member->decl->kind == DECL_LET) {
-                /* On-demand type-check: target module member hasn't been processed yet.
-                 * This is safe because pass1 phase 4 already detected circular deps. */
+                /* On-demand type-check with cycle detection */
+                for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                    if (v->decl == member->decl) {
+                        diag_error(e->loc, "circular dependency: '%s.%s' depends on itself through imports",
+                            mod_sym->name, e->field.name);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                }
+                OnDemandVisited vis = { .decl = member->decl, .next = ctx->on_demand_visited };
+                ctx->on_demand_visited = &vis;
                 SymbolTable *saved_mod = ctx->module_symtab;
                 Scope *saved_scope = ctx->scope;
                 ctx->module_symtab = mod_sym->members;
@@ -2411,6 +2576,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 check_decl_let(ctx, member->decl);
                 ctx->scope = saved_scope;
                 ctx->module_symtab = saved_mod;
+                ctx->on_demand_visited = vis.next;
             }
             if (!member->type) {
                 diag_error(e->loc, "use of '%s.%s' before its type is resolved",
@@ -2454,9 +2620,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     Type *concrete = type_substitute(ctx->arena, sym->type,
                         sym->type_params, bindings, ntp);
                     if (concrete == sym->type) {
-                        Type *copy = arena_alloc(ctx->arena, sizeof(Type));
-                        *copy = *sym->type;
-                        concrete = copy;
+                        concrete = type_copy(ctx->arena, sym->type);
                     }
                     /* Ensure type_args are set for diagnostics (template may lack them) */
                     if (concrete->unio.type_arg_count == 0) {
@@ -3880,6 +4044,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         .mono_table = mono,
         .intern = intern_tbl,
         .import_scope = NULL,
+        .on_demand_visited = NULL,
     };
 
     /* First pass: type-check all module member decls (including nested submodules) */

@@ -60,9 +60,9 @@ The previous attempt (reverted 2026-03-24) was more complex — dual registratio
 ## Priority Items
 
 1. ~~**Unify whole-module imports into ImportTable**~~ — **Done (2026-03-26).** Whole-module imports now go to ImportTable with `module_members` field. Global symtab contains only declarations, never imports.
-2. **Fix generic union identity through import aliases** — bounded fix in the variant construction path, not an architectural issue.
-3. **Import cycle detection** — low urgency if expression-level cycle detection catches most cases, but should be verified.
-4. **`qualified_name` propagation audit** — worth doing once to prevent diagnostic regressions.
+2. ~~**Fix generic union identity through import aliases**~~ — **Done (2026-03-26).** Fixed in two places: (a) EXPR_CALL variant constructor now handles generic instantiation through module paths and import aliases, (b) `resolve_type` now uses canonical name from `sym->type->unio.name` instead of stub name `t->struc.name` for `mono_register`, ensuring consistent mangled names across all resolution paths.
+3. ~~**Import cycle detection**~~ — **Done (2026-03-26).** Extended pass1 Phase 4 to scan DECL_IMPORT edges in addition to expression-level references. Added defensive visited set in pass2 on-demand type checking to prevent infinite recursion as a safety net.
+4. ~~**`qualified_name` propagation audit**~~ — **Done (2026-03-26).** Audited all 26 Type copy sites — all propagate correctly via shallow copy. Added `type_copy()` helper to `types.c/h` and replaced ~10 manual copy patterns for maintainability.
 
 ## Additional restrictions (2026-03-26)
 
