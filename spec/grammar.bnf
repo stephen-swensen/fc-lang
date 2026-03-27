@@ -96,6 +96,8 @@ NEWLINE = (* synthetic token — new peer at current block column *)     ;
 ident_start   = letter | underscore ;
 ident_cont    = letter | digit | underscore ;
 IDENT         = ident_start , { ident_cont } ;
+(* Constraint not expressible in BNF: IDENT must not contain "__"         *)
+(* (double underscore). Reserved for compiler name mangling.              *)
 
 (* Type variable names begin with an apostrophe.                       *)
 TYPE_VAR      = "'" , ( letter | underscore ) , { ident_cont } ;

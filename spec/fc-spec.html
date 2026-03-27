@@ -594,7 +594,7 @@ Nesting is useful for commenting out regions of code that already contain block 
 
 ### Identifiers
 
-An identifier begins with a letter (`a`–`z`, `A`–`Z`) or underscore (`_`), followed by zero or more letters, digits (`0`–`9`), or underscores. Identifiers are ASCII-only — non-ASCII characters are not permitted in identifier positions.
+An identifier begins with a letter (`a`–`z`, `A`–`Z`) or underscore (`_`), followed by zero or more letters, digits (`0`–`9`), or underscores. Identifiers are ASCII-only — non-ASCII characters are not permitted in identifier positions. Double underscores (`__`) are **not permitted** within identifiers — they are reserved for the compiler's internal name mangling of namespace and module hierarchies.
 
 Type variable names begin with an apostrophe (`'`) followed by one or more letters, digits, or underscores. The apostrophe is a dedicated sigil — concrete type names never begin with `'`.
 
@@ -2993,7 +2993,7 @@ fc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
 The module system is entirely compile-time — no runtime representation in generated C:
 
 - **Namespaces** — erased. Exist only in the compiler's module map.
-- **Modules** — become C symbol prefixes. `geometry.manhattan(p)` transpiles to `geometry_manhattan(p)`.
+- **Modules** — become C symbol prefixes using `__` as the hierarchy separator. `geometry.manhattan(p)` transpiles to `geometry__manhattan(p)`. Namespace segments are also joined with `__`: namespace `acme::graphics::` module `render` member `draw` becomes `acme__graphics__render__draw`. The `__` separator is unambiguous because double underscores are forbidden in user identifiers.
 - **Imports** — become nothing. The import scope chain is resolved at compile time.
 - **`private`** — enforced at compile time only.
 - **Type-associated modules** — pure naming convention. `vec2.zero` is a prefixed global; no vtable or indirection.
