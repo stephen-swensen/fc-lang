@@ -272,6 +272,7 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - Raw pointer arithmetic as escape hatch from slice overhead
 - Function pointer params in extern (non-capturing lambdas extract fn_ptr automatically)
 - Extern struct: C struct layout import via `extern struct C_NAME [as fc_name]` in `from` modules
+- Extern union: C untagged union import via `extern union C_NAME [as fc_name]` in `from` modules, with memcmp-based equality
 - Conditional compilation (`#if`/`#else`/`#end`) with built-in and user-defined flags
 - Escape analysis: compile-time detection of returning stack pointers/slices, freeing non-heap memory, storing stack pointers in heap structs
 - `const` qualifier for pointer/slice types: deep const, `const cstr` → `const char*` vs `cstr` → `char*` at extern boundaries, string/cstring literals infer const, write/free/address-of rejection through const
@@ -282,11 +283,9 @@ Overview of what's solved and what's still missing for full C interop and embedd
 
 **Remaining gaps (active):**
 
-1. **No untagged unions** — FC unions are tagged (discriminated). C unions are untagged (overlapping memory). Needed for C libraries like SDL (`SDL_Event`). Workaround is `any*` + pointer casts, but that's ergonomically poor for heavily-used types.
+1. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC. Platform-dependent values (e.g., `O_RDONLY`) make manual redeclaration error-prone. Needed for any non-trivial C library (SDL has hundreds of constants).
 
-2. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC. Platform-dependent values (e.g., `O_RDONLY`) make manual redeclaration error-prone. Needed for any non-trivial C library (SDL has hundreds of constants).
-
-Items 1–2 are needed for the SDL use case (a motivating goal for FC's C interop story).
+Item 1 is needed for the SDL use case (a motivating goal for FC's C interop story).
 
 **Deferred gaps:**
 

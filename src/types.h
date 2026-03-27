@@ -62,7 +62,8 @@ struct Type {
             const char *name;
             const char *base_name;      /* original FC name before mangling (for diagnostics) */
             const char *qualified_name;  /* fully qualified FC path (e.g. "std::types.tuple2") */
-            const char *c_name;         /* C struct tag name for extern structs, NULL for normal */
+            const char *c_name;         /* C struct/union tag name for extern types, NULL for normal */
+            bool is_c_union;            /* true for extern union (untagged C union layout) */
             StructField *fields;
             int field_count;
             Type **type_args;

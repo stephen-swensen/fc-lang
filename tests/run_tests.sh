@@ -57,8 +57,10 @@ run_test() {
         return
     fi
 
-    # Compile C -> binary
-    if ! "$CC" -std=c11 -Wall -Werror -o "$bin_file" "$c_file" 2>"$TMPDIR/${slug}.cc_stderr"; then
+    # Compile C -> binary (include source dir for local .h files)
+    local src_dir
+    src_dir="$(dirname "$(echo $fc_files | awk '{print $1}')")"
+    if ! "$CC" -std=c11 -Wall -Werror -I "$src_dir" -o "$bin_file" "$c_file" 2>"$TMPDIR/${slug}.cc_stderr"; then
         echo "  FAIL  $test_display (C compilation failed)"
         cat "$TMPDIR/${slug}.cc_stderr"
         failed=$((failed + 1))

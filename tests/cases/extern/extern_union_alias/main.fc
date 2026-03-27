@@ -1,0 +1,15 @@
+// Test: extern union with as alias
+module u from "test_union.h" =
+    extern union IntOrFloat as int_or_float =
+        i: int32
+        f: float32
+
+import int_or_float from u
+
+let main = (args: str[]) ->
+    let v = int_or_float { i = 7 }
+    assert(v.i == 7)
+    let mut v2 = default(int_or_float)
+    v2.f = 3.14f32
+    assert(v2.f == 3.14f32)
+    0

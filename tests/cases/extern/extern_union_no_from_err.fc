@@ -1,0 +1,7 @@
+// Test: extern union in module without from clause is an error
+module m =
+    extern union foo =
+        x: int32
+
+let main = (args: str[]) ->
+    0

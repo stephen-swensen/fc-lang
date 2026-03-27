@@ -187,7 +187,8 @@ static void emit_type(Type *t, FILE *out) {
             return;
         }
         if (t->struc.c_name) {
-            fprintf(out, "struct %s", t->struc.c_name);
+            fprintf(out, "%s %s", t->struc.is_c_union ? "union" : "struct",
+                t->struc.c_name);
         } else {
             fprintf(out, "%s", t->struc.name);
         }
@@ -1603,7 +1604,8 @@ static void emit_expr(Expr *e, FILE *out) {
             sname = mangle_generic_with_subst(sname, e->type);
         }
         if (e->type && e->type->kind == TYPE_STRUCT && e->type->struc.c_name) {
-            fprintf(out, "(struct %s){ ", e->type->struc.c_name);
+            fprintf(out, "(%s %s){ ", e->type->struc.is_c_union ? "union" : "struct",
+                e->type->struc.c_name);
         } else {
             fprintf(out, "(%s){ ", sname);
         }
@@ -2387,8 +2389,10 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
     typeset_add(eqs, t);
     switch (t->kind) {
     case TYPE_STRUCT:
-        for (int i = 0; i < t->struc.field_count; i++)
-            collect_eq_types(t->struc.fields[i].type, eqs);
+        if (!t->struc.is_c_union) {
+            for (int i = 0; i < t->struc.field_count; i++)
+                collect_eq_types(t->struc.fields[i].type, eqs);
+        }
         break;
     case TYPE_UNION:
         for (int i = 0; i < t->unio.variant_count; i++)
@@ -2902,19 +2906,26 @@ static void emit_eq_func(Type *t, FILE *out) {
     t = resolve_struct_stub(t);
     switch (t->kind) {
     case TYPE_STRUCT: {
-        int fc = t->struc.field_count;
-        if (fc == 0) {
-            fprintf(out, "    (void)a; (void)b;\n    return true;\n");
+        if (t->struc.is_c_union) {
+            /* Extern unions: byte-level comparison via memcmp */
+            fprintf(out, "    return memcmp(&a, &b, sizeof(");
+            emit_type(t, out);
+            fprintf(out, ")) == 0;\n");
         } else {
-            fprintf(out, "    return ");
-            for (int i = 0; i < fc; i++) {
-                if (i > 0) fprintf(out, " && ");
-                char a_buf[256], b_buf[256];
-                snprintf(a_buf, sizeof(a_buf), "a.%s", t->struc.fields[i].name);
-                snprintf(b_buf, sizeof(b_buf), "b.%s", t->struc.fields[i].name);
-                emit_value_eq(t->struc.fields[i].type, a_buf, b_buf, out);
+            int fc = t->struc.field_count;
+            if (fc == 0) {
+                fprintf(out, "    (void)a; (void)b;\n    return true;\n");
+            } else {
+                fprintf(out, "    return ");
+                for (int i = 0; i < fc; i++) {
+                    if (i > 0) fprintf(out, " && ");
+                    char a_buf[256], b_buf[256];
+                    snprintf(a_buf, sizeof(a_buf), "a.%s", t->struc.fields[i].name);
+                    snprintf(b_buf, sizeof(b_buf), "b.%s", t->struc.fields[i].name);
+                    emit_value_eq(t->struc.fields[i].type, a_buf, b_buf, out);
+                }
+                fprintf(out, ";\n");
             }
-            fprintf(out, ";\n");
         }
         break;
     }

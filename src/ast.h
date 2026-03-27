@@ -351,8 +351,9 @@ struct Decl {
         /* DECL_STRUCT */
         struct {
             const char *name;
-            const char *c_name;     /* C struct tag name for extern structs, NULL for normal */
-            bool is_extern;         /* true for extern struct declarations */
+            const char *c_name;     /* C struct/union tag name for extern types, NULL for normal */
+            bool is_extern;         /* true for extern struct/union declarations */
+            bool is_c_union;        /* true for extern union (untagged C union layout) */
             StructField *fields;
             int field_count;
             const char **type_params;   /* type var names, e.g. ["'a", "'b"] */

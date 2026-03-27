@@ -2161,8 +2161,9 @@ static Decl *parse_extern_decl(Parser *p) {
     loc.filename = p->filename;
     expect(p, TOK_EXTERN);
 
-    /* extern struct — C struct layout import */
-    if (check(p, TOK_STRUCT)) {
+    /* extern struct/union — C struct or union layout import */
+    bool is_c_union = check(p, TOK_UNION);
+    if (check(p, TOK_STRUCT) || is_c_union) {
         advance_p(p);
         const char *c_name = tok_intern(p, expect(p, TOK_IDENT));
         const char *fc_name = c_name;
@@ -2192,6 +2193,7 @@ static Decl *parse_extern_decl(Parser *p) {
         d->struc.name = fc_name;
         d->struc.c_name = c_name;
         d->struc.is_extern = true;
+        d->struc.is_c_union = is_c_union;
         d->struc.is_generic = false;
         d->struc.type_params = NULL;
         d->struc.type_param_count = 0;

@@ -3255,6 +3255,50 @@ match ts with                                        // pattern matching
 - The compiler always emits `struct C_name` in the generated C. This works for both `struct timespec` (no typedef) and `typedef struct SDL_Rect { ... } SDL_Rect;` (where the struct tag matches the typedef name).
 - Structs with union members, bitfields, or anonymous inner structs are not supported — use `any*` for those types.
 
+### Extern unions
+
+C union types (untagged, overlapping memory) can be imported using `extern union` inside a `from` module. This is analogous to `extern struct` — the compiler uses the C union directly instead of generating its own definition. Extern unions are distinct from FC's tagged `union` type: they have no discriminant tag and their fields overlap in memory.
+
+```fc
+module u from "test_union.h" =
+    extern union int_or_float =
+        i: int32
+        f: float32
+```
+
+The generated C uses `union int_or_float` wherever the FC type is referenced.
+
+**With alias:**
+
+```fc
+module sdl from "SDL2/SDL.h" =
+    extern union SDL_Event as sdl_event =
+        type: uint32
+        key: sdl_keyboard_event
+        motion: sdl_mouse_motion_event
+```
+
+**Usage** — extern unions support field access, literals, default, sizeof, address-of, and equality:
+
+```fc
+import sdl_event from sdl
+
+let mut event = default(sdl_event)
+event.type = 42u32                             // field mutation
+let v = int_or_float { i = 99 }               // literal
+let size = sizeof(sdl_event)                   // size query
+let eq = v == default(int_or_float)            // byte-level equality (memcmp)
+```
+
+**Equality** — extern union equality uses byte-level comparison (`memcmp` over `sizeof`), not field-by-field comparison. This is the only sound option since fields overlap in memory and there is no tag to determine the active member.
+
+**Rules:**
+- Extern unions can only appear inside a `module ... from "header"` block.
+- Extern unions cannot be generic (no type parameters).
+- All fields must be declared with FC types that are assignment-compatible with the actual C field types.
+- The compiler always emits `union C_name` in the generated C.
+- Pattern matching is not supported on extern unions — there is no tag to dispatch on, and reading all overlapping fields simultaneously is semantically wrong.
+
 ### Reserved identifiers and `extern as`
 
 FC reserves `alloc`, `free`, `sizeof`, `default`, and `assert` as built-in operator names — they cannot be used as user-defined binding names anywhere in FC code. This creates a conflict when importing C functions that share these names. `free` is the most common case.

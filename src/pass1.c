@@ -332,6 +332,7 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     st->struc.name = d->struc.name;
     st->struc.base_name = d->struc.name;
     st->struc.c_name = d->struc.c_name;
+    st->struc.is_c_union = d->struc.is_c_union;
     st->struc.fields = d->struc.fields;
     st->struc.field_count = d->struc.field_count;
     st->struc.type_args = NULL;
@@ -393,8 +394,8 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
         }
         if (!d->module.from_lib && child->kind == DECL_STRUCT && child->struc.is_extern) {
             diag_error(child->loc,
-                "extern struct in module '%s' requires a 'from' clause on the module",
-                mod_name);
+                "extern %s in module '%s' requires a 'from' clause on the module",
+                child->struc.is_c_union ? "union" : "struct", mod_name);
         }
     }
     for (int j = 0; j < d->module.decl_count; j++) {
@@ -433,6 +434,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 st->struc.base_name = src_name;
                 st->struc.qualified_name = make_qualified(intern, display_prefix, src_name);
                 st->struc.c_name = child->struc.c_name;
+                st->struc.is_c_union = child->struc.is_c_union;
                 st->struc.fields = child->struc.fields;
                 st->struc.field_count = child->struc.field_count;
                 st->struc.type_args = NULL;
@@ -778,7 +780,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         }
         case DECL_STRUCT: {
             if (d->struc.is_extern) {
-                diag_error(d->loc, "extern struct must be inside a module with a 'from' clause");
+                diag_error(d->loc, "extern %s must be inside a module with a 'from' clause",
+                    d->struc.is_c_union ? "union" : "struct");
                 break;
             }
             Symbol *existing = symtab_lookup(symtab, d->struc.name);

@@ -723,6 +723,10 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
         diag_error(loc, "cannot destructure non-struct type %s", type_name(struct_type));
         return;
     }
+    if (struct_type->struc.is_c_union) {
+        diag_error(loc, "cannot destructure extern union type '%s'", type_name(struct_type));
+        return;
+    }
 
     for (int i = 0; i < pat->struc.field_count; i++) {
         const char *fname = pat->struc.fields[i].name;
@@ -3286,6 +3290,11 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
     case PAT_STRUCT: {
         if (type->kind != TYPE_STRUCT) {
             diag_error(pat->loc, "struct pattern on non-struct type %s", type_name(type));
+            return;
+        }
+        if (type->struc.is_c_union) {
+            diag_error(pat->loc, "cannot pattern match on extern union type '%s'",
+                type_name(type));
             return;
         }
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
