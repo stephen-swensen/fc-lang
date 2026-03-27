@@ -2,6 +2,8 @@
 
 FC is a systems programming language that transpiles to C11. It aims to combine modern language ergonomics with C's performance and memory model — no garbage collector, no borrow checker, just direct control.
 
+https://fc-lang.dev
+
 ## Key Features
 
 - **C11 target** — generates portable C using `<stdint.h>` types and `_Static_assert`
