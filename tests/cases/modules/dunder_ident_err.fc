@@ -1,0 +1,4 @@
+let my__bad = 42
+
+let main = (args: str[]) ->
+    my__bad

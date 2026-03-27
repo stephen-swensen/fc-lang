@@ -126,7 +126,19 @@ static TokenKind check_keyword(const char *start, int len) {
 static Token scan_identifier(Lexer *l) {
     while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
     int len = (int)(l->current - l->start);
-    return make_token(l, check_keyword(l->start, len));
+    /* Reject identifiers containing __ (double underscore) — reserved for
+     * the compiler's name mangling of namespace/module hierarchies. */
+    TokenKind kw = check_keyword(l->start, len);
+    if (kw == TOK_IDENT) {
+        for (int i = 0; i + 1 < len; i++) {
+            if (l->start[i] == '_' && l->start[i + 1] == '_') {
+                SrcLoc loc = { .line = l->line, .col = l->start_col };
+                diag_fatal(loc, "identifier '%.*s' contains '__' (double underscore), "
+                    "which is reserved", len, l->start);
+            }
+        }
+    }
+    return make_token(l, kw);
 }
 
 static Token scan_number(Lexer *l) {
