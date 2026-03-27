@@ -1,0 +1,10 @@
+// Test: extern constant with struct type is rejected
+struct point =
+    x: int32
+    y: int32
+
+module c from "fcntl.h" =
+    extern O_RDONLY: point
+
+let main = (args: str[]) ->
+    0

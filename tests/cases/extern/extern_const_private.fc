@@ -1,0 +1,10 @@
+// Test: private extern constants are not accessible outside the module
+module c from "fcntl.h" =
+    private extern O_RDONLY: int64
+    extern O_WRONLY: int64
+
+let main = (args: str[]) ->
+    // Public constant is accessible
+    let wr = c.O_WRONLY
+    assert(wr >= 0)
+    0

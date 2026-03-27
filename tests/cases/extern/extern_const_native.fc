@@ -1,0 +1,8 @@
+// Test: extern constants with isize/usize native types
+module c from "stdio.h" =
+    extern BUFSIZ as bufsiz: usize
+
+let main = (args: str[]) ->
+    let sz = c.bufsiz
+    assert(sz > 0u)
+    0

@@ -1,0 +1,23 @@
+// Test: extern constants used in arithmetic and bitwise expressions (SDL flags pattern)
+module c from "fcntl.h" =
+    extern O_RDONLY: int64
+    extern O_WRONLY: int64
+    extern O_CREAT: int64
+
+let main = (args: str[]) ->
+    // Bitwise OR — the SDL/POSIX flags pattern
+    let flags = c.O_WRONLY | c.O_CREAT
+    assert(flags != 0)
+
+    // Comparison
+    assert(c.O_RDONLY != c.O_WRONLY)
+
+    // Arithmetic
+    let sum = c.O_RDONLY + c.O_WRONLY
+    assert(sum >= 0)
+
+    // Use in if-expression
+    let result = if c.O_RDONLY == 0 then 1 else 0
+    assert(result == 0 || result == 1)
+
+    0

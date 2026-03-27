@@ -276,6 +276,8 @@ Overview of what's solved and what's still missing for full C interop and embedd
 - Conditional compilation (`#if`/`#else`/`#end`) with built-in and user-defined flags
 - Escape analysis: compile-time detection of returning stack pointers/slices, freeing non-heap memory, storing stack pointers in heap structs
 - `const` qualifier for pointer/slice types: deep const, `const cstr` → `const char*` vs `cstr` → `char*` at extern boundaries, string/cstring literals infer const, write/free/address-of rejection through const
+- Extern constants: `extern C_NAME [as fc_name]: type` imports C `#define` constants with type validation (scalar/pointer/cstr only) and automatic cstr boundary casts
+- Fixed-size inline array fields (`T[N]`) in structs and extern structs
 
 **Addressed by platform contract / core / stdlib redesign (see Active TODO):**
 - ~~No `--target` flag~~ — dropped. Platform contract is "C11 with libc and heap." No bare-metal support. Conditional compilation uses user-defined `--flag` only.
@@ -283,11 +285,7 @@ Overview of what's solved and what's still missing for full C interop and embedd
 
 **Remaining gaps (active):**
 
-1. **No `#define` / macro interop** — C constants defined as `#define FOO 42` can't be imported. Must redeclare manually in FC. Platform-dependent values (e.g., `O_RDONLY`) make manual redeclaration error-prone. Needed for any non-trivial C library (SDL has hundreds of constants).
-
-2. **No fixed-size array fields in structs** — C structs and unions often contain fixed-size arrays (`uint8_t addr[16]`, `char name[256]`). FC has no way to declare a field that occupies `N * sizeof(T)` bytes inline. Design direction: `T[N]` syntax in struct field declarations as a storage annotation — the field is stored as a C array but accessed as a `T[]` slice (the compiler creates a fat pointer view on access). Slice assignment to a fixed-size field would emit a bounded `memcpy`. Works for both extern and first-class FC structs. Not blocking for SDL2 (whose types are mostly scalar/struct fields) but needed for networking, crypto, and other C APIs that use inline arrays.
-
-Items 1–2 are needed for full C interop coverage. Item 1 is the SDL2 blocker.
+None — all active C interop gaps are resolved. See deferred gaps below for items outside FC's platform contract.
 
 **Deferred gaps:**
 
@@ -300,6 +298,14 @@ Items 1–2 are needed for full C interop coverage. Item 1 is the SDL2 blocker.
 ---
 
 # Resolved
+
+## Extern constants — `#define` interop (resolved 2026-03-27)
+
+C constants defined as `#define FOO 42` can now be imported using the existing `extern` syntax with a non-function type: `extern FOO: int64`. The mechanism requires no special codegen — the C macro name is emitted directly into the generated code, and the C preprocessor expands it after the `#include`. The `as` clause works for renaming: `extern SDL_INIT_VIDEO as sdl_init_video: int64`.
+
+Type validation rejects types with no C `#define` equivalent: slices, options, structs, unions, void. For `cstr`-typed constants, codegen emits a `(const uint8_t*)` cast to bridge the `char*` / `uint8_t*` signedness difference at the C boundary.
+
+Function-like macros (`#define MAX(a,b) ...`) are code transformations, not constant values, and remain outside the scope of this feature. Users wrap them in C helper functions or reimplement in FC.
 
 ## Function pointer trampolines at extern boundaries (resolved 2026-03-22)
 

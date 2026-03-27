@@ -1,0 +1,70 @@
+// Test: extern constants with all supported types
+module c from "test_consts.h" =
+    // Signed integers
+    extern CONST_I8 as const_i8: int8
+    extern CONST_I16 as const_i16: int16
+    extern CONST_I32 as const_i32: int32
+    extern CONST_I64 as const_i64: int64
+
+    // Unsigned integers
+    extern CONST_U8 as const_u8: uint8
+    extern CONST_U16 as const_u16: uint16
+    extern CONST_U32 as const_u32: uint32
+    extern CONST_U64 as const_u64: uint64
+
+    // Floats
+    extern CONST_F32 as const_f32: float32
+    extern CONST_F64 as const_f64: float64
+
+    // Bool
+    extern CONST_TRUE as const_true: bool
+    extern CONST_FALSE as const_false: bool
+
+    // Pointer
+    extern CONST_NULL as const_null: any*
+
+    // String
+    extern CONST_VERSION as const_version: const cstr
+
+    // Bitwise flags
+    extern FLAG_A as flag_a: int32
+    extern FLAG_B as flag_b: int32
+    extern FLAG_C as flag_c: int32
+
+let main = (args: str[]) ->
+    // Signed integers
+    assert(c.const_i8 == (0i8 - 42i8))
+    assert(c.const_i16 == (0i16 - 1000i16))
+    assert(c.const_i32 == (0 - 100000))
+    assert(c.const_i64 == (0i64 - 1000000000i64))
+
+    // Unsigned integers
+    assert(c.const_u8 == 200u8)
+    assert(c.const_u16 == 50000u16)
+    assert(c.const_u32 == 3000000000u32)
+    assert(c.const_u64 == 9000000000000000000u64)
+
+    // Floats
+    assert(c.const_f32 > 3.0f32)
+    assert(c.const_f32 < 4.0f32)
+    assert(c.const_f64 > 2.7)
+    assert(c.const_f64 < 2.8)
+
+    // Bool
+    assert(c.const_true)
+    assert(!c.const_false)
+
+    // Pointer — null check
+    let p = c.const_null
+    assert(p == (any*) 0u)
+
+    // String — cstr is non-null
+    let v = c.const_version
+    assert(v != (const cstr) 0u)
+
+    // Bitwise flags
+    let all_flags = c.flag_a | c.flag_b | c.flag_c
+    assert(all_flags == 7)
+    assert(c.flag_a & c.flag_b == 0)
+
+    0

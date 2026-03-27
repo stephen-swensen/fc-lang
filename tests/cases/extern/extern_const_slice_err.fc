@@ -1,0 +1,6 @@
+// Test: extern constant with slice type is rejected
+module c from "fcntl.h" =
+    extern O_RDONLY: int32[]
+
+let main = (args: str[]) ->
+    0

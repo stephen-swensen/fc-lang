@@ -1,0 +1,7 @@
+// Test: accessing a private extern constant from outside the module is an error
+module c from "fcntl.h" =
+    private extern O_RDONLY: int64
+
+let main = (args: str[]) ->
+    let rd = c.O_RDONLY
+    0

@@ -1450,6 +1450,10 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_type(e->type, out);
                 fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
                     e->field.codegen_name);
+            } else if (is_cstr_type(e->type)) {
+                /* C string #defines are char*; FC cstr is uint8_t* — cast at boundary */
+                fprintf(out, "(%s uint8_t*)(%s)",
+                    (e->type->is_const ? "const" : ""), e->field.codegen_name);
             } else {
                 fprintf(out, "%s", e->field.codegen_name);
             }

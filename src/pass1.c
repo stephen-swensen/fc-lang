@@ -491,6 +491,33 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 msym->type = child->ext.type;
                 msym->is_private = child->is_private;
             }
+            /* Validate types for extern constants (non-function externs).
+             * Function-type externs are extern function declarations.
+             * Constants may only have scalar or pointer types — types that
+             * map directly to C #define constant values. */
+            Type *et = child->ext.type;
+            if (et && et->kind != TYPE_FUNC) {
+                const char *reason = NULL;
+                switch (et->kind) {
+                case TYPE_SLICE:
+                case TYPE_FIXED_ARRAY:
+                    reason = "slice"; break;
+                case TYPE_OPTION:
+                    reason = "option"; break;
+                case TYPE_STRUCT:
+                    reason = "struct"; break;
+                case TYPE_UNION:
+                    reason = "union"; break;
+                case TYPE_VOID:
+                    reason = "void"; break;
+                default: break;
+                }
+                if (reason) {
+                    diag_error(child->loc,
+                        "extern constant '%s' cannot have %s type '%s'",
+                        child->ext.name, reason, type_name(et));
+                }
+            }
             break;
         }
         case DECL_MODULE: {

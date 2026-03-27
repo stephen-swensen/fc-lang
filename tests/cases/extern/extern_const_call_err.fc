@@ -1,0 +1,7 @@
+// Test: calling an extern constant (non-function) is rejected
+module c from "fcntl.h" =
+    extern O_RDONLY: int64
+
+let main = (args: str[]) ->
+    let x = c.O_RDONLY(42)
+    0

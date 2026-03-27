@@ -1,0 +1,9 @@
+module c from "fcntl.h" =
+    extern O_RDONLY: int64
+    extern O_WRONLY: int64
+
+let main = (args: str[]) ->
+    let rd = c.O_RDONLY
+    let wr = c.O_WRONLY
+    assert(rd != wr)
+    0
