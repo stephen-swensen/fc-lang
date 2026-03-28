@@ -1,6 +1,6 @@
 (* ================================================================== *)
 (* FC Language — EBNF Grammar                                         *)
-(* Version 0.8-draft                                                   *)
+(* Version 0.9-draft                                                   *)
 (*                                                                     *)
 (* Notation:                                                           *)
 (*   =          defines a production                                   *)
