@@ -2,31 +2,42 @@ namespace std::
 
 module text =
     private module c from "stdlib.h" =
-        extern atoi: (const cstr) -> int32
-        extern atoll: (const cstr) -> int64
-        extern atof: (const cstr) -> float64
-        extern strtof: (const cstr, any*) -> float32
+        extern strtol: (const cstr, cstr*, int32) -> int64
+        extern strtod: (const cstr, cstr*) -> float64
+        extern strtof: (const cstr, cstr*) -> float32
 
-    // parse_int32: parses a string as a 32-bit integer.
-    // s: const str — input string.
-    // returns: int32 — parsed value, or 0 if the string is not a valid integer.
+    // parse_int32: parses a string as a 32-bit signed integer (base 10).
+    // returns: int32? — some(value) on success, none if the string is not a valid integer.
     let parse_int32 = (s: const str) ->
-        c.atoi((cstr)s)
+        let cs = (cstr)s
+        let mut endptr = default(cstr)
+        let val = c.strtol(cs, &endptr, 10)
+        if endptr == cs then default(int32?)
+        else some((int32)val)
 
-    // parse_int64: parses a string as a 64-bit integer.
-    // s: const str — input string.
-    // returns: int64 — parsed value, or 0 if the string is not a valid integer.
+    // parse_int64: parses a string as a 64-bit signed integer (base 10).
+    // returns: int64? — some(value) on success, none if the string is not a valid integer.
     let parse_int64 = (s: const str) ->
-        c.atoll((cstr)s)
+        let cs = (cstr)s
+        let mut endptr = default(cstr)
+        let val = c.strtol(cs, &endptr, 10)
+        if endptr == cs then default(int64?)
+        else some(val)
 
     // parse_float32: parses a string as a 32-bit float.
-    // s: const str — input string.
-    // returns: float32 — parsed value, or 0.0 if the string is not a valid number.
+    // returns: float32? — some(value) on success, none if the string is not a valid number.
     let parse_float32 = (s: const str) ->
-        c.strtof((cstr)s, default(any*))
+        let cs = (cstr)s
+        let mut endptr = default(cstr)
+        let val = c.strtof(cs, &endptr)
+        if endptr == cs then default(float32?)
+        else some(val)
 
     // parse_float64: parses a string as a 64-bit float.
-    // s: const str — input string.
-    // returns: float64 — parsed value, or 0.0 if the string is not a valid number.
+    // returns: float64? — some(value) on success, none if the string is not a valid number.
     let parse_float64 = (s: const str) ->
-        c.atof((cstr)s)
+        let cs = (cstr)s
+        let mut endptr = default(cstr)
+        let val = c.strtod(cs, &endptr)
+        if endptr == cs then default(float64?)
+        else some(val)

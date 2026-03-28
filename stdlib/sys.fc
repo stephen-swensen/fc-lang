@@ -4,6 +4,7 @@ module sys =
     private module c from "stdlib.h" =
         extern getenv: (const cstr) -> const cstr?
         extern exit: (int32) -> void
+
     private module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
         extern clock_gettime: (int32, timespec*) -> int32
         extern nanosleep: (timespec*, timespec*?) -> int32

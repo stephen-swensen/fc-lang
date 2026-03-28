@@ -1,26 +1,38 @@
 import text from std::
-import math from std::
 
 let main = (args: str[]) ->
-    // parse_int32
-    assert(text.parse_int32("42") == 42)
-    assert(text.parse_int32("-7") == -7)
-    assert(text.parse_int32("0") == 0)
-    assert(text.parse_int32("abc") == 0)
+    // parse_int32 — success
+    assert(text.parse_int32("42") == some(42))
+    assert(text.parse_int32("-7") == some(-7))
+    assert(text.parse_int32("0") == some(0))
 
-    // parse_int64
-    assert(text.parse_int64("1000000000000") == 1000000000000i64)
-    assert(text.parse_int64("-999") == -999i64)
-    assert(text.parse_int64("xyz") == 0i64)
+    // parse_int32 — failure
+    assert(text.parse_int32("abc") == default(int32?))
+    assert(text.parse_int32("") == default(int32?))
 
-    // parse_float64
-    assert(math.abs(text.parse_float64("3.14") - 3.14) < 0.001)
-    assert(text.parse_float64("0.0") == 0.0)
-    assert(text.parse_float64("bad") == 0.0)
+    // parse_int64 — success
+    assert(text.parse_int64("1000000000000") == some(1000000000000i64))
+    assert(text.parse_int64("-999") == some(-999i64))
 
-    // parse_float32
-    assert(math.abs((float64)text.parse_float32("2.5") - 2.5) < 0.001)
-    assert(text.parse_float32("0.0") == 0.0f32)
-    assert(text.parse_float32("bad") == 0.0f32)
+    // parse_int64 — failure
+    assert(text.parse_int64("xyz") == default(int64?))
+    assert(text.parse_int64("") == default(int64?))
+
+    // parse_float64 — success
+    assert(text.parse_float64("3.14") != default(float64?))
+    assert(text.parse_float64("0.0") == some(0.0))
+    assert(text.parse_float64("-1.5") == some(-1.5))
+
+    // parse_float64 — failure
+    assert(text.parse_float64("bad") == default(float64?))
+    assert(text.parse_float64("") == default(float64?))
+
+    // parse_float32 — success
+    assert(text.parse_float32("2.5") == some(2.5f32))
+    assert(text.parse_float32("0.0") == some(0.0f32))
+
+    // parse_float32 — failure
+    assert(text.parse_float32("bad") == default(float32?))
+    assert(text.parse_float32("") == default(float32?))
 
     0
