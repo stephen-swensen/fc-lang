@@ -1,0 +1,16 @@
+import io from std::
+
+let main = (args: str[]) ->
+    // /dev/null always exists
+    assert(io.exists("/dev/null"))
+
+    // /tmp always exists
+    assert(io.exists("/tmp"))
+
+    // nonexistent path
+    assert(!io.exists("/nonexistent/path/file.txt"))
+
+    // empty string
+    assert(!io.exists(""))
+
+    0

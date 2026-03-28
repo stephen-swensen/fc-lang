@@ -1,0 +1,23 @@
+import io from std::
+
+let main = (args: str[]) ->
+    // /dev/null is writable
+    assert(io.can_write("/dev/null"))
+
+    // /tmp is writable
+    assert(io.can_write("/tmp"))
+
+    // nonexistent path is not writable
+    assert(!io.can_write("/nonexistent/path/file.txt"))
+
+    // write a temp file and verify it's writable
+    match io.open("/tmp/fc_test_can_write.txt", "w") with
+    | some(wf) ->
+        io.write("test", wf)
+        io.close(wf)
+    | none -> assert(false)
+
+    assert(io.can_write("/tmp/fc_test_can_write.txt"))
+    io.remove("/tmp/fc_test_can_write.txt")
+
+    0

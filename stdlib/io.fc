@@ -1,6 +1,9 @@
 namespace std::
 
 module io =
+    private module u from "unistd.h" =
+        extern access: (const cstr, int32) -> int32
+
     private module c from "stdio.h" =
         extern fwrite: (const any*, uint64, uint64, any*) -> uint64
         extern fread: (any*, uint64, uint64, any*) -> uint64
@@ -12,6 +15,7 @@ module io =
         extern feof: (any*) -> int32
         extern remove: (const cstr) -> int32
         extern rename: (const cstr, const cstr) -> int32
+        extern fgetc: (any*) -> int32
 
     // Seek origin constants for use with seek().
     let seek_set = 0
@@ -101,4 +105,30 @@ module io =
             read(buf, size, handle)
             close(handle)
             some(buf)
+
+    // read_char: reads a single byte from a file handle.
+    // f: any* — opaque FILE* handle (e.g. stdin, or from open).
+    // returns: uint8? — the byte read, or none on EOF.
+    let read_char = (f: any*) ->
+        let ch = c.fgetc(f)
+        if ch == -1 then default(uint8?)
+        else some((uint8)ch)
+
+    // exists: checks whether a file or directory exists at path.
+    // path: const str — file path to check.
+    // returns: bool — true if the path exists.
+    let exists = (path: const str) ->
+        u.access((cstr)path, 0) == 0
+
+    // can_read: checks whether the current process has read permission for path.
+    // path: const str — file path to check.
+    // returns: bool — true if the path exists and is readable.
+    let can_read = (path: const str) ->
+        u.access((cstr)path, 4) == 0
+
+    // can_write: checks whether the current process has write permission for path.
+    // path: const str — file path to check.
+    // returns: bool — true if the path exists and is writable.
+    let can_write = (path: const str) ->
+        u.access((cstr)path, 2) == 0
 

@@ -1,0 +1,32 @@
+import io from std::
+
+let main = (args: str[]) ->
+    // write a test file
+    match io.open("/tmp/fc_test_read_char.txt", "w") with
+    | some(wf) ->
+        io.write("AB", wf)
+        io.close(wf)
+    | none -> assert(false)
+
+    // read chars back one at a time
+    match io.open("/tmp/fc_test_read_char.txt", "r") with
+    | some(rf) ->
+        // first char is 'A' (65)
+        let c1 = io.read_char(rf)
+        assert(c1.is_some)
+        assert(c1! == 65u8)
+
+        // second char is 'B' (66)
+        let c2 = io.read_char(rf)
+        assert(c2.is_some)
+        assert(c2! == 66u8)
+
+        // third read is EOF
+        let c3 = io.read_char(rf)
+        assert(c3.is_none)
+
+        io.close(rf)
+    | none -> assert(false)
+
+    io.remove("/tmp/fc_test_read_char.txt")
+    0
