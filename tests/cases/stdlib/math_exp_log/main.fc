@@ -1,0 +1,24 @@
+import math from std::
+
+let eps = 0.000001
+
+let main = (args: str[]) ->
+    // exp
+    assert(math.abs(math.exp(0.0) - 1.0) < eps)
+    assert(math.abs(math.exp(1.0) - math.e) < eps)
+
+    // log (natural)
+    assert(math.abs(math.log(1.0)) < eps)
+    assert(math.abs(math.log(math.e) - 1.0) < eps)
+
+    // log2
+    assert(math.abs(math.log2(1.0)) < eps)
+    assert(math.abs(math.log2(2.0) - 1.0) < eps)
+    assert(math.abs(math.log2(8.0) - 3.0) < eps)
+
+    // log10
+    assert(math.abs(math.log10(1.0)) < eps)
+    assert(math.abs(math.log10(10.0) - 1.0) < eps)
+    assert(math.abs(math.log10(100.0) - 2.0) < eps)
+
+    0

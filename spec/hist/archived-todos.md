@@ -424,6 +424,9 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?`.
 
+### std::math module (resolved 2026-03-27)
+Added `stdlib/math.fc` wrapping C11 `math.h`. 2 constants (`pi`, `e`) and 14 functions: `sqrt`, `abs`, `pow`, `min`, `max`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `atan2`, `exp`, `log`, `log2`, `log10`. Float64 only — consistent with FC's explicit-cast philosophy. Also fixed float literal codegen precision (was `%g` / 6 digits, now `%.17g` for float64, `%.9g` for float32) and added `-lm` to test runners and `run.sh`. Tests in `tests/cases/stdlib/`.
+
 ### type_name() for generic function types (resolved 2026-03-27)
 `type_name()` (used by `%T` interpolation and all diagnostic error messages) now shows explicit type parameters on generic function types. Added `type_params` and `type_param_count` fields to `TYPE_FUNC` in `types.h`, populated from `EXPR_FUNC.explicit_type_vars` during pass2, and propagated through `resolve_type()` and `type_substitute()`. Output: `<'a>() -> 'a` instead of `() -> 'a`.
 

@@ -1,0 +1,25 @@
+import math from std::
+
+let eps = 0.000001
+
+let main = (args: str[]) ->
+    // sin
+    assert(math.abs(math.sin(0.0)) < eps)
+    assert(math.abs(math.sin(math.pi / 2.0) - 1.0) < eps)
+    assert(math.abs(math.sin(math.pi)) < eps)
+
+    // cos
+    assert(math.abs(math.cos(0.0) - 1.0) < eps)
+    assert(math.abs(math.cos(math.pi / 2.0)) < eps)
+    assert(math.abs(math.cos(math.pi) - -1.0) < eps)
+
+    // tan
+    assert(math.abs(math.tan(0.0)) < eps)
+    assert(math.abs(math.tan(math.pi / 4.0) - 1.0) < eps)
+
+    // atan2
+    assert(math.abs(math.atan2(0.0, 1.0)) < eps)
+    assert(math.abs(math.atan2(1.0, 0.0) - math.pi / 2.0) < eps)
+    assert(math.abs(math.atan2(1.0, 1.0) - math.pi / 4.0) < eps)
+
+    0

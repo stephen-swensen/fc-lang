@@ -982,10 +982,12 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_FLOAT_LIT: {
-        /* %g may strip the decimal point (e.g., 0.0 → "0"), which makes
-         * "0f" invalid C. Ensure there's always a decimal point. */
+        /* Use enough precision to round-trip IEEE 754 doubles (17 digits)
+         * and floats (9 digits). %g may strip the decimal point (e.g.,
+         * 0.0 → "0"), which makes "0f" invalid C. Ensure there's always one. */
         char fbuf[64];
-        snprintf(fbuf, sizeof(fbuf), "%g", e->float_lit.value);
+        int prec = (e->float_lit.lit_type->kind == TYPE_FLOAT32) ? 9 : 17;
+        snprintf(fbuf, sizeof(fbuf), "%.*g", prec, e->float_lit.value);
         bool has_dot = (strchr(fbuf, '.') || strchr(fbuf, 'e') || strchr(fbuf, 'E'));
         if (e->float_lit.lit_type->kind == TYPE_FLOAT32) {
             if (has_dot) fprintf(out, "%sf", fbuf);

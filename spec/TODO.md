@@ -4,10 +4,6 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ## Standard Library
 
-### std::math module
-
-sin, cos, sqrt, pow, abs, floor, ceil, round, etc. wrapping `math.h`. Tier 1 (C11 standard).
-
 ### std::text module
 
 String manipulation utilities (split, join, trim, contains, starts_with, etc.). Design TBD.

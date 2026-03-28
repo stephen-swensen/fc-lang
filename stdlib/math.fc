@@ -1,0 +1,72 @@
+namespace std::
+
+module math =
+    private module c from "math.h" =
+        extern sqrt: (float64) -> float64
+        extern fabs: (float64) -> float64
+        extern pow: (float64, float64) -> float64
+        extern fmin: (float64, float64) -> float64
+        extern fmax: (float64, float64) -> float64
+        extern floor: (float64) -> float64
+        extern ceil: (float64) -> float64
+        extern round: (float64) -> float64
+        extern sin: (float64) -> float64
+        extern cos: (float64) -> float64
+        extern tan: (float64) -> float64
+        extern atan2: (float64, float64) -> float64
+        extern exp: (float64) -> float64
+        extern log: (float64) -> float64
+        extern log2: (float64) -> float64
+        extern log10: (float64) -> float64
+
+    // Constants
+    let pi = 3.14159265358979323846
+    let e = 2.71828182845904523536
+
+    // sqrt: square root of x.
+    let sqrt = (x: float64) -> c.sqrt(x)
+
+    // abs: absolute value of x.
+    let abs = (x: float64) -> c.fabs(x)
+
+    // pow: x raised to the power y.
+    let pow = (x: float64, y: float64) -> c.pow(x, y)
+
+    // min: smaller of x and y.
+    let min = (x: float64, y: float64) -> c.fmin(x, y)
+
+    // max: larger of x and y.
+    let max = (x: float64, y: float64) -> c.fmax(x, y)
+
+    // floor: largest integer value <= x.
+    let floor = (x: float64) -> c.floor(x)
+
+    // ceil: smallest integer value >= x.
+    let ceil = (x: float64) -> c.ceil(x)
+
+    // round: nearest integer value, rounding halfway cases away from zero.
+    let round = (x: float64) -> c.round(x)
+
+    // sin: sine of x (radians).
+    let sin = (x: float64) -> c.sin(x)
+
+    // cos: cosine of x (radians).
+    let cos = (x: float64) -> c.cos(x)
+
+    // tan: tangent of x (radians).
+    let tan = (x: float64) -> c.tan(x)
+
+    // atan2: arc tangent of y/x, using signs to determine quadrant.
+    let atan2 = (y: float64, x: float64) -> c.atan2(y, x)
+
+    // exp: e raised to the power x.
+    let exp = (x: float64) -> c.exp(x)
+
+    // log: natural logarithm of x.
+    let log = (x: float64) -> c.log(x)
+
+    // log2: base-2 logarithm of x.
+    let log2 = (x: float64) -> c.log2(x)
+
+    // log10: base-10 logarithm of x.
+    let log10 = (x: float64) -> c.log10(x)

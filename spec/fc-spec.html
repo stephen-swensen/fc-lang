@@ -2863,6 +2863,47 @@ sys.sleep(1000)    // sleep for 1 second
 
 ---
 
+## std::math — Mathematical Functions
+
+Wraps C11 `math.h` for common mathematical operations. All functions operate on `float64` (on Linux, link the generated C with `-lm`).
+
+```fc
+import math from std::
+
+let distance = (x: float64, y: float64) ->
+    math.sqrt(math.pow(x, 2.0) + math.pow(y, 2.0))
+```
+
+### Constants
+
+| Name | Value |
+|------|-------|
+| `math.pi` | 3.14159265358979323846 |
+| `math.e` | 2.71828182845904523536 |
+
+### Functions
+
+```
+math.sqrt(x)           square root
+math.abs(x)            absolute value
+math.pow(x, y)         x raised to y
+math.min(x, y)         smaller of x and y
+math.max(x, y)         larger of x and y
+math.floor(x)          largest integer ≤ x
+math.ceil(x)           smallest integer ≥ x
+math.round(x)          nearest integer (halfway away from zero)
+math.sin(x)            sine (radians)
+math.cos(x)            cosine (radians)
+math.tan(x)            tangent (radians)
+math.atan2(y, x)       arc tangent of y/x
+math.exp(x)            e^x
+math.log(x)            natural logarithm
+math.log2(x)           base-2 logarithm
+math.log10(x)          base-10 logarithm
+```
+
+---
+
 ---
 
 # PART 7 — Program Structure

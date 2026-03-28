@@ -29,7 +29,7 @@ tmpdir=$(mktemp -d /tmp/fc-run.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
 
 ./fc "${fc_files[@]}" stdlib/* "${fc_flags[@]}" -o "$tmpdir/out.c"
-cc -std=c11 -Wall -Werror -o "$tmpdir/out" "$tmpdir/out.c"
+cc -std=c11 -Wall -Werror -o "$tmpdir/out" "$tmpdir/out.c" -lm
 set +e
 "$tmpdir/out"
 echo "[exit: $?]"
