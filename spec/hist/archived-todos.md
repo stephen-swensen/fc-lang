@@ -424,6 +424,26 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?`.
 
+### Stack array literal size enforcement (resolved 2026-03-27)
+Pass2 now validates that the size expression in `T[N] { }` is `EXPR_INT_LIT`, rejecting runtime expressions with "array size must be a compile-time constant". Previously this only failed at C compilation.
+
+### Remove str32 (resolved 2026-03-27)
+`str32` (alias for `uint32[]`) had no runtime support — no literals, no interpolation, no conversion. Removed from compiler (`TYPE_STR32` eliminated, `str32` no longer parses as a builtin type). Can re-add when Unicode support is properly designed. See also: "char32 type and str32 status (2026-03-24)" and "True type aliases" entries below.
+
+### Missing %p interpolation test (resolved 2026-03-27)
+Added `tests/cases/strings/interp_ptr.fc` — exercises `%p` format specifier on pointer values in string interpolation.
+
+### Stdlib signatures const qualifiers (resolved 2026-03-27)
+Spec function signatures for `io.write`, `io.open`, and `sys.env` updated to include `const` qualifiers matching the implementation: `io.write(s: const str, f: any*)`, `io.open(path: const str, mode: const str)`, `sys.env(name: const str) -> const str?`.
+
+### Deferred items archived (2026-03-27)
+The following items were explicitly moved out of the active TODO as deferred/out-of-scope:
+- **Closures at extern boundaries** — wrapper function pattern for passing closures to C callback APIs. Current non-capturing restriction is conservative-but-complete.
+- **Unreachable pattern detection** — warning-only feature. Maranget infrastructure supports it as the dual of exhaustiveness. Small addition when there's demand.
+- **Field access on type variables** — structural generics (`(p: 'a) -> p.x + p.y`). High complexity, trivial workaround exists (pass fields as separate parameters).
+- **Inline assembly, volatile, bitfield structs** — outside FC's platform contract. Users write C wrapper files.
+- **Eager type resolution** — not viable. Blocked by self-referential struct cycles. On-demand `resolve_type()` is the correct approach.
+
 ### True type aliases for str/cstr/str32, import-as alias propagation (resolved 2026-03-17)
 - `TYPE_STR`, `TYPE_CSTR`, `TYPE_STR32` removed from `TypeKind` enum. `str` is now `TYPE_SLICE{uint8}`, `cstr` is `TYPE_POINTER{uint8}`, `str32` is `TYPE_SLICE{uint32}` — with a `const char *alias` field on `Type` for display names.
 - `str` and `uint8[]` are fully interchangeable (same for `cstr`/`uint8*`, `str32`/`uint32[]`).
