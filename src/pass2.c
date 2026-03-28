@@ -1361,9 +1361,20 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (type_is_error(lt) || type_is_error(rt)) { e->type = type_error(); return e->type; }
         TokenKind op = e->binary.op;
 
-        /* Allow operations on type variables — defer validation to monomorphization */
+        /* Allow operations on type variables — defer validation to monomorphization.
+         * Reject binary ops on different type variables ('a op 'b): the result
+         * type cannot be soundly determined when widening is involved.
+         * Same type var ('a op 'a) and concrete op typevar are fine. */
         if (lt->kind == TYPE_TYPE_VAR || rt->kind == TYPE_TYPE_VAR) {
-            /* Comparison always returns bool */
+            if (lt->kind == TYPE_TYPE_VAR && rt->kind == TYPE_TYPE_VAR &&
+                lt->type_var.name != rt->type_var.name) {
+                diag_error(e->loc,
+                    "binary operator on different type variables %s and %s",
+                    type_name(lt), type_name(rt));
+                e->type = type_error();
+                return e->type;
+            }
+            /* Comparison/logical always returns bool */
             if (op == TOK_EQEQ || op == TOK_BANGEQ || op == TOK_LT ||
                 op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ ||
                 op == TOK_AMPAMP || op == TOK_PIPEPIPE) {

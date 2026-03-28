@@ -1,0 +1,8 @@
+// Concrete + type var: the concrete type pins 'a at instantiation
+let add_one = (x: 'a) -> x + 1
+let sub_ten = (x: 'a) -> 10 - x
+
+let main = (args: str[]) ->
+    assert(add_one(41) == 42)
+    assert(sub_ten(3) == 7)
+    0

@@ -1,0 +1,5 @@
+let both = (x: 'a, y: 'b) -> x && y
+
+let main = (args: str[]) ->
+    both(true, false)
+    0

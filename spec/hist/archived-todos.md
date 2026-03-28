@@ -424,6 +424,12 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?`.
 
+### Generic mixed type-var arithmetic (resolved 2026-03-27)
+Binary operations on different type variables (`'a + 'b`, `'a > 'b`) were unsound — the result type was picked arbitrarily, which produced wrong types when widening was involved (e.g., `'a = int32`, `'b = int64`). Fix: pass2 now rejects binary operators on different type variables at template time. Same type var (`'a + 'a`) and concrete+typevar (`int32 + 'a`) remain allowed. Conservative-but-complete — no partial fix that covers some cases but breaks others. Tests: updated 4 existing error tests, added `concrete_typevar_arith.fc`, `mixed_typevar_bitwise_err.fc`, `mixed_typevar_logical_err.fc`.
+
+### Branch widening in if/match (deferred 2026-03-27)
+if/match branches require exact type equality. Implicit widening would allow compatible types to unify (e.g., `const str` + `str` → `const str`, `int8` + `int32` → `int32`). Also affects loop return type unification via `break value`. Deferred permanently — significant complexity (numeric widening, const widening, loop types all interact) for marginal benefit. Users manually cast to unify: `(const str)non_const_expr`. This is consistent with FC's design: no implicit widening across branches avoids a class of subtle bugs.
+
 ### Stack array literal size enforcement (resolved 2026-03-27)
 Pass2 now validates that the size expression in `T[N] { }` is `EXPR_INT_LIT`, rejecting runtime expressions with "array size must be a compile-time constant". Previously this only failed at C compilation.
 

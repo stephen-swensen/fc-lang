@@ -1,0 +1,5 @@
+let band = (x: 'a, y: 'b) -> x & y
+
+let main = (args: str[]) ->
+    band(0xff, 0x0f)
+    0

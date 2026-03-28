@@ -14,20 +14,6 @@ Non-capturing lambdas are not affected — their `.ctx` is `NULL`.
 
 Priority: medium (safety net exists at C level, but violates FC's "catch errors early" philosophy).
 
-## Type System
-
-### Generic mixed type-var arithmetic (soundness)
-
-Binary operations on different type variables (`'a + 'b`, `'a > 'b`) are allowed at template time, but the result type is unsound when widening is involved. The type-var early return in pass2 picks one operand's type arbitrarily. When instantiated with types that widen (e.g., `'a = int32`, `'b = int64`), the inferred return type doesn't match the computed type.
-
-Fix: restrict mixed type-var binary operations — require both operands to be the same type variable (`'a + 'a` ok, `'a + 'b` error at template time, concrete + `'a` ok since it pins `'a`). Conservative-but-complete.
-
-### Branch widening in if/match (deferred)
-
-if/match branches require exact type equality. Adding implicit widening would allow compatible types to unify — e.g., `const str` + `str` → `const str`, or `int8` + `int32` → `int32`. Also affects loop return type unification via `break value`.
-
-Deferred — significant work, numeric widening / const widening / loop types all interact. Users manually cast to unify: `(const str)non_const_expr`.
-
 ## Standard Library
 
 ### std::math module
