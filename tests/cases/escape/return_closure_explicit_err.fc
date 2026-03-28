@@ -1,0 +1,8 @@
+// Explicit return of capturing closure via let binding
+let make_adder = (x: int32) ->
+    let f = (n: int32) -> n + x
+    return f
+    f
+
+let main = (args: str[]) ->
+    0

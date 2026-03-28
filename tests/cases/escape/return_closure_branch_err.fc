@@ -1,0 +1,9 @@
+// If-expression where one branch captures — conservative merge
+let make = (x: int32, flag: bool) ->
+    if flag then
+        (n: int32) -> n + x
+    else
+        (n: int32) -> n * 2
+
+let main = (args: str[]) ->
+    0

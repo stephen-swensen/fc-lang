@@ -1,0 +1,7 @@
+// Capturing closures used locally — no escape, no error
+let main = (args: str[]) ->
+    let threshold = 10
+    let above = (x: int32) -> x > threshold
+    assert(above(15) == true)
+    assert(above(5) == false)
+    0

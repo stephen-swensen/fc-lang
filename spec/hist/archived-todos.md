@@ -424,6 +424,9 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?`.
 
+### Capturing lambda context lifetime (resolved 2026-03-27)
+Returning a capturing lambda created a dangling pointer — the compound literal context (`&(_ctx_fn){ .captured_x = x }`) has block scope in C11. The direct case (`return (x) -> x + captured`) was already caught by a pattern match on `EXPR_FUNC`, but the indirect case (`let f = (x) -> x + captured; f`) was not, because the return value was an `EXPR_IDENT` with `PROV_UNKNOWN`. Fix: capturing lambdas now receive `PROV_STACK` provenance, and `TYPE_FUNC` is included in `type_has_provenance()`. The general provenance-based escape check now catches all paths: direct return, indirect via let, conditional branches (conservative merge), and storing in heap structs. Non-capturing lambdas retain `PROV_UNKNOWN` since their `.ctx` is `NULL`. Tests: 4 error cases (indirect, explicit indirect, branch, alloc struct), 2 success cases (non-capturing return, local use).
+
 ### Generic mixed type-var arithmetic (resolved 2026-03-27)
 Binary operations on different type variables (`'a + 'b`, `'a > 'b`) were unsound — the result type was picked arbitrarily, which produced wrong types when widening was involved (e.g., `'a = int32`, `'b = int64`). Fix: pass2 now rejects binary operators on different type variables at template time. Same type var (`'a + 'a`) and concrete+typevar (`int32 + 'a`) remain allowed. Conservative-but-complete — no partial fix that covers some cases but breaks others. Tests: updated 4 existing error tests, added `concrete_typevar_arith.fc`, `mixed_typevar_bitwise_err.fc`, `mixed_typevar_logical_err.fc`.
 

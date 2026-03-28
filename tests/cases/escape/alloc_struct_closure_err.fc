@@ -1,0 +1,9 @@
+// Storing a capturing closure in a heap-allocated struct
+struct callback =
+    f: (int32) -> int32
+
+let main = (args: str[]) ->
+    let x = 10
+    let cb = alloc(callback { f = (n: int32) -> n + x })
+    free(cb!)
+    0

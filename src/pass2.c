@@ -104,11 +104,13 @@ static Provenance merge_prov(Provenance a, Provenance b) {
     return PROV_UNKNOWN;
 }
 
-/* Does this type carry provenance (pointer-like or slice-like)? */
+/* Does this type carry provenance (pointer-like, slice-like, or closure-like)? */
 static bool type_has_provenance(Type *t) {
     if (!t) return false;
     if (t->kind == TYPE_POINTER || t->kind == TYPE_SLICE ||
         t->kind == TYPE_ANY_PTR) return true;
+    /* Capturing closures have a stack-allocated context struct */
+    if (t->kind == TYPE_FUNC) return true;
     /* Option wrapping a pointer/slice also carries provenance */
     if (t->kind == TYPE_OPTION) return type_has_provenance(t->option.inner);
     return false;
@@ -1708,6 +1710,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         e->func.captures = lctx.entries;
         e->func.capture_count = lctx.count;
 
+        /* Capturing closures have stack-allocated context (compound literal) */
+        if (lctx.count > 0)
+            e->prov = PROV_STACK;
+
         /* Generate lifted_name for lambdas (non-top-level functions) */
         if (!is_top) {
             int id = local_id_counter++;
@@ -1718,16 +1724,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->func.lifted_name = ln;
         }
 
-        /* Check if last expression returns a capturing closure */
+        /* Check if implicitly returning stack-derived values */
         if (e->func.body_count > 0) {
             Expr *last = e->func.body[e->func.body_count - 1];
-            if (last->kind == EXPR_FUNC && last->func.capture_count > 0) {
-                diag_error(last->loc, "cannot return a capturing closure");
-            }
-            /* Check if implicitly returning a stack-derived pointer/slice */
             if (last->prov == PROV_STACK && type_has_provenance(last->type)) {
-                diag_error(last->loc, "cannot return stack-allocated %s from function",
-                    type_name(last->type));
+                if (last->type->kind == TYPE_FUNC)
+                    diag_error(last->loc, "cannot return a capturing closure");
+                else
+                    diag_error(last->loc, "cannot return stack-allocated %s from function",
+                        type_name(last->type));
             }
         }
 
@@ -2225,16 +2230,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_RETURN: {
         if (e->return_expr.value) {
             check_expr(ctx, e->return_expr.value);
-            /* Check if returning a capturing closure */
-            if (e->return_expr.value->kind == EXPR_FUNC &&
-                e->return_expr.value->func.capture_count > 0) {
-                diag_error(e->loc, "cannot return a capturing closure");
-            }
-            /* Check if returning a stack-derived pointer/slice */
+            /* Check if returning stack-derived values */
             if (e->return_expr.value->prov == PROV_STACK &&
                 type_has_provenance(e->return_expr.value->type)) {
-                diag_error(e->loc, "cannot return stack-allocated %s from function",
-                    type_name(e->return_expr.value->type));
+                if (e->return_expr.value->type->kind == TYPE_FUNC)
+                    diag_error(e->loc, "cannot return a capturing closure");
+                else
+                    diag_error(e->loc, "cannot return stack-allocated %s from function",
+                        type_name(e->return_expr.value->type));
             }
         }
         e->type = type_void();
