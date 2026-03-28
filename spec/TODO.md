@@ -6,7 +6,7 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ### Platform-conditional stdlib (sys.sleep)
 
-`sys.sleep` uses POSIX `nanosleep` — not available on Windows. Need a mechanism for platform-conditional code in the stdlib. Options: documented manual flags (`--flag posix` / `--flag win32`) with `#if`/`#else`/`#end`, or extending C interop to check C preprocessor `#ifdef` symbols. `sys.time` is already pure C11 (`timespec_get`).
+`sys.sleep` uses POSIX `nanosleep` — works on Linux, macOS, and Windows via MinGW/MSYS2, but not with MSVC. For native MSVC support, need a mechanism for platform-conditional code in the stdlib. Options: documented manual flags (`--flag posix` / `--flag win32`) with `#if`/`#else`/`#end`, or extending C interop to check C preprocessor `#ifdef` symbols. `sys.time` is already pure C11 (`timespec_get`). Low priority — MinGW is free/open-source and produces native Windows binaries.
 
 ## Standard Library
 

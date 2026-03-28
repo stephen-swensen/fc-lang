@@ -2716,7 +2716,7 @@ All stdlib modules live in the `std::` namespace and are written in regular FC w
 
 **`std::io`** — File I/O using opaque `any*` handles (C `FILE*`). Provides `write`, `read`, `open`, `close`, `flush`, `seek`, `tell`, `eof`, `remove`, `rename`, and seek origin constants (`seek_set`, `seek_cur`, `seek_end`). The built-in globals `stdin`, `stdout`, `stderr` are typed `any*` and always available without import.
 
-**`std::sys`** — Environment, process control, and time. Provides `env` (read environment variables), `exit` (terminate process), `time` (wall-clock milliseconds since epoch), `sleep` (pause execution).
+**`std::sys`** — Environment, process control, and time. Provides `env` (read environment variables), `exit` (terminate process), `time` (wall-clock milliseconds since epoch, pure C11), `sleep` (pause execution, POSIX), `temp_dir` (platform temp directory). `sleep` uses POSIX `nanosleep` — works on Linux, macOS, and Windows via MinGW; all other functions are pure C11.
 
 **`std::math`** — Mathematical functions wrapping C11 `math.h`, all operating on `float64` (on Linux, link with `-lm`). Constants `pi` and `e`. Core functions: `sqrt`, `abs`, `pow`, `min`, `max`. Rounding: `floor`, `ceil`, `round`, `trunc`. Trigonometry: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`. Exponential/logarithmic: `exp`, `log`, `log2`, `log10`. Utilities: `fmod`, `hypot`, `is_nan`, `is_inf`, `is_finite`.
 

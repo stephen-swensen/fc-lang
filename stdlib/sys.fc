@@ -50,7 +50,7 @@ module sys =
                 | none -> "/tmp"
 
     // sleep: suspends the calling thread for at least ms milliseconds.
-    // Note: uses POSIX nanosleep — not available on Windows.
+    // Uses POSIX nanosleep — works on Linux, macOS, and Windows via MinGW.
     // ms: int64 — duration to sleep in milliseconds.
     // returns: void.
     let sleep = (ms: int64) ->
