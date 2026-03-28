@@ -5,6 +5,9 @@ module sys =
         extern getenv: (const cstr) -> const cstr?
         extern exit: (int32) -> void
 
+    private module u from "unistd.h" =
+        extern getpid: () -> int32
+
     private module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
         extern timespec_get: (timespec*, int32) -> int32
         extern nanosleep: (timespec*, timespec*?) -> int32
@@ -57,4 +60,9 @@ module sys =
         let mut req = t.timespec { tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
         t.nanosleep(&req, default(t.timespec*?))
         return
+
+    // get_pid: returns the current process ID.
+    // Uses POSIX getpid — works on Linux, macOS, and Windows via MinGW.
+    // returns: int32 — the process ID.
+    let get_pid = () -> u.getpid()
 
