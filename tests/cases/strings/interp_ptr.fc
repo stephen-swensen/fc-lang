@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let mut x = 42
+    let p = &x
+    let s = "%p{p}"
+    // %p should produce a non-empty hex address string
+    assert(s.len > 0)
+    0

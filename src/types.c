@@ -57,19 +57,6 @@ Type *type_str(void) {
     return &str_type;
 }
 
-/* str32 = uint32[] with alias "str32" */
-Type *type_str32(void) {
-    static Type str32_type = {0};
-    static bool init = false;
-    if (!init) {
-        str32_type.kind = TYPE_SLICE;
-        str32_type.alias = "str32";
-        str32_type.slice.elem = type_uint32();
-        init = true;
-    }
-    return &str32_type;
-}
-
 /* cstr = uint8* with alias "cstr" */
 Type *type_cstr(void) {
     static Type cstr_type = {0};
@@ -140,11 +127,6 @@ bool is_str_type(Type *t) {
 bool is_cstr_type(Type *t) {
     return t && t->kind == TYPE_POINTER && t->pointer.pointee &&
            t->pointer.pointee->kind == TYPE_UINT8;
-}
-
-bool is_str32_type(Type *t) {
-    return t && t->kind == TYPE_SLICE && t->slice.elem &&
-           t->slice.elem->kind == TYPE_UINT32;
 }
 
 bool type_is_error(Type *t) {
@@ -295,7 +277,6 @@ const char *type_name(Type *t) {
     if (t->is_const) {
         if (is_str_type(t)) return "const str";
         if (is_cstr_type(t)) return "const cstr";
-        if (is_str32_type(t)) return "const str32";
         static char cbufs[4][256];
         static int cidx = 0;
         char *buf = cbufs[cidx & 3]; cidx++;
@@ -316,7 +297,6 @@ const char *type_name(Type *t) {
     /* For compound types, check known aliases */
     if (is_str_type(t)) return "str";
     if (is_cstr_type(t)) return "cstr";
-    if (is_str32_type(t)) return "str32";
     /* For compound types, build a recursive name */
     switch (t->kind) {
     case TYPE_POINTER: {
@@ -496,8 +476,8 @@ Type *type_from_name(const char *s, int len) {
         {"uint32",6, type_uint32}, {"uint64",6, type_uint64},
         {"float32",7, type_float32}, {"float64",7, type_float64},
         {"bool",4, type_bool},     {"char",4, type_char},
-        {"str",3, type_str},       {"str32",5, type_str32},
-        {"cstr",4, type_cstr},     {"any",3, type_any_ptr},
+        {"str",3, type_str},       {"cstr",4, type_cstr},
+        {"any",3, type_any_ptr},
         {"isize",5, type_isize},   {"usize",5, type_usize},
     };
     for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
@@ -726,7 +706,6 @@ char *mangle_type_name(Type *t) {
     }
     if (is_str_type(t)) return str_dup("str");
     if (is_cstr_type(t)) return str_dup("cstr");
-    if (is_str32_type(t)) return str_dup("str32");
     switch (t->kind) {
     case TYPE_INT8:    return str_dup("int8");
     case TYPE_INT16:   return str_dup("int16");

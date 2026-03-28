@@ -151,7 +151,7 @@ static bool is_type_name(const char *s, int len) {
         {"uint8",3+1+1}, {"uint16",3+2+1}, {"uint32",3+2+1}, {"uint64",3+2+1},
         {"float32",5+2}, {"float64",5+2},
         {"bool",4}, {"char",4},
-        {"str",3}, {"str32",5}, {"cstr",4},
+        {"str",3}, {"cstr",4},
         {"any",3},
     };
     /* Actually compute lengths correctly */
@@ -160,7 +160,7 @@ static bool is_type_name(const char *s, int len) {
         {"uint8",5}, {"uint16",6}, {"uint32",6}, {"uint64",6},
         {"float32",7}, {"float64",7},
         {"bool",4}, {"char",4},
-        {"str",3}, {"str32",5}, {"cstr",4},
+        {"str",3}, {"cstr",4},
         {"any",3},
         {"isize",5}, {"usize",5},
     };

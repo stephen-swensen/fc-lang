@@ -1,6 +1,6 @@
 (* ================================================================== *)
 (* FC Language — EBNF Grammar                                         *)
-(* Version 0.5-draft                                                   *)
+(* Version 0.8-draft                                                   *)
 (*                                                                     *)
 (* Notation:                                                           *)
 (*   =          defines a production                                   *)
@@ -110,7 +110,7 @@ TYPE_VAR      = "'" , ( letter | underscore ) , { ident_cont } ;
 (* Reserved words — may not be used as identifiers.                    *)
 keyword = "let" | "mut" | "struct" | "union" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
-        | "private" | "match" | "with" | "if" | "then" | "else"
+        | "private" | "const" | "match" | "with" | "if" | "then" | "else"
         | "for" | "in" | "loop" | "break" | "continue" | "return"
         | "some" | "true" | "false" | "none" | "void"
         | "any"         (* only valid as part of "any*" type syntax *) ;
@@ -125,9 +125,10 @@ builtin_global = "stdin" | "stdout" | "stderr" ;
 (* Built-in type names — may not be used as user-defined names.        *)
 builtin_type = "int8" | "int16" | "int32" | "int64"
              | "uint8" | "uint16" | "uint32" | "uint64"
+             | "isize" | "usize"
              | "float32" | "float64"
              | "bool" | "char"
-             | "str" | "str32" | "cstr" ;
+             | "str" | "cstr" ;
 
 
 (* ------------------------------------------------------------------ *)
@@ -137,7 +138,8 @@ builtin_type = "int8" | "int16" | "int32" | "int64"
 (* --- Integer literals ---                                            *)
 
 int_suffix    = "i8" | "i16" | "i32" | "i64"
-              | "u8" | "u16" | "u32" | "u64" ;
+              | "u8" | "u16" | "u32" | "u64"
+              | "i"  | "u" ;                   (* isize / usize suffixes *)
 INT_LIT       = digit , { [ '_' ] , digit } , [ int_suffix ] ;
 
 (* Underscores may appear between digits for readability: 1_000_000.   *)
@@ -386,7 +388,10 @@ func_type        = type_primary , "->" , func_type
                  ;
 
 (* After resolving a base type, apply postfix type modifiers.          *)
-type_primary     = type_atom , { type_postfix } ;
+(* The "const" prefix marks a pointer or slice as read-only.           *)
+(* Only valid on pointer, slice, and any* types — bare value types     *)
+(* like "const int32" are a parse error.                               *)
+type_primary     = [ "const" ] , type_atom , { type_postfix } ;
 
 type_postfix     = "*"                           (* pointer type:  T*     *)
                  | "[" , "]"                     (* slice type:    T[]    *)

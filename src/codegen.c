@@ -163,8 +163,6 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_SLICE:
         if (is_str_type(t)) {
             fprintf(out, "fc_str");
-        } else if (is_str32_type(t)) {
-            fprintf(out, "fc_str32");
         } else {
             fprintf(out, "fc_slice_");
             emit_type_ident(t->slice.elem, out);
@@ -263,8 +261,6 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_SLICE:
         if (is_str_type(t)) {
             fprintf(out, "fc_str");
-        } else if (is_str32_type(t)) {
-            fprintf(out, "fc_str32");
         } else {
             fprintf(out, "fc_slice_");
             emit_type_ident(t->slice.elem, out);
@@ -3500,9 +3496,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
     fprintf(out, "\n");
 
-    /* Always emit fc_str and fc_str32 (aliases for uint8/uint32 slices) */
+    /* Always emit fc_str (alias for uint8 slice) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
-    fprintf(out, "typedef struct { uint32_t* ptr; int64_t len; } fc_str32;\n");
 
     /* Collect all slice, option, function, and eq types used in the program */
     TypeSet slices = {0};
@@ -3595,7 +3590,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     /* Emit slice typedefs — before struct defs since structs may contain slices */
     for (int i = 0; i < slices.count; i++) {
         Type *s = slices.types[i];
-        if (is_str_type(s) || is_str32_type(s)) continue; /* str/str32 already emitted */
+        if (is_str_type(s)) continue; /* str already emitted */
         /* Forward-declare as named struct so structs can reference it */
         fprintf(out, "typedef struct fc_slice_");
         emit_type_ident(s->slice.elem, out);

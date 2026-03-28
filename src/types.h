@@ -100,7 +100,6 @@ Type *type_float64(void);
 Type *type_bool(void);
 Type *type_void(void);
 Type *type_str(void);
-Type *type_str32(void);
 Type *type_cstr(void);
 Type *type_const_str(void);
 Type *type_const_cstr(void);
@@ -116,10 +115,9 @@ Type *type_slice(Arena *a, Type *elem);
 Type *type_option(Arena *a, Type *inner);
 Type *type_fixed_array(Arena *a, Type *elem, int64_t size);
 
-/* Alias type helpers: str = uint8[], cstr = uint8*, str32 = uint32[] */
+/* Alias type helpers: str = uint8[], cstr = uint8* */
 bool is_str_type(Type *t);
 bool is_cstr_type(Type *t);
-bool is_str32_type(Type *t);
 
 /* Const helpers */
 Type *type_copy(Arena *a, Type *t);

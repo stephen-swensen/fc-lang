@@ -612,7 +612,7 @@ The following are **built-in globals** — predefined identifiers typed `any*` t
 
 The following are **built-in type names** and may not be used as user-defined type names or binding names:
 
-`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `any`, `str`, `str32`, `cstr`
+`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `any`, `str`, `cstr`
 
 ---
 
@@ -639,7 +639,6 @@ The following are **built-in type names** and may not be used as user-defined ty
 | void | Non-instantiable type. Used by the compiler for type inference and control flow analysis. May appear in function type signatures (`() -> void`) but never as a value in expression positions — `void` cannot be assigned to a let binding or passed as an argument. | void |
 | any* | Opaque pointer — a raw address with no associated type. Cannot be dereferenced. Used for C interop — wrapping opaque C handles (file handles, database connections, etc.) and pointer casts. See §any* — opaque pointers. | void* |
 | str | Alias for `uint8[]`. An FC string — fat pointer with length. | — |
-| str32 | Alias for `uint32[]`. A unicode codepoint string. | — |
 | cstr | Alias for `uint8*`. A null-terminated C string pointer. Use for C interop only. | char* |
 
 Implicit widening conversions are allowed in binary expressions and comparisons where no information can be lost — see §Operators & Access. All other numeric conversions require an explicit cast. `if` conditions must be `bool` typed — numeric values do not implicitly coerce to bool.
@@ -2072,7 +2071,6 @@ int32?[]    // slice of optional int32
 int32[]?    // optional slice of int32
 int32?[]?   // optional slice of optional int32
 str         // built-in alias for uint8[]
-str32       // built-in alias for uint32[], for unicode codepoints
 ```
 
 ### Representation
@@ -2378,7 +2376,7 @@ The dot notation `T.something` is not a special "static property" feature — it
 
 A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
 
-The built-in aliases `str`, `cstr`, and `str32` are the canonical examples: `str` is `uint8[]`, `cstr` is `uint8*`, and `str32` is `uint32[]`. Import aliases (§Importing) extend this mechanism to user-defined types — `import point as pt from geometry` makes `pt` a type alias for `point`. The alias name is preserved in diagnostics and function signatures, but the underlying type identity is unchanged: `pt` and `point` are the same type, values are freely interchangeable, and `==` works across them.
+The built-in aliases `str` and `cstr` are the canonical examples: `str` is `uint8[]` and `cstr` is `uint8*`. Import aliases (§Importing) extend this mechanism to user-defined types — `import point as pt from geometry` makes `pt` a type alias for `point`. The alias name is preserved in diagnostics and function signatures, but the underlying type identity is unchanged: `pt` and `point` are the same type, values are freely interchangeable, and `==` works across them.
 
 ### Type-specific built-ins
 
@@ -2723,9 +2721,9 @@ import io from std::
 ### Operations
 
 ```fc
-io.write(s: str, f: any*) -> int64
+io.write(s: const str, f: any*) -> int64
 io.read(buf: uint8[], n: int64, f: any*) -> int64
-io.open(path: str, mode: str) -> any*?
+io.open(path: const str, mode: const str) -> any*?
 io.close(f: any*) -> void
 io.flush(f: any*) -> void
 ```
@@ -2803,13 +2801,13 @@ import sys from std::
 ### Operations
 
 ```fc
-sys.env(name: str) -> str?
+sys.env(name: const str) -> const str?
 sys.exit(code: int32) -> void
 sys.time() -> int64
 sys.sleep(ms: int64) -> void
 ```
 
-**`sys.env`** — reads the environment variable with the given name. Returns `str?` — `none` if the variable is not set. The returned `str` is a view into process memory (from C's `getenv`), valid for the lifetime of the process unless the environment is modified. The `name` argument receives the same null-termination treatment as `io.open`'s path argument — an unconditional stack copy with a null byte appended.
+**`sys.env`** — reads the environment variable with the given name. Returns `const str?` — `none` if the variable is not set. The returned `const str` is a view into process memory (from C's `getenv`), valid for the lifetime of the process unless the environment is modified. The `name` argument receives the same null-termination treatment as `io.open`'s path argument — an unconditional stack copy with a null byte appended.
 
 ```fc
 import io from std::
