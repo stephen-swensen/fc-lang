@@ -87,3 +87,18 @@ module io =
     let rename = (old_path: const str, new_path: const str) ->
         c.rename((cstr)old_path, (cstr)new_path) == 0
 
+    // read_all: reads an entire file into a heap-allocated string.
+    // path: const str — file path to read.
+    // returns: str? — some(contents) on success, none if the file cannot be opened. Caller must free.
+    let read_all = (path: const str) ->
+        match open(path, "r") with
+        | none -> default(str?)
+        | some(handle) ->
+            seek(handle, 0i64, seek_end)
+            let size = tell(handle)
+            seek(handle, 0i64, seek_set)
+            let buf = alloc(uint8[size] {})!
+            read(buf, size, handle)
+            close(handle)
+            some(buf)
+
