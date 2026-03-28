@@ -7,6 +7,16 @@ module io =
         extern fopen: (const cstr, const cstr) -> any*?
         extern fclose: (any*) -> int32
         extern fflush: (any*) -> int32
+        extern fseek: (any*, int64, int32) -> int32
+        extern ftell: (any*) -> int64
+        extern feof: (any*) -> int32
+        extern remove: (const cstr) -> int32
+        extern rename: (const cstr, const cstr) -> int32
+
+    // Seek origin constants for use with seek().
+    let seek_set = 0
+    let seek_cur = 1
+    let seek_end = 2
 
     // write: writes the bytes of s to file handle f.
     // s: const str — the data to write; const because write does not modify the buffer.
@@ -43,3 +53,36 @@ module io =
     let flush = (f: any*) ->
         c.fflush(f)
         return
+
+    // seek: repositions the file position indicator.
+    // f: any* — opaque FILE* handle.
+    // offset: int64 — byte offset relative to whence.
+    // whence: int32 — seek_set (start), seek_cur (current), or seek_end (end).
+    // returns: int32 — 0 on success, nonzero on error.
+    let seek = (f: any*, offset: int64, whence: int32) ->
+        c.fseek(f, offset, whence)
+
+    // tell: returns the current file position indicator.
+    // f: any* — opaque FILE* handle.
+    // returns: int64 — byte offset from start, or -1 on error.
+    let tell = (f: any*) ->
+        c.ftell(f)
+
+    // eof: tests end-of-file indicator on a file handle.
+    // f: any* — opaque FILE* handle.
+    // returns: bool — true if end-of-file has been reached.
+    let eof = (f: any*) ->
+        c.feof(f) != 0
+
+    // remove: deletes a file at the given path.
+    // path: const str — file path to delete.
+    // returns: bool — true on success.
+    let remove = (path: const str) ->
+        c.remove((cstr)path) == 0
+
+    // rename: renames or moves a file.
+    // old_path: const str — current file path.
+    // new_path: const str — new file path.
+    // returns: bool — true on success.
+    let rename = (old_path: const str, new_path: const str) ->
+        c.rename((cstr)old_path, (cstr)new_path) == 0

@@ -1,0 +1,41 @@
+import io from std::
+
+let main = (args: str[]) ->
+    // Write a test file
+    let f = io.open("/tmp/fc_test_seek_tell.txt", "w")
+    match f with
+    | some(wf) ->
+        io.write("abcdefghij", wf)
+        io.close(wf)
+    | none -> return 1
+
+    // Read it back with seek/tell
+    let f2 = io.open("/tmp/fc_test_seek_tell.txt", "r")
+    match f2 with
+    | some(rf) ->
+        // tell at start should be 0
+        assert(io.tell(rf) == 0i64)
+
+        // seek to position 5
+        assert(io.seek(rf, 5i64, io.seek_set) == 0)
+        assert(io.tell(rf) == 5i64)
+
+        // read 3 bytes from position 5 -> "fgh"
+        let mut buf = uint8[3] {}
+        let n = io.read(buf, 3, rf)
+        assert(n == 3i64)
+        assert(io.tell(rf) == 8i64)
+
+        // seek relative to current (-2)
+        assert(io.seek(rf, -2i64, io.seek_cur) == 0)
+        assert(io.tell(rf) == 6i64)
+
+        // seek from end
+        assert(io.seek(rf, -3i64, io.seek_end) == 0)
+        assert(io.tell(rf) == 7i64)
+
+        io.close(rf)
+    | none -> return 2
+
+    io.remove("/tmp/fc_test_seek_tell.txt")
+    0

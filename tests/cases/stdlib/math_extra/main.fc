@@ -1,0 +1,22 @@
+import math from std::
+
+let eps = 0.000001
+
+let main = (args: str[]) ->
+    // fmod
+    assert(math.abs(math.fmod(5.5, 2.0) - 1.5) < eps)
+    assert(math.abs(math.fmod(10.0, 3.0) - 1.0) < eps)
+    assert(math.abs(math.fmod(-5.5, 2.0) - -1.5) < eps)
+
+    // hypot
+    assert(math.abs(math.hypot(3.0, 4.0) - 5.0) < eps)
+    assert(math.abs(math.hypot(0.0, 5.0) - 5.0) < eps)
+    assert(math.abs(math.hypot(1.0, 1.0) - math.sqrt(2.0)) < eps)
+
+    // trunc
+    assert(math.trunc(2.9) == 2.0)
+    assert(math.trunc(-2.9) == -2.0)
+    assert(math.trunc(3.0) == 3.0)
+    assert(math.trunc(0.0) == 0.0)
+
+    0

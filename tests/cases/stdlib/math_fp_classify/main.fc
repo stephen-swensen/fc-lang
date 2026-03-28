@@ -1,0 +1,25 @@
+import math from std::
+
+let main = (args: str[]) ->
+    // is_nan
+    assert(math.is_nan(float64.nan) == true)
+    assert(math.is_nan(0.0) == false)
+    assert(math.is_nan(float64.inf) == false)
+    assert(math.is_nan(1.5) == false)
+
+    // is_inf
+    assert(math.is_inf(float64.inf) == true)
+    assert(math.is_inf(float64.neg_inf) == true)
+    assert(math.is_inf(0.0) == false)
+    assert(math.is_inf(float64.nan) == false)
+    assert(math.is_inf(1.5) == false)
+
+    // is_finite
+    assert(math.is_finite(1.5) == true)
+    assert(math.is_finite(0.0) == true)
+    assert(math.is_finite(-999.0) == true)
+    assert(math.is_finite(float64.inf) == false)
+    assert(math.is_finite(float64.neg_inf) == false)
+    assert(math.is_finite(float64.nan) == false)
+
+    0

@@ -424,6 +424,12 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?`.
 
+### Stdlib completeness pass (2026-03-28)
+Extended all three non-experimental stdlib modules:
+- **io.fc**: added `seek`, `tell`, `eof`, `remove`, `rename`, and seek origin constants (`seek_set`/`seek_cur`/`seek_end`).
+- **sys.fc**: added `parse_int32`, `parse_int64`, `parse_float32`, `parse_float64` (wrapping atoi/atoll/strtof/atof).
+- **math.fc**: added `asin`, `acos`, `atan` (inverse trig), `fmod`, `hypot`, `trunc`, and pure-FC `is_nan`/`is_inf`/`is_finite` using type properties.
+
 ### std::math module (resolved 2026-03-27)
 Added `stdlib/math.fc` wrapping C11 `math.h`. 2 constants (`pi`, `e`) and 14 functions: `sqrt`, `abs`, `pow`, `min`, `max`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `atan2`, `exp`, `log`, `log2`, `log10`. Float64 only — consistent with FC's explicit-cast philosophy. Also fixed float literal codegen precision (was `%g` / 6 digits, now `%.17g` for float64, `%.9g` for float32) and added `-lm` to test runners and `run.sh`. Tests in `tests/cases/stdlib/`.
 

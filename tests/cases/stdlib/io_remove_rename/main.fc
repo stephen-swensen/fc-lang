@@ -1,0 +1,39 @@
+import io from std::
+
+let main = (args: str[]) ->
+    // Create a file
+    let f = io.open("/tmp/fc_test_rename_src.txt", "w")
+    match f with
+    | some(wf) ->
+        io.write("data", wf)
+        io.close(wf)
+    | none -> return 1
+
+    // Rename it
+    assert(io.rename("/tmp/fc_test_rename_src.txt", "/tmp/fc_test_rename_dst.txt") == true)
+
+    // Original should not be openable
+    let f2 = io.open("/tmp/fc_test_rename_src.txt", "r")
+    match f2 with
+    | some(rf) ->
+        io.close(rf)
+        return 2
+    | none -> return 0
+
+    // New name should be readable
+    let f3 = io.open("/tmp/fc_test_rename_dst.txt", "r")
+    match f3 with
+    | some(rf) ->
+        let mut buf = uint8[16] {}
+        let n = io.read(buf, 16, rf)
+        assert(n == 4i64)
+        io.close(rf)
+    | none -> return 3
+
+    // Remove the file
+    assert(io.remove("/tmp/fc_test_rename_dst.txt") == true)
+
+    // Removing again should fail
+    assert(io.remove("/tmp/fc_test_rename_dst.txt") == false)
+
+    0

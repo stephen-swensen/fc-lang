@@ -4,9 +4,13 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ## Standard Library
 
-### std::text module
+### io.read_all
 
-String manipulation utilities (split, join, trim, contains, starts_with, etc.). Design TBD.
+Read an entire file into a heap-allocated string. API design TBD: return type (`str?` vs `str` with error), max size limits, error handling strategy.
+
+### std::text — string manipulation utilities
+
+`std::text` exists with parse functions (`parse_int32`, `parse_int64`, `parse_float32`, `parse_float64`). Remaining: split, join, trim, contains, starts_with, etc. Design TBD.
 
 ### prelude.fc / types.fc status
 

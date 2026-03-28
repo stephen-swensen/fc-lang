@@ -13,7 +13,13 @@ module math =
         extern sin: (float64) -> float64
         extern cos: (float64) -> float64
         extern tan: (float64) -> float64
+        extern asin: (float64) -> float64
+        extern acos: (float64) -> float64
+        extern atan: (float64) -> float64
         extern atan2: (float64, float64) -> float64
+        extern fmod: (float64, float64) -> float64
+        extern hypot: (float64, float64) -> float64
+        extern trunc: (float64) -> float64
         extern exp: (float64) -> float64
         extern log: (float64) -> float64
         extern log2: (float64) -> float64
@@ -56,8 +62,26 @@ module math =
     // tan: tangent of x (radians).
     let tan = (x: float64) -> c.tan(x)
 
+    // asin: inverse sine of x. Result in radians [-pi/2, pi/2].
+    let asin = (x: float64) -> c.asin(x)
+
+    // acos: inverse cosine of x. Result in radians [0, pi].
+    let acos = (x: float64) -> c.acos(x)
+
+    // atan: inverse tangent of x. Result in radians [-pi/2, pi/2].
+    let atan = (x: float64) -> c.atan(x)
+
     // atan2: arc tangent of y/x, using signs to determine quadrant.
     let atan2 = (y: float64, x: float64) -> c.atan2(y, x)
+
+    // fmod: floating-point remainder of x/y.
+    let fmod = (x: float64, y: float64) -> c.fmod(x, y)
+
+    // hypot: sqrt(x*x + y*y), computed without intermediate overflow.
+    let hypot = (x: float64, y: float64) -> c.hypot(x, y)
+
+    // trunc: round toward zero (strip fractional part).
+    let trunc = (x: float64) -> c.trunc(x)
 
     // exp: e raised to the power x.
     let exp = (x: float64) -> c.exp(x)
@@ -70,3 +94,17 @@ module math =
 
     // log10: base-10 logarithm of x.
     let log10 = (x: float64) -> c.log10(x)
+
+    // is_nan: true if x is NaN.
+    let is_nan = (x: float64) -> x != x
+
+    // is_inf: true if x is positive or negative infinity.
+    let is_inf = (x: float64) ->
+        if x == float64.inf then true
+        else x == float64.neg_inf
+
+    // is_finite: true if x is neither NaN nor infinity.
+    let is_finite = (x: float64) ->
+        if x != x then false
+        else if x == float64.inf then false
+        else x != float64.neg_inf

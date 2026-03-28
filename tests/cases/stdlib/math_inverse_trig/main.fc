@@ -1,0 +1,25 @@
+import math from std::
+
+let eps = 0.000001
+
+let main = (args: str[]) ->
+    // asin
+    assert(math.abs(math.asin(0.0)) < eps)
+    assert(math.abs(math.asin(1.0) - math.pi / 2.0) < eps)
+    assert(math.abs(math.asin(-1.0) - (0.0 - math.pi / 2.0)) < eps)
+
+    // acos
+    assert(math.abs(math.acos(1.0)) < eps)
+    assert(math.abs(math.acos(0.0) - math.pi / 2.0) < eps)
+    assert(math.abs(math.acos(-1.0) - math.pi) < eps)
+
+    // atan
+    assert(math.abs(math.atan(0.0)) < eps)
+    assert(math.abs(math.atan(1.0) - math.pi / 4.0) < eps)
+    assert(math.abs(math.atan(-1.0) - (0.0 - math.pi / 4.0)) < eps)
+
+    // Round-trip: sin(asin(x)) == x
+    assert(math.abs(math.sin(math.asin(0.5)) - 0.5) < eps)
+    assert(math.abs(math.cos(math.acos(0.5)) - 0.5) < eps)
+
+    0

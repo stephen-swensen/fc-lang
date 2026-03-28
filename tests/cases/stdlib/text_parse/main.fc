@@ -1,0 +1,26 @@
+import text from std::
+import math from std::
+
+let main = (args: str[]) ->
+    // parse_int32
+    assert(text.parse_int32("42") == 42)
+    assert(text.parse_int32("-7") == -7)
+    assert(text.parse_int32("0") == 0)
+    assert(text.parse_int32("abc") == 0)
+
+    // parse_int64
+    assert(text.parse_int64("1000000000000") == 1000000000000i64)
+    assert(text.parse_int64("-999") == -999i64)
+    assert(text.parse_int64("xyz") == 0i64)
+
+    // parse_float64
+    assert(math.abs(text.parse_float64("3.14") - 3.14) < 0.001)
+    assert(text.parse_float64("0.0") == 0.0)
+    assert(text.parse_float64("bad") == 0.0)
+
+    // parse_float32
+    assert(math.abs((float64)text.parse_float32("2.5") - 2.5) < 0.001)
+    assert(text.parse_float32("0.0") == 0.0f32)
+    assert(text.parse_float32("bad") == 0.0f32)
+
+    0

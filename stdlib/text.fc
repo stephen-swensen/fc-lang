@@ -1,0 +1,32 @@
+namespace std::
+
+module text =
+    private module c from "stdlib.h" =
+        extern atoi: (const cstr) -> int32
+        extern atoll: (const cstr) -> int64
+        extern atof: (const cstr) -> float64
+        extern strtof: (const cstr, any*) -> float32
+
+    // parse_int32: parses a string as a 32-bit integer.
+    // s: const str — input string.
+    // returns: int32 — parsed value, or 0 if the string is not a valid integer.
+    let parse_int32 = (s: const str) ->
+        c.atoi((cstr)s)
+
+    // parse_int64: parses a string as a 64-bit integer.
+    // s: const str — input string.
+    // returns: int64 — parsed value, or 0 if the string is not a valid integer.
+    let parse_int64 = (s: const str) ->
+        c.atoll((cstr)s)
+
+    // parse_float32: parses a string as a 32-bit float.
+    // s: const str — input string.
+    // returns: float32 — parsed value, or 0.0 if the string is not a valid number.
+    let parse_float32 = (s: const str) ->
+        c.strtof((cstr)s, default(any*))
+
+    // parse_float64: parses a string as a 64-bit float.
+    // s: const str — input string.
+    // returns: float64 — parsed value, or 0.0 if the string is not a valid number.
+    let parse_float64 = (s: const str) ->
+        c.atof((cstr)s)
