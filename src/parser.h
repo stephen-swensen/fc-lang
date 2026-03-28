@@ -13,6 +13,7 @@ typedef struct {
     int pending_count;
     int pending_cap;
     bool allow_fixed_array; /* true when parsing struct/extern struct field types */
+    int expr_start_pos;     /* token index at start of current parse_expr (for postfix ! text capture) */
 } Parser;
 
 void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable *intern);

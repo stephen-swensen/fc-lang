@@ -1255,12 +1255,12 @@ Several operations in FC can fail at runtime with no meaningful recovery path. T
 
 All hard failures call `abort()` from the C standard library, which terminates the process immediately without unwinding, without running cleanup functions, and without flushing output buffers. On embedded targets where `abort()` is unavailable, the compiler emits a target-appropriate trap instruction (infinite loop, CPU halt, or equivalent).
 
-There is no exception handling, no panic-with-message, and no recoverable failure path for these operations in this version of FC. If a more sophisticated failure mechanism is added in future (diagnostic output, configurable panic handlers), it will be specified as a separate feature and will not change the semantics of existing code — hard failures will remain hard failures.
+There is no exception handling and no recoverable failure path for these operations in this version of FC. Hard failures that have sufficient source context (option unwrap, assert) print a diagnostic to stderr before aborting — including the source file, line number, and the expression text that triggered the failure. Bounds checks and division-by-zero abort without diagnostic output.
 
 **Division by zero** — integer division (`/`) and remainder (`%`) by zero are hard failures. This diverges from C, where integer division by zero is undefined behavior. FC makes it defined: the program aborts. Float division by zero follows IEEE 754 and produces `inf` or `nan` — it is not a hard failure.
 
 > **Transpilation**
-> Bounds checks emit a conditional `abort()` before the access. Option unwrap emits a tag check before the value read. Division by zero emits a divisor check before the division. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).
+> Bounds checks emit a conditional `abort()` before the access. Option unwrap emits a tag check before the value read; on failure, it prints a diagnostic to stderr (`file:line: unwrap failed: expr`) before calling `abort()`. Division by zero emits a divisor check before the division. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).
 
 ---
 
@@ -1939,13 +1939,35 @@ default(node*?)    // node*? with no value
 
 `some` is a built-in operator that infers the option type from its argument expression. To create a none value, use `default(T?)` — conceptually, `none` is the first variant of the option type, so its default value is none (see §Default Values).
 
+### Checking options
+
+Option types have two synthetic read-only fields that return `bool`:
+
+```fc
+let x = some(42)
+let y = default(int32?)
+
+x.is_some    // true
+x.is_none    // false
+y.is_some    // false
+y.is_none    // true
+```
+
+These fields cannot be assigned to. They work with both pointer options (`T*?`) and value options (`int32?`, `str?`, etc.).
+
 ### Unwrapping
 
 ```fc
 let n = alloc(node)!    // unwrap — crashes if none
 ```
 
-Use `x!` when you are certain a value is present and want to crash loudly if not. For safe unwrapping, use a `match` expression.
+Use `x!` when you are certain a value is present and want to crash loudly if not. Unwrapping a `none` value prints a diagnostic to stderr with the source file, line number, and expression text, then aborts:
+
+```
+file.fc:3: unwrap failed: x
+```
+
+For safe unwrapping, use a `match` expression.
 
 > **Transpilation**
 > Option types transpile differently depending on whether the underlying type is a pointer:

@@ -1,0 +1,33 @@
+let get_value = (x: int32?) ->
+    if x.is_some then x! else 0
+
+let main = (args: str[]) ->
+    // basic is_some / is_none on value options
+    let x = some(42)
+    let y = default(int32?)
+    assert(x.is_some)
+    assert(!x.is_none)
+    assert(y.is_none)
+    assert(!y.is_some)
+
+    // use in if condition
+    assert(get_value(some(10)) == 10)
+    assert(get_value(default(int32?)) == 0)
+
+    // is_some on string option
+    let s = some("hello")
+    assert(s.is_some)
+    let s2 = default(str?)
+    assert(s2.is_none)
+
+    // is_some on bool option
+    let b = some(false)
+    assert(b.is_some)
+    assert(!b.is_none)
+
+    // is_some on function return value
+    let r = some(100)
+    let v = if r.is_some then 1 else 0
+    assert(v == 1)
+
+    0

@@ -2274,6 +2274,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                  strcmp(e->assign.target->field.name, "ptr") == 0)) {
                 diag_error(e->loc, "cannot assign to slice .%s field", e->assign.target->field.name);
             }
+            if (ot && ot->kind == TYPE_OPTION &&
+                (strcmp(e->assign.target->field.name, "is_some") == 0 ||
+                 strcmp(e->assign.target->field.name, "is_none") == 0)) {
+                diag_error(e->loc, "cannot assign to option .%s field", e->assign.target->field.name);
+            }
         }
         e->type = type_void();
         return e->type;
@@ -2748,6 +2753,17 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->prov = e->field.object->prov;
                 return e->type;
             }
+        }
+
+        /* Option .is_some and .is_none fields */
+        if (obj_type->kind == TYPE_OPTION) {
+            if (strcmp(e->field.name, "is_some") == 0 || strcmp(e->field.name, "is_none") == 0) {
+                e->type = type_bool();
+                return e->type;
+            }
+            diag_error(e->loc, "option type has no field '%s'", e->field.name);
+            e->type = type_error();
+            return e->type;
         }
 
         /* Normal struct field access */

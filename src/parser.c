@@ -16,6 +16,7 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->pending_decls = NULL;
     p->pending_count = 0;
     p->pending_cap = 0;
+    p->expr_start_pos = 0;
 }
 
 /* ---- Token access ---- */
@@ -1363,6 +1364,15 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_UNARY_POSTFIX, loc);
         e->unary_postfix.op = TOK_BANG;
         e->unary_postfix.operand = left;
+        /* Capture source text of the operand expression for unwrap diagnostics */
+        const char *text_start = p->tokens[p->expr_start_pos].start;
+        int text_len = (int)(op_tok->start - text_start);
+        while (text_len > 0 && (text_start[text_len-1] == ' ' ||
+               text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
+               text_start[text_len-1] == '\t'))
+            text_len--;
+        e->unary_postfix.expr_text = arena_strdup(p->arena, text_start, text_len);
+        e->unary_postfix.expr_text_len = text_len;
         return e;
     }
 
@@ -1586,6 +1596,8 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
 }
 
 static Expr *parse_expr(Parser *p, Prec min_prec) {
+    int saved_start = p->expr_start_pos;
+    p->expr_start_pos = p->pos;
     Expr *left = parse_prefix(p);
     for (;;) {
         Token *t = current(p);
@@ -1594,6 +1606,7 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
         Token *op_tok = advance_p(p);
         left = parse_infix(p, left, op_tok);
     }
+    p->expr_start_pos = saved_start;
     return left;
 }
 

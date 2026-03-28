@@ -1,13 +1,6 @@
 import * from std::prelude
 
-struct point =
-    x: int32
-    y: const int32
-
 let main = (args: str[]) ->
-    let s = default(str[])
-    s.len = 5
-    println("%s{s[2]}")
-    assert(s.len == 0)
-    println("%T{s}")
+    let s = default(str?)!
+    assert(s.len == 3, "unwrap failed")
     0

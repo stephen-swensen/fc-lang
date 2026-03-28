@@ -1,0 +1,20 @@
+let main = (args: str[]) ->
+    // nested option: some(some(1))
+    let x = some(some(1))
+    assert(x.is_some)
+    assert(!x.is_none)
+
+    // outer is some, inner is none
+    let y = some(default(int32?))
+    assert(y.is_some)
+
+    // outer is none
+    let z = default(int32??)
+    assert(z.is_none)
+    assert(!z.is_some)
+
+    // unwrap outer, check inner
+    let inner = y!
+    assert(inner.is_none)
+
+    0

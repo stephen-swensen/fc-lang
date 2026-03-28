@@ -1194,8 +1194,11 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_UNARY_POSTFIX: {
         if (e->unary_postfix.op == TOK_BANG) {
-            /* Option unwrap: check has_value, abort if none */
+            /* Option unwrap: check has_value, abort with diagnostic if none */
             Type *opt_type = e->unary_postfix.operand->type;
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int fn_len = (int)strlen(fn);
+            int line = e->loc.line;
             if (is_null_sentinel(opt_type)) {
                 /* T*? → plain pointer, unwrap = null check */
                 fprintf(out, "({ ");
@@ -1203,7 +1206,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 int tid = temp_counter++;
                 fprintf(out, " _uw%d = ", tid);
                 emit_expr(e->unary_postfix.operand, out);
-                fprintf(out, "; if (!_uw%d) abort(); _uw%d; })", tid, tid);
+                fprintf(out, "; if (!_uw%d) { fprintf(stderr, \"", tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, ":%d: unwrap failed: ", line);
+                if (e->unary_postfix.expr_text)
+                    emit_c_escaped(e->unary_postfix.expr_text,
+                                   e->unary_postfix.expr_text_len, out);
+                fprintf(out, "\\n\"); abort(); } _uw%d; })", tid);
             } else {
                 /* Non-pointer option: check .has_value */
                 fprintf(out, "({ ");
@@ -1211,7 +1220,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 int tid = temp_counter++;
                 fprintf(out, " _uw%d = ", tid);
                 emit_expr(e->unary_postfix.operand, out);
-                fprintf(out, "; if (!_uw%d.has_value) abort(); _uw%d.value; })", tid, tid);
+                fprintf(out, "; if (!_uw%d.has_value) { fprintf(stderr, \"", tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, ":%d: unwrap failed: ", line);
+                if (e->unary_postfix.expr_text)
+                    emit_c_escaped(e->unary_postfix.expr_text,
+                                   e->unary_postfix.expr_text_len, out);
+                fprintf(out, "\\n\"); abort(); } _uw%d.value; })", tid);
             }
         }
         break;
@@ -1499,6 +1514,33 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ".%s, .len = %lld }", e->field.name,
                     (long long)fat->fixed_array.size);
             break;
+        }
+        /* Option .is_some / .is_none synthetic fields */
+        if (e->field.object->type && e->field.object->type->kind == TYPE_OPTION) {
+            Type *opt_type = e->field.object->type;
+            if (strcmp(e->field.name, "is_some") == 0) {
+                if (is_null_sentinel(opt_type)) {
+                    fprintf(out, "(");
+                    emit_expr(e->field.object, out);
+                    fprintf(out, " != NULL)");
+                } else {
+                    emit_expr(e->field.object, out);
+                    fprintf(out, ".has_value");
+                }
+                break;
+            }
+            if (strcmp(e->field.name, "is_none") == 0) {
+                if (is_null_sentinel(opt_type)) {
+                    fprintf(out, "(");
+                    emit_expr(e->field.object, out);
+                    fprintf(out, " == NULL)");
+                } else {
+                    fprintf(out, "(!");
+                    emit_expr(e->field.object, out);
+                    fprintf(out, ".has_value)");
+                }
+                break;
+            }
         }
         emit_expr(e->field.object, out);
         fprintf(out, ".%s", e->field.name);
@@ -3288,8 +3330,12 @@ static void detect_features_expr(Expr *e) {
         detect_features_expr(e->binary.right);
         return;
     case EXPR_UNARY_PREFIX:
-    case EXPR_UNARY_POSTFIX:
         detect_features_expr(e->unary_prefix.operand);
+        return;
+    case EXPR_UNARY_POSTFIX:
+        if (e->unary_postfix.op == TOK_BANG)
+            g_needs_stdio = true;
+        detect_features_expr(e->unary_postfix.operand);
         return;
     case EXPR_CALL:
         detect_features_expr(e->call.func);

@@ -127,7 +127,7 @@ struct Expr {
         struct { TokenKind op; Expr *operand; } unary_prefix;
 
         /* EXPR_UNARY_POSTFIX */
-        struct { TokenKind op; Expr *operand; } unary_postfix;
+        struct { TokenKind op; Expr *operand; const char *expr_text; int expr_text_len; } unary_postfix;
 
         /* EXPR_CALL */
         struct {
