@@ -4,6 +4,9 @@ fc
 # Object files
 *.o
 
+# Default C compiler output
+a.out
+
 
 # Editor/IDE
 *.swp
