@@ -424,6 +424,9 @@ Resolving struct field types and union variant payloads in-place on registered t
 - `print`/`eprint`/`fprint` removed as compiler operators. All I/O now uses `io.write(s, f)`.
 - Null-sentinel optimization extended to `any*?` and `cstr?`.
 
+### type_name() for generic function types (resolved 2026-03-27)
+`type_name()` (used by `%T` interpolation and all diagnostic error messages) now shows explicit type parameters on generic function types. Added `type_params` and `type_param_count` fields to `TYPE_FUNC` in `types.h`, populated from `EXPR_FUNC.explicit_type_vars` during pass2, and propagated through `resolve_type()` and `type_substitute()`. Output: `<'a>() -> 'a` instead of `() -> 'a`.
+
 ### Capturing lambda context lifetime (resolved 2026-03-27)
 Returning a capturing lambda created a dangling pointer — the compound literal context (`&(_ctx_fn){ .captured_x = x }`) has block scope in C11. The direct case (`return (x) -> x + captured`) was already caught by a pattern match on `EXPR_FUNC`, but the indirect case (`let f = (x) -> x + captured; f`) was not, because the return value was an `EXPR_IDENT` with `PROV_UNKNOWN`. Fix: capturing lambdas now receive `PROV_STACK` provenance, and `TYPE_FUNC` is included in `type_has_provenance()`. The general provenance-based escape check now catches all paths: direct return, indirect via let, conditional branches (conservative merge), and storing in heap structs. Non-capturing lambdas retain `PROV_UNKNOWN` since their `.ctx` is `NULL`. Tests: 4 error cases (indirect, explicit indirect, branch, alloc struct), 2 success cases (non-capturing return, local use).
 

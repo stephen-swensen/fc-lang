@@ -1,0 +1,12 @@
+// %T on generic functions shows explicit type parameters
+let make_default = <'a>() -> default('a)
+let apply = <'b>(f: (int32, int32) -> int32) -> default('b)
+let add = (a: 'a, b: 'a) -> a + b
+
+let main = (args: str[]) ->
+    // Explicit type var shown with <> prefix
+    assert("%T{make_default}" == "<'a>() -> 'a")
+    assert("%T{apply}" == "<'b>((int32, int32) -> int32) -> 'b")
+    // Implicit type vars (inferred from params) have no <> prefix
+    assert("%T{add}" == "('a, 'a) -> 'a")
+    0

@@ -291,6 +291,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         nf->func.param_types = params;
         nf->func.param_count = t->func.param_count;
         nf->func.return_type = ret;
+        nf->func.type_params = t->func.type_params;
+        nf->func.type_param_count = t->func.type_param_count;
         return nf;
     }
 
@@ -1742,6 +1744,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         ft->func.param_types = ptypes;
         ft->func.param_count = pc;
         ft->func.return_type = ret;
+        ft->func.type_params = e->func.explicit_type_vars;
+        ft->func.type_param_count = e->func.explicit_type_var_count;
         e->type = ft;
         return e->type;
     }

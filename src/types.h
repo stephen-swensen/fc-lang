@@ -58,6 +58,8 @@ struct Type {
             int param_count;
             Type *return_type;
             bool is_variadic;
+            const char **type_params;   /* explicit type var names (e.g. "'a", "'b"), NULL if none */
+            int type_param_count;
         } func;
         struct {
             const char *name;

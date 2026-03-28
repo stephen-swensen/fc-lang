@@ -333,6 +333,14 @@ const char *type_name(Type *t) {
         static int bidx = 0;
         char *buf = bufs[bidx & 1]; bidx++;
         int pos = 0;
+        if (t->func.type_param_count > 0) {
+            pos += snprintf(buf + pos, 256 - (size_t)pos, "<");
+            for (int i = 0; i < t->func.type_param_count; i++) {
+                if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
+                pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", t->func.type_params[i]);
+            }
+            pos += snprintf(buf + pos, 256 - (size_t)pos, ">");
+        }
         pos += snprintf(buf + pos, 256 - (size_t)pos, "(");
         for (int i = 0; i < t->func.param_count; i++) {
             if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
@@ -622,6 +630,8 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         nf->func.param_count = t->func.param_count;
         nf->func.return_type = ret;
         nf->func.is_variadic = t->func.is_variadic;
+        nf->func.type_params = t->func.type_params;
+        nf->func.type_param_count = t->func.type_param_count;
         return nf;
     }
     case TYPE_STRUCT: {
