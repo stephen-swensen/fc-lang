@@ -41,3 +41,77 @@ module text =
         let val = c.strtod(cs, &endptr)
         if endptr == cs then default(float64?)
         else some(val)
+
+    // contains: true if haystack contains needle as a substring.
+    let contains = (haystack: const str, needle: const str) ->
+        if needle.len == 0i64 then true
+        else if needle.len > haystack.len then false
+        else
+            let limit = haystack.len - needle.len + 1i64
+            let mut i = 0i64
+            let mut found = false
+            loop
+                if i >= limit then break
+                if haystack[i..i + needle.len] == needle then found = true
+                i = i + 1i64
+            found
+
+    // starts_with: true if s begins with prefix.
+    let starts_with = (s: const str, prefix: const str) ->
+        if prefix.len > s.len then false
+        else s[0i64..prefix.len] == prefix
+
+    // ends_with: true if s ends with suffix.
+    let ends_with = (s: const str, suffix: const str) ->
+        if suffix.len > s.len then false
+        else s[s.len - suffix.len..s.len] == suffix
+
+    // index_of: returns the position of the first occurrence of needle in haystack.
+    // returns: int64? — some(index) if found, none if not found.
+    let index_of = (haystack: const str, needle: const str) ->
+        if needle.len == 0i64 then some(0i64)
+        else if needle.len > haystack.len then default(int64?)
+        else
+            let limit = haystack.len - needle.len + 1i64
+            let mut i = 0i64
+            loop
+                if i >= limit then break
+                if haystack[i..i + needle.len] == needle then return some(i)
+                i = i + 1i64
+            default(int64?)
+
+    // trim: strips leading and trailing ASCII whitespace (space, tab, newline, carriage return).
+    let trim = (s: const str) ->
+        let mut start = 0i64
+        loop
+            if start >= s.len then break
+            let b = s[start]
+            if b != 32u8 && b != 9u8 && b != 10u8 && b != 13u8 then break
+            start = start + 1i64
+        let mut end = s.len
+        loop
+            if end <= start then break
+            let b = s[end - 1i64]
+            if b != 32u8 && b != 9u8 && b != 10u8 && b != 13u8 then break
+            end = end - 1i64
+        s[start..end]
+
+    // trim_left: strips leading ASCII whitespace.
+    let trim_left = (s: const str) ->
+        let mut start = 0i64
+        loop
+            if start >= s.len then break
+            let b = s[start]
+            if b != 32u8 && b != 9u8 && b != 10u8 && b != 13u8 then break
+            start = start + 1i64
+        s[start..s.len]
+
+    // trim_right: strips trailing ASCII whitespace.
+    let trim_right = (s: const str) ->
+        let mut end = s.len
+        loop
+            if end <= 0i64 then break
+            let b = s[end - 1i64]
+            if b != 32u8 && b != 9u8 && b != 10u8 && b != 13u8 then break
+            end = end - 1i64
+        s[0i64..end]

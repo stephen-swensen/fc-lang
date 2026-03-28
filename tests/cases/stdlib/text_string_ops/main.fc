@@ -1,0 +1,51 @@
+import text from std::
+
+let main = (args: str[]) ->
+    // contains
+    assert(text.contains("hello world", "world") == true)
+    assert(text.contains("hello world", "xyz") == false)
+    assert(text.contains("hello", "") == true)
+    assert(text.contains("", "x") == false)
+    assert(text.contains("abc", "abc") == true)
+    assert(text.contains("abc", "abcd") == false)
+
+    // starts_with
+    assert(text.starts_with("hello world", "hello") == true)
+    assert(text.starts_with("hello world", "world") == false)
+    assert(text.starts_with("hello", "hello") == true)
+    assert(text.starts_with("hi", "hello") == false)
+    assert(text.starts_with("anything", "") == true)
+
+    // ends_with
+    assert(text.ends_with("hello world", "world") == true)
+    assert(text.ends_with("hello world", "hello") == false)
+    assert(text.ends_with("hello", "hello") == true)
+    assert(text.ends_with("hi", "hello") == false)
+    assert(text.ends_with("anything", "") == true)
+
+    // index_of
+    assert(text.index_of("hello world", "world") == some(6i64))
+    assert(text.index_of("hello world", "xyz") == default(int64?))
+    assert(text.index_of("abcabc", "bc") == some(1i64))
+    assert(text.index_of("hello", "") == some(0i64))
+    assert(text.index_of("", "x") == default(int64?))
+    assert(text.index_of("abc", "abc") == some(0i64))
+
+    // trim
+    assert(text.trim("  hello  ") == "hello")
+    assert(text.trim("hello") == "hello")
+    assert(text.trim("   ") == "")
+    assert(text.trim("") == "")
+    assert(text.trim("\t\n hello \r\n") == "hello")
+
+    // trim_left
+    assert(text.trim_left("  hello  ") == "hello  ")
+    assert(text.trim_left("hello") == "hello")
+    assert(text.trim_left("   ") == "")
+
+    // trim_right
+    assert(text.trim_right("  hello  ") == "  hello")
+    assert(text.trim_right("hello") == "hello")
+    assert(text.trim_right("   ") == "")
+
+    0
