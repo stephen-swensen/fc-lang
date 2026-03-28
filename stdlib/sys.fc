@@ -6,7 +6,7 @@ module sys =
         extern exit: (int32) -> void
 
     private module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
-        extern clock_gettime: (int32, timespec*) -> int32
+        extern timespec_get: (timespec*, int32) -> int32
         extern nanosleep: (timespec*, timespec*?) -> int32
         extern struct timespec =
             tv_sec: int64
@@ -28,13 +28,29 @@ module sys =
         c.exit(code)
 
     // time: returns the current wall-clock time as milliseconds since the Unix epoch.
+    // Uses C11 timespec_get (portable, no POSIX dependency).
     // returns: int64 — milliseconds since 1970-01-01 00:00:00 UTC.
     let time = () ->
         let mut ts = default(t.timespec)
-        t.clock_gettime(0, &ts)
+        t.timespec_get(&ts, 1)
         ts.tv_sec * 1000 + ts.tv_nsec / 1000000
 
+    // temp_dir: returns the platform temp directory path.
+    // Checks TMPDIR, TMP, TEMP (in order), then falls back to "/tmp".
+    // returns: const str — the temp directory path.
+    let temp_dir = () ->
+        match c.getenv((cstr)"TMPDIR") with
+        | some(cs) -> (const str)cs
+        | none ->
+            match c.getenv((cstr)"TMP") with
+            | some(cs) -> (const str)cs
+            | none ->
+                match c.getenv((cstr)"TEMP") with
+                | some(cs) -> (const str)cs
+                | none -> "/tmp"
+
     // sleep: suspends the calling thread for at least ms milliseconds.
+    // Note: uses POSIX nanosleep — not available on Windows.
     // ms: int64 — duration to sleep in milliseconds.
     // returns: void.
     let sleep = (ms: int64) ->

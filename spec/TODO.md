@@ -2,6 +2,12 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
+## Platform & Portability
+
+### Platform-conditional stdlib (sys.sleep)
+
+`sys.sleep` uses POSIX `nanosleep` — not available on Windows. Need a mechanism for platform-conditional code in the stdlib. Options: documented manual flags (`--flag posix` / `--flag win32`) with `#if`/`#else`/`#end`, or extending C interop to check C preprocessor `#ifdef` symbols. `sys.time` is already pure C11 (`timespec_get`).
+
 ## Standard Library
 
 ### io.read_all

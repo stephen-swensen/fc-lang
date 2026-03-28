@@ -86,3 +86,4 @@ module io =
     // returns: bool — true on success.
     let rename = (old_path: const str, new_path: const str) ->
         c.rename((cstr)old_path, (cstr)new_path) == 0
+
