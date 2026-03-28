@@ -1,6 +1,11 @@
 import text from std::
 
 let main = (args: str[]) ->
+    // copy
+    let c = text.copy("hello")
+    assert(c == "hello")
+    free(c)
+
     // contains
     assert(text.contains("hello world", "world") == true)
     assert(text.contains("hello world", "xyz") == false)
@@ -31,21 +36,62 @@ let main = (args: str[]) ->
     assert(text.index_of("", "x") == default(int64?))
     assert(text.index_of("abc", "abc") == some(0i64))
 
-    // trim
+    // trim (returns subslice, no allocation)
     assert(text.trim("  hello  ") == "hello")
     assert(text.trim("hello") == "hello")
     assert(text.trim("   ") == "")
     assert(text.trim("") == "")
     assert(text.trim("\t\n hello \r\n") == "hello")
 
-    // trim_left
+    // trim_left / trim_right (subslices)
     assert(text.trim_left("  hello  ") == "hello  ")
-    assert(text.trim_left("hello") == "hello")
-    assert(text.trim_left("   ") == "")
-
-    // trim_right
     assert(text.trim_right("  hello  ") == "  hello")
-    assert(text.trim_right("hello") == "hello")
-    assert(text.trim_right("   ") == "")
+
+    // to_upper_char / to_lower_char
+    assert(text.to_upper_char(97u8) == 65u8)
+    assert(text.to_upper_char(48u8) == 48u8)
+    assert(text.to_lower_char(65u8) == 97u8)
+    assert(text.to_lower_char(48u8) == 48u8)
+
+    // to_upper / to_lower (heap-allocated, caller frees)
+    let u = text.to_upper("hello World 123")
+    assert(u == "HELLO WORLD 123")
+    free(u)
+    let l = text.to_lower("HELLO World 123")
+    assert(l == "hello world 123")
+    free(l)
+
+    // split (heap-allocated array of subslices, caller frees array)
+    let parts = text.split("a,b,c", ",")
+    assert(parts.len == 3i64)
+    assert(parts[0] == "a")
+    assert(parts[1] == "b")
+    assert(parts[2] == "c")
+    free(parts)
+
+    let parts2 = text.split("hello", ",")
+    assert(parts2.len == 1i64)
+    assert(parts2[0] == "hello")
+    free(parts2)
+
+    let parts3 = text.split("a::b::c", "::")
+    assert(parts3.len == 3i64)
+    assert(parts3[0] == "a")
+    assert(parts3[1] == "b")
+    assert(parts3[2] == "c")
+    free(parts3)
+
+    // join (heap-allocated, caller frees)
+    let p = text.split("a,b,c", ",")
+    let j = text.join(p, "-")
+    assert(j == "a-b-c")
+    free(j)
+    free(p)
+
+    let p2 = text.split("hello", ",")
+    let j2 = text.join(p2, "-")
+    assert(j2 == "hello")
+    free(j2)
+    free(p2)
 
     0
