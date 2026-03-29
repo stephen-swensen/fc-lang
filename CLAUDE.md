@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This is an early-stage compiler project for **FC** (version 0.9-draft), a systems programming language that transpiles to C11. The compiler (`./fc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`.
+This is a compiler project for **FC** (version 1.0-draft), a systems programming language that transpiles to C11. The compiler (`./fc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`.
 
 ## Build & Run
 
