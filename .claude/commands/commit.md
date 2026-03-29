@@ -41,3 +41,7 @@ EOF
 ## Step 6: Push
 
 After the commit succeeds, run `git branch --show-current` one more time to verify the branch. If the branch looks correct for the work, run `git push`. If the branch looks wrong or unexpected, ask the user before pushing.
+
+## Step 7: Summary
+
+After all steps complete, print a brief summary: the branch, commit hash, commit message, files changed, and whether the push succeeded.
