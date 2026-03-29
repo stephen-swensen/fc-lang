@@ -2,7 +2,7 @@
 disable-model-invocation: true
 model: haiku
 effort: low
-context: append
+context: fork
 ---
 
 Commit and optionally push changes. Follow these steps exactly in order. Do not skip steps or combine them.

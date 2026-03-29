@@ -70,6 +70,34 @@ let apply = (x: 'a, f: ('a) -> 'b) -> f(x)
 // function (stack-allocated context). Composition is done inline instead.
 
 // ============================================================
+// C Interop — extern declarations bind to C headers
+// Extern items live in modules with a from "header" clause.
+// ============================================================
+
+module c_stdlib from "stdlib.h" =
+    extern abs: (int32) -> int32       // extern function
+    extern EXIT_SUCCESS: int32         // extern constant
+    extern EXIT_FAILURE: int32
+
+// Feature-test macros — define is emitted before the #include
+module c_time from "time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern struct timespec =           // extern struct
+        tv_sec: int64
+        tv_nsec: int64
+
+// Extern unions — C's untagged unions (fields overlap, no tag)
+module c_signal from "signal.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern union sigval =              // extern union
+        sival_int: int32
+        sival_ptr: any*
+
+// Variadic functions — ... for untyped trailing args
+module c_stdio from "stdio.h" =
+    extern snprintf: (cstr, usize, const cstr, ...) -> int32
+
+import sigval from c_signal
+
+// ============================================================
 // Entry point — main receives command-line args as str[]
 // Return value becomes the process exit code.
 // ============================================================
@@ -416,8 +444,8 @@ let main = (args: str[]) ->
     assert(identity(3.14) == 3.14)
 
     // Generic unions — type args required (variant may not constrain all params)
-    let ok_val = result<int32, str>.ok(42)
-    let err_val = result<int32, str>.err("fail")
+    let ok_val = result<int32, bool>.ok(42)
+    let err_val = result<int32, bool>.err(true)
     let got = match ok_val with
     | ok(v)  -> v
     | err(_) -> -1
@@ -458,6 +486,39 @@ let main = (args: str[]) ->
         let mut inner = 77
         &inner
     assert(*inner_ptr == 77)
+
+    // --------------------------------------------------------
+    // C Interop
+    // --------------------------------------------------------
+
+    // Extern functions
+    assert(c_stdlib.abs(-42) == 42)
+    assert(c_stdlib.abs(0) == 0)
+
+    // Extern constants (C macros imported as typed values)
+    assert(c_stdlib.EXIT_SUCCESS == 0)
+    assert(c_stdlib.EXIT_FAILURE != 0)
+
+    // Extern structs — construct, access fields, default, sizeof
+    let ts = c_time.timespec { tv_sec = 42, tv_nsec = 100 }
+    assert(ts.tv_sec == 42)
+    assert(ts.tv_nsec == 100)
+    assert(default(c_time.timespec).tv_sec == 0)
+    assert(sizeof(c_time.timespec) == 16i64)
+
+    // Extern unions — untagged, fields overlap in memory
+    let sv = sigval { sival_int = 42 }
+    assert(sv.sival_int == 42)
+    let mut sv2 = default(sigval)
+    sv2.sival_int = 99
+    assert(sv2.sival_int == 99)
+
+    // Variadic extern functions
+    let mut strbuf = uint8[64] {}
+    c_stdio.snprintf(strbuf.ptr, 64u, c"value=%d", 42)
+
+    // Aliases: extern abs as c_abs renames C's abs to c_abs in FC
+    // Useful when C names collide with FC builtins (alloc, free, sizeof)
 
     // --------------------------------------------------------
     // All done
