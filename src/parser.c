@@ -62,6 +62,20 @@ static const char *tok_intern(Parser *p, Token *t) {
     return intern(p->intern, t->start, t->length);
 }
 
+/* Accept an identifier or a reserved keyword token as a C name in extern declarations.
+ * This allows 'extern free as c_free: ...' where 'free' is normally a keyword. */
+static Token *expect_extern_c_name(Parser *p) {
+    TokenKind k = current(p)->kind;
+    if (k == TOK_IDENT || k == TOK_ALLOC || k == TOK_FREE || k == TOK_SIZEOF ||
+        k == TOK_ALIGNOF || k == TOK_DEFAULT || k == TOK_ASSERT) {
+        return advance_p(p);
+    }
+    SrcLoc loc = loc_from_token(current(p));
+    diag_fatal(loc, "expected identifier in extern declaration, got %s",
+        token_kind_name(k));
+    return NULL; /* unreachable */
+}
+
 /* ---- Pratt precedence ---- */
 
 typedef enum {
@@ -902,6 +916,36 @@ static Expr *parse_prefix(Parser *p) {
                     elem_type->struc.field_count = 0;
                 }
                 expect(p, TOK_LBRACKET);
+
+                /* T[] { ptr = expr, len = expr } — slice construction from raw parts */
+                if (check(p, TOK_RBRACKET)) {
+                    advance_p(p); /* consume ] */
+                    expect(p, TOK_LBRACE);
+                    /* Parse ptr and len fields (either order) */
+                    Expr *ptr_val = NULL, *len_val = NULL;
+                    while (!check(p, TOK_RBRACE)) {
+                        const char *fn = tok_intern(p, expect(p, TOK_IDENT));
+                        expect(p, TOK_EQ);
+                        Expr *val = parse_expr(p, PREC_NONE + 1);
+                        if (strcmp(fn, "ptr") == 0) ptr_val = val;
+                        else if (strcmp(fn, "len") == 0) len_val = val;
+                        else {
+                            SrcLoc floc = loc_from_token(current(p));
+                            diag_fatal(floc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
+                        }
+                        if (check(p, TOK_COMMA)) advance_p(p);
+                    }
+                    expect(p, TOK_RBRACE);
+                    if (!ptr_val || !len_val) {
+                        diag_fatal(loc, "slice literal requires both 'ptr' and 'len' fields");
+                    }
+                    Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
+                    e->slice_lit.elem_type = elem_type;
+                    e->slice_lit.ptr_expr = ptr_val;
+                    e->slice_lit.len_expr = len_val;
+                    return e;
+                }
+
                 Expr *size_expr = parse_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RBRACKET);
                 expect(p, TOK_LBRACE);
@@ -943,6 +987,31 @@ static Expr *parse_prefix(Parser *p) {
                 is_struct_lit = true;
             }
             if (is_struct_lit) {
+                /* str { ptr = expr, len = expr } — slice literal for string type */
+                if (strcmp(name, "str") == 0) {
+                    advance_p(p);  /* consume ident */
+                    advance_p(p);  /* consume { */
+                    Expr *ptr_val = NULL, *len_val = NULL;
+                    while (!check(p, TOK_RBRACE)) {
+                        const char *fn = tok_intern(p, expect(p, TOK_IDENT));
+                        expect(p, TOK_EQ);
+                        Expr *val = parse_expr(p, PREC_NONE + 1);
+                        if (strcmp(fn, "ptr") == 0) ptr_val = val;
+                        else if (strcmp(fn, "len") == 0) len_val = val;
+                        else diag_fatal(loc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
+                        if (check(p, TOK_COMMA)) advance_p(p);
+                    }
+                    expect(p, TOK_RBRACE);
+                    if (!ptr_val || !len_val)
+                        diag_fatal(loc, "slice literal requires both 'ptr' and 'len' fields");
+                    Type *et = arena_alloc(p->arena, sizeof(Type));
+                    et->kind = TYPE_UINT8;
+                    Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
+                    e->slice_lit.elem_type = et;
+                    e->slice_lit.ptr_expr = ptr_val;
+                    e->slice_lit.len_expr = len_val;
+                    return e;
+                }
                 advance_p(p);  /* consume ident */
                 advance_p(p);  /* consume { */
                 return parse_struct_literal(p, name, loc);
@@ -2263,7 +2332,7 @@ static Decl *parse_extern_decl(Parser *p) {
     }
 
     /* extern function declaration */
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_extern_c_name(p));
     const char *alias = NULL;
     if (check(p, TOK_AS)) {
         advance_p(p);

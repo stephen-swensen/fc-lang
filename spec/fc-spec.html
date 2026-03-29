@@ -892,7 +892,7 @@ Non-const implicitly widens to const (the safe direction). Const to non-const re
 ```fc
 let f = (s: const str) -> s.len
 
-let mut buf = alloc(uint8[100])!
+let mut buf = alloc(uint8[100] { })!
 f(buf)                     // ok — str widens to const str
 ```
 
@@ -1539,7 +1539,7 @@ loop
     if done() then break
 
 // non-uniform step — for only supports step-by-one
-let buf = alloc(uint8[256])!
+let buf = alloc(uint8[256] { })!
 let mut i = 0
 loop
     if i >= buf.len then break
@@ -1552,7 +1552,7 @@ loop
 > All three `for` forms transpile to standard C `for` loops:
 > ```c
 > // for p in points (element iteration)
-> for (size_t _i = 0; _i < points.len; _i++) {
+> for (int64_t _i = 0; _i < points.len; _i++) {
 >     point p = points.ptr[_i];
 >     // body
 > }
@@ -1568,7 +1568,7 @@ loop
 >     // body
 > }
 > ```
-> For element iteration, `size_t` is used for the internal loop counter as a compiler optimization — it is the natural width for array indexing on the target platform. This does not affect FC semantics. For range and index-element iteration, the counter is the user-visible binding `i`, typed according to the widening rules.
+> For element iteration, `int64_t` is used for the internal loop counter, matching the slice `.len` type. This does not affect FC semantics. For range and index-element iteration, the counter is the user-visible binding `i`, typed according to the widening rules.
 > `loop` transpiles to a C `while(1)` with `break` and `continue` mapping directly.
 
 # PART 3 — Functions
@@ -1835,25 +1835,6 @@ ptr->x     // pointer field access
 
 Structs may be allocated on the stack or heap. Memory layout is identical to the equivalent C struct in declaration order — FC defers entirely to the C compiler for field alignment and padding. This means FC structs and their C equivalents are always ABI-compatible.
 
-### Local struct definitions
-
-`struct` may also appear inside a function body as a scoped definition, following the same lexical scoping rules as `let` bindings. The struct type is only visible within the expressions that follow it in the same block.
-
-```fc
-let process = (data: uint8[]) ->
-    struct result =
-        value: int32
-        success: bool
-
-    let make_result = (v: int32, s: bool) ->
-        result { value = v, success = s }
-
-    let r = make_result(42, true)
-    r
-```
-
-A local struct type may be used as the return type of nested functions defined within the same scope. It may not be used as the return type of the enclosing function — that would allow the type name to escape its lexical scope, which is a compile error. This applies to explicit returns and to the implicit case: if a function body's final expression infers to a locally-defined type, the compiler treats that as a compile error even though the type is never written by name — the type cannot be named by callers and so cannot be a valid return type.
-
 ---
 
 ## Union Types
@@ -1896,26 +1877,6 @@ let r = parse_outcome.success(42)
 > } shape;
 > ```
 > The anonymous union means payload fields are accessed directly on the struct (`s.circle`) rather than through a named payload field (`s.payload.circle`), producing cleaner generated code. Variant tags are assigned integer values in declaration order starting from 0. This means zero-initialized memory is always a valid union value — the tag field 0 corresponds to the first declared variant, and the payload bytes are zero.
-
-### Local union definitions
-
-Like structs, `union` may appear inside a function body as a scoped definition. The union type is only visible within the expressions that follow it in the same block, and may not be used as the return type of the enclosing function — whether explicitly or via inference.
-
-```fc
-let parse = (input: str) ->
-    union parse_result =
-        | success(int32)
-        | failure(str)
-
-    let interpret = (r: parse_result) ->
-        match r with
-        | success(n) -> n
-        | failure(msg) -> 0
-
-    let r = if valid(input) then parse_result.success(42)
-            else parse_result.failure("bad input")
-    interpret(r)
-```
 
 ---
 
@@ -2112,8 +2073,8 @@ Slices can be stack-allocated using literal initialization syntax, or heap-alloc
 ```fc
 let mut buf = int32[128] { }          // stack slice — zero-initialized
 let rgb = uint8[3] { 255, 0, 128 }   // stack slice — exhaustive element list
-let buf = alloc(int32[128])           // heap slice — returns int32[]?
-let buf = alloc(int32[128])!          // heap slice — unwrap, crash on failure
+let buf = alloc(int32[128] { })       // heap slice — returns int32[]?
+let buf = alloc(int32[128] { })!     // heap slice — unwrap, crash on failure
 ```
 
 Two initialization forms for stack slices:
@@ -2167,7 +2128,7 @@ let s = "hello"          // s: const str — points to static read-only memory
 s[0] = 72u8              // compile error: cannot assign through const pointer/slice
 free(s)                  // compile error: cannot free const pointer/slice
 
-let mut buf = alloc(uint8[5])!
+let mut buf = alloc(uint8[5] { })!
 buf[0] = 72u8            // ok — heap-allocated, mutable (non-const str)
 free(buf)                // ok — heap-allocated
 ```
@@ -2664,7 +2625,7 @@ When `alloc` wraps a literal expression — string literals, cstr literals, inte
 
 #### Raw buffer allocation
 
-`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N])`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
+`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N] { })`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
 
 ```fc
 let buf = alloc(uint8, 256)!    // uint8*? — raw buffer, no length tracking
@@ -3177,7 +3138,7 @@ C library bindings are declared using `extern` inside a module with a `from` cla
 > module io =
 >     private module c from "stdio.h" =
 >         extern fwrite: (any*, uint64, uint64, any*) -> uint64
->     let write = (s: str, f: any*) ->
+>     let write = (s: const str, f: any*) ->
 >         (int64) c.fwrite((any*)s.ptr, 1u64, (uint64)s.len, f)
 > ```
 
@@ -3393,7 +3354,7 @@ match buf with
 | some(p)  -> use(p)
 ```
 
-The programmer is responsible for correctly declaring which C functions can return null. Getting this wrong (declaring a nullable return as non-nullable) is the same class of bug as in C itself.
+The programmer is responsible for correctly declaring which C functions can return null. A bare `T*` return type is treated as non-nullable — the compiler assumes the function always returns a valid pointer. Getting this wrong (declaring a nullable return as non-nullable) is the same class of bug as in C itself.
 
 For C functions that signal failure via a sentinel integer value (such as `-1`), declare the return type as a plain integer and check the sentinel directly — do not use `?`:
 
@@ -3657,7 +3618,7 @@ let identity = (x: 'a) -> x
 let fst = (a: 'a, b: 'b) -> a
 
 let map = (s: 'a[], f: ('a) -> 'b) ->
-    let mut result = alloc('b[s.len])!
+    let mut result = alloc('b[s.len] { })!
     let mut i = 0
     loop
         if i >= s.len then break result
@@ -3692,7 +3653,7 @@ However, some functions introduce type variables that do not appear in any param
 ```fc
 // 'a cannot be inferred from any argument — it only appears in the return type
 let make = <'a>() ->
-    arraylist { data = alloc('a[4])!, len = 0 }
+    arraylist { data = alloc('a[4] { })!, len = 0 }
 ```
 
 The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
@@ -4111,14 +4072,14 @@ module arraylist =
 
     private let grow = (l: arraylist<'a>*) ->
         let new_cap = l->data.len * 2
-        let mut new_data = alloc('a[new_cap])!
+        let mut new_data = alloc('a[new_cap] { })!
         for i in 0..l->len
             new_data[i] = l->data[i]
         free(l->data)
         l->data = new_data
 
     let make = <'a>() ->
-        arraylist { data = alloc('a[4])!, len = 0 }
+        arraylist { data = alloc('a[4] { })!, len = 0 }
 
     let drop = (l: arraylist<'a>) ->
         free(l.data)

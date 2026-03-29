@@ -41,6 +41,7 @@ typedef enum {
     EXPR_FUNC,
     EXPR_STRUCT_LIT,
     EXPR_ARRAY_LIT,
+    EXPR_SLICE_LIT,     /* T[] { ptr = expr, len = expr } */
     EXPR_ALLOC,
     EXPR_FREE,
     EXPR_SIZEOF,
@@ -118,7 +119,7 @@ struct Expr {
         struct { const char *value; int length; } cstring_lit;
 
         /* EXPR_IDENT */
-        struct { const char *name; const char *codegen_name; bool is_local; } ident;
+        struct { const char *name; const char *codegen_name; bool is_local; bool is_mut; } ident;
 
         /* EXPR_BINARY */
         struct { TokenKind op; Expr *left; Expr *right; } binary;
@@ -210,6 +211,13 @@ struct Expr {
             Expr **elems;
             int elem_count;
         } array_lit;
+
+        /* EXPR_SLICE_LIT — T[] { ptr = expr, len = expr } */
+        struct {
+            Type *elem_type;    /* element type (e.g., uint8 for str) */
+            Expr *ptr_expr;
+            Expr *len_expr;
+        } slice_lit;
 
         /* EXPR_ALLOC */
         struct {

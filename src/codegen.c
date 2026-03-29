@@ -1177,6 +1177,17 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "))");
             break;
         }
+        /* Bitwise NOT on sub-int types: cast result back to prevent C promotion issues */
+        if (e->unary_prefix.op == TOK_TILDE && e->type && type_is_integer(e->type) &&
+            (e->type->kind == TYPE_INT8  || e->type->kind == TYPE_UINT8 ||
+             e->type->kind == TYPE_INT16 || e->type->kind == TYPE_UINT16)) {
+            fprintf(out, "((");
+            emit_type(e->type, out);
+            fprintf(out, ")(~");
+            emit_expr(e->unary_prefix.operand, out);
+            fprintf(out, "))");
+            break;
+        }
         const char *op_str;
         switch (e->unary_prefix.op) {
         case TOK_MINUS: op_str = "-"; break;
@@ -1672,6 +1683,25 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "){ .ptr = _arr%d, .len = ", tid);
         emit_expr(e->array_lit.size_expr, out);
         fprintf(out, " }; })");
+        break;
+    }
+
+    case EXPR_SLICE_LIT: {
+        /* Slice construction from raw parts: (fc_slice_T){ .ptr = ptr, .len = len } */
+        fprintf(out, "(");
+        emit_type(e->type, out);
+        fprintf(out, "){ .ptr = ");
+        /* Cast away const if source pointer is const (FC tracks constness at slice level) */
+        Type *ptr_type = e->slice_lit.ptr_expr->type;
+        if (ptr_type && ptr_type->kind == TYPE_POINTER && ptr_type->is_const) {
+            fprintf(out, "(");
+            emit_type(e->slice_lit.elem_type, out);
+            fprintf(out, "*)");
+        }
+        emit_expr(e->slice_lit.ptr_expr, out);
+        fprintf(out, ", .len = ");
+        emit_expr(e->slice_lit.len_expr, out);
+        fprintf(out, " }");
         break;
     }
 
@@ -2712,6 +2742,11 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_types_expr(e->array_lit.elems[i], slices, options, fns);
         break;
+    case EXPR_SLICE_LIT:
+        collect_types_in_type(e->slice_lit.elem_type, slices, options, fns);
+        collect_types_expr(e->slice_lit.ptr_expr, slices, options, fns);
+        collect_types_expr(e->slice_lit.len_expr, slices, options, fns);
+        break;
     case EXPR_MATCH:
         collect_types_expr(e->match_expr.subject, slices, options, fns);
         for (int i = 0; i < e->match_expr.arm_count; i++) {
@@ -2899,6 +2934,10 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_trampolines_expr(e->array_lit.elems[i], ts);
         break;
+    case EXPR_SLICE_LIT:
+        collect_trampolines_expr(e->slice_lit.ptr_expr, ts);
+        collect_trampolines_expr(e->slice_lit.len_expr, ts);
+        break;
     case EXPR_MATCH:
         collect_trampolines_expr(e->match_expr.subject, ts);
         for (int i = 0; i < e->match_expr.arm_count; i++)
@@ -3008,6 +3047,10 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_lambdas_expr(e->array_lit.elems[i], ls);
+        break;
+    case EXPR_SLICE_LIT:
+        collect_lambdas_expr(e->slice_lit.ptr_expr, ls);
+        collect_lambdas_expr(e->slice_lit.len_expr, ls);
         break;
     case EXPR_MATCH:
         collect_lambdas_expr(e->match_expr.subject, ls);
@@ -3423,6 +3466,10 @@ static void detect_features_expr(Expr *e) {
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             detect_features_expr(e->array_lit.elems[i]);
+        return;
+    case EXPR_SLICE_LIT:
+        detect_features_expr(e->slice_lit.ptr_expr);
+        detect_features_expr(e->slice_lit.len_expr);
         return;
     case EXPR_IDENT:
         /* Built-in globals stdin/stdout/stderr require stdio.h */

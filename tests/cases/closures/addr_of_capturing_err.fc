@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let threshold = 10
+    let mut above = (x: int32) -> x > threshold
+    let p = &above
+    0

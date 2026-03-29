@@ -1,0 +1,9 @@
+let negate = (x: 'a) -> -x
+let bitflip = (x: 'a) -> ~x
+
+let main = (args: str[]) ->
+    assert(negate(42) == -42)
+    assert(negate(3.14f64) == -3.14f64)
+    assert(bitflip(0u8) == 255u8)
+    assert(bitflip(0xFFi32) == ~0xFFi32)
+    0

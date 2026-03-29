@@ -238,7 +238,18 @@ static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
     while (!at_end(l) && peek(l) != '"') {
         if (peek(l) == '\\') {
             advance(l); /* skip backslash */
-            if (!at_end(l)) advance(l); /* skip escaped char */
+            if (at_end(l)) break;
+            char esc = peek(l);
+            if (esc == 'n' || esc == 't' || esc == 'r' || esc == '\\' ||
+                esc == '"' || esc == '\'' || esc == '0') {
+                advance(l);
+            } else if (esc == 'x') {
+                advance(l); /* skip 'x' */
+                if (!at_end(l) && isxdigit((unsigned char)peek(l))) advance(l);
+                if (!at_end(l) && isxdigit((unsigned char)peek(l))) advance(l);
+            } else {
+                return error_token(l, "unrecognized escape sequence");
+            }
             continue;
         }
         if (peek(l) == '%') {
@@ -318,10 +329,17 @@ static Token scan_cstring(Lexer *l) {
 static Token scan_char_lit(Lexer *l) {
     advance(l); /* opening ' */
     if (peek(l) == '\\') {
-        advance(l); advance(l);
-        if (l->current[-1] == 'x') {
+        advance(l); /* skip backslash */
+        char esc = peek(l);
+        if (esc == 'n' || esc == 't' || esc == 'r' || esc == '\\' ||
+            esc == '"' || esc == '\'' || esc == '0') {
+            advance(l);
+        } else if (esc == 'x') {
+            advance(l); /* skip 'x' */
             if (isxdigit((unsigned char)peek(l))) advance(l);
             if (isxdigit((unsigned char)peek(l))) advance(l);
+        } else {
+            return error_token(l, "unrecognized escape sequence");
         }
     } else {
         advance(l);

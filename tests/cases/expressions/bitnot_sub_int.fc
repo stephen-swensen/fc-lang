@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    let a = 0u8
+    assert(~a == 255u8)
+    let b = 0xFFu8
+    assert(~b == 0u8)
+    let c = 0u16
+    assert(~c == 65535u16)
+    let d = 0xFFFFu16
+    assert(~d == 0u16)
+    0

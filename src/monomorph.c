@@ -294,6 +294,10 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                 discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, symtab, var_names, concrete, var_count);
         }
         return;
+    case EXPR_SLICE_LIT:
+        discover_in_expr(e->slice_lit.ptr_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->slice_lit.len_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     default: return;
     }
 }

@@ -1,0 +1,10 @@
+module mymod =
+    private struct secret =
+        x: int32
+
+    let make = () ->
+        secret { x = 42 }
+
+let main = (args: str[]) ->
+    let s = mymod.secret { x = 10 }
+    0

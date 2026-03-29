@@ -1,0 +1,9 @@
+module libc from "string.h" =
+    extern strlen: (const uint8*) -> usize
+
+let main = (args: str[]) ->
+    let cs = c"hello"
+    let st = str { ptr = cs, len = (int64) libc.strlen(cs) }
+    assert(st.len == 5i64)
+    assert(st[0] == 104u8)
+    0

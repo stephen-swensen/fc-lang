@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let s = "hello\q"
+    0

@@ -1,0 +1,15 @@
+module geometry =
+    struct point =
+        x: int32
+        y: int32
+
+    module transforms =
+        let translate = (p: point, dx: int32, dy: int32) ->
+            point { x = p.x + dx, y = p.y + dy }
+
+let main = (args: str[]) ->
+    let p = geometry.point { x = 1, y = 2 }
+    let moved = geometry.transforms.translate(p, 10, 20)
+    assert(moved.x == 11)
+    assert(moved.y == 22)
+    0

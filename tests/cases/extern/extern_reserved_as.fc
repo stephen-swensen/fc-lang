@@ -1,0 +1,7 @@
+module libc from "stdlib.h" =
+    extern free as c_free: (any*) -> void
+
+let main = (args: str[]) ->
+    let p = alloc(int32)!
+    libc.c_free((any*) p)
+    0

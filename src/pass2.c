@@ -11,6 +11,7 @@ typedef struct {
     const char *codegen_name;   /* unique C name for shadowing */
     Type *type;
     bool is_mut;
+    bool is_capturing;          /* true if bound to a capturing lambda */
     Provenance prov;            /* provenance of the bound value */
 } LocalBinding;
 
@@ -49,7 +50,7 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
 }
 
 static void scope_add_prov(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut, Provenance prov) {
-    LocalBinding b = { name, codegen_name, type, is_mut, prov };
+    LocalBinding b = { name, codegen_name, type, is_mut, false, prov };
     DA_APPEND(s->locals, s->local_count, s->local_cap, b);
 }
 
@@ -84,6 +85,17 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
     if (out_crossings) *out_crossings = 0;
     if (out_is_global) *out_is_global = false;
     return NULL;
+}
+
+/* Look up whether a binding holds a capturing lambda */
+static bool scope_lookup_is_capturing(Scope *s, const char *name) {
+    for (Scope *sc = s; sc; sc = sc->parent) {
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].name == name)
+                return sc->locals[i].is_capturing;
+        }
+    }
+    return false;
 }
 
 /* Look up a binding's provenance by name */
@@ -136,6 +148,7 @@ typedef struct {
     Type **loop_break_type;  /* non-NULL when inside a loop; points to break value type */
     bool in_for;             /* true when inside a for loop (break value forbidden) */
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
+    SymbolTable *parent_module_symtab;  /* non-NULL in child modules; parent's symtab for type fallback */
     const char *current_ns;      /* current namespace for namespace isolation */
     Type *recursive_ret;         /* non-NULL placeholder when resolving a recursive function */
     LambdaCtx *lambda_ctx;       /* capture tracking for lambdas, NULL outside lambdas */
@@ -210,7 +223,8 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
 
 /* Look up a dotted name (e.g., "module.type" or "a.b.type") by walking the module chain.
  * Returns the symbol for the final member, or NULL if any segment is not found. */
-static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
+static Symbol *resolve_dotted_name_ex(CheckCtx *ctx, const char *dotted_name,
+    SymbolTable **out_owner_members) {
     const char *dot = strchr(dotted_name, '.');
     if (!dot) return NULL;
 
@@ -235,11 +249,16 @@ static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
         dot = strchr(path, '.');
     }
     if (!mod_sym || !mod_sym->members) return NULL;
+    if (out_owner_members) *out_owner_members = mod_sym->members;
     const char *member_name = intern_cstr(ctx->intern, path);
     Symbol *sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_STRUCT);
     if (!sym) sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_UNION);
     if (!sym) sym = symtab_lookup(mod_sym->members, member_name);
     return sym;
+}
+
+static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
+    return resolve_dotted_name_ex(ctx, dotted_name, NULL);
 }
 
 /* Resolve a named type stub (TYPE_STRUCT with no fields) to the actual type from symtab */
@@ -309,6 +328,12 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
             sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_STRUCT);
             if (!sym)
                 sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_UNION);
+        }
+        /* Fallback to parent module's types (for child modules accessing parent structs/unions) */
+        if (!sym && ctx->parent_module_symtab) {
+            sym = symtab_lookup_kind(ctx->parent_module_symtab, t->struc.name, DECL_STRUCT);
+            if (!sym)
+                sym = symtab_lookup_kind(ctx->parent_module_symtab, t->struc.name, DECL_UNION);
         }
         if (!sym) {
             sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_STRUCT);
@@ -1039,9 +1064,28 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     }
 
     /* Recurse into all sub-expressions */
-    case EXPR_UNARY_PREFIX:
+    case EXPR_UNARY_PREFIX: {
         ok &= validate_generic_body(e->unary_prefix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        /* Validate deferred unary ops on type variables */
+        Type *ot_raw = e->unary_prefix.operand->type;
+        if (ot_raw && type_contains_type_var(ot_raw)) {
+            Type *ot = type_substitute(arena, ot_raw, type_params, bindings, ntp);
+            if (e->unary_prefix.op == TOK_MINUS) {
+                if (!type_is_numeric(ot)) {
+                    diag_error(call_loc, "in %s at %d:%d: unary minus requires numeric operand, got %s",
+                        inst_desc, e->loc.line, e->loc.col, type_name(ot));
+                    ok = false;
+                }
+            } else if (e->unary_prefix.op == TOK_TILDE) {
+                if (!type_is_integer(ot)) {
+                    diag_error(call_loc, "in %s at %d:%d: bitwise not requires integer operand, got %s",
+                        inst_desc, e->loc.line, e->loc.col, type_name(ot));
+                    ok = false;
+                }
+            }
+        }
         break;
+    }
     case EXPR_UNARY_POSTFIX:
         ok &= validate_generic_body(e->unary_postfix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
@@ -1123,6 +1167,10 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_SLICE_LIT:
+        ok &= validate_generic_body(e->slice_lit.ptr_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->slice_lit.len_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++)
@@ -1228,6 +1276,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
             e->ident.codegen_name = cg_name;
             e->ident.is_local = !is_global_binding;
+            e->ident.is_mut = is_mut;
             e->type = t;
             e->prov = scope_lookup_prov(ctx->scope, e->ident.name);
             return t;
@@ -1248,6 +1297,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name) {
                     e->ident.codegen_name = msym->decl->let.codegen_name;
                 }
+                if (msym->decl && msym->decl->kind == DECL_LET)
+                    e->ident.is_mut = msym->decl->let.is_mut;
                 if (!msym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();
@@ -1300,6 +1351,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         ctx->on_demand_visited = vis.next;
                     }
                 }
+                if (isym->decl && isym->decl->kind == DECL_LET)
+                    e->ident.is_mut = isym->decl->let.is_mut;
                 if (!isym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();
@@ -1355,6 +1408,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (sym->decl && sym->decl->kind == DECL_LET && sym->decl->let.codegen_name) {
             e->ident.codegen_name = sym->decl->let.codegen_name;
         }
+        if (sym->decl && sym->decl->kind == DECL_LET)
+            e->ident.is_mut = sym->decl->let.is_mut;
         e->type = sym->type;
         return e->type;
     }
@@ -1560,6 +1615,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *ot = check_expr(ctx, e->unary_prefix.operand);
         if (type_is_error(ot)) { e->type = type_error(); return e->type; }
         TokenKind op = e->unary_prefix.op;
+        /* Defer unary minus and bitwise not on type variables to monomorphization */
+        if (ot->kind == TYPE_TYPE_VAR && (op == TOK_MINUS || op == TOK_TILDE)) {
+            e->type = ot;
+            return e->type;
+        }
         if (op == TOK_MINUS) {
             if (!type_is_numeric(ot)) {
                 diag_error(e->loc, "unary minus requires numeric operand, got %s", type_name(ot));
@@ -1600,6 +1660,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     NULL, &op_is_mut, NULL, NULL);
                 if (!op_is_mut) {
                     diag_error(e->loc, "address-of requires mutable binding");
+                    e->type = type_error();
+                    return e->type;
+                }
+                /* &f on a capturing lambda is an error — only non-capturing
+                 * function bindings can yield a raw C function pointer */
+                if (ot->kind == TYPE_FUNC &&
+                    scope_lookup_is_capturing(ctx->scope, operand->ident.name)) {
+                    diag_error(e->loc, "cannot take address of capturing closure");
                     e->type = type_error();
                     return e->type;
                 }
@@ -2201,6 +2269,17 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         e->let_expr.codegen_name = cg;
         scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
                         e->let_expr.let_init->prov);
+        /* Mark binding as capturing if init is a lambda with captures */
+        if (e->let_expr.let_init->kind == EXPR_FUNC &&
+            e->let_expr.let_init->func.capture_count > 0) {
+            Scope *sc = ctx->scope;
+            for (int ci = sc->local_count - 1; ci >= 0; ci--) {
+                if (sc->locals[ci].codegen_name == cg) {
+                    sc->locals[ci].is_capturing = true;
+                    break;
+                }
+            }
+        }
         e->type = type_void();
         return e->type;
     }
@@ -2254,6 +2333,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (type_is_error(lt) || type_is_error(vt)) {
             e->type = type_void();
             return e->type;
+        }
+        /* Reject reassignment of immutable (let) bindings */
+        if (e->assign.target->kind == EXPR_IDENT && !e->assign.target->ident.is_mut) {
+            diag_error(e->loc, "cannot assign to immutable binding '%s'",
+                e->assign.target->ident.name);
         }
         if (!type_eq(lt, vt)) {
             if (type_can_widen(vt, lt)) {
@@ -2326,11 +2410,21 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Symbol *sym = NULL;
 
         /* Check for module-qualified name: "module.type", "a.b.type", etc. */
-        if (strchr(e->struct_lit.type_name, '.'))
-            sym = resolve_dotted_name(ctx, e->struct_lit.type_name);
+        if (strchr(e->struct_lit.type_name, '.')) {
+            SymbolTable *owner_members = NULL;
+            sym = resolve_dotted_name_ex(ctx, e->struct_lit.type_name, &owner_members);
+            if (sym && sym->is_private && ctx->module_symtab != owner_members) {
+                diag_error(e->loc, "cannot access private type '%s'",
+                    e->struct_lit.type_name);
+                e->type = type_error();
+                return e->type;
+            }
+        }
 
         if (!sym && ctx->module_symtab)
             sym = symtab_lookup_kind(ctx->module_symtab, e->struct_lit.type_name, DECL_STRUCT);
+        if (!sym && ctx->parent_module_symtab)
+            sym = symtab_lookup_kind(ctx->parent_module_symtab, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
             sym = import_chain_lookup_kind(ctx->import_scope, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
@@ -2924,6 +3018,46 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (elem_error) { e->type = type_error(); return e->type; }
         e->type = type_slice(ctx->arena, elem_type);
         e->prov = PROV_STACK;
+        return e->type;
+    }
+
+    case EXPR_SLICE_LIT: {
+        /* Slice literal: T[] { ptr = expr, len = expr } */
+        Type *elem_type = resolve_type(ctx, e->slice_lit.elem_type);
+        e->slice_lit.elem_type = elem_type;
+        Type *pt = check_expr(ctx, e->slice_lit.ptr_expr);
+        Type *lt = check_expr(ctx, e->slice_lit.len_expr);
+        if (type_is_error(pt) || type_is_error(lt)) {
+            e->type = type_error();
+            return e->type;
+        }
+        /* ptr must be T* (pointer to element type) */
+        Type *expected_ptr = type_pointer(ctx->arena, elem_type);
+        if (!type_eq(pt, expected_ptr) && !(pt->kind == TYPE_POINTER && type_eq(pt->pointer.pointee, elem_type))) {
+            /* Also allow const T* — result will be const slice */
+            if (!(pt->kind == TYPE_POINTER && pt->is_const && type_eq(pt->pointer.pointee, elem_type))) {
+                diag_error(e->slice_lit.ptr_expr->loc,
+                    "slice ptr field: expected %s*, got %s",
+                    type_name(elem_type), type_name(pt));
+            }
+        }
+        /* len must be int64 (or widenable to int64) */
+        Type *len_type = type_int64();
+        if (!type_eq(lt, len_type)) {
+            if (type_can_widen(lt, len_type)) {
+                e->slice_lit.len_expr = wrap_widen(ctx->arena, e->slice_lit.len_expr, len_type);
+            } else {
+                diag_error(e->slice_lit.len_expr->loc,
+                    "slice len field: expected int64, got %s", type_name(lt));
+            }
+        }
+        Type *slice_type = type_slice(ctx->arena, elem_type);
+        /* If ptr is const, result is const slice */
+        if (pt->is_const) {
+            slice_type = type_make_const(ctx->arena, slice_type);
+        }
+        e->type = slice_type;
+        e->prov = e->slice_lit.ptr_expr->prov;
         return e->type;
     }
 
@@ -4170,6 +4304,7 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 child->module.name, DECL_MODULE);
             if (sub_sym && sub_sym->members) {
                 SymbolTable *saved_symtab = ctx->module_symtab;
+                SymbolTable *saved_parent = ctx->parent_module_symtab;
                 Scope *saved_scope = ctx->scope;
                 ImportScope *saved_imports = ctx->import_scope;
 
@@ -4177,12 +4312,14 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 ImportScope sub_import_scope = { .table = sub_sym->imports, .parent = ctx->import_scope };
                 if (sub_sym->imports) ctx->import_scope = &sub_import_scope;
 
+                ctx->parent_module_symtab = ctx->module_symtab;
                 ctx->module_symtab = sub_sym->members;
                 ctx->scope = scope_new(ctx->arena, ctx->scope);
                 ctx->scope->is_global = true;
                 check_module_members(ctx, child, sub_sym->members);
                 ctx->scope = saved_scope;
                 ctx->module_symtab = saved_symtab;
+                ctx->parent_module_symtab = saved_parent;
                 ctx->import_scope = saved_imports;
             }
         }

@@ -1,0 +1,6 @@
+let modify = (x: int32) ->
+    x = 99
+    x
+
+let main = (args: str[]) ->
+    modify(42)

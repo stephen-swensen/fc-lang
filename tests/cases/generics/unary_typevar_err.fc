@@ -1,0 +1,5 @@
+let negate = (x: 'a) -> -x
+
+let main = (args: str[]) ->
+    let r = negate(true)
+    0
