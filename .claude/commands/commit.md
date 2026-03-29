@@ -1,5 +1,7 @@
 ---
 disable-model-invocation: true
+model: claude-sonnet-4-6
+effort: low
 ---
 
 Commit and optionally push changes. Follow these steps exactly in order. Do not skip steps or combine them.
