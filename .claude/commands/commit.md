@@ -1,3 +1,7 @@
+---
+disable-model-invocation: true
+---
+
 Commit and optionally push changes. Follow these steps exactly in order. Do not skip steps or combine them.
 
 ## Step 1: Check branch

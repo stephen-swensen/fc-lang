@@ -19,10 +19,11 @@ The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g`. Tests comp
 
 ## Git Workflow
 
-- **Never auto-commit** — only commit when explicitly asked
-- Use `/commit` for the full commit-and-push workflow
+- **Never auto-commit**
+- **Never invoke `/commit`** — the user always runs this manually
 - Default branch is `main`; experimental work may happen in other branches
 - Working changes may be discarded and branches may be abandoned — follow the user's lead
+- The user will always be in control of commiting changes, and may do so outside of the claude sessions itself, so don't count on the state of the git repository remaining static
 
 ## Language Overview
 
