@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+ulimit -c 0
 
 FC="./fc"
 CC="${CC:-cc}"
@@ -63,7 +64,7 @@ run_one_test() {
     if [ -n "$expected_exit_file" ] && [ -f "$expected_exit_file" ]; then
         local expected_exit=$(cat "$expected_exit_file" | tr -d '[:space:]')
         set +e
-        "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1
+        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
         local actual_exit=$?
         set -e
         if [ "$actual_exit" != "$expected_exit" ]; then
@@ -75,7 +76,7 @@ run_one_test() {
     # Check expected stdout
     if [ -n "$expected_file" ] && [ -f "$expected_file" ]; then
         set +e
-        "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1
+        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
         set -e
         if ! diff -u "$expected_file" "$TMPDIR/${slug}.stdout" > "$TMPDIR/${slug}.diff" 2>&1; then
             echo "FAIL  $test_display (output mismatch)"
@@ -88,7 +89,7 @@ run_one_test() {
     if { [ -z "$expected_exit_file" ] || [ ! -f "$expected_exit_file" ]; } && \
        { [ -z "$expected_file" ] || [ ! -f "$expected_file" ]; }; then
         set +e
-        "$bin_file" > "$TMPDIR/${slug}.stdout" 2>"$TMPDIR/${slug}.run_stderr"
+        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>"$TMPDIR/${slug}.run_stderr"; } 2>/dev/null
         local actual_exit=$?
         set -e
         if [ "$actual_exit" != "0" ]; then
