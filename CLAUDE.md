@@ -20,10 +20,9 @@ The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g`. Tests comp
 ## Git Workflow
 
 - **Never auto-commit** — only commit when explicitly asked
-- When asked to commit, always run `git diff HEAD` (or `git diff --cached` if already staged) and base the commit message **only on what the diff shows**. Do not rely on conversation memory — changes may have been made and reverted during the session. Also check `git log --oneline -3` to match the repository's commit message style
-- Default branch is `main`; experimental work may happen in other branches — always check the current branch before acting
+- Use `/commit` for the full commit-and-push workflow
+- Default branch is `main`; experimental work may happen in other branches
 - Working changes may be discarded and branches may be abandoned — follow the user's lead
-- No `Co-Authored-By` attribution in commit messages
 
 ## Language Overview
 
