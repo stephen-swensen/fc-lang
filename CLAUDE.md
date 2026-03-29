@@ -126,32 +126,7 @@ match x with
 
 ## Testing
 
-Tests live in `tests/cases/`, organized into subdirectories by functional category:
-
-- `expressions/` — arithmetic, bitwise, boolean, comparison, literals, overflow, shifts, div/mod, comments, int range checks
-- `bindings/` — shadow, void_bind, let_void, unused_local
-- `functions/` — func definitions, recursion, early return, func types, top_level_as_value
-- `control_flow/` — if, else, loop, for, break, continue
-- `structs/` — struct creation, destructuring, field mutation, omitted fields
-- `unions/` — union creation, variants, mixed/no payload
-- `pattern_matching/` — match syntax and patterns (struct, union, option, wildcard, complex)
-- `exhaustiveness/` — Maranget algorithm (bool, int, option, union, struct, nested, generic)
-- `equality/` — structural equality codegen (struct, union, slice, option, string, widen, generic)
-- `casts_widening/` — cast, widen (type conversions)
-- `options/` — option, unwrap, none, nested options
-- `pointers/` — pointer, deref, ptr arithmetic/ordering, addr_of, ptr_to_ptr
-- `slices/` — slice, subslice, stack_array, bounds checks
-- `strings/` — string, cstr, str interop, interpolation, alloc_str
-- `memory/` — alloc, free, sizeof, default, linked_list
-- `modules/` — module, import, namespace, private (single-file tests as `.fc` files, multi-file tests as subdirectories)
-- `closures/` — capture, lambda, closure semantics, globals
-- `generics/` — generic functions/structs/unions, monomorphization, dedup
-- `type_properties/` — static type props (int32.min, float64.nan) + typevar props ('a.bits)
-- `native_types/` — isize/usize literals, arithmetic, casts, generics, error cases
-- `extern/` — extern declarations, conditional compilation (#if/#else/#end), variadic extern calls
-- `const/` — const pointers/slices, const coercion, freeze/strip casts, deep const, const errors
-- `escape/` — stack escape analysis (return stack ptr/slice, free non-heap, alloc struct with stack fields)
-- `io/` — print, io read/write, eprint, stdin/stdout, sys, main_args
+Tests live in `tests/cases/`, organized into subdirectories by functional category (expressions, bindings, functions, control_flow, structs, unions, pattern_matching, exhaustiveness, equality, casts_widening, options, pointers, slices, strings, memory, modules, closures, generics, type_properties, native_types, extern, const, escape, io). Standard library tests live in `tests/cases/stdlib/` as multi-file tests with `deps` files pointing to `stdlib/*.fc`. Browse the directories to see what's covered.
 
 Each **single-file test** is an `.fc` file optionally paired with:
 - `.expected_exit` — expected exit code (0–255). If omitted, the expected exit code is 0.
@@ -179,20 +154,7 @@ The test runner discovers all `.fc` files in the subdirectory and compiles them 
 
 ### Test coverage philosophy
 
-Correctness is imperative in compiler implementation — exhaustive testing is not optional. Every new feature, bug fix, or spec change must be accompanied by a thorough test suite that covers not just the happy path but all meaningful combinations and edge cases.
-
-When adding a feature or fixing a bug, add tests that exercise:
-- The happy path (feature works as specified)
-- All syntax forms and variations (e.g., every import form the spec defines)
-- Edge cases and boundary conditions (empty inputs, single elements, maximum values)
-- Error cases (invalid input produces a clear compile error, type mismatches, ordering violations)
-- Interactions between features (e.g., shadowing + mutability, match + options + unions, generics + equality, nested types)
-- Multiple type combinations (e.g., if a feature works on structs, unions, slices, options, and strings — test all of them, not just one)
-- Generic/monomorphized variants of the feature
-
-Aim for dozens of test cases per feature, not a handful. A bug caught by a test during development costs minutes; a bug discovered in user code costs hours.
-
-Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
+Every new feature, bug fix, or spec change must include tests covering the happy path, edge cases, error cases, and feature interactions. Aim for thorough coverage — not just one type or one syntax form, but all meaningful combinations. Exit codes are mod 256 — keep expected values under 256.
 
 ## Workflow
 
@@ -202,6 +164,7 @@ Exit codes are mod 256 — keep expected values under 256 to avoid confusion.
 
 The `spec/` folder contains:
 - **`fc-spec.html`** — Full language specification. Self-contained HTML with embedded markdown rendered by `marked.js`. Open in a browser to read.
+- **`examples.fc`** — Runnable quick reference demonstrating all core syntax and semantics. Read this first for a fast overview of the language.
 - **`grammar.bnf`** — BNF grammar for the language syntax.
 - **`TODO.md`** — Outstanding spec/compiler tasks.
 - **`hist/`** — Historical design artifacts and analysis documents.
