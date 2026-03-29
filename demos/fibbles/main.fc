@@ -2,13 +2,18 @@
 // Pure FC implementation (no C helper files).
 
 import rect from sdl
-import write from std::io
+import io from std::
 
 // Grid and display constants
 let grid_w = 32
 let grid_h = 24
 let cell = 20
 let max_body = 512
+
+// Game states
+let st_splash = 0
+let st_playing = 1
+let st_over = 2
 
 // SDL_Event field offsets for x86_64 Linux
 // offset 0:  event.type     (uint32 / int32)
@@ -20,7 +25,75 @@ struct vec2 =
     x: int32
     y: int32
 
-// --- Helper functions ---
+// --- Drawing helpers ---
+
+let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
+    let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
+    sdl.set_color(r, red, green, blue, 255u8)
+    sdl.fill_rect(r, &rc)
+    return
+
+// --- 3x5 pixel font ---
+// Each glyph is packed into an int32: row0 in bits 0-2, row1 in bits 3-5, etc.
+// Each row is 3 bits wide (bit 2 = leftmost pixel).
+
+let glyph = (ch: uint8) ->
+    if ch == 'A' then 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'B' then 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+    else if ch == 'C' then 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+    else if ch == 'D' then 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+    else if ch == 'E' then 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+    else if ch == 'F' then 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    else if ch == 'G' then 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+    else if ch == 'H' then 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'I' then 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    else if ch == 'K' then 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+    else if ch == 'L' then 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+    else if ch == 'M' then 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'N' then 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'O' then 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    else if ch == 'P' then 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    else if ch == 'Q' then 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+    else if ch == 'R' then 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'S' then 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+    else if ch == 'T' then 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    else if ch == 'U' then 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    else if ch == 'V' then 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+    else if ch == 'W' then 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+    else if ch == 'Y' then 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    else if ch == '0' then 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+    else if ch == '1' then 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    else if ch == '2' then 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+    else if ch == '5' then 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+    else if ch == '+' then 0 | (2 << 3) | (7 << 6) | (2 << 9) | (0 << 12)
+    else if ch == '-' then 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
+    else if ch == ':' then 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+    else 0
+
+let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
+    let g = glyph(ch)
+    let mut row = 0
+    loop
+        if row >= 5 then break
+        let bits = (g >> (row * 3)) & 7
+        let mut col = 0
+        loop
+            if col >= 3 then break
+            if (bits >> (2 - col)) & 1 == 1 then
+                draw_cell(r, ox + col, oy + row, cr, cg, cb)
+            col = col + 1
+        row = row + 1
+    return
+
+let draw_text = (r: any*, text: const str, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
+    let mut x = ox
+    for ch in text
+        if ch != ' ' then
+            draw_char(r, ch, x, oy, cr, cg, cb)
+        x = x + 4
+    return
+
+// --- Game helpers ---
 
 let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
     body[(head - len + 1 + i + max_body) % max_body]
@@ -44,15 +117,60 @@ let place_food = (body: vec2[], head: int32, len: int32) ->
         if !on_snake(body, head, len, x, y) then
             break vec2 { x = x, y = y }
 
-let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
-    let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
-    sdl.set_color(r, red, green, blue, 255u8)
-    sdl.fill_rect(r, &rc)
+let clear_screen = (r: any*) ->
+    sdl.set_color(r, 20u8, 20u8, 40u8, 255u8)
+    sdl.clear(r)
+    return
+
+// --- Splash screen ---
+
+let render_splash = (r: any*) ->
+    clear_screen(r)
+
+    // Title: "FIBBLES" centered (7 chars * 4 = 28 cells, offset = 2)
+    draw_text(r, "FIBBLES", 2, 1, 0u8, 220u8, 0u8)
+
+    // Decorative snake at row 7
+    let mut sx = 4
+    loop
+        if sx >= 22 then break
+        draw_cell(r, sx, 7, 0u8, 140u8, 0u8)
+        sx = sx + 1
+    draw_cell(r, 22, 7, 0u8, 255u8, 0u8)
+    draw_cell(r, 25, 7, 255u8, 50u8, 50u8)
+
+    // Instructions (max 8 chars per line on 32-cell grid)
+    draw_text(r, "ARROWS", 4, 10, 140u8, 140u8, 180u8)
+    draw_text(r, "STEER", 6, 16, 140u8, 140u8, 180u8)
+
+    // "PRESS SPACE" prompt at bottom — window title has full info
+    // Use the space bar visual: draw a wider bar
+    let mut bx = 10
+    loop
+        if bx >= 22 then break
+        draw_cell(r, bx, 22, 80u8, 80u8, 100u8)
+        bx = bx + 1
+
+    sdl.present(r)
     return
 
 // --- Main ---
 
 let main = (args: str[]) ->
+    // Print rules to terminal
+    io.write("=== FIBBLES ===\n", stdout)
+    io.write("A Snake clone written in FC\n\n", stdout)
+    io.write("Controls:\n", stdout)
+    io.write("  Arrow keys  Steer the snake\n", stdout)
+    io.write("  R           Restart after game over\n", stdout)
+    io.write("  ESC         Quit\n\n", stdout)
+    io.write("Rules:\n", stdout)
+    io.write("  Eat the red food to grow and score\n", stdout)
+    io.write("  Each food: +10 points\n", stdout)
+    io.write("  Speed starts at 150ms, decreases 2ms per food (min 50ms)\n", stdout)
+    io.write("  Game over if you hit a wall or yourself\n\n", stdout)
+    io.write("Press SPACE to start...\n", stdout)
+
     // Init SDL
     sdl.init(sdl.init_video)
     let win = sdl.create_window(c"Fibbles", sdl.pos_centered, sdl.pos_centered,
@@ -66,27 +184,25 @@ let main = (args: str[]) ->
     let mut length = 3
     let mut dir_x = 1
     let mut dir_y = 0
+    let mut next_dx = 1
+    let mut next_dy = 0
     let mut score = 0
     let mut speed = 150
-    let mut game_over = false
+    let mut state = st_splash
     let mut running = true
     let mut last_tick = sdl.get_ticks()
 
-    // Initial snake (center, moving right)
     let cx = grid_w / 2
     let cy = grid_h / 2
-    body[0] = vec2 { x = cx - 2, y = cy }
-    body[1] = vec2 { x = cx - 1, y = cy }
-    body[2] = vec2 { x = cx, y = cy }
 
-    // Initial food
-    let mut food = place_food(body, head_idx, length)
-    sdl.set_title(win, c"Fibbles - Score: 0")
+    let mut food = vec2 { x = 0, y = 0 }
 
     // Event buffer (SDL_Event is ~56 bytes on x86_64)
     let mut event_buf = uint8[64] { }
 
-    // Game loop
+    sdl.set_title(win, c"Fibbles - Press SPACE to start")
+
+    // Main loop
     loop
         if !running then break
 
@@ -95,61 +211,94 @@ let main = (args: str[]) ->
             let has = sdl.poll_event((any*) event_buf.ptr)
             if has == 0 then break
             let etype = *((int32*)(event_buf.ptr + ev_type_off))
+
             if etype == sdl.quit_event then
                 running = false
+                break
+
             if etype == sdl.keydown_event then
                 let ekey = *((int32*)(event_buf.ptr + ev_key_off))
                 if ekey == sdl.key_escape then
                     running = false
-                if game_over then
-                    if ekey == sdl.key_r then
-                        // Restart
+                    break
+
+                if state == st_splash then
+                    if ekey == sdl.key_space then
+                        // Init snake
                         head_idx = 2
                         length = 3
                         dir_x = 1
                         dir_y = 0
+                        next_dx = 1
+                        next_dy = 0
                         score = 0
                         speed = 150
-                        game_over = false
                         body[0] = vec2 { x = cx - 2, y = cy }
                         body[1] = vec2 { x = cx - 1, y = cy }
                         body[2] = vec2 { x = cx, y = cy }
                         food = place_food(body, head_idx, length)
                         last_tick = sdl.get_ticks()
                         sdl.set_title(win, c"Fibbles - Score: 0")
-                else
-                    // Direction change (reject 180-degree reversal)
+                        state = st_playing
+
+                if state == st_playing then
+                    // Direction input — validate against committed dir, not queued dir
                     if ekey == sdl.key_up && dir_y != 1 then
-                        dir_x = 0
-                        dir_y = -1
+                        next_dx = 0
+                        next_dy = -1
                     if ekey == sdl.key_down && dir_y != -1 then
-                        dir_x = 0
-                        dir_y = 1
+                        next_dx = 0
+                        next_dy = 1
                     if ekey == sdl.key_left && dir_x != 1 then
-                        dir_x = -1
-                        dir_y = 0
+                        next_dx = -1
+                        next_dy = 0
                     if ekey == sdl.key_right && dir_x != -1 then
+                        next_dx = 1
+                        next_dy = 0
+
+                if state == st_over then
+                    if ekey == sdl.key_r then
+                        head_idx = 2
+                        length = 3
                         dir_x = 1
                         dir_y = 0
+                        next_dx = 1
+                        next_dy = 0
+                        score = 0
+                        speed = 150
+                        body[0] = vec2 { x = cx - 2, y = cy }
+                        body[1] = vec2 { x = cx - 1, y = cy }
+                        body[2] = vec2 { x = cx, y = cy }
+                        food = place_food(body, head_idx, length)
+                        last_tick = sdl.get_ticks()
+                        sdl.set_title(win, c"Fibbles - Score: 0")
+                        state = st_playing
+
+        if !running then break
 
         // --- Update ---
-        if !game_over then
+        if state == st_playing then
             let now = sdl.get_ticks()
             if now - last_tick >= (uint32) speed then
                 last_tick = now
+
+                // Apply queued direction
+                dir_x = next_dx
+                dir_y = next_dy
+
                 let head = body[head_idx]
                 let new_x = head.x + dir_x
                 let new_y = head.y + dir_y
 
                 // Wall collision
                 if new_x < 0 || new_x >= grid_w || new_y < 0 || new_y >= grid_h then
-                    game_over = true
-                    sdl.set_title(win, c"Fibbles - GAME OVER (R to restart)")
+                    state = st_over
+                    sdl.set_title(win, c"Fibbles - GAME OVER  R:restart  ESC:quit")
                 else
-                    // Self collision (check against body excluding head)
+                    // Self collision
                     if on_snake(body, head_idx, length, new_x, new_y) then
-                        game_over = true
-                        sdl.set_title(win, c"Fibbles - GAME OVER (R to restart)")
+                        state = st_over
+                        sdl.set_title(win, c"Fibbles - GAME OVER  R:restart  ESC:quit")
                     else
                         // Advance snake
                         head_idx = (head_idx + 1) % max_body
@@ -166,38 +315,46 @@ let main = (args: str[]) ->
                             sdl.set_title(win, (cstr)"Fibbles - Score: %d{s}")
 
         // --- Render ---
-        // Background
-        sdl.set_color(ren, 20u8, 20u8, 40u8, 255u8)
-        sdl.clear(ren)
+        if state == st_splash then
+            render_splash(ren)
 
-        // Food
-        draw_cell(ren, food.x, food.y, 255u8, 50u8, 50u8)
+        if state == st_playing || state == st_over then
+            clear_screen(ren)
 
-        // Snake body
-        let mut i = 0
-        loop
-            if i >= length then break
-            let seg = body_at(body, head_idx, length, i)
-            if i == length - 1 then
-                // Head
-                if game_over then
-                    draw_cell(ren, seg.x, seg.y, 140u8, 0u8, 0u8)
+            // Food
+            draw_cell(ren, food.x, food.y, 255u8, 50u8, 50u8)
+
+            // Snake
+            let mut i = 0
+            loop
+                if i >= length then break
+                let seg = body_at(body, head_idx, length, i)
+                if i == length - 1 then
+                    if state == st_over then
+                        draw_cell(ren, seg.x, seg.y, 140u8, 0u8, 0u8)
+                    else
+                        draw_cell(ren, seg.x, seg.y, 0u8, 255u8, 0u8)
                 else
-                    draw_cell(ren, seg.x, seg.y, 0u8, 255u8, 0u8)
-            else
-                // Body
-                if game_over then
-                    draw_cell(ren, seg.x, seg.y, 200u8, 0u8, 0u8)
-                else
-                    draw_cell(ren, seg.x, seg.y, 0u8, 180u8, 0u8)
-            i = i + 1
+                    if state == st_over then
+                        draw_cell(ren, seg.x, seg.y, 200u8, 0u8, 0u8)
+                    else
+                        draw_cell(ren, seg.x, seg.y, 0u8, 180u8, 0u8)
+                i = i + 1
 
-        sdl.present(ren)
+            // Game over overlay text
+            if state == st_over then
+                // "GAME" centered: 4 chars * 4 = 16, offset = (32-16)/2 = 8
+                draw_text(ren, "GAME", 8, 8, 255u8, 255u8, 255u8)
+                // "OVER" centered
+                draw_text(ren, "OVER", 8, 14, 255u8, 255u8, 255u8)
+
+            sdl.present(ren)
+
         sdl.delay(16u32)
 
     // Final score
     let fs = score
-    write("Final score: %d{fs}\n", stdout)
+    io.write("Final score: %d{fs}\n", stdout)
 
     // Cleanup
     sdl.destroy_renderer(ren)

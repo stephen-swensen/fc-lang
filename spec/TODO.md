@@ -12,6 +12,10 @@ Extern unions cannot have fields whose type is a struct (e.g., C unions like SDL
 
 A `private module c from "stdio.h"` inside `std::io` (in stdlib/io.fc) conflicts with a top-level `module c from "stdlib.h"` in another file when both are compiled together. Private modules should be scoped to their enclosing module and not clash with same-named modules in other scopes. Currently requires workaround: rename one of the modules.
 
+### Forward references for functions with inferred return types
+
+Top-level `let` function bindings cannot be referenced before their definition in the same file if their return type is inferred. The spec states "Top-level declarations can reference each other regardless of order", but pass2 cannot resolve the type of a function whose body hasn't been type-checked yet. Currently requires workaround: order functions so callees come before callers.
+
 ## Standard Library
 
 ### prelude.fc / types.fc status

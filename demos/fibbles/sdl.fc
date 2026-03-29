@@ -21,6 +21,7 @@ module sdl from "SDL2/SDL.h" =
     extern SDLK_LEFT as key_left: int32
     extern SDLK_RIGHT as key_right: int32
     extern SDLK_ESCAPE as key_escape: int32
+    extern SDLK_SPACE as key_space: int32
     extern SDLK_r as key_r: int32
 
     // --- Lifecycle ---
