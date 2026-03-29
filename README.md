@@ -16,7 +16,7 @@ https://fc-lang.dev
 
 ## Status
 
-The compiler is under active development.
+The compiler implements all features described in the language specification (v1.0-draft). The spec and implementation are validated by a comprehensive test suite.
 
 ## Building
 
@@ -78,7 +78,7 @@ The test runner (`tests/run_tests.sh`) compiles each FC file to C, compiles the 
 
 - **`src/`** — The compiler, written in C11. Pipeline: lexer → parser → pass1 (declaration collection) → pass2 (type checking) → monomorphization → codegen (C11 emission).
 - **`stdlib/`** — Standard library modules (`std::io`, `std::sys`, etc.), written in FC.
-- **`spec/`** — Language specification (`fc-spec.html`, best viewed in a browser), formal grammar, and compiler roadmap.
+- **`spec/`** — Language specification (`fc-spec.html`, best viewed in a browser) and formal grammar.
 - **`tests/cases/`** — Integration tests organized by functional areas.
 
 For code examples, see the full language specification in `spec/fc-spec.html`.

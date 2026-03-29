@@ -4287,60 +4287,32 @@ The compiler's first pass collects all four files, registers `geom::` as a names
 
 ---
 
-## Road to Implementation
+## Implementation Status
 
-This section outlines the major work items between this design specification and a working FC compiler. The items are roughly ordered by dependency — earlier items inform later ones.
+The FC compiler implements all features described in this specification. The compiler (`./fc`) is a single-pass-to-C transpiler written in C11, producing warning-clean C11 output that compiles with `cc -std=c11 -Wall -Werror`.
 
-### Formal grammar
+### Compiler pipeline
 
-A complete formal grammar (PEG or BNF) is the natural first step. The design spec describes syntax through prose and examples, which is sufficient for language design but insufficient for parser implementation. Writing the grammar will surface ambiguities and edge cases not yet visible in prose — particularly around the interaction between indentation-based layout, continuation lines, and expression-level constructs like `match` and `if`.
+Source → lexer → parser → pass 1 (declaration collection) → pass 2 (type checking) → monomorphization discovery → C code emission.
 
-Key areas that will need careful attention in the grammar:
+All specification features are implemented and tested:
 
-- The offside rule and how it interacts with multi-line expressions, match arms, and nested blocks
-- Disambiguation of overloaded tokens (`*`, `&`, `!`, `->`) across type and expression contexts
-- Negative literals in patterns vs. unary negation in expressions
-- `T<args>` in call position vs. comparison operators
-- The boundary between type expressions and value expressions
+- Indentation-based layout with offside rule and bracket suppression
+- Full type inference (bottom-up, directional, no global unification)
+- Monomorphized generics for functions, structs, and unions
+- Tagged unions with exhaustive pattern matching (Maranget algorithm)
+- Closures with by-copy capture and stack-frame lifetime
+- Escape analysis for stack pointers, slices, and closures
+- Option types with null-sentinel optimization for pointer options
+- Structural equality with generated comparison functions
+- Module system with namespaces, visibility, and lexically scoped imports
+- C interop via `extern` declarations, automatic boundary casts, and variadic support
+- Conditional compilation with `#if`/`#else`/`#end` directives
+- Standard library modules: `std::io`, `std::sys`, `std::math`, `std::text`
 
-### Lexer
+### Test suite
 
-A whitespace-sensitive lexer that tracks column positions and emits synthetic indent/dedent tokens (or equivalent layout information). The lexer must handle nested block comments, all escape sequences, suffixed numeric literals with compile-time range checking, and the tab prohibition.
-
-### Two-pass compiler front end
-
-The spec describes a two-pass architecture: a first pass that collects top-level declarations (names, types, struct layouts, module structure) and a second pass that type-checks all expressions. This maps to a concrete implementation:
-
-- **Pass 1** — scan all files, build the global module map, resolve namespaces and imports, detect circular imports, collect struct/union layouts, and register function signatures (parameter types inferred from annotations, return types deferred).
-- **Pass 2** — type-check all expression bodies with the full environment available. Resolve type variables at generic call sites. Detect monomorphization errors. Enforce capture rules on closures.
-
-### Monomorphizer
-
-After type-checking, the monomorphizer walks every generic call site and produces concrete instantiations. This is a fixpoint process — a generic function may call another generic function, requiring transitive instantiation. The monomorphizer must detect and deduplicate identical instantiations across the build.
-
-### C code emitter
-
-The backend emits C11 source from the typed, monomorphized AST. Most of the transpilation patterns are already specified in this document — the emitter is largely a mechanical translation. Key areas requiring care:
-
-- Name mangling for monomorphized generics, module-qualified names, and collision avoidance
-- The cast-through-unsigned pattern for signed arithmetic
-- Shift amount masking
-- Fat pointer representation for closures and slices
-- Tagged union layout with C11 anonymous unions
-- Bounds check and division-by-zero guard insertion
-- Option type specialization (null-sentinel for pointer options, tagged struct for value options)
-- Conditional compilation directive handling
-
-### Runtime support
-
-FC has minimal runtime needs — no garbage collector, no scheduler, no standard library beyond what C provides. The compiler may need to emit a small set of support functions:
-
-- `abort()`-based trap functions for bounds check, unwrap, and division-by-zero failures
-- Generated equality functions for structs and unions where `==` is used
-
-### Test infrastructure
-
-A test suite covering the major areas of the spec: type inference edge cases, generic monomorphization, closure capture and lifetime rules, operator semantics (overflow wrapping, shift masking, implicit widening), bounds checking, pattern matching exhaustiveness, module visibility, and C interop. Each transpilation note in this spec is effectively a test case.
+The compiler is validated by a comprehensive test suite covering expressions, bindings, functions, control flow, structs, unions, pattern matching, exhaustiveness, equality, casts, options, pointers, slices, strings, memory management, modules, closures, generics, type properties, native types, extern interop, const semantics, escape analysis, and I/O.
 
 
 
