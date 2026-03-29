@@ -179,8 +179,9 @@ let main = (args: str[]) ->
     let mut length = 3
     let mut dir_x = 1
     let mut dir_y = 0
-    let mut next_dx = 1
-    let mut next_dy = 0
+    let mut q_dx = int32[2] { }
+    let mut q_dy = int32[2] { }
+    let mut q_len = 0
     let mut score = 0
     let mut speed = 150
     let mut state = st_splash
@@ -222,8 +223,7 @@ let main = (args: str[]) ->
                         length = 3
                         dir_x = 1
                         dir_y = 0
-                        next_dx = 1
-                        next_dy = 0
+                        q_len = 0
                         score = 0
                         speed = 150
                         body[0] = vec2 { x = cx - 2, y = cy }
@@ -234,20 +234,32 @@ let main = (args: str[]) ->
                         sdl.set_title(win, c"Fibbles - Score: 0")
                         state = st_playing
 
-                if state == st_playing then
-                    // Direction input — validate against committed dir, not queued dir
-                    if ekey == sdl.key_up && dir_y != 1 then
-                        next_dx = 0
-                        next_dy = -1
-                    if ekey == sdl.key_down && dir_y != -1 then
-                        next_dx = 0
-                        next_dy = 1
-                    if ekey == sdl.key_left && dir_x != 1 then
-                        next_dx = -1
-                        next_dy = 0
-                    if ekey == sdl.key_right && dir_x != -1 then
-                        next_dx = 1
-                        next_dy = 0
+                if state == st_playing && q_len < 2 then
+                    // Direction queue: validate against last queued (or committed)
+                    // direction, then enqueue. Max 2 entries allows fold-back combos
+                    // (e.g. UP+LEFT while moving RIGHT) without letting a second
+                    // press reverse the first (e.g. UP+DOWN).
+                    let ref_dx = if q_len > 0 then q_dx[q_len - 1] else dir_x
+                    let ref_dy = if q_len > 0 then q_dy[q_len - 1] else dir_y
+                    let mut accepted = false
+                    if ekey == sdl.key_up && ref_dy != 1 then
+                        q_dx[q_len] = 0
+                        q_dy[q_len] = -1
+                        accepted = true
+                    if ekey == sdl.key_down && ref_dy != -1 && !accepted then
+                        q_dx[q_len] = 0
+                        q_dy[q_len] = 1
+                        accepted = true
+                    if ekey == sdl.key_left && ref_dx != 1 && !accepted then
+                        q_dx[q_len] = -1
+                        q_dy[q_len] = 0
+                        accepted = true
+                    if ekey == sdl.key_right && ref_dx != -1 && !accepted then
+                        q_dx[q_len] = 1
+                        q_dy[q_len] = 0
+                        accepted = true
+                    if accepted then
+                        q_len = q_len + 1
 
                 if state == st_over then
                     if ekey == sdl.key_r then
@@ -255,8 +267,7 @@ let main = (args: str[]) ->
                         length = 3
                         dir_x = 1
                         dir_y = 0
-                        next_dx = 1
-                        next_dy = 0
+                        q_len = 0
                         score = 0
                         speed = 150
                         body[0] = vec2 { x = cx - 2, y = cy }
@@ -275,9 +286,13 @@ let main = (args: str[]) ->
             if now - last_tick >= (uint32) speed then
                 last_tick = now
 
-                // Apply queued direction
-                dir_x = next_dx
-                dir_y = next_dy
+                // Dequeue direction
+                if q_len > 0 then
+                    dir_x = q_dx[0]
+                    dir_y = q_dy[0]
+                    q_dx[0] = q_dx[1]
+                    q_dy[0] = q_dy[1]
+                    q_len = q_len - 1
 
                 let head = body[head_idx]
                 let new_x = head.x + dir_x
