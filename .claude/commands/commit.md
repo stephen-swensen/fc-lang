@@ -1,7 +1,8 @@
 ---
 disable-model-invocation: true
-model: claude-sonnet-4-6
+model: haiku
 effort: low
+context: append
 ---
 
 Commit and optionally push changes. Follow these steps exactly in order. Do not skip steps or combine them.
