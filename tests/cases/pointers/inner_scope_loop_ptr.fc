@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let p = loop
+        let mut found = 77
+        break &found
+    assert(*p == 77)
+    0

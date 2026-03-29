@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let p = if true then
+        let mut val = 100
+        &val
+    else
+        let mut other = 0
+        &other
+    assert(*p == 100)
+    0

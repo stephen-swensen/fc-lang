@@ -24,6 +24,209 @@ static TypeSet *g_eq_set = NULL;
 static int indent_level = 0;
 static int temp_counter = 0;
 
+/* Hoisted let-mut declarations: emitted at function top, assignments at original site */
+typedef struct {
+    const char *codegen_name;
+    Type *type;
+} HoistedDecl;
+
+static HoistedDecl *g_hoisted = NULL;
+static int g_hoisted_count = 0;
+static int g_hoisted_cap = 0;
+
+static void emit_type(Type *t, FILE *out);
+static void emit_indent(FILE *out);
+
+static bool is_hoisted(const char *codegen_name) {
+    for (int i = 0; i < g_hoisted_count; i++)
+        if (g_hoisted[i].codegen_name == codegen_name) return true;
+    return false;
+}
+
+static void collect_hoisted_pat(Pattern *pat, Type *type);
+
+/* Recursively collect all let-mut bindings from a function body */
+static void collect_hoisted_bindings(Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_LET:
+        collect_hoisted_bindings(e->let_expr.let_init);
+        if (e->let_expr.let_is_mut && e->let_expr.codegen_name && e->let_expr.let_type) {
+            HoistedDecl d = { e->let_expr.codegen_name, e->let_expr.let_type };
+            DA_APPEND(g_hoisted, g_hoisted_count, g_hoisted_cap, d);
+        }
+        break;
+    case EXPR_LET_DESTRUCT:
+        collect_hoisted_bindings(e->let_destruct.init);
+        /* Destructured mut bindings: collect individual pattern bindings */
+        if (e->let_destruct.is_mut)
+            collect_hoisted_pat(e->let_destruct.pattern, e->let_destruct.init_type);
+        break;
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            collect_hoisted_bindings(e->block.stmts[i]);
+        break;
+    case EXPR_IF:
+        collect_hoisted_bindings(e->if_expr.cond);
+        collect_hoisted_bindings(e->if_expr.then_body);
+        collect_hoisted_bindings(e->if_expr.else_body);
+        break;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            collect_hoisted_bindings(e->loop_expr.body[i]);
+        break;
+    case EXPR_FOR:
+        collect_hoisted_bindings(e->for_expr.iter);
+        if (e->for_expr.range_end) collect_hoisted_bindings(e->for_expr.range_end);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            collect_hoisted_bindings(e->for_expr.body[i]);
+        break;
+    case EXPR_MATCH:
+        collect_hoisted_bindings(e->match_expr.subject);
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                collect_hoisted_bindings(e->match_expr.arms[i].body[j]);
+        break;
+    case EXPR_BINARY:
+        collect_hoisted_bindings(e->binary.left);
+        collect_hoisted_bindings(e->binary.right);
+        break;
+    case EXPR_UNARY_PREFIX:
+        collect_hoisted_bindings(e->unary_prefix.operand);
+        break;
+    case EXPR_UNARY_POSTFIX:
+        collect_hoisted_bindings(e->unary_postfix.operand);
+        break;
+    case EXPR_CALL:
+        collect_hoisted_bindings(e->call.func);
+        for (int i = 0; i < e->call.arg_count; i++)
+            collect_hoisted_bindings(e->call.args[i]);
+        break;
+    case EXPR_INDEX:
+        collect_hoisted_bindings(e->index.object);
+        collect_hoisted_bindings(e->index.index);
+        break;
+    case EXPR_FIELD: case EXPR_DEREF_FIELD:
+        collect_hoisted_bindings(e->field.object);
+        break;
+    case EXPR_ASSIGN:
+        collect_hoisted_bindings(e->assign.target);
+        collect_hoisted_bindings(e->assign.value);
+        break;
+    case EXPR_RETURN:
+        if (e->return_expr.value) collect_hoisted_bindings(e->return_expr.value);
+        break;
+    case EXPR_BREAK:
+        if (e->break_expr.value) collect_hoisted_bindings(e->break_expr.value);
+        break;
+    case EXPR_CAST:
+        collect_hoisted_bindings(e->cast.operand);
+        break;
+    case EXPR_SOME:
+        collect_hoisted_bindings(e->some_expr.value);
+        break;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            collect_hoisted_bindings(e->struct_lit.fields[i].value);
+        break;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            collect_hoisted_bindings(e->array_lit.elems[i]);
+        break;
+    case EXPR_SLICE_LIT:
+        collect_hoisted_bindings(e->slice_lit.ptr_expr);
+        collect_hoisted_bindings(e->slice_lit.len_expr);
+        break;
+    case EXPR_ALLOC:
+        if (e->alloc_expr.size_expr) collect_hoisted_bindings(e->alloc_expr.size_expr);
+        if (e->alloc_expr.init_expr) collect_hoisted_bindings(e->alloc_expr.init_expr);
+        break;
+    case EXPR_FREE:
+        collect_hoisted_bindings(e->free_expr.operand);
+        break;
+    case EXPR_ASSERT:
+        collect_hoisted_bindings(e->assert_expr.condition);
+        if (e->assert_expr.message) collect_hoisted_bindings(e->assert_expr.message);
+        break;
+    case EXPR_SLICE:
+        collect_hoisted_bindings(e->slice.object);
+        if (e->slice.lo) collect_hoisted_bindings(e->slice.lo);
+        if (e->slice.hi) collect_hoisted_bindings(e->slice.hi);
+        break;
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (!e->interp_string.segments[i].is_literal && e->interp_string.segments[i].expr)
+                collect_hoisted_bindings(e->interp_string.segments[i].expr);
+        break;
+    case EXPR_FUNC:
+        /* Don't recurse into nested lambdas — they get their own hoisting scope */
+        break;
+    default:
+        break;
+    }
+}
+
+/* Collect hoisted bindings from destructuring pattern */
+static void collect_hoisted_pat(Pattern *pat, Type *type) {
+    if (!pat || !type) return;
+    switch (pat->kind) {
+    case PAT_BINDING:
+        if (pat->binding.name) {
+            HoistedDecl d = { pat->binding.name, type };
+            DA_APPEND(g_hoisted, g_hoisted_count, g_hoisted_cap, d);
+        }
+        break;
+    case PAT_STRUCT:
+        for (int i = 0; i < pat->struc.field_count; i++)
+            collect_hoisted_pat(pat->struc.fields[i].pattern, pat->struc.fields[i].resolved_type);
+        break;
+    case PAT_SOME:
+        if (pat->some_pat.inner && type->kind == TYPE_OPTION)
+            collect_hoisted_pat(pat->some_pat.inner, type->option.inner);
+        break;
+    case PAT_VARIANT:
+        if (pat->variant.payload && type->kind == TYPE_UNION) {
+            for (int v = 0; v < type->unio.variant_count; v++) {
+                if (type->unio.variants[v].name == pat->variant.variant) {
+                    collect_hoisted_pat(pat->variant.payload, type->unio.variants[v].payload);
+                    break;
+                }
+            }
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* Emit hoisted declarations at the top of a function body */
+static void emit_hoisted_decls(FILE *out) {
+    for (int i = 0; i < g_hoisted_count; i++) {
+        emit_indent(out);
+        emit_type(g_hoisted[i].type, out);
+        Type *t = g_hoisted[i].type;
+        /* Use appropriate zero initializer for the type */
+        bool is_scalar = type_is_numeric(t) || t->kind == TYPE_BOOL ||
+            t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR;
+        if (is_scalar)
+            fprintf(out, " %s = 0;\n", g_hoisted[i].codegen_name);
+        else
+            fprintf(out, " %s = {0};\n", g_hoisted[i].codegen_name);
+    }
+}
+
+/* Set up hoisting for a function body, emit declarations, then tear down */
+static void begin_hoisted_scope(Expr **body, int body_count, FILE *out) {
+    g_hoisted_count = 0;
+    for (int i = 0; i < body_count; i++)
+        collect_hoisted_bindings(body[i]);
+    emit_hoisted_decls(out);
+}
+
+static void end_hoisted_scope(void) {
+    g_hoisted_count = 0;
+}
+
 /* Does the option inner type use null-sentinel optimization (bare pointer, NULL = none)? */
 static bool is_null_sentinel(Type *opt_type) {
     if (!opt_type || opt_type->kind != TYPE_OPTION) return false;
@@ -446,10 +649,14 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     switch (pat->kind) {
     case PAT_BINDING:
         emit_indent(out);
-        emit_type(type, out);
-        fprintf(out, " %s = %s;\n", pat->binding.name, expr);
-        emit_indent(out);
-        fprintf(out, "(void)%s;\n", pat->binding.name);
+        if (is_hoisted(pat->binding.name)) {
+            fprintf(out, "%s = %s;\n", pat->binding.name, expr);
+        } else {
+            emit_type(type, out);
+            fprintf(out, " %s = %s;\n", pat->binding.name, expr);
+            emit_indent(out);
+            fprintf(out, "(void)%s;\n", pat->binding.name);
+        }
         break;
     case PAT_WILDCARD:
     case PAT_INT_LIT:
@@ -506,8 +713,13 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
 
         if (s->kind == EXPR_LET) {
             const char *vname = s->let_expr.codegen_name ? s->let_expr.codegen_name : s->let_expr.let_name;
-            emit_type(s->let_expr.let_type, out);
-            fprintf(out, " %s = ", vname);
+            if (is_hoisted(vname)) {
+                /* Hoisted: declaration already at function top, just assign */
+                fprintf(out, "%s = ", vname);
+            } else {
+                emit_type(s->let_expr.let_type, out);
+                fprintf(out, " %s = ", vname);
+            }
             emit_expr(s->let_expr.let_init, out);
             fprintf(out, ";\n");
             emit_indent(out);
@@ -2314,8 +2526,12 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_LET: {
         const char *vname = e->let_expr.codegen_name ? e->let_expr.codegen_name : e->let_expr.let_name;
-        emit_type(e->let_expr.let_type, out);
-        fprintf(out, " %s = ", vname);
+        if (is_hoisted(vname)) {
+            fprintf(out, "%s = ", vname);
+        } else {
+            emit_type(e->let_expr.let_type, out);
+            fprintf(out, " %s = ", vname);
+        }
         emit_expr(e->let_expr.let_init, out);
         break;
     }
@@ -2400,7 +2616,9 @@ static void emit_func_decl(Decl *d, FILE *out) {
     }
 
     indent_level = 1;
+    begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
     emit_block_stmts(fn->func.body, fn->func.body_count, out, true);
+    end_hoisted_scope();
     indent_level = 0;
 
     /* For main, if body's last expr doesn't return, add return 0 */
@@ -4015,7 +4233,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             fprintf(out, "(void)_ctx;\n");
         }
 
+        begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
         emit_block_stmts(lam->func.body, lam->func.body_count, out, true);
+        end_hoisted_scope();
         indent_level = 0;
         fprintf(out, "}\n\n");
     }
@@ -4070,7 +4290,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "void* _ctx) {\n");
         fprintf(out, "    (void)_ctx;\n");
         indent_level = 1;
+        begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
         emit_block_stmts(fn->func.body, fn->func.body_count, out, true);
+        end_hoisted_scope();
         indent_level = 0;
         fprintf(out, "}\n\n");
         g_subst = NULL;

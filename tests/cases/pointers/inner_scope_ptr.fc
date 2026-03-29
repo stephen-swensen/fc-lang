@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let p =
+        let mut x = 42
+        &x
+    assert(*p == 42)
+    *p = 99
+    assert(*p == 99)
+    0

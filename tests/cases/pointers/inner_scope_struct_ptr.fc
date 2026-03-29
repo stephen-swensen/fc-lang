@@ -1,0 +1,13 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p =
+        let mut pt = point { x = 3, y = 4 }
+        &pt
+    assert(p->x == 3)
+    assert(p->y == 4)
+    p->x = 30
+    assert(p->x == 30)
+    0

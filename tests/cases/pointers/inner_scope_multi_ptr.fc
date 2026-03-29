@@ -1,0 +1,14 @@
+let main = (args: str[]) ->
+    let pa =
+        let mut a = 10
+        &a
+    let pb =
+        let mut b = 20
+        &b
+    assert(*pa == 10)
+    assert(*pb == 20)
+    *pa = 100
+    *pb = 200
+    assert(*pa == 100)
+    assert(*pb == 200)
+    0

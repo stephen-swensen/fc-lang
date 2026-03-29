@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    let p =
+        let q =
+            let mut deep = 999
+            &deep
+        q
+    assert(*p == 999)
+    *p = 1
+    assert(*p == 1)
+    0
