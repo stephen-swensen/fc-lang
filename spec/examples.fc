@@ -1,0 +1,445 @@
+// FC Language — Quick Reference by Example
+// This file compiles and runs: ./run.sh spec/examples.fc
+// Every section exercises a language feature and asserts correctness.
+
+// ============================================================
+// Structs — named product types with ordered fields
+// ============================================================
+
+struct point =
+    x: int32
+    y: int32
+
+struct color =
+    r: uint8
+    g: uint8
+    b: uint8
+
+// ============================================================
+// Unions — tagged sum types with exhaustive matching
+// ============================================================
+
+union shape =
+    | circle(int32)
+    | rect(point)
+    | empty
+
+// ============================================================
+// Generics — monomorphized at compile time, zero runtime cost
+// Type variables ('a, 'b, ...) are implicit — any 'name in a
+// signature makes that function/struct/union generic.
+// ============================================================
+
+struct pair =
+    first: 'a
+    second: 'b
+
+let identity = (x: 'a) -> x
+
+let swap = (p: pair<'a, 'b>) ->
+    pair { first = p.second, second = p.first }
+
+// ============================================================
+// Modules — group related functions and types
+// ============================================================
+
+module point =
+    let origin = () ->
+        point { x = 0, y = 0 }
+
+    let manhattan = (p: point) ->
+        let abs_x = if p.x < 0 then -p.x else p.x
+        let abs_y = if p.y < 0 then -p.y else p.y
+        abs_x + abs_y
+
+// ============================================================
+// Higher-order functions
+// ============================================================
+
+let apply = (x: 'a, f: ('a) -> 'b) -> f(x)
+
+// Note: closures that capture cannot be returned from their enclosing
+// function (stack-allocated context). Composition is done inline instead.
+
+// ============================================================
+// Entry point — main receives command-line args as str[]
+// Return value becomes the process exit code.
+// ============================================================
+
+let main = (args: str[]) ->
+
+    // --------------------------------------------------------
+    // Primitive types and literals
+    // --------------------------------------------------------
+
+    let i = 42                  // int32 (default integer)
+    let f = 3.14                // float64 (default float)
+    let b = true                // bool
+    let c = 'A'                 // char (alias for uint8)
+    let s = "hello"             // str (alias for uint8[], a fat pointer)
+    let cs = c"hello"           // cstr (alias for uint8*, null-terminated)
+
+    // Suffixed literals for explicit types
+    let i8  = 127i8             // int8
+    let u64 = 1000u64           // uint64
+    let f32 = 2.5f32            // float32
+    let isz = 42i               // isize (ptrdiff_t)
+    let usz = 42u               // usize (size_t)
+
+    // Numeric bases and underscores
+    let hex = 0xFF
+    let bin = 0b1010_0101
+    let oct = 0o77
+
+    // --------------------------------------------------------
+    // Bindings: let (immutable) and let mut (mutable)
+    // --------------------------------------------------------
+
+    let x = 10                  // immutable — cannot reassign
+    let mut y = 20              // mutable — can reassign, addressable with &
+    y = 30
+    assert(y == 30)
+
+    // let controls reassignment, not content mutation
+    let p = point { x = 1, y = 2 }
+    p.x = 10                   // field mutation on let binding is ok
+    assert(p.x == 10)
+
+    // Shadowing — any combination of let/let mut
+    let z = 1
+    let z = z + 1              // shadows previous z
+    assert(z == 2)
+
+    // --------------------------------------------------------
+    // Operators
+    // --------------------------------------------------------
+
+    // Arithmetic (signed wraps via two's complement)
+    assert(7 / 2 == 3)
+    assert(7 % 2 == 1)
+
+    // Bitwise — bind tighter than comparison (unlike C)
+    assert(0xFF & 0x0F == 0x0F) // parses as (0xFF & 0x0F) == 0x0F
+    assert(0xF0 | 0x0F == 0xFF)
+    assert(0xFF ^ 0xFF == 0)
+    assert(1 << 4 == 16)
+    assert(~0u8 == 255u8)      // bitwise NOT
+
+    // Comparison and logical
+    assert(1 < 2 && 2 < 3)
+    assert(!(1 > 2))
+
+    // Implicit widening (lossless only, never int→float)
+    let wide = 1i8 + 1000i32   // int8 widens to int32
+    assert(wide == 1001)
+
+    // Explicit casts
+    let fi = (int32) 3.7       // float→int truncates: 3
+    assert(fi == 3)
+
+    // --------------------------------------------------------
+    // If expressions — branches produce values
+    // --------------------------------------------------------
+
+    let abs_val = if i < 0 then -i else i
+    assert(abs_val == 42)
+
+    // If without else is void (used for side effects)
+    if true then assert(true)
+
+    // --------------------------------------------------------
+    // Match expressions — exhaustive pattern matching
+    // --------------------------------------------------------
+
+    let describe = (s: shape) ->
+        match s with
+        | circle(r) -> r * r
+        | rect(p)   -> p.x * p.y
+        | empty     -> 0
+
+    assert(describe(shape.circle(5)) == 25)
+    assert(describe(shape.rect(point { x = 3, y = 4 })) == 12)
+    assert(describe(shape.empty) == 0)
+
+    // Patterns: literals, wildcards, nested, struct destructuring
+    let classify = (n: int32) ->
+        match n with
+        | 0     -> 0
+        | 1     -> 1
+        | _     -> 2           // wildcard — catches everything else
+
+    assert(classify(0) == 0)
+    assert(classify(999) == 2)
+
+    // Struct destructuring in match
+    let get_x = (p: point) ->
+        match p with
+        | { x = 0 }    -> 0        // match when x is 0
+        | { x = v }    -> v        // bind x to v
+
+    assert(get_x(point { x = 7, y = 0 }) == 7)
+
+    // --------------------------------------------------------
+    // Loops
+    // --------------------------------------------------------
+
+    // loop — infinite loop, optionally produces a value via break
+    let mut sum = 0
+    let mut idx = 0
+    loop
+        if idx >= 5 then break
+        sum = sum + idx
+        idx = idx + 1
+    assert(sum == 10)
+
+    // loop as expression — break with a value
+    let found = loop
+        if idx > 100 then break -1
+        if idx == 5 then break idx
+        idx = idx + 1
+    assert(found == 5)
+
+    // for — range iteration
+    let mut total = 0
+    for i in 0..5              // 0, 1, 2, 3, 4
+        total = total + i
+    assert(total == 10)
+
+    // for — element iteration over a slice
+    let nums = int32[3] { 10, 20, 30 }
+    let mut elem_sum = 0
+    for n in nums
+        elem_sum = elem_sum + n
+    assert(elem_sum == 60)
+
+    // for — index + element iteration
+    let mut index_sum = 0
+    for i, v in nums
+        index_sum = index_sum + (int32) i + v * 0
+    assert(index_sum == 3)     // 0 + 1 + 2
+
+    // --------------------------------------------------------
+    // Functions and closures
+    // --------------------------------------------------------
+
+    // Functions are values — defined with (params) -> body
+    let double = (n: int32) -> n * 2
+    assert(double(21) == 42)
+
+    // Multi-line body — last expression is the return value
+    let clamp = (val: int32, lo: int32, hi: int32) ->
+        if val < lo then lo
+        else if val > hi then hi
+        else val
+    assert(clamp(150, 0, 100) == 100)
+
+    // Early return
+    let first_positive = (a: int32, b: int32) ->
+        if a > 0 then return a
+        if b > 0 then return b
+        0
+    assert(first_positive(-1, 5) == 5)
+
+    // Closures capture let bindings by copy (let mut cannot be captured)
+    let threshold = 50
+    let above = (n: int32) -> n > threshold
+    assert(above(60))
+    assert(!above(40))
+
+    // Higher-order: passing functions as arguments
+    assert(apply(21, double) == 42)
+
+    // Closures can be passed as arguments (not returned)
+    let inc = (n: int32) -> n + 1
+    assert(apply(41, inc) == 42)
+
+    // --------------------------------------------------------
+    // Structs
+    // --------------------------------------------------------
+
+    // Construction — fields in any order, unspecified fields default to zero
+    let origin = point { x = 0, y = 0 }
+    let partial = point { y = 5 }      // x defaults to 0
+    assert(partial.x == 0)
+    assert(partial.y == 5)
+
+    // Structural equality
+    assert(origin == point { x = 0, y = 0 })
+    assert(origin != partial)
+
+    // Destructuring in let bindings
+    let { x = px, y = py } = partial
+    assert(px == 0)
+    assert(py == 5)
+
+    // Type-associated module — point.origin() uses the module
+    assert(point.origin() == origin)
+    assert(point.manhattan(point { x = -3, y = 4 }) == 7)
+
+    // --------------------------------------------------------
+    // Unions (tagged unions)
+    // --------------------------------------------------------
+
+    // Construction uses qualified variant names
+    let c1 = shape.circle(10)
+    let r1 = shape.rect(point { x = 3, y = 4 })
+    let e1 = shape.empty
+
+    // Default is first variant with zeroed payload
+    let d = default(shape)
+    assert(describe(d) == 0)   // circle(0) → 0 * 0
+
+    // --------------------------------------------------------
+    // Option types — T? replaces null
+    // --------------------------------------------------------
+
+    let some_val = some(42)           // int32?
+    let no_val = default(int32?)      // none
+
+    // Check via .is_some / .is_none
+    assert(some_val.is_some)
+    assert(no_val.is_none)
+
+    // Unwrap with ! (aborts on none)
+    assert(some_val! == 42)
+
+    // Pattern matching on options
+    let unwrap_or = (opt: int32?, fallback: int32) ->
+        match opt with
+        | some(v) -> v
+        | none    -> fallback
+    assert(unwrap_or(some_val, 0) == 42)
+    assert(unwrap_or(no_val, -1) == -1)
+
+    // Pointer options: T*? uses null as none (no tag overhead)
+    let mut val = point { x = 99, y = 0 }
+    let ptr_opt = some(&val)          // point*?
+    assert(ptr_opt!->x == 99)
+
+    // --------------------------------------------------------
+    // Pointers
+    // --------------------------------------------------------
+
+    // &x requires let mut — gives T*
+    let mut n = 42
+    let np = &n                // int32*
+    assert(*np == 42)          // dereference with *
+    *np = 100                  // mutate through pointer
+    assert(n == 100)
+
+    // Pointer to struct — field access with ->
+    let mut pt = point { x = 1, y = 2 }
+    let pp = &pt
+    assert(pp->x == 1)
+    pp->y = 20
+    assert(pt.y == 20)
+
+    // --------------------------------------------------------
+    // Slices and strings
+    // --------------------------------------------------------
+
+    // Stack slice — T[N] { elements }
+    let buf = int32[4] { 10, 20, 30, 40 }
+    assert(buf.len == 4i64)
+    assert(buf[0] == 10)
+    assert(buf[3] == 40)
+
+    // Subslicing
+    let mid = buf[1..3]        // elements at index 1, 2
+    assert(mid.len == 2i64)
+    assert(mid[0] == 20)
+
+    // String literals are const str (const uint8[])
+    let greeting = "hello"
+    assert(greeting.len == 5i64)
+    assert(greeting[0] == 104u8)   // 'h'
+
+    // String interpolation with format specifiers
+    let name = "world"
+    let msg = "hello %s{name}, n=%d{i}"
+
+    // Slice construction from raw pointer
+    let raw = int32[] { ptr = buf.ptr, len = buf.len }
+    assert(raw[2] == 30)
+
+    // --------------------------------------------------------
+    // Memory management
+    // --------------------------------------------------------
+
+    // Heap allocation — returns T? (option), must unwrap
+    let hp = alloc(point { x = 5, y = 6 })!
+    assert(hp->x == 5)
+    free(hp)
+
+    // Heap slice
+    let hs = alloc(int32[4] { 1, 2, 3, 4 })!
+    assert(hs[0] == 1)
+    free(hs)
+
+    // Raw buffer (pointer, not slice)
+    let rb = alloc(uint8, 64u)!
+    free(rb)
+
+    // sizeof and alignof (return int64)
+    assert(sizeof(int32) == 4i64)
+    assert(sizeof(point) == 8i64)
+    assert(alignof(int64) == 8i64)
+
+    // default — zero value for any type
+    assert(default(int32) == 0)
+    assert(default(bool) == false)
+    assert(default(int32?).is_none)
+
+    // --------------------------------------------------------
+    // Generics
+    // --------------------------------------------------------
+
+    assert(identity(42) == 42)
+    assert(identity(true) == true)
+
+    let p1 = pair { first = 1, second = "two" }
+    let p2 = swap(p1)
+    assert(p2.first == "two")
+    assert(p2.second == 1)
+
+    // Monomorphized for each concrete type used
+    assert(identity(42) == 42)
+    assert(identity(true) == true)
+    assert(identity(3.14) == 3.14)
+
+    // --------------------------------------------------------
+    // Const — deep immutability for pointers and slices
+    // --------------------------------------------------------
+
+    let mut v = 42
+    let cp = (const int32*) &v    // freeze: int32* → const int32*
+    assert(*cp == 42)             // reading through const is fine
+    // *cp = 10                   // would be a compile error
+
+    // String literals are already const str
+    // let mut bindings of slices are non-const
+    let mut mbuf = int32[2] { 1, 2 }
+    mbuf[0] = 99
+    assert(mbuf[0] == 99)
+
+    // --------------------------------------------------------
+    // Escape analysis — the compiler rejects dangling pointers
+    // --------------------------------------------------------
+
+    // These are all compile errors (not shown, but tested elsewhere):
+    //   return &local_var        → cannot return stack pointer
+    //   free(&local_var)         → cannot free stack memory
+    //   alloc(s { p = &local })  → cannot store stack ptr in heap
+
+    // Pointers to inner-scope let mut bindings are valid for
+    // the entire function call (hoisted to function scope).
+    let inner_ptr =
+        let mut inner = 77
+        &inner
+    assert(*inner_ptr == 77)
+
+    // --------------------------------------------------------
+    // All done
+    // --------------------------------------------------------
+
+    0
