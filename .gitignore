@@ -7,6 +7,8 @@ fc
 # Default C compiler output
 a.out
 
+# Scratch Dir
+scratch/
 
 # Editor/IDE
 *.swp

@@ -1,6 +1,0 @@
-import * from std::prelude
-
-let main = (args: str[]) ->
-    let s = default(str?)!
-    assert(s.len == 3, "unwrap failed")
-    0

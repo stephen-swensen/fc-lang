@@ -1,7 +1,0 @@
-namespace std::
-
-module prelude =
-    let print = (s:const str) ->  io.write(s, stdout)
-    let println = (s:const str) ->  io.write("%s{s}\n", stdout)
-    let freeze = (x: 'a*) -> (const 'a*) x
-
