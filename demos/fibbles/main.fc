@@ -1,0 +1,206 @@
+// Fibbles — a Nibbles/Snake clone in FC using SDL2
+// Pure FC implementation (no C helper files).
+
+import rect from sdl
+import write from std::io
+
+// Grid and display constants
+let grid_w = 32
+let grid_h = 24
+let cell = 20
+let max_body = 512
+
+// SDL_Event field offsets for x86_64 Linux
+// offset 0:  event.type     (uint32 / int32)
+// offset 20: event.key.keysym.sym (int32)
+let ev_type_off = 0i
+let ev_key_off = 20i
+
+struct vec2 =
+    x: int32
+    y: int32
+
+// --- Helper functions ---
+
+let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
+    body[(head - len + 1 + i + max_body) % max_body]
+
+let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
+    let mut i = 0
+    let mut found = false
+    loop
+        if i >= len then break
+        let seg = body_at(body, head, len, i)
+        if seg.x == x && seg.y == y then
+            found = true
+            break
+        i = i + 1
+    found
+
+let place_food = (body: vec2[], head: int32, len: int32) ->
+    loop
+        let x = rng.rand() % grid_w
+        let y = rng.rand() % grid_h
+        if !on_snake(body, head, len, x, y) then
+            break vec2 { x = x, y = y }
+
+let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
+    let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
+    sdl.set_color(r, red, green, blue, 255u8)
+    sdl.fill_rect(r, &rc)
+    return
+
+// --- Main ---
+
+let main = (args: str[]) ->
+    // Init SDL
+    sdl.init(sdl.init_video)
+    let win = sdl.create_window(c"Fibbles", sdl.pos_centered, sdl.pos_centered,
+        grid_w * cell, grid_h * cell, sdl.window_shown)
+    let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
+    rng.srand(sdl.get_ticks())
+
+    // Game state
+    let mut body = vec2[512] { }
+    let mut head_idx = 2
+    let mut length = 3
+    let mut dir_x = 1
+    let mut dir_y = 0
+    let mut score = 0
+    let mut speed = 150
+    let mut game_over = false
+    let mut running = true
+    let mut last_tick = sdl.get_ticks()
+
+    // Initial snake (center, moving right)
+    let cx = grid_w / 2
+    let cy = grid_h / 2
+    body[0] = vec2 { x = cx - 2, y = cy }
+    body[1] = vec2 { x = cx - 1, y = cy }
+    body[2] = vec2 { x = cx, y = cy }
+
+    // Initial food
+    let mut food = place_food(body, head_idx, length)
+    sdl.set_title(win, c"Fibbles - Score: 0")
+
+    // Event buffer (SDL_Event is ~56 bytes on x86_64)
+    let mut event_buf = uint8[64] { }
+
+    // Game loop
+    loop
+        if !running then break
+
+        // --- Input: drain all pending events ---
+        loop
+            let has = sdl.poll_event((any*) event_buf.ptr)
+            if has == 0 then break
+            let etype = *((int32*)(event_buf.ptr + ev_type_off))
+            if etype == sdl.quit_event then
+                running = false
+            if etype == sdl.keydown_event then
+                let ekey = *((int32*)(event_buf.ptr + ev_key_off))
+                if ekey == sdl.key_escape then
+                    running = false
+                if game_over then
+                    if ekey == sdl.key_r then
+                        // Restart
+                        head_idx = 2
+                        length = 3
+                        dir_x = 1
+                        dir_y = 0
+                        score = 0
+                        speed = 150
+                        game_over = false
+                        body[0] = vec2 { x = cx - 2, y = cy }
+                        body[1] = vec2 { x = cx - 1, y = cy }
+                        body[2] = vec2 { x = cx, y = cy }
+                        food = place_food(body, head_idx, length)
+                        last_tick = sdl.get_ticks()
+                        sdl.set_title(win, c"Fibbles - Score: 0")
+                else
+                    // Direction change (reject 180-degree reversal)
+                    if ekey == sdl.key_up && dir_y != 1 then
+                        dir_x = 0
+                        dir_y = -1
+                    if ekey == sdl.key_down && dir_y != -1 then
+                        dir_x = 0
+                        dir_y = 1
+                    if ekey == sdl.key_left && dir_x != 1 then
+                        dir_x = -1
+                        dir_y = 0
+                    if ekey == sdl.key_right && dir_x != -1 then
+                        dir_x = 1
+                        dir_y = 0
+
+        // --- Update ---
+        if !game_over then
+            let now = sdl.get_ticks()
+            if now - last_tick >= (uint32) speed then
+                last_tick = now
+                let head = body[head_idx]
+                let new_x = head.x + dir_x
+                let new_y = head.y + dir_y
+
+                // Wall collision
+                if new_x < 0 || new_x >= grid_w || new_y < 0 || new_y >= grid_h then
+                    game_over = true
+                    sdl.set_title(win, c"Fibbles - GAME OVER (R to restart)")
+                else
+                    // Self collision (check against body excluding head)
+                    if on_snake(body, head_idx, length, new_x, new_y) then
+                        game_over = true
+                        sdl.set_title(win, c"Fibbles - GAME OVER (R to restart)")
+                    else
+                        // Advance snake
+                        head_idx = (head_idx + 1) % max_body
+                        body[head_idx] = vec2 { x = new_x, y = new_y }
+
+                        // Check food
+                        if new_x == food.x && new_y == food.y then
+                            length = length + 1
+                            score = score + 10
+                            if speed > 50 then
+                                speed = speed - 2
+                            food = place_food(body, head_idx, length)
+                            let s = score
+                            sdl.set_title(win, (cstr)"Fibbles - Score: %d{s}")
+
+        // --- Render ---
+        // Background
+        sdl.set_color(ren, 20u8, 20u8, 40u8, 255u8)
+        sdl.clear(ren)
+
+        // Food
+        draw_cell(ren, food.x, food.y, 255u8, 50u8, 50u8)
+
+        // Snake body
+        let mut i = 0
+        loop
+            if i >= length then break
+            let seg = body_at(body, head_idx, length, i)
+            if i == length - 1 then
+                // Head
+                if game_over then
+                    draw_cell(ren, seg.x, seg.y, 140u8, 0u8, 0u8)
+                else
+                    draw_cell(ren, seg.x, seg.y, 0u8, 255u8, 0u8)
+            else
+                // Body
+                if game_over then
+                    draw_cell(ren, seg.x, seg.y, 200u8, 0u8, 0u8)
+                else
+                    draw_cell(ren, seg.x, seg.y, 0u8, 180u8, 0u8)
+            i = i + 1
+
+        sdl.present(ren)
+        sdl.delay(16u32)
+
+    // Final score
+    let fs = score
+    write("Final score: %d{fs}\n", stdout)
+
+    // Cleanup
+    sdl.destroy_renderer(ren)
+    sdl.destroy_window(win)
+    sdl.quit()
+    0
