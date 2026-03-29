@@ -586,15 +586,17 @@ static bool unify(Type *param_type, Type *arg_type,
     }
 }
 
-/* Look up a module symbol, trying namespace-qualified, then global, then module_symtab */
+/* Look up a module symbol: inner scope first, then imports, then global */
 static Symbol *lookup_module(CheckCtx *ctx, const char *name) {
-    Symbol *mod = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
-    if (!mod && ctx->current_ns)
-        mod = symtab_lookup_module(ctx->symtab, name, NULL);
-    if (!mod && ctx->module_symtab)
+    Symbol *mod = NULL;
+    if (ctx->module_symtab)
         mod = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
     if (!mod)
         mod = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
+    if (!mod)
+        mod = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+    if (!mod && ctx->current_ns)
+        mod = symtab_lookup_module(ctx->symtab, name, NULL);
     if (!mod)
         mod = symtab_lookup_kind(ctx->symtab, name, DECL_MODULE);
     return mod;
@@ -1299,6 +1301,27 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
                 if (msym->decl && msym->decl->kind == DECL_LET)
                     e->ident.is_mut = msym->decl->let.is_mut;
+                if (!msym->type && msym->decl && msym->decl->kind == DECL_LET) {
+                    /* On-demand type check for module sibling with cycle detection */
+                    bool cycle = false;
+                    for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                        if (v->decl == msym->decl) { cycle = true; break; }
+                    }
+                    if (cycle) {
+                        diag_error(e->loc, "circular dependency: '%s' depends on itself",
+                            e->ident.name);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    OnDemandVisited vis = { .decl = msym->decl, .next = ctx->on_demand_visited };
+                    ctx->on_demand_visited = &vis;
+                    Scope *saved_scope = ctx->scope;
+                    ctx->scope = scope_new(ctx->arena, NULL);
+                    ctx->scope->is_global = true;
+                    check_decl_let(ctx, msym->decl);
+                    ctx->scope = saved_scope;
+                    ctx->on_demand_visited = vis.next;
+                }
                 if (!msym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();
@@ -1398,6 +1421,32 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
             e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
             return e->type;
+        }
+        if (!sym->type && sym->decl && sym->decl->kind == DECL_LET) {
+            /* On-demand type check for global symbol with cycle detection */
+            bool cycle = false;
+            for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                if (v->decl == sym->decl) { cycle = true; break; }
+            }
+            if (cycle) {
+                diag_error(e->loc, "circular dependency: '%s' depends on itself",
+                    e->ident.name);
+                e->type = type_error();
+                return e->type;
+            }
+            OnDemandVisited vis = { .decl = sym->decl, .next = ctx->on_demand_visited };
+            ctx->on_demand_visited = &vis;
+            SymbolTable *saved_mod = ctx->module_symtab;
+            Scope *saved_scope = ctx->scope;
+            ImportScope *saved_imports = ctx->import_scope;
+            ctx->module_symtab = NULL;
+            ctx->scope = scope_new(ctx->arena, NULL);
+            ctx->scope->is_global = true;
+            check_decl_let(ctx, sym->decl);
+            ctx->scope = saved_scope;
+            ctx->module_symtab = saved_mod;
+            ctx->import_scope = saved_imports;
+            ctx->on_demand_visited = vis.next;
         }
         if (!sym->type) {
             diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
@@ -2606,15 +2655,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Symbol *mod_sym = NULL;
         if (e->field.object->kind == EXPR_IDENT) {
             const char *name = e->field.object->ident.name;
-            /* Namespace-aware module lookup: try current namespace first, then global */
-            mod_sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
-            if (!mod_sym && ctx->current_ns)
-                mod_sym = symtab_lookup_module(ctx->symtab, name, NULL);
-            /* Also check module symtab for within-module references */
-            if (!mod_sym && ctx->module_symtab)
+            /* Inner scope first: module symtab, then imports, then global */
+            if (ctx->module_symtab)
                 mod_sym = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
             if (!mod_sym)
                 mod_sym = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
+            if (!mod_sym)
+                mod_sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+            if (!mod_sym && ctx->current_ns)
+                mod_sym = symtab_lookup_module(ctx->symtab, name, NULL);
         }
 
         /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
@@ -2631,13 +2680,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 cur = cur->field.object;
             }
             if (cur->kind == EXPR_IDENT) {
-                Symbol *root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
-                if (!root && ctx->current_ns)
-                    root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
-                if (!root && ctx->module_symtab)
+                Symbol *root = NULL;
+                if (ctx->module_symtab)
                     root = symtab_lookup_kind(ctx->module_symtab, cur->ident.name, DECL_MODULE);
                 if (!root)
                     root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
+                if (!root)
+                    root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
+                if (!root && ctx->current_ns)
+                    root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
                 if (root && root->members) {
                     Symbol *walk = root;
                     for (int k = depth - 1; k >= 0; k--) {

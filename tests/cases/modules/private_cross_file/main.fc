@@ -1,0 +1,8 @@
+// A top-level module also named "c" — should not conflict with
+// the private nested "c" inside io_wrapper in lib.fc.
+module c from "stdlib.h" =
+    extern abs: (int32) -> int32
+
+let main = (args: str[]) ->
+    assert(c.abs(-42) == 42)
+    0

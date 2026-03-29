@@ -1,0 +1,10 @@
+// Forward reference within a module: double_plus calls add_one defined later.
+module math =
+    let double_plus = (x: int32) -> add_one(x * 2)
+    let add_one = (x: int32) -> x + 1
+
+let main = (args: str[]) ->
+    // double_plus(5) = add_one(10) = 11
+    assert(math.double_plus(5) == 11)
+    assert(math.add_one(7) == 8)
+    0
