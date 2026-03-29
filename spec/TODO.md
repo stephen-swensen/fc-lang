@@ -20,9 +20,3 @@ A `private module c from "stdio.h"` inside `std::io` (in stdlib/io.fc) conflicts
 
 Top-level `let` function bindings cannot be referenced before their definition in the same file if their return type is inferred. The spec states "Top-level declarations can reference each other regardless of order", but pass2 cannot resolve the type of a function whose body hasn't been type-checked yet. Currently requires workaround: order functions so callees come before callers.
 
-## Standard Library
-
-### prelude.fc / types.fc status
-
-`stdlib/prelude.fc` provides `print`, `println`, `freeze` — undocumented convenience functions. `stdlib/types.fc` provides generic `tuple1` through `tuple5` — undocumented. Both are experimental and only used in `tests/scratch.fc`. Need a decision before v1.0: formalize in spec or remove.
-
