@@ -34,10 +34,18 @@ struct pair =
     first: 'a
     second: 'b
 
+union result =
+    | ok('a)
+    | err('b)
+
 let identity = (x: 'a) -> x
 
 let swap = (p: pair<'a, 'b>) ->
     pair { first = p.second, second = p.first }
+
+// Explicit type args — <'a> declares type vars not inferrable from params
+let make_pair = <'a, 'b>() ->
+    pair { first = default('a), second = default('b) }
 
 // ============================================================
 // Modules — group related functions and types
@@ -406,6 +414,19 @@ let main = (args: str[]) ->
     assert(identity(42) == 42)
     assert(identity(true) == true)
     assert(identity(3.14) == 3.14)
+
+    // Generic unions — type args required (variant may not constrain all params)
+    let ok_val = result<int32, str>.ok(42)
+    let err_val = result<int32, str>.err("fail")
+    let got = match ok_val with
+    | ok(v)  -> v
+    | err(_) -> -1
+    assert(got == 42)
+
+    // Explicit type args — for functions where types can't be inferred from args
+    let dp = make_pair<int32, bool>()
+    assert(dp.first == 0)
+    assert(dp.second == false)
 
     // --------------------------------------------------------
     // Const — deep immutability for pointers and slices
