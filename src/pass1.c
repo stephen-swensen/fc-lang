@@ -575,6 +575,23 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             if (msym) msym->type = resolved;
         }
     }
+
+    /* Resolve struct type stubs in extern struct/union field types against
+     * sibling extern structs within the same module. This allows e.g.:
+     *   extern struct SDL_Keysym as keysym = ...
+     *   extern struct SDL_KeyboardEvent as keyboard_event =
+     *       keysym: keysym
+     * where keysym field type resolves to the extern struct. */
+    for (int j = 0; j < members->count; j++) {
+        Symbol *msym = &members->symbols[j];
+        if (msym->kind != DECL_STRUCT || !msym->type) continue;
+        Type *st = msym->type;
+        for (int k = 0; k < st->struc.field_count; k++) {
+            Type *resolved = resolve_type_stubs(st->struc.fields[k].type, members);
+            if (resolved != st->struc.fields[k].type)
+                st->struc.fields[k].type = resolved;
+        }
+    }
 }
 
 /* Process imports for a single module symbol */

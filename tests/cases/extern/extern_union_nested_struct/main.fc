@@ -1,0 +1,37 @@
+// Test: extern union with deeply nested struct fields
+// Access through union -> struct -> struct without importing intermediate types
+module ev from "test_event.h" =
+    extern struct keysym as keysym =
+        scancode: int32
+        sym: int32
+    extern struct key_event as key_event =
+        type: uint32
+        timestamp: uint32
+        keysym: keysym
+    extern union event as event =
+        type: uint32
+        key: key_event
+
+// Only import the top-level union — intermediate types are accessed via fields
+import event from ev
+
+let main = (args: str[]) ->
+    let mut e = default(event)
+
+    // Nested field access through union -> struct -> struct
+    e.key.keysym.sym = 42
+    assert(e.key.keysym.sym == 42)
+
+    // Set via struct literal
+    e.key.keysym.scancode = 10
+    assert(e.key.keysym.scancode == 10)
+
+    // Type field overlaps
+    e.key.type = 3u32
+    assert(e.type == 3u32)
+
+    // Timestamp through key
+    e.key.timestamp = 999u32
+    assert(e.key.timestamp == 999u32)
+
+    0

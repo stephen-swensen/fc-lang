@@ -2,6 +2,7 @@
 // Pure FC implementation (no C helper files).
 
 import rect from sdl
+import sdl_event from sdl
 import io from std::
 
 // Grid and display constants
@@ -15,23 +16,11 @@ let st_splash = 0
 let st_playing = 1
 let st_over = 2
 
-// SDL_Event field offsets for x86_64 Linux
-// offset 0:  event.type     (uint32 / int32)
-// offset 20: event.key.keysym.sym (int32)
-let ev_type_off = 0i
-let ev_key_off = 20i
-
 struct vec2 =
     x: int32
     y: int32
 
 // --- Drawing helpers ---
-
-let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
-    let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
-    sdl.set_color(r, red, green, blue, 255u8)
-    sdl.fill_rect(r, &rc)
-    return
 
 // --- 3x5 pixel font ---
 // Each glyph is packed into an int32: row0 in bits 0-2, row1 in bits 3-5, etc.
@@ -93,6 +82,12 @@ let draw_text = (r: any*, text: const str, ox: int32, oy: int32, cr: uint8, cg: 
         x = x + 4
     return
 
+let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
+    let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
+    sdl.set_color(r, red, green, blue, 255u8)
+    sdl.fill_rect(r, &rc)
+    return
+
 // --- Game helpers ---
 
 let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
@@ -112,8 +107,8 @@ let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
 
 let place_food = (body: vec2[], head: int32, len: int32) ->
     loop
-        let x = rng.rand() % grid_w
-        let y = rng.rand() % grid_h
+        let x = c.rand() % grid_w
+        let y = c.rand() % grid_h
         if !on_snake(body, head, len, x, y) then
             break vec2 { x = x, y = y }
 
@@ -176,7 +171,7 @@ let main = (args: str[]) ->
     let win = sdl.create_window(c"Fibbles", sdl.pos_centered, sdl.pos_centered,
         grid_w * cell, grid_h * cell, sdl.window_shown)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
-    rng.srand(sdl.get_ticks())
+    c.srand(sdl.get_ticks())
 
     // Game state
     let mut body = vec2[512] { }
@@ -197,8 +192,7 @@ let main = (args: str[]) ->
 
     let mut food = vec2 { x = 0, y = 0 }
 
-    // Event buffer (SDL_Event is ~56 bytes on x86_64)
-    let mut event_buf = uint8[64] { }
+    let mut event = default(sdl_event)
 
     sdl.set_title(win, c"Fibbles - Press SPACE to start")
 
@@ -208,16 +202,15 @@ let main = (args: str[]) ->
 
         // --- Input: drain all pending events ---
         loop
-            let has = sdl.poll_event((any*) event_buf.ptr)
+            let has = sdl.poll_event(&event)
             if has == 0 then break
-            let etype = *((int32*)(event_buf.ptr + ev_type_off))
 
-            if etype == sdl.quit_event then
+            if (int32) event.type == sdl.quit_event then
                 running = false
                 break
 
-            if etype == sdl.keydown_event then
-                let ekey = *((int32*)(event_buf.ptr + ev_key_off))
+            if (int32) event.type == sdl.keydown_event then
+                let ekey = event.key.keysym.sym
                 if ekey == sdl.key_escape then
                     running = false
                     break

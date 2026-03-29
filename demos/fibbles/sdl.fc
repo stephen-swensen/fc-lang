@@ -46,11 +46,18 @@ module sdl from "SDL2/SDL.h" =
     extern SDL_GetTicks as get_ticks: () -> uint32
 
     // --- Events ---
-    // SDL_Event is a complex C union with nested structs that FC cannot represent.
-    // We pass any* (void*) and read fields via pointer arithmetic in pure FC.
-    extern SDL_PollEvent as poll_event: (any*) -> int32
+    extern struct SDL_Keysym as sdl_keysym =
+        scancode: int32
+        sym: int32
+    extern struct SDL_KeyboardEvent as keyboard_event =
+        type: uint32
+        keysym: sdl_keysym
+    extern union SDL_Event as sdl_event =
+        type: uint32
+        key: keyboard_event
+    extern SDL_PollEvent as poll_event: (sdl_event*) -> int32
 
 // C stdlib for random number generation
-module rng from "stdlib.h" =
+module c from "stdlib.h" =
     extern srand: (uint32) -> void
     extern rand: () -> int32
