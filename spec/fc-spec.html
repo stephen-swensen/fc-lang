@@ -3274,7 +3274,8 @@ match ts with                                        // pattern matching
 - Extern structs cannot be generic (no type parameters).
 - All fields must be declared with FC types that are assignment-compatible with the actual C field types.
 - The compiler always emits `struct C_name` in the generated C. This works for both `struct timespec` (no typedef) and `typedef struct SDL_Rect { ... } SDL_Rect;` (where the struct tag matches the typedef name).
-- Structs with union members, bitfields, or anonymous inner structs are not supported — use `any*` for those types.
+- Fields may reference other extern struct or extern union types declared in the same `from` module.
+- Bitfields and anonymous inner structs are not supported — use `any*` for those types.
 
 ### Extern unions
 
@@ -3317,6 +3318,8 @@ let eq = v == default(int_or_float)            // byte-level equality (memcmp)
 - Extern unions can only appear inside a `module ... from "header"` block.
 - Extern unions cannot be generic (no type parameters).
 - All fields must be declared with FC types that are assignment-compatible with the actual C field types.
+- Fields may reference other extern struct or extern union types declared in the same `from` module. This enables mapping complex C unions like `SDL_Event` where each variant is itself a C struct.
+- Partial field declarations are supported — you only need to declare the fields you intend to access in FC. The compiler uses the C header's definition for layout and sizing, so undeclared fields still occupy their correct memory positions.
 - The compiler always emits `union C_name` in the generated C.
 - Pattern matching is not supported on extern unions — there is no tag to dispatch on, and reading all overlapping fields simultaneously is semantically wrong.
 

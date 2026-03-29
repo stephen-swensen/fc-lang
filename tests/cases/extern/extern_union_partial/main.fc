@@ -1,0 +1,38 @@
+// Test: extern union with partial field declarations
+// Only declare a subset of the C union's fields
+module u from "test_union.h" =
+    extern struct partial_a as partial_a =
+        x: int32
+        y: int32
+        z: int32
+    // partial_b and partial_c are NOT declared — we don't need them
+    extern union big_union as big_union =
+        tag: int32
+        a: partial_a
+        // b, c, raw are NOT declared
+
+import partial_a from u
+import big_union from u
+
+let main = (args: str[]) ->
+    // sizeof should reflect the real C union size, not just declared fields
+    // The C union has a uint8_t[16] member so it's at least 16 bytes
+    let sz = sizeof(big_union)
+    assert(sz >= 16)
+
+    // Use the declared fields normally
+    let v = big_union { a = partial_a { x = 1, y = 2, z = 3 } }
+    assert(v.a.x == 1)
+    assert(v.a.y == 2)
+    assert(v.a.z == 3)
+
+    // Tag field overlaps
+    let v2 = big_union { tag = 42 }
+    assert(v2.tag == 42)
+
+    // Mutation
+    let mut v3 = default(big_union)
+    v3.a = partial_a { x = 10, y = 20, z = 30 }
+    assert(v3.a.x == 10)
+
+    0

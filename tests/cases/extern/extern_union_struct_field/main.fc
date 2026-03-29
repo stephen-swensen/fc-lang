@@ -1,0 +1,55 @@
+// Test: extern union with struct-typed fields
+module ev from "test_union.h" =
+    extern struct key_event as key_event =
+        type: uint32
+        timestamp: uint32
+        keycode: int32
+    extern struct mouse_event as mouse_event =
+        type: uint32
+        timestamp: uint32
+        x: int32
+        y: int32
+    extern union event as event =
+        type: uint32
+        key: key_event
+        mouse: mouse_event
+
+import key_event from ev
+import mouse_event from ev
+import event from ev
+
+let main = (args: str[]) ->
+    // Create union with struct-typed field
+    let k = key_event { type = 1u32, timestamp = 100u32, keycode = 42 }
+    let e = event { key = k }
+
+    // Read struct-typed field
+    let k2 = e.key
+    assert(k2.type == 1u32)
+    assert(k2.timestamp == 100u32)
+    assert(k2.keycode == 42)
+
+    // Nested field access through union
+    assert(e.key.keycode == 42)
+    assert(e.key.timestamp == 100u32)
+
+    // Access the overlapping type field directly
+    assert(e.type == 1u32)
+
+    // Create union with a different struct field
+    let m = mouse_event { type = 2u32, timestamp = 200u32, x = 10, y = 20 }
+    let e2 = event { mouse = m }
+    assert(e2.mouse.x == 10)
+    assert(e2.mouse.y == 20)
+    assert(e2.type == 2u32)
+
+    // Mutation: assign struct-typed field
+    let mut e3 = event { type = 0u32 }
+    e3.key = key_event { type = 3u32, timestamp = 300u32, keycode = 99 }
+    assert(e3.key.keycode == 99)
+
+    // Mutation: sub-field through union
+    e3.key.keycode = 77
+    assert(e3.key.keycode == 77)
+
+    0
