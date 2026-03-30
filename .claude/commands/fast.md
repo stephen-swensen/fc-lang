@@ -1,5 +1,4 @@
 ---
-model: haiku
 effort: low
 context: append
 argument-hint: "<question>"

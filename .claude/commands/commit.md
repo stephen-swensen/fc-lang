@@ -1,36 +1,26 @@
 ---
 disable-model-invocation: true
-model: haiku
 effort: low
 context: fork
 ---
 
-Commit and optionally push changes. Follow these steps exactly in order. Do not skip steps or combine them.
+Commit changes. Follow these steps in order.
 
-## Step 1: Check branch
+## Step 1: Check repo state
 
-Run `git branch --show-current` and display it. If the branch seems unexpected for the work being done, ask the user to confirm before proceeding.
+Run `git status`. If the repo is in a conflicted state (mid-merge, mid-rebase, mid-cherry-pick), stop and tell the user.
 
-## Step 2: Inspect changes
+## Step 2: Stage files
 
-Run these in parallel:
-- `git status` (never use -uall flag)
-- `git diff HEAD` to see all unstaged and staged changes (or `git diff --cached` if the user has already staged files)
-- `git log --oneline -5` to see the repo's commit message style
+Stage all changed and untracked files with `git add -A`. If the user asked to exclude specific files, unstage them with `git reset HEAD -- <file>`. Do not stage files that look like secrets (.env, credentials, etc.).
 
-## Step 3: Draft commit message
+## Step 3: Diff
 
-Based ONLY on what the diff shows, draft a concise commit message. Do not rely on conversation memory — changes may have been made and reverted during the session. Match the style of recent commits shown in git log.
+Run `git diff --cached` to see what will be committed.
 
-Do NOT include `Co-Authored-By` or any attribution trailers.
+## Step 4: Commit
 
-## Step 4: Stage files
-
-Stage specific files by name. Never use `git add -A` or `git add .`. Do not stage files that look like secrets (.env, credentials, etc.) or build artifacts (.o files, binaries). Show the user which files you are staging.
-
-## Step 5: Commit
-
-Create the commit with the drafted message. Use a HEREDOC for the message to preserve formatting:
+Based on the diff, write a concise commit message that describes what changed and why. Scale the message to the size of the change — small changes get a short sentence, larger changes may get a few sentences. Never include `Co-Authored-By` or attribution trailers. Commit using a HEREDOC:
 ```
 git commit -m "$(cat <<'EOF'
 message here
@@ -38,10 +28,6 @@ EOF
 )"
 ```
 
-## Step 6: Push
+## Step 5: Summary
 
-After the commit succeeds, run `git branch --show-current` one more time to verify the branch. If the branch looks correct for the work, run `git push`. If the branch looks wrong or unexpected, ask the user before pushing.
-
-## Step 7: Summary
-
-After all steps complete, print a brief summary: the branch, commit hash, commit message, files changed, and whether the push succeeded.
+Print the branch, commit hash, and commit message.
