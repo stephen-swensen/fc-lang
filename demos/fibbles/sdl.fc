@@ -31,6 +31,7 @@ module sdl from "SDL2/SDL.h" =
     extern SDL_CreateWindow as create_window: (const cstr, int32, int32, int32, int32, uint32) -> any*
     extern SDL_DestroyWindow as destroy_window: (any*) -> void
     extern SDL_SetWindowTitle as set_title: (any*, const cstr) -> void
+    extern SDL_SetWindowResizable as set_resizable: (any*, int32) -> void
 
     // --- Renderer ---
     extern SDL_CreateRenderer as create_renderer: (any*, int32, uint32) -> any*
@@ -61,3 +62,4 @@ module sdl from "SDL2/SDL.h" =
 module c from "stdlib.h" =
     extern srand: (uint32) -> void
     extern rand: () -> int32
+    extern system: (const cstr) -> int32

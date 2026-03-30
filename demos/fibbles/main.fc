@@ -4,6 +4,8 @@
 import rect from sdl
 import sdl_event from sdl
 import io from std::
+import text from std::
+import sys from std::
 
 // Grid and display constants
 let grid_w = 32
@@ -14,6 +16,7 @@ let max_body = 512
 union game_state =
     | splash
     | playing
+    | paused
     | over
 
 struct vec2 =
@@ -53,10 +56,17 @@ let glyph = (ch: uint8) ->
     else if ch == '0' then 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
     else if ch == '1' then 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
     else if ch == '2' then 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+    else if ch == '3' then 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+    else if ch == '4' then 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
     else if ch == '5' then 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+    else if ch == '6' then 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    else if ch == '7' then 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+    else if ch == '8' then 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    else if ch == '9' then 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
     else if ch == '+' then 0 | (2 << 3) | (7 << 6) | (2 << 9) | (0 << 12)
     else if ch == '-' then 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
     else if ch == ':' then 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+    else if ch == '!' then 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
     else 0
 
 let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
@@ -117,6 +127,29 @@ let clear_screen = (r: any*) ->
     sdl.clear(r)
     return
 
+let load_high_score = () ->
+    let td = sys.temp_dir()
+    match io.open("%s{td}/fibbles-data/highscore.txt", "r") with
+    | some(fp) ->
+        let mut buf = uint8[32] { }
+        io.read(buf, 32i64, fp)
+        io.close(fp)
+        match text.parse_int32((const str) buf) with
+        | some(v) -> v
+        | none -> 0
+    | none -> 0
+
+let save_high_score = (score: int32) ->
+    let td = sys.temp_dir()
+    c.system((cstr)"mkdir -p %s{td}/fibbles-data")
+    match io.open("%s{td}/fibbles-data/highscore.txt", "w") with
+    | some(fp) ->
+        let s = score
+        io.write("%d{s}\n", fp)
+        io.close(fp)
+    | none -> return
+    return
+
 // --- Splash screen ---
 
 let render_splash = (r: any*) ->
@@ -134,12 +167,11 @@ let render_splash = (r: any*) ->
     draw_cell(r, 22, 7, 0u8, 255u8, 0u8)
     draw_cell(r, 25, 7, 255u8, 50u8, 50u8)
 
-    // Instructions (max 8 chars per line on 32-cell grid)
+    // Instructions
     draw_text(r, "ARROWS", 4, 10, 140u8, 140u8, 180u8)
     draw_text(r, "STEER", 6, 16, 140u8, 140u8, 180u8)
 
-    // "PRESS SPACE" prompt at bottom — window title has full info
-    // Use the space bar visual: draw a wider bar
+    // Space bar visual
     let mut bx = 10
     loop
         if bx >= 22 then break
@@ -160,9 +192,10 @@ let main = (args: str[]) ->
     io.write("  SPACE       Start / Restart\n", stdout)
     io.write("  ESC         Quit\n\n", stdout)
     io.write("Rules:\n", stdout)
-    io.write("  Eat the red food to grow and score\n", stdout)
-    io.write("  Each food: +10 points\n", stdout)
-    io.write("  Speed starts at 150ms, decreases 2ms per food (min 50ms)\n", stdout)
+    io.write("  Eat red food: +10 pts, +1 length\n", stdout)
+    io.write("  Eat yellow bonus: +20 pts, +4 length\n", stdout)
+    io.write("  Level up every 100 points\n", stdout)
+    io.write("  Speed increases by 3ms per food (max speed 50ms)\n", stdout)
     io.write("  Game over if you hit a wall or yourself\n\n", stdout)
     io.write("Press SPACE to start...\n", stdout)
 
@@ -170,9 +203,13 @@ let main = (args: str[]) ->
     sdl.init(sdl.init_video)
     let win = sdl.create_window(c"Fibbles", 0, 0,
         grid_w * cell, grid_h * cell, sdl.window_shown)
+    sdl.set_resizable(win, 0)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
     sdl.set_logical_size(ren, grid_w * cell, grid_h * cell)
     c.srand(sdl.get_ticks())
+
+    // Load high score
+    let mut high_score = load_high_score()
 
     // Game state
     let mut body = vec2[512] { }
@@ -188,15 +225,19 @@ let main = (args: str[]) ->
     let mut state = game_state.splash
     let mut running = true
     let mut last_tick = sdl.get_ticks()
+    let mut new_high = false
 
     let cx = grid_w / 2
     let cy = grid_h / 2
 
     let mut food = vec2 { x = 0, y = 0 }
+    let mut bonus = vec2 { x = -1, y = -1 }
+    let mut bonus_active = false
 
     let mut event = default(sdl_event)
 
-    sdl.set_title(win, c"Fibbles - Press SPACE to start")
+    let hi = high_score
+    sdl.set_title(win, c"Fibbles - Score: 0 (High: %d{hi}) Level 1")
 
     // Main loop
     loop
@@ -217,8 +258,8 @@ let main = (args: str[]) ->
                     running = false
                     break
 
-                if state == game_state.splash then
-                    if ekey == sdl.key_space then
+                if ekey == sdl.key_space then
+                    if state == game_state.splash || state == game_state.over then
                         // Init snake
                         head_idx = 2
                         length = 3
@@ -227,13 +268,26 @@ let main = (args: str[]) ->
                         q_len = 0
                         score = 0
                         speed = 150
+                        new_high = false
+                        bonus_active = false
                         body[0] = vec2 { x = cx - 2, y = cy }
                         body[1] = vec2 { x = cx - 1, y = cy }
                         body[2] = vec2 { x = cx, y = cy }
                         food = place_food(body, head_idx, length)
                         last_tick = sdl.get_ticks()
-                        sdl.set_title(win, c"Fibbles - Score: 0")
+                        let h = high_score
+                        sdl.set_title(win, c"Fibbles - Score: 0 (High: %d{h}) Level 1")
                         state = game_state.playing
+                    else if state == game_state.paused then
+                        state = game_state.playing
+                        last_tick = sdl.get_ticks()
+                        let s = score
+                        let lv = score / 100 + 1
+                        let h = high_score
+                        sdl.set_title(win, c"Fibbles - Score: %d{s} (High: %d{h}) Level %d{lv}")
+                    else if state == game_state.playing then
+                        state = game_state.paused
+                        sdl.set_title(win, c"Fibbles - PAUSED (SPACE to resume)")
 
                 if state == game_state.playing && q_len < 2 then
                     // Direction queue: validate against last queued (or committed)
@@ -262,23 +316,6 @@ let main = (args: str[]) ->
                     if accepted then
                         q_len = q_len + 1
 
-                if state == game_state.over then
-                    if ekey == sdl.key_space then
-                        head_idx = 2
-                        length = 3
-                        dir_x = 1
-                        dir_y = 0
-                        q_len = 0
-                        score = 0
-                        speed = 150
-                        body[0] = vec2 { x = cx - 2, y = cy }
-                        body[1] = vec2 { x = cx - 1, y = cy }
-                        body[2] = vec2 { x = cx, y = cy }
-                        food = place_food(body, head_idx, length)
-                        last_tick = sdl.get_ticks()
-                        sdl.set_title(win, c"Fibbles - Score: 0")
-                        state = game_state.playing
-
         if !running then break
 
         // --- Update ---
@@ -302,36 +339,69 @@ let main = (args: str[]) ->
                 // Wall collision
                 if new_x < 0 || new_x >= grid_w || new_y < 0 || new_y >= grid_h then
                     state = game_state.over
+                    // Check high score
+                    if score > high_score then
+                        high_score = score
+                        save_high_score(score)
+                        new_high = true
+                        let s = score
+                        io.write("NEW HIGH SCORE: %d{s}!\n", stdout)
                     sdl.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
                 else
                     // Self collision
                     if on_snake(body, head_idx, length, new_x, new_y) then
                         state = game_state.over
+                        if score > high_score then
+                            high_score = score
+                            save_high_score(score)
+                            new_high = true
+                            let s = score
+                            io.write("NEW HIGH SCORE: %d{s}!\n", stdout)
                         sdl.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
                     else
                         // Advance snake
                         head_idx = (head_idx + 1) % max_body
                         body[head_idx] = vec2 { x = new_x, y = new_y }
 
-                        // Check food
+                        // Check regular food
                         if new_x == food.x && new_y == food.y then
                             length = length + 1
                             score = score + 10
                             if speed > 50 then
-                                speed = speed - 2
+                                speed = speed - 3
                             food = place_food(body, head_idx, length)
+                            // 25% chance to spawn bonus food
+                            if !bonus_active && c.rand() % 4 == 0 then
+                                bonus = place_food(body, head_idx, length)
+                                bonus_active = true
                             let s = score
-                            sdl.set_title(win, (cstr)"Fibbles - Score: %d{s}")
+                            let lv = score / 100 + 1
+                            let h = high_score
+                            sdl.set_title(win, c"Fibbles - Score: %d{s} (High: %d{h}) Level %d{lv}")
+
+                        // Check bonus food (no speed increase)
+                        if bonus_active && new_x == bonus.x && new_y == bonus.y then
+                            length = length + 4
+                            score = score + 20
+                            bonus_active = false
+                            let s = score
+                            let lv = score / 100 + 1
+                            let h = high_score
+                            sdl.set_title(win, c"Fibbles - Score: %d{s} (High: %d{h}) Level %d{lv}")
 
         // --- Render ---
         if state == game_state.splash then
             render_splash(ren)
 
-        if state == game_state.playing || state == game_state.over then
+        if state == game_state.playing || state == game_state.paused || state == game_state.over then
             clear_screen(ren)
 
-            // Food
+            // Food (red)
             draw_cell(ren, food.x, food.y, 255u8, 50u8, 50u8)
+
+            // Bonus food (yellow)
+            if bonus_active then
+                draw_cell(ren, bonus.x, bonus.y, 255u8, 220u8, 0u8)
 
             // Snake
             let mut i = 0
@@ -350,12 +420,44 @@ let main = (args: str[]) ->
                         draw_cell(ren, seg.x, seg.y, 0u8, 180u8, 0u8)
                 i = i + 1
 
-            // Game over overlay text
+            // Paused overlay
+            if state == game_state.paused then
+                draw_text(ren, "PAUSED", 4, 10, 180u8, 180u8, 220u8)
+
+            // Game over overlay
             if state == game_state.over then
-                // "GAME" centered: 4 chars * 4 = 16, offset = (32-16)/2 = 8
-                draw_text(ren, "GAME", 8, 8, 255u8, 255u8, 255u8)
-                // "OVER" centered
-                draw_text(ren, "OVER", 8, 14, 255u8, 255u8, 255u8)
+                if new_high then
+                    draw_text(ren, "NEW", 10, 1, 255u8, 220u8, 0u8)
+                    draw_text(ren, "HIGH!", 8, 7, 255u8, 220u8, 0u8)
+                else
+                    draw_text(ren, "GAME", 8, 1, 255u8, 255u8, 255u8)
+                    draw_text(ren, "OVER", 8, 7, 255u8, 255u8, 255u8)
+
+                // Score digits centered
+                let fs = score
+                let mut dcount = 0
+                if fs == 0 then
+                    dcount = 1
+                else
+                    let mut tmp = fs
+                    loop
+                        if tmp <= 0 then break
+                        dcount = dcount + 1
+                        tmp = tmp / 10
+                let sox = 16 - dcount * 2
+                let mut digits = int32[8] { }
+                let mut si = 0
+                let mut dtmp = fs
+                loop
+                    if si >= dcount then break
+                    digits[dcount - 1 - si] = dtmp % 10
+                    dtmp = dtmp / 10
+                    si = si + 1
+                let mut di = 0
+                loop
+                    if di >= dcount then break
+                    draw_char(ren, '0' + (uint8) digits[di], sox + di * 4, 13, 255u8, 255u8, 255u8)
+                    di = di + 1
 
             sdl.present(ren)
 
