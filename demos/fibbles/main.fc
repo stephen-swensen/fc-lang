@@ -289,6 +289,12 @@ let main = (args: str[]) ->
                         state = game_state.paused
                         sdl.set_title(win, c"Fibbles - PAUSED (SPACE to resume)")
 
+                if ekey == sdl.key_c && state == game_state.splash then
+                    let td = sys.temp_dir()
+                    c.system((cstr)"rm -f %s{td}/fibbles-data/highscore.txt")
+                    high_score = 0
+                    sdl.set_title(win, c"Fibbles - Score: 0 (High: 0) Level 1")
+
                 if state == game_state.playing && q_len < 2 then
                     // Direction queue: validate against last queued (or committed)
                     // direction, then enqueue. Max 2 entries allows fold-back combos

@@ -180,6 +180,7 @@ Every new feature, bug fix, or spec change must include tests covering the happy
 ## Workflow
 
 - Run `make test-parallel` to confirm all tests pass before presenting a summary of changes
+- Skip tests for changes that only touch `demos/` — demo apps are standalone and don't affect compiler tests
 
 ## Spec Reference
 
