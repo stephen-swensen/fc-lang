@@ -11,10 +11,10 @@ let grid_h = 24
 let cell = 20
 let max_body = 512
 
-// Game states
-let st_splash = 0
-let st_playing = 1
-let st_over = 2
+union game_state =
+    | splash
+    | playing
+    | over
 
 struct vec2 =
     x: int32
@@ -157,7 +157,7 @@ let main = (args: str[]) ->
     io.write("A Snake clone written in FC\n\n", stdout)
     io.write("Controls:\n", stdout)
     io.write("  Arrow keys  Steer the snake\n", stdout)
-    io.write("  R           Restart after game over\n", stdout)
+    io.write("  SPACE       Start / Restart\n", stdout)
     io.write("  ESC         Quit\n\n", stdout)
     io.write("Rules:\n", stdout)
     io.write("  Eat the red food to grow and score\n", stdout)
@@ -185,7 +185,7 @@ let main = (args: str[]) ->
     let mut q_len = 0
     let mut score = 0
     let mut speed = 150
-    let mut state = st_splash
+    let mut state = game_state.splash
     let mut running = true
     let mut last_tick = sdl.get_ticks()
 
@@ -217,7 +217,7 @@ let main = (args: str[]) ->
                     running = false
                     break
 
-                if state == st_splash then
+                if state == game_state.splash then
                     if ekey == sdl.key_space then
                         // Init snake
                         head_idx = 2
@@ -233,9 +233,9 @@ let main = (args: str[]) ->
                         food = place_food(body, head_idx, length)
                         last_tick = sdl.get_ticks()
                         sdl.set_title(win, c"Fibbles - Score: 0")
-                        state = st_playing
+                        state = game_state.playing
 
-                if state == st_playing && q_len < 2 then
+                if state == game_state.playing && q_len < 2 then
                     // Direction queue: validate against last queued (or committed)
                     // direction, then enqueue. Max 2 entries allows fold-back combos
                     // (e.g. UP+LEFT while moving RIGHT) without letting a second
@@ -262,8 +262,8 @@ let main = (args: str[]) ->
                     if accepted then
                         q_len = q_len + 1
 
-                if state == st_over then
-                    if ekey == sdl.key_r then
+                if state == game_state.over then
+                    if ekey == sdl.key_space then
                         head_idx = 2
                         length = 3
                         dir_x = 1
@@ -277,12 +277,12 @@ let main = (args: str[]) ->
                         food = place_food(body, head_idx, length)
                         last_tick = sdl.get_ticks()
                         sdl.set_title(win, c"Fibbles - Score: 0")
-                        state = st_playing
+                        state = game_state.playing
 
         if !running then break
 
         // --- Update ---
-        if state == st_playing then
+        if state == game_state.playing then
             let now = sdl.get_ticks()
             if now - last_tick >= (uint32) speed then
                 last_tick = now
@@ -301,13 +301,13 @@ let main = (args: str[]) ->
 
                 // Wall collision
                 if new_x < 0 || new_x >= grid_w || new_y < 0 || new_y >= grid_h then
-                    state = st_over
-                    sdl.set_title(win, c"Fibbles - GAME OVER  R:restart  ESC:quit")
+                    state = game_state.over
+                    sdl.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
                 else
                     // Self collision
                     if on_snake(body, head_idx, length, new_x, new_y) then
-                        state = st_over
-                        sdl.set_title(win, c"Fibbles - GAME OVER  R:restart  ESC:quit")
+                        state = game_state.over
+                        sdl.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
                     else
                         // Advance snake
                         head_idx = (head_idx + 1) % max_body
@@ -324,10 +324,10 @@ let main = (args: str[]) ->
                             sdl.set_title(win, (cstr)"Fibbles - Score: %d{s}")
 
         // --- Render ---
-        if state == st_splash then
+        if state == game_state.splash then
             render_splash(ren)
 
-        if state == st_playing || state == st_over then
+        if state == game_state.playing || state == game_state.over then
             clear_screen(ren)
 
             // Food
@@ -339,19 +339,19 @@ let main = (args: str[]) ->
                 if i >= length then break
                 let seg = body_at(body, head_idx, length, i)
                 if i == length - 1 then
-                    if state == st_over then
+                    if state == game_state.over then
                         draw_cell(ren, seg.x, seg.y, 140u8, 0u8, 0u8)
                     else
                         draw_cell(ren, seg.x, seg.y, 0u8, 255u8, 0u8)
                 else
-                    if state == st_over then
+                    if state == game_state.over then
                         draw_cell(ren, seg.x, seg.y, 200u8, 0u8, 0u8)
                     else
                         draw_cell(ren, seg.x, seg.y, 0u8, 180u8, 0u8)
                 i = i + 1
 
             // Game over overlay text
-            if state == st_over then
+            if state == game_state.over then
                 // "GAME" centered: 4 chars * 4 = 16, offset = (32-16)/2 = 8
                 draw_text(ren, "GAME", 8, 8, 255u8, 255u8, 255u8)
                 // "OVER" centered
