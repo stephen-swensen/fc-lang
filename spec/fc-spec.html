@@ -2845,6 +2845,60 @@ let main = (args: str[]) ->
 
 This restriction ensures that file ordering never affects compilation — all cross-file code is in modules, which the compiler resolves regardless of order.
 
+### Global scope and implicit visibility
+
+Types (`struct`, `union`), bindings (`let`, `let mut`), and modules declared at file level in the entry-point file reside in the **global scope**. These global declarations are implicitly visible to all modules in the `global::` namespace — no import is required:
+
+```fc
+// main.fc — entry-point file
+struct point =
+    x: int32
+    y: int32
+
+let mut origin = point { x = 0, y = 0 }
+
+let main = (args: str[]) ->
+    let p = helper.make_point()
+    origin = p
+    origin.x + origin.y
+```
+
+```fc
+// helper.fc
+module helper =
+    let make_point = () -> point { x = 10, y = 20 }  // point and origin visible here
+    let shift = () ->
+        origin.x = origin.x + 1                       // global mutable state
+```
+
+This works because the [name resolution order](#name-resolution-order) falls through from module members and imports to the global scope. The global scope acts as an implicit outermost layer visible to all `global::` code across all files.
+
+**Namespace boundary.** Modules in a non-global namespace (e.g., `namespace acme::`) do *not* see global declarations implicitly. They must use `import` to access them:
+
+```fc
+// vendor.fc
+namespace acme::
+module vendor =
+    // point is NOT visible here — different namespace
+    // must import explicitly if needed
+```
+
+**Shadowing.** If a module defines a member with the same name as a global declaration, the module member takes priority (module members are checked before the global scope in name resolution). This follows the same innermost-wins rule as `let` shadowing:
+
+```fc
+struct point =
+    x: int32
+    y: int32
+
+module shapes =
+    struct point =               // shadows global point within this module
+        x: float64
+        y: float64
+    let make = () -> point { x = 1.0, y = 2.0 }   // uses shapes.point
+```
+
+**Design rationale.** Restricting file-level declarations to the entry-point file means there is exactly one source of global types and state. This avoids the ordering and visibility problems that arise when multiple files can inject globals, while still providing a lightweight mechanism for shared types and state in application code. Libraries should define types in modules rather than relying on global scope.
+
 ### Visibility
 
 Everything inside a module is public by default. Use `private` to hide a symbol from importers:

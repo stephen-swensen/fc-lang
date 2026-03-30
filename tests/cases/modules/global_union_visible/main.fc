@@ -1,0 +1,18 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+    | point
+
+let main = (args: str[]) ->
+    // construct global union variants in main
+    let c = shape.circle(5)
+    let s = shape.square(3)
+
+    // pass global union values to other-file module function
+    let a1 = helper.area(c)
+    assert(a1 == 25)
+    let a2 = helper.area(s)
+    assert(a2 == 9)
+    let a3 = helper.area(shape.point)
+    assert(a3 == 0)
+    0

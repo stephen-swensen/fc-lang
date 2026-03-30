@@ -1,0 +1,18 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    // global point has int32 fields
+    let gp = point { x = 1, y = 2 }
+    assert(gp.x == 1)
+
+    // helper.make uses its own local point (float64 fields)
+    let hp = helper.make()
+    assert(hp.a == 100)
+
+    // helper.make_global uses the global point
+    let gp2 = helper.make_global()
+    assert(gp2.x == 42)
+    assert(gp2.y == 99)
+    0

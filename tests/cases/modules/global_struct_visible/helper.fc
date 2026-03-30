@@ -1,0 +1,2 @@
+module helper =
+    let make_point = () -> point { x = 10, y = 20 }

@@ -1,0 +1,6 @@
+module helper =
+    let area = (s: shape) ->
+        match s with
+        | circle(r) -> r * r
+        | square(side) -> side * side
+        | point -> 0

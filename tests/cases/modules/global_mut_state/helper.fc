@@ -1,0 +1,4 @@
+module helper =
+    let shift = (dx: int32, dy: int32) ->
+        origin.x = origin.x + dx
+        origin.y = origin.y + dy

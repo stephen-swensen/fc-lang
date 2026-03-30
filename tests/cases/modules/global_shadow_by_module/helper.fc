@@ -1,0 +1,8 @@
+module helper =
+    struct local_point =
+        a: int32
+        b: int32
+
+    let make = () -> local_point { a = 100, b = 200 }
+
+    let make_global = () -> point { x = 42, y = 99 }

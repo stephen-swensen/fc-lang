@@ -1,0 +1,4 @@
+union color =
+    | red
+    | green
+    | blue
