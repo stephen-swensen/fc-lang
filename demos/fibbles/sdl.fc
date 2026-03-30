@@ -36,6 +36,7 @@ module sdl from "SDL2/SDL.h" =
     // --- Renderer ---
     extern SDL_CreateRenderer as create_renderer: (any*, int32, uint32) -> any*
     extern SDL_DestroyRenderer as destroy_renderer: (any*) -> void
+    extern SDL_RenderSetLogicalSize as set_logical_size: (any*, int32, int32) -> int32
     extern SDL_SetRenderDrawColor as set_color: (any*, uint8, uint8, uint8, uint8) -> int32
     extern SDL_RenderClear as clear: (any*) -> int32
     extern SDL_RenderFillRect as fill_rect: (any*, const rect*) -> int32

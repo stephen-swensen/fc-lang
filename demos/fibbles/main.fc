@@ -168,9 +168,10 @@ let main = (args: str[]) ->
 
     // Init SDL
     sdl.init(sdl.init_video)
-    let win = sdl.create_window(c"Fibbles", sdl.pos_centered, sdl.pos_centered,
+    let win = sdl.create_window(c"Fibbles", 0, 0,
         grid_w * cell, grid_h * cell, sdl.window_shown)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
+    sdl.set_logical_size(ren, grid_w * cell, grid_h * cell)
     c.srand(sdl.get_ticks())
 
     // Game state
