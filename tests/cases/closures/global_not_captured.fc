@@ -1,0 +1,23 @@
+// Top-level bindings are accessed as globals, not captured by copy.
+// Mutations to the global after the lambda is created are visible through the lambda.
+
+struct point =
+    x: int32
+    y: int32
+
+let mut val = default(point)
+
+let read_val = () -> val
+
+let main = (args: str[]) ->
+    val = point { x = 2, y = 3 }
+    let result = read_val()
+    assert(result.x == 2)
+    assert(result.y == 3)
+
+    // mutate again and confirm read_val sees the update
+    val = point { x = 10, y = 20 }
+    let result2 = read_val()
+    assert(result2.x == 10)
+    assert(result2.y == 20)
+    0

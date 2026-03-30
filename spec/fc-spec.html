@@ -1683,7 +1683,9 @@ The compiler performs **escape analysis** on pointer and slice expressions, trac
 
 ## Closures & Capture
 
-Lambdas may capture immutable `let` bindings from the enclosing scope by copy. `let mut` bindings cannot be captured.
+Lambdas may capture immutable `let` bindings from the enclosing *local* scope by copy. `let mut` bindings cannot be captured.
+
+**Top-level bindings are not captures.** When a lambda references a top-level `let` or `let mut` binding, it accesses the global directly — no copy is made and no capture occurs. This means the function sees mutations to the global, and the function is *not* a closure for C interop purposes (it can be passed to `extern` function pointer parameters). Only references that cross a local lambda boundary produce captures.
 
 ```fc
 let threshold = 10
@@ -1691,6 +1693,15 @@ let above = (x: int32) -> x > threshold    // captures threshold by copy
 
 let mut counter = 0
 let f = () -> counter + 1                  // compile error — cannot capture mutable let binding
+```
+
+In contrast, a top-level mutable binding can be freely referenced:
+
+```fc
+let mut total = 0
+let add = (n: int32) ->                    // not a closure — total is a global, not a capture
+    total = total + n
+    total
 ```
 
 Capturing a pointer value (a `let` binding that holds a pointer) is allowed. The programmer is responsible for ensuring the pointed-to memory remains live for the lifetime of the closure.
