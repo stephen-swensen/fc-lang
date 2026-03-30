@@ -92,10 +92,31 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - `loop` produces a value via `break value`; `for` is always void
 - `match` is exhaustive; wildcard `_` satisfies exhaustiveness
 
+### Union Syntax
+- Variant declarations require `|` before each variant: `| circle(int32)`, not `circle(int32)`
+- Variant **construction** requires the union type name: `shape.circle(5)`, `shape.empty`
+- Variant **pattern matching** uses bare names: `| circle(r) -> ...`, `| empty -> ...`
+- Each variant carries zero or one payload (not multiple — use a struct for compound data)
+```fc
+union shape =
+    | circle(int32)       // one payload
+    | rect(point)         // struct payload for compound data
+    | empty               // no payload
+
+let s = shape.circle(5)  // construction: qualified
+match s with
+| circle(r) -> r * r     // pattern: bare name
+| rect(p) -> p.x + p.y
+| empty -> 0
+```
+
 ### Function Syntax
 - Functions/lambdas do **not** have return type annotations — the return type is always inferred
+- `->` introduces the function **body**, never a return type — this applies to all functions including void-returning ones
 - Correct: `let f = (x: int32) -> x * 2` or with a block body: `let f = (x: int32) ->\n    x * 2`
+- Correct void function: `let greet = (name: str) ->\n    print(name)`
 - **Wrong**: `let f = (x: int32) -> int32 = x * 2` — this is not valid FC syntax
+- **Wrong**: `let f = (x: int32) -> void` — `void` is not a return type annotation; what follows `->` is the body
 - The `->` token introduces the function body (or separates param types in function type syntax like `(int32) -> int32`)
 
 ### Bindings
