@@ -1,0 +1,5 @@
+// Interpolated string in file-level init should be rejected
+let s = alloc("value: %d{42}")!
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,14 @@
+// Module-level struct literal — emits compound literal at C file scope
+module config =
+    struct point =
+        x: int32
+        y: int32
+    let origin = point { x = 0, y = 0 }
+    let offset = point { x = 10, y = 20 }
+
+let main = (args: str[]) ->
+    assert(config.origin.x == 0)
+    assert(config.origin.y == 0)
+    assert(config.offset.x == 10)
+    assert(config.offset.y == 20)
+    0

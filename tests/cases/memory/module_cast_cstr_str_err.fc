@@ -1,0 +1,7 @@
+// cstr-to-str cast in module-level const-expr should be rejected —
+// codegen emits strlen statement expression
+module m =
+    let s = (str)c"hello"
+
+let main = (args: str[]) ->
+    0

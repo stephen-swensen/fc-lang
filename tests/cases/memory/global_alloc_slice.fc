@@ -1,0 +1,9 @@
+let buf = alloc(int32[10] { })!
+
+let main = (args: str[]) ->
+    buf[0] = 42
+    buf[9] = 99
+    assert(buf[0] == 42)
+    assert(buf[9] == 99)
+    assert(buf.len == 10)
+    0

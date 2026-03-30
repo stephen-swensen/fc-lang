@@ -1,0 +1,6 @@
+let x = some(42)
+
+let main = (args: str[]) ->
+    assert(x.is_some)
+    assert(x! == 42)
+    0

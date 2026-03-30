@@ -1,0 +1,11 @@
+// Struct equality in module-level const-expr should be rejected —
+// codegen emits generated comparison function call
+module m =
+    struct point =
+        x: int32
+        y: int32
+    let same = point { x = 1, y = 2 } == point { x = 1, y = 2 }
+
+let main = (args: str[]) ->
+    assert(m.same)
+    0

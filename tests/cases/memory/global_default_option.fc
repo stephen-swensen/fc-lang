@@ -1,0 +1,6 @@
+// File-level default of option type
+let x = default(int32?)
+
+let main = (args: str[]) ->
+    assert(x.is_none)
+    0

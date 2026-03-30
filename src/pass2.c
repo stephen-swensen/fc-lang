@@ -4247,6 +4247,77 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 static bool is_const_expr(Expr *e) {
     if (!e) return true;
     switch (e->kind) {
+    /* Literals — always valid C constants */
+    case EXPR_INT_LIT:
+    case EXPR_FLOAT_LIT:
+    case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT:
+    case EXPR_CSTRING_LIT:
+        return true;
+    /* Type operators — compile-time constants in C */
+    case EXPR_SIZEOF:
+    case EXPR_ALIGNOF:
+    case EXPR_DEFAULT:
+        return true;
+    /* Unary prefix — only negate and boolean-not emit simple C infix */
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_MINUS || e->unary_prefix.op == TOK_BANG)
+            return is_const_expr(e->unary_prefix.operand);
+        return false;
+    /* Binary — safelist operators that emit simple C infix at file scope.
+     * Integer div/mod emit zero-check statement expressions.
+     * Equality on aggregate types emits generated comparison function calls. */
+    case EXPR_BINARY:
+        switch (e->binary.op) {
+        case TOK_PLUS: case TOK_MINUS: case TOK_STAR:
+        case TOK_LTLT: case TOK_GTGT:
+        case TOK_AMP: case TOK_PIPE: case TOK_CARET:
+        case TOK_AMPAMP: case TOK_PIPEPIPE:
+        case TOK_LT: case TOK_GT: case TOK_LTEQ: case TOK_GTEQ:
+            return is_const_expr(e->binary.left) &&
+                   is_const_expr(e->binary.right);
+        case TOK_SLASH: case TOK_PERCENT:
+            /* Float div/mod emits simple infix; integer emits zero-check */
+            if (e->type && type_is_integer(e->type)) return false;
+            return is_const_expr(e->binary.left) &&
+                   is_const_expr(e->binary.right);
+        case TOK_EQEQ: case TOK_BANGEQ:
+            /* Primitive equality is simple infix; aggregate types emit
+             * generated comparison function calls */
+            if (e->binary.left->type &&
+                type_needs_eq_func(e->binary.left->type))
+                return false;
+            return is_const_expr(e->binary.left) &&
+                   is_const_expr(e->binary.right);
+        default:
+            return false;
+        }
+    /* Cast — simple type casts are fine; str↔cstr emit statement exprs */
+    case EXPR_CAST:
+        if (e->cast.operand->type &&
+            ((is_str_type(e->cast.operand->type) && is_cstr_type(e->cast.target)) ||
+             (is_cstr_type(e->cast.operand->type) && is_str_type(e->cast.target))))
+            return false;
+        return is_const_expr(e->cast.operand);
+    /* Struct literal — valid if all field values are const */
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            if (!is_const_expr(e->struct_lit.fields[i].value)) return false;
+        return true;
+    /* Everything else is rejected by default */
+    default:
+        return false;
+    }
+}
+
+/* Check if an expression is valid in a file-level initializer.
+ * More permissive than is_const_expr: allows alloc, some, unwrap, array/slice
+ * literals, and union variant constructors, but still disallows FC function
+ * calls and variable references.  Called after type-checking so e->type is set. */
+static bool is_file_init_expr(Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
     case EXPR_INT_LIT:
     case EXPR_FLOAT_LIT:
     case EXPR_BOOL_LIT:
@@ -4258,15 +4329,47 @@ static bool is_const_expr(Expr *e) {
     case EXPR_DEFAULT:
         return true;
     case EXPR_UNARY_PREFIX:
-        return is_const_expr(e->unary_prefix.operand);
+        /* Only negate (-) and boolean not (!) are safe; deref (*) and
+         * address-of (&) are not valid in init context. */
+        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_BANG)
+            return false;
+        return is_file_init_expr(e->unary_prefix.operand);
+    case EXPR_UNARY_POSTFIX:
+        return is_file_init_expr(e->unary_postfix.operand);
     case EXPR_BINARY:
-        return is_const_expr(e->binary.left) && is_const_expr(e->binary.right);
+        return is_file_init_expr(e->binary.left) && is_file_init_expr(e->binary.right);
     case EXPR_CAST:
-        return is_const_expr(e->cast.operand);
+        return is_file_init_expr(e->cast.operand);
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (!is_const_expr(e->struct_lit.fields[i].value)) return false;
+            if (!is_file_init_expr(e->struct_lit.fields[i].value)) return false;
         return true;
+    case EXPR_ALLOC:
+        return is_file_init_expr(e->alloc_expr.size_expr) &&
+               is_file_init_expr(e->alloc_expr.init_expr);
+    case EXPR_SOME:
+        return is_file_init_expr(e->some_expr.value);
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            if (!is_file_init_expr(e->array_lit.elems[i])) return false;
+        return is_file_init_expr(e->array_lit.size_expr);
+    case EXPR_SLICE_LIT:
+        return is_file_init_expr(e->slice_lit.ptr_expr) &&
+               is_file_init_expr(e->slice_lit.len_expr);
+    case EXPR_CALL:
+        /* Allow union variant constructors only */
+        if (e->type && e->type->kind == TYPE_UNION &&
+            e->call.func->kind == EXPR_FIELD) {
+            for (int i = 0; i < e->call.arg_count; i++)
+                if (!is_file_init_expr(e->call.args[i])) return false;
+            return true;
+        }
+        return false;
+    case EXPR_FIELD:
+        /* Allow no-payload union variant constructors */
+        if (e->type && e->type->kind == TYPE_UNION)
+            return true;
+        return false;
     default:
         return false;
     }
@@ -4518,9 +4621,10 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
 
             check_decl_let(&ctx, d);
             if (d->let.init && d->let.init->kind != EXPR_FUNC &&
-                !is_const_expr(d->let.init)) {
+                !is_file_init_expr(d->let.init)) {
                 diag_error(d->loc,
-                    "top-level initializer for '%s' must be a constant expression",
+                    "file-level initializer for '%s' must not contain "
+                    "function calls or variable references",
                     d->let.name);
             }
             ctx.import_scope = NULL;

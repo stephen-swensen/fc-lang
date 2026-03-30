@@ -1,0 +1,6 @@
+// Variable reference inside alloc argument should be rejected
+let n = 10
+let buf = alloc(int32[n] { })!
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,16 @@
+// File-level alloc global accessed from another function
+let p = alloc(int32)!
+
+let set_value = (v: int32) ->
+    *p = v
+
+let get_value = () ->
+    *p
+
+let main = (args: str[]) ->
+    set_value(42)
+    assert(get_value() == 42)
+    set_value(99)
+    assert(get_value() == 99)
+    free(p)
+    0

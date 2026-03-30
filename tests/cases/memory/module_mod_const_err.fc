@@ -1,0 +1,7 @@
+// Modulo in module-level const-expr should be rejected —
+// codegen emits runtime zero-check as statement expression
+module m =
+    let x = 10 % 3
+
+let main = (args: str[]) ->
+    m.x

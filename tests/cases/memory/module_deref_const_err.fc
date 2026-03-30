@@ -1,0 +1,7 @@
+// Deref in module-level const-expr should be rejected —
+// produces non-constant C at file scope
+module m =
+    let x = *default(int32*)
+
+let main = (args: str[]) ->
+    m.x

@@ -1,0 +1,13 @@
+struct pair =
+    a: int32
+    b: int32
+
+let p = alloc(pair)!
+
+let main = (args: str[]) ->
+    p->a = 1
+    p->b = 2
+    assert(p->a == 1)
+    assert(p->b == 2)
+    free(p)
+    0

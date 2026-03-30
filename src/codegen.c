@@ -24,6 +24,10 @@ static TypeSet *g_eq_set = NULL;
 static int indent_level = 0;
 static int temp_counter = 0;
 
+/* File-level non-function globals whose initialization is hoisted into C main */
+static Decl **g_file_globals = NULL;
+static int g_file_global_count = 0;
+
 /* Hoisted let-mut declarations: emitted at function top, assignments at original site */
 typedef struct {
     const char *codegen_name;
@@ -2642,6 +2646,13 @@ static void emit_func_decl(Decl *d, FILE *out) {
     /* Emit C main wrapper that converts argc/argv to str[] */
     if (is_main) {
         fprintf(out, "int main(int argc, char **argv) {\n");
+        /* Hoisted file-level global initializations */
+        for (int gi = 0; gi < g_file_global_count; gi++) {
+            Decl *gd = g_file_globals[gi];
+            fprintf(out, "    %s = ", gd->let.name);
+            emit_expr(gd->let.init, out);
+            fprintf(out, ";\n");
+        }
         fprintf(out, "    fc_str *_args = (fc_str*)__builtin_alloca((size_t)argc * sizeof(fc_str));\n");
         fprintf(out, "    for (int _i = 0; _i < argc; _i++) {\n");
         fprintf(out, "        _args[_i].ptr = (uint8_t*)argv[_i];\n");
@@ -4056,6 +4067,26 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
     }
 
+    /* Collect file-level non-function globals for hoisted initialization in C main */
+    g_file_global_count = 0;
+    g_file_globals = NULL;
+    if (has_main) {
+        for (int i = 0; i < all_count; i++) {
+            Decl *d = all_decls[i];
+            if (d->kind == DECL_LET && !is_func_decl(d) && !d->let.codegen_name)
+                g_file_global_count++;
+        }
+        if (g_file_global_count > 0) {
+            g_file_globals = malloc(sizeof(Decl*) * (size_t)g_file_global_count);
+            int idx = 0;
+            for (int i = 0; i < all_count; i++) {
+                Decl *d = all_decls[i];
+                if (d->kind == DECL_LET && !is_func_decl(d) && !d->let.codegen_name)
+                    g_file_globals[idx++] = d;
+            }
+        }
+    }
+
     /* Emit forward declarations for functions (with void* _ctx), skip generics.
      * main is emitted as fc_main with its str[] param (no _ctx). */
     for (int i = 0; i < all_count; i++) {
@@ -4138,18 +4169,24 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
     /* Emit non-function global variable definitions.
      * Must come before lifted lambdas so they can reference globals.
-     * Pass2 enforces that initializers are constant expressions, so these
-     * are valid at C file scope. Module members (with codegen_name) are
-     * always emitted; other top-level variables only when there is a main. */
+     * Module members (with codegen_name) are emitted with const-expr initializers
+     * at C file scope.  File-level globals (no codegen_name) are declared without
+     * initializers here; their initialization is hoisted into the C main wrapper. */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d) &&
             (d->let.codegen_name || has_main)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             emit_type(d->let.resolved_type, out);
-            fprintf(out, " %s = ", cname);
-            emit_expr(d->let.init, out);
-            fprintf(out, ";\n");
+            if (d->let.codegen_name) {
+                /* Module member: emit with initializer (must be const expr) */
+                fprintf(out, " %s = ", cname);
+                emit_expr(d->let.init, out);
+                fprintf(out, ";\n");
+            } else {
+                /* File-level global: declare only, init hoisted into C main */
+                fprintf(out, " %s;\n", cname);
+            }
         }
     }
     fprintf(out, "\n");
@@ -4361,5 +4398,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "}\n");
     }
 
+    free(g_file_globals);
+    g_file_globals = NULL;
+    g_file_global_count = 0;
     free(all_decls);
 }

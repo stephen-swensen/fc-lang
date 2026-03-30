@@ -1,0 +1,7 @@
+// File-level some wrapping a default
+let x = some(default(int32))
+
+let main = (args: str[]) ->
+    assert(x.is_some)
+    assert(x! == 0)
+    0

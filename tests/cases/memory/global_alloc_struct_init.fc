@@ -1,0 +1,12 @@
+// File-level alloc with struct initializer expression
+struct pair =
+    a: int32
+    b: int32
+
+let p = alloc(pair { a = 10, b = 20 })!
+
+let main = (args: str[]) ->
+    assert(p->a == 10)
+    assert(p->b == 20)
+    free(p)
+    0

@@ -1,1 +1,1 @@
-top-level initializer for 'b' must be a constant expression
+file-level initializer for 'b' must not contain function calls or variable references

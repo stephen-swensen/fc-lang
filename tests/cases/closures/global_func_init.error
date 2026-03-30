@@ -1,1 +1,1 @@
-top-level initializer for 'result' must be a constant expression
+file-level initializer for 'result' must not contain function calls or variable references

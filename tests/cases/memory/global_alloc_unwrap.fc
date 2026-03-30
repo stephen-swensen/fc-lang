@@ -1,0 +1,7 @@
+let p = alloc(int32)!
+
+let main = (args: str[]) ->
+    *p = 42
+    assert(*p == 42)
+    free(p)
+    0

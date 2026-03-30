@@ -1,0 +1,8 @@
+// Float division is valid at module level — no zero-check statement expression
+module m =
+    let half = 1.0 / 2.0
+
+let main = (args: str[]) ->
+    assert(m.half > 0.4)
+    assert(m.half < 0.6)
+    0

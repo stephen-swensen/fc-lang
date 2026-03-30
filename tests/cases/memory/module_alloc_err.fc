@@ -1,0 +1,6 @@
+// alloc at module level should be rejected — still requires const expressions
+module config =
+    let p = alloc(int32)!
+
+let main = (args: str[]) ->
+    0

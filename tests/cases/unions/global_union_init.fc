@@ -1,0 +1,25 @@
+union color =
+    | red
+    | green
+    | blue
+
+union shape =
+    | circle(int32)
+    | square(int32)
+
+let c = color.green
+let s = shape.circle(10)
+
+let main = (args: str[]) ->
+    let r = match c with
+    | red -> 1
+    | green -> 2
+    | blue -> 3
+    assert(r == 2)
+
+    let area = match s with
+    | circle(radius) -> radius * radius
+    | square(side) -> side * side
+    assert(area == 100)
+
+    0

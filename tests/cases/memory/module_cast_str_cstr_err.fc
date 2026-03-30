@@ -1,0 +1,7 @@
+// str-to-cstr cast in module-level const-expr should be rejected —
+// codegen emits alloca statement expression
+module m =
+    let s = (cstr)"hello"
+
+let main = (args: str[]) ->
+    0
