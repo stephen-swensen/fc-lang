@@ -114,7 +114,7 @@ let main = (args: str[]) ->
         sys.exit(1)
     let fd = fd_opt!
 
-    let addr = net.make_addr(net.ntohl(ip), (uint16)port)
+    let addr = net.make_addr(net.net_to_host32(ip), (uint16)port)
     if !net.connect_addr(fd, addr) then
         io.write("furl: connection to %s{host} port %d{port} failed\n", stderr)
         net.close(fd)

@@ -4,7 +4,7 @@ let main = (args: str[]) ->
     // resolve dotted-decimal IP (inet_addr path)
     let lo = net.resolve("127.0.0.1")
     assert(lo.is_some)
-    assert(lo! == net.htonl(net.inaddr_loopback))
+    assert(lo! == net.host_to_net32(net.inaddr_loopback))
 
     // resolve 0.0.0.0
     let any_ip = net.resolve("0.0.0.0")
@@ -14,6 +14,6 @@ let main = (args: str[]) ->
     // resolve "localhost" (gethostbyname path)
     let local = net.resolve("localhost")
     assert(local.is_some)
-    assert(local! == net.htonl(net.inaddr_loopback))
+    assert(local! == net.host_to_net32(net.inaddr_loopback))
 
     0

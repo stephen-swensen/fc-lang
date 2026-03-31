@@ -7,13 +7,13 @@ let main = (args: str[]) ->
     // Set up a server using the resolved address
     let server = net.open_tcp()!
     assert(net.set_reuse_addr(server))
-    assert(net.bind_addr(server, net.make_addr(net.ntohl(ip), 0u16)))
+    assert(net.bind_addr(server, net.make_addr(net.net_to_host32(ip), 0u16)))
     assert(net.listen(server, 1))
     let port = net.local_port(server)!
 
     // Connect a client using the resolved address
     let client = net.open_tcp()!
-    assert(net.connect_addr(client, net.make_addr(net.ntohl(ip), port)))
+    assert(net.connect_addr(client, net.make_addr(net.net_to_host32(ip), port)))
 
     // Accept and exchange data
     let peer = net.accept(server)!

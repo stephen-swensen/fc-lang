@@ -86,7 +86,7 @@ let main = (args: str[]) ->
     let mut timeout = time_ext.timeval { tv_sec = 2, tv_usec = 0 }
     sock_ext.setsockopt(fd, sock_ext.sol_socket, sock_ext.so_rcvtimeo, (const any*)&timeout, 16u32)
 
-    let addr = net.make_addr(net.ntohl(ip), 0u16)
+    let addr = net.make_addr(net.net_to_host32(ip), 0u16)
     let id = (uint16)(sys.get_pid() & 0xFFFF)
 
     io.write("FING %s{host} (%d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d})\n", stdout)

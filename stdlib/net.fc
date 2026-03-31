@@ -82,17 +82,17 @@ module net =
 
     // --- Byte order ---
 
-    // htons: convert uint16 from host to network byte order.
-    let htons = (x: uint16) -> arpa.htons(x)
+    // host_to_net16: convert uint16 from host to network byte order.
+    let host_to_net16 = (x: uint16) -> arpa.htons(x)
 
-    // ntohs: convert uint16 from network to host byte order.
-    let ntohs = (x: uint16) -> arpa.ntohs(x)
+    // net_to_host16: convert uint16 from network to host byte order.
+    let net_to_host16 = (x: uint16) -> arpa.ntohs(x)
 
-    // htonl: convert uint32 from host to network byte order.
-    let htonl = (x: uint32) -> arpa.htonl(x)
+    // host_to_net32: convert uint32 from host to network byte order.
+    let host_to_net32 = (x: uint32) -> arpa.htonl(x)
 
-    // ntohl: convert uint32 from network to host byte order.
-    let ntohl = (x: uint32) -> arpa.ntohl(x)
+    // net_to_host32: convert uint32 from network to host byte order.
+    let net_to_host32 = (x: uint32) -> arpa.ntohl(x)
 
     // --- Address construction ---
 
@@ -101,8 +101,8 @@ module net =
     let make_addr = (host: uint32, port: uint16) ->
         inet.sockaddr_in {
             sin_family = (uint16)sock.af_inet,
-            sin_port = arpa.htons(port),
-            sin_addr = inet.in_addr { s_addr = arpa.htonl(host) }
+            sin_port = host_to_net16(port),
+            sin_addr = inet.in_addr { s_addr = host_to_net32(host) }
         }
 
     // make_addr_str: construct a sockaddr_in from a dotted-decimal IPv4 string and port.
@@ -110,7 +110,7 @@ module net =
     let make_addr_str = (ip: const str, port: uint16) ->
         inet.sockaddr_in {
             sin_family = (uint16)sock.af_inet,
-            sin_port = arpa.htons(port),
+            sin_port = host_to_net16(port),
             sin_addr = inet.in_addr { s_addr = arpa.inet_addr((cstr)ip) }
         }
 
@@ -219,7 +219,7 @@ module net =
         let mut addr = default(inet.sockaddr_in)
         let mut len = 16u32
         if sock.getsockname(fd, (any*)&addr, &len) == 0 then
-            some(arpa.ntohs(addr.sin_port))
+            some(net_to_host16(addr.sin_port))
         else
             default(uint16?)
 

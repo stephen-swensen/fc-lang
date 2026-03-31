@@ -1,17 +1,17 @@
 import net from std::
 
 let main = (args: str[]) ->
-    // htons/ntohs round-trip
-    assert(net.ntohs(net.htons(8080u16)) == 8080u16)
-    assert(net.ntohs(net.htons(0u16)) == 0u16)
-    assert(net.ntohs(net.htons(443u16)) == 443u16)
+    // host_to_net / net_to_host round-trip (16-bit)
+    assert(net.net_to_host16(net.host_to_net16(8080u16)) == 8080u16)
+    assert(net.net_to_host16(net.host_to_net16(0u16)) == 0u16)
+    assert(net.net_to_host16(net.host_to_net16(443u16)) == 443u16)
 
-    // htonl/ntohl round-trip
-    assert(net.ntohl(net.htonl(0x7F000001u32)) == 0x7F000001u32)
-    assert(net.ntohl(net.htonl(0u32)) == 0u32)
-    assert(net.ntohl(net.htonl(0xFFFFFFFFu32)) == 0xFFFFFFFFu32)
+    // host_to_net / net_to_host round-trip (32-bit)
+    assert(net.net_to_host32(net.host_to_net32(0x7F000001u32)) == 0x7F000001u32)
+    assert(net.net_to_host32(net.host_to_net32(0u32)) == 0u32)
+    assert(net.net_to_host32(net.host_to_net32(0xFFFFFFFFu32)) == 0xFFFFFFFFu32)
 
-    // Known value on little-endian: htons(0x1234) == 0x3412
-    assert(net.htons(0x1234u16) == 0x3412u16)
-    assert(net.htonl(0x01020304u32) == 0x04030201u32)
+    // Known value on little-endian: host_to_net16(0x1234) == 0x3412
+    assert(net.host_to_net16(0x1234u16) == 0x3412u16)
+    assert(net.host_to_net32(0x01020304u32) == 0x04030201u32)
     0
