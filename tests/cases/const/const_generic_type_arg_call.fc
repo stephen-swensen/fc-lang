@@ -1,0 +1,8 @@
+// const type in expression-level generic type arg list (exercises is_type_arg_token)
+
+let make = <'a>() -> default('a)
+
+let main = (args: str[]) ->
+    let x = make<const int32*>()
+    assert(x == (const int32*)0i)
+    0

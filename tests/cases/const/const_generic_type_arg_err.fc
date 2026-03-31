@@ -1,0 +1,9 @@
+// const on non-pointer/slice type in generic type args should still error
+
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let b = box { value = 42 }
+    let _x = (box<const int32>)b
+    0

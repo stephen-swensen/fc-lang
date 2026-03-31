@@ -154,6 +154,7 @@ static bool is_type_arg_token(TokenKind k) {
     case TOK_LBRACKET: case TOK_RBRACKET:
     case TOK_LPAREN: case TOK_RPAREN:
     case TOK_ARROW:
+    case TOK_CONST:
         return true;
     default:
         return false;
@@ -321,7 +322,8 @@ static Type *parse_type(Parser *p) {
             do {
                 Token *tt = current(p);
                 if (tt->kind == TOK_IDENT || tt->kind == TOK_TYPE_VAR ||
-                    tt->kind == TOK_LPAREN || tt->kind == TOK_VOID) {
+                    tt->kind == TOK_LPAREN || tt->kind == TOK_VOID ||
+                    tt->kind == TOK_CONST) {
                     Type *ty = parse_type(p);
                     DA_APPEND(targs, ta_count, ta_cap, ty);
                 } else {
