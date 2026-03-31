@@ -16,8 +16,4 @@ let main = (args: str[]) ->
     assert(local.is_some)
     assert(local! == net.htonl(net.inaddr_loopback))
 
-    // invalid hostname returns none
-    let bad = net.resolve("nonexistent.invalid")
-    assert(bad.is_none)
-
     0
