@@ -1,0 +1,23 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // resolve dotted-decimal IP (inet_addr path)
+    let lo = net.resolve("127.0.0.1")
+    assert(lo.is_some)
+    assert(lo! == net.htonl(net.inaddr_loopback))
+
+    // resolve 0.0.0.0
+    let any_ip = net.resolve("0.0.0.0")
+    assert(any_ip.is_some)
+    assert(any_ip! == 0u32)
+
+    // resolve "localhost" (gethostbyname path)
+    let local = net.resolve("localhost")
+    assert(local.is_some)
+    assert(local! == net.htonl(net.inaddr_loopback))
+
+    // invalid hostname returns none
+    let bad = net.resolve("nonexistent.invalid")
+    assert(bad.is_none)
+
+    0

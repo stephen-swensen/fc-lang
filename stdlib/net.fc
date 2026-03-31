@@ -43,6 +43,15 @@ module net =
         extern ntohl: (uint32) -> uint32
         extern inet_addr: (const cstr) -> uint32
 
+    private module dns from "netdb.h" define "_POSIX_C_SOURCE" "200809L" =
+        extern struct hostent =
+            h_name: cstr
+            h_aliases: any*
+            h_addrtype: int32
+            h_length: int32
+            h_addr_list: any*
+        extern gethostbyname: (const cstr) -> hostent*?
+
     private module u from "unistd.h" =
         extern close: (int32) -> int32
 
@@ -213,3 +222,16 @@ module net =
             some(arpa.ntohs(addr.sin_port))
         else
             default(uint16?)
+
+    // --- DNS ---
+
+    // resolve: resolve a hostname or dotted-decimal IPv4 string to a network-byte-order address.
+    // Tries inet_addr first (for "1.2.3.4" style), falls back to gethostbyname for hostnames.
+    // returns: some(ip) in network byte order, or none if resolution fails.
+    let resolve = (host: const str) ->
+        let ip = arpa.inet_addr((cstr)host)
+        if ip != 0xFFFFFFFFu32 then some(ip)
+        else
+            match dns.gethostbyname((cstr)host) with
+            | some(h) -> some(**((uint32**)h->h_addr_list))
+            | none -> default(uint32?)

@@ -18,35 +18,11 @@ module time_ext from "sys/time.h" define "_POSIX_C_SOURCE" "200809L" =
         tv_usec: int64
     extern gettimeofday: (timeval*, any*?) -> int32
 
-module arpa_ext from "arpa/inet.h" =
-    extern inet_addr: (const cstr) -> uint32
-
-module dns from "netdb.h" define "_POSIX_C_SOURCE" "200809L" =
-    extern struct hostent =
-        h_name: cstr
-        h_aliases: any*
-        h_addrtype: int32
-        h_length: int32
-        h_addr_list: any*
-    extern gethostbyname: (const cstr) -> hostent*?
-
 // now_usec: current time in microseconds.
 let now_usec = () ->
     let mut tv = default(time_ext.timeval)
     time_ext.gettimeofday(&tv, default(any*?))
     tv.tv_sec * 1000000 + tv.tv_usec
-
-// resolve: resolve a hostname or dotted-decimal IP to a network-byte-order IPv4 address.
-let resolve = (host: const str) ->
-    let ip = arpa_ext.inet_addr((cstr)host)
-    if ip != 0xFFFFFFFFu32 then some(ip)
-    else
-        let he = dns.gethostbyname((cstr)host)
-        if he.is_some then
-            let h = he!
-            some(**((uint32**)h->h_addr_list))
-        else
-            default(uint32?)
 
 // icmp_checksum: compute the ICMP ones-complement checksum over a byte buffer.
 let icmp_checksum = (buf: uint8[]) ->
@@ -87,7 +63,7 @@ let main = (args: str[]) ->
     let count = 4
 
     // Resolve hostname / IP
-    let ip_opt = resolve(host)
+    let ip_opt = net.resolve(host)
     if ip_opt.is_none then
         io.write("fing: unknown host %s{host}\n", stderr)
         sys.exit(1)
