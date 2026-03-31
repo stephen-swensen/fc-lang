@@ -128,25 +128,37 @@ let clear_screen = (r: any*) ->
     return
 
 let load_high_score = () ->
-    let td = sys.temp_dir()
-    match io.open("%s{td}/fibbles-data/highscore.txt", "r") with
-    | some(fp) ->
-        let mut buf = uint8[32] { }
-        io.read(buf, 32i64, fp)
-        io.close(fp)
-        match text.parse_int32((const str) buf) with
-        | some(v) -> v
+    match sys.home_dir() with
+    | some(hd) ->
+        match io.open("%s{hd}/.fibbles/highscore.txt", "r") with
+        | some(fp) ->
+            let mut buf = uint8[32] { }
+            io.read(buf, 32i64, fp)
+            io.close(fp)
+            match text.parse_int32((const str) buf) with
+            | some(v) -> v
+            | none -> 0
         | none -> 0
     | none -> 0
 
 let save_high_score = (score: int32) ->
-    let td = sys.temp_dir()
-    c.system((cstr)"mkdir -p %s{td}/fibbles-data")
-    match io.open("%s{td}/fibbles-data/highscore.txt", "w") with
-    | some(fp) ->
-        let s = score
-        io.write("%d{s}\n", fp)
-        io.close(fp)
+    match sys.home_dir() with
+    | some(hd) ->
+        c.system((cstr)"mkdir -p %s{hd}/.fibbles")
+        match io.open("%s{hd}/.fibbles/highscore.txt", "w") with
+        | some(fp) ->
+            let s = score
+            io.write("%d{s}\n", fp)
+            io.close(fp)
+        | none -> return
+    | none -> return
+    return
+
+let clear_high_score = () ->
+    match sys.home_dir() with
+    | some(hd) ->
+        c.system((cstr)"rm -f %s{hd}/.fibbles/highscore.txt")
+        return
     | none -> return
     return
 
@@ -290,8 +302,7 @@ let main = (args: str[]) ->
                         sdl.set_title(win, c"Fibbles - PAUSED (SPACE to resume)")
 
                 if ekey == sdl.key_c && state == game_state.splash then
-                    let td = sys.temp_dir()
-                    c.system((cstr)"rm -f %s{td}/fibbles-data/highscore.txt")
+                    clear_high_score()
                     high_score = 0
                     sdl.set_title(win, c"Fibbles - Score: 0 (High: 0) Level 1")
 

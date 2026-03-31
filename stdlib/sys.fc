@@ -39,18 +39,29 @@ module sys =
         ts.tv_sec * 1000 + ts.tv_nsec / 1000000
 
     // temp_dir: returns the platform temp directory path.
-    // Checks TMPDIR, TMP, TEMP (in order), then falls back to "/tmp".
-    // returns: const str — the temp directory path.
+    // Checks TMPDIR, TMP, TEMP (in order).
+    // returns: const str? — the temp directory path if found, none otherwise.
     let temp_dir = () ->
         match c.getenv((cstr)"TMPDIR") with
-        | some(cs) -> (const str)cs
+        | some(cs) -> some((const str)cs)
         | none ->
             match c.getenv((cstr)"TMP") with
-            | some(cs) -> (const str)cs
+            | some(cs) -> some((const str)cs)
             | none ->
                 match c.getenv((cstr)"TEMP") with
-                | some(cs) -> (const str)cs
-                | none -> "/tmp"
+                | some(cs) -> some((const str)cs)
+                | none -> default(const str?)
+
+    // home_dir: returns the user's home directory path.
+    // Checks HOME (Linux, macOS, MinGW), then USERPROFILE (Windows).
+    // returns: const str? — the home directory path if found, none otherwise.
+    let home_dir = () ->
+        match c.getenv((cstr)"HOME") with
+        | some(cs) -> some((const str)cs)
+        | none ->
+            match c.getenv((cstr)"USERPROFILE") with
+            | some(cs) -> some((const str)cs)
+            | none -> default(const str?)
 
     // sleep: suspends the calling thread for at least ms milliseconds.
     // Uses POSIX nanosleep — works on Linux, macOS, and Windows via MinGW.
