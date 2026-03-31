@@ -5,6 +5,7 @@ module net =
         extern AF_INET as af_inet: int32
         extern SOCK_STREAM as sock_stream: int32
         extern SOCK_DGRAM as sock_dgram: int32
+        extern SOCK_RAW as sock_raw: int32
         extern SOL_SOCKET as sol_socket: int32
         extern SO_REUSEADDR as so_reuseaddr: int32
         extern SHUT_RD as shut_rd: int32
@@ -26,6 +27,7 @@ module net =
     private module inet from "netinet/in.h" =
         extern INADDR_ANY as inaddr_any: uint32
         extern INADDR_LOOPBACK as inaddr_loopback: uint32
+        extern IPPROTO_ICMP as ipproto_icmp: int32
         extern struct in_addr =
             s_addr: uint32
         extern struct sockaddr_in =
@@ -61,6 +63,9 @@ module net =
     let shut_rd = sock.shut_rd
     let shut_wr = sock.shut_wr
     let shut_rdwr = sock.shut_rdwr
+
+    // Protocol numbers
+    let ipproto_icmp = inet.ipproto_icmp
 
     // Special addresses (host byte order — pass to make_addr)
     let inaddr_any = inet.inaddr_any
@@ -112,6 +117,12 @@ module net =
     // returns: some(fd) on success, none on failure.
     let open_udp = () ->
         let fd = sock.socket(sock.af_inet, sock.sock_dgram, 0)
+        if fd >= 0 then some(fd) else default(int32?)
+
+    // open_icmp: create a raw ICMP socket (requires cap_net_raw or root).
+    // returns: some(fd) on success, none on failure.
+    let open_icmp = () ->
+        let fd = sock.socket(sock.af_inet, sock.sock_raw, inet.ipproto_icmp)
         if fd >= 0 then some(fd) else default(int32?)
 
     // close: close a socket.

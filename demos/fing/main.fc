@@ -1,0 +1,177 @@
+// fing — a ping clone written in FC
+// Uses ICMP datagram sockets (no root required on most Linux systems).
+// Supports both IP addresses and hostnames.
+
+import net from std::
+import sys from std::
+import io from std::
+
+// Extra C bindings not in std::net
+module sock_ext from "sys/socket.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern setsockopt: (int32, int32, int32, const any*, uint32) -> int32
+    extern SOL_SOCKET as sol_socket: int32
+    extern SO_RCVTIMEO as so_rcvtimeo: int32
+
+module time_ext from "sys/time.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern struct timeval =
+        tv_sec: int64
+        tv_usec: int64
+    extern gettimeofday: (timeval*, any*?) -> int32
+
+module arpa_ext from "arpa/inet.h" =
+    extern inet_addr: (const cstr) -> uint32
+
+module dns from "netdb.h" define "_POSIX_C_SOURCE" "200809L" =
+    extern struct hostent =
+        h_name: cstr
+        h_aliases: any*
+        h_addrtype: int32
+        h_length: int32
+        h_addr_list: any*
+    extern gethostbyname: (const cstr) -> hostent*?
+
+// now_usec: current time in microseconds.
+let now_usec = () ->
+    let mut tv = default(time_ext.timeval)
+    time_ext.gettimeofday(&tv, default(any*?))
+    tv.tv_sec * 1000000 + tv.tv_usec
+
+// resolve: resolve a hostname or dotted-decimal IP to a network-byte-order IPv4 address.
+let resolve = (host: const str) ->
+    let ip = arpa_ext.inet_addr((cstr)host)
+    if ip != 0xFFFFFFFFu32 then some(ip)
+    else
+        let he = dns.gethostbyname((cstr)host)
+        if he.is_some then
+            let h = he!
+            some(**((uint32**)h->h_addr_list))
+        else
+            default(uint32?)
+
+// icmp_checksum: compute the ICMP ones-complement checksum over a byte buffer.
+let icmp_checksum = (buf: uint8[]) ->
+    let mut sum = 0u32
+    let len = (int32)buf.len
+    let mut i = 0
+    loop
+        if i + 1 >= len then break
+        sum = sum + (((uint32)buf[i] << 8u32) | (uint32)buf[i + 1])
+        i = i + 2
+    if len % 2 == 1 then
+        sum = sum + ((uint32)buf[len - 1] << 8u32)
+    sum = (sum >> 16u32) + (sum & 0xFFFFu32)
+    sum = sum + (sum >> 16u32)
+    (uint16)(~sum & 0xFFFFu32)
+
+// build_echo_request: fill buf with an ICMP echo request packet.
+let build_echo_request = (buf: uint8[], id: uint16, seq: uint16) ->
+    buf.ptr[0] = 8u8          // type: echo request
+    buf.ptr[1] = 0u8          // code
+    buf.ptr[2] = 0u8          // checksum (zeroed for computation)
+    buf.ptr[3] = 0u8
+    buf.ptr[4] = (uint8)(id >> 8u16)
+    buf.ptr[5] = (uint8)(id & 0xFFu16)
+    buf.ptr[6] = (uint8)(seq >> 8u16)
+    buf.ptr[7] = (uint8)(seq & 0xFFu16)
+    let cksum = icmp_checksum(buf)
+    buf.ptr[2] = (uint8)(cksum >> 8u16)
+    buf.ptr[3] = (uint8)(cksum & 0xFFu16)
+    return
+
+let main = (args: str[]) ->
+    if args.len < 2 then
+        io.write("Usage: fing <host>\n", stderr)
+        sys.exit(1)
+
+    let host = args[1]
+    let count = 4
+
+    // Resolve hostname / IP
+    let ip_opt = resolve(host)
+    if ip_opt.is_none then
+        io.write("fing: unknown host %s{host}\n", stderr)
+        sys.exit(1)
+    let ip = ip_opt!
+
+    // Extract IP octets for display (from network byte order)
+    let ip_a = (int32)(ip & 0xFFu32)
+    let ip_b = (int32)((ip >> 8u32) & 0xFFu32)
+    let ip_c = (int32)((ip >> 16u32) & 0xFFu32)
+    let ip_d = (int32)((ip >> 24u32) & 0xFFu32)
+
+    // Open ICMP socket
+    let fd_opt = net.open_icmp()
+    if fd_opt.is_none then
+        io.write("fing: cannot open ICMP socket (try: sudo setcap cap_net_raw+ep /tmp/fing-bin)\n", stderr)
+        sys.exit(1)
+    let fd = fd_opt!
+
+    // Set receive timeout: 2 seconds
+    let mut timeout = time_ext.timeval { tv_sec = 2, tv_usec = 0 }
+    sock_ext.setsockopt(fd, sock_ext.sol_socket, sock_ext.so_rcvtimeo, (const any*)&timeout, 16u32)
+
+    let addr = net.make_addr(net.ntohl(ip), 0u16)
+    let id = (uint16)(sys.get_pid() & 0xFFFF)
+
+    io.write("FING %s{host} (%d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d})\n", stdout)
+
+    let mut sent = 0
+    let mut received = 0
+    let mut min_us = 999999999i64
+    let mut max_us = 0i64
+    let mut total_us = 0i64
+
+    let mut seq = 0
+    loop
+        if seq >= count then break
+
+        let mut pkt = uint8[64] {}
+        build_echo_request(pkt, id, (uint16)seq)
+
+        let start = now_usec()
+        let n_sent = net.send_to(fd, pkt, addr)
+        if n_sent < 0 then
+            io.write("send failed for icmp_seq=%d{seq}\n", stderr)
+        else
+            sent = sent + 1
+            let mut reply = uint8[128] {}
+            let n_recv = net.recv_from(fd, reply, 128)
+            let elapsed = now_usec() - start
+            // SOCK_RAW: reply has IP header + ICMP packet
+            let ihl = (int32)(reply[0] & 0x0Fu8) * 4
+            if n_recv >= (int64)(ihl + 8) then
+                let ttl = (int32)reply[8]
+                let icmp_type = reply[ihl]
+                if icmp_type == 0u8 then
+                    received = received + 1
+                    if elapsed < min_us then min_us = elapsed
+                    if elapsed > max_us then max_us = elapsed
+                    total_us = total_us + elapsed
+                    let ms = elapsed / 1000
+                    let frac = (elapsed % 1000) / 100
+                    let nbytes = (int32)n_recv - ihl
+                    io.write("%d{nbytes} bytes from %d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d}: icmp_seq=%d{seq} ttl=%d{ttl} time=%d{(int32)ms}.%d{(int32)frac} ms\n", stdout)
+                else
+                    io.write("unexpected ICMP type=%d{(int32)icmp_type}\n", stdout)
+            else
+                io.write("Request timeout for icmp_seq=%d{seq}\n", stdout)
+
+        seq = seq + 1
+        if seq < count then sys.sleep(1000)
+
+    // Summary
+    io.write("\n--- %s{host} fing statistics ---\n", stdout)
+    let loss = if sent > 0 then (sent - received) * 100 / sent else 0
+    io.write("%d{sent} packets transmitted, %d{received} received, %d{loss}%% packet loss\n", stdout)
+    if received > 0 then
+        let avg_us = total_us / (int64)received
+        let min_ms = min_us / 1000
+        let min_frac = (min_us % 1000) / 100
+        let avg_ms = avg_us / 1000
+        let avg_frac = (avg_us % 1000) / 100
+        let max_ms = max_us / 1000
+        let max_frac = (max_us % 1000) / 100
+        io.write("rtt min/avg/max = %d{(int32)min_ms}.%d{(int32)min_frac}/%d{(int32)avg_ms}.%d{(int32)avg_frac}/%d{(int32)max_ms}.%d{(int32)max_frac} ms\n", stdout)
+
+    net.close(fd)
+    if received == 0 then 1 else 0
