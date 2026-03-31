@@ -2388,6 +2388,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             diag_error(e->loc, "cannot assign to immutable binding '%s'",
                 e->assign.target->ident.name);
         }
+        /* Reject self-assignment (x = x) — it's always a no-op */
+        if (e->assign.target->kind == EXPR_IDENT && e->assign.value->kind == EXPR_IDENT &&
+            e->assign.target->ident.name == e->assign.value->ident.name) {
+            diag_error(e->loc, "self-assignment of '%s' has no effect", e->assign.target->ident.name);
+        }
         if (!type_eq(lt, vt)) {
             if (type_can_widen(vt, lt)) {
                 e->assign.value = wrap_widen(ctx->arena, e->assign.value, lt);

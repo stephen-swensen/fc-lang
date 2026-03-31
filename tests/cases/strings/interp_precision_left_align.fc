@@ -4,8 +4,8 @@ let main = (args: str[]) ->
         let s = "%-8.5s{name}!"
         let mut r = 0
         // Left-aligned: "hello   !"
-        if s == "hello   !" then r = r + 1 else r = r
-        if s.len == 9 then r = r + 2 else r = r
+        if s == "hello   !" then r = r + 1
+        if s.len == 9 then r = r + 2
         r
     assert(_result == 3)
     0

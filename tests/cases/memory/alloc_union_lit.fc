@@ -11,19 +11,19 @@ let main = (args: str[]) ->
             r = r + 1
             match *p with
             | circle(v) ->
-                if v == 42 then r = r + 2 else r = r
-            | square(_) -> r = r
+                if v == 42 then r = r + 2
+            | square(_) -> assert(false)
             free(p)
-        | none -> r = r
+        | none -> assert(false)
         let s2 = alloc(shape.square(10))
         match s2 with
         | some(p2) ->
             match *p2 with
-            | circle(_) -> r = r
+            | circle(_) -> assert(false)
             | square(v) ->
-                if v == 10 then r = r + 4 else r = r
+                if v == 10 then r = r + 4
             free(p2)
-        | none -> r = r
+        | none -> assert(false)
         r
     assert(_result == 7)
     0

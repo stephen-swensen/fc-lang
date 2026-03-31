@@ -4,7 +4,7 @@ let main = (args: str[]) ->
         let y = 1.0f32
         let s = "%T{x},%T{y}"
         let mut r = 0
-        if s == "float64,float32" then r = r + 1 else r = r
+        if s == "float64,float32" then r = r + 1
         r
     assert(_result == 1)
     0

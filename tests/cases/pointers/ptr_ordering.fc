@@ -5,11 +5,11 @@ let main = (args: str[]) ->
         let pa = &a
         let pb = &b
         let mut r = 0
-        if pa != pb then r = r + 1 else r = r
+        if pa != pb then r = r + 1
         // one of these must be true: pa < pb or pa > pb
-        if pa < pb then r = r + 2 else if pa > pb then r = r + 2 else r = r
+        if pa < pb then r = r + 2 else if pa > pb then r = r + 2
         // test <= and >=
-        if pa <= pb then r = r + 4 else if pa >= pb then r = r + 4 else r = r
+        if pa <= pb then r = r + 4 else if pa >= pb then r = r + 4
         r
     assert(_result == 7)
     0

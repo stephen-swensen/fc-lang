@@ -11,8 +11,8 @@ let main = (args: str[]) ->
         let y = outer { a = inner { v = 1 }, b = inner { v = 2 } }
         let z = outer { a = inner { v = 1 }, b = inner { v = 3 } }
         let mut r = 0
-        if x == y then r = r + 1 else r = r
-        if x != z then r = r + 2 else r = r
+        if x == y then r = r + 1
+        if x != z then r = r + 2
         r
     assert(_result == 3)
     0

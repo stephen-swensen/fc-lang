@@ -4,11 +4,11 @@ let main = (args: str[]) ->
         let b = 3.14
         let c = 2.71
         let mut r = 0
-        if a == b then r = r + 1 else r = r
-        if a != c then r = r + 2 else r = r
+        if a == b then r = r + 1
+        if a != c then r = r + 2
         let x = 1.5f32
         let y = 1.5f32
-        if x == y then r = r + 4 else r = r
+        if x == y then r = r + 4
         r
     assert(_result == 7)
     0

@@ -7,15 +7,15 @@ let main = (args: str[]) ->
         let s = c"%d{x}"
         let len = c.strlen(s)
         let mut r = 0
-        if len == 2u then r = r + 1 else r = r
+        if len == 2u then r = r + 1
         let name = c"world"
         let s2 = c"hello %s{name}!"
         let len2 = c.strlen(s2)
-        if len2 == 12u then r = r + 2 else r = r
+        if len2 == 12u then r = r + 2
         // empty interp segments
         let s3 = c"test"
         let len3 = c.strlen(s3)
-        if len3 == 4u then r = r + 2 else r = r
+        if len3 == 4u then r = r + 2
         r
     assert(_result == 5)
     0

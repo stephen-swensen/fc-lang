@@ -3,11 +3,11 @@ let main = (args: str[]) ->
         let x = 255
         let s = "%x{x}"
         let mut r = 0
-        if s == "ff" then r = r + 1 else r = r
+        if s == "ff" then r = r + 1
         let s2 = "%X{x}"
-        if s2 == "FF" then r = r + 2 else r = r
+        if s2 == "FF" then r = r + 2
         let s3 = "%04x{x}"
-        if s3 == "00ff" then r = r + 4 else r = r
+        if s3 == "00ff" then r = r + 4
         r
     assert(_result == 7)
     0

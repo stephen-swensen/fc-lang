@@ -9,10 +9,10 @@ let main = (args: str[]) ->
             *p = 42u8
             let p1 = p + 1i
             *p1 = 99u8
-            if *p == 42u8 then r = r + 1 else r = r
-            if *p1 == 99u8 then r = r + 1 else r = r
+            if *p == 42u8 then r = r + 1
+            if *p1 == 99u8 then r = r + 1
             free(p)
-        | none -> r = r
+        | none -> assert(false)
         r
     assert(_result == 3)
     0

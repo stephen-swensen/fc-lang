@@ -7,8 +7,8 @@ let main = (args: str[]) ->
         let g = add_one
         let h = add_two
         let mut r = 0
-        if f == g then r = r + 1 else r = r
-        if f != h then r = r + 2 else r = r
+        if f == g then r = r + 1
+        if f != h then r = r + 2
         r
     assert(_result == 3)
     0

@@ -7,7 +7,7 @@ let main = (args: str[]) ->
         let name = "result"
         let s = "%s{name}=%d{x} (%T{x})"
         let mut r = 0
-        if s == "result=30 (int32)" then r = r + 1 else r = r
+        if s == "result=30 (int32)" then r = r + 1
         r
     assert(_result == 1)
     0

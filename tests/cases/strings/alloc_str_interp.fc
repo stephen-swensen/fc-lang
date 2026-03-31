@@ -5,19 +5,19 @@ let main = (args: str[]) ->
         let mut r = 0
         match s with
         | some(v) ->
-            if v == "42" then r = r + 1 else r = r
-            if v.len == 2 then r = r + 2 else r = r
+            if v == "42" then r = r + 1
+            if v.len == 2 then r = r + 2
             free(v)
-        | none -> r = r
+        | none -> assert(false)
 
         // multi-segment interpolated
         let name = "world"
         let s2 = alloc("hello %s{name}!")
         match s2 with
         | some(v) ->
-            if v == "hello world!" then r = r + 4 else r = r
+            if v == "hello world!" then r = r + 4
             free(v)
-        | none -> r = r
+        | none -> assert(false)
 
         r
     assert(_result == 7)

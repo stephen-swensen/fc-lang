@@ -7,7 +7,7 @@ let main = (args: str[]) ->
         let p = &b
         let s = "%T{p},%T{b}"
         let mut r = 0
-        if s == "box<int32>*,box<int32>" then r = r + 1 else r = r
+        if s == "box<int32>*,box<int32>" then r = r + 1
         r
     assert(_result == 1)
     0

@@ -3,7 +3,7 @@ let main = (args: str[]) ->
         let x = 42u
         let s = "%T{x}"
         let mut r = 0
-        if s == "usize" then r = r + 1 else r = r
+        if s == "usize" then r = r + 1
         r
     assert(_result == 1)
     0

@@ -4,13 +4,13 @@ let main = (args: str[]) ->
         // leading text is empty
         let s1 = "%d{x}!"
         let mut r = 0
-        if s1 == "42!" then r = r + 1 else r = r
+        if s1 == "42!" then r = r + 1
         // trailing text is empty
         let s2 = "val=%d{x}"
-        if s2 == "val=42" then r = r + 2 else r = r
+        if s2 == "val=42" then r = r + 2
         // both parts have text
         let s3 = "[%d{x}]"
-        if s3 == "[42]" then r = r + 4 else r = r
+        if s3 == "[42]" then r = r + 4
         r
     assert(_result == 7)
     0

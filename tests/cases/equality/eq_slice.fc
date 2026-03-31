@@ -16,9 +16,9 @@ let main = (args: str[]) ->
         buf4[0] = 1
         buf4[1] = 2
         let mut r = 0
-        if buf1 == buf2 then r = r + 1 else r = r
-        if buf1 != buf3 then r = r + 2 else r = r
-        if buf1 != buf4 then r = r + 4 else r = r
+        if buf1 == buf2 then r = r + 1
+        if buf1 != buf3 then r = r + 2
+        if buf1 != buf4 then r = r + 4
         free(buf1)
         free(buf2)
         free(buf3)

@@ -4,9 +4,9 @@ let main = (args: str[]) ->
         let s = "x=%d{x}"
         let mut r = 0
         // "x=42" should be 4 chars
-        if s.len == 4 then r = r + 1 else r = r
+        if s.len == 4 then r = r + 1
         // check content via equality
-        if s == "x=42" then r = r + 2 else r = r
+        if s == "x=42" then r = r + 2
         r
     assert(_result == 3)
     0

@@ -6,10 +6,10 @@ let main = (args: str[]) ->
         let d = default(int32?)
         let e = default(int32?)
         let mut r = 0
-        if a == b then r = r + 1 else r = r
-        if a != c then r = r + 2 else r = r
-        if a != d then r = r + 4 else r = r
-        if d == e then r = r + 8 else r = r
+        if a == b then r = r + 1
+        if a != c then r = r + 2
+        if a != d then r = r + 4
+        if d == e then r = r + 8
         r
     assert(_result == 15)
     0

@@ -8,10 +8,10 @@ let main = (args: str[]) ->
         let f = 10u16
         let g = 10u16
         let mut r = 0
-        if a == b then r = r + 1 else r = r
-        if a != c then r = r + 2 else r = r
-        if d == e then r = r + 4 else r = r
-        if f == g then r = r else r = r
+        if a == b then r = r + 1
+        if a != c then r = r + 2
+        if d == e then r = r + 4
+        if f == g then r = r + 8
         r
-    assert(_result == 7)
+    assert(_result == 15)
     0

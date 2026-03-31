@@ -5,10 +5,10 @@ let main = (args: str[]) ->
         match arr with
         | some(v) ->
             r = r + 1
-            if v[0] == 0 then r = r + 1 else r = r
-            if v[3] == 0 then r = r + 1 else r = r
+            if v[0] == 0 then r = r + 1
+            if v[3] == 0 then r = r + 1
             free(v)
-        | none -> r = r
+        | none -> assert(false)
         r
     assert(_result == 3)
     0

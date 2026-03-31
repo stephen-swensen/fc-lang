@@ -4,10 +4,10 @@ let main = (args: str[]) ->
         // zero-padded
         let s1 = "%08d{x}"
         let mut r = 0
-        if s1 == "00000042" then r = r + 1 else r = r
+        if s1 == "00000042" then r = r + 1
         // hex with 0x prefix
         let s2 = "%#x{x}"
-        if s2 == "0x2a" then r = r + 2 else r = r
+        if s2 == "0x2a" then r = r + 2
         r
     assert(_result == 3)
     0

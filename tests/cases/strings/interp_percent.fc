@@ -3,8 +3,8 @@ let main = (args: str[]) ->
         let x = 50
         let s = "%d{x}%% done"
         let mut r = 0
-        if s == "50% done" then r = r + 1 else r = r
-        if s.len == 8 then r = r + 2 else r = r
+        if s == "50% done" then r = r + 1
+        if s.len == 8 then r = r + 2
         r
     assert(_result == 3)
     0

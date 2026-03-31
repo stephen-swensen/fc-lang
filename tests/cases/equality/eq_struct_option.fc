@@ -12,8 +12,8 @@ let main = (args: str[]) ->
         let b = wrapper { p = point { x = 1, y = 2 }, label = some(10) }
         let c = wrapper { p = point { x = 1, y = 2 }, label = default(int32?) }
         let mut r = 0
-        if a == b then r = r + 1 else r = r
-        if a != c then r = r + 2 else r = r
+        if a == b then r = r + 1
+        if a != c then r = r + 2
         r
     assert(_result == 3)
     0

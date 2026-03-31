@@ -4,7 +4,7 @@ let main = (args: str[]) ->
         let p = &x
         let s = "%T{p}"
         let mut r = 0
-        if s == "int32*" then r = r + 1 else r = r
+        if s == "int32*" then r = r + 1
         r
     assert(_result == 1)
     0

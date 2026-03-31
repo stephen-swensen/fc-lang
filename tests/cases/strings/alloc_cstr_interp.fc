@@ -9,18 +9,18 @@ let main = (args: str[]) ->
         let mut r = 0
         match s with
         | some(v) ->
-            if c.strcmp(v, c"value: 42") == 0 then r = r + 1 else r = r
+            if c.strcmp(v, c"value: 42") == 0 then r = r + 1
             let len = c.strlen(v)
-            if len == 9u then r = r + 2 else r = r
+            if len == 9u then r = r + 2
             free(v)
-        | none -> r = r
+        | none -> assert(false)
         let name = c"world"
         let s2 = alloc(c"hello %s{name}!")
         match s2 with
         | some(v2) ->
-            if c.strcmp(v2, c"hello world!") == 0 then r = r + 4 else r = r
+            if c.strcmp(v2, c"hello world!") == 0 then r = r + 4
             free(v2)
-        | none -> r = r
+        | none -> assert(false)
         r
     assert(_result == 7)
     0

@@ -781,10 +781,19 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
 }
 
 static void emit_if_stmt(Expr *e, FILE *out) {
-    /* Emit if as a C statement (not expression) */
-    fprintf(out, "if (");
-    emit_expr(e->if_expr.cond, out);
-    fprintf(out, ") {\n");
+    /* Emit if as a C statement (not expression).
+     * Binary expressions emit their own outer parens, so use "if "
+     * to avoid double-parens like if ((x == y)) which triggers
+     * clang's -Wparentheses-equality. */
+    if (e->if_expr.cond->kind == EXPR_BINARY) {
+        fprintf(out, "if ");
+        emit_expr(e->if_expr.cond, out);
+        fprintf(out, " {\n");
+    } else {
+        fprintf(out, "if (");
+        emit_expr(e->if_expr.cond, out);
+        fprintf(out, ") {\n");
+    }
     indent_level++;
     if (e->if_expr.then_body->kind == EXPR_BLOCK) {
         emit_block_stmts(e->if_expr.then_body->block.stmts,
@@ -1279,14 +1288,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
             }
             if (type_needs_eq_func(cmp_type)) {
-                if (e->binary.op == TOK_BANGEQ) fprintf(out, "(!");
+                if (e->binary.op == TOK_BANGEQ) fprintf(out, "(!"); else fprintf(out, "(");
                 emit_eq_func_name(cmp_type, out);
                 fprintf(out, "(");
                 emit_expr(e->binary.left, out);
                 fprintf(out, ", ");
                 emit_expr(e->binary.right, out);
-                fprintf(out, ")");
-                if (e->binary.op == TOK_BANGEQ) fprintf(out, ")");
+                fprintf(out, "))");
                 break;
             }
         }
@@ -1603,9 +1611,15 @@ static void emit_expr(Expr *e, FILE *out) {
             indent_level++;
             fprintf(out, "\n");
             emit_indent(out);
-            fprintf(out, "if (");
-            emit_expr(e->if_expr.cond, out);
-            fprintf(out, ") {\n");
+            if (e->if_expr.cond->kind == EXPR_BINARY) {
+                fprintf(out, "if ");
+                emit_expr(e->if_expr.cond, out);
+                fprintf(out, " {\n");
+            } else {
+                fprintf(out, "if (");
+                emit_expr(e->if_expr.cond, out);
+                fprintf(out, ") {\n");
+            }
             indent_level++;
             if (e->if_expr.then_body->kind == EXPR_BLOCK) {
                 emit_block_stmts(e->if_expr.then_body->block.stmts,
@@ -2114,9 +2128,15 @@ static void emit_expr(Expr *e, FILE *out) {
 
             if (i > 0) fprintf(out, "else ");
 
-            /* Emit conditions */
+            /* Last arm of an exhaustive match: emit plain else / bare block
+             * (no condition) so the result variable is always provably
+             * initialized.  Single-arm matches (arm_count == 1) also skip
+             * the condition since there is only one possible case. */
+            bool is_last_arm = (i == e->match_expr.arm_count - 1);
             bool has_cond = false;
-            emit_pat_conditions(pat, subj_expr, e->match_expr.subject->type, &has_cond, out);
+            if (!is_last_arm) {
+                emit_pat_conditions(pat, subj_expr, e->match_expr.subject->type, &has_cond, out);
+            }
             if (has_cond) fprintf(out, ") {\n");
             else fprintf(out, "{\n");
 
@@ -2260,9 +2280,11 @@ static void emit_expr(Expr *e, FILE *out) {
         const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
         int fn_len = (int)strlen(fn);
         int line = e->loc.line;
-        fprintf(out, "({ if (!(");
+        fprintf(out, "({ if (!");
+        if (e->assert_expr.condition->kind != EXPR_BINARY) fprintf(out, "(");
         emit_expr(e->assert_expr.condition, out);
-        fprintf(out, ")) { ");
+        if (e->assert_expr.condition->kind != EXPR_BINARY) fprintf(out, ")");
+        fprintf(out, ") { ");
         if (e->assert_expr.message) {
             int tid = temp_counter++;
             fprintf(out, "fc_str _am%d = ", tid);

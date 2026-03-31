@@ -4,8 +4,8 @@ let main = (args: str[]) ->
         let s = "%.10s{name}!"
         let mut r = 0
         // "hi" is 2 chars, precision 10 does not truncate
-        if s == "hi!" then r = r + 1 else r = r
-        if s.len == 3 then r = r + 2 else r = r
+        if s == "hi!" then r = r + 1
+        if s.len == 3 then r = r + 2
         r
     assert(_result == 3)
     0

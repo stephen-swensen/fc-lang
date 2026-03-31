@@ -7,7 +7,7 @@ let main = (args: str[]) ->
         let r = result<int32, bool>.ok(42)
         let s = "%T{r}"
         let mut ret = 0
-        if s == "result<int32, bool>" then ret = ret + 1 else ret = ret
+        if s == "result<int32, bool>" then ret = ret + 1
         ret
     assert(_result == 1)
     0

@@ -2,7 +2,7 @@ let main = (args: str[]) ->
     let _result =
         let s = "%T{1 + 2}"
         let mut r = 0
-        if s == "int32" then r = r + 1 else r = r
+        if s == "int32" then r = r + 1
         r
     assert(_result == 1)
     0

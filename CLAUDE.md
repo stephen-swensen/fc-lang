@@ -9,8 +9,8 @@ This is a compiler project for **FC** (version 1.0-draft), a systems programming
 ## Build & Run
 
 - **`make`** — Build the compiler (produces `./fc` in the project root)
-- **`make test`** — Build and run all tests
-- **`make test-parallel`** — Build and run all tests in parallel
+- **`make test-all`** — Build and run all tests with both gcc and clang
+- **`make test-gcc`** / **`make test-clang`** — Test with a single compiler
 - **`make clean`** — Remove build artifacts
 - **`./fc input.fc -o output.c`** — Compile a single FC file to C
 - **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
@@ -88,7 +88,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 
 ### Control Flow
 - `if`, `match`, `loop` are expressions
-- `return`, `break`, `continue` are void-typed expressions (enable early-return in expression positions)
+- `return`, `break`, `continue` are void-typed expressions (enable early-return in expression positions). `return` is the idiomatic way to produce void in an else branch: `if x > 3 then f() else return`
 - `loop` produces a value via `break value`; `for` is always void
 - `match` is exhaustive; wildcard `_` satisfies exhaustiveness
 
@@ -124,6 +124,7 @@ match s with
 - `let mut`: mutable binding, addressable (`&x` → `T*`), not capturable in closures
 - Both `let` and `let mut` allow field/element mutation — `let` controls reassignability, not content mutation
 - Shadowing is allowed (any combination of `let`/`let mut`)
+- Self-assignment (`x = x`) is a compile error — it's always a no-op
 
 ### Operators
 - No compound assignment (`+=`, `-=`, etc.) — only plain `=`
@@ -160,7 +161,7 @@ Each **multi-file test** is a subdirectory containing:
 - `expected_exit` or `error` (no dot prefix) — the expected result
 - `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
 
-Run with `make test`. The test runner (`tests/run_tests.sh`) compiles FC→C with `./fc`, then C→binary with `cc -std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
+Run with `make test-all`. The test runner compiles FC→C with `./fc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
 
 ### Multi-file tests
 
@@ -179,7 +180,7 @@ Every new feature, bug fix, or spec change must include tests covering the happy
 
 ## Workflow
 
-- Run `make test-parallel` to confirm all tests pass before presenting a summary of changes
+- Run `make test-all` to confirm all tests pass (both gcc and clang) before presenting a summary of changes
 - Skip tests for changes that only touch `demos/` — demo apps are standalone and don't affect compiler tests
 
 ## Spec Reference

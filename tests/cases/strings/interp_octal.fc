@@ -3,7 +3,7 @@ let main = (args: str[]) ->
         let x = 255
         let s = "%o{x}"
         let mut r = 0
-        if s == "377" then r = r + 1 else r = r
+        if s == "377" then r = r + 1
         r
     assert(_result == 1)
     0

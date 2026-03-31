@@ -3,10 +3,10 @@ let main = (args: str[]) ->
     let s2 = alloc("hello")!
     let mut r = 0
     // const str == str (mixed constness)
-    if s1 == s2 then r = r + 1 else r = r
+    if s1 == s2 then r = r + 1
     // str == const str (reversed)
-    if s2 == s1 then r = r + 1 else r = r
+    if s2 == s1 then r = r + 1
     // const str == const str
-    if s1 == "hello" then r = r + 1 else r = r
+    if s1 == "hello" then r = r + 1
     free(s2)
     r - 3

@@ -9,8 +9,8 @@ let main = (args: str[]) ->
         let b = color.red
         let c = color.blue
         let mut r = 0
-        if a == b then r = r + 1 else r = r
-        if a != c then r = r + 2 else r = r
+        if a == b then r = r + 1
+        if a != c then r = r + 2
         r
     assert(_result == 3)
     0

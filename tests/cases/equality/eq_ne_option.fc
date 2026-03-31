@@ -4,10 +4,10 @@ let main = (args: str[]) ->
         let b = some(42)
         let c = default(int32?)
         let mut r = 0
-        if a == b then r = r + 1 else r = r
-        if !(a != b) then r = r + 2 else r = r
-        if a != c then r = r + 4 else r = r
-        if !(a == c) then r = r + 8 else r = r
+        if a == b then r = r + 1
+        if !(a != b) then r = r + 2
+        if a != c then r = r + 4
+        if !(a == c) then r = r + 8
         r
     assert(_result == 15)
     0

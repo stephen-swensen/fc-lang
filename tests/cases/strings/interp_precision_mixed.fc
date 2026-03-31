@@ -4,8 +4,8 @@ let main = (args: str[]) ->
         let b = "world"
         let s = "%.3s{a} %s{b}"
         let mut r = 0
-        if s == "hel world" then r = r + 1 else r = r
-        if s.len == 9 then r = r + 2 else r = r
+        if s == "hel world" then r = r + 1
+        if s.len == 9 then r = r + 2
         r
     assert(_result == 3)
     0

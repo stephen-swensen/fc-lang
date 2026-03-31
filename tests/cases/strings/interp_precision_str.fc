@@ -4,8 +4,8 @@ let main = (args: str[]) ->
         let s = "%.5s{name}!"
         let mut r = 0
         // Should truncate to "hello" (5 chars) + "!"
-        if s == "hello!" then r = r + 1 else r = r
-        if s.len == 6 then r = r + 2 else r = r
+        if s == "hello!" then r = r + 1
+        if s.len == 6 then r = r + 2
         r
     assert(_result == 3)
     0
