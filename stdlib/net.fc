@@ -173,9 +173,9 @@ module net =
     // --- Data transfer ---
 
     // send_bytes: send data on a connected socket.
-    // data: const str — the bytes to send.
+    // data: const uint8[] — the bytes to send.
     // returns: number of bytes sent, or -1 on error.
-    let send_bytes = (fd: int32, data: const str) ->
+    let send_bytes = (fd: int32, data: const uint8[]) ->
         sock.send(fd, (const any*)data.ptr, (uint64)data.len, 0)
 
     // recv_bytes: receive data from a connected socket.
@@ -188,10 +188,10 @@ module net =
     // --- UDP operations ---
 
     // send_to: send a datagram to a specific address.
-    // data: const str — the bytes to send.
+    // data: const uint8[] — the bytes to send.
     // addr: destination address.
     // returns: number of bytes sent, or -1 on error.
-    let send_to = (fd: int32, data: const str, addr: inet.sockaddr_in) ->
+    let send_to = (fd: int32, data: const uint8[], addr: inet.sockaddr_in) ->
         let mut a = addr
         sock.sendto(fd, (const any*)data.ptr, (uint64)data.len, 0, (const any*)&a, 16u32)
 
