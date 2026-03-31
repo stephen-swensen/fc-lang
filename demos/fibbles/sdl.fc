@@ -47,6 +47,27 @@ module sdl from "SDL2/SDL.h" =
     extern SDL_Delay as delay: (uint32) -> void
     extern SDL_GetTicks as get_ticks: () -> uint32
 
+    // --- Audio ---
+    extern SDL_INIT_AUDIO as init_audio: uint32
+    extern AUDIO_S16SYS as audio_s16sys: uint16
+
+    extern struct SDL_AudioSpec as audio_spec =
+        freq: int32
+        format: uint16
+        channels: uint8
+        silence: uint8
+        samples: uint16
+        padding: uint16
+        size: uint32
+        callback: any*
+        userdata: any*
+
+    extern SDL_OpenAudioDevice as open_audio: (any*, int32, const audio_spec*, audio_spec*, int32) -> uint32
+    extern SDL_PauseAudioDevice as pause_audio: (uint32, int32) -> void
+    extern SDL_QueueAudio as queue_audio: (uint32, any*, uint32) -> int32
+    extern SDL_ClearQueuedAudio as clear_audio: (uint32) -> void
+    extern SDL_CloseAudioDevice as close_audio: (uint32) -> void
+
     // --- Events ---
     extern struct SDL_Keysym as sdl_keysym =
         scancode: int32
