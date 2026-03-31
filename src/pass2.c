@@ -2785,6 +2785,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             /* Extern member: use raw C name */
             if (member->kind == DECL_EXTERN) {
                 e->field.codegen_name = member->decl->ext.name;
+                e->field.is_extern_const = (member->type && member->type->kind != TYPE_FUNC);
                 e->type = member->type;
                 return e->type;
             }
@@ -4307,6 +4308,9 @@ static bool is_const_expr(Expr *e) {
              (is_cstr_type(e->cast.operand->type) && is_str_type(e->cast.target))))
             return false;
         return is_const_expr(e->cast.operand);
+    /* Extern constants — C macros/enums are compile-time constants */
+    case EXPR_FIELD:
+        return e->field.is_extern_const;
     /* Struct literal — valid if all field values are const */
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
@@ -4375,6 +4379,9 @@ static bool is_file_init_expr(Expr *e) {
     case EXPR_FIELD:
         /* Allow no-payload union variant constructors */
         if (e->type && e->type->kind == TYPE_UNION)
+            return true;
+        /* Allow extern constants (C macros/enums) */
+        if (e->field.is_extern_const)
             return true;
         return false;
     default:

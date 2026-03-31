@@ -149,6 +149,7 @@ struct Expr {
             int type_arg_count;
             Type *fixed_array_type; /* non-NULL if field is a fixed-size inline array (TYPE_FIXED_ARRAY) */
             bool is_variant_constructor; /* true when this is union variant construction, not field access */
+            bool is_extern_const;       /* true when this is an extern constant (not a function) */
         } field;
 
         /* EXPR_INDEX */

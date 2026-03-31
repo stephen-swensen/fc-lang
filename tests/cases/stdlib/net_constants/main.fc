@@ -1,0 +1,16 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // Verify constants are positive / have expected relationships
+    assert(net.af_inet > 0)
+    assert(net.sock_stream > 0)
+    assert(net.sock_dgram > 0)
+    assert(net.sock_stream != net.sock_dgram)
+    assert(net.sol_socket > 0)
+    assert(net.so_reuseaddr > 0)
+    assert(net.shut_rd >= 0)
+    assert(net.shut_wr > net.shut_rd)
+    assert(net.shut_rdwr > net.shut_wr)
+    assert(net.inaddr_any == 0u32)
+    assert(net.inaddr_loopback != 0u32)
+    0

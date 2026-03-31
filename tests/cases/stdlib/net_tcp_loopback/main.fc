@@ -1,0 +1,38 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // --- Server setup ---
+    let server = net.open_tcp()!
+    assert(net.set_reuse_addr(server))
+    assert(net.bind_addr(server, net.make_addr(net.inaddr_loopback, 0u16)))
+    assert(net.listen(server, 1))
+    let port = net.local_port(server)!
+
+    // --- Client connects ---
+    let client = net.open_tcp()!
+    assert(net.connect_addr(client, net.make_addr(net.inaddr_loopback, port)))
+
+    // --- Server accepts ---
+    let peer = net.accept(server)!
+
+    // --- Send data from client, receive on server side ---
+    let msg = "hello"
+    let sent = net.send_bytes(client, msg)
+    assert(sent == (int64)msg.len)
+
+    let mut buf = uint8[32] {}
+    let received = net.recv_bytes(peer, buf, 32)
+    assert(received == sent)
+
+    // Verify data matches
+    let mut i = 0
+    for c in buf
+        if i < (int32)received then
+            assert(c == msg[i])
+            i = i + 1
+
+    // --- Cleanup ---
+    net.close(peer)
+    net.close(client)
+    net.close(server)
+    0

@@ -1,0 +1,204 @@
+namespace std::
+
+module net =
+    private module sock from "sys/socket.h" define "_POSIX_C_SOURCE" "200809L" =
+        extern AF_INET as af_inet: int32
+        extern SOCK_STREAM as sock_stream: int32
+        extern SOCK_DGRAM as sock_dgram: int32
+        extern SOL_SOCKET as sol_socket: int32
+        extern SO_REUSEADDR as so_reuseaddr: int32
+        extern SHUT_RD as shut_rd: int32
+        extern SHUT_WR as shut_wr: int32
+        extern SHUT_RDWR as shut_rdwr: int32
+        extern socket: (int32, int32, int32) -> int32
+        extern bind: (int32, const any*, uint32) -> int32
+        extern listen: (int32, int32) -> int32
+        extern accept: (int32, any*?, uint32*?) -> int32
+        extern connect: (int32, const any*, uint32) -> int32
+        extern send: (int32, const any*, uint64, int32) -> int64
+        extern recv: (int32, any*, uint64, int32) -> int64
+        extern sendto: (int32, const any*, uint64, int32, const any*, uint32) -> int64
+        extern recvfrom: (int32, any*, uint64, int32, any*?, uint32*?) -> int64
+        extern setsockopt: (int32, int32, int32, const any*, uint32) -> int32
+        extern getsockname: (int32, any*, uint32*) -> int32
+        extern shutdown: (int32, int32) -> int32
+
+    private module inet from "netinet/in.h" =
+        extern INADDR_ANY as inaddr_any: uint32
+        extern INADDR_LOOPBACK as inaddr_loopback: uint32
+        extern struct in_addr =
+            s_addr: uint32
+        extern struct sockaddr_in =
+            sin_family: uint16
+            sin_port: uint16
+            sin_addr: in_addr
+            sin_zero: uint8[8]
+
+    private module arpa from "arpa/inet.h" =
+        extern htons: (uint16) -> uint16
+        extern ntohs: (uint16) -> uint16
+        extern htonl: (uint32) -> uint32
+        extern ntohl: (uint32) -> uint32
+        extern inet_addr: (const cstr) -> uint32
+
+    private module u from "unistd.h" =
+        extern close: (int32) -> int32
+
+    // --- Constants (from C headers via extern) ---
+
+    // Address families
+    let af_inet = sock.af_inet
+
+    // Socket types
+    let sock_stream = sock.sock_stream
+    let sock_dgram = sock.sock_dgram
+
+    // Socket option levels and options
+    let sol_socket = sock.sol_socket
+    let so_reuseaddr = sock.so_reuseaddr
+
+    // Shutdown modes
+    let shut_rd = sock.shut_rd
+    let shut_wr = sock.shut_wr
+    let shut_rdwr = sock.shut_rdwr
+
+    // Special addresses (host byte order — pass to make_addr)
+    let inaddr_any = inet.inaddr_any
+    let inaddr_loopback = inet.inaddr_loopback
+
+    // --- Byte order ---
+
+    // htons: convert uint16 from host to network byte order.
+    let htons = (x: uint16) -> arpa.htons(x)
+
+    // ntohs: convert uint16 from network to host byte order.
+    let ntohs = (x: uint16) -> arpa.ntohs(x)
+
+    // htonl: convert uint32 from host to network byte order.
+    let htonl = (x: uint32) -> arpa.htonl(x)
+
+    // ntohl: convert uint32 from network to host byte order.
+    let ntohl = (x: uint32) -> arpa.ntohl(x)
+
+    // --- Address construction ---
+
+    // make_addr: construct a sockaddr_in from a host byte-order IPv4 address and port.
+    // Use inaddr_any or inaddr_loopback for common addresses.
+    let make_addr = (host: uint32, port: uint16) ->
+        inet.sockaddr_in {
+            sin_family = (uint16)sock.af_inet,
+            sin_port = arpa.htons(port),
+            sin_addr = inet.in_addr { s_addr = arpa.htonl(host) }
+        }
+
+    // make_addr_str: construct a sockaddr_in from a dotted-decimal IPv4 string and port.
+    // Note: inet_addr returns 0xFFFFFFFF for invalid addresses.
+    let make_addr_str = (ip: const str, port: uint16) ->
+        inet.sockaddr_in {
+            sin_family = (uint16)sock.af_inet,
+            sin_port = arpa.htons(port),
+            sin_addr = inet.in_addr { s_addr = arpa.inet_addr((cstr)ip) }
+        }
+
+    // --- Socket lifecycle ---
+
+    // open_tcp: create a TCP (stream) socket.
+    // returns: some(fd) on success, none on failure.
+    let open_tcp = () ->
+        let fd = sock.socket(sock.af_inet, sock.sock_stream, 0)
+        if fd >= 0 then some(fd) else default(int32?)
+
+    // open_udp: create a UDP (datagram) socket.
+    // returns: some(fd) on success, none on failure.
+    let open_udp = () ->
+        let fd = sock.socket(sock.af_inet, sock.sock_dgram, 0)
+        if fd >= 0 then some(fd) else default(int32?)
+
+    // close: close a socket.
+    let close = (fd: int32) ->
+        u.close(fd)
+        return
+
+    // shutdown: shut down part or all of a socket connection.
+    // how: shut_rd, shut_wr, or shut_rdwr.
+    // returns: true on success.
+    let shutdown = (fd: int32, how: int32) ->
+        sock.shutdown(fd, how) == 0
+
+    // --- Socket options ---
+
+    // set_reuse_addr: enable SO_REUSEADDR on a socket.
+    // returns: true on success.
+    let set_reuse_addr = (fd: int32) ->
+        let mut val = 1
+        sock.setsockopt(fd, sock.sol_socket, sock.so_reuseaddr, (const any*)&val, 4u32) == 0
+
+    // --- TCP operations ---
+
+    // bind_addr: bind a socket to an address.
+    // returns: true on success.
+    let bind_addr = (fd: int32, addr: inet.sockaddr_in) ->
+        let mut a = addr
+        sock.bind(fd, (const any*)&a, 16u32) == 0
+
+    // listen: start listening for connections.
+    // backlog: maximum pending connection queue length.
+    // returns: true on success.
+    let listen = (fd: int32, backlog: int32) ->
+        sock.listen(fd, backlog) == 0
+
+    // accept: accept a connection on a listening socket.
+    // returns: some(client_fd) on success, none on failure.
+    let accept = (fd: int32) ->
+        let client = sock.accept(fd, default(any*?), default(uint32*?))
+        if client >= 0 then some(client) else default(int32?)
+
+    // connect_addr: connect a socket to a remote address.
+    // returns: true on success.
+    let connect_addr = (fd: int32, addr: inet.sockaddr_in) ->
+        let mut a = addr
+        sock.connect(fd, (const any*)&a, 16u32) == 0
+
+    // --- Data transfer ---
+
+    // send_bytes: send data on a connected socket.
+    // data: const str — the bytes to send.
+    // returns: number of bytes sent, or -1 on error.
+    let send_bytes = (fd: int32, data: const str) ->
+        sock.send(fd, (const any*)data.ptr, (uint64)data.len, 0)
+
+    // recv_bytes: receive data from a connected socket.
+    // buf: uint8[] — destination buffer.
+    // max: int64 — maximum bytes to receive.
+    // returns: bytes received, 0 if peer closed, or -1 on error.
+    let recv_bytes = (fd: int32, buf: uint8[], max: int64) ->
+        sock.recv(fd, (any*)buf.ptr, (uint64)max, 0)
+
+    // --- UDP operations ---
+
+    // send_to: send a datagram to a specific address.
+    // data: const str — the bytes to send.
+    // addr: destination address.
+    // returns: number of bytes sent, or -1 on error.
+    let send_to = (fd: int32, data: const str, addr: inet.sockaddr_in) ->
+        let mut a = addr
+        sock.sendto(fd, (const any*)data.ptr, (uint64)data.len, 0, (const any*)&a, 16u32)
+
+    // recv_from: receive a datagram (discards source address).
+    // buf: uint8[] — destination buffer.
+    // max: int64 — maximum bytes to receive.
+    // returns: bytes received, or -1 on error.
+    let recv_from = (fd: int32, buf: uint8[], max: int64) ->
+        sock.recvfrom(fd, (any*)buf.ptr, (uint64)max, 0, default(any*?), default(uint32*?))
+
+    // --- Utility ---
+
+    // local_port: get the locally bound port of a socket.
+    // returns: some(port) in host byte order, or none on error.
+    let local_port = (fd: int32) ->
+        let mut addr = default(inet.sockaddr_in)
+        let mut len = 16u32
+        if sock.getsockname(fd, (any*)&addr, &len) == 0 then
+            some(arpa.ntohs(addr.sin_port))
+        else
+            default(uint16?)

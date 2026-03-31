@@ -1,0 +1,33 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // Create two UDP sockets bound to loopback
+    let sock1 = net.open_udp()!
+    assert(net.bind_addr(sock1, net.make_addr(net.inaddr_loopback, 0u16)))
+    let port1 = net.local_port(sock1)!
+
+    let sock2 = net.open_udp()!
+    assert(net.bind_addr(sock2, net.make_addr(net.inaddr_loopback, 0u16)))
+    let port2 = net.local_port(sock2)!
+
+    // Send from sock1 to sock2
+    let msg = "udp test"
+    let sent = net.send_to(sock1, msg, net.make_addr(net.inaddr_loopback, port2))
+    assert(sent == (int64)msg.len)
+
+    // Receive on sock2
+    let mut buf = uint8[32] {}
+    let received = net.recv_from(sock2, buf, 32)
+    assert(received == sent)
+
+    // Verify data matches
+    let mut i = 0
+    for c in buf
+        if i < (int32)received then
+            assert(c == msg[i])
+            i = i + 1
+
+    // Cleanup
+    net.close(sock1)
+    net.close(sock2)
+    0

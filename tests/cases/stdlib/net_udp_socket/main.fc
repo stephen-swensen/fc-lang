@@ -1,0 +1,17 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // Create UDP socket
+    let fd = net.open_udp()!
+    assert(fd >= 0)
+
+    // Bind to loopback on any port
+    assert(net.bind_addr(fd, net.make_addr(net.inaddr_loopback, 0u16)))
+
+    // Get the kernel-assigned port
+    let port = net.local_port(fd)!
+    assert(port > 0u16)
+
+    // Close
+    net.close(fd)
+    0

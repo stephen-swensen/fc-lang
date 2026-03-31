@@ -1,0 +1,24 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // make_addr with inaddr_any
+    let a1 = net.make_addr(net.inaddr_any, 8080u16)
+    assert(a1.sin_family == (uint16)net.af_inet)
+    assert(net.ntohs(a1.sin_port) == 8080u16)
+    assert(a1.sin_addr.s_addr == 0u32)
+
+    // make_addr with inaddr_loopback
+    let a2 = net.make_addr(net.inaddr_loopback, 9000u16)
+    assert(a2.sin_family == (uint16)net.af_inet)
+    assert(net.ntohs(a2.sin_port) == 9000u16)
+    assert(a2.sin_addr.s_addr == net.htonl(net.inaddr_loopback))
+
+    // make_addr_str
+    let a3 = net.make_addr_str("127.0.0.1", 8080u16)
+    assert(a3.sin_family == (uint16)net.af_inet)
+    assert(net.ntohs(a3.sin_port) == 8080u16)
+    assert(a3.sin_addr.s_addr == net.htonl(net.inaddr_loopback))
+
+    // make_addr and make_addr_str should produce the same address
+    assert(a2.sin_addr.s_addr == a3.sin_addr.s_addr)
+    0

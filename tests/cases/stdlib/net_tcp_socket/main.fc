@@ -1,0 +1,23 @@
+import net from std::
+
+let main = (args: str[]) ->
+    // Create TCP socket
+    let fd = net.open_tcp()!
+    assert(fd >= 0)
+
+    // Set reuse addr
+    assert(net.set_reuse_addr(fd))
+
+    // Bind to loopback on any port
+    assert(net.bind_addr(fd, net.make_addr(net.inaddr_loopback, 0u16)))
+
+    // Listen
+    assert(net.listen(fd, 1))
+
+    // Get the kernel-assigned port
+    let port = net.local_port(fd)!
+    assert(port > 0u16)
+
+    // Close
+    net.close(fd)
+    0
