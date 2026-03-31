@@ -238,6 +238,7 @@ let main = (args: str[]) ->
     let mut running = true
     let mut last_tick = sdl.get_ticks()
     let mut new_high = false
+    let mut force_tick = false
 
     let cx = grid_w / 2
     let cy = grid_h / 2
@@ -306,39 +307,54 @@ let main = (args: str[]) ->
                     high_score = 0
                     sdl.set_title(win, c"Fibbles - Score: 0 (High: 0) Level 1")
 
-                if state == game_state.playing && q_len < 2 then
+                if state == game_state.playing then
+                    // Same-direction arrow with no pending turns: immediate advance
+                    let mut same_dir = false
+                    if q_len == 0 then
+                        if ekey == sdl.key_up && dir_x == 0 && dir_y == -1 then
+                            same_dir = true
+                        if ekey == sdl.key_down && dir_x == 0 && dir_y == 1 then
+                            same_dir = true
+                        if ekey == sdl.key_left && dir_x == -1 && dir_y == 0 then
+                            same_dir = true
+                        if ekey == sdl.key_right && dir_x == 1 && dir_y == 0 then
+                            same_dir = true
+                    if same_dir then
+                        force_tick = true
                     // Direction queue: validate against last queued (or committed)
                     // direction, then enqueue. Max 2 entries allows fold-back combos
                     // (e.g. UP+LEFT while moving RIGHT) without letting a second
                     // press reverse the first (e.g. UP+DOWN).
-                    let ref_dx = if q_len > 0 then q_dx[q_len - 1] else dir_x
-                    let ref_dy = if q_len > 0 then q_dy[q_len - 1] else dir_y
-                    let mut accepted = false
-                    if ekey == sdl.key_up && ref_dy != 1 then
-                        q_dx[q_len] = 0
-                        q_dy[q_len] = -1
-                        accepted = true
-                    if ekey == sdl.key_down && ref_dy != -1 && !accepted then
-                        q_dx[q_len] = 0
-                        q_dy[q_len] = 1
-                        accepted = true
-                    if ekey == sdl.key_left && ref_dx != 1 && !accepted then
-                        q_dx[q_len] = -1
-                        q_dy[q_len] = 0
-                        accepted = true
-                    if ekey == sdl.key_right && ref_dx != -1 && !accepted then
-                        q_dx[q_len] = 1
-                        q_dy[q_len] = 0
-                        accepted = true
-                    if accepted then
-                        q_len = q_len + 1
+                    else if q_len < 2 then
+                        let ref_dx = if q_len > 0 then q_dx[q_len - 1] else dir_x
+                        let ref_dy = if q_len > 0 then q_dy[q_len - 1] else dir_y
+                        let mut accepted = false
+                        if ekey == sdl.key_up && ref_dy != 1 then
+                            q_dx[q_len] = 0
+                            q_dy[q_len] = -1
+                            accepted = true
+                        if ekey == sdl.key_down && ref_dy != -1 && !accepted then
+                            q_dx[q_len] = 0
+                            q_dy[q_len] = 1
+                            accepted = true
+                        if ekey == sdl.key_left && ref_dx != 1 && !accepted then
+                            q_dx[q_len] = -1
+                            q_dy[q_len] = 0
+                            accepted = true
+                        if ekey == sdl.key_right && ref_dx != -1 && !accepted then
+                            q_dx[q_len] = 1
+                            q_dy[q_len] = 0
+                            accepted = true
+                        if accepted then
+                            q_len = q_len + 1
 
         if !running then break
 
         // --- Update ---
         if state == game_state.playing then
             let now = sdl.get_ticks()
-            if now - last_tick >= (uint32) speed then
+            if force_tick || now - last_tick >= (uint32) speed then
+                force_tick = false
                 last_tick = now
 
                 // Dequeue direction
