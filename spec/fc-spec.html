@@ -450,11 +450,33 @@ The one nuance is mutually recursive top-level functions: since the first compil
 
 Targeting C is a deliberate strength of the design, not a limitation. Every platform that matters already has a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets. By targeting C, FC inherits all of these backends for free, including niche embedded toolchains that have no LLVM backend. The generated C is also human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
 
-FC targets **C11** specifically. C11 adoption is broad including most embedded toolchains. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output) and `_Static_assert` (compiler-generated sanity checks in emitted code). FC avoids C11 features with known gaps in embedded compiler support.
+FC targets **C11** specifically, plus two GNU extensions supported by GCC and Clang. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output), `_Static_assert` (compiler-generated sanity checks), compound literals, and designated initializers.
+
+#### GNU extensions required
+
+The generated C uses two extensions beyond the C11 standard:
+
+- **GNU statement expressions** (`({ ... })`) — used pervasively for bounds-checked slice access, option unwrap, `alloc` expressions, match-as-expression, loop-as-expression, and other constructs that must evaluate a sequence of statements and produce a value. This is the primary GNU dependency.
+- **`__builtin_alloca`** — used for stack-dynamic allocation of temporaries: string interpolation buffers, array literal backing storage, and the `argc`/`argv` conversion in the generated `main` wrapper. Avoids any `<alloca.h>` dependency.
+
+Both extensions are supported by GCC (all versions supporting C11) and Clang (all versions). They are also supported by all GCC-based cross-compilation toolchains.
 
 ### Platform contract
 
-FC targets **C11 hosted implementations with heap allocation** — specifically, GCC or Clang with a libc that provides `malloc`, `free`, `abort`, `memcmp`, `strlen`, `snprintf`, and `__builtin_alloca`. This covers desktop, server, mobile (iOS, Android NDK), and "rich" embedded platforms (Raspberry Pi, ESP32 with ESP-IDF, Arduino with avr-libc, ARM Cortex-M with newlib/picolibc).
+#### Supported toolchains
+
+FC requires a **GCC-compatible C11 compiler**. Supported toolchains:
+
+- **GCC** — all platforms (Linux, macOS, BSDs, Windows via MinGW-w64)
+- **Clang** — all platforms (Linux, macOS, Windows via clang-cl is *not* supported; Clang with GNU-compatible driver is)
+- **GCC-based cross-compilers** — arm-none-eabi-gcc (ARM Cortex-M), xtensa-esp32-elf-gcc (ESP32 via ESP-IDF), avr-gcc (Arduino/AVR), riscv-unknown-elf-gcc (RISC-V), and similar GCC-derivative toolchains for embedded targets
+- **MinGW-w64** — GCC-based toolchain for building native Windows executables
+
+**Not supported: MSVC.** Microsoft's C compiler does not implement GNU statement expressions or `__builtin_alloca`, and has no plan to. Windows users should use MinGW-w64 or Clang (with the GNU-compatible driver, not clang-cl).
+
+#### Runtime requirements
+
+FC targets **C11 hosted implementations with heap allocation** — a libc providing `malloc`, `free`, `abort`, `memcmp`, `strlen`, and `snprintf`. This covers desktop, server, mobile (iOS, Android NDK), and "rich" embedded platforms (Raspberry Pi, ESP32 with ESP-IDF, Arduino with avr-libc, ARM Cortex-M with newlib/picolibc).
 
 **Not supported:** C11 freestanding (no libc), static-memory-only bare metal, or custom allocator-only environments. FC's core language features — heap allocation (`alloc`/`free`), string interpolation, bounds-check traps (`abort`) — depend on a hosted-like environment. Platforms without these facilities are better served by C directly.
 
@@ -2733,7 +2755,7 @@ All stdlib modules live in the `std::` namespace and are written in regular FC w
 
 ## The FC Compiler
 
-FC programs are compiled by the `fc` command-line tool, which transpiles FC source files into a single C11 source file. The generated C is then compiled with any C11 compiler (e.g., `cc`, `gcc`, `clang`).
+FC programs are compiled by the `fc` command-line tool, which transpiles FC source files into a single C source file. The generated C requires a GCC-compatible C11 compiler (GCC, Clang, or a GCC-based cross-compiler — see §Why C as a target for details).
 
 ### Usage
 
@@ -3195,7 +3217,7 @@ The compiler emits a small set of C headers in the generated output. These are o
 
 **Extern-driven headers** — emitted from `module ... from "header.h"` declarations in user code or the standard library. See §C Interop.
 
-A pure-integer program with no string interpolation and no floats gets a 5-header preamble. Stack-dynamic allocation uses `__builtin_alloca` (a GCC/Clang intrinsic), avoiding any `<alloca.h>` dependency.
+A pure-integer program with no string interpolation and no floats gets a 5-header preamble. Stack-dynamic allocation uses `__builtin_alloca` (see §GNU extensions required), avoiding any `<alloca.h>` dependency.
 
 # PART 8 — C Interop
 
@@ -4366,7 +4388,7 @@ The compiler's first pass collects all four files, registers `geom::` as a names
 
 ## Implementation Status
 
-The FC compiler implements all features described in this specification. The compiler (`./fc`) is a single-pass-to-C transpiler written in C11, producing warning-clean C11 output that compiles with `cc -std=c11 -Wall -Werror`.
+The FC compiler implements all features described in this specification. The compiler (`./fc`) is a single-pass-to-C transpiler written in C11, producing warning-clean output that compiles with `gcc -std=c11 -Wall -Werror` or `clang -std=c11 -Wall -Werror` (GNU extensions are enabled by default in both compilers even with `-std=c11`).
 
 ### Compiler pipeline
 
