@@ -221,7 +221,7 @@ let main = (args: str[]) ->
     let mut q_dy = int32[2] { }
     let mut q_len = 0
     let mut score = 0
-    let mut speed = 150
+    let mut speed = 300
     let mut state = game_state.splash
     let mut running = true
     let mut last_tick = sdl.get_ticks()
@@ -267,7 +267,7 @@ let main = (args: str[]) ->
                         dir_y = 0
                         q_len = 0
                         score = 0
-                        speed = 150
+                        speed = 300
                         new_high = false
                         bonus_active = false
                         body[0] = vec2 { x = cx - 2, y = cy }
