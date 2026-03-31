@@ -16,10 +16,10 @@ module net =
         extern listen: (int32, int32) -> int32
         extern accept: (int32, any*?, uint32*?) -> int32
         extern connect: (int32, const any*, uint32) -> int32
-        extern send: (int32, const any*, uint64, int32) -> int64
-        extern recv: (int32, any*, uint64, int32) -> int64
-        extern sendto: (int32, const any*, uint64, int32, const any*, uint32) -> int64
-        extern recvfrom: (int32, any*, uint64, int32, any*?, uint32*?) -> int64
+        extern send: (int32, const any*, usize, int32) -> isize
+        extern recv: (int32, any*, usize, int32) -> isize
+        extern sendto: (int32, const any*, usize, int32, const any*, uint32) -> isize
+        extern recvfrom: (int32, any*, usize, int32, any*?, uint32*?) -> isize
         extern setsockopt: (int32, int32, int32, const any*, uint32) -> int32
         extern getsockname: (int32, any*, uint32*) -> int32
         extern shutdown: (int32, int32) -> int32
@@ -176,14 +176,14 @@ module net =
     // data: const uint8[] — the bytes to send.
     // returns: number of bytes sent, or -1 on error.
     let send_bytes = (fd: int32, data: const uint8[]) ->
-        sock.send(fd, (const any*)data.ptr, (uint64)data.len, 0)
+        (int64)sock.send(fd, (const any*)data.ptr, (usize)data.len, 0)
 
     // recv_bytes: receive data from a connected socket.
     // buf: uint8[] — destination buffer.
     // max: int64 — maximum bytes to receive.
     // returns: bytes received, 0 if peer closed, or -1 on error.
     let recv_bytes = (fd: int32, buf: uint8[], max: int64) ->
-        sock.recv(fd, (any*)buf.ptr, (uint64)max, 0)
+        (int64)sock.recv(fd, (any*)buf.ptr, (usize)max, 0)
 
     // --- UDP operations ---
 
@@ -193,14 +193,14 @@ module net =
     // returns: number of bytes sent, or -1 on error.
     let send_to = (fd: int32, data: const uint8[], addr: inet.sockaddr_in) ->
         let mut a = addr
-        sock.sendto(fd, (const any*)data.ptr, (uint64)data.len, 0, (const any*)&a, 16u32)
+        (int64)sock.sendto(fd, (const any*)data.ptr, (usize)data.len, 0, (const any*)&a, 16u32)
 
     // recv_from: receive a datagram (discards source address).
     // buf: uint8[] — destination buffer.
     // max: int64 — maximum bytes to receive.
     // returns: bytes received, or -1 on error.
     let recv_from = (fd: int32, buf: uint8[], max: int64) ->
-        sock.recvfrom(fd, (any*)buf.ptr, (uint64)max, 0, default(any*?), default(uint32*?))
+        (int64)sock.recvfrom(fd, (any*)buf.ptr, (usize)max, 0, default(any*?), default(uint32*?))
 
     // --- Utility ---
 

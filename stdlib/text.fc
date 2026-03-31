@@ -2,7 +2,7 @@ namespace std::
 
 module text =
     private module c from "stdlib.h" =
-        extern strtol: (const cstr, cstr*, int32) -> int64
+        extern strtoll: (const cstr, cstr*, int32) -> int64
         extern strtod: (const cstr, cstr*) -> float64
         extern strtof: (const cstr, cstr*) -> float32
 
@@ -11,7 +11,7 @@ module text =
     let parse_int32 = (s: const str) ->
         let cs = (cstr)s
         let mut endptr = default(cstr)
-        let val = c.strtol(cs, &endptr, 10)
+        let val = c.strtoll(cs, &endptr, 10)
         if endptr == cs then default(int32?)
         else some((int32)val)
 
@@ -20,7 +20,7 @@ module text =
     let parse_int64 = (s: const str) ->
         let cs = (cstr)s
         let mut endptr = default(cstr)
-        let val = c.strtol(cs, &endptr, 10)
+        let val = c.strtoll(cs, &endptr, 10)
         if endptr == cs then default(int64?)
         else some(val)
 
