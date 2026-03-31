@@ -2826,6 +2826,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (!sym)
                 sym = import_chain_lookup(ctx->import_scope, e->field.object->ident.name);
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
+                e->field.is_variant_constructor = true;
                 if (sym->is_generic) {
                     /* Generic union no-payload variant: require explicit type args */
                     int ntp = sym->type_param_count;
@@ -2879,6 +2880,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
         /* If the object resolved to a union type (e.g., module.UnionType.Variant) */
         if (obj_type->kind == TYPE_UNION) {
+            e->field.is_variant_constructor = true;
             e->type = obj_type;
             return e->type;
         }

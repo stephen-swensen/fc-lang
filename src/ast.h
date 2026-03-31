@@ -148,6 +148,7 @@ struct Expr {
             Type **type_args;       /* explicit type args for generic variant: name<Types>.variant */
             int type_arg_count;
             Type *fixed_array_type; /* non-NULL if field is a fixed-size inline array (TYPE_FIXED_ARRAY) */
+            bool is_variant_constructor; /* true when this is union variant construction, not field access */
         } field;
 
         /* EXPR_INDEX */

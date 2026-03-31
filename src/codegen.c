@@ -1461,8 +1461,8 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_CALL: {
         /* Check if this is a variant constructor: type is union and func is EXPR_FIELD */
-        if (e->type && e->type->kind == TYPE_UNION &&
-            e->call.func->kind == EXPR_FIELD) {
+        if (e->call.func->kind == EXPR_FIELD &&
+            e->call.func->field.is_variant_constructor) {
             const char *union_name = e->type->unio.name;
             /* Under substitution, compute mangled name for generic unions */
             if (g_subst && type_contains_type_var(e->type)) {
@@ -1700,7 +1700,7 @@ static void emit_expr(Expr *e, FILE *out) {
             break;
         }
         /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
-        if (e->type && e->type->kind == TYPE_UNION) {
+        if (e->field.is_variant_constructor) {
             const char *union_name = e->type->unio.name;
             if (g_subst && type_contains_type_var(e->type)) {
                 union_name = mangle_generic_with_subst(union_name, e->type);

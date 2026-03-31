@@ -1,0 +1,9 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+
+let main = (args: str[]) ->
+    let s = helper.make_circle(5)
+    match s with
+    | circle(r) -> r
+    | square(side) -> side

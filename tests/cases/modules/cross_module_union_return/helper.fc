@@ -1,0 +1,2 @@
+module helper =
+    let make_circle = (r: int32) -> shape.circle(r)

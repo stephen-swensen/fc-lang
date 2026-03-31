@@ -1,0 +1,15 @@
+union color =
+    | red
+    | green
+    | blue
+
+struct config =
+    bg: color
+
+let main = (args: str[]) ->
+    let cfg = config { bg = color.green }
+    let r = match cfg.bg with
+    | red -> 1
+    | green -> 2
+    | blue -> 3
+    r
