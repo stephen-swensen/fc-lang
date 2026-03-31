@@ -259,9 +259,10 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
     return result;
 }
 
-/* Resolve struct type stubs in a type tree against a symbol table.
- * Replaces TYPE_STRUCT stubs (field_count == 0) with the actual type from the symtab.
- * Used to resolve extern function parameter types against sibling extern structs
+/* Resolve type stubs in a type tree against a symbol table.
+ * Recursively walks the type tree (through pointers, slices, options, fixed arrays,
+ * and function types) and replaces TYPE_STRUCT stubs (field_count == 0) with the
+ * actual type from the symtab. Used to resolve references to sibling extern types
  * within the same from-module. */
 static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
     if (!t) return t;
@@ -558,39 +559,33 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
         }
     }
 
-    /* Resolve struct type stubs in extern function signatures against sibling
-     * extern structs within the same module. This allows e.g.:
-     *   extern struct timespec = ...
-     *   extern clock_gettime: (int32, timespec*) -> int32
-     * where timespec* in the function type resolves to the extern struct. */
-    for (int j = 0; j < d->module.decl_count; j++) {
-        Decl *child = d->module.decls[j];
-        if (child->kind != DECL_EXTERN) continue;
-        Type *resolved = resolve_type_stubs(child->ext.type, members);
-        if (resolved != child->ext.type) {
-            child->ext.type = resolved;
-            /* Update the symbol table entry too */
-            const char *src_name = child->ext.alias ? child->ext.alias : child->ext.name;
-            Symbol *msym = symtab_lookup(members, src_name);
-            if (msym) msym->type = resolved;
-        }
-    }
-
-    /* Resolve struct type stubs in extern struct/union field types against
-     * sibling extern structs within the same module. This allows e.g.:
-     *   extern struct SDL_Keysym as keysym = ...
-     *   extern struct SDL_KeyboardEvent as keyboard_event =
-     *       keysym: keysym
-     * where keysym field type resolves to the extern struct. */
+    /* Resolve type stubs in all symbols against sibling types within the module.
+     * A single comprehensive pass that walks every type tree in every symbol,
+     * covering extern function signatures, struct field types, and any other
+     * position where a type stub may appear. */
     for (int j = 0; j < members->count; j++) {
         Symbol *msym = &members->symbols[j];
-        if (msym->kind != DECL_STRUCT || !msym->type) continue;
-        Type *st = msym->type;
-        for (int k = 0; k < st->struc.field_count; k++) {
-            Type *resolved = resolve_type_stubs(st->struc.fields[k].type, members);
-            if (resolved != st->struc.fields[k].type)
-                st->struc.fields[k].type = resolved;
+        if (!msym->type) continue;
+
+        /* Resolve the symbol's top-level type (e.g. extern function signatures
+         * whose param/return types reference sibling extern structs/unions) */
+        Type *resolved = resolve_type_stubs(msym->type, members);
+        if (resolved != msym->type) {
+            msym->type = resolved;
+            if (msym->kind == DECL_EXTERN && msym->decl)
+                msym->decl->ext.type = resolved;
         }
+
+        /* Resolve stubs within struct field types */
+        if (msym->type->kind == TYPE_STRUCT) {
+            Type *st = msym->type;
+            for (int k = 0; k < st->struc.field_count; k++) {
+                Type *fr = resolve_type_stubs(st->struc.fields[k].type, members);
+                if (fr != st->struc.fields[k].type)
+                    st->struc.fields[k].type = fr;
+            }
+        }
+
     }
 }
 

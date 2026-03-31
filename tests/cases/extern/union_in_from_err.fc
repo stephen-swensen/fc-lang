@@ -1,0 +1,7 @@
+// Test: FC-style union inside a from-module is rejected
+module m from "stdio.h" =
+    union shape =
+        | circle(int32)
+        | empty
+
+let main = (args: str[]) -> 0
