@@ -119,39 +119,41 @@ let clear_screen = (r: any*) ->
     sdl.clear(r)
     return
 
-// --- Sound effects (square wave PC speaker style) ---
+// --- Sound effects (pre-generated square wave buffers) ---
 
-let play_tone = (dev: uint32, freq: int32, duration_ms: int32) ->
-    let sample_rate = 44100
-    let num_samples = sample_rate * duration_ms / 1000
+struct sound =
+    data: any*
+    bytes: uint32
+
+let samples_ms = (ms: int32) ->
+    44100 * ms / 1000
+
+let gen_tone = (freq: int32, duration_ms: int32) ->
+    let num_samples = samples_ms(duration_ms)
     let buf = alloc(int16, (usize) num_samples)!
-    let period = sample_rate / freq
+    let period = 44100 / freq
     let half = period / 2
     for i in 0..num_samples
         if (i % period) < half then
             buf[i] = 8000i16
         else
             buf[i] = -8000i16
-    sdl.queue_audio(dev, (any*) buf, (uint32)(num_samples * 2))
-    free(buf)
-    return
+    sound { data = (any*) buf, bytes = (uint32)(num_samples * 2) }
 
-let play_eat_sound = (dev: uint32) ->
-    play_tone(dev, 880, 60)
-    return
+let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
+    let num_samples = samples_ms(duration_ms)
+    let period = 44100 / freq
+    let half = period / 2
+    for i in 0..num_samples
+        if (i % period) < half then
+            buf[offset + i] = 8000i16
+        else
+            buf[offset + i] = -8000i16
+    offset + num_samples
 
-let play_bonus_sound = (dev: uint32) ->
-    play_tone(dev, 587, 60)
-    play_tone(dev, 784, 60)
-    play_tone(dev, 1047, 80)
-    return
-
-let play_death_sound = (dev: uint32) ->
+let play_sound = (dev: uint32, s: sound) ->
     sdl.clear_audio(dev)
-    play_tone(dev, 440, 120)
-    play_tone(dev, 330, 120)
-    play_tone(dev, 220, 150)
-    play_tone(dev, 110, 250)
+    sdl.queue_audio(dev, s.data, s.bytes)
     return
 
 let load_high_score = () ->
@@ -245,13 +247,31 @@ let main = (args: str[]) ->
     desired.freq = 44100
     desired.format = sdl.audio_s16sys
     desired.channels = 1u8
-    desired.samples = 1024u16
+    desired.samples = 256u16
     desired.callback = (any*) 0u
     desired.userdata = (any*) 0u
     let mut obtained = default(audio_spec)
     let audio_dev = sdl.open_audio((any*) 0u, 0, &desired, &obtained, 0)
     if audio_dev > 0u32 then
         sdl.pause_audio(audio_dev, 0)
+
+    // Pre-generate sound effect buffers (zero allocation during gameplay)
+    let eat_snd = gen_tone(880, 60)
+
+    let bonus_n = samples_ms(60) + samples_ms(60) + samples_ms(80)
+    let bonus_mem = alloc(int16, (usize) bonus_n)!
+    let mut boff = fill_tone(bonus_mem, 0, 587, 60)
+    boff = fill_tone(bonus_mem, boff, 784, 60)
+    fill_tone(bonus_mem, boff, 1047, 80)
+    let bonus_snd = sound { data = (any*) bonus_mem, bytes = (uint32)(bonus_n * 2) }
+
+    let death_n = samples_ms(120) + samples_ms(120) + samples_ms(150) + samples_ms(250)
+    let death_mem = alloc(int16, (usize) death_n)!
+    let mut doff = fill_tone(death_mem, 0, 440, 120)
+    doff = fill_tone(death_mem, doff, 330, 120)
+    doff = fill_tone(death_mem, doff, 220, 150)
+    fill_tone(death_mem, doff, 110, 250)
+    let death_snd = sound { data = (any*) death_mem, bytes = (uint32)(death_n * 2) }
 
     // Load high score
     let mut high_score = load_high_score()
@@ -401,7 +421,7 @@ let main = (args: str[]) ->
                 if new_x < 0 || new_x >= grid_w || new_y < 0 || new_y >= grid_h then
                     state = game_state.over
                     if audio_dev > 0u32 then
-                        play_death_sound(audio_dev)
+                        play_sound(audio_dev, death_snd)
                     // Check high score
                     if score > high_score then
                         high_score = score
@@ -414,7 +434,7 @@ let main = (args: str[]) ->
                     if on_snake(body, head_idx, length, new_x, new_y) then
                         state = game_state.over
                         if audio_dev > 0u32 then
-                            play_death_sound(audio_dev)
+                            play_sound(audio_dev, death_snd)
                         if score > high_score then
                             high_score = score
                             save_high_score(score)
@@ -429,7 +449,7 @@ let main = (args: str[]) ->
                         // Check regular food
                         if new_x == food.x && new_y == food.y then
                             if audio_dev > 0u32 then
-                                play_eat_sound(audio_dev)
+                                play_sound(audio_dev, eat_snd)
                             length = length + 1
                             score = score + 10
                             if speed > 50 then
@@ -444,7 +464,7 @@ let main = (args: str[]) ->
                         // Check bonus food (no speed increase)
                         if bonus_active && new_x == bonus.x && new_y == bonus.y then
                             if audio_dev > 0u32 then
-                                play_bonus_sound(audio_dev)
+                                play_sound(audio_dev, bonus_snd)
                             length = length + 4
                             score = score + 20
                             bonus_active = false
