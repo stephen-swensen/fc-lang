@@ -61,7 +61,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - No explicit type annotations on bindings — always inferred from RHS
 - Function parameter types are always required (they anchor inference)
 - No function overloading — names always resolve to exactly one function
-- Implicit widening only where lossless (e.g., `int32` → `int64`, NOT int → float)
+- Implicit widening only where lossless (e.g., `int32` → `int64`, NOT int → float) — applies in binary expressions, comparisons, function call arguments, slice indices, and for-range endpoints. An `int32` literal like `0` widens to `int64` when compared to `.len` or used as a slice bound.
 - Integer-to-float always requires an explicit cast
 - No `null` in the language — option types (`T?`) replace nullable values
 - **Type aliases are true aliases**: `str` and `cstr` are desugared to their underlying types (`uint8[]` and `uint8*`) internally with a `const char *alias` field on `Type` for display purposes. They are fully interchangeable with their underlying types — `str` and `uint8[]` are the same type, `cstr` and `uint8*` are the same type. The alias only affects `type_name()` output in diagnostics, never type equality or semantics. C interop details (e.g., `const char*` for C string functions) are handled only at extern call boundaries in codegen, not in the type system.
@@ -84,12 +84,14 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42i`, `42u`
 - No implicit widening to/from `isize`/`usize` — explicit casts required
 - String types: `str` = `uint8[]` (fat pointer), `cstr` = `uint8*` (null-terminated, C interop)
+- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(int32)buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width required), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
 - `any*` = opaque pointer (`void*`), cannot be dereferenced
 
 ### Control Flow
 - `if`, `match`, `loop` are expressions
 - `return`, `break`, `continue` are void-typed expressions (enable early-return in expression positions). `return` is the idiomatic way to produce void in an else branch: `if x > 3 then f() else return`
 - `loop` produces a value via `break value`; `for` is always void
+- `for` has three forms: `for i in 0..n` (range, exclusive end), `for x in slice` (element), `for i, x in slice` (index + element). Loop variable type is inferred from endpoints/slice via widening.
 - `match` is exhaustive; wildcard `_` satisfies exhaustiveness
 
 ### Union Syntax

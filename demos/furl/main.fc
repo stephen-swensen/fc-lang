@@ -20,32 +20,32 @@ let main = (args: str[]) ->
 
     let mut i = 1
     loop
-        if i >= (int32)args.len then break
+        if i >= args.len then break
         let arg = args[i]
         if arg == "-v" then verbose = true
         else if arg == "-I" then head_only = true
         else if arg == "-X" then
             i = i + 1
-            if i >= (int32)args.len then
+            if i >= args.len then
                 io.write("furl: -X requires a method\n", stderr)
                 sys.exit(1)
             method = args[i]
         else if arg == "-o" then
             i = i + 1
-            if i >= (int32)args.len then
+            if i >= args.len then
                 io.write("furl: -o requires a filename\n", stderr)
                 sys.exit(1)
             out_file = args[i]
         else if arg == "-H" then
             i = i + 1
-            if i >= (int32)args.len then
+            if i >= args.len then
                 io.write("furl: -H requires a header value\n", stderr)
                 sys.exit(1)
             custom_hdrs[num_hdrs] = args[i]
             num_hdrs = num_hdrs + 1
         else if arg == "-d" then
             i = i + 1
-            if i >= (int32)args.len then
+            if i >= args.len then
                 io.write("furl: -d requires data\n", stderr)
                 sys.exit(1)
             body_data = args[i]
@@ -55,7 +55,7 @@ let main = (args: str[]) ->
         else url_arg = arg
         i = i + 1
 
-    if url_arg.len == 0i64 then
+    if url_arg.len == 0 then
         io.write("Usage: furl [options] <url>\n", stderr)
         io.write("Options:\n", stderr)
         io.write("  -v          Verbose (show request/response headers)\n", stderr)
@@ -67,7 +67,7 @@ let main = (args: str[]) ->
         sys.exit(1)
 
     // Auto-switch to POST when body is provided
-    if body_data.len > 0i64 && method == "GET" then
+    if body_data.len > 0 && method == "GET" then
         method = "POST"
 
     // --- URL parsing ---
@@ -75,28 +75,28 @@ let main = (args: str[]) ->
         io.write("furl: URL must start with http://\n", stderr)
         sys.exit(1)
 
-    let rest = url_arg[7i64..url_arg.len]
+    let rest = url_arg[7..url_arg.len]
     let slash_opt = text.index_of(rest, "/")
 
     let mut authority = rest
     let mut path = "/"
     if slash_opt.is_some then
-        authority = rest[0i64..slash_opt!]
+        authority = rest[0..slash_opt!]
         path = rest[slash_opt!..rest.len]
 
     let colon_opt = text.index_of(authority, ":")
     let mut host = authority
     let mut port = 80
     if colon_opt.is_some then
-        host = authority[0i64..colon_opt!]
-        let port_str = authority[colon_opt! + 1i64..authority.len]
+        host = authority[0..colon_opt!]
+        let port_str = authority[colon_opt! + 1..authority.len]
         let p = text.parse_int32(port_str)
         if p.is_none then
             io.write("furl: invalid port\n", stderr)
             sys.exit(1)
         port = p!
 
-    if host.len == 0i64 then
+    if host.len == 0 then
         io.write("furl: empty hostname\n", stderr)
         sys.exit(1)
 
@@ -142,21 +142,17 @@ let main = (args: str[]) ->
     if verbose then io.write("> Connection: close\n", stderr)
 
     // Custom headers
-    let mut hi = 0
-    loop
-        if hi >= num_hdrs then break
+    for hi in 0..num_hdrs
         let hdr = custom_hdrs[hi]
         let hdr_line = alloc("%s{hdr}\r\n")!
         if verbose then io.write("> %s{hdr}\n", stderr)
         net.send_bytes(fd, hdr_line)
         free(hdr_line)
-        hi = hi + 1
 
     // Content-Length if body present
-    if body_data.len > 0i64 then
-        let blen = (int32)body_data.len
-        let cl = alloc("Content-Length: %d{blen}\r\n")!
-        if verbose then io.write("> Content-Length: %d{blen}\n", stderr)
+    if body_data.len > 0 then
+        let cl = alloc("Content-Length: %d{body_data.len}\r\n")!
+        if verbose then io.write("> Content-Length: %d{body_data.len}\n", stderr)
         net.send_bytes(fd, cl)
         free(cl)
 
@@ -165,7 +161,7 @@ let main = (args: str[]) ->
     if verbose then io.write(">\n", stderr)
 
     // Send body
-    if body_data.len > 0i64 then
+    if body_data.len > 0 then
         net.send_bytes(fd, body_data)
 
     // --- Read response ---
@@ -177,7 +173,7 @@ let main = (args: str[]) ->
     // Output handle
     let mut out = stdout
     let mut out_opened = false
-    if out_file.len > 0i64 then
+    if out_file.len > 0 then
         let f = io.open(out_file, "w")
         if f.is_none then
             io.write("furl: could not open %s{out_file}\n", stderr)
@@ -192,16 +188,13 @@ let main = (args: str[]) ->
 
         if in_headers then
             // Accumulate into header buffer
-            let mut j = 0i64
-            loop
-                if j >= n then break
-                if header_len < 8192i64 then
+            for j in 0..n
+                if header_len < 8192 then
                     header_buf[header_len] = recv_buf[j]
-                    header_len = header_len + 1i64
-                j = j + 1i64
+                    header_len = header_len + 1
 
             // Look for end-of-headers separator
-            let hdr_view = header_buf[0i64..header_len]
+            let hdr_view = header_buf[0..header_len]
             let sep = text.index_of(hdr_view, "\r\n\r\n")
             if sep.is_some then
                 let sep_pos = sep!
@@ -209,10 +202,10 @@ let main = (args: str[]) ->
 
                 // Print response headers
                 if verbose || head_only then
-                    let headers = header_buf[0i64..sep_pos]
+                    let headers = header_buf[0..sep_pos]
                     let lines = text.split(headers, "\r\n")
                     for line in lines
-                        if line.len > 0i64 then
+                        if line.len > 0 then
                             if verbose then io.write("< %s{line}\n", stderr)
                             if head_only then io.write("%s{line}\n", out)
                     free(lines)
@@ -220,13 +213,13 @@ let main = (args: str[]) ->
 
                 // Output body portion from this chunk
                 if !head_only then
-                    let body_start = sep_pos + 4i64
+                    let body_start = sep_pos + 4
                     if body_start < header_len then
                         io.write(header_buf[body_start..header_len], out)
         else
             // Past headers — stream body directly
             if !head_only then
-                io.write(recv_buf[0i64..n], out)
+                io.write(recv_buf[0..n], out)
 
     // Cleanup
     if out_opened then io.close(out)

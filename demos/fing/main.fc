@@ -97,9 +97,7 @@ let main = (args: str[]) ->
     let mut max_us = 0i64
     let mut total_us = 0i64
 
-    let mut seq = 0
-    loop
-        if seq >= count then break
+    for seq in 0..count
 
         let mut pkt = uint8[64] {}
         build_echo_request(pkt, id, (uint16)seq)
@@ -126,14 +124,13 @@ let main = (args: str[]) ->
                     let ms = elapsed / 1000
                     let frac = (elapsed % 1000) / 100
                     let nbytes = (int32)n_recv - ihl
-                    io.write("%d{nbytes} bytes from %d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d}: icmp_seq=%d{seq} ttl=%d{ttl} time=%d{(int32)ms}.%d{(int32)frac} ms\n", stdout)
+                    io.write("%d{nbytes} bytes from %d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d}: icmp_seq=%d{seq} ttl=%d{ttl} time=%d{ms}.%d{frac} ms\n", stdout)
                 else
-                    io.write("unexpected ICMP type=%d{(int32)icmp_type}\n", stdout)
+                    io.write("unexpected ICMP type=%d{icmp_type}\n", stdout)
             else
                 io.write("Request timeout for icmp_seq=%d{seq}\n", stdout)
 
-        seq = seq + 1
-        if seq < count then sys.sleep(1000)
+        if seq < count - 1 then sys.sleep(1000)
 
     // Summary
     io.write("\n--- %s{host} fing statistics ---\n", stdout)
@@ -141,13 +138,7 @@ let main = (args: str[]) ->
     io.write("%d{sent} packets transmitted, %d{received} received, %d{loss}%% packet loss\n", stdout)
     if received > 0 then
         let avg_us = total_us / (int64)received
-        let min_ms = min_us / 1000
-        let min_frac = (min_us % 1000) / 100
-        let avg_ms = avg_us / 1000
-        let avg_frac = (avg_us % 1000) / 100
-        let max_ms = max_us / 1000
-        let max_frac = (max_us % 1000) / 100
-        io.write("rtt min/avg/max = %d{(int32)min_ms}.%d{(int32)min_frac}/%d{(int32)avg_ms}.%d{(int32)avg_frac}/%d{(int32)max_ms}.%d{(int32)max_frac} ms\n", stdout)
+        io.write("rtt min/avg/max = %d{min_us / 1000}.%d{(min_us % 1000) / 100}/%d{avg_us / 1000}.%d{(avg_us % 1000) / 100}/%d{max_us / 1000}.%d{(max_us % 1000) / 100} ms\n", stdout)
 
     net.close(fd)
     if received == 0 then 1 else 0

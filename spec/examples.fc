@@ -399,8 +399,11 @@ let main = (args: str[]) ->
     assert(greeting[0] == 104u8)   // 'h'
 
     // String interpolation with format specifiers
+    // Arbitrary expressions are allowed inside %spec{expr}
     let name = "world"
     let msg = "hello %s{name}, n=%d{i}"
+    let expr_msg = "sum=%d{i + 1}, double=%d{i * 2}"
+    assert(expr_msg == "sum=43, double=84")
 
     // Slice construction from raw pointer
     let raw = int32[] { ptr = buf.ptr, len = buf.len }
