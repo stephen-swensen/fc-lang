@@ -2733,21 +2733,29 @@ let p = alloc(point3d)!
 > **Transpilation**
 > `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d){ .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
 
-# PART 6 — I/O & Formatting
+# PART 6 — Standard Library
 
-## Standard Library Modules
+All standard library modules live in the `std::` namespace and are written in regular FC wrapping C standard library functions. Import with `import <module> from std::`. Source files are in `stdlib/`.
 
-All stdlib modules live in the `std::` namespace and are written in regular FC wrapping C standard library functions. Import with `import <module> from std::`.
+## std::io
 
-**`std::io`** — File I/O using opaque `any*` handles (C `FILE*`). Reading, writing, opening, closing, seeking, and filesystem operations. The built-in globals `stdin`, `stdout`, `stderr` are typed `any*` and always available without import.
+File I/O using opaque `any*` handles (C `FILE*`). Reading, writing, opening, closing, seeking, and filesystem operations. The built-in globals `stdin`, `stdout`, `stderr` are typed `any*` and always available without import.
 
-**`std::sys`** — Environment variables, process control, wall-clock time, and sleep. Mostly pure C11; `sleep` uses POSIX `nanosleep` (works on Linux, macOS, and Windows via MinGW).
+## std::sys
 
-**`std::math`** — Common mathematical functions wrapping C11 `math.h`, all operating on `float64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
+Environment variables, process control, wall-clock time, and sleep. Mostly pure C11; `sleep` uses POSIX `nanosleep` (works on Linux, macOS, and Windows via MinGW).
 
-**`std::text`** — String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
+## std::math
 
-**`std::data`** — Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:
+Common mathematical functions wrapping C11 `math.h`, all operating on `float64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
+
+## std::text
+
+String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
+
+## std::data
+
+Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:
 
 - **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
 - **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.
@@ -2756,8 +2764,6 @@ All stdlib modules live in the `std::` namespace and are written in regular FC w
 - **`slice`** — Functional operations on built-in `'a[]` slices: map, filter, fold, scan, reduce, find, sort, reverse, copy, and more. Read-only functions take `const 'a[]`; mutating functions (sort, reverse, retain, apply) take `'a[]`.
 
 All sequential collections (array_list, linked_list, slice) share a consistent functional API: `fold_left`, `fold_right`, `reduce`, `scan`, `map`, `mapi`, `filter`, `iter`, `iteri`, `any`, `all`, `find`, `count`. In-place mutating variants: `sort`, `reverse`, `retain`, `apply`, `applyi`. The `try_` prefix convention returns an option; the bare name force-unwraps (e.g., `try_find` vs `find`).
-
----
 
 ---
 

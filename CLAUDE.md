@@ -200,7 +200,7 @@ Spec sections are organized as:
 - Part 3 — Functions (lambdas, closures, capture)
 - Part 4 — Type system (structs, unions, options, pointers, slices, function types)
 - Part 5 — Memory management (alloc, free, stack/heap)
-- Part 6 — I/O, system & formatting (std::io module, std::sys module, print/eprint/fprint/sprint)
+- Part 6 — Standard library (std::io, std::sys, std::math, std::text, std::data)
 - Part 7 — Program structure (modules, namespaces, imports, conditional compilation)
 - Part 8 — C interop (extern, any*, variadics)
 - Part 9 — Generics (type variables, monomorphization)
