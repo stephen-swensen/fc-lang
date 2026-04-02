@@ -1786,6 +1786,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_FUNC: {
+        /* If this function was already type-checked (e.g., during on-demand
+         * checking of a forward-referenced function), return the cached result.
+         * Re-checking would assign different codegen names from a new scope. */
+        if (e->type) return e->type;
         bool is_top = ctx->is_top_level_init;
         ctx->is_top_level_init = false;
 
@@ -1890,6 +1894,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_CALL: {
+        /* If this call was already type-checked (e.g., during on-demand checking
+         * of a forward-referenced function), return the cached result. Without this,
+         * inferred type_args from the first check are misinterpreted as explicit
+         * type args on the second check, causing spurious errors. */
+        if (e->type) return e->type;
         Type *ft = check_expr(ctx, e->call.func);
         if (type_is_error(ft)) { e->type = type_error(); return e->type; }
 
