@@ -443,6 +443,31 @@ module linked_list =
         l->tail = some(n)
         l->len = l->len + 1
 
+    // insert: inserts value before the element at index. O(n) traversal.
+    // index 0 = prepend, index len = append.
+    let insert = (l: linked_list<'a>*, index: int64, value: 'a) ->
+        if index <= 0 then linked_list.prepend(l, value)
+        else if index >= l->len then linked_list.append(l, value)
+        else
+            let mut cur = l->head
+            let mut i = 0i64
+            loop
+                match cur with
+                | none -> break
+                | some(at) ->
+                    if i == index then
+                        let n = alloc(dl_node { value = value })!
+                        n->next = some(at)
+                        n->prev = at->prev
+                        match at->prev with
+                        | none -> l->head = some(n)
+                        | some(p) -> p->next = some(n)
+                        at->prev = some(n)
+                        l->len = l->len + 1
+                        break
+                    i = i + 1
+                    cur = at->next
+
     // copy: returns a deep copy. Caller must drop.
     let copy = (l: linked_list<'a>) ->
         let mut result = linked_list.make<'a>()

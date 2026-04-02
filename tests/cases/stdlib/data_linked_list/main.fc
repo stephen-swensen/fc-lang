@@ -14,6 +14,25 @@ let main = (args: str[]) ->
     assert(linked_list.first(l) == 1)
     assert(linked_list.last(l) == 4)
 
+    // insert at middle, head, tail
+    linked_list.insert(&l, 2i64, 99)
+    // now: 1, 2, 99, 3, 4
+    assert(linked_list.len(l) == 5)
+    let ins_check = linked_list.to_slice(l)
+    assert(ins_check[0] == 1)
+    assert(ins_check[1] == 2)
+    assert(ins_check[2] == 99)
+    assert(ins_check[3] == 3)
+    assert(ins_check[4] == 4)
+    free(ins_check)
+    // remove the 99 so the rest of the test is unaffected
+    let mut _discard = linked_list.pop_first(&l)
+    _discard = linked_list.pop_first(&l)
+    _discard = linked_list.pop_first(&l) // removes 99
+    linked_list.prepend(&l, 2)
+    linked_list.prepend(&l, 1)
+    // back to: 1, 2, 3, 4
+
     // fold / fold_right
     let sum = linked_list.fold_left(l, 0, (acc: int32, x: int32) -> acc + x)
     assert(sum == 10)
