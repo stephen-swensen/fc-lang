@@ -215,6 +215,11 @@ module array_list =
             if pred(e) then n = n + 1
         n
 
+    // sort: sorts elements in place.
+    // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
+    let sort = (l: array_list<'a>*, cmp: ('a, 'a) -> int32) ->
+        slice.sort(l->data[0..l->len], cmp)
+
 // =========================================================================
 // slice — functional operations on built-in 'a[] slices
 // =========================================================================
@@ -360,6 +365,20 @@ module slice =
         for i, e in s
             result[i] = e
         result
+
+    // sort: sorts a slice in place.
+    // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
+    let sort = (s: 'a[], cmp: ('a, 'a) -> int32) ->
+        // insertion sort
+        for i in 1..s.len
+            let key = s[i]
+            let mut j = i - 1
+            loop
+                if j < 0 then break
+                if cmp(s[j], key) <= 0 then break
+                s[j + 1] = s[j]
+                j = j - 1
+            s[j + 1] = key
 
 // =========================================================================
 // linked_list — doubly-linked list with O(1) prepend/append
@@ -691,6 +710,23 @@ module linked_list =
                 result[j] = ptr->value
                 j = j + 1
                 cur = ptr->next
+
+    // sort: sorts elements in place.
+    // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
+    let sort = (l: linked_list<'a>*, cmp: ('a, 'a) -> int32) ->
+        if l->len <= 1 then return
+        let s = linked_list.to_slice(*l)
+        slice.sort(s, cmp)
+        let mut cur = l->head
+        let mut j = 0i64
+        loop
+            match cur with
+            | none -> break
+            | some(ptr) ->
+                ptr->value = s[j]
+                j = j + 1
+                cur = ptr->next
+        free(s)
 
 // =========================================================================
 // hash_dict — hash map with open addressing and linear probing

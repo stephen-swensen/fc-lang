@@ -116,5 +116,23 @@ let main = (args: str[]) ->
     assert(linked_list.first(l) == 0)
     assert(linked_list.last(l) == 19)
 
+    // sort
+    linked_list.clear(&l)
+    linked_list.append(&l, 5)
+    linked_list.append(&l, 1)
+    linked_list.append(&l, 4)
+    linked_list.append(&l, 2)
+    linked_list.append(&l, 3)
+    linked_list.sort(&l, (a: int32, b: int32) -> a - b)
+    assert(linked_list.first(l) == 1)
+    assert(linked_list.last(l) == 5)
+    let sorted = linked_list.to_slice(l)
+    assert(sorted[0] == 1)
+    assert(sorted[1] == 2)
+    assert(sorted[2] == 3)
+    assert(sorted[3] == 4)
+    assert(sorted[4] == 5)
+    free(sorted)
+
     linked_list.drop(l)
     0

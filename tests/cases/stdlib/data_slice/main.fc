@@ -69,4 +69,24 @@ let main = (args: str[]) ->
     assert(cp.len == 5i64)
     free(cp)
 
+    // sort
+    let mut buf = int32[6] { 3, 1, 4, 1, 5, 9 }
+    slice.sort(buf, (a: int32, b: int32) -> a - b)
+    assert(buf[0] == 1)
+    assert(buf[1] == 1)
+    assert(buf[2] == 3)
+    assert(buf[3] == 4)
+    assert(buf[4] == 5)
+    assert(buf[5] == 9)
+    // sort descending
+    slice.sort(buf, (a: int32, b: int32) -> b - a)
+    assert(buf[0] == 9)
+    assert(buf[5] == 1)
+    // sort empty and single-element (no crash)
+    let mut empty_buf = int32[0] {}
+    slice.sort(empty_buf, (a: int32, b: int32) -> a - b)
+    let mut one = int32[1] { 42 }
+    slice.sort(one, (a: int32, b: int32) -> a - b)
+    assert(one[0] == 42)
+
     0

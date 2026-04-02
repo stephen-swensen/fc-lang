@@ -118,6 +118,25 @@ let main = (args: str[]) ->
     assert(array_list.get(scanned, 3i64) == 40)
     array_list.drop(scanned)
 
+    // sort
+    let mut sl = array_list.make<int32>()
+    array_list.add(&sl, 5)
+    array_list.add(&sl, 1)
+    array_list.add(&sl, 4)
+    array_list.add(&sl, 2)
+    array_list.add(&sl, 3)
+    array_list.sort(&sl, (a: int32, b: int32) -> a - b)
+    assert(array_list.get(sl, 0i64) == 1)
+    assert(array_list.get(sl, 1i64) == 2)
+    assert(array_list.get(sl, 2i64) == 3)
+    assert(array_list.get(sl, 3i64) == 4)
+    assert(array_list.get(sl, 4i64) == 5)
+    // sort descending
+    array_list.sort(&sl, (a: int32, b: int32) -> b - a)
+    assert(array_list.get(sl, 0i64) == 5)
+    assert(array_list.get(sl, 4i64) == 1)
+    array_list.drop(sl)
+
     // clear
     array_list.clear(&l)
     assert(array_list.is_empty(l))
