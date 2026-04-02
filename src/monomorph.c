@@ -59,20 +59,31 @@ MonoInstance *mono_find(MonoTable *t, const char *mangled_name) {
     return NULL;
 }
 
-void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type) {
+void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type,
+                              SymbolTable *symtab) {
     if (!type) return;
     switch (type->kind) {
-    case TYPE_POINTER: mono_resolve_type_names(t, a, intern, type->pointer.pointee); return;
-    case TYPE_SLICE:   mono_resolve_type_names(t, a, intern, type->slice.elem); return;
-    case TYPE_OPTION:  mono_resolve_type_names(t, a, intern, type->option.inner); return;
-    case TYPE_FIXED_ARRAY: mono_resolve_type_names(t, a, intern, type->fixed_array.elem); return;
+    case TYPE_POINTER: mono_resolve_type_names(t, a, intern, type->pointer.pointee, symtab); return;
+    case TYPE_SLICE:   mono_resolve_type_names(t, a, intern, type->slice.elem, symtab); return;
+    case TYPE_OPTION:  mono_resolve_type_names(t, a, intern, type->option.inner, symtab); return;
+    case TYPE_FIXED_ARRAY: mono_resolve_type_names(t, a, intern, type->fixed_array.elem, symtab); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
-            mono_resolve_type_names(t, a, intern, type->func.param_types[i]);
-        mono_resolve_type_names(t, a, intern, type->func.return_type);
+            mono_resolve_type_names(t, a, intern, type->func.param_types[i], symtab);
+        mono_resolve_type_names(t, a, intern, type->func.return_type, symtab);
         return;
     case TYPE_STRUCT:
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
+            /* Canonicalize name via symtab before mangling */
+            if (symtab && !mono_find(t, type->struc.name)) {
+                const char *lookup = type->struc.base_name ? type->struc.base_name : type->struc.name;
+                Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_STRUCT);
+                if (!sym) sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
+                if (sym && sym->type && sym->type->struc.name != type->struc.name) {
+                    if (!type->struc.base_name) type->struc.base_name = type->struc.name;
+                    type->struc.name = sym->type->struc.name;
+                }
+            }
             if (!mono_find(t, type->struc.name)) {
                 if (!type->struc.base_name) type->struc.base_name = type->struc.name;
                 type->struc.name = mangle_generic_name(a, intern,
@@ -80,10 +91,19 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             }
         }
         for (int i = 0; i < type->struc.field_count; i++)
-            mono_resolve_type_names(t, a, intern, type->struc.fields[i].type);
+            mono_resolve_type_names(t, a, intern, type->struc.fields[i].type, symtab);
         return;
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
+            if (symtab && !mono_find(t, type->unio.name)) {
+                const char *lookup = type->unio.base_name ? type->unio.base_name : type->unio.name;
+                Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_UNION);
+                if (!sym) sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
+                if (sym && sym->type && sym->type->unio.name != type->unio.name) {
+                    if (!type->unio.base_name) type->unio.base_name = type->unio.name;
+                    type->unio.name = sym->type->unio.name;
+                }
+            }
             if (!mono_find(t, type->unio.name)) {
                 if (!type->unio.base_name) type->unio.base_name = type->unio.name;
                 type->unio.name = mangle_generic_name(a, intern,
@@ -91,7 +111,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             }
         }
         for (int i = 0; i < type->unio.variant_count; i++)
-            mono_resolve_type_names(t, a, intern, type->unio.variants[i].payload);
+            mono_resolve_type_names(t, a, intern, type->unio.variants[i].payload, symtab);
         return;
     default: return;
     }
@@ -206,7 +226,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                         }
                         if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct);
+                        mono_resolve_type_names(t, a, intern, ct, symtab);
                         mi->concrete_type = ct;
                     }
                 }
@@ -353,8 +373,142 @@ static void topo_visit(MonoTable *t, int idx, int *state, int *order, int *order
     order[(*order_count)++] = idx;
 }
 
+/* Recursively walk a type tree and register any concrete generic struct/union
+ * references that don't have a MonoInstance yet. This handles structs referenced
+ * only as field types (never directly constructed via struct literals). */
+static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
+                                   InternTable *intern, SymbolTable *symtab) {
+    if (!type) return;
+    switch (type->kind) {
+    case TYPE_POINTER: discover_nested_types(type->pointer.pointee, t, a, intern, symtab); return;
+    case TYPE_SLICE:   discover_nested_types(type->slice.elem, t, a, intern, symtab); return;
+    case TYPE_OPTION:  discover_nested_types(type->option.inner, t, a, intern, symtab); return;
+    case TYPE_FIXED_ARRAY: discover_nested_types(type->fixed_array.elem, t, a, intern, symtab); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < type->func.param_count; i++)
+            discover_nested_types(type->func.param_types[i], t, a, intern, symtab);
+        discover_nested_types(type->func.return_type, t, a, intern, symtab);
+        return;
+    case TYPE_STRUCT:
+        if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
+            /* Check if already fully mangled and registered */
+            if (mono_find(t, type->struc.name)) {
+                /* Recurse into fields only */
+                for (int i = 0; i < type->struc.field_count; i++)
+                    discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+                return;
+            }
+            /* Find the template symbol to get the canonical base name for mangling.
+             * Try base_name first (parser name), then name (may be canonical from pass1). */
+            const char *lookup = type->struc.base_name ? type->struc.base_name : type->struc.name;
+            Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_STRUCT);
+            if (!sym) sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
+            /* Use the symbol's canonical name for mangling */
+            const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
+            const char *mangled = mangle_generic_name(a, intern,
+                canon, type->struc.type_args, type->struc.type_arg_count);
+            if (!type->struc.base_name) type->struc.base_name = type->struc.name;
+            type->struc.name = mangled;
+            if (!mono_find(t, mangled)) {
+                if (sym && sym->is_generic && sym->decl) {
+                    mono_register(t, a, intern, sym->type->struc.name, NULL,
+                        type->struc.type_args, type->struc.type_arg_count,
+                        sym->decl, DECL_STRUCT, sym->type_params, sym->type_param_count);
+                    /* Build concrete type */
+                    MonoInstance *mi = mono_find(t, mangled);
+                    if (mi && !mi->concrete_type) {
+                        int ntp = sym->type_param_count < type->struc.type_arg_count
+                                  ? sym->type_param_count : type->struc.type_arg_count;
+                        Type *ct = type_substitute(a, sym->type,
+                            sym->type_params, type->struc.type_args, ntp);
+                        if (ct == sym->type) ct = type_copy(a, ct);
+                        if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
+                        ct->struc.name = mangled;
+                        mono_resolve_type_names(t, a, intern, ct, symtab);
+                        mi->concrete_type = ct;
+                    }
+                }
+            }
+        }
+        /* Recurse into fields (for by-value nested structs) */
+        for (int i = 0; i < type->struc.field_count; i++)
+            discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+        return;
+    case TYPE_UNION:
+        if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
+            if (mono_find(t, type->unio.name)) {
+                for (int i = 0; i < type->unio.variant_count; i++)
+                    discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+                return;
+            }
+            const char *lookup = type->unio.base_name ? type->unio.base_name : type->unio.name;
+            Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_UNION);
+            if (!sym) sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
+            const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
+            const char *mangled = mangle_generic_name(a, intern,
+                canon, type->unio.type_args, type->unio.type_arg_count);
+            if (!type->unio.base_name) type->unio.base_name = type->unio.name;
+            type->unio.name = mangled;
+            if (!mono_find(t, mangled)) {
+                if (sym && sym->is_generic && sym->decl) {
+                    mono_register(t, a, intern, sym->type->unio.name, NULL,
+                        type->unio.type_args, type->unio.type_arg_count,
+                        sym->decl, DECL_UNION, sym->type_params, sym->type_param_count);
+                    MonoInstance *mi = mono_find(t, mangled);
+                    if (mi && !mi->concrete_type) {
+                        int ntp = sym->type_param_count < type->unio.type_arg_count
+                                  ? sym->type_param_count : type->unio.type_arg_count;
+                        Type *ct = type_substitute(a, sym->type,
+                            sym->type_params, type->unio.type_args, ntp);
+                        if (ct == sym->type) ct = type_copy(a, ct);
+                        if (!ct->unio.base_name) ct->unio.base_name = ct->unio.name;
+                        ct->unio.name = mangled;
+                        mono_resolve_type_names(t, a, intern, ct, symtab);
+                        mi->concrete_type = ct;
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < type->unio.variant_count; i++)
+            discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+        return;
+    default: return;
+    }
+}
+
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     if (t->count == 0) return;
+
+    /* Discover any concrete generic structs/unions referenced in field types
+     * that don't have their own MonoInstance yet (e.g., entry<int32> used only
+     * as a field type of table<int32>, never directly constructed). */
+    int prev_count;
+    do {
+        prev_count = t->count;
+        for (int i = 0; i < prev_count; i++) {
+            MonoInstance *inst = &t->entries[i];
+            if (inst->concrete_type && (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION)) {
+                Type *ct = inst->concrete_type;
+                if (ct->kind == TYPE_STRUCT) {
+                    for (int f = 0; f < ct->struc.field_count; f++)
+                        discover_nested_types(ct->struc.fields[f].type, t, a, intern, symtab);
+                } else if (ct->kind == TYPE_UNION) {
+                    for (int v = 0; v < ct->unio.variant_count; v++)
+                        discover_nested_types(ct->unio.variants[v].payload, t, a, intern, symtab);
+                }
+            }
+        }
+    } while (t->count > prev_count);  /* Repeat until fixpoint */
+
+    /* Resolve all type names in concrete_types. This is the single centralized
+     * pass that converts canonical struct names (e.g., "m__entry") to mangled
+     * C identifiers (e.g., "m__entry_int32_int32"). Done AFTER discovery so
+     * all mono instances are registered and mono_find can prevent double-mangling. */
+    for (int i = 0; i < t->count; i++) {
+        MonoInstance *inst = &t->entries[i];
+        if (inst->concrete_type)
+            mono_resolve_type_names(t, a, intern, inst->concrete_type, symtab);
+    }
 
     /* Topologically sort struct/union entries so by-value dependencies come first.
      * Function entries are left in their original order at the end. */

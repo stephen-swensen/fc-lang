@@ -1,0 +1,30 @@
+// A module-scoped generic struct used as a slice element in another struct.
+// Tests that the entry struct gets forward-declared and defined in the right order.
+module m =
+    struct entry =
+        key: 'a
+        value: 'b
+        state: int32
+
+    struct table =
+        buckets: entry<'a, 'b>[]
+        count: int32
+
+    let make = <'a, 'b>(cap: int64) ->
+        table { buckets = alloc(entry<'a, 'b>[cap] { })!, count = 0 }
+
+    let set_entry = (t: table<'a, 'b>*, idx: int64, k: 'a, v: 'b) ->
+        t->buckets[idx] = entry { key = k, value = v, state = 1 }
+
+    let get_key = (t: table<'a, 'b>, idx: int64) ->
+        let e = t.buckets[idx]
+        e.key
+
+let main = (args: str[]) ->
+    let mut t = m.make<int32, int32>(4)
+    m.set_entry(&t, 0, 10, 100)
+    m.set_entry(&t, 1, 20, 200)
+    assert(m.get_key(t, 0) == 10)
+    assert(m.get_key(t, 1) == 20)
+    free(t.buckets)
+    0

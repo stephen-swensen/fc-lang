@@ -437,7 +437,6 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                     MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                     if (mi && !mi->concrete_type) {
                         Type *ct = type_copy(ctx->arena, concrete);
-                        mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
                         mi->concrete_type = ct;
                     }
                 }
@@ -771,7 +770,6 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
                 if (!ct->unio.base_name) ct->unio.base_name = ct->unio.name;
                 ct->unio.name = type_mangled;
             }
-            mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
             mi->concrete_type = ct;
         }
         return result;
@@ -2619,7 +2617,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                 if (mi && !mi->concrete_type) {
                     Type *ct = type_copy(ctx->arena, concrete);
-                    mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
+                    mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct, ctx->symtab);
                     mi->concrete_type = ct;
                 }
             }

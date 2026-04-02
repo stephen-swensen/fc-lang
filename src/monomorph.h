@@ -36,8 +36,10 @@ MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
 
 /* Recursively resolve generic struct/union stubs with concrete type_args into
  * mangled names in a type tree. Call after type_substitute() to ensure nested
- * references (e.g. self-referential fields) have proper C identifiers. */
-void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
+ * references (e.g. self-referential fields) have proper C identifiers.
+ * symtab (optional): used to canonicalize struct names before mangling. */
+void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type,
+                              SymbolTable *symtab);
 
 
 /* Finalize monomorphized types: ensure all concrete_types are built and
