@@ -694,98 +694,91 @@ module linked_list =
 
 // =========================================================================
 // hash_dict — hash map with open addressing and linear probing
-// Struct-of-arrays layout. Hash/eq functions stored in struct.
-// State: 0 = empty, 1 = occupied, 2 = deleted (tombstone).
+// Entry-struct layout. Hash/eq functions stored in struct.
+// Entry state: 0 = empty, 1 = occupied, 2 = deleted (tombstone).
 // =========================================================================
 
 module hash_dict =
 
+    struct hd_entry =
+        key:   'a
+        value: 'b
+        state: int32
+
     struct hash_dict =
-        keys:   'a[]
-        values: 'b[]
-        states: int32[]
-        len:    int64
-        hash:   ('a) -> int64
-        eq:     ('a, 'a) -> bool
+        buckets: hd_entry<'a, 'b>[]
+        len:     int64
+        hash:    ('a) -> int64
+        eq:      ('a, 'a) -> bool
 
     // make: creates empty hash_dict with default capacity 16. Caller must drop.
     // 'b must be explicitly provided; 'a is inferred from hash/eq.
     let make = <'b>(hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
-        hash_dict { keys = alloc('a[16] { })!, values = alloc('b[16] { })!, states = alloc(int32[16] { })!, len = 0, hash = hash, eq = eq }
+        hash_dict { buckets = alloc(hd_entry<'a, 'b>[16] { })!, len = 0, hash = hash, eq = eq }
 
     // make_with_capacity: creates empty hash_dict with given capacity. Caller must drop.
     let make_with_capacity = <'b>(cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
         let actual = if cap < 4i64 then 4i64 else cap
-        hash_dict { keys = alloc('a[actual] { })!, values = alloc('b[actual] { })!, states = alloc(int32[actual] { })!, len = 0, hash = hash, eq = eq }
+        hash_dict { buckets = alloc(hd_entry<'a, 'b>[actual] { })!, len = 0, hash = hash, eq = eq }
 
-    // drop: frees all backing arrays. Does not free key/value heap data.
+    // drop: frees bucket storage. Does not free key/value heap data.
     let drop = (d: hash_dict<'a, 'b>) ->
-        free(d.keys)
-        free(d.values)
-        free(d.states)
+        free(d.buckets)
 
     private let rehash = (d: hash_dict<'a, 'b>*) ->
-        let old_keys = d->keys
-        let old_vals = d->values
-        let old_states = d->states
-        let old_cap = old_keys.len
+        let old = d->buckets
+        let old_cap = old.len
         let new_cap = old_cap * 2
-        d->keys = alloc('a[new_cap] { })!
-        d->values = alloc('b[new_cap] { })!
-        d->states = alloc(int32[new_cap] { })!
+        d->buckets = alloc(hd_entry<'a, 'b>[new_cap] { })!
         d->len = 0
         for i in 0..old_cap
-            if old_states[i] == 1 then
-                let h = d->hash(old_keys[i])
+            let entry = old[i]
+            if entry.state == 1 then
+                let h = d->hash(entry.key)
                 let mut idx = h % new_cap
                 if idx < 0 then idx = idx + new_cap
                 loop
-                    if d->states[idx] == 0 then
-                        d->keys[idx] = old_keys[i]
-                        d->values[idx] = old_vals[i]
-                        d->states[idx] = 1
+                    let slot = d->buckets[idx]
+                    if slot.state == 0 then
+                        d->buckets[idx] = hd_entry { key = entry.key, value = entry.value, state = 1 }
                         d->len = d->len + 1
                         break
                     idx = (idx + 1) % new_cap
-        free(old_keys)
-        free(old_vals)
-        free(old_states)
+        free(old)
 
     // put: inserts or updates a key-value pair. Rehashes at 70% load.
     let put = (d: hash_dict<'a, 'b>*, key: 'a, value: 'b) ->
-        if d->len * 10 >= d->keys.len * 7 then hash_dict.rehash(d)
-        let cap = d->keys.len
+        if d->len * 10 >= d->buckets.len * 7 then hash_dict.rehash(d)
+        let cap = d->buckets.len
         let h = d->hash(key)
         let mut idx = h % cap
         if idx < 0 then idx = idx + cap
         let mut first_del = -1i64
         loop
-            let st = d->states[idx]
-            if st == 0 then
+            let entry = d->buckets[idx]
+            if entry.state == 0 then
                 let ins = if first_del >= 0 then first_del else idx
-                d->keys[ins] = key
-                d->values[ins] = value
-                d->states[ins] = 1
+                d->buckets[ins] = hd_entry { key = key, value = value, state = 1 }
                 d->len = d->len + 1
                 break
-            if st == 2 && first_del < 0 then
+            if entry.state == 2 && first_del < 0 then
                 first_del = idx
-            if st == 1 && d->eq(d->keys[idx], key) then
-                d->values[idx] = value
+            if entry.state == 1 && d->eq(entry.key, key) then
+                d->buckets[idx] = hd_entry { key = key, value = value, state = 1 }
                 break
             idx = (idx + 1) % cap
 
     // try_get: returns value for key, or none.
     let try_get = (d: hash_dict<'a, 'b>, key: 'a) ->
-        let cap = d.keys.len
+        let cap = d.buckets.len
         let h = d.hash(key)
         let mut idx = h % cap
         if idx < 0 then idx = idx + cap
         loop
-            let st = d.states[idx]
-            if st == 0 then break default('b?)
-            if st == 1 && d.eq(d.keys[idx], key) then
-                break some(d.values[idx])
+            let entry = d.buckets[idx]
+            if entry.state == 0 then break default('b?)
+            if entry.state == 1 && d.eq(entry.key, key) then
+                break some(entry.value)
             idx = (idx + 1) % cap
 
     // get: returns value for key. Aborts if not found.
@@ -806,16 +799,16 @@ module hash_dict =
 
     // try_remove: removes entry for key. Returns value or none.
     let try_remove = (d: hash_dict<'a, 'b>*, key: 'a) ->
-        let cap = d->keys.len
+        let cap = d->buckets.len
         let h = d->hash(key)
         let mut idx = h % cap
         if idx < 0 then idx = idx + cap
         loop
-            let st = d->states[idx]
-            if st == 0 then break default('b?)
-            if st == 1 && d->eq(d->keys[idx], key) then
-                let val = d->values[idx]
-                d->states[idx] = 2
+            let entry = d->buckets[idx]
+            if entry.state == 0 then break default('b?)
+            if entry.state == 1 && d->eq(entry.key, key) then
+                let val = entry.value
+                d->buckets[idx] = hd_entry { key = entry.key, value = entry.value, state = 2 }
                 d->len = d->len - 1
                 break some(val)
             idx = (idx + 1) % cap
@@ -827,24 +820,27 @@ module hash_dict =
     // fold: folds over all (key, value) pairs.
     let fold = (d: hash_dict<'a, 'b>, init: 'c, f: ('c, 'a, 'b) -> 'c) ->
         let mut acc = init
-        for i in 0..d.keys.len
-            if d.states[i] == 1 then
-                acc = f(acc, d.keys[i], d.values[i])
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 then
+                acc = f(acc, entry.key, entry.value)
         acc
 
     // iter: applies f to each (key, value) pair for side effects.
     let iter = (d: hash_dict<'a, 'b>, f: ('a, 'b) -> 'c) ->
-        for i in 0..d.keys.len
-            if d.states[i] == 1 then
-                f(d.keys[i], d.values[i])
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 then
+                f(entry.key, entry.value)
 
     // keys: returns all keys as heap-allocated slice. Caller must free.
     let keys = (d: hash_dict<'a, 'b>) ->
         let result = alloc('a[d.len] { })!
         let mut j = 0i64
-        for i in 0..d.keys.len
-            if d.states[i] == 1 then
-                result[j] = d.keys[i]
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 then
+                result[j] = entry.key
                 j = j + 1
         result
 
@@ -852,37 +848,37 @@ module hash_dict =
     let values = (d: hash_dict<'a, 'b>) ->
         let result = alloc('b[d.len] { })!
         let mut j = 0i64
-        for i in 0..d.keys.len
-            if d.states[i] == 1 then
-                result[j] = d.values[i]
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 then
+                result[j] = entry.value
                 j = j + 1
         result
 
     // count: number of entries matching predicate.
     let count = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
         let mut n = 0i64
-        for i in 0..d.keys.len
-            if d.states[i] == 1 && pred(d.keys[i], d.values[i]) then
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 && pred(entry.key, entry.value) then
                 n = n + 1
         n
 
     // any: true if any entry matches predicate.
     let any = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
-        let mut i = 0i64
-        loop
-            if i >= d.keys.len then break false
-            if d.states[i] == 1 && pred(d.keys[i], d.values[i]) then
-                break true
-            i = i + 1
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 && pred(entry.key, entry.value) then
+                return true
+        false
 
     // all: true if all entries match predicate.
     let all = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
-        let mut i = 0i64
-        loop
-            if i >= d.keys.len then break true
-            if d.states[i] == 1 && !pred(d.keys[i], d.values[i]) then
-                break false
-            i = i + 1
+        for i in 0..d.buckets.len
+            let entry = d.buckets[i]
+            if entry.state == 1 && !pred(entry.key, entry.value) then
+                return false
+        true
 
 // =========================================================================
 // hash_set — hash set with open addressing and linear probing
@@ -891,95 +887,94 @@ module hash_dict =
 
 module hash_set =
 
+    struct hs_entry =
+        key:   'a
+        state: int32
+
     struct hash_set =
-        keys:   'a[]
-        states: int32[]
-        len:    int64
-        hash:   ('a) -> int64
-        eq:     ('a, 'a) -> bool
+        buckets: hs_entry<'a>[]
+        len:     int64
+        hash:    ('a) -> int64
+        eq:      ('a, 'a) -> bool
 
     // make: creates empty hash_set with default capacity 16. Caller must drop.
     let make = (hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
-        hash_set { keys = alloc('a[16] { })!, states = alloc(int32[16] { })!, len = 0, hash = hash, eq = eq }
+        hash_set { buckets = alloc(hs_entry<'a>[16] { })!, len = 0, hash = hash, eq = eq }
 
     // make_with_capacity: creates empty hash_set with given capacity. Caller must drop.
     let make_with_capacity = (cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
         let actual = if cap < 4i64 then 4i64 else cap
-        hash_set { keys = alloc('a[actual] { })!, states = alloc(int32[actual] { })!, len = 0, hash = hash, eq = eq }
+        hash_set { buckets = alloc(hs_entry<'a>[actual] { })!, len = 0, hash = hash, eq = eq }
 
-    // drop: frees backing arrays.
+    // drop: frees bucket storage.
     let drop = (s: hash_set<'a>) ->
-        free(s.keys)
-        free(s.states)
+        free(s.buckets)
 
     private let rehash = (s: hash_set<'a>*) ->
-        let old_keys = s->keys
-        let old_states = s->states
-        let old_cap = old_keys.len
+        let old = s->buckets
+        let old_cap = old.len
         let new_cap = old_cap * 2
-        s->keys = alloc('a[new_cap] { })!
-        s->states = alloc(int32[new_cap] { })!
+        s->buckets = alloc(hs_entry<'a>[new_cap] { })!
         s->len = 0
         for i in 0..old_cap
-            if old_states[i] == 1 then
-                let h = s->hash(old_keys[i])
+            let entry = old[i]
+            if entry.state == 1 then
+                let h = s->hash(entry.key)
                 let mut idx = h % new_cap
                 if idx < 0 then idx = idx + new_cap
                 loop
-                    if s->states[idx] == 0 then
-                        s->keys[idx] = old_keys[i]
-                        s->states[idx] = 1
+                    let slot = s->buckets[idx]
+                    if slot.state == 0 then
+                        s->buckets[idx] = hs_entry { key = entry.key, state = 1 }
                         s->len = s->len + 1
                         break
                     idx = (idx + 1) % new_cap
-        free(old_keys)
-        free(old_states)
+        free(old)
 
     // add: inserts key if not present. Rehashes at 70% load.
     let add = (s: hash_set<'a>*, key: 'a) ->
-        if s->len * 10 >= s->keys.len * 7 then hash_set.rehash(s)
-        let cap = s->keys.len
+        if s->len * 10 >= s->buckets.len * 7 then hash_set.rehash(s)
+        let cap = s->buckets.len
         let h = s->hash(key)
         let mut idx = h % cap
         if idx < 0 then idx = idx + cap
         let mut first_del = -1i64
         loop
-            let st = s->states[idx]
-            if st == 0 then
+            let entry = s->buckets[idx]
+            if entry.state == 0 then
                 let ins = if first_del >= 0 then first_del else idx
-                s->keys[ins] = key
-                s->states[ins] = 1
+                s->buckets[ins] = hs_entry { key = key, state = 1 }
                 s->len = s->len + 1
                 break
-            if st == 2 && first_del < 0 then
+            if entry.state == 2 && first_del < 0 then
                 first_del = idx
-            if st == 1 && s->eq(s->keys[idx], key) then
+            if entry.state == 1 && s->eq(entry.key, key) then
                 break
             idx = (idx + 1) % cap
 
     // has: true if key exists.
     let has = (s: hash_set<'a>, key: 'a) ->
-        let cap = s.keys.len
+        let cap = s.buckets.len
         let h = s.hash(key)
         let mut idx = h % cap
         if idx < 0 then idx = idx + cap
         loop
-            let st = s.states[idx]
-            if st == 0 then break false
-            if st == 1 && s.eq(s.keys[idx], key) then break true
+            let entry = s.buckets[idx]
+            if entry.state == 0 then break false
+            if entry.state == 1 && s.eq(entry.key, key) then break true
             idx = (idx + 1) % cap
 
     // remove: removes key. Returns true if it was present.
     let remove = (s: hash_set<'a>*, key: 'a) ->
-        let cap = s->keys.len
+        let cap = s->buckets.len
         let h = s->hash(key)
         let mut idx = h % cap
         if idx < 0 then idx = idx + cap
         loop
-            let st = s->states[idx]
-            if st == 0 then break false
-            if st == 1 && s->eq(s->keys[idx], key) then
-                s->states[idx] = 2
+            let entry = s->buckets[idx]
+            if entry.state == 0 then break false
+            if entry.state == 1 && s->eq(entry.key, key) then
+                s->buckets[idx] = hs_entry { key = entry.key, state = 2 }
                 s->len = s->len - 1
                 break true
             idx = (idx + 1) % cap
@@ -994,62 +989,67 @@ module hash_set =
 
     // clear: removes all elements.
     let clear = (s: hash_set<'a>*) ->
-        for i in 0..s->keys.len
-            s->states[i] = 0
+        for i in 0..s->buckets.len
+            let entry = s->buckets[i]
+            if entry.state != 0 then
+                s->buckets[i] = hs_entry { key = entry.key, state = 0 }
         s->len = 0
 
     // fold: folds over all elements.
     let fold = (s: hash_set<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
         let mut acc = init
-        for i in 0..s.keys.len
-            if s.states[i] == 1 then
-                acc = f(acc, s.keys[i])
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 then
+                acc = f(acc, entry.key)
         acc
 
     // iter: applies f to each element for side effects.
     let iter = (s: hash_set<'a>, f: ('a) -> 'b) ->
-        for i in 0..s.keys.len
-            if s.states[i] == 1 then
-                f(s.keys[i])
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 then
+                f(entry.key)
 
     // filter: returns new hash_set with matching elements. Caller must drop.
     let filter = (s: hash_set<'a>, pred: ('a) -> bool) ->
         let mut result = hash_set.make(s.hash, s.eq)
-        for i in 0..s.keys.len
-            if s.states[i] == 1 && pred(s.keys[i]) then
-                hash_set.add(&result, s.keys[i])
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 && pred(entry.key) then
+                hash_set.add(&result, entry.key)
         result
 
     // to_slice: returns all elements as heap-allocated slice. Caller must free.
     let to_slice = (s: hash_set<'a>) ->
         let result = alloc('a[s.len] { })!
         let mut j = 0i64
-        for i in 0..s.keys.len
-            if s.states[i] == 1 then
-                result[j] = s.keys[i]
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 then
+                result[j] = entry.key
                 j = j + 1
         result
 
     // any: true if any element matches predicate.
     let any = (s: hash_set<'a>, pred: ('a) -> bool) ->
-        let mut i = 0i64
-        loop
-            if i >= s.keys.len then break false
-            if s.states[i] == 1 && pred(s.keys[i]) then break true
-            i = i + 1
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 && pred(entry.key) then return true
+        false
 
     // all: true if all elements match predicate.
     let all = (s: hash_set<'a>, pred: ('a) -> bool) ->
-        let mut i = 0i64
-        loop
-            if i >= s.keys.len then break true
-            if s.states[i] == 1 && !pred(s.keys[i]) then break false
-            i = i + 1
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 && !pred(entry.key) then return false
+        true
 
     // count: number of elements matching predicate.
     let count = (s: hash_set<'a>, pred: ('a) -> bool) ->
         let mut n = 0i64
-        for i in 0..s.keys.len
-            if s.states[i] == 1 && pred(s.keys[i]) then
+        for i in 0..s.buckets.len
+            let entry = s.buckets[i]
+            if entry.state == 1 && pred(entry.key) then
                 n = n + 1
         n
