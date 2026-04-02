@@ -1,0 +1,15 @@
+// A generic function defined at the parent module level called from a child module.
+module parent =
+    let helper = (x: 'a) -> x
+
+    module child =
+        let use_helper = (x: int32) -> helper(x)
+
+    module grandchild =
+        module inner =
+            let deep_use = (x: int32) -> helper(x) + 1
+
+let main = (args: str[]) ->
+    assert(parent.child.use_helper(42) == 42)
+    assert(parent.grandchild.inner.deep_use(10) == 11)
+    0

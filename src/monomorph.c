@@ -129,16 +129,19 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                 }
             }
             if (all_concrete) {
-                /* Find callee symbol */
+                /* Find callee symbol — prefer resolved_callee from pass2
+                 * (handles module-scoped functions that aren't in the global symtab) */
                 Expr *callee = e->call.func;
-                Symbol *callee_sym = NULL;
-                if (callee->kind == EXPR_IDENT) {
-                    callee_sym = symtab_lookup(symtab, callee->ident.name);
-                } else if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
-                    Symbol *mod = symtab_lookup_module(symtab, callee->field.object->ident.name, NULL);
-                    if (!mod) mod = symtab_lookup_kind(symtab, callee->field.object->ident.name, DECL_MODULE);
-                    if (mod && mod->members)
-                        callee_sym = symtab_lookup(mod->members, callee->field.name);
+                Symbol *callee_sym = (Symbol *)e->call.resolved_callee;
+                if (!callee_sym) {
+                    if (callee->kind == EXPR_IDENT) {
+                        callee_sym = symtab_lookup(symtab, callee->ident.name);
+                    } else if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
+                        Symbol *mod = symtab_lookup_module(symtab, callee->field.object->ident.name, NULL);
+                        if (!mod) mod = symtab_lookup_kind(symtab, callee->field.object->ident.name, DECL_MODULE);
+                        if (mod && mod->members)
+                            callee_sym = symtab_lookup(mod->members, callee->field.name);
+                    }
                 }
                 if (callee_sym) {
                     const char *base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
@@ -158,9 +161,13 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
             discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, symtab, var_names, concrete, var_count);
         /* Register generic struct instances created under substitution */
         if (e->type && e->type->kind == TYPE_STRUCT && type_contains_type_var(e->type)) {
-            Symbol *struct_sym = symtab_lookup_kind(symtab, e->struct_lit.type_name, DECL_STRUCT);
-            if (!struct_sym)
-                struct_sym = symtab_lookup(symtab, e->struct_lit.type_name);
+            /* Prefer resolved_sym from pass2 (handles module-scoped structs) */
+            Symbol *struct_sym = (Symbol *)e->struct_lit.resolved_sym;
+            if (!struct_sym) {
+                struct_sym = symtab_lookup_kind(symtab, e->struct_lit.type_name, DECL_STRUCT);
+                if (!struct_sym)
+                    struct_sym = symtab_lookup(symtab, e->struct_lit.type_name);
+            }
             if (struct_sym && struct_sym->is_generic) {
                 const char **vars = NULL;
                 int vc = 0, vcap = 0;
@@ -300,6 +307,80 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         return;
     default: return;
     }
+}
+
+/* Check if a type references a struct/union by VALUE (not through pointer/option/slice).
+ * Returns the mangled name if found, NULL otherwise. */
+static const char *find_by_value_dep(Type *type) {
+    if (!type) return NULL;
+    switch (type->kind) {
+    case TYPE_STRUCT:
+        /* A struct embedded by value is a direct dependency */
+        return type->struc.name;
+    case TYPE_FIXED_ARRAY:
+        /* Fixed arrays of structs are by-value */
+        return find_by_value_dep(type->fixed_array.elem);
+    default:
+        /* Pointers, slices, options, functions — NOT by-value dependencies */
+        return NULL;
+    }
+}
+
+/* Topological sort state for DFS */
+enum { TOPO_UNVISITED = 0, TOPO_VISITING = 1, TOPO_DONE = 2 };
+
+static void topo_visit(MonoTable *t, int idx, int *state, int *order, int *order_count) {
+    if (state[idx] != TOPO_UNVISITED) return;
+    state[idx] = TOPO_VISITING;
+    MonoInstance *inst = &t->entries[idx];
+    if (inst->concrete_type && (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION)) {
+        Type *ct = inst->concrete_type;
+        int fc = (ct->kind == TYPE_STRUCT) ? ct->struc.field_count : 0;
+        StructField *fields = (ct->kind == TYPE_STRUCT) ? ct->struc.fields : NULL;
+        for (int f = 0; f < fc; f++) {
+            const char *dep = find_by_value_dep(fields[f].type);
+            if (!dep) continue;
+            /* Find the dependency in the mono table */
+            for (int j = 0; j < t->count; j++) {
+                if (j != idx && t->entries[j].mangled_name == dep) {
+                    topo_visit(t, j, state, order, order_count);
+                    break;
+                }
+            }
+        }
+    }
+    state[idx] = TOPO_DONE;
+    order[(*order_count)++] = idx;
+}
+
+void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
+    if (t->count == 0) return;
+
+    /* Topologically sort struct/union entries so by-value dependencies come first.
+     * Function entries are left in their original order at the end. */
+    int *state = calloc((size_t)t->count, sizeof(int));
+    int *order = malloc(sizeof(int) * (size_t)t->count);
+    int order_count = 0;
+
+    /* Visit struct/union entries first (DFS-based topological sort) */
+    for (int i = 0; i < t->count; i++) {
+        if (t->entries[i].decl_kind == DECL_STRUCT || t->entries[i].decl_kind == DECL_UNION)
+            topo_visit(t, i, state, order, &order_count);
+    }
+    /* Append remaining entries (functions) in original order */
+    for (int i = 0; i < t->count; i++) {
+        if (state[i] == TOPO_UNVISITED)
+            order[order_count++] = i;
+    }
+
+    /* Reorder entries according to topological order */
+    MonoInstance *sorted = malloc(sizeof(MonoInstance) * (size_t)t->count);
+    for (int i = 0; i < t->count; i++)
+        sorted[i] = t->entries[order[i]];
+    memcpy(t->entries, sorted, sizeof(MonoInstance) * (size_t)t->count);
+    free(sorted);
+    free(state);
+    free(order);
 }
 
 void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern,

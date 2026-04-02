@@ -39,6 +39,11 @@ MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
  * references (e.g. self-referential fields) have proper C identifiers. */
 void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
 
+
+/* Finalize monomorphized types: ensure all concrete_types are built and
+ * topologically sort entries so by-value struct dependencies are emitted first. */
+void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
+
 /* Discover all transitive monomorphized instances by walking template function
  * bodies. Generic calls inside generic functions aren't resolved until the outer
  * function is instantiated; this fixpoint loop finds them all. Call after pass2. */

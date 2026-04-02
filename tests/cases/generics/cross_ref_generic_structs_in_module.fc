@@ -1,0 +1,19 @@
+// Two generic structs in a module where one references the other.
+module m =
+    struct inner =
+        x: 'a
+        y: 'a
+
+    struct outer =
+        ptr: inner<'a>*
+
+    let create = (a: 'a, b: 'a) ->
+        let i = alloc(inner { x = a, y = b })!
+        outer { ptr = i }
+
+let main = (args: str[]) ->
+    let o = m.create(10, 20)
+    assert(o.ptr->x == 10)
+    assert(o.ptr->y == 20)
+    free(o.ptr)
+    0

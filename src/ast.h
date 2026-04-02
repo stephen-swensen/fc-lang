@@ -140,6 +140,7 @@ struct Expr {
             bool is_indirect;     /* callee is a function value (fat pointer) */
             bool is_extern_call;  /* callee is an extern function (no _ctx) */
             const char *mangled_name;   /* C function name for monomorphized call, NULL for non-generic */
+            void *resolved_callee;      /* Symbol* resolved in pass2, used by mono discovery */
         } call;
 
         /* EXPR_FIELD, EXPR_DEREF_FIELD */
@@ -204,6 +205,7 @@ struct Expr {
             const char *type_name;
             FieldInit *fields;
             int field_count;
+            void *resolved_sym;     /* Symbol* resolved in pass2, used by mono discovery */
         } struct_lit;
 
         /* EXPR_ARRAY_LIT */

@@ -1,0 +1,28 @@
+// Self-referential generic struct inside a module with deep chain access.
+module m =
+    struct node =
+        value: 'a
+        next: node<'a>*?
+
+    let make = (v: 'a) ->
+        let n = alloc(node { value = v })!
+        n->next = default(node<'a>*?)
+        n
+
+    let prepend = (head: node<'a>*, v: 'a) ->
+        let n = m.make(v)
+        n->next = some(head)
+        n
+
+let main = (args: str[]) ->
+    let n1 = m.make(10)
+    let n2 = m.prepend(n1, 20)
+    let n3 = m.prepend(n2, 30)
+    // Test deep chain access (3 levels) from outside the module
+    assert(n3->value == 30)
+    assert(n3->next!->value == 20)
+    assert(n3->next!->next!->value == 10)
+    free(n3->next!->next!)
+    free(n3->next!)
+    free(n3)
+    0

@@ -141,6 +141,13 @@ typedef struct OnDemandVisited {
     struct OnDemandVisited *next;
 } OnDemandVisited;
 
+/* Linked list of parent module symbol tables for arbitrary nesting depth.
+ * Enables child modules to see symbols from all ancestor modules. */
+typedef struct ModuleScopeChain {
+    SymbolTable *members;
+    struct ModuleScopeChain *parent;
+} ModuleScopeChain;
+
 typedef struct {
     SymbolTable *symtab;
     Scope *scope;
@@ -148,7 +155,7 @@ typedef struct {
     Type **loop_break_type;  /* non-NULL when inside a loop; points to break value type */
     bool in_for;             /* true when inside a for loop (break value forbidden) */
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
-    SymbolTable *parent_module_symtab;  /* non-NULL in child modules; parent's symtab for type fallback */
+    ModuleScopeChain *parent_modules;  /* chain of ancestor module symtabs (nearest first) */
     const char *current_ns;      /* current namespace for namespace isolation */
     Type *recursive_ret;         /* non-NULL placeholder when resolving a recursive function */
     LambdaCtx *lambda_ctx;       /* capture tracking for lambdas, NULL outside lambdas */
@@ -315,7 +322,7 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         return nf;
     }
 
-    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.fields == NULL && t->struc.name) {
+    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name) {
         /* Look up as struct/union first, then fall back to general lookup.
          * This handles the case where a module shares the same name as a type. */
         Symbol *sym = NULL;
@@ -328,12 +335,25 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
             sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_STRUCT);
             if (!sym)
                 sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_UNION);
+            /* Fallback: stub may have canonical name; try base_name (source name) */
+            if (!sym && t->struc.base_name && t->struc.base_name != t->struc.name) {
+                sym = symtab_lookup_kind(ctx->module_symtab, t->struc.base_name, DECL_STRUCT);
+                if (!sym)
+                    sym = symtab_lookup_kind(ctx->module_symtab, t->struc.base_name, DECL_UNION);
+            }
         }
-        /* Fallback to parent module's types (for child modules accessing parent structs/unions) */
-        if (!sym && ctx->parent_module_symtab) {
-            sym = symtab_lookup_kind(ctx->parent_module_symtab, t->struc.name, DECL_STRUCT);
-            if (!sym)
-                sym = symtab_lookup_kind(ctx->parent_module_symtab, t->struc.name, DECL_UNION);
+        /* Fallback to ancestor module types (for child modules accessing parent structs/unions) */
+        if (!sym) {
+            for (ModuleScopeChain *p = ctx->parent_modules; p && !sym; p = p->parent) {
+                sym = symtab_lookup_kind(p->members, t->struc.name, DECL_STRUCT);
+                if (!sym)
+                    sym = symtab_lookup_kind(p->members, t->struc.name, DECL_UNION);
+                if (!sym && t->struc.base_name && t->struc.base_name != t->struc.name) {
+                    sym = symtab_lookup_kind(p->members, t->struc.base_name, DECL_STRUCT);
+                    if (!sym)
+                        sym = symtab_lookup_kind(p->members, t->struc.base_name, DECL_UNION);
+                }
+            }
         }
         if (!sym) {
             sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_STRUCT);
@@ -615,6 +635,10 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
         Symbol *sym = NULL;
         if (ctx->module_symtab)
             sym = symtab_lookup(ctx->module_symtab, callee->ident.name);
+        if (!sym) {
+            for (ModuleScopeChain *p = ctx->parent_modules; p && !sym; p = p->parent)
+                sym = symtab_lookup(p->members, callee->ident.name);
+        }
         if (!sym)
             sym = import_chain_lookup(ctx->import_scope, callee->ident.name);
         if (!sym)
@@ -2025,11 +2049,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
          * or the callee symbol is marked generic (for explicit-only type vars
          * that don't appear in parameter/return types, e.g. sizeof('a)) */
         Symbol *callee_sym = find_callee_symbol(ctx, e->call.func);
+        e->call.resolved_callee = callee_sym;
         bool callee_is_generic = callee_sym && callee_sym->is_generic;
         /* A local function value whose type contains type vars (e.g. a closure
          * parameter 'f: ('a) -> 'b') is NOT a generic call — skip resolution */
-        bool is_local_fn_value = e->call.func->kind == EXPR_IDENT
-                                 && e->call.func->ident.is_local;
+        bool is_local_fn_value = (e->call.func->kind == EXPR_IDENT
+                                  && e->call.func->ident.is_local)
+                                 || ((e->call.func->kind == EXPR_FIELD
+                                      || e->call.func->kind == EXPR_DEREF_FIELD)
+                                     && !callee_sym);
         if ((type_contains_type_var(ft) || callee_is_generic) && !is_local_fn_value) {
             if (!callee_sym || !callee_sym->is_generic) {
                 diag_error(e->loc, "cannot resolve generic function '%s'",
@@ -2477,8 +2505,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
         if (!sym && ctx->module_symtab)
             sym = symtab_lookup_kind(ctx->module_symtab, e->struct_lit.type_name, DECL_STRUCT);
-        if (!sym && ctx->parent_module_symtab)
-            sym = symtab_lookup_kind(ctx->parent_module_symtab, e->struct_lit.type_name, DECL_STRUCT);
+        if (!sym) {
+            for (ModuleScopeChain *p = ctx->parent_modules; p && !sym; p = p->parent)
+                sym = symtab_lookup_kind(p->members, e->struct_lit.type_name, DECL_STRUCT);
+        }
         if (!sym)
             sym = import_chain_lookup_kind(ctx->import_scope, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
@@ -2497,6 +2527,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
+        e->struct_lit.resolved_sym = sym;
         if (sym->kind != DECL_STRUCT || !sym->type || sym->type->kind != TYPE_STRUCT) {
             diag_error(e->loc, "'%s' is not a struct type", e->struct_lit.type_name);
             e->type = type_error();
@@ -4472,7 +4503,7 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 child->module.name, DECL_MODULE);
             if (sub_sym && sub_sym->members) {
                 SymbolTable *saved_symtab = ctx->module_symtab;
-                SymbolTable *saved_parent = ctx->parent_module_symtab;
+                ModuleScopeChain *saved_parents = ctx->parent_modules;
                 Scope *saved_scope = ctx->scope;
                 ImportScope *saved_imports = ctx->import_scope;
 
@@ -4480,14 +4511,16 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 ImportScope sub_import_scope = { .table = sub_sym->imports, .parent = ctx->import_scope };
                 if (sub_sym->imports) ctx->import_scope = &sub_import_scope;
 
-                ctx->parent_module_symtab = ctx->module_symtab;
+                /* Push current module onto parent chain */
+                ModuleScopeChain parent_link = { .members = ctx->module_symtab, .parent = ctx->parent_modules };
+                if (ctx->module_symtab) ctx->parent_modules = &parent_link;
                 ctx->module_symtab = sub_sym->members;
                 ctx->scope = scope_new(ctx->arena, ctx->scope);
                 ctx->scope->is_global = true;
                 check_module_members(ctx, child, sub_sym->members);
                 ctx->scope = saved_scope;
                 ctx->module_symtab = saved_symtab;
-                ctx->parent_module_symtab = saved_parent;
+                ctx->parent_modules = saved_parents;
                 ctx->import_scope = saved_imports;
             }
         }

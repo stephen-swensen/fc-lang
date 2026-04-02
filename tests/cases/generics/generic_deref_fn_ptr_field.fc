@@ -1,0 +1,17 @@
+// Calling function pointer fields through pointer dereference (->).
+struct processor =
+    transform: ('a) -> 'a
+    combine: ('a, 'a) -> 'a
+
+let apply_transform = (p: processor<'a>*, x: 'a) ->
+    p->transform(x)
+
+let apply_combine = (p: processor<'a>*, x: 'a, y: 'a) ->
+    p->combine(x, y)
+
+let main = (args: str[]) ->
+    let p = alloc(processor { transform = (x: int32) -> x * 2, combine = (a: int32, b: int32) -> a + b })!
+    assert(apply_transform(p, 5) == 10)
+    assert(apply_combine(p, 3, 4) == 7)
+    free(p)
+    0

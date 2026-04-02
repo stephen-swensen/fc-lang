@@ -259,6 +259,51 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
     return result;
 }
 
+/* Canonicalize generic struct/union stub names in a type tree.
+ * Walks through compound type wrappers and, for TYPE_STRUCT/TYPE_UNION stubs
+ * (field_count/variant_count == 0) with type_arg_count > 0, updates the stub's
+ * name to the canonical mangled form from the module's symbol table.
+ * This is a NAME-ONLY update: preserves type_args, doesn't replace with full type,
+ * doesn't create circular references. Mutates the type in place. */
+static void canonicalize_stub_names(Type *t, SymbolTable *members) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_POINTER: canonicalize_stub_names(t->pointer.pointee, members); return;
+    case TYPE_SLICE:   canonicalize_stub_names(t->slice.elem, members); return;
+    case TYPE_OPTION:  canonicalize_stub_names(t->option.inner, members); return;
+    case TYPE_FIXED_ARRAY: canonicalize_stub_names(t->fixed_array.elem, members); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            canonicalize_stub_names(t->func.param_types[i], members);
+        canonicalize_stub_names(t->func.return_type, members);
+        return;
+    case TYPE_STRUCT:
+        if (t->struc.field_count == 0 && t->struc.type_arg_count > 0 && t->struc.name) {
+            Symbol *sym = symtab_lookup_kind(members, t->struc.name, DECL_STRUCT);
+            if (sym && sym->type && sym->type->struc.name != t->struc.name) {
+                t->struc.base_name = t->struc.name;
+                t->struc.name = sym->type->struc.name;
+                if (sym->type->struc.qualified_name)
+                    t->struc.qualified_name = sym->type->struc.qualified_name;
+            }
+        }
+        /* Don't recurse into fields — stubs have field_count=0 */
+        return;
+    case TYPE_UNION:
+        if (t->unio.variant_count == 0 && t->unio.type_arg_count > 0 && t->unio.name) {
+            Symbol *sym = symtab_lookup_kind(members, t->unio.name, DECL_UNION);
+            if (sym && sym->type && sym->type->unio.name != t->unio.name) {
+                t->unio.base_name = t->unio.name;
+                t->unio.name = sym->type->unio.name;
+                if (sym->type->unio.qualified_name)
+                    t->unio.qualified_name = sym->type->unio.qualified_name;
+            }
+        }
+        return;
+    default: return;
+    }
+}
+
 /* Resolve type stubs in a type tree against a symbol table.
  * Recursively walks the type tree (through pointers, slices, options, fixed arrays,
  * and function types) and replaces TYPE_STRUCT stubs (field_count == 0) with the
@@ -322,7 +367,8 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
         r->func.return_type = ret;
         return r;
     }
-    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name) {
+    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name
+        && t->struc.type_arg_count == 0) {
         Symbol *sym = symtab_lookup_kind(members, t->struc.name, DECL_STRUCT);
         if (sym && sym->type) return sym->type;
         /* Also check for union stubs */
@@ -586,6 +632,39 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             }
         }
 
+    }
+
+    /* Canonicalize generic stub names in struct/union field types.
+     * Updates parser names (e.g., "inner") to canonical mangled names (e.g., "m__inner")
+     * so downstream code doesn't need module context to resolve them. */
+    for (int j = 0; j < members->count; j++) {
+        Symbol *msym = &members->symbols[j];
+        if (!msym->type) continue;
+        if (msym->type->kind == TYPE_STRUCT) {
+            for (int k = 0; k < msym->type->struc.field_count; k++)
+                canonicalize_stub_names(msym->type->struc.fields[k].type, members);
+        }
+        if (msym->type->kind == TYPE_UNION) {
+            for (int k = 0; k < msym->type->unio.variant_count; k++)
+                canonicalize_stub_names(msym->type->unio.variants[k].payload, members);
+        }
+    }
+
+    /* Register module-scoped struct/union types in the global symbol table under
+     * their mangled names, so resolve_type can find them from any context. */
+    for (int j = 0; j < members->count; j++) {
+        Symbol *msym = &members->symbols[j];
+        if ((msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) && msym->type) {
+            const char *mangled_name = (msym->kind == DECL_STRUCT)
+                ? msym->type->struc.name : msym->type->unio.name;
+            symtab_add(global_symtab, mangled_name, msym->kind, msym->decl);
+            Symbol *gsym = &global_symtab->symbols[global_symtab->count - 1];
+            gsym->type = msym->type;
+            gsym->is_generic = msym->is_generic;
+            gsym->type_params = msym->type_params;
+            gsym->type_param_count = msym->type_param_count;
+            gsym->explicit_type_param_count = msym->explicit_type_param_count;
+        }
     }
 }
 
