@@ -1,0 +1,62 @@
+import hash_dict from std::data::
+
+let hash_int = (x: int32) -> (int64)x * 2654435761i64
+let eq_int = (a: int32, b: int32) -> a == b
+
+let main = (args: str[]) ->
+    let mut d = hash_dict.make<int32>(hash_int, eq_int)
+    assert(hash_dict.is_empty(d))
+
+    // put / get
+    hash_dict.put(&d, 1, 10)
+    hash_dict.put(&d, 2, 20)
+    hash_dict.put(&d, 3, 30)
+    assert(hash_dict.len(d) == 3)
+    assert(hash_dict.get(d, 1) == 10)
+    assert(hash_dict.get(d, 2) == 20)
+    assert(hash_dict.get(d, 3) == 30)
+
+    // update existing
+    hash_dict.put(&d, 2, 25)
+    assert(hash_dict.get(d, 2) == 25)
+    assert(hash_dict.len(d) == 3)
+
+    // has / try_get
+    assert(hash_dict.has(d, 1))
+    assert(!hash_dict.has(d, 99))
+    assert(hash_dict.try_get(d, 1) == some(10))
+    assert(hash_dict.try_get(d, 99).is_none)
+
+    // remove
+    let removed = hash_dict.remove(&d, 2)
+    assert(removed == 25)
+    assert(hash_dict.len(d) == 2)
+    assert(!hash_dict.has(d, 2))
+    assert(hash_dict.try_remove(&d, 99).is_none)
+
+    // fold
+    let sum = hash_dict.fold(d, 0, (acc: int32, k: int32, v: int32) -> acc + v)
+    assert(sum == 40) // 10 + 30
+
+    // keys / values
+    let ks = hash_dict.keys(d)
+    assert(ks.len == 2i64)
+    free(ks)
+    let vs = hash_dict.values(d)
+    assert(vs.len == 2i64)
+    free(vs)
+
+    // count / any / all
+    assert(hash_dict.count(d, (k: int32, v: int32) -> v > 15) == 1)
+    assert(hash_dict.any(d, (k: int32, v: int32) -> k == 1))
+    assert(hash_dict.all(d, (k: int32, v: int32) -> v > 0))
+
+    // rehash: add many entries to trigger growth
+    for i in 10..30
+        hash_dict.put(&d, i, i * 100)
+    assert(hash_dict.len(d) == 22) // 2 original + 20 new
+    assert(hash_dict.get(d, 15) == 1500)
+    assert(hash_dict.get(d, 1) == 10) // original still there
+
+    hash_dict.drop(d)
+    0

@@ -1,0 +1,101 @@
+import linked_list from std::data::
+
+let main = (args: str[]) ->
+    let mut l = linked_list.make<int32>()
+    assert(linked_list.is_empty(l))
+
+    // prepend / append
+    linked_list.prepend(&l, 2)
+    linked_list.prepend(&l, 1)
+    linked_list.append(&l, 3)
+    linked_list.append(&l, 4)
+    // now: 1, 2, 3, 4
+    assert(linked_list.len(l) == 4)
+    assert(linked_list.first(l) == 1)
+    assert(linked_list.last(l) == 4)
+
+    // fold / fold_right
+    let sum = linked_list.fold_left(l, 0, (acc: int32, x: int32) -> acc + x)
+    assert(sum == 10)
+    let rsum = linked_list.fold_right(l, 0, (acc: int32, x: int32) -> acc + x)
+    assert(rsum == 10)
+
+    // fold_right order check: 0 - 4 - 3 - 2 - 1 = -10
+    let rdiff = linked_list.fold_right(l, 0, (acc: int32, x: int32) -> acc - x)
+    assert(rdiff == -10)
+
+    // reduce / try_reduce
+    let r = linked_list.reduce(l, (a: int32, b: int32) -> a + b)
+    assert(r == 10)
+    let empty = linked_list.make<int32>()
+    assert(linked_list.try_reduce(empty, (a: int32, b: int32) -> a + b).is_none)
+    linked_list.drop(empty)
+
+    // map
+    let doubled = linked_list.map(l, (x: int32) -> x * 2)
+    assert(linked_list.first(doubled) == 2)
+    assert(linked_list.last(doubled) == 8)
+    assert(linked_list.len(doubled) == 4)
+    linked_list.drop(doubled)
+
+    // filter
+    let big = linked_list.filter(l, (x: int32) -> x > 2)
+    assert(linked_list.len(big) == 2)
+    assert(linked_list.first(big) == 3)
+    linked_list.drop(big)
+
+    // any / all
+    assert(linked_list.any(l, (x: int32) -> x == 3))
+    assert(!linked_list.any(l, (x: int32) -> x == 99))
+    assert(linked_list.all(l, (x: int32) -> x > 0))
+
+    // find / try_find
+    assert(linked_list.find(l, (x: int32) -> x > 2) == 3)
+    assert(linked_list.try_find(l, (x: int32) -> x > 100).is_none)
+
+    // count
+    assert(linked_list.count(l, (x: int32) -> x >= 2) == 3)
+
+    // scan
+    let scanned = linked_list.scan(l, 0, (acc: int32, x: int32) -> acc + x)
+    assert(scanned.len == 5i64)
+    assert(scanned[0i64] == 0)
+    assert(scanned[4i64] == 10)
+    free(scanned)
+
+    // pop_first / pop_last
+    let f = linked_list.pop_first(&l)
+    assert(f == some(1))
+    let b = linked_list.pop_last(&l)
+    assert(b == some(4))
+    assert(linked_list.len(l) == 2)
+    assert(linked_list.first(l) == 2)
+    assert(linked_list.last(l) == 3)
+
+    // copy
+    let l2 = linked_list.copy(l)
+    assert(linked_list.len(l2) == 2)
+    assert(linked_list.first(l2) == 2)
+    linked_list.drop(l2)
+
+    // to_slice
+    let sl = linked_list.to_slice(l)
+    assert(sl.len == 2i64)
+    assert(sl[0i64] == 2)
+    assert(sl[1i64] == 3)
+    free(sl)
+
+    // clear
+    linked_list.clear(&l)
+    assert(linked_list.is_empty(l))
+    assert(linked_list.pop_first(&l).is_none)
+
+    // grow beyond initial capacity
+    for i in 0..20
+        linked_list.append(&l, i)
+    assert(linked_list.len(l) == 20)
+    assert(linked_list.first(l) == 0)
+    assert(linked_list.last(l) == 19)
+
+    linked_list.drop(l)
+    0

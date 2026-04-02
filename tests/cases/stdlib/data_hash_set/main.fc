@@ -1,0 +1,63 @@
+import hash_set from std::data::
+
+let hash_int = (x: int32) -> (int64)x * 2654435761i64
+let eq_int = (a: int32, b: int32) -> a == b
+
+let main = (args: str[]) ->
+    let mut s = hash_set.make(hash_int, eq_int)
+    assert(hash_set.is_empty(s))
+
+    // add / has
+    hash_set.add(&s, 1)
+    hash_set.add(&s, 2)
+    hash_set.add(&s, 3)
+    assert(hash_set.len(s) == 3)
+    assert(hash_set.has(s, 1))
+    assert(hash_set.has(s, 2))
+    assert(!hash_set.has(s, 99))
+
+    // duplicate add
+    hash_set.add(&s, 2)
+    assert(hash_set.len(s) == 3)
+
+    // remove
+    assert(hash_set.remove(&s, 2))
+    assert(!hash_set.has(s, 2))
+    assert(hash_set.len(s) == 2)
+    assert(!hash_set.remove(&s, 99))
+
+    // fold
+    let sum = hash_set.fold(s, 0, (acc: int32, x: int32) -> acc + x)
+    assert(sum == 4) // 1 + 3
+
+    // filter
+    hash_set.add(&s, 4)
+    hash_set.add(&s, 5)
+    let evens = hash_set.filter(s, (x: int32) -> x % 2 == 0)
+    assert(hash_set.len(evens) == 1) // only 4
+    assert(hash_set.has(evens, 4))
+    hash_set.drop(evens)
+
+    // to_slice
+    let sl = hash_set.to_slice(s)
+    assert(sl.len == 4i64)
+    free(sl)
+
+    // any / all / count
+    assert(hash_set.any(s, (x: int32) -> x == 5))
+    assert(hash_set.all(s, (x: int32) -> x > 0))
+    assert(hash_set.count(s, (x: int32) -> x > 2) == 3)
+
+    // clear
+    hash_set.clear(&s)
+    assert(hash_set.is_empty(s))
+
+    // rehash: add many entries
+    for i in 0..30
+        hash_set.add(&s, i)
+    assert(hash_set.len(s) == 30)
+    assert(hash_set.has(s, 0))
+    assert(hash_set.has(s, 29))
+
+    hash_set.drop(s)
+    0

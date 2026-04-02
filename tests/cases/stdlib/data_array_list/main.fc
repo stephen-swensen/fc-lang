@@ -1,0 +1,128 @@
+import array_list from std::data::
+
+let main = (args: str[]) ->
+    // make and basic operations
+    let mut l = array_list.make<int32>()
+    assert(array_list.is_empty(l))
+    assert(array_list.len(l) == 0)
+
+    // add elements
+    array_list.add(&l, 10)
+    array_list.add(&l, 20)
+    array_list.add(&l, 30)
+    assert(array_list.len(l) == 3)
+    assert(array_list.get(l, 0i64) == 10)
+    assert(array_list.get(l, 1i64) == 20)
+    assert(array_list.get(l, 2i64) == 30)
+
+    // first / last
+    assert(array_list.first(l) == 10)
+    assert(array_list.last(l) == 30)
+    assert(array_list.try_first(l) == some(10))
+    assert(array_list.try_last(l) == some(30))
+
+    // update
+    array_list.update(&l, 1i64, 25)
+    assert(array_list.get(l, 1i64) == 25)
+
+    // insert
+    array_list.insert(&l, 1i64, 15)
+    assert(array_list.len(l) == 4)
+    assert(array_list.get(l, 1i64) == 15)
+    assert(array_list.get(l, 2i64) == 25)
+
+    // remove_at
+    let removed = array_list.remove_at(&l, 1i64)
+    assert(removed == 15)
+    assert(array_list.len(l) == 3)
+
+    // pop
+    let popped = array_list.pop(&l)
+    assert(popped == 30)
+    assert(array_list.len(l) == 2)
+
+    // to_slice
+    let s = array_list.to_slice(l)
+    assert(s.len == 2i64)
+    assert(s[0i64] == 10)
+
+    // copy
+    let l2 = array_list.copy(l)
+    assert(array_list.len(l2) == 2)
+    assert(array_list.get(l2, 0i64) == 10)
+    array_list.drop(l2)
+
+    // grow past initial capacity
+    let mut big = array_list.make<int32>()
+    for i in 0..20
+        array_list.add(&big, i)
+    assert(array_list.len(big) == 20)
+    assert(array_list.get(big, 19i64) == 19)
+
+    // fold
+    let sum = array_list.fold_left(l, 0, (acc: int32, x: int32) -> acc + x)
+    assert(sum == 35) // 10 + 25
+
+    // fold_right
+    let diff = array_list.fold_right(l, 0, (acc: int32, x: int32) -> acc - x)
+    assert(diff == -35)
+
+    // reduce
+    array_list.add(&l, 5)
+    let r = array_list.reduce(l, (a: int32, b: int32) -> a + b)
+    assert(r == 40)
+
+    // try_reduce on empty
+    let empty = array_list.make<int32>()
+    assert(array_list.try_reduce(empty, (a: int32, b: int32) -> a + b).is_none)
+    array_list.drop(empty)
+
+    // map
+    let doubled = array_list.map(l, (x: int32) -> x * 2)
+    assert(array_list.get(doubled, 0i64) == 20)
+    assert(array_list.get(doubled, 1i64) == 50)
+    assert(array_list.get(doubled, 2i64) == 10)
+    array_list.drop(doubled)
+
+    // mapi
+    let indexed = array_list.mapi(l, (i: int64, x: int32) -> (int32)i + x)
+    assert(array_list.get(indexed, 0i64) == 10)
+    assert(array_list.get(indexed, 1i64) == 26)
+    assert(array_list.get(indexed, 2i64) == 7)
+    array_list.drop(indexed)
+
+    // filter
+    let big_ones = array_list.filter(l, (x: int32) -> x > 8)
+    assert(array_list.len(big_ones) == 2)
+    array_list.drop(big_ones)
+
+    // any / all
+    assert(array_list.any(l, (x: int32) -> x == 25))
+    assert(!array_list.any(l, (x: int32) -> x == 99))
+    assert(array_list.all(l, (x: int32) -> x > 0))
+    assert(!array_list.all(l, (x: int32) -> x > 10))
+
+    // find / try_find
+    assert(array_list.find(l, (x: int32) -> x > 20) == 25)
+    assert(array_list.try_find(l, (x: int32) -> x > 100).is_none)
+
+    // count
+    assert(array_list.count(l, (x: int32) -> x >= 10) == 2)
+
+    // scan
+    let scanned = array_list.scan(l, 0, (acc: int32, x: int32) -> acc + x)
+    assert(array_list.len(scanned) == 4)
+    assert(array_list.get(scanned, 0i64) == 0)
+    assert(array_list.get(scanned, 1i64) == 10)
+    assert(array_list.get(scanned, 2i64) == 35)
+    assert(array_list.get(scanned, 3i64) == 40)
+    array_list.drop(scanned)
+
+    // clear
+    array_list.clear(&l)
+    assert(array_list.is_empty(l))
+
+    // cleanup
+    array_list.drop(l)
+    array_list.drop(big)
+    0

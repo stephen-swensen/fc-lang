@@ -1,0 +1,72 @@
+import slice from std::data::
+
+let main = (args: str[]) ->
+    let s = int32[5] { 1, 2, 3, 4, 5 }
+
+    // fold / fold_right
+    let sum = slice.fold_left(s, 0, (acc: int32, x: int32) -> acc + x)
+    assert(sum == 15)
+    let diff = slice.fold_right(s, 0, (acc: int32, x: int32) -> acc - x)
+    assert(diff == -15) // 0 - 5 - 4 - 3 - 2 - 1
+
+    // reduce / try_reduce
+    let product = slice.reduce(s, (a: int32, b: int32) -> a + b)
+    assert(product == 15)
+    let empty = int32[0] {}
+    assert(slice.try_reduce(empty, (a: int32, b: int32) -> a + b).is_none)
+
+    // scan
+    let scanned = slice.scan(s, 0, (acc: int32, x: int32) -> acc + x)
+    assert(scanned.len == 6i64)
+    assert(scanned[0i64] == 0)
+    assert(scanned[5i64] == 15)
+    free(scanned)
+
+    // map / mapi
+    let doubled = slice.map(s, (x: int32) -> x * 2)
+    assert(doubled[0i64] == 2)
+    assert(doubled[4i64] == 10)
+    free(doubled)
+
+    let indexed = slice.mapi(s, (i: int64, x: int32) -> (int32)i * 10 + x)
+    assert(indexed[0i64] == 1)  // 0*10 + 1
+    assert(indexed[3i64] == 34) // 3*10 + 4
+    free(indexed)
+
+    // filter
+    let evens = slice.filter(s, (x: int32) -> x % 2 == 0)
+    assert(evens.len == 2i64)
+    assert(evens[0i64] == 2)
+    assert(evens[1i64] == 4)
+    free(evens)
+
+    // any / all
+    assert(slice.any(s, (x: int32) -> x == 3))
+    assert(!slice.any(s, (x: int32) -> x == 99))
+    assert(slice.all(s, (x: int32) -> x > 0))
+    assert(!slice.all(s, (x: int32) -> x > 3))
+
+    // find / try_find
+    assert(slice.find(s, (x: int32) -> x > 3) == 4)
+    assert(slice.try_find(s, (x: int32) -> x > 100).is_none)
+
+    // first / last
+    assert(slice.first(s) == 1)
+    assert(slice.last(s) == 5)
+
+    // count
+    assert(slice.count(s, (x: int32) -> x > 2) == 3)
+
+    // reverse
+    let rev = slice.reverse(s)
+    assert(rev[0i64] == 5)
+    assert(rev[4i64] == 1)
+    free(rev)
+
+    // copy
+    let cp = slice.copy(s)
+    assert(cp[0i64] == 1)
+    assert(cp.len == 5i64)
+    free(cp)
+
+    0
