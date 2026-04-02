@@ -2439,335 +2439,276 @@ float64.bits    // 64
 > **Transpilation**
 > Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `int32.max` becomes `INT32_MAX`, `float64.nan` becomes `((double)NAN)`.
 
-# PART 5 — Memory Management
+# PART 5 — Generics
 
-## Memory Management
+## Overview
 
-FC's memory model is manual — no garbage collector, no borrow checker. Memory lives either on the stack or the heap, and the programmer is responsible for managing heap allocations explicitly.
+FC supports parametric polymorphism through type variables. A type variable is a placeholder for any concrete type — the compiler produces a separate concrete instantiation for each unique combination of types a generic function or type is used with. This is **monomorphization**: there is no runtime type information, no boxing, and no dispatch overhead. Every generic use site compiles down to code that is identical in structure to what you would have written by hand for that specific type.
 
-Five built-in compile-time operators handle memory and runtime checking operations that require compiler participation to resolve:
-
-| Operator | Description |
-|----------|-------------|
-| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
-| `alloc(T[N] { })` | Heap-allocate a zero-initialized slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
-| `alloc(T[N] { elems })` | Heap-allocate a slice initialized with provided elements. `N` must be a literal. |
-| `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
-| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
-| `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
-| `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
-| `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
-| `alignof(T)` | Return the alignment in bytes of type `T` as an `int64`. For fixed arrays `T[N]`, returns alignment of element type `T`. |
-| `assert(cond)` | Check that `cond` (a `bool` expression) is true at runtime. If false, prints a diagnostic message to stderr and calls `abort()`. |
-| `assert(cond, msg)` | Same as `assert(cond)`, but additionally includes the string `msg` (type `str`) in the diagnostic output. |
-
-These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
-
-`alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
-
-The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
+This is the same model as C++ templates, but specified at the language level rather than as a text-substitution mechanism. The compiler resolves all type variables before emitting any C output — the generated C contains only concrete, fully-typed code.
 
 ---
 
-## Default Values
+## Type Variables
 
-Every FC type has a well-defined default value, produced by zero-initializing its memory. This is what both `default(T)` on the stack and `alloc(T)` on the heap produce.
+A type variable is written as an apostrophe followed by a name: `'a`, `'b`, `'elem`, `'Key`, `'Val`. The apostrophe is a dedicated sigil — concrete type names never begin with `'`, so there is no ambiguity.
 
-```fc
-let x = default(int32)     // 0
-let f = default(float64)   // 0.0
-let b = default(bool)      // false
-let s = default(str)       // empty slice — { ptr = null, len = 0 }
-let p = default(point)     // point { x = 0.0, y = 0.0 }
-let o = default(int32?)    // int32? with no value
-let n = sizeof(int32)      // 4 — int64
-let a = alignof(int64)     // 8 — int64 (on most platforms)
-```
-
-Default values by type category:
-
-| Type | Default |
-|------|---------|
-| Integer types | `0` |
-| Float types | `0.0` |
-| `bool` | `false` |
-| `T?` | `none` |
-| `T*?` | `none` |
-| Slices (`T[]`) | Empty slice — `{ ptr = null, len = 0 }`. Safe because bounds checking prevents indexing into a zero-length slice. |
-| Structs | Zero bytes across all fields — each field holds whatever zero means for its type at its memory offset. No construction occurs. |
-| Unions | Zero bytes — tag field is 0, which maps to the first declared variant. Payload bytes are also zero. The resulting value is a valid union of the first variant with zeroed payload memory. |
-| `T*` | Zero bytes — physically null. The programmer is responsible for initializing raw pointer fields before use. |
-| Function types | Zero bytes — null `fn_ptr` and null `ctx`. Calling a zero-initialized function value will crash. The programmer is responsible for initializing function-typed fields before calling them. |
-
-> **Note on unions**
-> The first-variant convention means the programmer controls what `default(T)` produces for a union by ordering variants intentionally. If no variant is a sensible default, the programmer should avoid relying on `default` for that union and initialize explicitly instead.
-
-**Raw pointer and function-typed fields** — both `default(T)` and `alloc(T)` are zero-initialization under the hood. For types containing raw `T*` fields or function-typed fields, zero-init produces physically null bytes. The programmer is responsible for writing valid values to those fields before dereferencing or calling them, regardless of whether the value lives on the stack or the heap.
+Type variables are **implicit** — they are never declared separately. Any `'a` appearing in a function signature, struct body, or union body is automatically treated as a type variable. Multiple occurrences of the same name within the same scope refer to the same type variable and constrain the types at those positions to be identical.
 
 ---
 
-## Assert
+## Generic Functions
 
-**`assert(condition)`** — evaluates `condition` (which must be a `bool` expression) at runtime. If the condition is true, execution continues normally. If the condition is false, `assert` prints a diagnostic message to stderr and terminates the program by calling `abort()`.
-
-**`assert(condition, message)`** — same as the single-argument form, but additionally includes `message` (which must be a `str` expression) in the diagnostic output.
+A function is generic if one or more type variables appear in its parameter or return types. The type variables are resolved at each call site by the compiler — no explicit instantiation syntax is required.
 
 ```fc
-assert(x > 0)
-assert(x > 0, "x must be positive")
-assert(count == items.len, "count mismatch")
+let identity = (x: 'a) -> x
+
+let fst = (a: 'a, b: 'b) -> a
+
+let map = (s: 'a[], f: ('a) -> 'b) ->
+    let mut result = alloc('b[s.len] { })!
+    let mut i = 0
+    loop
+        if i >= s.len then break result
+        result[i] = f(s[i])
+        i = i + 1
+
+let swap = (p: pair<'a, 'b>) ->
+    pair { first = p.second, second = p.first }
 ```
 
-The diagnostic output follows FC's error message format:
+When the same type variable appears more than once, the compiler unifies the types at those positions:
 
+```fc
+let eq_first = (a: 'a, b: 'a) -> a == b    // both arguments must be the same type
 ```
-filename:line: assertion failed: x > 0
-filename:line: assertion failed: x > 0: x must be positive
+
+`==` is valid here without any constraint because FC defines structural equality for all types (see §Structural Equality). This is one of the benefits of FC's universal equality model — unconstrained type variables can always use `==` and `!=`.
+
+Return types are always inferred — if the body expression resolves to a concrete type, that becomes the return type after type variable substitution.
+
+### Implicit and explicit type arguments
+
+In the normal case, type variables are resolved entirely from the function's arguments — no explicit type annotation is needed at the call site:
+
+```fc
+let x = identity(42)                          // 'a = int32, inferred from argument
+let z = map(points, (p: point) -> p.x)        // 'a = point, 'b = float64, inferred
 ```
 
-The expression text is captured at compile time from the source code. The filename and line number refer to the location of the `assert` call in the FC source file.
+However, some functions introduce type variables that do not appear in any parameter. The most common case is a constructor or factory function where the element type is not given by any argument:
 
-`assert` is a void-typed expression — it cannot be used where a value is expected. It is a built-in operator, not a function, and does not require any imports.
+```fc
+// 'a cannot be inferred from any argument — it only appears in the return type
+let make = <'a>() ->
+    arraylist { data = alloc('a[4] { })!, len = 0 }
+```
 
-**Type constraints:**
-- The condition must be `bool`. Passing a non-`bool` expression is a compile error.
-- The message (if present) must be `str`. Passing a non-`str` expression is a compile error.
+The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
+
+```fc
+let mut nums = arraylist.make<int32>()
+let mut strs = arraylist.make<str>()
+```
+
+Multiple explicit type variables are separated by commas:
+
+```fc
+let make_pair = <'a, 'b>() ->
+    pair { first = default('a), second = default('b) }
+
+let p = make_pair<int32, str>()
+```
+
+**The rule:** a type variable belongs in `<>` if and only if it does not appear in any parameter type. If a type variable appears in a parameter, it is always inferred from the argument — declaring it in `<>` as well is a compile error:
+
+```fc
+// compile error — 'a appears in a parameter, cannot also be declared explicit
+let bad = <'a>(x: 'a) -> x
+```
+
+This keeps the explicit syntax minimal — it only appears when genuinely necessary, and a `<>` declaration is a clear signal to the reader that the type cannot be derived from the arguments.
+
+**Inside a generic function body**, a `<>` type variable may be satisfied by a type variable already in scope from the enclosing function's own parameters — no explicit `<type>` annotation is needed at internal call sites:
+
+```fc
+let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
+    let mut result = arraylist.make<'b>()    // 'b is in scope — explicit but no concrete type needed
+    for x in l.data[..l.len]
+        arraylist.add(&result, f(x))
+    result
+```
+
+The explicit `<type>` syntax is only required when calling from a non-generic context where no type variable is in scope.
+
+**Passing generic functions as arguments** — `<type>` syntax is only valid in call position, never as a standalone expression. A generic function cannot be passed as a value directly — it has no single concrete type until instantiated. The idiomatic pattern is a wrapper lambda that instantiates at the required type:
+
+```fc
+let factory = <'a>() -> default('a)
+
+// wrapper lambda instantiates factory at a specific type
+let str_factory = () -> factory<str>()
+
+let l = arraylist.repeat<str>(5, str_factory)
+
+// or inline
+let l = arraylist.repeat<str>(5, () -> factory<str>())
+```
+
+The wrapper is a plain concrete `() -> str` — no new language mechanism required. This covers all practical factory and callback patterns without rank-2 polymorphism.
+
+**Rank-2 polymorphism is not supported** — a function parameter typed as "a generic function that works for any type" (e.g. `f: <'a>() -> 'a`) would require the callee to invoke `f` at multiple different types, which implies runtime type information or a constraint system. FC has neither, and this pattern is explicitly out of scope. The wrapper lambda approach covers all realistic cases without it.
+
+**Parsing** — `name<type>()` is always parsed as a generic call, never as a comparison expression. This is unambiguous in FC because type names (`int32`, `str`, `point`, `'a`) are syntactically distinct from value expressions in all positions where they may appear. No disambiguation sigil (such as Rust's `::<>` turbofish) is required.
+
+---
+
+## Generic Structs and Unions
+
+Structs and unions become generic by using type variables in their field or variant definitions. The type parameters are inferred from the body — no explicit parameter list is required on the type name.
+
+```fc
+struct pair =
+    first:  'a
+    second: 'b
+
+struct box =
+    value: 'a
+
+union result =
+    | ok('a)
+    | err('b)
+```
+
+The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. The type parameters are ordered by first appearance in the body, reading top-to-bottom, left-to-right.
+
+For generic structs, type arguments are inferred from the struct literal fields:
+
+```fc
+let p = pair { first = 42, second = "hello" }    // pair<int32, str>
+let b = box { value = 3.14 }                     // box<float64>
+```
+
+For generic unions, type arguments must be provided explicitly at the construction site using `name<types>.variant(args)` syntax. This is required because a variant's payload may not constrain all type parameters — for example, `result.err(32)` cannot determine `'a`:
+
+```fc
+let r = result<int32, str>.ok(42)                // result<int32, str>
+let e = result<int32, str>.err("fail")           // result<int32, str>
+```
+
+Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
+
+```fc
+let map_fst = (p: pair<'a, 'b>, f: ('a) -> 'c) ->
+    pair { first = f(p.first), second = p.second }
+```
+
+### Type-associated modules on generic types
+
+A module sharing a generic type's name works the same as for concrete types. Type variables in scope within the type definition are available within the associated module:
+
+```fc
+struct box =
+    value: 'a
+
+module box =
+    let wrap = (x: 'a) -> box { value = x }
+    let unwrap = (b: box<'a>) -> b.value
+    let map = (b: box<'a>, f: ('a) -> 'b) -> box { value = f(b.value) }
+```
+
+Built-in operators `default(T)` and `sizeof(T)`, as well as static module member access, follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
+
+```fc
+let make_default = (x: 'a) -> default('a)     // ok — checked at call site
+let size_of_val  = (x: 'a) -> sizeof('a)       // ok — checked at call site
+let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type has .min
+let make_none    = (x: 'a) -> default('a?)     // ok — produces 'a? with no value
+```
+
+A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
+
+---
+
+## option
+
+`option` is a built-in generic union:
+
+```fc
+union option =
+    | none
+    | some('a)
+```
+
+The syntax for option types is `T?` — there is no `option<T>` type syntax. Conceptually, `option` follows the same design as a union with `none` as its first variant: `default(T?)` produces a none value (first-variant-is-default, see §Default Values), and `| none ->` / `| some(v) ->` work as match patterns with exhaustiveness checking. The built-in `some(expr)` operator (see §Constructing options) wraps a value and infers the option type, and `x!` unwraps it (crashing if none).
+
+The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
+
+---
+
+## Monomorphization
+
+For each unique combination of concrete types a generic function or type is used with, the compiler produces a distinct concrete instantiation. This happens entirely before C code is emitted — the generated C contains no type variables, no generic machinery, and no runtime type information.
+
+```fc
+let x = identity(42)        // produces: identity instantiated at int32
+let y = identity(3.14)      // produces: identity instantiated at float64
+let z = identity("hello")   // produces: identity instantiated at str
+
+let p1 = pair { first = 1,     second = true  }   // produces: pair<int32, bool>
+let p2 = pair { first = "hi",  second = 3.14  }   // produces: pair<str, float64>
+```
+
+Each instantiation becomes a distinct C type or function. The compiler derives C names from the generic name and the concrete type arguments — for example, `pair<int32, bool>` might emit as `pair_int32_bool` and `identity` at `int32` as `identity_int32`. The exact naming scheme is a compiler implementation detail; what matters is that names are unique, derived deterministically from the types, and human-readable enough to be identifiable in debugger output and compiler errors.
+
+Two uses of the same generic at the same concrete types share a single instantiation — the compiler deduplicates across the entire build.
 
 > **Transpilation**
+> A generic struct transpiles to a C struct per instantiation:
 > ```c
-> // assert(x > 0)
-> ({ if (!(x > 0)) { fprintf(stderr, "file.fc:10: assertion failed: x > 0\n"); abort(); } })
->
-> // assert(x > 0, "msg")
-> ({ if (!(x > 0)) { fc_str _am0 = msg; fprintf(stderr, "file.fc:10: assertion failed: x > 0: %.*s\n", (int)_am0.len, (const char*)_am0.ptr); abort(); } })
+> typedef struct { int32_t first; bool second; } pair_int32_bool;
+> typedef struct { fc_slice_uint8 first; double second; } pair_str_float64;
 > ```
+> A generic function transpiles to a C function per unique call signature:
+> ```c
+> int32_t identity_int32(int32_t x) { return x; }
+> double  identity_float64(double x) { return x; }
+> ```
+> Option types (`T?`) follow the existing option transpilation rules per instantiation — pointer types use the null-sentinel form, all others use the tagged struct form.
+
+### Errors at monomorphization
+
+FC has no constraint system in this version. Type variables are unconstrained — any concrete type may be substituted. If a generic function uses an operation that the concrete type does not support, the compiler reports an error at the **call site** where the unsupported instantiation was requested, identifying the type variable substitution that caused the problem. Errors are not reported inside the generic definition itself.
+
+This means generic functions work naturally across numeric types without any annotation:
+
+```fc
+let add = (a: 'a, b: 'a) -> a + b
+
+add(1, 2)           // ok — int32 supports +
+add(1.0, 2.0)       // ok — float64 supports +
+add("x", "y")       // compile error at this call site — str does not support +
+```
+
+The error message identifies the call site and the substitution: something like "when calling `add` with `'a = str`, operator `+` is not defined for `str`." This makes it straightforward to diagnose in practice, even without a formal constraint declaration in the source.
+
+### Scope of operations on type variables
+
+The following operations are valid on type variables within a generic body, with validation deferred to monomorphization:
+
+- **Operators**: arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`)
+- **Built-in type operators**: `default('a)`, `sizeof('a)`
+- **Built-in static type properties**: `'a.min`, `'a.max`, `'a.bits`, `'a.nan`, `'a.inf`, `'a.neg_inf`, `'a.epsilon`
+
+The following are **not** supported on type variables:
+
+- **Field access on values** — `x.field` where `x: 'a` is not valid. The compiler does not perform structural typing; a type variable does not carry information about which fields the concrete type will have. To operate on fields generically, pass them as separate parameters: write `let sum = (x: 'a, y: 'a) -> x + y` rather than `let sum = (p: 'a) -> p.x + p.y`.
+- **User-defined type-associated module members** — `'a.make()` or `'a.zero` where `make`/`zero` are members of a user-defined module sharing the type's name. Only the built-in static properties listed above are accessible on type variables. User-defined module members require a concrete type name.
 
 ---
 
-## Stack Allocation
-
-Stack memory is allocated implicitly when a binding is declared. All stack bindings must be initialized at declaration — FC never emits an uninitialized C local variable.
-
-```fc
-let x = 42                           // stack int32, initialized to 42
-let p = point { x = 1.0, y = 2.0 }  // stack struct, explicitly initialized
-let p = default(point)               // stack struct, zero-initialized
-let buf = int32[128] { }             // stack slice, zero-initialized
-let rgb = uint8[3] { 255, 0, 128 }  // stack slice, exhaustive element list
-```
-
-Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
-
-`N` in `T[N] { }` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
-
-> **Transpilation**
-> `int32[128] { }` transpiles to `int32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
-
-**Lifetime** — all local bindings share the stack frame of their enclosing function. A pointer or slice into stack memory is valid for the duration of the function call and must not escape it. Returning a stack-allocated pointer or slice, or storing it in heap memory that outlives the call, produces a dangling pointer. Use heap allocation for data that must outlive a function call.
-
-#### Escape analysis
-
-The compiler tracks the **provenance** of every pointer and slice expression — whether it refers to stack memory, heap memory, static memory, or is unknown (e.g. received as a function parameter). The following are compile errors:
-
-- **Returning stack memory** — returning a stack-derived pointer, slice, or option-wrapped pointer/slice from a function (both explicit `return` and implicit last-expression):
-
-```fc
-let bad = () ->
-    let mut x = 42
-    &x                              // compile error: cannot return stack-allocated int32*
-
-let also_bad = () ->
-    int32[4] { 1, 2, 3, 4 }        // compile error: cannot return stack-allocated int32[]
-```
-
-- **Freeing non-heap memory** — calling `free` on a string literal (static memory) or stack-allocated memory:
-
-```fc
-free("hello")                       // compile error: cannot free static memory
-let mut x = 42
-free(&x)                            // compile error: cannot free stack-allocated memory
-```
-
-- **Storing stack pointers in heap structs** — passing a stack-derived pointer or slice as a field value in `alloc(struct_lit)`:
-
-```fc
-struct node =
-    data: int32*
-
-let mut x = 42
-let n = alloc(node { data = &x })   // compile error: cannot store stack-allocated int32* in heap struct
-```
-
-Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, and `.ptr` on slices. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
-
-The analysis is **intraprocedural** — function parameters and call return values have unknown provenance. A function that receives a pointer parameter is allowed to return it; the caller is responsible for ensuring the pointer is valid. `alloc(stack_data)` produces heap provenance — the deep-copy promotes stack data to the heap, which is the intended escape hatch:
-
-```fc
-let make_slice = () ->
-    let arr = int32[3] { 10, 20, 30 }
-    alloc(arr)!                     // OK — deep copy to heap, safe to return
-```
-
----
-
-## Heap Allocation
-
-```fc
-let n = alloc(node)              // returns node*? — may fail
-let n = alloc(node)!             // unwrap — crash on failure
-let buf = alloc(node[128] { })   // heap-allocated slice of 128 nodes, returns node[]?
-let raw = alloc(uint8, 256)      // raw buffer of 256 bytes, returns uint8*?
-free(ptr)                        // free a heap-allocated pointer
-free(buf)                        // free a heap-allocated slice — compiler emits free(buf.ptr)
-```
-
-`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N] { })` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
-
-### alloc forms summary
-
-| Form | Returns | Behavior |
-|------|---------|----------|
-| `alloc(T)` | `T*?` | Zero-initialized single value |
-| `alloc(T[N] { })` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
-| `alloc(T[N] { elems })` | `T[]?` | Heap array initialized with provided elements; `N` must be literal |
-| `alloc(T, N)` | `T*?` | Raw buffer of `N` elements, zero-initialized (no length tracking) |
-| `alloc("literal")` | `str?` | Heap copy of string literal |
-| `alloc(c"literal")` | `cstr?` | Heap copy of cstr literal |
-| `alloc("...%d{x}...")` | `str?` | Interpolated string written directly to heap |
-| `alloc(c"...%d{x}...")` | `cstr?` | Interpolated cstr written directly to heap |
-| `alloc(struct { fields })` | `T*?` | Heap struct initialized from literal |
-| `alloc(union.variant(val))` | `T*?` | Heap union initialized from variant |
-| `alloc(slice_expr)` | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
-
-`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. The bare form `alloc(T[N])` is not valid — the `{ }` initializer is always required, even when empty. This keeps `T[N]` unambiguously a type and `T[N] { }` unambiguously a value expression. For runtime-sized allocation, `N` may be any integer expression but explicit element values are not allowed (the array is zero-initialized). Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
-
-The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
-
-```fc
-let s = "hello %d{n}"       // stack-allocated (alloca) — unsafe to return
-let owned = alloc(s)!        // heap copy — safe to return, caller must free
-
-let mut buf = int32[3] { }
-buf.ptr[0] = 10
-let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
-```
-
-#### alloc with string and cstr literals
-
-`alloc("hello")` creates a heap copy of the string literal, returning `str?`. `alloc(c"hello")` creates a heap copy of the cstr literal including the null terminator, returning `cstr?` (= `uint8*?`). The caller must free the result.
-
-```fc
-let s = alloc("hello")!         // str? — heap copy of literal
-let c = alloc(c"hello")!        // cstr? — heap copy with null terminator
-```
-
-#### Direct-to-heap optimization
-
-When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or array literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `calloc`'d buffer. This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
-
-#### Raw buffer allocation
-
-`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N] { })`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
-
-```fc
-let buf = alloc(uint8, 256)!    // uint8*? — raw buffer, no length tracking
-```
-
-`alloc(T, N)` transpiles to `calloc(N, sizeof(T))`. Like all alloc forms, the memory is zero-initialized.
-
-`alloc` and `free` require a hosted C environment with heap allocation (FC's platform contract — see §Platform contract).
-
-### Initialized alloc
-
-`alloc` also accepts a value expression instead of a bare type name. The type is inferred from the expression, memory is allocated and zero-initialized, then the value is written in. This combines allocation and initialization into a single expression.
-
-**Struct literal** — partial construction allowed, unspecified fields remain zero:
-
-```fc
-let p = alloc(point3d { x = 2, y = 3, z = 4 })!
-let p = alloc(point3d { x = 2, z = 4 })!        // y defaults to 0
-```
-
-**Union variant:**
-
-```fc
-let s = alloc(shape.circle(3.14))!
-let r = alloc(parse_outcome.success(42))!
-```
-
-**Slice literal** — same rules as stack slice initialization. Length is always required and the element count must match exactly:
-
-```fc
-let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
-let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
-```
-
-In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
-
-> **Transpilation**
-> `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
-
-### Initialization after alloc
-
-When using the zero-init form, there are two idiomatic ways to initialize fields afterward.
-
-**Field-by-field** — useful when only some fields differ from their defaults:
-
-```fc
-let p = alloc(point3d)!
-p->x = 2
-p->z = 4
-// y remains 0 — already zero-initialized by alloc
-```
-
-**Whole-struct assignment** — write a struct literal through the pointer with `*p = ...`:
-
-```fc
-let p = alloc(point3d)!
-*p = point3d { x = 2, y = 3, z = 4 }
-
-// partial construction also works — unspecified fields default to 0
-*p = point3d { x = 2, z = 4 }
-```
-
-> **Transpilation**
-> `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d){ .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
-
-# PART 6 — Standard Library
-
-All standard library modules live in the `std::` namespace and are written in regular FC wrapping C standard library functions. Import with `import <module> from std::`. Source files are in `stdlib/`.
-
-## std::io
-
-File I/O using opaque `any*` handles (C `FILE*`). Reading, writing, opening, closing, seeking, and filesystem operations. The built-in globals `stdin`, `stdout`, `stderr` are typed `any*` and always available without import.
-
-## std::sys
-
-Environment variables, process control, wall-clock time, and sleep. Mostly pure C11; `sleep` uses POSIX `nanosleep` (works on Linux, macOS, and Windows via MinGW).
-
-## std::math
-
-Common mathematical functions wrapping C11 `math.h`, all operating on `float64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
-
-## std::text
-
-String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
-
-## std::data
-
-Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:
-
-- **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
-- **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.
-- **`hash_dict`** — Hash map with open addressing and linear probing. Stores user-provided hash and equality functions. Supports put, get, remove, and iteration over key-value pairs.
-- **`hash_set`** — Hash set using the same probing strategy as hash_dict. Supports add, has, remove, and filtered iteration.
-- **`slice`** — Functional operations on built-in `'a[]` slices: map, filter, fold, scan, reduce, find, sort, reverse, copy, and more. Read-only functions take `const 'a[]`; mutating functions (sort, reverse, retain, apply) take `'a[]`.
-
-All sequential collections (array_list, linked_list, slice) share a consistent functional API: `fold_left`, `fold_right`, `reduce`, `scan`, `map`, `mapi`, `filter`, `iter`, `iteri`, `any`, `all`, `find`, `count`. In-place mutating variants: `sort`, `reverse`, `retain`, `apply`, `applyi`. The `try_` prefix convention returns an option; the bare name force-unwraps (e.g., `try_find` vs `find`).
-
----
-
-# PART 7 — Program Structure
+# PART 6 — Program Structure
 
 ## The FC Compiler
 
@@ -3234,6 +3175,300 @@ The compiler emits a small set of C headers in the generated output. These are o
 **Extern-driven headers** — emitted from `module ... from "header.h"` declarations in user code or the standard library. See §C Interop.
 
 A pure-integer program with no string interpolation and no floats gets a 5-header preamble. Stack-dynamic allocation uses `__builtin_alloca` (see §GNU extensions required), avoiding any `<alloca.h>` dependency.
+
+# PART 7 — Memory Management
+
+## Memory Management
+
+FC's memory model is manual — no garbage collector, no borrow checker. Memory lives either on the stack or the heap, and the programmer is responsible for managing heap allocations explicitly.
+
+Five built-in compile-time operators handle memory and runtime checking operations that require compiler participation to resolve:
+
+| Operator | Description |
+|----------|-------------|
+| `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
+| `alloc(T[N] { })` | Heap-allocate a zero-initialized slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
+| `alloc(T[N] { elems })` | Heap-allocate a slice initialized with provided elements. `N` must be a literal. |
+| `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
+| `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
+| `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
+| `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
+| `alignof(T)` | Return the alignment in bytes of type `T` as an `int64`. For fixed arrays `T[N]`, returns alignment of element type `T`. |
+| `assert(cond)` | Check that `cond` (a `bool` expression) is true at runtime. If false, prints a diagnostic message to stderr and calls `abort()`. |
+| `assert(cond, msg)` | Same as `assert(cond)`, but additionally includes the string `msg` (type `str`) in the diagnostic output. |
+
+These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
+
+`alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
+
+The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
+
+---
+
+## Default Values
+
+Every FC type has a well-defined default value, produced by zero-initializing its memory. This is what both `default(T)` on the stack and `alloc(T)` on the heap produce.
+
+```fc
+let x = default(int32)     // 0
+let f = default(float64)   // 0.0
+let b = default(bool)      // false
+let s = default(str)       // empty slice — { ptr = null, len = 0 }
+let p = default(point)     // point { x = 0.0, y = 0.0 }
+let o = default(int32?)    // int32? with no value
+let n = sizeof(int32)      // 4 — int64
+let a = alignof(int64)     // 8 — int64 (on most platforms)
+```
+
+Default values by type category:
+
+| Type | Default |
+|------|---------|
+| Integer types | `0` |
+| Float types | `0.0` |
+| `bool` | `false` |
+| `T?` | `none` |
+| `T*?` | `none` |
+| Slices (`T[]`) | Empty slice — `{ ptr = null, len = 0 }`. Safe because bounds checking prevents indexing into a zero-length slice. |
+| Structs | Zero bytes across all fields — each field holds whatever zero means for its type at its memory offset. No construction occurs. |
+| Unions | Zero bytes — tag field is 0, which maps to the first declared variant. Payload bytes are also zero. The resulting value is a valid union of the first variant with zeroed payload memory. |
+| `T*` | Zero bytes — physically null. The programmer is responsible for initializing raw pointer fields before use. |
+| Function types | Zero bytes — null `fn_ptr` and null `ctx`. Calling a zero-initialized function value will crash. The programmer is responsible for initializing function-typed fields before calling them. |
+
+> **Note on unions**
+> The first-variant convention means the programmer controls what `default(T)` produces for a union by ordering variants intentionally. If no variant is a sensible default, the programmer should avoid relying on `default` for that union and initialize explicitly instead.
+
+**Raw pointer and function-typed fields** — both `default(T)` and `alloc(T)` are zero-initialization under the hood. For types containing raw `T*` fields or function-typed fields, zero-init produces physically null bytes. The programmer is responsible for writing valid values to those fields before dereferencing or calling them, regardless of whether the value lives on the stack or the heap.
+
+---
+
+## Assert
+
+**`assert(condition)`** — evaluates `condition` (which must be a `bool` expression) at runtime. If the condition is true, execution continues normally. If the condition is false, `assert` prints a diagnostic message to stderr and terminates the program by calling `abort()`.
+
+**`assert(condition, message)`** — same as the single-argument form, but additionally includes `message` (which must be a `str` expression) in the diagnostic output.
+
+```fc
+assert(x > 0)
+assert(x > 0, "x must be positive")
+assert(count == items.len, "count mismatch")
+```
+
+The diagnostic output follows FC's error message format:
+
+```
+filename:line: assertion failed: x > 0
+filename:line: assertion failed: x > 0: x must be positive
+```
+
+The expression text is captured at compile time from the source code. The filename and line number refer to the location of the `assert` call in the FC source file.
+
+`assert` is a void-typed expression — it cannot be used where a value is expected. It is a built-in operator, not a function, and does not require any imports.
+
+**Type constraints:**
+- The condition must be `bool`. Passing a non-`bool` expression is a compile error.
+- The message (if present) must be `str`. Passing a non-`str` expression is a compile error.
+
+> **Transpilation**
+> ```c
+> // assert(x > 0)
+> ({ if (!(x > 0)) { fprintf(stderr, "file.fc:10: assertion failed: x > 0\n"); abort(); } })
+>
+> // assert(x > 0, "msg")
+> ({ if (!(x > 0)) { fc_str _am0 = msg; fprintf(stderr, "file.fc:10: assertion failed: x > 0: %.*s\n", (int)_am0.len, (const char*)_am0.ptr); abort(); } })
+> ```
+
+---
+
+## Stack Allocation
+
+Stack memory is allocated implicitly when a binding is declared. All stack bindings must be initialized at declaration — FC never emits an uninitialized C local variable.
+
+```fc
+let x = 42                           // stack int32, initialized to 42
+let p = point { x = 1.0, y = 2.0 }  // stack struct, explicitly initialized
+let p = default(point)               // stack struct, zero-initialized
+let buf = int32[128] { }             // stack slice, zero-initialized
+let rgb = uint8[3] { 255, 0, 128 }  // stack slice, exhaustive element list
+```
+
+Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
+
+`N` in `T[N] { }` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
+
+> **Transpilation**
+> `int32[128] { }` transpiles to `int32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
+
+**Lifetime** — all local bindings share the stack frame of their enclosing function. A pointer or slice into stack memory is valid for the duration of the function call and must not escape it. Returning a stack-allocated pointer or slice, or storing it in heap memory that outlives the call, produces a dangling pointer. Use heap allocation for data that must outlive a function call.
+
+#### Escape analysis
+
+The compiler tracks the **provenance** of every pointer and slice expression — whether it refers to stack memory, heap memory, static memory, or is unknown (e.g. received as a function parameter). The following are compile errors:
+
+- **Returning stack memory** — returning a stack-derived pointer, slice, or option-wrapped pointer/slice from a function (both explicit `return` and implicit last-expression):
+
+```fc
+let bad = () ->
+    let mut x = 42
+    &x                              // compile error: cannot return stack-allocated int32*
+
+let also_bad = () ->
+    int32[4] { 1, 2, 3, 4 }        // compile error: cannot return stack-allocated int32[]
+```
+
+- **Freeing non-heap memory** — calling `free` on a string literal (static memory) or stack-allocated memory:
+
+```fc
+free("hello")                       // compile error: cannot free static memory
+let mut x = 42
+free(&x)                            // compile error: cannot free stack-allocated memory
+```
+
+- **Storing stack pointers in heap structs** — passing a stack-derived pointer or slice as a field value in `alloc(struct_lit)`:
+
+```fc
+struct node =
+    data: int32*
+
+let mut x = 42
+let n = alloc(node { data = &x })   // compile error: cannot store stack-allocated int32* in heap struct
+```
+
+Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, and `.ptr` on slices. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
+
+The analysis is **intraprocedural** — function parameters and call return values have unknown provenance. A function that receives a pointer parameter is allowed to return it; the caller is responsible for ensuring the pointer is valid. `alloc(stack_data)` produces heap provenance — the deep-copy promotes stack data to the heap, which is the intended escape hatch:
+
+```fc
+let make_slice = () ->
+    let arr = int32[3] { 10, 20, 30 }
+    alloc(arr)!                     // OK — deep copy to heap, safe to return
+```
+
+---
+
+## Heap Allocation
+
+```fc
+let n = alloc(node)              // returns node*? — may fail
+let n = alloc(node)!             // unwrap — crash on failure
+let buf = alloc(node[128] { })   // heap-allocated slice of 128 nodes, returns node[]?
+let raw = alloc(uint8, 256)      // raw buffer of 256 bytes, returns uint8*?
+free(ptr)                        // free a heap-allocated pointer
+free(buf)                        // free a heap-allocated slice — compiler emits free(buf.ptr)
+```
+
+`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N] { })` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
+
+### alloc forms summary
+
+| Form | Returns | Behavior |
+|------|---------|----------|
+| `alloc(T)` | `T*?` | Zero-initialized single value |
+| `alloc(T[N] { })` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
+| `alloc(T[N] { elems })` | `T[]?` | Heap array initialized with provided elements; `N` must be literal |
+| `alloc(T, N)` | `T*?` | Raw buffer of `N` elements, zero-initialized (no length tracking) |
+| `alloc("literal")` | `str?` | Heap copy of string literal |
+| `alloc(c"literal")` | `cstr?` | Heap copy of cstr literal |
+| `alloc("...%d{x}...")` | `str?` | Interpolated string written directly to heap |
+| `alloc(c"...%d{x}...")` | `cstr?` | Interpolated cstr written directly to heap |
+| `alloc(struct { fields })` | `T*?` | Heap struct initialized from literal |
+| `alloc(union.variant(val))` | `T*?` | Heap union initialized from variant |
+| `alloc(slice_expr)` | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
+
+`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. The bare form `alloc(T[N])` is not valid — the `{ }` initializer is always required, even when empty. This keeps `T[N]` unambiguously a type and `T[N] { }` unambiguously a value expression. For runtime-sized allocation, `N` may be any integer expression but explicit element values are not allowed (the array is zero-initialized). Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
+
+The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
+
+```fc
+let s = "hello %d{n}"       // stack-allocated (alloca) — unsafe to return
+let owned = alloc(s)!        // heap copy — safe to return, caller must free
+
+let mut buf = int32[3] { }
+buf.ptr[0] = 10
+let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
+```
+
+#### alloc with string and cstr literals
+
+`alloc("hello")` creates a heap copy of the string literal, returning `str?`. `alloc(c"hello")` creates a heap copy of the cstr literal including the null terminator, returning `cstr?` (= `uint8*?`). The caller must free the result.
+
+```fc
+let s = alloc("hello")!         // str? — heap copy of literal
+let c = alloc(c"hello")!        // cstr? — heap copy with null terminator
+```
+
+#### Direct-to-heap optimization
+
+When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or array literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `calloc`'d buffer. This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
+
+#### Raw buffer allocation
+
+`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N] { })`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
+
+```fc
+let buf = alloc(uint8, 256)!    // uint8*? — raw buffer, no length tracking
+```
+
+`alloc(T, N)` transpiles to `calloc(N, sizeof(T))`. Like all alloc forms, the memory is zero-initialized.
+
+`alloc` and `free` require a hosted C environment with heap allocation (FC's platform contract — see §Platform contract).
+
+### Initialized alloc
+
+`alloc` also accepts a value expression instead of a bare type name. The type is inferred from the expression, memory is allocated and zero-initialized, then the value is written in. This combines allocation and initialization into a single expression.
+
+**Struct literal** — partial construction allowed, unspecified fields remain zero:
+
+```fc
+let p = alloc(point3d { x = 2, y = 3, z = 4 })!
+let p = alloc(point3d { x = 2, z = 4 })!        // y defaults to 0
+```
+
+**Union variant:**
+
+```fc
+let s = alloc(shape.circle(3.14))!
+let r = alloc(parse_outcome.success(42))!
+```
+
+**Slice literal** — same rules as stack slice initialization. Length is always required and the element count must match exactly:
+
+```fc
+let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
+let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
+```
+
+In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
+
+> **Transpilation**
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
+
+### Initialization after alloc
+
+When using the zero-init form, there are two idiomatic ways to initialize fields afterward.
+
+**Field-by-field** — useful when only some fields differ from their defaults:
+
+```fc
+let p = alloc(point3d)!
+p->x = 2
+p->z = 4
+// y remains 0 — already zero-initialized by alloc
+```
+
+**Whole-struct assignment** — write a struct literal through the pointer with `*p = ...`:
+
+```fc
+let p = alloc(point3d)!
+*p = point3d { x = 2, y = 3, z = 4 }
+
+// partial construction also works — unspecified fields default to 0
+*p = point3d { x = 2, z = 4 }
+```
+
+> **Transpilation**
+> `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d){ .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
 
 # PART 8 — C Interop
 
@@ -3705,272 +3940,37 @@ let s = str { ptr = cs, len = libc.strlen(cs) }
 
 The resulting `str` shares memory with the original C string — no allocation occurs. The programmer is responsible for ensuring the C string remains live for the lifetime of the FC slice.
 
-# PART 9 — Generics
+# PART 9 — Standard Library
 
-## Overview
+All standard library modules live in the `std::` namespace and are written in regular FC wrapping C standard library functions. Import with `import <module> from std::`. Source files are in `stdlib/`.
 
-FC supports parametric polymorphism through type variables. A type variable is a placeholder for any concrete type — the compiler produces a separate concrete instantiation for each unique combination of types a generic function or type is used with. This is **monomorphization**: there is no runtime type information, no boxing, and no dispatch overhead. Every generic use site compiles down to code that is identical in structure to what you would have written by hand for that specific type.
+## std::io
 
-This is the same model as C++ templates, but specified at the language level rather than as a text-substitution mechanism. The compiler resolves all type variables before emitting any C output — the generated C contains only concrete, fully-typed code.
+File I/O using opaque `any*` handles (C `FILE*`). Reading, writing, opening, closing, seeking, and filesystem operations. The built-in globals `stdin`, `stdout`, `stderr` are typed `any*` and always available without import.
 
----
+## std::sys
 
-## Type Variables
+Environment variables, process control, wall-clock time, and sleep. Mostly pure C11; `sleep` uses POSIX `nanosleep` (works on Linux, macOS, and Windows via MinGW).
 
-A type variable is written as an apostrophe followed by a name: `'a`, `'b`, `'elem`, `'Key`, `'Val`. The apostrophe is a dedicated sigil — concrete type names never begin with `'`, so there is no ambiguity.
+## std::math
 
-Type variables are **implicit** — they are never declared separately. Any `'a` appearing in a function signature, struct body, or union body is automatically treated as a type variable. Multiple occurrences of the same name within the same scope refer to the same type variable and constrain the types at those positions to be identical.
+Common mathematical functions wrapping C11 `math.h`, all operating on `float64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
 
----
+## std::text
 
-## Generic Functions
+String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
 
-A function is generic if one or more type variables appear in its parameter or return types. The type variables are resolved at each call site by the compiler — no explicit instantiation syntax is required.
+## std::data
 
-```fc
-let identity = (x: 'a) -> x
+Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:
 
-let fst = (a: 'a, b: 'b) -> a
+- **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
+- **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.
+- **`hash_dict`** — Hash map with open addressing and linear probing. Stores user-provided hash and equality functions. Supports put, get, remove, and iteration over key-value pairs.
+- **`hash_set`** — Hash set using the same probing strategy as hash_dict. Supports add, has, remove, and filtered iteration.
+- **`slice`** — Functional operations on built-in `'a[]` slices: map, filter, fold, scan, reduce, find, sort, reverse, copy, and more. Read-only functions take `const 'a[]`; mutating functions (sort, reverse, retain, apply) take `'a[]`.
 
-let map = (s: 'a[], f: ('a) -> 'b) ->
-    let mut result = alloc('b[s.len] { })!
-    let mut i = 0
-    loop
-        if i >= s.len then break result
-        result[i] = f(s[i])
-        i = i + 1
-
-let swap = (p: pair<'a, 'b>) ->
-    pair { first = p.second, second = p.first }
-```
-
-When the same type variable appears more than once, the compiler unifies the types at those positions:
-
-```fc
-let eq_first = (a: 'a, b: 'a) -> a == b    // both arguments must be the same type
-```
-
-`==` is valid here without any constraint because FC defines structural equality for all types (see §Structural Equality). This is one of the benefits of FC's universal equality model — unconstrained type variables can always use `==` and `!=`.
-
-Return types are always inferred — if the body expression resolves to a concrete type, that becomes the return type after type variable substitution.
-
-### Implicit and explicit type arguments
-
-In the normal case, type variables are resolved entirely from the function's arguments — no explicit type annotation is needed at the call site:
-
-```fc
-let x = identity(42)                          // 'a = int32, inferred from argument
-let z = map(points, (p: point) -> p.x)        // 'a = point, 'b = float64, inferred
-```
-
-However, some functions introduce type variables that do not appear in any parameter. The most common case is a constructor or factory function where the element type is not given by any argument:
-
-```fc
-// 'a cannot be inferred from any argument — it only appears in the return type
-let make = <'a>() ->
-    arraylist { data = alloc('a[4] { })!, len = 0 }
-```
-
-The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
-
-```fc
-let mut nums = arraylist.make<int32>()
-let mut strs = arraylist.make<str>()
-```
-
-Multiple explicit type variables are separated by commas:
-
-```fc
-let make_pair = <'a, 'b>() ->
-    pair { first = default('a), second = default('b) }
-
-let p = make_pair<int32, str>()
-```
-
-**The rule:** a type variable belongs in `<>` if and only if it does not appear in any parameter type. If a type variable appears in a parameter, it is always inferred from the argument — declaring it in `<>` as well is a compile error:
-
-```fc
-// compile error — 'a appears in a parameter, cannot also be declared explicit
-let bad = <'a>(x: 'a) -> x
-```
-
-This keeps the explicit syntax minimal — it only appears when genuinely necessary, and a `<>` declaration is a clear signal to the reader that the type cannot be derived from the arguments.
-
-**Inside a generic function body**, a `<>` type variable may be satisfied by a type variable already in scope from the enclosing function's own parameters — no explicit `<type>` annotation is needed at internal call sites:
-
-```fc
-let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
-    let mut result = arraylist.make<'b>()    // 'b is in scope — explicit but no concrete type needed
-    for x in l.data[..l.len]
-        arraylist.add(&result, f(x))
-    result
-```
-
-The explicit `<type>` syntax is only required when calling from a non-generic context where no type variable is in scope.
-
-**Passing generic functions as arguments** — `<type>` syntax is only valid in call position, never as a standalone expression. A generic function cannot be passed as a value directly — it has no single concrete type until instantiated. The idiomatic pattern is a wrapper lambda that instantiates at the required type:
-
-```fc
-let factory = <'a>() -> default('a)
-
-// wrapper lambda instantiates factory at a specific type
-let str_factory = () -> factory<str>()
-
-let l = arraylist.repeat<str>(5, str_factory)
-
-// or inline
-let l = arraylist.repeat<str>(5, () -> factory<str>())
-```
-
-The wrapper is a plain concrete `() -> str` — no new language mechanism required. This covers all practical factory and callback patterns without rank-2 polymorphism.
-
-**Rank-2 polymorphism is not supported** — a function parameter typed as "a generic function that works for any type" (e.g. `f: <'a>() -> 'a`) would require the callee to invoke `f` at multiple different types, which implies runtime type information or a constraint system. FC has neither, and this pattern is explicitly out of scope. The wrapper lambda approach covers all realistic cases without it.
-
-**Parsing** — `name<type>()` is always parsed as a generic call, never as a comparison expression. This is unambiguous in FC because type names (`int32`, `str`, `point`, `'a`) are syntactically distinct from value expressions in all positions where they may appear. No disambiguation sigil (such as Rust's `::<>` turbofish) is required.
-
----
-
-## Generic Structs and Unions
-
-Structs and unions become generic by using type variables in their field or variant definitions. The type parameters are inferred from the body — no explicit parameter list is required on the type name.
-
-```fc
-struct pair =
-    first:  'a
-    second: 'b
-
-struct box =
-    value: 'a
-
-union result =
-    | ok('a)
-    | err('b)
-```
-
-The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box` over `'a`, and `result` over `'a` and `'b`. The type parameters are ordered by first appearance in the body, reading top-to-bottom, left-to-right.
-
-For generic structs, type arguments are inferred from the struct literal fields:
-
-```fc
-let p = pair { first = 42, second = "hello" }    // pair<int32, str>
-let b = box { value = 3.14 }                     // box<float64>
-```
-
-For generic unions, type arguments must be provided explicitly at the construction site using `name<types>.variant(args)` syntax. This is required because a variant's payload may not constrain all type parameters — for example, `result.err(32)` cannot determine `'a`:
-
-```fc
-let r = result<int32, str>.ok(42)                // result<int32, str>
-let e = result<int32, str>.err("fail")           // result<int32, str>
-```
-
-Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
-
-```fc
-let map_fst = (p: pair<'a, 'b>, f: ('a) -> 'c) ->
-    pair { first = f(p.first), second = p.second }
-```
-
-### Type-associated modules on generic types
-
-A module sharing a generic type's name works the same as for concrete types. Type variables in scope within the type definition are available within the associated module:
-
-```fc
-struct box =
-    value: 'a
-
-module box =
-    let wrap = (x: 'a) -> box { value = x }
-    let unwrap = (b: box<'a>) -> b.value
-    let map = (b: box<'a>, f: ('a) -> 'b) -> box { value = f(b.value) }
-```
-
-Built-in operators `default(T)` and `sizeof(T)`, as well as static module member access, follow the same monomorphization rules as operators — they are valid on type variables in a generic body and checked against the concrete type at each call site:
-
-```fc
-let make_default = (x: 'a) -> default('a)     // ok — checked at call site
-let size_of_val  = (x: 'a) -> sizeof('a)       // ok — checked at call site
-let get_min      = (x: 'a) -> 'a.min           // ok — valid if concrete type has .min
-let make_none    = (x: 'a) -> default('a?)     // ok — produces 'a? with no value
-```
-
-A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
-
----
-
-## option
-
-`option` is a built-in generic union:
-
-```fc
-union option =
-    | none
-    | some('a)
-```
-
-The syntax for option types is `T?` — there is no `option<T>` type syntax. Conceptually, `option` follows the same design as a union with `none` as its first variant: `default(T?)` produces a none value (first-variant-is-default, see §Default Values), and `| none ->` / `| some(v) ->` work as match patterns with exhaustiveness checking. The built-in `some(expr)` operator (see §Constructing options) wraps a value and infers the option type, and `x!` unwraps it (crashing if none).
-
-The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
-
----
-
-## Monomorphization
-
-For each unique combination of concrete types a generic function or type is used with, the compiler produces a distinct concrete instantiation. This happens entirely before C code is emitted — the generated C contains no type variables, no generic machinery, and no runtime type information.
-
-```fc
-let x = identity(42)        // produces: identity instantiated at int32
-let y = identity(3.14)      // produces: identity instantiated at float64
-let z = identity("hello")   // produces: identity instantiated at str
-
-let p1 = pair { first = 1,     second = true  }   // produces: pair<int32, bool>
-let p2 = pair { first = "hi",  second = 3.14  }   // produces: pair<str, float64>
-```
-
-Each instantiation becomes a distinct C type or function. The compiler derives C names from the generic name and the concrete type arguments — for example, `pair<int32, bool>` might emit as `pair_int32_bool` and `identity` at `int32` as `identity_int32`. The exact naming scheme is a compiler implementation detail; what matters is that names are unique, derived deterministically from the types, and human-readable enough to be identifiable in debugger output and compiler errors.
-
-Two uses of the same generic at the same concrete types share a single instantiation — the compiler deduplicates across the entire build.
-
-> **Transpilation**
-> A generic struct transpiles to a C struct per instantiation:
-> ```c
-> typedef struct { int32_t first; bool second; } pair_int32_bool;
-> typedef struct { fc_slice_uint8 first; double second; } pair_str_float64;
-> ```
-> A generic function transpiles to a C function per unique call signature:
-> ```c
-> int32_t identity_int32(int32_t x) { return x; }
-> double  identity_float64(double x) { return x; }
-> ```
-> Option types (`T?`) follow the existing option transpilation rules per instantiation — pointer types use the null-sentinel form, all others use the tagged struct form.
-
-### Errors at monomorphization
-
-FC has no constraint system in this version. Type variables are unconstrained — any concrete type may be substituted. If a generic function uses an operation that the concrete type does not support, the compiler reports an error at the **call site** where the unsupported instantiation was requested, identifying the type variable substitution that caused the problem. Errors are not reported inside the generic definition itself.
-
-This means generic functions work naturally across numeric types without any annotation:
-
-```fc
-let add = (a: 'a, b: 'a) -> a + b
-
-add(1, 2)           // ok — int32 supports +
-add(1.0, 2.0)       // ok — float64 supports +
-add("x", "y")       // compile error at this call site — str does not support +
-```
-
-The error message identifies the call site and the substitution: something like "when calling `add` with `'a = str`, operator `+` is not defined for `str`." This makes it straightforward to diagnose in practice, even without a formal constraint declaration in the source.
-
-### Scope of operations on type variables
-
-The following operations are valid on type variables within a generic body, with validation deferred to monomorphization:
-
-- **Operators**: arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`)
-- **Built-in type operators**: `default('a)`, `sizeof('a)`
-- **Built-in static type properties**: `'a.min`, `'a.max`, `'a.bits`, `'a.nan`, `'a.inf`, `'a.neg_inf`, `'a.epsilon`
-
-The following are **not** supported on type variables:
-
-- **Field access on values** — `x.field` where `x: 'a` is not valid. The compiler does not perform structural typing; a type variable does not carry information about which fields the concrete type will have. To operate on fields generically, pass them as separate parameters: write `let sum = (x: 'a, y: 'a) -> x + y` rather than `let sum = (p: 'a) -> p.x + p.y`.
-- **User-defined type-associated module members** — `'a.make()` or `'a.zero` where `make`/`zero` are members of a user-defined module sharing the type's name. Only the built-in static properties listed above are accessible on type variables. User-defined module members require a concrete type name.
+All sequential collections (array_list, linked_list, slice) share a consistent functional API: `fold_left`, `fold_right`, `reduce`, `scan`, `map`, `mapi`, `filter`, `iter`, `iteri`, `any`, `all`, `find`, `count`. In-place mutating variants: `sort`, `reverse`, `retain`, `apply`, `applyi`. The `try_` prefix convention returns an option; the bare name force-unwraps (e.g., `try_find` vs `find`).
 
 ---
 
