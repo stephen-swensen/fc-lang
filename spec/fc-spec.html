@@ -1284,7 +1284,7 @@ Several operations in FC can fail at runtime with no meaningful recovery path. T
 | Option unwrap | `x!` on a `none` value |
 | Division by zero | Integer division or remainder with a zero divisor |
 
-All hard failures call `abort()` from the C standard library, which terminates the process immediately without unwinding, without running cleanup functions, and without flushing output buffers. On embedded targets where `abort()` is unavailable, the compiler emits a target-appropriate trap instruction (infinite loop, CPU halt, or equivalent).
+All hard failures call `abort()` from the C standard library, which terminates the process immediately without unwinding, without running cleanup functions, and without flushing output buffers.
 
 There is no exception handling and no recoverable failure path for these operations in this version of FC. Hard failures that have sufficient source context (option unwrap, assert) print a diagnostic to stderr before aborting — including the source file, line number, and the expression text that triggered the failure. Bounds checks and division-by-zero abort without diagnostic output.
 
