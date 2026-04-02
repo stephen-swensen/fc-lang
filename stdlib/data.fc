@@ -220,6 +220,30 @@ module array_list =
     let sort = (l: array_list<'a>*, cmp: ('a, 'a) -> int32) ->
         slice.sort(l->data[0..l->len], cmp)
 
+    // reverse: reverses element order in place.
+    let reverse = (l: array_list<'a>*) ->
+        slice.reverse(l->data[0..l->len])
+
+    // retain: removes elements not matching predicate, in place.
+    // Compacts matching elements to the front and updates len.
+    let retain = (l: array_list<'a>*, pred: ('a) -> bool) ->
+        let mut j = 0i64
+        for i in 0..l->len
+            if pred(l->data[i]) then
+                if j != i then l->data[j] = l->data[i]
+                j = j + 1
+        l->len = j
+
+    // apply: transforms each element in place. Same type in and out.
+    let apply = (l: array_list<'a>*, f: ('a) -> 'a) ->
+        for i in 0..l->len
+            l->data[i] = f(l->data[i])
+
+    // applyi: transforms each element in place with index.
+    let applyi = (l: array_list<'a>*, f: (int64, 'a) -> 'a) ->
+        for i in 0..l->len
+            l->data[i] = f(i, l->data[i])
+
 // =========================================================================
 // slice — functional operations on built-in 'a[] slices
 // =========================================================================
@@ -352,12 +376,17 @@ module slice =
             if pred(e) then n = n + 1
         n
 
-    // reverse: returns a reversed copy. Caller must free.
+    // reverse: reverses element order in place.
     let reverse = (s: 'a[]) ->
-        let result = alloc('a[s.len] { })!
-        for i, e in s
-            result[s.len - 1 - i] = e
-        result
+        let mut lo = 0i64
+        let mut hi = s.len - 1
+        loop
+            if lo >= hi then break
+            let tmp = s[lo]
+            s[lo] = s[hi]
+            s[hi] = tmp
+            lo = lo + 1
+            hi = hi - 1
 
     // copy: returns a heap-allocated copy. Caller must free.
     let copy = (s: 'a[]) ->
@@ -365,6 +394,27 @@ module slice =
         for i, e in s
             result[i] = e
         result
+
+    // retain: removes elements not matching predicate, in place.
+    // Compacts matching elements to the front and returns a subslice of the result.
+    // Elements past the returned subslice length are stale.
+    let retain = (s: 'a[], pred: ('a) -> bool) ->
+        let mut j = 0i64
+        for i in 0..s.len
+            if pred(s[i]) then
+                if j != i then s[j] = s[i]
+                j = j + 1
+        s[0..j]
+
+    // apply: transforms each element in place. Same type in and out.
+    let apply = (s: 'a[], f: ('a) -> 'a) ->
+        for i in 0..s.len
+            s[i] = f(s[i])
+
+    // applyi: transforms each element in place with index.
+    let applyi = (s: 'a[], f: (int64, 'a) -> 'a) ->
+        for i in 0..s.len
+            s[i] = f(i, s[i])
 
     // sort_range: sorts s[lo..hi] (inclusive) in place using quicksort.
     private let sort_range = (s: 'a[], lo: int64, hi: int64, cmp: ('a, 'a) -> int32) ->
@@ -735,6 +785,62 @@ module linked_list =
                 j = j + 1
                 cur = ptr->next
         free(s)
+
+    // reverse: reverses element order in place by rewiring node pointers. O(n).
+    let reverse = (l: linked_list<'a>*) ->
+        let mut cur = l->head
+        loop
+            match cur with
+            | none -> break
+            | some(ptr) ->
+                let next = ptr->next
+                ptr->next = ptr->prev
+                ptr->prev = next
+                cur = next
+        let old_head = l->head
+        l->head = l->tail
+        l->tail = old_head
+
+    // retain: removes elements not matching predicate in place, freeing their nodes. O(n).
+    let retain = (l: linked_list<'a>*, pred: ('a) -> bool) ->
+        let mut cur = l->head
+        loop
+            match cur with
+            | none -> break
+            | some(ptr) ->
+                let next = ptr->next
+                if !pred(ptr->value) then
+                    match ptr->prev with
+                    | none -> l->head = ptr->next
+                    | some(p) -> p->next = ptr->next
+                    match ptr->next with
+                    | none -> l->tail = ptr->prev
+                    | some(n) -> n->prev = ptr->prev
+                    free(ptr)
+                    l->len = l->len - 1
+                cur = next
+
+    // apply: transforms each element in place. Same type in and out.
+    let apply = (l: linked_list<'a>*, f: ('a) -> 'a) ->
+        let mut cur = l->head
+        loop
+            match cur with
+            | none -> break
+            | some(ptr) ->
+                ptr->value = f(ptr->value)
+                cur = ptr->next
+
+    // applyi: transforms each element in place with index.
+    let applyi = (l: linked_list<'a>*, f: (int64, 'a) -> 'a) ->
+        let mut cur = l->head
+        let mut idx = 0i64
+        loop
+            match cur with
+            | none -> break
+            | some(ptr) ->
+                ptr->value = f(idx, ptr->value)
+                idx = idx + 1
+                cur = ptr->next
 
 // =========================================================================
 // hash_dict — hash map with open addressing and linear probing

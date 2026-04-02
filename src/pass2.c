@@ -2326,6 +2326,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_LET: {
+        if (e->type) return e->type;
         Type *t = check_expr(ctx, e->let_expr.let_init);
         if (type_is_error(t)) {
             /* Add binding with error type so subsequent uses don't cascade "undefined" */
@@ -2495,6 +2496,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_STRUCT_LIT: {
+        if (e->type) return e->type;
         /* Look up the struct type */
         Symbol *sym = NULL;
 

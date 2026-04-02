@@ -137,6 +137,33 @@ let main = (args: str[]) ->
     assert(array_list.get(sl, 4i64) == 1)
     array_list.drop(sl)
 
+    // reverse
+    let mut rv = array_list.make<int32>()
+    array_list.add(&rv, 1)
+    array_list.add(&rv, 2)
+    array_list.add(&rv, 3)
+    array_list.reverse(&rv)
+    assert(array_list.get(rv, 0i64) == 3)
+    assert(array_list.get(rv, 1i64) == 2)
+    assert(array_list.get(rv, 2i64) == 1)
+
+    // retain
+    array_list.retain(&rv, (x: int32) -> x >= 2)
+    assert(array_list.len(rv) == 2)
+    assert(array_list.get(rv, 0i64) == 3)
+    assert(array_list.get(rv, 1i64) == 2)
+
+    // apply
+    array_list.apply(&rv, (x: int32) -> x * 10)
+    assert(array_list.get(rv, 0i64) == 30)
+    assert(array_list.get(rv, 1i64) == 20)
+
+    // applyi
+    array_list.applyi(&rv, (i: int64, x: int32) -> x + (int32)i)
+    assert(array_list.get(rv, 0i64) == 30) // 30 + 0
+    assert(array_list.get(rv, 1i64) == 21) // 20 + 1
+    array_list.drop(rv)
+
     // clear
     array_list.clear(&l)
     assert(array_list.is_empty(l))
