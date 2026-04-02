@@ -2747,6 +2747,16 @@ All stdlib modules live in the `std::` namespace and are written in regular FC w
 
 **`std::text`** — String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
 
+**`std::data`** — Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:
+
+- **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
+- **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.
+- **`hash_dict`** — Hash map with open addressing and linear probing. Stores user-provided hash and equality functions. Supports put, get, remove, and iteration over key-value pairs.
+- **`hash_set`** — Hash set using the same probing strategy as hash_dict. Supports add, has, remove, and filtered iteration.
+- **`slice`** — Functional operations on built-in `'a[]` slices: map, filter, fold, scan, reduce, find, sort, reverse, copy, and more. Read-only functions take `const 'a[]`; mutating functions (sort, reverse, retain, apply) take `'a[]`.
+
+All sequential collections (array_list, linked_list, slice) share a consistent functional API: `fold_left`, `fold_right`, `reduce`, `scan`, `map`, `mapi`, `filter`, `iter`, `iteri`, `any`, `all`, `find`, `count`. In-place mutating variants: `sort`, `reverse`, `retain`, `apply`, `applyi`. The `try_` prefix convention returns an option; the bare name force-unwraps (e.g., `try_find` vs `find`).
+
 ---
 
 ---
@@ -4407,7 +4417,7 @@ All specification features are implemented and tested:
 - Module system with namespaces, visibility, and lexically scoped imports
 - C interop via `extern` declarations, automatic boundary casts, and variadic support
 - Conditional compilation with `#if`/`#else`/`#end` directives
-- Standard library modules: `std::io`, `std::sys`, `std::math`, `std::text`
+- Standard library modules: `std::io`, `std::sys`, `std::math`, `std::text`, `std::data`
 
 ### Test suite
 
