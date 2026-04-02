@@ -1812,17 +1812,17 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_INDEX: {
-        /* Bounds check for slices */
+        /* Bounds check for slices — returns lvalue via pointer dereference */
         Type *obj_type = e->index.object->type;
         if (obj_type && obj_type->kind == TYPE_SLICE) {
             int tid = temp_counter++;
-            fprintf(out, "({ ");
+            fprintf(out, "(*({ ");
             emit_type(obj_type, out);
             fprintf(out, " _s%d = ", tid);
             emit_expr(e->index.object, out);
             fprintf(out, "; int64_t _i%d = (int64_t)", tid);
             emit_expr(e->index.index, out);
-            fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) abort(); _s%d.ptr[_i%d]; })",
+            fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) abort(); _s%d.ptr + _i%d; }))",
                 tid, tid, tid, tid, tid);
         } else {
             /* Pointer indexing — no bounds check */
@@ -2526,24 +2526,8 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ")); })");
             break;
         }
-        /* Special case: assignment to slice/str element needs bounds check inside */
-        if (target->kind == EXPR_INDEX) {
-            Type *obj_type = target->index.object->type;
-            if (obj_type && obj_type->kind == TYPE_SLICE) {
-                int tid = temp_counter++;
-                fprintf(out, "({ ");
-                emit_type(obj_type, out);
-                fprintf(out, " _s%d = ", tid);
-                emit_expr(target->index.object, out);
-                fprintf(out, "; int64_t _i%d = (int64_t)", tid);
-                emit_expr(target->index.index, out);
-                fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) abort(); _s%d.ptr[_i%d] = ",
-                    tid, tid, tid, tid, tid);
-                emit_expr(e->assign.value, out);
-                fprintf(out, "; })");
-                break;
-            }
-        }
+        /* Slice element assignment handled generically — EXPR_INDEX now produces
+         * an lvalue via pointer dereference, so no special case needed. */
         emit_expr(e->assign.target, out);
         fprintf(out, " = ");
         emit_expr(e->assign.value, out);
