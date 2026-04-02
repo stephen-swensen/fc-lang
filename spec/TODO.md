@@ -8,6 +8,4 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 - **stdlib data: sort for array_list and linked_list**: `array_list` and `linked_list` should have `sort` methods (taking a comparison function). Sort requires a comparison function since generics have no trait constraints.
 
-- **Codegen: lvalue field access through bounds-checked slice indexing**: `d->buckets[idx].key = value` fails because bounds-checked slice indexing generates a C statement-expression whose result is an rvalue. Workaround: write whole structs (`d->buckets[idx] = entry { ... }`) instead of individual fields. Reading fields works fine via `let entry = d.buckets[idx]; entry.key`.
-
 - **Default hash/eq operators for hash_dict/hash_set**: Currently `hash_dict.make<int32>(hash_fn, eq_fn)` requires explicit hash and equality functions. A future enhancement could provide built-in `hash` and `eq` operators (based on byte representation of the type) so users can write `hash_dict.make<int32, str>()` without explicit function arguments.

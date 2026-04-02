@@ -738,9 +738,10 @@ module hash_dict =
                 let mut idx = h % new_cap
                 if idx < 0 then idx = idx + new_cap
                 loop
-                    let slot = d->buckets[idx]
-                    if slot.state == 0 then
-                        d->buckets[idx] = hd_entry { key = entry.key, value = entry.value, state = 1 }
+                    if d->buckets[idx].state == 0 then
+                        d->buckets[idx].key = entry.key
+                        d->buckets[idx].value = entry.value
+                        d->buckets[idx].state = 1
                         d->len = d->len + 1
                         break
                     idx = (idx + 1) % new_cap
@@ -758,13 +759,15 @@ module hash_dict =
             let entry = d->buckets[idx]
             if entry.state == 0 then
                 let ins = if first_del >= 0 then first_del else idx
-                d->buckets[ins] = hd_entry { key = key, value = value, state = 1 }
+                d->buckets[ins].key = key
+                d->buckets[ins].value = value
+                d->buckets[ins].state = 1
                 d->len = d->len + 1
                 break
             if entry.state == 2 && first_del < 0 then
                 first_del = idx
             if entry.state == 1 && d->eq(entry.key, key) then
-                d->buckets[idx] = hd_entry { key = key, value = value, state = 1 }
+                d->buckets[idx].value = value
                 break
             idx = (idx + 1) % cap
 
@@ -808,7 +811,7 @@ module hash_dict =
             if entry.state == 0 then break default('b?)
             if entry.state == 1 && d->eq(entry.key, key) then
                 let val = entry.value
-                d->buckets[idx] = hd_entry { key = entry.key, value = entry.value, state = 2 }
+                d->buckets[idx].state = 2
                 d->len = d->len - 1
                 break some(val)
             idx = (idx + 1) % cap
@@ -923,9 +926,9 @@ module hash_set =
                 let mut idx = h % new_cap
                 if idx < 0 then idx = idx + new_cap
                 loop
-                    let slot = s->buckets[idx]
-                    if slot.state == 0 then
-                        s->buckets[idx] = hs_entry { key = entry.key, state = 1 }
+                    if s->buckets[idx].state == 0 then
+                        s->buckets[idx].key = entry.key
+                        s->buckets[idx].state = 1
                         s->len = s->len + 1
                         break
                     idx = (idx + 1) % new_cap
@@ -943,7 +946,8 @@ module hash_set =
             let entry = s->buckets[idx]
             if entry.state == 0 then
                 let ins = if first_del >= 0 then first_del else idx
-                s->buckets[ins] = hs_entry { key = key, state = 1 }
+                s->buckets[ins].key = key
+                s->buckets[ins].state = 1
                 s->len = s->len + 1
                 break
             if entry.state == 2 && first_del < 0 then
@@ -974,7 +978,7 @@ module hash_set =
             let entry = s->buckets[idx]
             if entry.state == 0 then break false
             if entry.state == 1 && s->eq(entry.key, key) then
-                s->buckets[idx] = hs_entry { key = entry.key, state = 2 }
+                s->buckets[idx].state = 2
                 s->len = s->len - 1
                 break true
             idx = (idx + 1) % cap
@@ -990,9 +994,7 @@ module hash_set =
     // clear: removes all elements.
     let clear = (s: hash_set<'a>*) ->
         for i in 0..s->buckets.len
-            let entry = s->buckets[i]
-            if entry.state != 0 then
-                s->buckets[i] = hs_entry { key = entry.key, state = 0 }
+            s->buckets[i].state = 0
         s->len = 0
 
     // fold: folds over all elements.
