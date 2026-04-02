@@ -252,14 +252,14 @@ module slice =
 
     // fold: left fold (first to last).
     // fold_left: left fold (first to last).
-    let fold_left = (s: 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+    let fold_left = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
         let mut acc = init
         for e in s
             acc = f(acc, e)
         acc
 
     // fold_right: right fold (last to first).
-    let fold_right = (s: 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+    let fold_right = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
         let mut acc = init
         let mut i = s.len - 1
         loop
@@ -268,7 +268,7 @@ module slice =
             i = i - 1
 
     // try_reduce: fold using first element as init. Returns none if empty.
-    let try_reduce = (s: 'a[], f: ('a, 'a) -> 'a) ->
+    let try_reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
         if s.len == 0 then default('a?)
         else
             let mut acc = s[0]
@@ -277,11 +277,11 @@ module slice =
             some(acc)
 
     // reduce: fold using first element as init. Aborts if empty.
-    let reduce = (s: 'a[], f: ('a, 'a) -> 'a) ->
+    let reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
         slice.try_reduce(s, f)!
 
     // scan: like fold, returns all intermediate values. Caller must free.
-    let scan = (s: 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+    let scan = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
         let result = alloc('b[s.len + 1] { })!
         let mut acc = init
         result[0] = acc
@@ -293,21 +293,21 @@ module slice =
         result
 
     // map: transforms each element. Caller must free.
-    let map = (s: 'a[], f: ('a) -> 'b) ->
+    let map = (s: const 'a[], f: ('a) -> 'b) ->
         let result = alloc('b[s.len] { })!
         for i, e in s
             result[i] = f(e)
         result
 
     // mapi: transforms each element with index. Caller must free.
-    let mapi = (s: 'a[], f: (int64, 'a) -> 'b) ->
+    let mapi = (s: const 'a[], f: (int64, 'a) -> 'b) ->
         let result = alloc('b[s.len] { })!
         for i, e in s
             result[i] = f(i, e)
         result
 
     // filter: returns elements matching predicate. Caller must free.
-    let filter = (s: 'a[], pred: ('a) -> bool) ->
+    let filter = (s: const 'a[], pred: ('a) -> bool) ->
         let mut n = 0i64
         for e in s
             if pred(e) then n = n + 1
@@ -320,57 +320,57 @@ module slice =
         result
 
     // iter: applies f to each element for side effects.
-    let iter = (s: 'a[], f: ('a) -> 'b) ->
+    let iter = (s: const 'a[], f: ('a) -> 'b) ->
         for e in s
             f(e)
 
     // iteri: applies f to each (index, element) for side effects.
-    let iteri = (s: 'a[], f: (int64, 'a) -> 'b) ->
+    let iteri = (s: const 'a[], f: (int64, 'a) -> 'b) ->
         for i, e in s
             f(i, e)
 
     // any: true if any element matches predicate.
-    let any = (s: 'a[], pred: ('a) -> bool) ->
+    let any = (s: const 'a[], pred: ('a) -> bool) ->
         for e in s
             if pred(e) then return true
         false
 
     // all: true if all elements match predicate.
-    let all = (s: 'a[], pred: ('a) -> bool) ->
+    let all = (s: const 'a[], pred: ('a) -> bool) ->
         for e in s
             if !pred(e) then return false
         true
 
     // try_find: returns first element matching predicate, or none.
-    let try_find = (s: 'a[], pred: ('a) -> bool) ->
+    let try_find = (s: const 'a[], pred: ('a) -> bool) ->
         for e in s
             if pred(e) then return some(e)
         default('a?)
 
     // find: returns first element matching predicate. Aborts if none.
-    let find = (s: 'a[], pred: ('a) -> bool) ->
+    let find = (s: const 'a[], pred: ('a) -> bool) ->
         slice.try_find(s, pred)!
 
     // try_first: returns the first element as option.
-    let try_first = (s: 'a[]) ->
+    let try_first = (s: const 'a[]) ->
         if s.len == 0 then default('a?)
         else some(s[0])
 
     // first: returns the first element. Aborts if empty.
-    let first = (s: 'a[]) ->
+    let first = (s: const 'a[]) ->
         slice.try_first(s)!
 
     // try_last: returns the last element as option.
-    let try_last = (s: 'a[]) ->
+    let try_last = (s: const 'a[]) ->
         if s.len == 0 then default('a?)
         else some(s[s.len - 1])
 
     // last: returns the last element. Aborts if empty.
-    let last = (s: 'a[]) ->
+    let last = (s: const 'a[]) ->
         slice.try_last(s)!
 
     // count: number of elements matching predicate.
-    let count = (s: 'a[], pred: ('a) -> bool) ->
+    let count = (s: const 'a[], pred: ('a) -> bool) ->
         let mut n = 0i64
         for e in s
             if pred(e) then n = n + 1
@@ -389,7 +389,7 @@ module slice =
             hi = hi - 1
 
     // copy: returns a heap-allocated copy. Caller must free.
-    let copy = (s: 'a[]) ->
+    let copy = (s: const 'a[]) ->
         let result = alloc('a[s.len] { })!
         for i, e in s
             result[i] = e
