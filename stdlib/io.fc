@@ -98,12 +98,12 @@ module io =
         match open(path, "r") with
         | none -> default(str?)
         | some(handle) ->
+            defer close(handle)
             seek(handle, 0i64, seek_end)
             let size = tell(handle)
             seek(handle, 0i64, seek_set)
             let buf = alloc(uint8[size] {})!
             read(buf, size, handle)
-            close(handle)
             some(buf)
 
     // read_char: reads a single byte from a file handle.

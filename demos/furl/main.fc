@@ -113,11 +113,11 @@ let main = (args: str[]) ->
         io.write("furl: could not create socket\n", stderr)
         sys.exit(1)
     let fd = fd_opt!
+    defer net.close(fd)
 
     let addr = net.make_addr(net.net_to_host32(ip), (uint16)port)
     if !net.connect_addr(fd, addr) then
         io.write("furl: connection to %s{host} port %d{port} failed\n", stderr)
-        net.close(fd)
         sys.exit(1)
 
     // --- Build and send HTTP request ---
@@ -125,11 +125,11 @@ let main = (args: str[]) ->
 
     // Request line + Host header
     let req_line = alloc("%s{actual_method} %s{path} HTTP/1.0\r\nHost: %s{host}\r\n")!
+    defer free(req_line)
     if verbose then
         io.write("> %s{actual_method} %s{path} HTTP/1.0\n", stderr)
         io.write("> Host: %s{host}\n", stderr)
     net.send_bytes(fd, req_line)
-    free(req_line)
 
     // Fixed headers
     net.send_bytes(fd, "User-Agent: furl/1.0\r\n")
@@ -145,16 +145,16 @@ let main = (args: str[]) ->
     for hi in 0..num_hdrs
         let hdr = custom_hdrs[hi]
         let hdr_line = alloc("%s{hdr}\r\n")!
+        defer free(hdr_line)
         if verbose then io.write("> %s{hdr}\n", stderr)
         net.send_bytes(fd, hdr_line)
-        free(hdr_line)
 
     // Content-Length if body present
     if body_data.len > 0 then
         let cl = alloc("Content-Length: %d{body_data.len}\r\n")!
+        defer free(cl)
         if verbose then io.write("> Content-Length: %d{body_data.len}\n", stderr)
         net.send_bytes(fd, cl)
-        free(cl)
 
     // End of headers
     net.send_bytes(fd, "\r\n")
@@ -172,15 +172,13 @@ let main = (args: str[]) ->
 
     // Output handle
     let mut out = stdout
-    let mut out_opened = false
     if out_file.len > 0 then
         let f = io.open(out_file, "w")
         if f.is_none then
             io.write("furl: could not open %s{out_file}\n", stderr)
-            net.close(fd)
             sys.exit(1)
         out = f!
-        out_opened = true
+        defer io.close(out)
 
     loop
         let n = net.recv_bytes(fd, recv_buf, 4096)
@@ -204,11 +202,11 @@ let main = (args: str[]) ->
                 if verbose || head_only then
                     let headers = header_buf[0..sep_pos]
                     let lines = text.split(headers, "\r\n")
+                    defer free(lines)
                     for line in lines
                         if line.len > 0 then
                             if verbose then io.write("< %s{line}\n", stderr)
                             if head_only then io.write("%s{line}\n", out)
-                    free(lines)
                     if verbose then io.write("<\n", stderr)
 
                 // Output body portion from this chunk
@@ -221,7 +219,4 @@ let main = (args: str[]) ->
             if !head_only then
                 io.write(recv_buf[0..n], out)
 
-    // Cleanup
-    if out_opened then io.close(out)
-    net.close(fd)
     0

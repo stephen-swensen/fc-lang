@@ -81,6 +81,7 @@ let main = (args: str[]) ->
         io.write("fing: cannot open ICMP socket (try: sudo setcap cap_net_raw+ep /tmp/fing-bin)\n", stderr)
         sys.exit(1)
     let fd = fd_opt!
+    defer net.close(fd)
 
     // Set receive timeout: 2 seconds
     let mut timeout = time_ext.timeval { tv_sec = 2, tv_usec = 0 }
@@ -140,5 +141,4 @@ let main = (args: str[]) ->
         let avg_us = total_us / (int64)received
         io.write("rtt min/avg/max = %d{min_us / 1000}.%d{(min_us % 1000) / 100}/%d{avg_us / 1000}.%d{(avg_us % 1000) / 100}/%d{max_us / 1000}.%d{(max_us % 1000) / 100} ms\n", stdout)
 
-    net.close(fd)
     if received == 0 then 1 else 0
