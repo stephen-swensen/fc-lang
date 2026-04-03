@@ -33,15 +33,20 @@ test-clang: $(BIN)
 
 test-all: $(BIN)
 	@bash -c '\
+	  start=$$(date +%s%N); \
 	  tmpdir=$$(mktemp -d); \
 	  trap "rm -rf $$tmpdir" EXIT; \
-	  CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/gcc.out" 2>&1 & gcc_pid=$$!; \
-	  CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/clang.out" 2>&1 & clang_pid=$$!; \
-	  gcc_rc=0; wait $$gcc_pid || gcc_rc=$$?; \
-	  clang_rc=0; wait $$clang_pid || clang_rc=$$?; \
-	  echo "=== Testing with gcc ==="; cat "$$tmpdir/gcc.out"; \
-	  echo ""; \
-	  echo "=== Testing with clang ==="; cat "$$tmpdir/clang.out"; \
+	  (CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/gcc.out" 2>&1; \
+	    echo $$? > "$$tmpdir/gcc.rc"; \
+	    echo "=== Testing with gcc ==="; cat "$$tmpdir/gcc.out"; echo "") & \
+	  (CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/clang.out" 2>&1; \
+	    echo $$? > "$$tmpdir/clang.rc"; \
+	    echo "=== Testing with clang ==="; cat "$$tmpdir/clang.out"; echo "") & \
+	  wait; \
+	  gcc_rc=$$(cat "$$tmpdir/gcc.rc"); clang_rc=$$(cat "$$tmpdir/clang.rc"); \
+	  end=$$(date +%s%N); \
+	  elapsed_ms=$$(( (end - start) / 1000000 )); \
+	  printf "Total time: %d.%03ds\n" $$((elapsed_ms / 1000)) $$((elapsed_ms % 1000)); \
 	  if [ $$gcc_rc -ne 0 ] || [ $$clang_rc -ne 0 ]; then exit 1; fi'
 
 .PHONY: all clean test test-parallel test-gcc test-clang test-all

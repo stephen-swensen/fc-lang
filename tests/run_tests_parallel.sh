@@ -180,7 +180,7 @@ elapsed_s=$(( elapsed_ms / 1000 ))
 elapsed_frac=$(( elapsed_ms % 1000 ))
 
 echo ""
-printf "%d passed, %d failed in %d.%03ds\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac"
+printf "%d passed, %d failed in %d.%03ds (%s)\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac" "${CC:-cc}"
 
 if [ $failed -gt 0 ]; then
     echo -e "Failed tests:\n$fail_lines"
