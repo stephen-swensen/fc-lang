@@ -1,0 +1,12 @@
+// Verify defer in for-element iteration runs each iteration
+let mut count = 0
+
+let main = (args: str[]) ->
+    let items = int32[3] { 10, 20, 30 }
+    let mut sum = 0
+    for x in items
+        defer count = count + 1
+        sum = sum + x
+    assert(count == 3)
+    assert(sum == 60)
+    0

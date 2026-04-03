@@ -1,0 +1,10 @@
+// Verify continue in for loop unwinds iteration defers
+let mut count = 0
+
+let main = (args: str[]) ->
+    for i in 0..5
+        defer count = count + 1
+        if i == 2 then continue
+        // defer still runs on continue iterations
+    assert(count == 5)
+    0

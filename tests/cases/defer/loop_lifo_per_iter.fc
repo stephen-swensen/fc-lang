@@ -1,0 +1,11 @@
+// Verify multiple defers within a single loop iteration run in LIFO order
+let mut trace = 0
+
+let main = (args: str[]) ->
+    for i in 0..1
+        defer trace = trace * 10 + 1
+        defer trace = trace * 10 + 2
+        defer trace = trace * 10 + 3
+    // One iteration: LIFO → 3, then 2 (trace=32), then 1 (trace=321)
+    assert(trace == 321)
+    0
