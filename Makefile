@@ -32,10 +32,16 @@ test-clang: $(BIN)
 	@CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh
 
 test-all: $(BIN)
-	@echo "=== Testing with gcc ==="
-	@CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh
-	@echo ""
-	@echo "=== Testing with clang ==="
-	@CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@bash -c '\
+	  tmpdir=$$(mktemp -d); \
+	  trap "rm -rf $$tmpdir" EXIT; \
+	  CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/gcc.out" 2>&1 & gcc_pid=$$!; \
+	  CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/clang.out" 2>&1 & clang_pid=$$!; \
+	  gcc_rc=0; wait $$gcc_pid || gcc_rc=$$?; \
+	  clang_rc=0; wait $$clang_pid || clang_rc=$$?; \
+	  echo "=== Testing with gcc ==="; cat "$$tmpdir/gcc.out"; \
+	  echo ""; \
+	  echo "=== Testing with clang ==="; cat "$$tmpdir/clang.out"; \
+	  if [ $$gcc_rc -ne 0 ] || [ $$clang_rc -ne 0 ]; then exit 1; fi'
 
 .PHONY: all clean test test-parallel test-gcc test-clang test-all
