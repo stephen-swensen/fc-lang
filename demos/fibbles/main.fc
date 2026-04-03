@@ -161,9 +161,9 @@ let load_high_score = () ->
     | some(hd) ->
         match io.open("%s{hd}/.fibbles/highscore.txt", "r") with
         | some(fp) ->
-            defer io.close(fp)
             let mut buf = uint8[32] { }
             io.read(buf, 32, fp)
+            io.close(fp)
             match text.parse_int32((const str) buf) with
             | some(v) -> v
             | none -> 0
@@ -176,8 +176,8 @@ let save_high_score = (score: int32) ->
         c.system((cstr)"mkdir -p %s{hd}/.fibbles")
         match io.open("%s{hd}/.fibbles/highscore.txt", "w") with
         | some(fp) ->
-            defer io.close(fp)
             io.write("%d{score}\n", fp)
+            io.close(fp)
         | none -> return
     | none -> return
     return
@@ -235,13 +235,10 @@ let main = (args: str[]) ->
 
     // Init SDL
     sdl.init(sdl.init_video | sdl.init_audio)
-    defer sdl.quit()
     let win = sdl.create_window(c"Fibbles", 0, 0,
         grid_w * cell, grid_h * cell, sdl.window_shown)
-    defer sdl.destroy_window(win)
     sdl.set_resizable(win, 0)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
-    defer sdl.destroy_renderer(ren)
     sdl.set_logical_size(ren, grid_w * cell, grid_h * cell)
     c.srand(sdl.get_ticks())
 
@@ -256,7 +253,6 @@ let main = (args: str[]) ->
     let mut obtained = default(audio_spec)
     let audio_dev = sdl.open_audio((any*) 0u, 0, &desired, &obtained, 0)
     if audio_dev > 0u32 then
-        defer sdl.close_audio(audio_dev)
         sdl.pause_audio(audio_dev, 0)
 
     // Pre-generate sound effect buffers (zero allocation during gameplay)
@@ -264,7 +260,6 @@ let main = (args: str[]) ->
 
     let bonus_n = samples_ms(60) + samples_ms(60) + samples_ms(80)
     let bonus_mem = alloc(int16, (usize) bonus_n)!
-    defer free(bonus_mem)
     let mut boff = fill_tone(bonus_mem, 0, 587, 60)
     boff = fill_tone(bonus_mem, boff, 784, 60)
     fill_tone(bonus_mem, boff, 1047, 80)
@@ -272,7 +267,6 @@ let main = (args: str[]) ->
 
     let death_n = samples_ms(120) + samples_ms(120) + samples_ms(150) + samples_ms(250)
     let death_mem = alloc(int16, (usize) death_n)!
-    defer free(death_mem)
     let mut doff = fill_tone(death_mem, 0, 440, 120)
     doff = fill_tone(death_mem, doff, 330, 120)
     doff = fill_tone(death_mem, doff, 220, 150)
@@ -542,4 +536,11 @@ let main = (args: str[]) ->
 
     // Final score
     io.write("Final score: %d{score}\n", stdout)
+
+    // Cleanup
+    if audio_dev > 0u32 then
+        sdl.close_audio(audio_dev)
+    sdl.destroy_renderer(ren)
+    sdl.destroy_window(win)
+    sdl.quit()
     0
