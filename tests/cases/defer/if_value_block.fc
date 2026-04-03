@@ -1,0 +1,22 @@
+// Defer in value-producing if/else blocks
+let mut trace = 0
+
+let check = (cond: bool) ->
+    let x = if cond then
+        defer trace = trace + 10
+        1
+    else
+        defer trace = trace + 20
+        2
+    x
+
+let main = (args: str[]) ->
+    let a = check(true)
+    assert(a == 1)
+    assert(trace == 10)  // then-branch defer ran
+
+    trace = 0
+    let b = check(false)
+    assert(b == 2)
+    assert(trace == 20)  // else-branch defer ran
+    0

@@ -780,6 +780,12 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
 }
 
 static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return) {
+    /* Find last non-defer statement index (needed for block-value handling) */
+    int last_real_idx = -1;
+    for (int i = count - 1; i >= 0; i--) {
+        if (stmts[i]->kind != EXPR_DEFER) { last_real_idx = i; break; }
+    }
+
     for (int i = 0; i < count; i++) {
         Expr *s = stmts[i];
         bool is_last = (i == count - 1);
@@ -891,28 +897,40 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
                 emit_expr(s, out);
                 fprintf(out, ";\n");
             }
+        } else if (!as_return && i == last_real_idx && s->type &&
+                   s->type->kind != TYPE_VOID && has_pending_defers()) {
+            /* Last expression in a value-producing block with pending defers.
+             * Save to temp, emit defers, then produce temp as block value. */
+            emit_type(s->type, out);
+            int tid = temp_counter++;
+            fprintf(out, " _blk%d = ", tid);
+            emit_expr(s, out);
+            fprintf(out, ";\n");
+            emit_scope_defers(g_defer_scope, out);
+            emit_indent(out);
+            fprintf(out, "_blk%d;\n", tid);
         } else {
             emit_expr(s, out);
             fprintf(out, ";\n");
         }
     }
     /* Emit end-of-block defers for fall-through.
-     * For as_return with non-void last expr, defers were already emitted
-     * inline with the return statement — skip to avoid duplication.
-     * For void fall-through (including void as_return), emit here. */
+     * Skip when already handled: as_return with non-void last expr (defers
+     * emitted with the return), or non-void block value (handled above). */
     if (g_defer_scope && g_defer_scope->count > 0) {
-        bool last_was_nonvoid_return = as_return && count > 0;
-        if (last_was_nonvoid_return) {
-            /* Find the actual last non-defer statement */
-            Expr *last_real = NULL;
-            for (int i = count - 1; i >= 0; i--) {
-                if (stmts[i]->kind != EXPR_DEFER) { last_real = stmts[i]; break; }
-            }
-            last_was_nonvoid_return = last_real && last_real->type &&
+        bool already_handled = false;
+        if (as_return && last_real_idx >= 0) {
+            Expr *last_real = stmts[last_real_idx];
+            already_handled = last_real->type &&
                 last_real->type->kind != TYPE_VOID &&
                 last_real->kind != EXPR_RETURN;
         }
-        if (!last_was_nonvoid_return) {
+        if (!as_return && last_real_idx >= 0) {
+            Expr *last_real = stmts[last_real_idx];
+            already_handled = last_real->type &&
+                last_real->type->kind != TYPE_VOID;
+        }
+        if (!already_handled) {
             emit_scope_defers(g_defer_scope, out);
         }
     }

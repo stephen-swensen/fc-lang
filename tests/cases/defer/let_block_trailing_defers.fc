@@ -1,0 +1,14 @@
+// Value-producing block where defers come AFTER the value expression
+// (defers registered after the value should still run)
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x =
+        let v = 42
+        defer trace = trace + 1
+        defer trace = trace + 10
+        v
+    // v is the block value; both defers registered before v should run
+    assert(x == 42)
+    assert(trace == 11)
+    0

@@ -1,0 +1,12 @@
+// Defer in a let block that also has local bindings
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x =
+        defer trace = trace + 100
+        let a = 10
+        let b = 20
+        a + b
+    assert(x == 30)
+    assert(trace == 100)
+    0

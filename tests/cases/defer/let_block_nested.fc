@@ -1,0 +1,15 @@
+// Nested value-producing blocks, each with defers
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x =
+        defer trace = trace * 10 + 1
+        let y =
+            defer trace = trace * 10 + 2
+            5
+        // inner block exit: trace = 2
+        y + 10
+    // outer block exit: trace = 2*10+1 = 21
+    assert(x == 15)
+    assert(trace == 21)
+    0

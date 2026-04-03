@@ -1,0 +1,11 @@
+// Verify defer in a let-binding block (value-producing block)
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x =
+        defer trace = trace * 10 + 1
+        23
+    // After let block: trace = 1
+    assert(x == 23)
+    assert(trace == 1)
+    0

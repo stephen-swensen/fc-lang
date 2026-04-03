@@ -1,0 +1,14 @@
+// Defer in a loop-as-expression body that also has block-scoped defers
+let mut outer_trace = 0
+let mut inner_trace = 0
+
+let main = (args: str[]) ->
+    defer outer_trace = outer_trace + 1
+    let result = loop
+        defer inner_trace = inner_trace + 1
+        break 42
+    // inner_trace = 1 (loop defer ran on break)
+    assert(result == 42)
+    assert(inner_trace == 1)
+    // outer_trace incremented at function exit
+    0

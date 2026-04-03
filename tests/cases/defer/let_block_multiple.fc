@@ -1,0 +1,12 @@
+// Multiple defers in a value-producing let block
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x =
+        defer trace = trace * 10 + 1
+        defer trace = trace * 10 + 2
+        42
+    // LIFO: 2 runs first (trace=2), then 1 (trace=21)
+    assert(x == 42)
+    assert(trace == 21)
+    0

@@ -1,0 +1,8 @@
+// Realistic: alloc in a value-producing block, defer free, return computed value
+let main = (args: str[]) ->
+    let sum =
+        let buf = alloc(int32[3] { 10, 20, 30 })!
+        defer free(buf)
+        buf[0] + buf[1] + buf[2]
+    assert(sum == 60)
+    0

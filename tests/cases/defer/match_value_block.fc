@@ -1,0 +1,28 @@
+// Defer in value-producing match arms with multiple statements
+let mut trace = 0
+
+union choice =
+    | a
+    | b
+
+let pick = (c: choice) ->
+    match c with
+    | a ->
+        defer trace = trace + 10
+        let v = 1
+        v
+    | b ->
+        defer trace = trace + 20
+        let v = 2
+        v
+
+let main = (args: str[]) ->
+    let x = pick(choice.a)
+    assert(x == 1)
+    assert(trace == 10)
+
+    trace = 0
+    let y = pick(choice.b)
+    assert(y == 2)
+    assert(trace == 20)
+    0
