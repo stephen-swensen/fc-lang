@@ -1,0 +1,10 @@
+// Verify break with value works correctly with defers
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let result = loop
+        defer trace = trace + 1
+        break 42
+    assert(result == 42)
+    assert(trace == 1)
+    0

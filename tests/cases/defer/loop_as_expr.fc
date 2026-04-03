@@ -1,0 +1,12 @@
+// Defer inside loop-as-expression with break value
+let mut count = 0
+
+let main = (args: str[]) ->
+    let result = loop
+        defer count = count + 1
+        if count == 0 then
+            break 99
+        break 0
+    assert(result == 99)
+    assert(count == 1)
+    0

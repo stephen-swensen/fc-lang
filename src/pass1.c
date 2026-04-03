@@ -1106,6 +1106,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                         PUSH(ex->assert_expr.condition);
                         if (ex->assert_expr.message) { PUSH(ex->assert_expr.message); }
                         break;
+                    case EXPR_DEFER: PUSH(ex->defer_expr.value); break;
                     default: break;
                     }
                     #undef PUSH

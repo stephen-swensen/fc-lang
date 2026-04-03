@@ -55,6 +55,7 @@ typedef enum {
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
     EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
     EXPR_ASSERT,
+    EXPR_DEFER,
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -291,6 +292,9 @@ struct Expr {
             const char *expr_text;  /* source text of condition */
             int expr_text_len;
         } assert_expr;
+
+        /* EXPR_DEFER */
+        struct { Expr *value; } defer_expr;
     };
 };
 

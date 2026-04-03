@@ -427,6 +427,12 @@ let main = (args: str[]) ->
     let rb = alloc(uint8, 64u)!
     free(rb)
 
+    // defer — schedule cleanup to run at block scope exit (LIFO order)
+    let dp = alloc(point { x = 7, y = 8 })!
+    defer free(dp)          // free runs when this scope exits
+    assert(dp->x == 7)
+    // dp is freed automatically — no manual free needed
+
     // sizeof and alignof (return int64)
     assert(sizeof(int32) == 4i64)
     assert(sizeof(point) == 8i64)

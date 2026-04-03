@@ -1,0 +1,12 @@
+// Verify continue unwinds iteration defers
+let mut count = 0
+
+let main = (args: str[]) ->
+    let mut i = 0
+    loop
+        if i >= 3 then break
+        i = i + 1
+        defer count = count + 1
+        continue
+    assert(count == 3)
+    0

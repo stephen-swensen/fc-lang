@@ -1177,6 +1177,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         if (e->assert_expr.message)
             ok &= validate_generic_body(e->assert_expr.message, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
+    case EXPR_DEFER:
+        ok &= validate_generic_body(e->defer_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
     case EXPR_SOME:
         ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
@@ -1231,6 +1234,65 @@ static bool is_lvalue_expr(Expr *e) {
     case EXPR_DEREF_FIELD: return true;   /* p->field: pointee has own lifetime */
     case EXPR_INDEX:       return true;   /* arr[i] is an lvalue */
     default:               return false;  /* function calls, literals, etc. */
+    }
+}
+
+/* Check if an expression tree contains return/break/continue (forbidden inside defer).
+ * Does NOT recurse into nested EXPR_FUNC (lambdas have their own scope). */
+static bool expr_contains_control_flow(Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_RETURN: case EXPR_BREAK: case EXPR_CONTINUE:
+        return true;
+    case EXPR_FUNC:
+        return false;  /* lambdas have their own scope */
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            if (expr_contains_control_flow(e->block.stmts[i])) return true;
+        return false;
+    case EXPR_IF:
+        return expr_contains_control_flow(e->if_expr.cond) ||
+               expr_contains_control_flow(e->if_expr.then_body) ||
+               expr_contains_control_flow(e->if_expr.else_body);
+    case EXPR_CALL:
+        for (int i = 0; i < e->call.arg_count; i++)
+            if (expr_contains_control_flow(e->call.args[i])) return true;
+        return expr_contains_control_flow(e->call.func);
+    case EXPR_BINARY:
+        return expr_contains_control_flow(e->binary.left) ||
+               expr_contains_control_flow(e->binary.right);
+    case EXPR_UNARY_PREFIX:
+        return expr_contains_control_flow(e->unary_prefix.operand);
+    case EXPR_UNARY_POSTFIX:
+        return expr_contains_control_flow(e->unary_postfix.operand);
+    case EXPR_MATCH:
+        if (expr_contains_control_flow(e->match_expr.subject)) return true;
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                if (expr_contains_control_flow(e->match_expr.arms[i].body[j])) return true;
+        return false;
+    case EXPR_LOOP:
+        /* break/continue inside a loop are scoped to that loop, not to defer */
+        return false;
+    case EXPR_FOR:
+        /* Same — break/continue inside for are scoped to the for loop */
+        return false;
+    case EXPR_ASSIGN:
+        return expr_contains_control_flow(e->assign.target) ||
+               expr_contains_control_flow(e->assign.value);
+    case EXPR_INDEX:
+        return expr_contains_control_flow(e->index.object) ||
+               expr_contains_control_flow(e->index.index);
+    case EXPR_FIELD: case EXPR_DEREF_FIELD:
+        return expr_contains_control_flow(e->field.object);
+    case EXPR_CAST:
+        return expr_contains_control_flow(e->cast.operand);
+    case EXPR_SOME:
+        return expr_contains_control_flow(e->some_expr.value);
+    case EXPR_DEFER:
+        return expr_contains_control_flow(e->defer_expr.value);
+    default:
+        return false;
     }
 }
 
@@ -3345,6 +3407,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     diag_error(e->loc, "assert message must be str, got %s", type_name(mt));
                 }
             }
+        }
+        e->type = type_void();
+        return e->type;
+    }
+
+    case EXPR_DEFER: {
+        check_expr(ctx, e->defer_expr.value);
+        if (expr_contains_control_flow(e->defer_expr.value)) {
+            diag_error(e->loc, "deferred expression must not contain return, break, or continue");
         }
         e->type = type_void();
         return e->type;

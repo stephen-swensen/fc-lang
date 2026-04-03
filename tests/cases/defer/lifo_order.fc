@@ -1,0 +1,13 @@
+// Verify defers run in LIFO (last-in, first-out) order
+let mut trace = 0
+
+let run = () ->
+    defer trace = trace * 10 + 1
+    defer trace = trace * 10 + 2
+    defer trace = trace * 10 + 3
+    // LIFO: 3 runs first (trace=3), then 2 (trace=32), then 1 (trace=321)
+
+let main = (args: str[]) ->
+    run()
+    assert(trace == 321)
+    0

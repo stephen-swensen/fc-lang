@@ -1,0 +1,11 @@
+// Defer with non-void expression (return value discarded)
+let mut closed = false
+
+let fake_close = () ->
+    closed = true
+    42  // returns int32, but defer discards it
+
+let main = (args: str[]) ->
+    defer fake_close()
+    assert(!closed)
+    0

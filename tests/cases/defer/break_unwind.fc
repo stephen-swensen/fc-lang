@@ -1,0 +1,11 @@
+// Verify break unwinds inner defers but not outer
+let mut trace = 0
+
+let main = (args: str[]) ->
+    defer trace = trace * 10 + 1
+    loop
+        defer trace = trace * 10 + 2
+        break
+    // After break: loop defer ran (trace = 2)
+    // After main: func defer ran (trace = 21)
+    0

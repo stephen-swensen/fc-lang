@@ -35,6 +35,7 @@ typedef enum {
     TOK_BREAK,
     TOK_CONTINUE,
     TOK_RETURN,
+    TOK_DEFER,
     TOK_SOME,
     TOK_TRUE,
     TOK_FALSE,

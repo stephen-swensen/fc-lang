@@ -718,6 +718,15 @@ static Expr *parse_block_item(Parser *p) {
         return e;
     }
 
+    if (check(p, TOK_DEFER)) {
+        SrcLoc loc = loc_from_token(current(p));
+        advance_p(p);
+        Expr *value = parse_expr(p, PREC_NONE + 1);
+        Expr *e = alloc_expr(p, EXPR_DEFER, loc);
+        e->defer_expr.value = value;
+        return e;
+    }
+
     return parse_expr(p, PREC_NONE + 1);
 }
 

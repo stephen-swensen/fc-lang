@@ -1,0 +1,18 @@
+// Verify defer in if/else blocks runs at block exit
+let mut trace = 0
+
+let main = (args: str[]) ->
+    if true then
+        defer trace = trace + 10
+        trace = trace + 1
+    // after if block: trace = 1, then defer adds 10 = 11
+    assert(trace == 11)
+
+    if false then
+        defer trace = trace + 100
+    else
+        defer trace = trace + 20
+        trace = trace + 2
+    // after else block: trace = 11+2=13, then defer adds 20 = 33
+    assert(trace == 33)
+    0

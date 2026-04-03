@@ -1,0 +1,11 @@
+// Verify defer in loop body runs each iteration, not cumulatively
+let mut count = 0
+
+let main = (args: str[]) ->
+    let mut i = 0
+    loop
+        if i >= 3 then break
+        defer count = count + 1
+        i = i + 1
+    assert(count == 3)
+    0

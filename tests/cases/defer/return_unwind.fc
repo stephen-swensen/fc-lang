@@ -1,0 +1,15 @@
+// Verify return from nested scope unwinds all defers
+let mut trace = 0
+
+let run = () ->
+    defer trace = trace * 10 + 1
+    if true then
+        defer trace = trace * 10 + 2
+        return
+    trace = 999  // unreachable
+
+let main = (args: str[]) ->
+    run()
+    // Return unwinds: if-block defer (2), then func defer (1)
+    assert(trace == 21)
+    0

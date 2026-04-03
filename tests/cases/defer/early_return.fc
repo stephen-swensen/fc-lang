@@ -1,0 +1,15 @@
+// Verify defers run on early return
+let mut cleaned = 0
+
+let run = (early: bool) ->
+    defer cleaned = cleaned + 1
+    if early then return
+    defer cleaned = cleaned + 1
+
+let main = (args: str[]) ->
+    run(true)
+    assert(cleaned == 1)  // only first defer registered before early return
+    cleaned = 0
+    run(false)
+    assert(cleaned == 2)  // both defers registered
+    0

@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    loop
+        defer continue
+        0

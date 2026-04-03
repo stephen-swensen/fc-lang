@@ -105,6 +105,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"break",     5,  TOK_BREAK},
         {"continue",  8,  TOK_CONTINUE},
         {"return",    6,  TOK_RETURN},
+        {"defer",     5,  TOK_DEFER},
         {"some",      4,  TOK_SOME},
         {"true",      4,  TOK_TRUE},
         {"false",     5,  TOK_FALSE},

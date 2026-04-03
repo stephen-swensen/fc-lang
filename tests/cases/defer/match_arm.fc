@@ -1,0 +1,23 @@
+// Verify defer in match arm blocks runs at arm exit
+union choice =
+    | a
+    | b
+
+let mut trace = 0
+
+let run = (c: choice) ->
+    match c with
+    | a ->
+        defer trace = trace + 10
+        trace = trace + 1
+    | b ->
+        defer trace = trace + 20
+        trace = trace + 2
+
+let main = (args: str[]) ->
+    run(choice.a)
+    assert(trace == 11)  // 1 + defer 10
+    trace = 0
+    run(choice.b)
+    assert(trace == 22)  // 2 + defer 20
+    0

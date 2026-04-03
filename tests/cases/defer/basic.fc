@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let p = alloc(int32[4] { 1, 2, 3, 4 })!
+    defer free(p)
+    assert(p[0] == 1)
+    assert(p[3] == 4)
+    0

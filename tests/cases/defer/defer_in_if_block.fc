@@ -1,0 +1,10 @@
+// Defer inside an if-then block body
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x = 5
+    if x > 3 then
+        defer trace = trace + 10
+        trace = trace + 1
+    assert(trace == 11)
+    0

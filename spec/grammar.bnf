@@ -111,7 +111,7 @@ TYPE_VAR      = "'" , ( letter | underscore ) , { ident_cont } ;
 keyword = "let" | "mut" | "struct" | "union" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
         | "private" | "const" | "match" | "with" | "if" | "then" | "else"
-        | "for" | "in" | "loop" | "break" | "continue" | "return"
+        | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
         | "some" | "true" | "false" | "none" | "void"
         | "any"         (* only valid as part of "any*" type syntax *) ;
 
@@ -429,6 +429,7 @@ block_expr_item  = let_binding
                  | struct_decl               (* local struct definition  *)
                  | union_decl                (* local union definition   *)
                  | cond_comp_block           (* #if inside a block       *)
+                 | defer_stmt                (* deferred execution       *)
                  | expr
                  ;
 
@@ -619,6 +620,8 @@ for_iterable     = expr , ".." , expr           (* range iteration: a..b      *)
 return_expr      = "return" , [ expr ] ;
 
 break_expr       = "break" , [ expr ] ;
+
+defer_stmt       = "defer" , expr ;
 
 
 (* ------------------------------------------------------------------ *)

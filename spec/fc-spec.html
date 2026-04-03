@@ -1667,6 +1667,61 @@ let validate = (data: uint8[]) ->      // void — early exit on error
 
 In all cases `return` is only needed for early exits — the normal return value of a value-returning function is the final expression of the body. A void function with no early exit needs no `return` at all; the body just ends.
 
+### Defer
+
+`defer` schedules an expression to execute when the enclosing block scope exits. It is the idiomatic way to pair resource acquisition with cleanup:
+
+```fc
+let p = alloc(point { x = 1, y = 2 })!
+defer free(p)
+// ... use p, possibly return early in several places ...
+// free(p) runs automatically at scope exit
+```
+
+**Semantics:**
+
+| Property | Behavior |
+|---|---|
+| Scope | Block-scoped: function bodies, loop/for bodies, if/else blocks, match arm blocks, nested blocks |
+| Order | LIFO (last defer registered runs first) |
+| Loops | Each iteration gets a fresh defer queue — defers are not cumulative |
+| `return` | Unwinds all defers from innermost scope to function scope |
+| `break`/`continue` | Unwinds defers from innermost scope to loop boundary |
+| Return value | Discarded (any type is allowed; the expression runs for side effects) |
+| Restriction | The deferred expression must not contain `return`, `break`, or `continue` |
+
+Multiple defers in one scope run in reverse order:
+
+```fc
+let run = () ->
+    defer print("first registered, last to run\n")
+    defer print("last registered, first to run\n")
+// Output: "last registered, first to run" then "first registered, last to run"
+```
+
+Defer in loops runs each iteration, not at function exit:
+
+```fc
+for i in 0..n
+    let f = open(paths[i])!
+    defer close(f)       // closes at end of each iteration
+    process(f)
+```
+
+`return` from nested scopes unwinds all defers:
+
+```fc
+let run = () ->
+    defer cleanup_outer()
+    if error_condition then
+        defer cleanup_inner()
+        return                // runs cleanup_inner, then cleanup_outer
+    // ...
+```
+
+> **Transpilation**
+> Deferred expressions are emitted inline before every scope exit point in the generated C. For `return` with a value, the return expression is evaluated into a temporary, defers are emitted, then the temporary is returned. This may duplicate defer code across multiple exit points — a deliberate tradeoff for simplicity and zero runtime overhead (no defer stack, no function pointers).
+
 ### Entry point
 
 ```fc
@@ -3203,6 +3258,15 @@ These are not functions — they cannot be stored in bindings or passed as argum
 `alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
 
 The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
+
+**Best practice:** Use `defer` (see §Defer) to pair allocation with cleanup at the point of acquisition. This ensures cleanup runs regardless of which exit path the function takes:
+
+```fc
+let p = alloc(point { x = 1, y = 2 })!
+defer free(p)
+// ... use p, possibly with early returns ...
+// free(p) runs automatically
+```
 
 ---
 

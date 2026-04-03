@@ -94,6 +94,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - `loop` produces a value via `break value`; `for` is always void
 - `for` has three forms: `for i in 0..n` (range, exclusive end), `for x in slice` (element), `for i, x in slice` (index + element). Loop variable type is inferred from endpoints/slice via widening.
 - `match` is exhaustive; wildcard `_` satisfies exhaustiveness
+- `defer <expr>` schedules an expression to run at block scope exit (LIFO order). Block-scoped: runs when the enclosing function body, loop/for body, if/else block, match arm, or nested block exits. `return` unwinds all defers to function scope; `break`/`continue` unwind to loop boundary. Each loop iteration gets a fresh defer queue. Return value of deferred expression is discarded.
 
 ### Union Syntax
 - Variant declarations require `|` before each variant: `| circle(int32)`, not `circle(int32)`
