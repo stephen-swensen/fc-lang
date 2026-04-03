@@ -1329,6 +1329,7 @@ let result = loop
 | `break` | `void` | — |
 | `break expr` | `void` | enclosing `loop` expression |
 | `continue` | `void` | — |
+| `defer expr` | `void` | — (schedules `expr` to run at block scope exit) |
 
 ---
 
@@ -1602,6 +1603,70 @@ loop
 > For element iteration, `int64_t` is used for the internal loop counter, matching the slice `.len` type. This does not affect FC semantics. For range and index-element iteration, the counter is the user-visible binding `i`, typed according to the widening rules.
 > `loop` transpiles to a C `while(1)` with `break` and `continue` mapping directly.
 
+## Defer
+
+`defer` ensures an expression runs when the enclosing block scope exits. Execution is deterministic — deferred expressions run in LIFO order at well-defined points with no runtime overhead.
+
+```fc
+let p = alloc(point { x = 1, y = 2 })!
+defer free(p)
+// ... use p ...
+// free(p) runs at scope exit, regardless of exit path
+```
+
+**Semantics:**
+
+| Property | Behavior |
+|---|---|
+| Scope | Block-scoped: function bodies, loop/for bodies, if/else blocks, match arm blocks, nested blocks |
+| Order | LIFO — last defer registered runs first |
+| Loops | Each iteration gets a fresh defer queue — defers are not cumulative |
+| `return` | Unwinds all defers from innermost scope outward to function scope |
+| `break`/`continue` | Unwinds defers from innermost scope to loop boundary |
+| Return value | Discarded — any type is allowed; the expression runs for its side effects |
+| Restriction | The deferred expression must not contain `return`, `break`, or `continue` |
+
+### LIFO order
+
+Multiple defers in one scope run in reverse order of registration:
+
+```fc
+let a = alloc(int32[8] {})!
+defer free(a)
+let b = alloc(int32[8] {})!
+defer free(b)
+// at scope exit: free(b) runs first, then free(a)
+```
+
+### Defer in loops
+
+Defer in a loop body runs at the end of each iteration, not at function exit. This makes per-iteration cleanup correct without extracting a helper function:
+
+```fc
+for i in 0..n
+    let f = open(paths[i])!
+    defer close(f)       // closes at end of EACH iteration
+    process(f)
+// all files closed — no accumulation
+```
+
+### Unwinding
+
+`return` from a nested scope unwinds all defers from inner to outer. `break` and `continue` unwind defers up to the enclosing loop scope.
+
+```fc
+let run = () ->
+    defer cleanup_outer()
+    if error_condition then
+        defer cleanup_inner()
+        return                // runs cleanup_inner, then cleanup_outer
+```
+
+> **Transpilation**
+> Deferred expressions are emitted inline before every scope exit point in the generated C. For `return` with a value, the return expression is evaluated into a temporary, defers are emitted, then the temporary is returned.
+
+---
+
 # PART 3 — Functions
 
 ## Defining Functions
@@ -1666,61 +1731,6 @@ let validate = (data: uint8[]) ->      // void — early exit on error
 ```
 
 In all cases `return` is only needed for early exits — the normal return value of a value-returning function is the final expression of the body. A void function with no early exit needs no `return` at all; the body just ends.
-
-### Defer
-
-`defer` schedules an expression to execute when the enclosing block scope exits. It is the idiomatic way to pair resource acquisition with cleanup:
-
-```fc
-let p = alloc(point { x = 1, y = 2 })!
-defer free(p)
-// ... use p, possibly return early in several places ...
-// free(p) runs automatically at scope exit
-```
-
-**Semantics:**
-
-| Property | Behavior |
-|---|---|
-| Scope | Block-scoped: function bodies, loop/for bodies, if/else blocks, match arm blocks, nested blocks |
-| Order | LIFO (last defer registered runs first) |
-| Loops | Each iteration gets a fresh defer queue — defers are not cumulative |
-| `return` | Unwinds all defers from innermost scope to function scope |
-| `break`/`continue` | Unwinds defers from innermost scope to loop boundary |
-| Return value | Discarded (any type is allowed; the expression runs for side effects) |
-| Restriction | The deferred expression must not contain `return`, `break`, or `continue` |
-
-Multiple defers in one scope run in reverse order:
-
-```fc
-let run = () ->
-    defer print("first registered, last to run\n")
-    defer print("last registered, first to run\n")
-// Output: "last registered, first to run" then "first registered, last to run"
-```
-
-Defer in loops runs each iteration, not at function exit:
-
-```fc
-for i in 0..n
-    let f = open(paths[i])!
-    defer close(f)       // closes at end of each iteration
-    process(f)
-```
-
-`return` from nested scopes unwinds all defers:
-
-```fc
-let run = () ->
-    defer cleanup_outer()
-    if error_condition then
-        defer cleanup_inner()
-        return                // runs cleanup_inner, then cleanup_outer
-    // ...
-```
-
-> **Transpilation**
-> Deferred expressions are emitted inline before every scope exit point in the generated C. For `return` with a value, the return expression is evaluated into a temporary, defers are emitted, then the temporary is returned. This may duplicate defer code across multiple exit points — a deliberate tradeoff for simplicity and zero runtime overhead (no defer stack, no function pointers).
 
 ### Entry point
 
