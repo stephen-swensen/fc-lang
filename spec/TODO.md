@@ -2,8 +2,6 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
-- **Never/bottom type for `return`, `break`, `continue`**: These expressions should unify with any type, not just `void`. Currently `let x = match opt with | some(v) -> v | none -> return 1` fails because the match arms have types `int32` vs `void`. The `none` arm never produces a value (it exits the function), so it should be compatible with any type.
-
 - **Test runner: targeted test execution**: Add support for running a subset of tests by name or pattern (e.g., `make test FILTER=stdlib/data_array_list`) for faster iteration during development. The full suite is growing and takes ~10s.
 
 
