@@ -172,13 +172,14 @@ let main = (args: str[]) ->
 
     // Output handle
     let mut out = stdout
+    let mut out_opened = false
     if out_file.len > 0 then
         let f = io.open(out_file, "w")
         if f.is_none then
             io.write("furl: could not open %s{out_file}\n", stderr)
             sys.exit(1)
         out = f!
-        defer io.close(out)
+        out_opened = true
 
     loop
         let n = net.recv_bytes(fd, recv_buf, 4096)
@@ -219,4 +220,5 @@ let main = (args: str[]) ->
             if !head_only then
                 io.write(recv_buf[0..n], out)
 
+    if out_opened then io.close(out)
     0
