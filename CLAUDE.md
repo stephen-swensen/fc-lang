@@ -11,6 +11,7 @@ This is a compiler project for **FC** (version 1.0-draft), a systems programming
 - **`make`** — Build the compiler (produces `./fc` in the project root)
 - **`make test-all`** — Build and run all tests with both gcc and clang
 - **`make test-gcc`** / **`make test-clang`** — Test with a single compiler
+- **`make test-gcc FILTER=pattern`** — Run only tests matching a pattern (e.g., `FILTER=stdlib/data`, `FILTER=closures`)
 - **`make clean`** — Remove build artifacts
 - **`./fc input.fc -o output.c`** — Compile a single FC file to C
 - **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
@@ -182,7 +183,8 @@ Every new feature, bug fix, or spec change must include tests covering the happy
 
 ## Workflow
 
-- Run `make test-all` to confirm all tests pass (both gcc and clang) before presenting a summary of changes
+- During development, use `make test-gcc FILTER=pattern` for fast iteration on relevant tests
+- Run `make test-all` to confirm all tests pass (both gcc and clang) before presenting a final summary of changes
 - Skip tests for changes that only touch `demos/` — demo apps are standalone and don't affect compiler tests
 
 ## Spec Reference

@@ -25,17 +25,17 @@ test-parallel: $(BIN)
 
 test-gcc: $(BIN)
 	@echo "=== Testing with gcc ==="
-	@CC=gcc bash tests/run_tests_parallel.sh
+	@CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh
 
 test-clang: $(BIN)
 	@echo "=== Testing with clang ==="
-	@CC=clang bash tests/run_tests_parallel.sh
+	@CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh
 
 test-all: $(BIN)
 	@echo "=== Testing with gcc ==="
-	@CC=gcc bash tests/run_tests_parallel.sh
+	@CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh
 	@echo ""
 	@echo "=== Testing with clang ==="
-	@CC=clang bash tests/run_tests_parallel.sh
+	@CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh
 
 .PHONY: all clean test test-parallel test-gcc test-clang test-all

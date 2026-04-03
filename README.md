@@ -57,8 +57,11 @@ cc -std=c11 -o hello hello.c
 ## Testing
 
 ```sh
-make test               # build (if needed) and run all tests
-make test-parallel      # build (if needed) and run all tests in parallel
+make test-all                       # run all tests with both gcc and clang
+make test-gcc                       # run all tests with gcc
+make test-clang                     # run all tests with clang
+make test-gcc FILTER=closures       # run only tests matching a pattern
+make test-gcc FILTER=stdlib/data    # patterns match against category/test_name
 ```
 
 Tests live in `tests/cases/`, organized into subdirectories by category (e.g., `expressions/`, `structs/`, `generics/`, `modules/`, etc.).

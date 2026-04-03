@@ -103,7 +103,7 @@ run_one_test() {
 }
 
 export -f run_one_test
-export FC CC TMPDIR
+export FC CC TMPDIR FILTER
 
 # Build the list of tests (one per line: display|fc_files|error|exit|expected|flags)
 test_list="$TMPDIR/test_list"
@@ -141,6 +141,13 @@ for milestone_dir in "$TESTDIR"/*/; do
         echo "$milestone/$test_name|$fc_files|${test_subdir}error|${test_subdir}expected_exit|${test_subdir}expected|$fc_flags"
     done
 done > "$test_list"
+
+# Apply filter if set
+if [ -n "$FILTER" ]; then
+    filtered="$TMPDIR/test_list_filtered"
+    grep "$FILTER" "$test_list" > "$filtered" || true
+    test_list="$filtered"
+fi
 
 # Run tests in parallel, collect output
 results=$(cat "$test_list" | xargs -P "$JOBS" -I {} bash -c '
