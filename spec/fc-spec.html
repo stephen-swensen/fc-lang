@@ -3960,6 +3960,10 @@ Common mathematical functions wrapping C11 `math.h`, all operating on `float64` 
 
 String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
 
+## std::net
+
+POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `netdb.h`. IPv4 only. Provides socket lifecycle (`open_tcp`, `open_udp`, `open_icmp`, `close`, `shutdown`), address construction (`make_addr`, `make_addr_str`), TCP operations (`bind_addr`, `listen`, `accept`, `connect_addr`), data transfer (`send_bytes`, `recv_bytes`, `send_to`, `recv_from`), byte order conversion (`host_to_net16`, `host_to_net32`, `net_to_host16`, `net_to_host32`), DNS resolution (`resolve`), and socket options (`set_reuse_addr`). Socket creation functions return `int32?`; callers check for failure with option handling. Requires POSIX sockets (Linux, macOS, Windows via MinGW).
+
 ## std::data
 
 Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:

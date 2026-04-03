@@ -203,4 +203,4 @@ Spec sections are organized as:
 - Part 6 — Program structure (modules, namespaces, imports, conditional compilation)
 - Part 7 — Memory management (alloc, free, stack/heap)
 - Part 8 — C interop (extern, any*, variadics)
-- Part 9 — Standard library (std::io, std::sys, std::math, std::text, std::data)
+- Part 9 — Standard library (std::io, std::sys, std::math, std::text, std::net, std::data)
