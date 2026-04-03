@@ -64,9 +64,9 @@ Zig has a first-class error system:
 - Error return traces for debugging
 - Error unions `!T` that compose naturally
 
-FC has: `T?` for "might not have a value" and `abort()` for everything else. No error propagation, no cleanup on failure paths, no way to represent "this function can fail with these specific errors." The TODO mentions a never/bottom type for `return`/`break`, which would help but doesn't close the gap.
+FC's stdlib currently uses `T?` for fallible operations, which loses error information. However, FC's existing generics and tagged unions already support handrolled result types — `union result = | ok('a) | err('b)` with exhaustive pattern matching works today (see `spec/examples.fc`). Domain-specific error unions (e.g., `io_error` with `not_found`, `permission_denied`, etc.) compose naturally with this. C-style errno is also accessible via FC's extern system. The stdlib could adopt result types without any language changes.
 
-**Impact**: Any FC program doing I/O, networking, or file operations has to check options and manually handle every failure point. There's no equivalent of `try` chaining.
+The gap vs Zig is ergonomic, not capability: Zig's `try` keyword auto-propagates errors in one token, while FC requires explicit match-and-return at each call site. This is more verbose but also more explicit (Go made the same tradeoff).
 
 ### 3. Memory Management Sophistication
 Zig provides:
