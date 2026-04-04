@@ -7,6 +7,9 @@ fc
 # Default C compiler output
 a.out
 
+# Generated C from test runs
+tests/cases/**/*.c
+
 # Scratch Dir
 scratch/
 
