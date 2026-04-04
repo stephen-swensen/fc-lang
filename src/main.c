@@ -89,12 +89,12 @@ int main(int argc, char **argv) {
         diag_set_filename(input_paths[i]);
         sources[i] = read_file(input_paths[i]);
 
-        Lexer lexer;
+        Lexer lexer = {0};
         lexer_init(&lexer, sources[i], &intern_table, flags, flag_count);
         int token_count;
         all_tokens[i] = lexer_tokenize(&lexer, &token_count);
 
-        Parser parser;
+        Parser parser = {0};
         parser_init(&parser, all_tokens[i], token_count, &arena, &intern_table);
         parser.filename = input_paths[i];
         programs[i] = parse_program(&parser);
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
     }
 
     /* Pass 1: collect declarations */
-    SymbolTable symtab;
+    SymbolTable symtab = {0};
     symtab_init(&symtab);
     FileImportScopes file_scopes = { .scopes = NULL, .count = 0, .capacity = 0 };
     pass1_collect(prog, &symtab, &intern_table, &file_scopes);

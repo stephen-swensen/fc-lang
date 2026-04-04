@@ -16,6 +16,7 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->pending_decls = NULL;
     p->pending_count = 0;
     p->pending_cap = 0;
+    p->allow_fixed_array = false;
     p->expr_start_pos = 0;
 }
 

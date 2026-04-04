@@ -18,6 +18,8 @@ This is a compiler project for **FC** (version 1.0-draft), a systems programming
 
 The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g`. Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean.
 
+**Struct initialization**: Always declare stack-allocated structs with `= {0}` before calling their init function (e.g., `Parser parser = {0};`). This prevents uninitialized-field bugs when new fields are added but the init function isn't updated — the kind of bug that only manifests on some platforms. `arena_alloc` already zero-fills heap allocations.
+
 ## Git Workflow
 
 - **Never auto-commit**
