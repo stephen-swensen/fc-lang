@@ -4,9 +4,6 @@ module io =
     private module u from "unistd.h" =
         extern access: (const cstr, int32) -> int32
 
-    private module st from "sys/stat.h" =
-        extern mkdir: (const cstr, int32) -> int32
-
     private module c from "stdio.h" =
         extern fwrite: (const any*, usize, usize, any*) -> usize
         extern fread: (any*, usize, usize, any*) -> usize
@@ -120,8 +117,19 @@ module io =
     // mkdir: creates a directory at the given path.
     // path: const str — directory path to create.
     // returns: bool — true on success, false if it already exists or on error.
+#if windows
+    private module d from "direct.h" =
+        extern _mkdir as win_mkdir: (const cstr) -> int32
+
+    let mkdir = (path: const str) ->
+        d.win_mkdir((cstr)path) == 0
+#else
+    private module st from "sys/stat.h" =
+        extern mkdir: (const cstr, int32) -> int32
+
     let mkdir = (path: const str) ->
         st.mkdir((cstr)path, 493) == 0
+#end
 
     // exists: checks whether a file or directory exists at path.
     // path: const str — file path to check.
