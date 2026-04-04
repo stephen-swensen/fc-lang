@@ -235,7 +235,7 @@ let main = (args: str[]) ->
 
     // Init SDL
     sdl.init(sdl.init_video | sdl.init_audio)
-    let win = sdl.create_window(c"Fibbles", 0, 0,
+    let win = sdl.create_window(c"Fibbles", 40, 40,
         grid_w * cell, grid_h * cell, sdl.window_shown)
     sdl.set_resizable(win, 0)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
