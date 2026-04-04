@@ -4,6 +4,9 @@ module io =
     private module u from "unistd.h" =
         extern access: (const cstr, int32) -> int32
 
+    private module st from "sys/stat.h" =
+        extern mkdir: (const cstr, int32) -> int32
+
     private module c from "stdio.h" =
         extern fwrite: (const any*, usize, usize, any*) -> usize
         extern fread: (any*, usize, usize, any*) -> usize
@@ -113,6 +116,12 @@ module io =
         let ch = c.fgetc(f)
         if ch == -1 then default(uint8?)
         else some((uint8)ch)
+
+    // mkdir: creates a directory at the given path.
+    // path: const str — directory path to create.
+    // returns: bool — true on success, false if it already exists or on error.
+    let mkdir = (path: const str) ->
+        st.mkdir((cstr)path, 493) == 0
 
     // exists: checks whether a file or directory exists at path.
     // path: const str — file path to check.

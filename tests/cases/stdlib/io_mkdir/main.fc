@@ -1,0 +1,24 @@
+import io from std::
+
+let main = (args: str[]) ->
+    // Create a directory
+    assert(io.mkdir("/tmp/fc_test_mkdir") == true)
+
+    // Creating again should fail (already exists)
+    assert(io.mkdir("/tmp/fc_test_mkdir") == false)
+
+    // Should be able to create a file inside it
+    match io.open("/tmp/fc_test_mkdir/test.txt", "w") with
+    | some(f) ->
+        io.write("hello", f)
+        io.close(f)
+    | none -> return 1
+
+    // Clean up
+    io.remove("/tmp/fc_test_mkdir/test.txt")
+    c.rmdir((cstr)"/tmp/fc_test_mkdir")
+
+    0
+
+module c from "unistd.h" =
+    extern rmdir: (const cstr) -> int32

@@ -173,7 +173,7 @@ let load_high_score = () ->
 let save_high_score = (score: int32) ->
     match sys.home_dir() with
     | some(hd) ->
-        c.system((cstr)"mkdir -p %s{hd}/.fibbles")
+        io.mkdir("%s{hd}/.fibbles")
         match io.open("%s{hd}/.fibbles/highscore.txt", "w") with
         | some(fp) ->
             io.write("%d{score}\n", fp)
@@ -185,7 +185,7 @@ let save_high_score = (score: int32) ->
 let clear_high_score = () ->
     match sys.home_dir() with
     | some(hd) ->
-        c.system((cstr)"rm -f %s{hd}/.fibbles/highscore.txt")
+        io.remove("%s{hd}/.fibbles/highscore.txt")
         return
     | none -> return
     return

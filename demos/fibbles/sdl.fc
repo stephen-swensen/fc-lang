@@ -84,4 +84,3 @@ module sdl from "SDL2/SDL.h" =
 module c from "stdlib.h" =
     extern srand: (uint32) -> void
     extern rand: () -> int32
-    extern system: (const cstr) -> int32
