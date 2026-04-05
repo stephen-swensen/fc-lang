@@ -93,6 +93,58 @@ let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: 
     sdl.fill_rect(r, &rc)
     return
 
+let draw_small_rect = (r: any*, x: int32, y: int32, w: int32, h: int32, red: uint8, green: uint8, blue: uint8) ->
+    let mut rc = rect { x = x, y = y, w = w, h = h }
+    sdl.set_color(r, red, green, blue, 255u8)
+    sdl.fill_rect(r, &rc)
+    return
+
+let draw_face = (r: any*, hx: int32, hy: int32, dx: int32, dy: int32, dead: bool) ->
+    let px = hx * cell
+    let py = hy * cell
+
+    if dx == 1 && dy == 0 then
+        // Right — eyes on right side
+        draw_small_rect(r, px + 13, py + 3, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 13, py + 12, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 15, py + 4, 3, 3, 0u8, 0u8, 0u8)
+        draw_small_rect(r, px + 15, py + 13, 3, 3, 0u8, 0u8, 0u8)
+        if !dead then
+            draw_small_rect(r, px + 20, py + 9, 6, 2, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px + 26, py + 7, 3, 2, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px + 26, py + 11, 3, 2, 220u8, 0u8, 0u8)
+    else if dx == -1 && dy == 0 then
+        // Left — eyes on left side
+        draw_small_rect(r, px + 2, py + 3, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 2, py + 12, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 2, py + 4, 3, 3, 0u8, 0u8, 0u8)
+        draw_small_rect(r, px + 2, py + 13, 3, 3, 0u8, 0u8, 0u8)
+        if !dead then
+            draw_small_rect(r, px - 6, py + 9, 6, 2, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px - 9, py + 7, 3, 2, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px - 9, py + 11, 3, 2, 220u8, 0u8, 0u8)
+    else if dx == 0 && dy == -1 then
+        // Up — eyes on top
+        draw_small_rect(r, px + 3, py + 2, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 12, py + 2, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 4, py + 2, 3, 3, 0u8, 0u8, 0u8)
+        draw_small_rect(r, px + 13, py + 2, 3, 3, 0u8, 0u8, 0u8)
+        if !dead then
+            draw_small_rect(r, px + 9, py - 6, 2, 6, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px + 7, py - 9, 2, 3, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px + 11, py - 9, 2, 3, 220u8, 0u8, 0u8)
+    else
+        // Down — eyes on bottom
+        draw_small_rect(r, px + 3, py + 13, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 12, py + 13, 5, 5, 255u8, 255u8, 255u8)
+        draw_small_rect(r, px + 4, py + 15, 3, 3, 0u8, 0u8, 0u8)
+        draw_small_rect(r, px + 13, py + 15, 3, 3, 0u8, 0u8, 0u8)
+        if !dead then
+            draw_small_rect(r, px + 9, py + 20, 2, 6, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px + 7, py + 26, 2, 3, 220u8, 0u8, 0u8)
+            draw_small_rect(r, px + 11, py + 26, 2, 3, 220u8, 0u8, 0u8)
+    return
+
 // --- Game helpers ---
 
 let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
@@ -202,6 +254,7 @@ let render_splash = (r: any*) ->
     for sx in 4..22
         draw_cell(r, sx, 7, 0u8, 140u8, 0u8)
     draw_cell(r, 22, 7, 0u8, 255u8, 0u8)
+    draw_face(r, 22, 7, 1, 0, false)
     draw_cell(r, 25, 7, 255u8, 50u8, 50u8)
 
     // Instructions
@@ -497,6 +550,10 @@ let main = (args: str[]) ->
                         draw_cell(ren, seg.x, seg.y, 200u8, 0u8, 0u8)
                     else
                         draw_cell(ren, seg.x, seg.y, 0u8, 180u8, 0u8)
+
+            // Face on head
+            let head_seg = body_at(body, head_idx, length, length - 1)
+            draw_face(ren, head_seg.x, head_seg.y, dir_x, dir_y, state == game_state.over)
 
             // Paused overlay
             if state == game_state.paused then
