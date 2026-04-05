@@ -16,11 +16,9 @@ let main = (args: str[]) ->
     assert(lcg_random.next_uint32(&r0) == 436792849u32)
     assert(lcg_random.next_uint32(&r0) == 2599843874u32)
 
-    // next_uint64 combines two uint32 calls (verify via hi/lo parts)
+    // next_uint64 combines two uint32 calls
     let mut r2 = lcg_random.make(42u64)
-    let u64val = lcg_random.next_uint64(&r2)
-    assert((uint32)(u64val >> 32) == 2440530669u32)
-    assert((uint32)u64val == 968358053u32)
+    assert(lcg_random.next_uint64(&r2) == 10481999409208359077u64)
 
     // next_float64 is in [0.0, 1.0)
     let mut r3 = lcg_random.make(42u64)

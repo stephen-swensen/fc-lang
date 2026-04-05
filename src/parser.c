@@ -190,7 +190,7 @@ static bool is_type_name(const char *s, int len) {
 
 /* type_from_name is now in types.c/h */
 
-static int64_t parse_int_value(const char *start, int length);
+static uint64_t parse_int_value(const char *start, int length);
 
 static Type *parse_type_suffix(Parser *p, Type *base) {
     /* T*, T[], T[N], T? — left to right */
@@ -404,50 +404,50 @@ static Pattern *parse_pattern(Parser *p);
 static Expr *parse_match_expr(Parser *p);
 static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc);
 
-static int64_t parse_int_value(const char *start, int length) {
-    char buf[64];
+static uint64_t parse_int_value(const char *start, int length) {
+    char buf[72];  /* 64 binary digits + null + margin */
     int num_len = 0;
 
     /* Check for 0x, 0b, 0o prefixes */
     if (length >= 2 && start[0] == '0') {
         if (start[1] == 'x' || start[1] == 'X') {
-            for (int i = 2; i < length && num_len < 63; i++) {
+            for (int i = 2; i < length && num_len < 71; i++) {
                 char c = start[i];
                 if (isxdigit((unsigned char)c)) buf[num_len++] = c;
                 else if (c == '_') continue;
                 else break;
             }
             buf[num_len] = '\0';
-            return (int64_t)strtoll(buf, NULL, 16);
+            return strtoull(buf, NULL, 16);
         }
         if (start[1] == 'b' || start[1] == 'B') {
-            for (int i = 2; i < length && num_len < 63; i++) {
+            for (int i = 2; i < length && num_len < 71; i++) {
                 if (start[i] == '0' || start[i] == '1') buf[num_len++] = start[i];
                 else if (start[i] == '_') continue;
                 else break;
             }
             buf[num_len] = '\0';
-            return (int64_t)strtoll(buf, NULL, 2);
+            return strtoull(buf, NULL, 2);
         }
         if (start[1] == 'o' || start[1] == 'O') {
-            for (int i = 2; i < length && num_len < 63; i++) {
+            for (int i = 2; i < length && num_len < 71; i++) {
                 if (start[i] >= '0' && start[i] <= '7') buf[num_len++] = start[i];
                 else if (start[i] == '_') continue;
                 else break;
             }
             buf[num_len] = '\0';
-            return (int64_t)strtoll(buf, NULL, 8);
+            return strtoull(buf, NULL, 8);
         }
     }
 
-    for (int i = 0; i < length && num_len < 63; i++) {
+    for (int i = 0; i < length && num_len < 71; i++) {
         if (start[i] >= '0' && start[i] <= '9') buf[num_len++] = start[i];
         else if (start[i] == '_') continue;
         else break;
     }
     buf[num_len] = '\0';
     errno = 0;
-    return (int64_t)strtoll(buf, NULL, 10);
+    return strtoull(buf, NULL, 10);
 }
 
 /* Find where the numeric part ends (for suffix extraction) */
@@ -752,7 +752,7 @@ static Expr *parse_prefix(Parser *p) {
         char buf[64];
         int num_len = 0;
         int scan_pos = 0;
-        for (scan_pos = 0; scan_pos < t->length && num_len < 63; scan_pos++) {
+        for (scan_pos = 0; scan_pos < t->length && num_len < 71; scan_pos++) {
             char c = t->start[scan_pos];
             if ((c >= '0' && c <= '9') || c == '.') buf[num_len++] = c;
             else if (c == '_') continue;
@@ -1699,11 +1699,15 @@ static Pattern *parse_pattern(Parser *p) {
 
     /* Negative integer pattern: -42 */
     if (check(p, TOK_MINUS) && peek_at(p, 1)->kind == TOK_INT_LIT) {
+        SrcLoc loc = loc_from_token(current(p));
         advance_p(p); /* consume - */
         Token *t = advance_p(p);
+        Type *lt = parse_int_type(t->start, t->length);
+        if (type_is_unsigned(lt))
+            diag_fatal(loc, "cannot negate unsigned integer literal");
         pat->kind = PAT_INT_LIT;
         pat->int_lit.value = -parse_int_value(t->start, t->length);
-        pat->int_lit.lit_type = parse_int_type(t->start, t->length);
+        pat->int_lit.lit_type = lt;
         return pat;
     }
 

@@ -1,0 +1,26 @@
+// Test: uint64 literals larger than INT64_MAX (9223372036854775807)
+let main = (args: str[]) ->
+    // just above INT64_MAX
+    let a = 9223372036854775808u64
+    assert(a > 9223372036854775807u64)
+
+    // max uint64
+    let b = 18446744073709551615u64
+    assert(b == uint64.max)
+
+    // hex literal above INT64_MAX
+    let c = 0xFFFFFFFFFFFFFFFFu64
+    assert(c == uint64.max)
+
+    // binary literal above INT64_MAX
+    let d = 0b1000000000000000000000000000000000000000000000000000000000000000u64
+    assert(d == 9223372036854775808u64)
+
+    // arithmetic check: known value from std::random testing
+    let hi = 2440530669u32
+    let lo = 968358053u32
+    let combined = ((uint64)hi << 32) | (uint64)lo
+    let expected = 10481999409208359077u64
+    assert(combined == expected)
+
+    0

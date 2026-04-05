@@ -648,7 +648,12 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
         break;
     case PAT_INT_LIT:
         if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
-        fprintf(out, "%s == %" PRId64, expr, pat->int_lit.value);
+        if (pat->int_lit.lit_type && (pat->int_lit.lit_type->kind == TYPE_UINT64 ||
+            pat->int_lit.lit_type->kind == TYPE_UINT32 || pat->int_lit.lit_type->kind == TYPE_UINT16 ||
+            pat->int_lit.lit_type->kind == TYPE_UINT8 || pat->int_lit.lit_type->kind == TYPE_USIZE))
+            fprintf(out, "%s == %" PRIu64, expr, pat->int_lit.value);
+        else
+            fprintf(out, "%s == %" PRId64, expr, (int64_t)pat->int_lit.value);
         break;
     case PAT_BOOL_LIT:
         if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
@@ -1355,15 +1360,15 @@ static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
         if (e->int_lit.lit_type->kind == TYPE_INT64)
-            fprintf(out, "INT64_C(%" PRId64 ")", e->int_lit.value);
+            fprintf(out, "INT64_C(%" PRId64 ")", (int64_t)e->int_lit.value);
         else if (e->int_lit.lit_type->kind == TYPE_UINT64)
-            fprintf(out, "UINT64_C(%" PRId64 ")", e->int_lit.value);
+            fprintf(out, "UINT64_C(%" PRIu64 ")", e->int_lit.value);
         else if (e->int_lit.lit_type->kind == TYPE_ISIZE)
-            fprintf(out, "((ptrdiff_t)%" PRId64 "LL)", e->int_lit.value);
+            fprintf(out, "((ptrdiff_t)%" PRId64 "LL)", (int64_t)e->int_lit.value);
         else if (e->int_lit.lit_type->kind == TYPE_USIZE)
-            fprintf(out, "((size_t)%" PRId64 "ULL)", e->int_lit.value);
+            fprintf(out, "((size_t)%" PRIu64 "ULL)", e->int_lit.value);
         else
-            fprintf(out, "%" PRId64, e->int_lit.value);
+            fprintf(out, "%" PRId64, (int64_t)e->int_lit.value);
         break;
 
     case EXPR_FLOAT_LIT: {

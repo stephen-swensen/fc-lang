@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let x = 1u32
+    match x with
+    | -1u32 -> 0
+    | _ -> 1

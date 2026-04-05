@@ -448,26 +448,45 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     return t;
 }
 
-/* Check that an integer literal value fits in its target type */
-static void check_int_literal_range(int64_t value, Type *type, SrcLoc loc) {
-    int64_t lo, hi;
+/* Check that an integer literal value fits in its target type.
+ * The value is stored as uint64_t; for signed types we check the
+ * bit pattern against the type's range. Negative literals are
+ * represented as the two's-complement uint64_t (e.g. -1 → 0xFFFF...).
+ * Unsigned negation is caught separately in negation folding. */
+static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc) {
     switch (type->kind) {
-    case TYPE_INT8:   lo = -128;        hi = 127;        break;
-    case TYPE_INT16:  lo = -32768;      hi = 32767;      break;
-    case TYPE_INT32:  lo = -2147483648LL; hi = 2147483647; break;
-    case TYPE_INT64:  return; /* always fits in int64_t storage */
-    case TYPE_UINT8:  lo = 0; hi = 255;        break;
-    case TYPE_UINT16: lo = 0; hi = 65535;      break;
-    case TYPE_UINT32: lo = 0; hi = 4294967295LL; break;
-    case TYPE_UINT64:
-        if (value < 0)
-            diag_error(loc, "integer literal %" PRId64 " out of range for uint64 (0..18446744073709551615)", value);
+    case TYPE_INT8:
+        if (value > 127 && value < (uint64_t)(int64_t)-128)
+            diag_error(loc, "integer literal %" PRId64 " out of range for int8 (-128..127)", (int64_t)value);
         return;
+    case TYPE_INT16:
+        if (value > 32767 && value < (uint64_t)(int64_t)-32768)
+            diag_error(loc, "integer literal %" PRId64 " out of range for int16 (-32768..32767)", (int64_t)value);
+        return;
+    case TYPE_INT32:
+        if (value > 2147483647ULL && value < (uint64_t)(int64_t)-2147483648LL)
+            diag_error(loc, "integer literal %" PRId64 " out of range for int32 (-2147483648..2147483647)", (int64_t)value);
+        return;
+    case TYPE_INT64:
+        if (value > 9223372036854775807ULL && value < (uint64_t)INT64_MIN)
+            diag_error(loc, "integer literal out of range for int64");
+        return;
+    case TYPE_UINT8:
+        if (value > 255)
+            diag_error(loc, "integer literal %" PRIu64 " out of range for uint8 (0..255)", value);
+        return;
+    case TYPE_UINT16:
+        if (value > 65535)
+            diag_error(loc, "integer literal %" PRIu64 " out of range for uint16 (0..65535)", value);
+        return;
+    case TYPE_UINT32:
+        if (value > 4294967295ULL)
+            diag_error(loc, "integer literal %" PRIu64 " out of range for uint32 (0..4294967295)", value);
+        return;
+    case TYPE_UINT64:
+        return; /* always fits in uint64_t storage */
     default: return;
     }
-    if (value < lo || value > hi)
-        diag_error(loc, "integer literal %" PRId64 " out of range for %s (%" PRId64 "..%" PRId64 ")",
-                   value, type_name(type), lo, hi);
 }
 
 /* Wrap an expression in an implicit widening cast */
@@ -1729,8 +1748,30 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (e->unary_prefix.op == TOK_MINUS) {
             Expr *operand = e->unary_prefix.operand;
             if (operand->kind == EXPR_INT_LIT) {
-                int64_t val = -operand->int_lit.value;
                 Type *lt = operand->int_lit.lit_type;
+                /* Reject negation of unsigned types */
+                if (lt->kind == TYPE_UINT8) {
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint8 (0..255)", operand->int_lit.value);
+                    e->type = type_error(); return e->type;
+                }
+                if (lt->kind == TYPE_UINT16) {
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint16 (0..65535)", operand->int_lit.value);
+                    e->type = type_error(); return e->type;
+                }
+                if (lt->kind == TYPE_UINT32) {
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint32 (0..4294967295)", operand->int_lit.value);
+                    e->type = type_error(); return e->type;
+                }
+                if (lt->kind == TYPE_UINT64) {
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint64 (0..18446744073709551615)", operand->int_lit.value);
+                    e->type = type_error(); return e->type;
+                }
+                if (lt->kind == TYPE_USIZE) {
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for usize", operand->int_lit.value);
+                    e->type = type_error(); return e->type;
+                }
+                /* Negate via two's complement: -(uint64_t)v */
+                uint64_t val = -operand->int_lit.value;
                 e->kind = EXPR_INT_LIT;
                 e->int_lit.value = val;
                 e->int_lit.lit_type = lt;
@@ -3772,7 +3813,7 @@ typedef struct {
     CtorKind kind;
     const char *name;   /* variant name (CTOR_VARIANT) or struct name */
     int arity;          /* number of sub-patterns */
-    int64_t int_val;    /* for CTOR_INT_LIT */
+    uint64_t int_val;   /* for CTOR_INT_LIT */
     uint8_t char_val;   /* for CTOR_CHAR_LIT */
     const char *str_val; /* for CTOR_STRING_LIT */
 } Ctor;
