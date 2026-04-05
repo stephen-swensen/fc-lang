@@ -145,6 +145,50 @@ let draw_face = (r: any*, hx: int32, hy: int32, dx: int32, dy: int32, dead: bool
             draw_small_rect(r, px + 11, py + 26, 2, 3, 220u8, 0u8, 0u8)
     return
 
+let draw_strawberry = (r: any*, gx: int32, gy: int32) ->
+    let px = gx * cell
+    let py = gy * cell
+    // Red body
+    draw_small_rect(r, px + 4, py + 4, 12, 3, 220u8, 30u8, 30u8)
+    draw_small_rect(r, px + 3, py + 7, 14, 4, 220u8, 30u8, 30u8)
+    draw_small_rect(r, px + 5, py + 11, 10, 3, 220u8, 30u8, 30u8)
+    draw_small_rect(r, px + 7, py + 14, 6, 3, 220u8, 30u8, 30u8)
+    draw_small_rect(r, px + 9, py + 17, 2, 2, 220u8, 30u8, 30u8)
+    // Green leaves
+    draw_small_rect(r, px + 8, py, 4, 3, 0u8, 140u8, 0u8)
+    draw_small_rect(r, px + 4, py + 2, 5, 3, 0u8, 180u8, 0u8)
+    draw_small_rect(r, px + 11, py + 2, 5, 3, 0u8, 180u8, 0u8)
+    // Yellow seeds
+    draw_small_rect(r, px + 6, py + 6, 2, 1, 255u8, 220u8, 0u8)
+    draw_small_rect(r, px + 12, py + 6, 2, 1, 255u8, 220u8, 0u8)
+    draw_small_rect(r, px + 5, py + 9, 2, 1, 255u8, 220u8, 0u8)
+    draw_small_rect(r, px + 9, py + 8, 2, 1, 255u8, 220u8, 0u8)
+    draw_small_rect(r, px + 13, py + 9, 2, 1, 255u8, 220u8, 0u8)
+    draw_small_rect(r, px + 7, py + 12, 2, 1, 255u8, 220u8, 0u8)
+    draw_small_rect(r, px + 11, py + 12, 2, 1, 255u8, 220u8, 0u8)
+    return
+
+let draw_hamburger = (r: any*, gx: int32, gy: int32) ->
+    let px = gx * cell
+    let py = gy * cell
+    // Top bun
+    draw_small_rect(r, px + 6, py, 8, 2, 200u8, 150u8, 60u8)
+    draw_small_rect(r, px + 4, py + 2, 12, 2, 200u8, 150u8, 60u8)
+    draw_small_rect(r, px + 2, py + 4, 16, 3, 200u8, 150u8, 60u8)
+    // Sesame seeds
+    draw_small_rect(r, px + 7, py + 1, 2, 1, 255u8, 255u8, 200u8)
+    draw_small_rect(r, px + 11, py + 1, 2, 1, 255u8, 255u8, 200u8)
+    // Lettuce
+    draw_small_rect(r, px + 2, py + 7, 16, 2, 50u8, 200u8, 50u8)
+    // Patty
+    draw_small_rect(r, px + 2, py + 9, 16, 3, 120u8, 60u8, 20u8)
+    // Cheese
+    draw_small_rect(r, px + 1, py + 12, 18, 2, 255u8, 200u8, 0u8)
+    // Bottom bun
+    draw_small_rect(r, px + 2, py + 14, 16, 3, 200u8, 150u8, 60u8)
+    draw_small_rect(r, px + 4, py + 17, 12, 3, 200u8, 150u8, 60u8)
+    return
+
 // --- Game helpers ---
 
 let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
@@ -255,7 +299,7 @@ let render_splash = (r: any*) ->
         draw_cell(r, sx, 7, 0u8, 140u8, 0u8)
     draw_cell(r, 22, 7, 0u8, 255u8, 0u8)
     draw_face(r, 22, 7, 1, 0, false)
-    draw_cell(r, 25, 7, 255u8, 50u8, 50u8)
+    draw_strawberry(r, 25, 7)
 
     // Instructions
     draw_text(r, "ARROWS", 4, 10, 140u8, 140u8, 180u8)
@@ -530,12 +574,12 @@ let main = (args: str[]) ->
         if state == game_state.playing || state == game_state.paused || state == game_state.over then
             clear_screen(ren)
 
-            // Food (red)
-            draw_cell(ren, food.x, food.y, 255u8, 50u8, 50u8)
+            // Food (strawberry)
+            draw_strawberry(ren, food.x, food.y)
 
-            // Bonus food (yellow)
+            // Bonus food (hamburger)
             if bonus_active then
-                draw_cell(ren, bonus.x, bonus.y, 255u8, 220u8, 0u8)
+                draw_hamburger(ren, bonus.x, bonus.y)
 
             // Snake
             for i in 0..length
