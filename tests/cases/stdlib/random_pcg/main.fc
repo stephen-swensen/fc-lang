@@ -1,0 +1,68 @@
+import random from std::
+import pcg_random from random
+
+let main = (args: str[]) ->
+    // deterministic uint32 sequence with seed=42, default channel=1
+    let mut r = pcg_random.make(42u64)
+    assert(pcg_random.next_uint32(&r) == 1307692281u32)
+    assert(pcg_random.next_uint32(&r) == 3850602322u32)
+    assert(pcg_random.next_uint32(&r) == 1491967504u32)
+    assert(pcg_random.next_uint32(&r) == 4091771729u32)
+    assert(pcg_random.next_uint32(&r) == 3882238836u32)
+
+    // seed=0 produces valid output
+    let mut r0 = pcg_random.make(0u64)
+    assert(pcg_random.next_uint32(&r0) == 257813417u32)
+    assert(pcg_random.next_uint32(&r0) == 407017181u32)
+    assert(pcg_random.next_uint32(&r0) == 896943092u32)
+
+    // different channel produces different sequence
+    let mut r_ch = pcg_random.make_with_channel(42u64, 54u64)
+    assert(pcg_random.next_uint32(&r_ch) == 2707161783u32)
+    assert(pcg_random.next_uint32(&r_ch) == 2068313097u32)
+    assert(pcg_random.next_uint32(&r_ch) == 3122475824u32)
+
+    // next_uint64 combines two uint32 calls
+    let mut r2 = pcg_random.make(42u64)
+    assert(pcg_random.next_uint64(&r2) == 5616495583977244498u64)
+
+    // next_float64 is in [0.0, 1.0)
+    let mut r3 = pcg_random.make(42u64)
+    let f = pcg_random.next_float64(&r3)
+    assert(f >= 0.0)
+    assert(f < 1.0)
+
+    // next_float32 is in [0.0, 1.0)
+    let mut r4 = pcg_random.make(42u64)
+    let f32 = pcg_random.next_float32(&r4)
+    assert((float64)f32 >= 0.0)
+    assert((float64)f32 < 1.0)
+
+    // next_bounded_uint32
+    let mut r5 = pcg_random.make(42u64)
+    assert(pcg_random.next_bounded_uint32(&r5, 10u32) == 1u32)
+
+    // bound=1 always returns 0
+    let mut r6 = pcg_random.make(42u64)
+    assert(pcg_random.next_bounded_uint32(&r6, 1u32) == 0u32)
+
+    // multiple bounded calls stay in range
+    let mut r7 = pcg_random.make(123u64)
+    for i in 0..100
+        let val = pcg_random.next_bounded_uint32(&r7, 10u32)
+        assert(val < 10u32)
+        assert(i >= 0)
+
+    // channel 0 produces different sequence from channel 1
+    let mut r_c0 = pcg_random.make_with_channel(42u64, 0u64)
+    let mut r_c1 = pcg_random.make(42u64)
+    assert(pcg_random.next_uint32(&r_c0) != pcg_random.next_uint32(&r_c1))
+
+    // same seed + same channel = same sequence (reproducibility)
+    let mut ra = pcg_random.make(99u64)
+    let mut rb = pcg_random.make(99u64)
+    assert(pcg_random.next_uint32(&ra) == pcg_random.next_uint32(&rb))
+    assert(pcg_random.next_uint32(&ra) == pcg_random.next_uint32(&rb))
+    assert(pcg_random.next_uint32(&ra) == pcg_random.next_uint32(&rb))
+
+    0

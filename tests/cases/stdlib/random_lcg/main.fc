@@ -1,0 +1,57 @@
+import random from std::
+import lcg_random from random
+
+let main = (args: str[]) ->
+    // deterministic uint32 sequence with seed=42
+    let mut r = lcg_random.make(42u64)
+    assert(lcg_random.next_uint32(&r) == 2440530669u32)
+    assert(lcg_random.next_uint32(&r) == 968358053u32)
+    assert(lcg_random.next_uint32(&r) == 1773127077u32)
+    assert(lcg_random.next_uint32(&r) == 2707539007u32)
+    assert(lcg_random.next_uint32(&r) == 2921212588u32)
+
+    // seed=0 produces valid output
+    let mut r0 = lcg_random.make(0u64)
+    assert(lcg_random.next_uint32(&r0) == 335903614u32)
+    assert(lcg_random.next_uint32(&r0) == 436792849u32)
+    assert(lcg_random.next_uint32(&r0) == 2599843874u32)
+
+    // next_uint64 combines two uint32 calls (verify via hi/lo parts)
+    let mut r2 = lcg_random.make(42u64)
+    let u64val = lcg_random.next_uint64(&r2)
+    assert((uint32)(u64val >> 32) == 2440530669u32)
+    assert((uint32)u64val == 968358053u32)
+
+    // next_float64 is in [0.0, 1.0)
+    let mut r3 = lcg_random.make(42u64)
+    let f = lcg_random.next_float64(&r3)
+    assert(f >= 0.0)
+    assert(f < 1.0)
+
+    // next_float32 is in [0.0, 1.0)
+    let mut r4 = lcg_random.make(42u64)
+    let f32 = lcg_random.next_float32(&r4)
+    assert((float64)f32 >= 0.0)
+    assert((float64)f32 < 1.0)
+
+    // next_bounded_uint32 produces values in [0, bound)
+    let mut r5 = lcg_random.make(42u64)
+    assert(lcg_random.next_bounded_uint32(&r5, 6u32) == 3u32)
+
+    // bound=1 always returns 0
+    let mut r6 = lcg_random.make(42u64)
+    assert(lcg_random.next_bounded_uint32(&r6, 1u32) == 0u32)
+
+    // multiple bounded calls stay in range
+    let mut r7 = lcg_random.make(123u64)
+    for i in 0..100
+        let val = lcg_random.next_bounded_uint32(&r7, 10u32)
+        assert(val < 10u32)
+        assert(i >= 0)
+
+    // different seeds produce different sequences
+    let mut ra = lcg_random.make(1u64)
+    let mut rb = lcg_random.make(2u64)
+    assert(lcg_random.next_uint32(&ra) != lcg_random.next_uint32(&rb))
+
+    0
