@@ -223,6 +223,23 @@ static Symbol *parent_chain_lookup_kind(ModuleScopeChain *chain, const char *nam
     return NULL;
 }
 
+/* Namespace-aware global symtab lookup for non-module symbols.
+ * Top-level structs/unions/lets (ns_prefix=NULL) are only visible to global:: code.
+ * Module-scoped types registered with mangled names are always accessible
+ * (they're found by mangled name, not user-facing name). */
+static Symbol *global_lookup(SymbolTable *symtab, const char *name, const char *current_ns) {
+    Symbol *sym = symtab_lookup(symtab, name);
+    if (sym && sym->kind != DECL_MODULE && sym->ns_prefix != current_ns) return NULL;
+    return sym;
+}
+
+static Symbol *global_lookup_kind(SymbolTable *symtab, const char *name, DeclKind kind,
+                                  const char *current_ns) {
+    Symbol *sym = symtab_lookup_kind(symtab, name, kind);
+    if (sym && sym->ns_prefix != current_ns) return NULL;
+    return sym;
+}
+
 /* Look up ImportRef metadata from import chain (for generic info) */
 static ImportRef *import_chain_find_ref(ImportScope *scope, const char *name) {
     while (scope) {
@@ -379,9 +396,9 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_UNION);
         }
         if (!sym) {
-            sym = symtab_lookup_kind(ctx->symtab, t->struc.name, DECL_STRUCT);
+            sym = global_lookup_kind(ctx->symtab, t->struc.name, DECL_STRUCT, ctx->current_ns);
             if (!sym)
-                sym = symtab_lookup_kind(ctx->symtab, t->struc.name, DECL_UNION);
+                sym = global_lookup_kind(ctx->symtab, t->struc.name, DECL_UNION, ctx->current_ns);
         }
         if (!sym) {
             if (ctx->module_symtab)
@@ -391,7 +408,7 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
             if (!sym)
                 sym = import_chain_lookup(ctx->import_scope, t->struc.name);
             if (!sym)
-                sym = symtab_lookup(ctx->symtab, t->struc.name);
+                sym = global_lookup(ctx->symtab, t->struc.name, ctx->current_ns);
         }
         if (sym && sym->type) {
             /* If the stub has type args (e.g. box<int32>), instantiate the generic */
@@ -680,7 +697,7 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
         if (!sym)
             sym = import_chain_lookup(ctx->import_scope, callee->ident.name);
         if (!sym)
-            sym = symtab_lookup(ctx->symtab, callee->ident.name);
+            sym = global_lookup(ctx->symtab, callee->ident.name, ctx->current_ns);
         return sym;
     }
     if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
@@ -1534,8 +1551,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
         }
-        /* Check global symbol table */
-        Symbol *sym = symtab_lookup(ctx->symtab, e->ident.name);
+        /* Check global symbol table (namespace-aware for non-module symbols) */
+        Symbol *sym = global_lookup(ctx->symtab, e->ident.name, ctx->current_ns);
+        /* Modules have their own namespace logic below, so also try unfiltered */
+        if (!sym) sym = symtab_lookup_kind(ctx->symtab, e->ident.name, DECL_MODULE);
         if (!sym) {
             /* Built-in globals: stdin, stdout, stderr */
             const char *n = e->ident.name;
@@ -2067,7 +2086,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (!union_sym)
                     union_sym = import_chain_lookup(ctx->import_scope, uname);
                 if (!union_sym)
-                    union_sym = symtab_lookup(ctx->symtab, uname);
+                    union_sym = global_lookup(ctx->symtab, uname, ctx->current_ns);
             } else if (e->call.func->field.object->kind == EXPR_FIELD) {
                 /* Module-qualified path: walk EXPR_FIELD chain to find module, then union */
                 Expr *cur = e->call.func->field.object;
@@ -2675,7 +2694,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (!sym)
             sym = import_chain_lookup_kind(ctx->import_scope, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
-            sym = symtab_lookup_kind(ctx->symtab, e->struct_lit.type_name, DECL_STRUCT);
+            sym = global_lookup_kind(ctx->symtab, e->struct_lit.type_name, DECL_STRUCT, ctx->current_ns);
         /* Fallback: try general lookup (for within-module struct references) */
         if (!sym) {
             if (ctx->module_symtab)
@@ -2685,7 +2704,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (!sym)
                 sym = import_chain_lookup(ctx->import_scope, e->struct_lit.type_name);
             if (!sym)
-                sym = symtab_lookup(ctx->symtab, e->struct_lit.type_name);
+                sym = global_lookup(ctx->symtab, e->struct_lit.type_name, ctx->current_ns);
         }
         if (!sym) {
             diag_error(e->loc, "unknown type '%s'", e->struct_lit.type_name);
@@ -3034,7 +3053,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             if (!sym)
                 sym = import_chain_lookup(ctx->import_scope, e->field.object->ident.name);
             if (!sym)
-                sym = symtab_lookup(ctx->symtab, e->field.object->ident.name);
+                sym = global_lookup(ctx->symtab, e->field.object->ident.name, ctx->current_ns);
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
                 e->field.is_variant_constructor = true;
                 if (sym->is_generic) {
@@ -3564,7 +3583,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 Type *var_type = scope_lookup_capture(ctx->scope, name,
                     NULL, NULL, NULL, NULL);
                 if (!var_type) {
-                    Symbol *sym = symtab_lookup(ctx->symtab, name);
+                    Symbol *sym = global_lookup(ctx->symtab, name, ctx->current_ns);
                     if (sym && sym->kind == DECL_LET) var_type = sym->type;
                 }
                 if (!var_type) {
@@ -4617,7 +4636,7 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
         sym = import_chain_lookup(ctx->import_scope, lookup_name);
     }
     if (!sym) {
-        sym = symtab_lookup(ctx->symtab, lookup_name);
+        sym = global_lookup(ctx->symtab, lookup_name, ctx->current_ns);
     }
 
     Type *recursive_ret = NULL;

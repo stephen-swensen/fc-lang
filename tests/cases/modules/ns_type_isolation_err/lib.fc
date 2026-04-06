@@ -1,0 +1,4 @@
+namespace other::
+
+module helper =
+    let make = () -> point2d { x = 2, y = 3 }
