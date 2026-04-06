@@ -36,25 +36,25 @@ module random =
         // next_uint32: generates a pseudorandom uint32.
         // Returns the upper 32 bits of the 64-bit state after one step.
         let next_uint32 = (r: lcg_random*) ->
-            step(r)
+            lcg_random.step(r)
             (uint32)(r->state >> 32)
 
         // next_uint64: generates a pseudorandom uint64 from two uint32 outputs.
         let next_uint64 = (r: lcg_random*) ->
-            let hi = (uint64)next_uint32(r)
-            let lo = (uint64)next_uint32(r)
+            let hi = (uint64)lcg_random.next_uint32(r)
+            let lo = (uint64)lcg_random.next_uint32(r)
             (hi << 32) | lo
 
         // next_float64: generates a uniform float64 in [0.0, 1.0).
         // Uses the top 53 bits of a uint64 divided by 2^53 (9007199254740992).
         let next_float64 = (r: lcg_random*) ->
-            let bits = next_uint64(r)
+            let bits = lcg_random.next_uint64(r)
             (float64)(bits >> 11) / 9007199254740992.0
 
         // next_float32: generates a uniform float32 in [0.0, 1.0).
         // Uses the top 24 bits of a uint32 divided by 2^24 (16777216).
         let next_float32 = (r: lcg_random*) ->
-            let bits = next_uint32(r)
+            let bits = lcg_random.next_uint32(r)
             (float32)(bits >> 8) / 16777216.0f32
 
         // next_bounded_uint32: generates a uniform uint32 in [0, bound).
@@ -64,7 +64,7 @@ module random =
         let next_bounded_uint32 = (r: lcg_random*, bound: uint32) ->
             let threshold = (0u32 - bound) % bound
             loop
-                let x = next_uint32(r)
+                let x = lcg_random.next_uint32(r)
                 if x >= threshold then break x % bound
 
     // =========================================================================
@@ -101,7 +101,7 @@ module random =
 
         // make: creates a PCG with the given seed, using default channel 1.
         let make = (seed: uint64) ->
-            make_with_channel(seed, 1u64)
+            pcg_random.make_with_channel(seed, 1u64)
 
         // make_with_channel: creates a PCG with given seed and channel.
         // The channel selects the LCG stream: inc = channel * 2 + 1 (always odd).
@@ -110,9 +110,9 @@ module random =
         // initial state even for simple seeds like 0 or 1.
         let make_with_channel = (seed: uint64, channel: uint64) ->
             let mut r = pcg_random { state = 0u64, inc = (channel << 1) | 1u64 }
-            step(&r)
+            pcg_random.step(&r)
             r.state = r.state + seed
-            step(&r)
+            pcg_random.step(&r)
             r
 
         // next_uint32: generates a pseudorandom uint32 using XSH-RR output.
@@ -122,27 +122,27 @@ module random =
         //   result     = rotate_right(xorshifted, rot)
         let next_uint32 = (r: pcg_random*) ->
             let old_state = r->state
-            step(r)
+            pcg_random.step(r)
             let xorshifted = (uint32)(((old_state >> 18) ^ old_state) >> 27)
             let rot = (uint32)(old_state >> 59)
             (xorshifted >> rot) | (xorshifted << ((32u32 - rot) & 31u32))
 
         // next_uint64: generates a pseudorandom uint64 from two uint32 outputs.
         let next_uint64 = (r: pcg_random*) ->
-            let hi = (uint64)next_uint32(r)
-            let lo = (uint64)next_uint32(r)
+            let hi = (uint64)pcg_random.next_uint32(r)
+            let lo = (uint64)pcg_random.next_uint32(r)
             (hi << 32) | lo
 
         // next_float64: generates a uniform float64 in [0.0, 1.0).
         // Uses the top 53 bits of a uint64 divided by 2^53 (9007199254740992).
         let next_float64 = (r: pcg_random*) ->
-            let bits = next_uint64(r)
+            let bits = pcg_random.next_uint64(r)
             (float64)(bits >> 11) / 9007199254740992.0
 
         // next_float32: generates a uniform float32 in [0.0, 1.0).
         // Uses the top 24 bits of a uint32 divided by 2^24 (16777216).
         let next_float32 = (r: pcg_random*) ->
-            let bits = next_uint32(r)
+            let bits = pcg_random.next_uint32(r)
             (float32)(bits >> 8) / 16777216.0f32
 
         // next_bounded_uint32: generates a uniform uint32 in [0, bound).
@@ -152,5 +152,5 @@ module random =
         let next_bounded_uint32 = (r: pcg_random*, bound: uint32) ->
             let threshold = (0u32 - bound) % bound
             loop
-                let x = next_uint32(r)
+                let x = pcg_random.next_uint32(r)
                 if x >= threshold then break x % bound

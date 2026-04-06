@@ -1,0 +1,74 @@
+namespace test::
+
+module outer =
+
+    // A constant visible to child modules via parent chain
+    let scale = 10i32
+
+    // ---- companion struct + module (one level deep) ----
+
+    struct inner =
+        x: int32
+        y: int32
+
+    module inner =
+        let make = (x: int32, y: int32) ->
+            inner { x = x, y = y }
+
+        // Self-qualified call within companion module
+        let shifted = (a: inner) ->
+            inner.make(a.x + 1i32, a.y + 1i32)
+
+        // Access parent module constant via parent chain
+        let scaled = (a: inner) ->
+            inner.make(a.x * scale, a.y * scale)
+
+        // Chain multiple self-qualified calls
+        let double_shifted = (a: inner) ->
+            inner.shifted(inner.shifted(a))
+
+    // ---- two-level nesting: child inside child ----
+
+    module deeper =
+
+        struct widget =
+            val: int32
+
+        module widget =
+            let make = (v: int32) ->
+                widget { val = v }
+
+            // Access grandparent constant via parent chain
+            let scaled = (w: widget) ->
+                widget.make(w.val * scale)
+
+            let add = (a: widget, b: widget) ->
+                widget.make(a.val + b.val)
+
+        // Access sibling companion struct from another nested module
+        module utils =
+            let make_pair = (a: int32, b: int32) ->
+                widget.add(widget.make(a), widget.make(b))
+
+            // Use grandparent type (inner) from a deeply nested module
+            // Exercises resolve_type through parent chain
+            let wrap_inner = (p: inner) ->
+                widget.make(p.x + p.y)
+
+    // ---- shadowing: child redefines a name from parent ----
+
+    module shadow_test =
+
+        // Shadows outer.scale
+        let scale = 100i32
+
+        struct item =
+            n: int32
+
+        module item =
+            let make = (n: int32) ->
+                item { n = n }
+
+            // Should use shadow_test.scale (100), not outer.scale (10)
+            let scaled = (it: item) ->
+                item.make(it.n * scale)

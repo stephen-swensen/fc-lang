@@ -1,0 +1,54 @@
+import outer from test::
+
+import inner from outer
+import deeper from outer
+import widget from deeper
+import utils from deeper
+import shadow_test from outer
+import item from shadow_test
+
+let main = (args: str[]) ->
+    // Basic companion struct construction and self-qualified calls
+    let a = inner.make(3i32, 4i32)
+    assert(a.x == 3i32)
+    assert(a.y == 4i32)
+
+    let b = inner.shifted(a)
+    assert(b.x == 4i32)
+    assert(b.y == 5i32)
+
+    // Chained self-qualified calls
+    let d = inner.double_shifted(a)
+    assert(d.x == 5i32)
+    assert(d.y == 6i32)
+
+    // Parent chain constant access
+    let c = inner.scaled(a)
+    assert(c.x == 30i32)
+    assert(c.y == 40i32)
+
+    // Two-level nesting (grandchild module with companion struct)
+    let w1 = widget.make(3i32)
+    assert(w1.val == 3i32)
+
+    // Grandparent constant access through parent chain
+    let w2 = widget.scaled(w1)
+    assert(w2.val == 30i32)
+
+    let w3 = widget.add(w1, w2)
+    assert(w3.val == 33i32)
+
+    // Sibling module accessing companion struct from another sibling
+    let w4 = utils.make_pair(10i32, 20i32)
+    assert(w4.val == 30i32)
+
+    // Deeply nested module using grandparent type as parameter
+    let w5 = utils.wrap_inner(inner.make(3i32, 7i32))
+    assert(w5.val == 10i32)
+
+    // Shadowing: shadow_test.scale=100 should shadow outer.scale=10
+    let it = item.make(5i32)
+    let it2 = item.scaled(it)
+    assert(it2.n == 500i32)
+
+    0
