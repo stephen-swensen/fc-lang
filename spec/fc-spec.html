@@ -2868,6 +2868,8 @@ namespace acme::graphics::
 
 A namespace name consists of one or more `::` separated segments and always ends with `::`. Files with no namespace declaration are in `global::` — the implicit default. Application code normally lives in `global::`; libraries should declare a namespace.
 
+`global::` is reserved: it cannot appear in a `namespace` declaration or in an `import ... from global::` clause. It exists only as the implicit default for files with no namespace. This prevents library code from importing application-level declarations out of the global namespace — cross-namespace access always requires explicit imports from a named namespace.
+
 Namespaces are purely a compile-time disambiguation mechanism. They have no presence in expressions or at runtime.
 
 ### Top-level declarations and the entry-point file
