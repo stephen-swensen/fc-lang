@@ -1,0 +1,5 @@
+module some_module =
+    let x = 42
+
+let main = (args: str[]) ->
+    0

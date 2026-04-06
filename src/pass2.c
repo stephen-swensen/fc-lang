@@ -672,10 +672,6 @@ static Symbol *lookup_module(CheckCtx *ctx, const char *name) {
         mod = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
     if (!mod)
         mod = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
-    if (!mod && ctx->current_ns)
-        mod = symtab_lookup_module(ctx->symtab, name, NULL);
-    if (!mod)
-        mod = symtab_lookup_kind(ctx->symtab, name, DECL_MODULE);
     return mod;
 }
 
@@ -1578,9 +1574,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
          * Use namespace-aware lookup: prefer same-namespace entry. */
         if (sym->kind == DECL_MODULE) {
             Symbol *ns_mod = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
-            if (!ns_mod && ctx->current_ns) {
-                ns_mod = symtab_lookup_module(ctx->symtab, e->ident.name, NULL);
-            }
             if (!ns_mod) {
                 diag_error(e->loc, "module '%s' is in a different namespace; use 'import' to access it",
                     e->ident.name);
@@ -2101,8 +2094,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
                     if (!root)
                         root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
-                    if (!root && ctx->current_ns)
-                        root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
                     if (root && root->members) {
                         /* Walk intermediate fields to find the innermost module */
                         Symbol *walk = root;
@@ -2884,8 +2875,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 mod_sym = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
             if (!mod_sym)
                 mod_sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
-            if (!mod_sym && ctx->current_ns)
-                mod_sym = symtab_lookup_module(ctx->symtab, name, NULL);
         }
 
         /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
@@ -2911,8 +2900,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
                 if (!root)
                     root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
-                if (!root && ctx->current_ns)
-                    root = symtab_lookup_module(ctx->symtab, cur->ident.name, NULL);
                 if (root && root->members) {
                     Symbol *walk = root;
                     for (int k = depth - 1; k >= 0; k--) {

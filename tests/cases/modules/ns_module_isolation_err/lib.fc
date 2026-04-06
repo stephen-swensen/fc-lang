@@ -1,0 +1,4 @@
+namespace other::
+
+module helper =
+    let make = () -> some_module.x
