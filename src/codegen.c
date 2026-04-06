@@ -903,9 +903,12 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
                 fprintf(out, ";\n");
             }
         } else if (!as_return && i == last_real_idx && s->type &&
-                   s->type->kind != TYPE_VOID && has_pending_defers()) {
-            /* Last expression in a value-producing block with pending defers.
-             * Save to temp, emit defers, then produce temp as block value. */
+                   s->type->kind != TYPE_VOID &&
+                   g_defer_scope && g_defer_scope->count > 0) {
+            /* Last expression in a value-producing block with pending defers
+             * in the current scope. Save to temp, emit defers, then produce
+             * temp as block value. Only triggers when the current scope itself
+             * has defers — parent scope defers are handled at their own level. */
             emit_type(s->type, out);
             int tid = temp_counter++;
             fprintf(out, " _blk%d = ", tid);
