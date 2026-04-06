@@ -229,7 +229,7 @@ static Symbol *parent_chain_lookup_kind(ModuleScopeChain *chain, const char *nam
  * (they're found by mangled name, not user-facing name). */
 static Symbol *global_lookup(SymbolTable *symtab, const char *name, const char *current_ns) {
     Symbol *sym = symtab_lookup(symtab, name);
-    if (sym && sym->kind != DECL_MODULE && sym->ns_prefix != current_ns) return NULL;
+    if (sym && sym->ns_prefix != current_ns) return NULL;
     return sym;
 }
 
@@ -1547,10 +1547,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
         }
-        /* Check global symbol table (namespace-aware for non-module symbols) */
+        /* Check global symbol table (namespace-aware) */
         Symbol *sym = global_lookup(ctx->symtab, e->ident.name, ctx->current_ns);
-        /* Modules have their own namespace logic below, so also try unfiltered */
-        if (!sym) sym = symtab_lookup_kind(ctx->symtab, e->ident.name, DECL_MODULE);
+        /* Modules use namespace-aware lookup with error messaging */
+        if (!sym) sym = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
         if (!sym) {
             /* Built-in globals: stdin, stdout, stderr */
             const char *n = e->ident.name;
@@ -1560,7 +1560,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = type_any_ptr();
                 return e->type;
             }
-            diag_error(e->loc, "undefined name '%s'", e->ident.name);
+            /* Check if a module with this name exists in a different namespace */
+            Symbol *other_ns = symtab_lookup_kind(ctx->symtab, e->ident.name, DECL_MODULE);
+            if (other_ns) {
+                diag_error(e->loc, "module '%s' is in a different namespace; use 'import' to access it",
+                    e->ident.name);
+            } else {
+                diag_error(e->loc, "undefined name '%s'", e->ident.name);
+            }
             e->type = type_error();
             return e->type;
         }

@@ -1,0 +1,4 @@
+import foo from global::
+
+let main = (args: str[]) ->
+    0

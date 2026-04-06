@@ -704,6 +704,10 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
                 diag_error(d->loc, "cannot wildcard-import from a namespace");
                 continue;
             }
+            if (strcmp(imp_ns, "global") == 0) {
+                diag_error(d->loc, "cannot import from 'global::'; the global namespace is implicit and not importable");
+                continue;
+            }
             const char *name = d->import.name;
             Symbol *src = symtab_lookup_module(global_symtab, name, imp_ns);
             if (!src || src->kind != DECL_MODULE) {
@@ -758,6 +762,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         Decl *d = prog->decls[i];
 
         if (d->kind == DECL_NAMESPACE) {
+            if (d->ns.name && strcmp(d->ns.name, "global") == 0) {
+                diag_error(d->loc, "'global::' is the implicit default namespace and cannot be declared explicitly");
+            }
             current_ns = d->ns.name;
             continue;
         }
@@ -984,6 +991,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         if (from_ns && !mod_name) {
             if (d->import.is_wildcard) {
                 diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
+                continue;
+            }
+            if (strcmp(from_ns, "global") == 0) {
+                diag_error(d->loc, "cannot import from 'global::'; the global namespace is implicit and not importable");
                 continue;
             }
             /* import MODULE from namespace:: — cross-namespace whole module import */

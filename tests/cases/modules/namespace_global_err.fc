@@ -1,0 +1,7 @@
+namespace global::
+
+module foo =
+    let x = 1
+
+let main = (args: str[]) ->
+    0
