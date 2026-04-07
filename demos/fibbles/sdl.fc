@@ -80,7 +80,3 @@ module sdl from "SDL2/SDL.h" =
         key: keyboard_event
     extern SDL_PollEvent as poll_event: (sdl_event*) -> int32
 
-// C stdlib for random number generation
-module c from "stdlib.h" =
-    extern srand: (uint32) -> void
-    extern rand: () -> int32

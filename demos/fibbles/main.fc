@@ -7,6 +7,7 @@ import audio_spec from sdl
 import io from std::
 import text from std::
 import sys from std::
+import pcg_random from std::random
 
 // Grid and display constants
 let grid_w = 32
@@ -203,10 +204,10 @@ let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
             break
     found
 
-let place_food = (body: vec2[], head: int32, len: int32) ->
+let place_food = (pcg_state: pcg_random*, body: vec2[], head: int32, len: int32) ->
     loop
-        let x = c.rand() % grid_w
-        let y = c.rand() % grid_h
+        let x = (int32)pcg_random.next_bounded_uint32(pcg_state, (uint32)grid_w)
+        let y = (int32)pcg_random.next_bounded_uint32(pcg_state, (uint32)grid_h)
         if !on_snake(body, head, len, x, y) then
             break vec2 { x = x, y = y }
 
@@ -337,7 +338,7 @@ let main = (args: str[]) ->
     sdl.set_resizable(win, 0)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
     sdl.set_logical_size(ren, grid_w * cell, grid_h * cell)
-    c.srand(sdl.get_ticks())
+    let mut pcg_state = pcg_random.make((uint64)sys.time())
 
     // Init audio (square wave sound effects)
     let mut desired = default(audio_spec)
@@ -435,7 +436,7 @@ let main = (args: str[]) ->
                         body[0] = vec2 { x = cx - 2, y = cy }
                         body[1] = vec2 { x = cx - 1, y = cy }
                         body[2] = vec2 { x = cx, y = cy }
-                        food = place_food(body, head_idx, length)
+                        food = place_food(&pcg_state, body, head_idx, length)
                         last_tick = sdl.get_ticks()
                         sdl.set_title(win, c"Fibbles - Score: 0 (High: %d{high_score}) Level 1")
                         state = game_state.playing
@@ -551,10 +552,10 @@ let main = (args: str[]) ->
                             score = score + 10
                             if speed > 50 then
                                 speed = speed - 3
-                            food = place_food(body, head_idx, length)
+                            food = place_food(&pcg_state, body, head_idx, length)
                             // 25% chance to spawn bonus food
-                            if !bonus_active && c.rand() % 4 == 0 then
-                                bonus = place_food(body, head_idx, length)
+                            if !bonus_active && pcg_random.next_bounded_uint32(&pcg_state, 4u32) == 0u32 then
+                                bonus = place_food(&pcg_state, body, head_idx, length)
                                 bonus_active = true
                             sdl.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
 
