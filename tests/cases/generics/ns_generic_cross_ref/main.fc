@@ -1,9 +1,14 @@
 import containers from acme::
 
 let main = (args: str[]) ->
+    // struct -> struct (pointer)
     let o = containers.create(10, 20)
     assert(o.ptr->x == 10)
     assert(o.ptr->y == 20)
     assert(containers.sum_inner(o) == 30)
     free(o.ptr)
+
+    // struct -> struct (by value)
+    let p = containers.make_pair(1, 2, 3, 4)
+    assert(containers.pair_sum(p) == 10)
     0

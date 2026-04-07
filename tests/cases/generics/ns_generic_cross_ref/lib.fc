@@ -12,9 +12,19 @@ module containers =
     struct outer =
         ptr: inner<'a>*
 
+    struct pair =
+        fst: inner<'a>
+        snd: inner<'a>
+
     let create = (a: 'a, b: 'a) ->
         let i = alloc(inner { x = a, y = b })!
         outer { ptr = i }
 
     let sum_inner = (o: outer<int32>) ->
         o.ptr->x + o.ptr->y
+
+    let make_pair = (a: 'a, b: 'a, c: 'a, d: 'a) ->
+        pair { fst = inner { x = a, y = b }, snd = inner { x = c, y = d } }
+
+    let pair_sum = (p: pair<int32>) ->
+        p.fst.x + p.fst.y + p.snd.x + p.snd.y

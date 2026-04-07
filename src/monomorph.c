@@ -170,13 +170,8 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
             discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, symtab, var_names, concrete, var_count);
         /* Register generic struct instances created under substitution */
         if (e->type && e->type->kind == TYPE_STRUCT && type_contains_type_var(e->type)) {
-            /* Prefer resolved_sym from pass2 (handles module-scoped structs) */
+            /* Use resolved_sym from pass2 — always set for struct literals */
             Symbol *struct_sym = (Symbol *)e->struct_lit.resolved_sym;
-            if (!struct_sym) {
-                struct_sym = symtab_lookup_kind(symtab, e->struct_lit.type_name, DECL_STRUCT);
-                if (!struct_sym)
-                    struct_sym = symtab_lookup(symtab, e->struct_lit.type_name);
-            }
             if (struct_sym && struct_sym->is_generic) {
                 const char **vars = NULL;
                 int vc = 0, vcap = 0;
