@@ -1,0 +1,57 @@
+// Union companion module: variant construction falls through to the companion
+// union when the module has no matching member. Both internal (within the
+// companion module) and external (from outside) access must work.
+module outer =
+    union shape =
+        | circle(int32)
+        | rect(int32)
+        | empty
+
+    module shape =
+        let area = (s: shape) ->
+            match s with
+            | circle(r) -> r * r
+            | rect(w) -> w * w
+            | empty -> 0
+
+        // Internal: variant construction from within the companion module
+        let make_circle = (r: int32) -> shape.circle(r)
+        let make_rect = (w: int32) -> shape.rect(w)
+        let make_empty = () -> shape.empty
+
+    // Also test that module members still take priority over variants
+    module priority =
+        union test_u =
+            | foo(int32)
+
+        module test_u =
+            let bar = () -> 99
+
+            // "bar" should resolve as module member, not variant
+            let get_bar = () -> test_u.bar()
+
+let main = (args: str[]) ->
+    // External: variant construction through module path
+    let c = outer.shape.circle(5)
+    assert(outer.shape.area(c) == 25)
+
+    let r = outer.shape.rect(3)
+    assert(outer.shape.area(r) == 9)
+
+    // No-payload variant through companion
+    let e = outer.shape.empty
+    assert(outer.shape.area(e) == 0)
+
+    // Constructor functions that use internal companion access
+    let c2 = outer.shape.make_circle(7)
+    assert(outer.shape.area(c2) == 49)
+
+    let r2 = outer.shape.make_rect(4)
+    assert(outer.shape.area(r2) == 16)
+
+    let e2 = outer.shape.make_empty()
+    assert(outer.shape.area(e2) == 0)
+
+    // Module members take priority over variant names
+    assert(outer.priority.test_u.get_bar() == 99)
+    0

@@ -69,3 +69,7 @@ Discovered while expanding test coverage for namespaced generic cross-references
 ### No-payload variant construction for module-qualified generic unions (pass2.c)
 
 **Bug 5 — Module-qualified no-payload variant skipped generic instantiation.** For `m.wrapped<int32>.empty`, the parser puts `<int32>` on the outer FIELD node (`.empty`), not on the inner (`.wrapped`). The inner resolves to the raw union template. The code at the outer FIELD that handles `obj_type->kind == TYPE_UNION` returned the raw type without checking for type args. Fix: when `e->field.type_arg_count > 0` and the object is a generic union, instantiate via `mono_register` before returning.
+
+### Union companion module variant construction (pass2.c)
+
+**Bug 6 — Companion union variant construction failed when module took priority.** When a union and module share a name (companion pattern), `shape.circle(r)` was interpreted as module member access, failing with "module has no member 'circle'". Fix: when module member lookup fails, check for a companion union with the same name and fall through to variant construction if a matching variant exists. For external access through module chains (e.g., `outer.shape.circle`), the parent module's members table is tracked during chain resolution so the companion union can be found in the correct scope.

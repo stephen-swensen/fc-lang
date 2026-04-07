@@ -2851,6 +2851,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
          * For EXPR_FIELD "geometry.shapes", recursively find submodule "shapes" in "geometry".
          * Also handles type-associated modules (same name as struct/union). */
         Symbol *mod_sym = NULL;
+        SymbolTable *mod_parent_members = NULL; /* members table where mod_sym was found */
         if (e->field.object->kind == EXPR_IDENT) {
             const char *name = e->field.object->ident.name;
             mod_sym = resolve_symbol_kind(ctx, name, DECL_MODULE);
@@ -2876,6 +2877,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     for (int k = depth - 1; k >= 0; k--) {
                         Symbol *next = symtab_lookup_kind(walk->members, chain[k]->field.name, DECL_MODULE);
                         if (!next) { walk = NULL; break; }
+                        mod_parent_members = walk->members;
                         walk = next;
                     }
                     if (walk) mod_sym = walk;
@@ -2887,6 +2889,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (mod_sym && mod_sym->members) {
             Symbol *member = symtab_lookup(mod_sym->members, e->field.name);
             if (!member) {
+                /* Companion union fallback: if a union shares the module's name,
+                 * check if the field matches a variant of that union. This allows
+                 * shape.circle(r) where "shape" is both a module and a union.
+                 * Search current scope first, then the parent module where mod_sym was found. */
+                Symbol *companion = resolve_symbol_kind(ctx, mod_sym->name, DECL_UNION);
+                if (!companion && mod_parent_members)
+                    companion = symtab_lookup_kind(mod_parent_members, mod_sym->name, DECL_UNION);
+                if (companion && companion->type && companion->type->kind == TYPE_UNION) {
+                    Type *ut = companion->type;
+                    for (int v = 0; v < ut->unio.variant_count; v++) {
+                        if (ut->unio.variants[v].name == e->field.name) {
+                            e->type = ut;
+                            e->field.is_variant_constructor = true;
+                            return e->type;
+                        }
+                    }
+                }
                 diag_error(e->loc, "module '%s' has no member '%s'",
                     mod_sym->name, e->field.name);
                 e->type = type_error();
