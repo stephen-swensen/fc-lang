@@ -50,6 +50,20 @@ Removed all fallback symtab re-resolution from monomorph (`discover_in_expr` for
 
 - **`mono_resolve_type_names`** (monomorph.c): Still does its own symtab lookups for type name canonicalization. This operates on `Type` objects (not expressions) which don't carry `resolved_sym` pointers. Fixing this would require adding a `resolved_sym` field to the `Type` struct.
 
-## Known Related Bug
+## Related Bugs Found and Fixed
 
-**Generic unions with generic struct/union payloads** produce incorrect C codegen — the generated type names for variant payloads are unmonomorphized or incorrectly mangled. This is a codegen/mono issue unrelated to symbol resolution. Reproduces without namespaces or modules. Tracked separately.
+### Generic unions with generic struct/union payloads (3 bugs)
+
+Discovered while expanding test coverage for namespaced generic cross-references. Three independent bugs combined to make generic unions with generic payloads (e.g., `union wrapped = | val(inner<'a>) | empty`) produce incorrect C.
+
+**Bug 1 — Topo sort missed union variant payloads (monomorph.c).** `topo_visit` only walked struct fields for by-value dependencies, not union variant payloads. A union `wrapped<int32>` with payload `inner<int32>` was emitted before `inner<int32>` was defined. Fix: extended `find_by_value_dep` to handle TYPE_UNION and `topo_visit` to walk variant payloads.
+
+**Bug 2 — Pattern match used unsubstituted payload type (codegen.c).** `emit_pat_bindings` for PAT_VARIANT pulled the raw template payload type (e.g., `inner<'a>`) from the union definition instead of the monomorphized concrete type. Fix: look up the mono table's `concrete_type` for the union and get variant payloads from there. Also apply `g_subst` when inside a monomorphized generic context.
+
+**Bug 3 — Stub canonicalization missed union targets (pass1.c).** `canonicalize_stub_names` only looked for DECL_STRUCT when canonicalizing TYPE_STRUCT stubs, but the parser creates ALL type references as TYPE_STRUCT stubs (it doesn't know the target kind yet). A reference to `wrapped<'a>` (a union) in a variant payload wasn't canonicalized to the mangled name, causing incorrect type names in the generated C. Fix: also try DECL_UNION when canonicalizing TYPE_STRUCT stubs.
+
+### Known remaining bugs
+
+**Generic struct with union-typed field** — `struct holder = item: wrapped<'a>` followed by `holder { item = wrapped<'a>.val(...) }` produces "field 'item': type mismatch in generic struct" in pass2. This is a type inference bug where pass2 can't unify a generic union value with a generic struct field of union type. Reproduces without modules/namespaces.
+
+**No-payload variant construction for generic unions** — `m.wrapped<int32>.empty` (constructing a no-payload variant of a module-scoped generic union) emits the unmonomorphized type name. A codegen issue with how no-payload variant construction handles generic type arguments for module-scoped unions.

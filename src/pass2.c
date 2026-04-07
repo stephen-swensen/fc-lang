@@ -680,10 +680,10 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
                 mod = lookup_module(ctx, cur->ident.name);
                 if (mod && mod->members) {
                     /* Walk intermediate module segments */
-                    Expr *segs[32];
-                    int depth = 0;
+                    Expr **segs = NULL;
+                    int depth = 0, seg_cap = 0;
                     for (Expr *e = obj; e->kind == EXPR_FIELD; e = e->field.object)
-                        if (depth < 32) segs[depth++] = e;
+                        DA_APPEND(segs, depth, seg_cap, e);
                     /* segs is in reverse order (innermost first); walk from depth-1 to 0 */
                     for (int k = depth - 1; k >= 0; k--) {
                         Symbol *next = symtab_lookup_kind(mod->members,
@@ -691,6 +691,7 @@ static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
                         if (!next || !next->members) { mod = NULL; break; }
                         mod = next;
                     }
+                    free(segs);
                 }
             }
         }

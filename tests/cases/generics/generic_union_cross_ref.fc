@@ -1,0 +1,46 @@
+// Generic unions with generic struct/union payloads inside a module.
+// Tests topo sort ordering, pattern match codegen, and stub canonicalization.
+module m =
+    struct inner =
+        x: 'a
+        y: 'a
+
+    // union -> struct
+    union wrapped =
+        | val(inner<'a>)
+        | empty
+
+    let wrap = (x: 'a, y: 'a) ->
+        wrapped<'a>.val(inner { x = x, y = y })
+
+    let unwrap_x = (w: wrapped<int32>) ->
+        match w with
+        | val(i) -> i.x
+        | empty -> 0
+
+    // union -> union
+    union maybe =
+        | some_wrapped(wrapped<'a>)
+        | nothing
+
+    let nest = (x: 'a, y: 'a) ->
+        maybe<'a>.some_wrapped(wrapped<'a>.val(inner { x = x, y = y }))
+
+    let unnest_x = (n: maybe<int32>) ->
+        match n with
+        | some_wrapped(w) ->
+            match w with
+            | val(i) -> i.x
+            | empty -> 0
+        | nothing -> 0
+
+let main = (args: str[]) ->
+    // union -> struct
+    let w = m.wrap(3, 4)
+    assert(m.unwrap_x(w) == 3)
+    assert(m.unwrap_x(m.wrap(10, 20)) == 10)
+
+    // union -> union -> struct
+    let n = m.nest(7, 8)
+    assert(m.unnest_x(n) == 7)
+    0

@@ -324,6 +324,9 @@ static const char *find_by_value_dep(Type *type) {
     case TYPE_STRUCT:
         /* A struct embedded by value is a direct dependency */
         return type->struc.name;
+    case TYPE_UNION:
+        /* A union embedded by value is a direct dependency */
+        return type->unio.name;
     case TYPE_FIXED_ARRAY:
         /* Fixed arrays of structs are by-value */
         return find_by_value_dep(type->fixed_array.elem);
@@ -342,19 +345,29 @@ static void topo_visit(MonoTable *t, int idx, int *state, int *order, int *order
     MonoInstance *inst = &t->entries[idx];
     if (inst->concrete_type && (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION)) {
         Type *ct = inst->concrete_type;
-        int fc = (ct->kind == TYPE_STRUCT) ? ct->struc.field_count : 0;
-        StructField *fields = (ct->kind == TYPE_STRUCT) ? ct->struc.fields : NULL;
-        for (int f = 0; f < fc; f++) {
-            const char *dep = find_by_value_dep(fields[f].type);
-            if (!dep) continue;
-            /* Find the dependency in the mono table */
+        /* Collect by-value dependencies from struct fields and union variant payloads */
+        const char **deps = NULL;
+        int dep_count = 0, dep_cap = 0;
+        if (ct->kind == TYPE_STRUCT) {
+            for (int f = 0; f < ct->struc.field_count; f++) {
+                const char *d = find_by_value_dep(ct->struc.fields[f].type);
+                if (d) DA_APPEND(deps, dep_count, dep_cap, d);
+            }
+        } else if (ct->kind == TYPE_UNION) {
+            for (int v = 0; v < ct->unio.variant_count; v++) {
+                const char *d = find_by_value_dep(ct->unio.variants[v].payload);
+                if (d) DA_APPEND(deps, dep_count, dep_cap, d);
+            }
+        }
+        for (int d = 0; d < dep_count; d++) {
             for (int j = 0; j < t->count; j++) {
-                if (j != idx && t->entries[j].mangled_name == dep) {
+                if (j != idx && t->entries[j].mangled_name == deps[d]) {
                     topo_visit(t, j, state, order, order_count);
                     break;
                 }
             }
         }
+        free(deps);
     }
     state[idx] = TOPO_DONE;
     order[(*order_count)++] = idx;

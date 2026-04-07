@@ -279,12 +279,21 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
         return;
     case TYPE_STRUCT:
         if (t->struc.field_count == 0 && t->struc.type_arg_count > 0 && t->struc.name) {
+            /* Try struct first, then union — parser creates all type refs as TYPE_STRUCT
+             * stubs since it doesn't know the target kind yet */
             Symbol *sym = symtab_lookup_kind(members, t->struc.name, DECL_STRUCT);
-            if (sym && sym->type && sym->type->struc.name != t->struc.name) {
-                t->struc.base_name = t->struc.name;
-                t->struc.name = sym->type->struc.name;
-                if (sym->type->struc.qualified_name)
-                    t->struc.qualified_name = sym->type->struc.qualified_name;
+            if (!sym)
+                sym = symtab_lookup_kind(members, t->struc.name, DECL_UNION);
+            if (sym && sym->type) {
+                const char *canon = (sym->type->kind == TYPE_STRUCT)
+                    ? sym->type->struc.name : sym->type->unio.name;
+                const char *qname = (sym->type->kind == TYPE_STRUCT)
+                    ? sym->type->struc.qualified_name : sym->type->unio.qualified_name;
+                if (canon != t->struc.name) {
+                    t->struc.base_name = t->struc.name;
+                    t->struc.name = canon;
+                    if (qname) t->struc.qualified_name = qname;
+                }
             }
         }
         /* Don't recurse into fields — stubs have field_count=0 */

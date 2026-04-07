@@ -759,12 +759,26 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     }
     case PAT_VARIANT: {
         if (pat->variant.payload) {
+            /* Get variant payload type from the mono table's concrete_type if available,
+             * since the pass2 expression type may have unsubstituted type variables
+             * in variant payloads (pass2 renames but doesn't substitute them). */
+            Type *source_union = type;
+            if (type->kind == TYPE_UNION && g_mono) {
+                MonoInstance *mi = mono_find(g_mono, type->unio.name);
+                if (mi && mi->concrete_type && mi->concrete_type->kind == TYPE_UNION)
+                    source_union = mi->concrete_type;
+            }
             Type *payload_type = NULL;
-            for (int v = 0; v < type->unio.variant_count; v++) {
-                if (type->unio.variants[v].name == pat->variant.variant) {
-                    payload_type = type->unio.variants[v].payload;
+            for (int v = 0; v < source_union->unio.variant_count; v++) {
+                if (source_union->unio.variants[v].name == pat->variant.variant) {
+                    payload_type = source_union->unio.variants[v].payload;
                     break;
                 }
+            }
+            /* Substitute type variables when inside a monomorphized context */
+            if (payload_type && g_subst) {
+                payload_type = type_substitute(g_arena, payload_type,
+                    g_subst->var_names, g_subst->concrete, g_subst->count);
             }
             if (payload_type) {
                 char payload_expr[256];

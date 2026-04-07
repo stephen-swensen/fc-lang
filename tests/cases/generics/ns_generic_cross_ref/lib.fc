@@ -1,10 +1,11 @@
-// Namespaced module with generic structs that cross-reference each other.
-// Regression test: canonicalized type stubs (mangled names) must resolve
-// correctly within a namespaced module — both in module_symtab and global.
+// Namespaced module with generic structs and unions that cross-reference
+// each other. Tests all four combinations: struct->struct, union->struct,
+// union->union. (struct->union requires a separate pass2 inference fix.)
 namespace acme::
 
 module containers =
 
+    // struct referencing struct
     struct inner =
         x: 'a
         y: 'a
@@ -28,3 +29,32 @@ module containers =
 
     let pair_sum = (p: pair<int32>) ->
         p.fst.x + p.fst.y + p.snd.x + p.snd.y
+
+    // union referencing struct
+    union wrapped =
+        | val(inner<'a>)
+        | empty
+
+    let wrap = (x: 'a, y: 'a) ->
+        wrapped<'a>.val(inner { x = x, y = y })
+
+    let unwrap_x = (w: wrapped<int32>) ->
+        match w with
+        | val(i) -> i.x
+        | empty -> 0
+
+    // union referencing union
+    union maybe =
+        | some_wrapped(wrapped<'a>)
+        | nothing
+
+    let nest = (x: 'a, y: 'a) ->
+        maybe<'a>.some_wrapped(wrapped<'a>.val(inner { x = x, y = y }))
+
+    let unnest_x = (m: maybe<int32>) ->
+        match m with
+        | some_wrapped(w) ->
+            match w with
+            | val(i) -> i.x
+            | empty -> 0
+        | nothing -> 0

@@ -11,4 +11,12 @@ let main = (args: str[]) ->
     // struct -> struct (by value)
     let p = containers.make_pair(1, 2, 3, 4)
     assert(containers.pair_sum(p) == 10)
+
+    // union -> struct
+    let w = containers.wrap(3, 4)
+    assert(containers.unwrap_x(w) == 3)
+
+    // union -> union -> struct
+    let m = containers.nest(7, 8)
+    assert(containers.unnest_x(m) == 7)
     0
