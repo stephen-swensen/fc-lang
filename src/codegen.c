@@ -798,7 +798,7 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     }
 }
 
-static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return) {
+static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return, bool discard_value) {
     /* Find last non-defer statement index (needed for block-value handling) */
     int last_real_idx = -1;
     for (int i = count - 1; i >= 0; i--) {
@@ -930,7 +930,10 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return)
             fprintf(out, ";\n");
             emit_scope_defers(g_defer_scope, out);
             emit_indent(out);
-            fprintf(out, "_blk%d;\n", tid);
+            if (discard_value)
+                fprintf(out, "(void)_blk%d;\n", tid);
+            else
+                fprintf(out, "_blk%d;\n", tid);
         } else {
             emit_expr(s, out);
             fprintf(out, ";\n");
@@ -976,7 +979,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
     if (e->if_expr.then_body->kind == EXPR_BLOCK) {
         defer_scope_push(false);
         emit_block_stmts(e->if_expr.then_body->block.stmts,
-            e->if_expr.then_body->block.count, out, false);
+            e->if_expr.then_body->block.count, out, false, true);
         defer_scope_pop();
     } else {
         emit_indent(out);
@@ -997,7 +1000,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
             if (e->if_expr.else_body->kind == EXPR_BLOCK) {
                 defer_scope_push(false);
                 emit_block_stmts(e->if_expr.else_body->block.stmts,
-                    e->if_expr.else_body->block.count, out, false);
+                    e->if_expr.else_body->block.count, out, false, true);
                 defer_scope_pop();
             } else {
                 emit_indent(out);
@@ -1799,7 +1802,7 @@ static void emit_expr(Expr *e, FILE *out) {
             if (e->if_expr.then_body->kind == EXPR_BLOCK) {
                 defer_scope_push(false);
                 emit_block_stmts(e->if_expr.then_body->block.stmts,
-                    e->if_expr.then_body->block.count, out, false);
+                    e->if_expr.then_body->block.count, out, false, true);
                 defer_scope_pop();
             } else {
                 emit_indent(out);
@@ -1815,7 +1818,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (e->if_expr.else_body->kind == EXPR_BLOCK) {
                     defer_scope_push(false);
                     emit_block_stmts(e->if_expr.else_body->block.stmts,
-                        e->if_expr.else_body->block.count, out, false);
+                        e->if_expr.else_body->block.count, out, false, true);
                     defer_scope_pop();
                 } else {
                     emit_indent(out);
@@ -1839,7 +1842,7 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "({\n");
         indent_level++;
         defer_scope_push(false);
-        emit_block_stmts(e->block.stmts, e->block.count, out, false);
+        emit_block_stmts(e->block.stmts, e->block.count, out, false, false);
         defer_scope_pop();
         indent_level--;
         emit_indent(out);
@@ -2203,7 +2206,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "while (1) {\n");
             indent_level++;
             defer_scope_push(true);
-            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false);
+            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false, true);
             defer_scope_pop();
             indent_level--;
             emit_indent(out);
@@ -2218,7 +2221,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "while (1) {\n");
             indent_level++;
             defer_scope_push(true);
-            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false);
+            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false, true);
             defer_scope_pop();
             indent_level--;
             emit_indent(out);
@@ -2264,7 +2267,7 @@ static void emit_expr(Expr *e, FILE *out) {
 
             /* Body (already indented by indent_level++) */
             defer_scope_push(true);
-            emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false);
+            emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false, true);
             defer_scope_pop();
             indent_level--;
             emit_indent(out);
@@ -2275,7 +2278,7 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Body for range iteration */
         indent_level++;
         defer_scope_push(true);
-        emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false);
+        emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false, true);
         defer_scope_pop();
         indent_level--;
         emit_indent(out);
@@ -2337,7 +2340,7 @@ static void emit_expr(Expr *e, FILE *out) {
             /* Emit arm body */
             if (match_is_void) {
                 defer_scope_push(false);
-                emit_block_stmts(arm->body, arm->body_count, out, false);
+                emit_block_stmts(arm->body, arm->body_count, out, false, true);
                 defer_scope_pop();
             } else if (arm->body_count == 1) {
                 emit_indent(out);
@@ -2878,7 +2881,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
     indent_level = 1;
     begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
     defer_scope_push(false);
-    emit_block_stmts(fn->func.body, fn->func.body_count, out, true);
+    emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
     defer_scope_pop();
     end_hoisted_scope();
     indent_level = 0;
@@ -4542,7 +4545,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
         begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
         defer_scope_push(false);
-        emit_block_stmts(lam->func.body, lam->func.body_count, out, true);
+        emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);
         defer_scope_pop();
         end_hoisted_scope();
         indent_level = 0;
@@ -4601,7 +4604,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         indent_level = 1;
         begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
         defer_scope_push(false);
-        emit_block_stmts(fn->func.body, fn->func.body_count, out, true);
+        emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
         defer_scope_pop();
         end_hoisted_scope();
         indent_level = 0;
