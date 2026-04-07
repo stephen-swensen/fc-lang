@@ -551,9 +551,21 @@ static bool unify(Type *param_type, Type *arg_type,
     }
 
     if (param_type->kind != arg_type->kind) {
-        /* Handle struct/union stub mismatch */
+        /* Handle struct/union stub mismatch: the parser creates all type refs as
+         * TYPE_STRUCT stubs, but the resolved type may be TYPE_UNION.  Unify their
+         * type_args so generic type variables get bound correctly. */
         if ((param_type->kind == TYPE_STRUCT && arg_type->kind == TYPE_UNION) ||
             (param_type->kind == TYPE_UNION && arg_type->kind == TYPE_STRUCT)) {
+            int pa = (param_type->kind == TYPE_STRUCT) ? param_type->struc.type_arg_count : param_type->unio.type_arg_count;
+            int aa = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.type_arg_count : arg_type->unio.type_arg_count;
+            Type **pt_args = (param_type->kind == TYPE_STRUCT) ? param_type->struc.type_args : param_type->unio.type_args;
+            Type **at_args = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.type_args : arg_type->unio.type_args;
+            if (pa > 0 && pa == aa) {
+                for (int i = 0; i < pa; i++)
+                    if (!unify(pt_args[i], at_args[i], var_names, bindings, var_count))
+                        return false;
+                return true;
+            }
             const char *na = param_type->kind == TYPE_STRUCT ? param_type->struc.name : param_type->unio.name;
             const char *nb = arg_type->kind == TYPE_STRUCT ? arg_type->struc.name : arg_type->unio.name;
             return na == nb;
@@ -3056,6 +3068,46 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* If the object resolved to a union type (e.g., module.UnionType.Variant) */
         if (obj_type->kind == TYPE_UNION) {
             e->field.is_variant_constructor = true;
+            /* For module-qualified generic variants (m.union_name<Types>.variant),
+             * the parser puts type args on the outer FIELD node.  Instantiate
+             * the generic union if type args are present. */
+            if (e->field.type_arg_count > 0 && obj_type->unio.variant_count > 0) {
+                /* Find the symbol for this union to get type params */
+                Symbol *usym = resolve_symbol_kind(ctx, obj_type->unio.name, DECL_UNION);
+                if (!usym) usym = resolve_symbol(ctx, obj_type->unio.name);
+                if (usym && usym->is_generic) {
+                    int ntp = usym->type_param_count;
+                    if (e->field.type_arg_count != ntp) {
+                        diag_error(e->loc, "expected %d type argument(s), got %d",
+                            ntp, e->field.type_arg_count);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
+                    for (int k = 0; k < ntp; k++)
+                        bindings[k] = resolve_type(ctx, e->field.type_args[k]);
+                    Type *concrete = type_substitute(ctx->arena, usym->type,
+                        usym->type_params, bindings, ntp);
+                    if (concrete == usym->type)
+                        concrete = type_copy(ctx->arena, usym->type);
+                    if (concrete->unio.type_arg_count == 0) {
+                        concrete->unio.type_args = bindings;
+                        concrete->unio.type_arg_count = ntp;
+                    }
+                    if (!bindings_contain_type_vars(bindings, ntp)) {
+                        const char *mangled = mono_register(ctx->mono_table, ctx->arena,
+                            ctx->intern, usym->type->unio.name, NULL,
+                            bindings, ntp, usym->decl,
+                            DECL_UNION, usym->type_params, ntp);
+                        if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
+                        concrete->unio.name = mangled;
+                        MonoInstance *mi = mono_find(ctx->mono_table, mangled);
+                        if (mi && !mi->concrete_type) mi->concrete_type = concrete;
+                    }
+                    e->type = concrete;
+                    return e->type;
+                }
+            }
             e->type = obj_type;
             return e->type;
         }

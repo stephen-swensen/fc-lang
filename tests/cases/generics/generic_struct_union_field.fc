@@ -1,0 +1,46 @@
+// Generic struct with a generic union-typed field.
+// Regression test: pass2 unify must handle TYPE_STRUCT stub vs TYPE_UNION
+// mismatch by unifying type_args rather than just comparing names.
+union option_val =
+    | present('a)
+    | absent
+
+struct container =
+    item: option_val<'a>
+    label: int32
+
+let make = (x: 'a, label: int32) ->
+    container { item = option_val<'a>.present(x), label = label }
+
+let get_label = (c: container<int32>) -> c.label
+
+let get_item = (c: container<int32>) ->
+    match c.item with
+    | present(v) -> v
+    | absent -> 0
+
+let main = (args: str[]) ->
+    let c = make(42, 7)
+    assert(get_label(c) == 7)
+    assert(get_item(c) == 42)
+
+    // Also test within a module
+    let c2 = m.make(10, 3)
+    assert(m.get(c2) == 10)
+    0
+
+module m =
+    union wrapped =
+        | val('a)
+        | empty
+
+    struct holder =
+        item: wrapped<'a>
+
+    let make = (x: 'a, label: int32) ->
+        holder { item = wrapped<'a>.val(x) }
+
+    let get = (h: holder<int32>) ->
+        match h.item with
+        | val(v) -> v
+        | empty -> 0

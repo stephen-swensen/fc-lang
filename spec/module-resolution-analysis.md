@@ -62,8 +62,10 @@ Discovered while expanding test coverage for namespaced generic cross-references
 
 **Bug 3 — Stub canonicalization missed union targets (pass1.c).** `canonicalize_stub_names` only looked for DECL_STRUCT when canonicalizing TYPE_STRUCT stubs, but the parser creates ALL type references as TYPE_STRUCT stubs (it doesn't know the target kind yet). A reference to `wrapped<'a>` (a union) in a variant payload wasn't canonicalized to the mangled name, causing incorrect type names in the generated C. Fix: also try DECL_UNION when canonicalizing TYPE_STRUCT stubs.
 
-### Known remaining bugs
+### Generic struct with union-typed field — type unification (pass2.c)
 
-**Generic struct with union-typed field** — `struct holder = item: wrapped<'a>` followed by `holder { item = wrapped<'a>.val(...) }` produces "field 'item': type mismatch in generic struct" in pass2. This is a type inference bug where pass2 can't unify a generic union value with a generic struct field of union type. Reproduces without modules/namespaces.
+**Bug 4 — Unify didn't recurse into type_args across struct/union kind mismatch.** When a generic struct field has a union type (e.g., `item: wrapped<'a>`), the field type is a TYPE_STRUCT stub (parser doesn't know the target kind) but the assigned value has TYPE_UNION. The struct/union mismatch handler in `unify()` only compared names, never recursing into type_args, so it couldn't bind `'a` to `int32`. Fix: when both sides have matching type_arg counts, unify their type_args element-wise.
 
-**No-payload variant construction for generic unions** — `m.wrapped<int32>.empty` (constructing a no-payload variant of a module-scoped generic union) emits the unmonomorphized type name. A codegen issue with how no-payload variant construction handles generic type arguments for module-scoped unions.
+### No-payload variant construction for module-qualified generic unions (pass2.c)
+
+**Bug 5 — Module-qualified no-payload variant skipped generic instantiation.** For `m.wrapped<int32>.empty`, the parser puts `<int32>` on the outer FIELD node (`.empty`), not on the inner (`.wrapped`). The inner resolves to the raw union template. The code at the outer FIELD that handles `obj_type->kind == TYPE_UNION` returned the raw type without checking for type args. Fix: when `e->field.type_arg_count > 0` and the object is a generic union, instantiate via `mono_register` before returning.

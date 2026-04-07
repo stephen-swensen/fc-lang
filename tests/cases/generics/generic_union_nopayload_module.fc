@@ -1,0 +1,43 @@
+// No-payload variant construction for module-qualified generic unions.
+// Regression test: m.union_name<Types>.variant must instantiate the
+// generic union, not emit the unmonomorphized template name.
+module m =
+    union color =
+        | red
+        | green
+        | blue
+
+    union maybe =
+        | just('a)
+        | nothing
+
+    let is_just = (x: maybe<int32>) ->
+        match x with
+        | just(v) -> true
+        | nothing -> false
+
+    let from_just = (x: maybe<int32>) ->
+        match x with
+        | just(v) -> v
+        | nothing -> 0
+
+import maybe from m
+
+let main = (args: str[]) ->
+    // Module-qualified no-payload variant with generic type args
+    let n = m.maybe<int32>.nothing
+    assert(!m.is_just(n))
+    assert(m.from_just(n) == 0)
+
+    // Module-qualified payload variant (for comparison)
+    let s = m.maybe<int32>.just(42)
+    assert(m.is_just(s))
+    assert(m.from_just(s) == 42)
+
+    // Imported no-payload variant (already worked, regression check)
+    let n2 = maybe<int32>.nothing
+    assert(!m.is_just(n2))
+
+    // Non-generic module-qualified variant (should still work)
+    let c = m.color.red
+    0
