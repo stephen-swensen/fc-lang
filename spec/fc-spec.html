@@ -182,6 +182,22 @@
 
   .meta span { color: var(--accent2); }
 
+  .doc-header .repo-link {
+    margin-top: 1.2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  .doc-header .repo-link a {
+    color: var(--accent2);
+    text-decoration: none;
+  }
+
+  .doc-header .repo-link a:hover {
+    text-decoration: underline;
+  }
+
   #content h1 {
     font-size: 2.4rem;
     font-weight: 600;
@@ -4250,6 +4266,7 @@ hljs.registerLanguage('fc', function(hljs) {
       <div>target <span>C11</span></div>
       <div>extension <span>.fc</span></div>
     </div>
+    <div class="repo-link">source <a href="https://github.com/stephen-swensen/fc-lang">github.com/stephen-swensen/fc-lang</a></div>
   </div>
   <div id="content"></div>
 </main>
