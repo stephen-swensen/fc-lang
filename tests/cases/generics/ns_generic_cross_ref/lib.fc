@@ -1,0 +1,20 @@
+// Namespaced module with generic structs that cross-reference each other.
+// Regression test: canonicalized type stubs (mangled names) must resolve
+// correctly within a namespaced module — both in module_symtab and global.
+namespace acme::
+
+module containers =
+
+    struct inner =
+        x: 'a
+        y: 'a
+
+    struct outer =
+        ptr: inner<'a>*
+
+    let create = (a: 'a, b: 'a) ->
+        let i = alloc(inner { x = a, y = b })!
+        outer { ptr = i }
+
+    let sum_inner = (o: outer<int32>) ->
+        o.ptr->x + o.ptr->y

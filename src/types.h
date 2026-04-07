@@ -63,7 +63,7 @@ struct Type {
         } func;
         struct {
             const char *name;
-            const char *base_name;      /* original FC name before mangling (for diagnostics) */
+            const char *base_name;      /* display only: FC source name before module mangling; not used for resolution */
             const char *qualified_name;  /* fully qualified FC path (e.g. "std::types.tuple2") */
             const char *c_name;         /* C struct/union tag name for extern types, NULL for normal */
             bool is_c_union;            /* true for extern union (untagged C union layout) */
@@ -74,7 +74,7 @@ struct Type {
         } struc;
         struct {
             const char *name;
-            const char *base_name;      /* original FC name before mangling (for diagnostics) */
+            const char *base_name;      /* display only: FC source name before module mangling; not used for resolution */
             const char *qualified_name;  /* fully qualified FC path (e.g. "geometry.shape") */
             UnionVariant *variants;
             int variant_count;

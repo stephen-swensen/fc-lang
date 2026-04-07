@@ -498,6 +498,14 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 st->struc.type_arg_count = 0;
                 msym->type = st;
                 detect_generic_struct(child, msym);
+                /* Also register under mangled name so canonicalized type stubs
+                 * (which use the mangled name) resolve in module_symtab directly,
+                 * avoiding namespace-filter rejection in global_lookup_kind. */
+                symtab_add(members, mangled, DECL_STRUCT, child);
+                Symbol *msym2 = &members->symbols[members->count - 1];
+                msym2->is_private = child->is_private;
+                msym2->type = st;
+                detect_generic_struct(child, msym2);
             }
             break;
         }
@@ -524,6 +532,12 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 ut->unio.type_arg_count = 0;
                 msym->type = ut;
                 detect_generic_union(child, msym);
+                /* Also register under mangled name (see struct case above) */
+                symtab_add(members, mangled, DECL_UNION, child);
+                Symbol *msym2 = &members->symbols[members->count - 1];
+                msym2->is_private = child->is_private;
+                msym2->type = ut;
+                detect_generic_union(child, msym2);
             }
             break;
         }

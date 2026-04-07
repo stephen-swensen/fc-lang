@@ -385,46 +385,16 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     }
 
     if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name) {
-        /* Look up as struct/union first, then fall back to general lookup.
-         * This handles the case where a module shares the same name as a type. */
+        /* Look up as struct or union using the standard scope chain.
+         * Kind-filtering avoids returning a module in the companion pattern. */
         Symbol *sym = NULL;
 
-        /* Check for module-qualified name: "module.type", "a.b.type", etc. */
         if (strchr(t->struc.name, '.'))
             sym = resolve_dotted_name(ctx, t->struc.name);
-
-        if (!sym && ctx->module_symtab) {
-            sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_STRUCT);
-            if (!sym)
-                sym = symtab_lookup_kind(ctx->module_symtab, t->struc.name, DECL_UNION);
-            /* Fallback: stub may have canonical name; try base_name (source name) */
-            if (!sym && t->struc.base_name && t->struc.base_name != t->struc.name) {
-                sym = symtab_lookup_kind(ctx->module_symtab, t->struc.base_name, DECL_STRUCT);
-                if (!sym)
-                    sym = symtab_lookup_kind(ctx->module_symtab, t->struc.base_name, DECL_UNION);
-            }
-        }
-        /* Fallback to ancestor module types (for child modules accessing parent structs/unions) */
-        if (!sym) {
-            sym = parent_chain_lookup_kind(ctx->parent_modules, t->struc.name, DECL_STRUCT);
-            if (!sym)
-                sym = parent_chain_lookup_kind(ctx->parent_modules, t->struc.name, DECL_UNION);
-            if (!sym && t->struc.base_name && t->struc.base_name != t->struc.name) {
-                sym = parent_chain_lookup_kind(ctx->parent_modules, t->struc.base_name, DECL_STRUCT);
-                if (!sym)
-                    sym = parent_chain_lookup_kind(ctx->parent_modules, t->struc.base_name, DECL_UNION);
-            }
-        }
-        if (!sym) {
-            sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_STRUCT);
-            if (!sym)
-                sym = import_chain_lookup_kind(ctx->import_scope, t->struc.name, DECL_UNION);
-        }
-        if (!sym) {
-            sym = global_lookup_kind(ctx->symtab, t->struc.name, DECL_STRUCT, ctx->current_ns);
-            if (!sym)
-                sym = global_lookup_kind(ctx->symtab, t->struc.name, DECL_UNION, ctx->current_ns);
-        }
+        if (!sym)
+            sym = resolve_symbol_kind(ctx, t->struc.name, DECL_STRUCT);
+        if (!sym)
+            sym = resolve_symbol_kind(ctx, t->struc.name, DECL_UNION);
         if (!sym)
             sym = resolve_symbol(ctx, t->struc.name);
         if (sym && sym->type) {
