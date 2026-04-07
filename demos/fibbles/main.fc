@@ -175,7 +175,7 @@ let draw_hamburger = (r: any*, gx: int32, gy: int32) ->
     // Top bun
     draw_small_rect(r, px + 6, py, 8, 2, 200u8, 150u8, 60u8)
     draw_small_rect(r, px + 4, py + 2, 12, 2, 200u8, 150u8, 60u8)
-    draw_small_rect(r, px + 2, py + 4, 16, 3, 200u8, 150u8, 60u8)
+    draw_small_rect(r, px + 2, py + 4, 16, 2, 200u8, 150u8, 60u8)
     // Sesame seeds
     draw_small_rect(r, px + 7, py + 1, 2, 1, 255u8, 255u8, 200u8)
     draw_small_rect(r, px + 11, py + 1, 2, 1, 255u8, 255u8, 200u8)
