@@ -57,14 +57,22 @@ The `resolved_callee`/`resolved_sym` fields (added in `88c53cd`) bridge pass2's 
 
 ## Remediation Plan
 
-### 1. Nesting-depth test coverage (short-term)
+### 1. Nesting-depth test coverage (short-term) -- DONE
 
-Add tests that exercise generic-calling-generic at multiple nesting depths (1, 2, 3 levels of module wrapping). This catches the class of bug where pass2 resolves correctly but monomorph/codegen re-resolution fails at deeper nesting.
+Added 5 tests in `tests/cases/generics/` exercising generic-calling-generic at depths 2-3, companion structs, cross-sibling calls, and multi-level qualified calls.
 
-### 2. Consolidated lookup function (medium-term)
+### 2. Consolidated lookup function (medium-term) -- DONE
 
-Replace the ad-hoc lookup sequences with a single `resolve_symbol(ctx, name, kind)` function encoding the full priority chain. Every lookup site in pass2 calls this one function. When a new scope level is added, one function changes instead of 12.
+Added `resolve_symbol(ctx, name)` and `resolve_symbol_kind(ctx, name, kind)` in pass2.c. Replaced 10 hand-written inline chains with calls to these functions. Future scope changes now require patching 2 functions instead of 10+ call sites.
 
-### 3. Eliminate re-resolution in later phases (longer-term)
+Additionally fixed `find_callee_symbol` to handle multi-level EXPR_FIELD chains (e.g., `outer.inner.func()`), resolving the multi-level qualified generic call bug.
 
-Extend the `resolved_callee` pattern so that every call/struct-lit/type-ref that pass2 resolves carries its resolution forward. The fallback lookups in monomorph and codegen become dead code. Pass2 is the single source of truth for name resolution.
+### 3. Eliminate re-resolution in later phases -- PARTIALLY DONE
+
+Removed the fallback symtab lookups from `discover_in_expr` (monomorph.c) and the deferred generic call path (codegen.c). Both now rely solely on `resolved_callee` from pass2. The `EXPR_STRUCT_LIT` fallback in monomorph and type canonicalization in `mono_resolve_type_names` still use direct symtab lookups — these would require adding a `resolved_sym` field to `Type` itself, which is a separate effort.
+
+### Remaining architectural debt
+
+- **EXPR_IDENT resolution** (pass2.c): The biggest lookup site cannot be consolidated because each scope source (module_symtab, parent_chain, import_chain, global) has unique on-demand type-checking behavior entangled with the lookup. A future refactor could separate "find symbol + report source" from "do source-specific post-processing."
+- **`resolve_type` interleaved cascade** (pass2.c): The struct/union priority is interleaved at each scope level. Only the final fallback was consolidated; the main cascade cannot be flattened without changing priority semantics.
+- **`mono_resolve_type_names`** (monomorph.c): Still does its own symtab lookups for type name canonicalization. Fixing this would require adding a `resolved_sym` field to the `Type` struct.

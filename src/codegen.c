@@ -1682,20 +1682,10 @@ static void emit_expr(Expr *e, FILE *out) {
                     concrete_args[i] = type_substitute(g_arena, e->call.type_args[i],
                         g_subst->var_names, g_subst->concrete, g_subst->count);
                 }
-                /* Find the callee symbol and its base name for mangling.
-                   Prefer resolved_callee from pass2 (works for nested modules). */
+                /* Use resolved_callee from pass2 — always set for all call patterns
+                   (single-level and multi-level qualified calls) */
                 const char *base_name = NULL;
                 Symbol *callee_sym = (Symbol *)e->call.resolved_callee;
-                if (!callee_sym) {
-                    if (callee->kind == EXPR_IDENT) {
-                        callee_sym = symtab_lookup(g_symtab, callee->ident.name);
-                    } else if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
-                        Symbol *mod = symtab_lookup_module(g_symtab, callee->field.object->ident.name, NULL);
-                        if (!mod) mod = symtab_lookup_kind(g_symtab, callee->field.object->ident.name, DECL_MODULE);
-                        if (mod && mod->members)
-                            callee_sym = symtab_lookup(mod->members, callee->field.name);
-                    }
-                }
                 if (callee_sym) {
                     base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
                                  && callee_sym->decl->let.codegen_name)

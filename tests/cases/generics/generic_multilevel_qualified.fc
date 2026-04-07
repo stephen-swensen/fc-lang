@@ -1,0 +1,32 @@
+// Multi-level qualified generic calls from outside the module.
+// e.g. outer.inner.first(s) where first is generic and called
+// through a two-level module path without imports.
+// Regression test for find_callee_symbol multi-level EXPR_FIELD handling.
+module outer =
+    module inner =
+        let try_first = (s: const 'a[]) ->
+            if s.len == 0 then default('a?)
+            else some(s[0])
+
+        let first = (s: const 'a[]) ->
+            inner.try_first(s)!
+
+        let identity = (x: 'a) -> x
+
+// Three-level nesting
+module a =
+    module b =
+        module c =
+            let wrap = (x: 'a) -> x
+
+let main = (args: str[]) ->
+    let s = int32[3] { 10, 20, 30 }
+
+    // Two-level qualified generic call
+    assert(outer.inner.first(s) == 10)
+    assert(outer.inner.try_first(s)! == 10)
+    assert(outer.inner.identity(42) == 42)
+
+    // Three-level qualified generic call
+    assert(a.b.c.wrap(99) == 99)
+    0

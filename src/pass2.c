@@ -240,6 +240,38 @@ static Symbol *global_lookup_kind(SymbolTable *symtab, const char *name, DeclKin
     return sym;
 }
 
+/* Unified 4-step symbol resolution: module_symtab -> parent_chain -> import_chain -> global.
+ * This is the canonical lookup order for all name resolution in the type checker. */
+static Symbol *resolve_symbol(CheckCtx *ctx, const char *name) {
+    Symbol *sym = NULL;
+    if (ctx->module_symtab)
+        sym = symtab_lookup(ctx->module_symtab, name);
+    if (!sym)
+        sym = parent_chain_lookup(ctx->parent_modules, name);
+    if (!sym)
+        sym = import_chain_lookup(ctx->import_scope, name);
+    if (!sym)
+        sym = global_lookup(ctx->symtab, name, ctx->current_ns);
+    return sym;
+}
+
+static Symbol *resolve_symbol_kind(CheckCtx *ctx, const char *name, DeclKind kind) {
+    Symbol *sym = NULL;
+    if (ctx->module_symtab)
+        sym = symtab_lookup_kind(ctx->module_symtab, name, kind);
+    if (!sym)
+        sym = parent_chain_lookup_kind(ctx->parent_modules, name, kind);
+    if (!sym)
+        sym = import_chain_lookup_kind(ctx->import_scope, name, kind);
+    if (!sym) {
+        if (kind == DECL_MODULE)
+            sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+        else
+            sym = global_lookup_kind(ctx->symtab, name, kind, ctx->current_ns);
+    }
+    return sym;
+}
+
 /* Look up ImportRef metadata from import chain (for generic info) */
 static ImportRef *import_chain_find_ref(ImportScope *scope, const char *name) {
     while (scope) {
@@ -276,14 +308,7 @@ static Symbol *resolve_dotted_name_ex(CheckCtx *ctx, const char *dotted_name,
         int seg_len = (int)(dot - path);
         const char *seg_name = intern(ctx->intern, path, seg_len);
         if (!mod_sym) {
-            if (ctx->module_symtab)
-                mod_sym = symtab_lookup_kind(ctx->module_symtab, seg_name, DECL_MODULE);
-            if (!mod_sym)
-                mod_sym = parent_chain_lookup_kind(ctx->parent_modules, seg_name, DECL_MODULE);
-            if (!mod_sym)
-                mod_sym = import_chain_lookup_kind(ctx->import_scope, seg_name, DECL_MODULE);
-            if (!mod_sym)
-                mod_sym = symtab_lookup_kind(ctx->symtab, seg_name, DECL_MODULE);
+            mod_sym = resolve_symbol_kind(ctx, seg_name, DECL_MODULE);
         } else {
             mod_sym = mod_sym->members ?
                 symtab_lookup_kind(mod_sym->members, seg_name, DECL_MODULE) : NULL;
@@ -400,16 +425,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
             if (!sym)
                 sym = global_lookup_kind(ctx->symtab, t->struc.name, DECL_UNION, ctx->current_ns);
         }
-        if (!sym) {
-            if (ctx->module_symtab)
-                sym = symtab_lookup(ctx->module_symtab, t->struc.name);
-            if (!sym)
-                sym = parent_chain_lookup(ctx->parent_modules, t->struc.name);
-            if (!sym)
-                sym = import_chain_lookup(ctx->import_scope, t->struc.name);
-            if (!sym)
-                sym = global_lookup(ctx->symtab, t->struc.name, ctx->current_ns);
-        }
+        if (!sym)
+            sym = resolve_symbol(ctx, t->struc.name);
         if (sym && sym->type) {
             /* If the stub has type args (e.g. box<int32>), instantiate the generic */
             if (t->struc.type_arg_count > 0 && sym->is_generic && sym->type_param_count > 0) {
@@ -663,16 +680,7 @@ static bool unify(Type *param_type, Type *arg_type,
 
 /* Look up a module symbol: inner scope first, then imports, then global */
 static Symbol *lookup_module(CheckCtx *ctx, const char *name) {
-    Symbol *mod = NULL;
-    if (ctx->module_symtab)
-        mod = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
-    if (!mod)
-        mod = parent_chain_lookup_kind(ctx->parent_modules, name, DECL_MODULE);
-    if (!mod)
-        mod = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
-    if (!mod)
-        mod = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
-    return mod;
+    return resolve_symbol_kind(ctx, name, DECL_MODULE);
 }
 
 /* Check if any type binding still contains unresolved type variables */
@@ -685,19 +693,37 @@ static bool bindings_contain_type_vars(Type **bindings, int count) {
 /* Find the Symbol for an EXPR_CALL's callee, looking up global/module symbols */
 static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
     if (callee->kind == EXPR_IDENT) {
-        Symbol *sym = NULL;
-        if (ctx->module_symtab)
-            sym = symtab_lookup(ctx->module_symtab, callee->ident.name);
-        if (!sym)
-            sym = parent_chain_lookup(ctx->parent_modules, callee->ident.name);
-        if (!sym)
-            sym = import_chain_lookup(ctx->import_scope, callee->ident.name);
-        if (!sym)
-            sym = global_lookup(ctx->symtab, callee->ident.name, ctx->current_ns);
-        return sym;
+        return resolve_symbol(ctx, callee->ident.name);
     }
-    if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
-        Symbol *mod = lookup_module(ctx, callee->field.object->ident.name);
+    if (callee->kind == EXPR_FIELD) {
+        /* Resolve the module chain for qualified calls (mod.func or mod1.mod2.func) */
+        Expr *obj = callee->field.object;
+        Symbol *mod = NULL;
+        if (obj->kind == EXPR_IDENT) {
+            mod = lookup_module(ctx, obj->ident.name);
+        } else if (obj->kind == EXPR_FIELD) {
+            /* Multi-level: walk EXPR_FIELD chain to find root EXPR_IDENT,
+             * then resolve each intermediate module segment */
+            Expr *cur = obj;
+            while (cur->kind == EXPR_FIELD) cur = cur->field.object;
+            if (cur->kind == EXPR_IDENT) {
+                mod = lookup_module(ctx, cur->ident.name);
+                if (mod && mod->members) {
+                    /* Walk intermediate module segments */
+                    Expr *segs[32];
+                    int depth = 0;
+                    for (Expr *e = obj; e->kind == EXPR_FIELD; e = e->field.object)
+                        if (depth < 32) segs[depth++] = e;
+                    /* segs is in reverse order (innermost first); walk from depth-1 to 0 */
+                    for (int k = depth - 1; k >= 0; k--) {
+                        Symbol *next = symtab_lookup_kind(mod->members,
+                            segs[k]->field.name, DECL_MODULE);
+                        if (!next || !next->members) { mod = NULL; break; }
+                        mod = next;
+                    }
+                }
+            }
+        }
         if (mod && mod->members)
             return symtab_lookup(mod->members, callee->field.name);
     }
@@ -2079,28 +2105,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Symbol *union_sym = NULL;
             if (e->call.func->field.object->kind == EXPR_IDENT) {
                 const char *uname = e->call.func->field.object->ident.name;
-                if (ctx->module_symtab)
-                    union_sym = symtab_lookup(ctx->module_symtab, uname);
-                if (!union_sym)
-                    union_sym = parent_chain_lookup(ctx->parent_modules, uname);
-                if (!union_sym)
-                    union_sym = import_chain_lookup(ctx->import_scope, uname);
-                if (!union_sym)
-                    union_sym = global_lookup(ctx->symtab, uname, ctx->current_ns);
+                union_sym = resolve_symbol(ctx, uname);
             } else if (e->call.func->field.object->kind == EXPR_FIELD) {
                 /* Module-qualified path: walk EXPR_FIELD chain to find module, then union */
                 Expr *cur = e->call.func->field.object;
                 while (cur->kind == EXPR_FIELD) cur = cur->field.object;
                 if (cur->kind == EXPR_IDENT) {
-                    Symbol *root = NULL;
-                    if (ctx->module_symtab)
-                        root = symtab_lookup_kind(ctx->module_symtab, cur->ident.name, DECL_MODULE);
-                    if (!root)
-                        root = parent_chain_lookup_kind(ctx->parent_modules, cur->ident.name, DECL_MODULE);
-                    if (!root)
-                        root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
-                    if (!root)
-                        root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
+                    Symbol *root = resolve_symbol_kind(ctx, cur->ident.name, DECL_MODULE);
                     if (root && root->members) {
                         /* Walk intermediate fields to find the innermost module */
                         Symbol *walk = root;
@@ -2685,25 +2696,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
         }
 
-        if (!sym && ctx->module_symtab)
-            sym = symtab_lookup_kind(ctx->module_symtab, e->struct_lit.type_name, DECL_STRUCT);
         if (!sym)
-            sym = parent_chain_lookup_kind(ctx->parent_modules, e->struct_lit.type_name, DECL_STRUCT);
-        if (!sym)
-            sym = import_chain_lookup_kind(ctx->import_scope, e->struct_lit.type_name, DECL_STRUCT);
-        if (!sym)
-            sym = global_lookup_kind(ctx->symtab, e->struct_lit.type_name, DECL_STRUCT, ctx->current_ns);
+            sym = resolve_symbol_kind(ctx, e->struct_lit.type_name, DECL_STRUCT);
         /* Fallback: try general lookup (for within-module struct references) */
-        if (!sym) {
-            if (ctx->module_symtab)
-                sym = symtab_lookup(ctx->module_symtab, e->struct_lit.type_name);
-            if (!sym)
-                sym = parent_chain_lookup(ctx->parent_modules, e->struct_lit.type_name);
-            if (!sym)
-                sym = import_chain_lookup(ctx->import_scope, e->struct_lit.type_name);
-            if (!sym)
-                sym = global_lookup(ctx->symtab, e->struct_lit.type_name, ctx->current_ns);
-        }
+        if (!sym)
+            sym = resolve_symbol(ctx, e->struct_lit.type_name);
         if (!sym) {
             diag_error(e->loc, "unknown type '%s'", e->struct_lit.type_name);
             e->type = type_error();
@@ -2873,15 +2870,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Symbol *mod_sym = NULL;
         if (e->field.object->kind == EXPR_IDENT) {
             const char *name = e->field.object->ident.name;
-            /* Inner scope first: module symtab, parents, imports, then global */
-            if (ctx->module_symtab)
-                mod_sym = symtab_lookup_kind(ctx->module_symtab, name, DECL_MODULE);
-            if (!mod_sym)
-                mod_sym = parent_chain_lookup_kind(ctx->parent_modules, name, DECL_MODULE);
-            if (!mod_sym)
-                mod_sym = import_chain_lookup_kind(ctx->import_scope, name, DECL_MODULE);
-            if (!mod_sym)
-                mod_sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+            mod_sym = resolve_symbol_kind(ctx, name, DECL_MODULE);
         }
 
         /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
@@ -2898,15 +2887,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 cur = cur->field.object;
             }
             if (cur->kind == EXPR_IDENT) {
-                Symbol *root = NULL;
-                if (ctx->module_symtab)
-                    root = symtab_lookup_kind(ctx->module_symtab, cur->ident.name, DECL_MODULE);
-                if (!root)
-                    root = parent_chain_lookup_kind(ctx->parent_modules, cur->ident.name, DECL_MODULE);
-                if (!root)
-                    root = import_chain_lookup_kind(ctx->import_scope, cur->ident.name, DECL_MODULE);
-                if (!root)
-                    root = symtab_lookup_module(ctx->symtab, cur->ident.name, ctx->current_ns);
+                Symbol *root = resolve_symbol_kind(ctx, cur->ident.name, DECL_MODULE);
                 if (root && root->members) {
                     Symbol *walk = root;
                     for (int k = depth - 1; k >= 0; k--) {
@@ -4619,19 +4600,7 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     /* For function declarations, pre-register a partial function type
      * so the body can make recursive calls. */
     const char *lookup_name = d->let.name;
-    Symbol *sym = NULL;
-    if (ctx->module_symtab) {
-        sym = symtab_lookup(ctx->module_symtab, lookup_name);
-    }
-    if (!sym) {
-        sym = parent_chain_lookup(ctx->parent_modules, lookup_name);
-    }
-    if (!sym) {
-        sym = import_chain_lookup(ctx->import_scope, lookup_name);
-    }
-    if (!sym) {
-        sym = global_lookup(ctx->symtab, lookup_name, ctx->current_ns);
-    }
+    Symbol *sym = resolve_symbol(ctx, lookup_name);
 
     Type *recursive_ret = NULL;
     if (d->let.init && d->let.init->kind == EXPR_FUNC && sym && !sym->type) {

@@ -149,20 +149,9 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                 }
             }
             if (all_concrete) {
-                /* Find callee symbol — prefer resolved_callee from pass2
-                 * (handles module-scoped functions that aren't in the global symtab) */
-                Expr *callee = e->call.func;
+                /* Use resolved_callee from pass2 — always set for all call patterns
+                 * (single-level and multi-level qualified calls) */
                 Symbol *callee_sym = (Symbol *)e->call.resolved_callee;
-                if (!callee_sym) {
-                    if (callee->kind == EXPR_IDENT) {
-                        callee_sym = symtab_lookup(symtab, callee->ident.name);
-                    } else if (callee->kind == EXPR_FIELD && callee->field.object->kind == EXPR_IDENT) {
-                        Symbol *mod = symtab_lookup_module(symtab, callee->field.object->ident.name, NULL);
-                        if (!mod) mod = symtab_lookup_kind(symtab, callee->field.object->ident.name, DECL_MODULE);
-                        if (mod && mod->members)
-                            callee_sym = symtab_lookup(mod->members, callee->field.name);
-                    }
-                }
                 if (callee_sym) {
                     const char *base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
                                              && callee_sym->decl->let.codegen_name)
