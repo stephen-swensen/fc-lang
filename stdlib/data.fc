@@ -1,449 +1,449 @@
-namespace std::data::
+namespace std::
 
-// =========================================================================
-// array_list — dynamic array backed by a heap-allocated slice
-// =========================================================================
+module data =
 
-module array_list =
+    // =========================================================================
+    // array_list — dynamic array backed by a heap-allocated slice
+    // =========================================================================
 
     struct array_list =
         data: 'a[]
         len:  int64
 
-    private let grow = (l: array_list<'a>*) ->
-        let new_cap = l->data.len * 2
-        let mut new_data = alloc('a[new_cap] { })!
-        for i, e in l->data[0..l->len]
-            new_data[i] = e
-        free(l->data)
-        l->data = new_data
-
-    // make: creates an empty array_list with default capacity 8. Caller must drop.
-    let make = <'a>() ->
-        array_list { data = alloc('a[8] { })!, len = 0 }
-
-    // make_with_capacity: creates an empty array_list with given capacity. Caller must drop.
-    let make_with_capacity = <'a>(cap: int64) ->
-        let actual = if cap < 1i64 then 1i64 else cap
-        array_list { data = alloc('a[actual] { })!, len = 0 }
-
-    // drop: frees backing storage. Does not free element values.
-    let drop = (l: array_list<'a>) ->
-        free(l.data)
-
-    // copy: returns a deep copy. Caller must drop.
-    let copy = (l: array_list<'a>) ->
-        let new_data = alloc('a[l.data.len] { })!
-        for i, e in l.data[0..l.len]
-            new_data[i] = e
-        array_list { data = new_data, len = l.len }
-
-    // get: returns element at index. Bounds-checked by underlying slice.
-    let get = (l: array_list<'a>, index: int64) ->
-        l.data[index]
-
-    // len: returns the number of elements.
-    let len =(l: array_list<'a>) ->
-        l.len
-
-    // is_empty: true if no elements.
-    let is_empty = (l: array_list<'a>) ->
-        l.len == 0
-
-    // try_first: returns the first element as option.
-    let try_first = (l: array_list<'a>) ->
-        if l.len == 0 then default('a?)
-        else some(l.data[0])
-
-    // first: returns the first element. Aborts if empty.
-    let first = (l: array_list<'a>) ->
-        array_list.try_first(l)!
-
-    // try_last: returns the last element as option.
-    let try_last = (l: array_list<'a>) ->
-        if l.len == 0 then default('a?)
-        else some(l.data[l.len - 1])
-
-    // last: returns the last element. Aborts if empty.
-    let last = (l: array_list<'a>) ->
-        array_list.try_last(l)!
-
-    // to_slice: returns non-owning subslice of active elements.
-    // Valid only while array_list is live and not mutated.
-    let to_slice = (l: array_list<'a>) ->
-        l.data[0..l.len]
-
-    // add: appends element. Grows if needed.
-    let add = (l: array_list<'a>*, value: 'a) ->
-        if l->len == l->data.len then array_list.grow(l)
-        l->data[l->len] = value
-        l->len = l->len + 1
-
-    // update: sets element at index.
-    let update = (l: array_list<'a>*, index: int64, value: 'a) ->
-        l->data[index] = value
-
-    // insert: inserts element at index, shifting right.
-    let insert = (l: array_list<'a>*, index: int64, value: 'a) ->
-        if l->len == l->data.len then array_list.grow(l)
-        let mut i = l->len
-        loop
-            if i <= index then break
-            l->data[i] = l->data[i - 1]
-            i = i - 1
-        l->data[index] = value
-        l->len = l->len + 1
-
-    // remove_at: removes and returns element at index, shifting left.
-    let remove_at = (l: array_list<'a>*, index: int64) ->
-        let value = l->data[index]
-        let mut i = index
-        loop
-            if i >= l->len - 1 then break
-            l->data[i] = l->data[i + 1]
-            i = i + 1
-        l->len = l->len - 1
-        value
-
-    // pop: removes and returns last element. Aborts if empty.
-    let pop = (l: array_list<'a>*) ->
-        assert(l->len > 0)
-        l->len = l->len - 1
-        l->data[l->len]
-
-    // clear: removes all elements without freeing storage.
-    let clear = (l: array_list<'a>*) ->
-        l->len = 0
-
-    // fold_left: left fold (first to last).
-    let fold_left = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        for e in l.data[0..l.len]
-            acc = f(acc, e)
-        acc
-
-    // fold_right: right fold (last to first).
-    let fold_right = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        let mut i = l.len - 1
-        loop
-            if i < 0 then break acc
-            acc = f(acc, l.data[i])
-            i = i - 1
-
-    // try_reduce: fold using first element as init. Returns none if empty.
-    let try_reduce = (l: array_list<'a>, f: ('a, 'a) -> 'a) ->
-        if l.len == 0 then default('a?)
-        else
-            let mut acc = l.data[0]
-            for e in l.data[1..l.len]
-                acc = f(acc, e)
-            some(acc)
-
-    // reduce: fold using first element as init. Aborts if empty.
-    let reduce = (l: array_list<'a>, f: ('a, 'a) -> 'a) ->
-        array_list.try_reduce(l, f)!
-
-    // scan: like fold, returns all intermediate accumulator values.
-    // Result has length(l) + 1 elements. Caller must drop.
-    let scan = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut result = array_list.make_with_capacity<'b>(l.len + 1)
-        let mut acc = init
-        array_list.add(&result, acc)
-        for e in l.data[0..l.len]
-            acc = f(acc, e)
-            array_list.add(&result, acc)
-        result
-
-    // map: transforms each element. Returns new array_list. Caller must drop.
-    let map = (l: array_list<'a>, f: ('a) -> 'b) ->
-        let mut result = array_list.make_with_capacity<'b>(l.len)
-        for e in l.data[0..l.len]
-            array_list.add(&result, f(e))
-        result
-
-    // mapi: transforms each element with index. Caller must drop.
-    let mapi = (l: array_list<'a>, f: (int64, 'a) -> 'b) ->
-        let mut result = array_list.make_with_capacity<'b>(l.len)
-        for i, e in l.data[0..l.len]
-            array_list.add(&result, f(i, e))
-        result
-
-    // filter: returns new array_list with matching elements. Caller must drop.
-    let filter = (l: array_list<'a>, pred: ('a) -> bool) ->
-        let mut result = array_list.make<'a>()
-        for e in l.data[0..l.len]
-            if pred(e) then array_list.add(&result, e)
-        result
-
-    // iter: applies f to each element for side effects.
-    let iter = (l: array_list<'a>, f: ('a) -> 'b) ->
-        for e in l.data[0..l.len]
-            f(e)
-
-    // iteri: applies f to each (index, element) for side effects.
-    let iteri = (l: array_list<'a>, f: (int64, 'a) -> 'b) ->
-        for i, e in l.data[0..l.len]
-            f(i, e)
-
-    // any: true if any element matches predicate.
-    let any = (l: array_list<'a>, pred: ('a) -> bool) ->
-        for e in l.data[0..l.len]
-            if pred(e) then return true
-        false
-
-    // all: true if all elements match predicate.
-    let all = (l: array_list<'a>, pred: ('a) -> bool) ->
-        for e in l.data[0..l.len]
-            if !pred(e) then return false
-        true
-
-    // try_find: returns first element matching predicate, or none.
-    let try_find = (l: array_list<'a>, pred: ('a) -> bool) ->
-        for e in l.data[0..l.len]
-            if pred(e) then return some(e)
-        default('a?)
-
-    // find: returns first element matching predicate. Aborts if none.
-    let find = (l: array_list<'a>, pred: ('a) -> bool) ->
-        array_list.try_find(l, pred)!
-
-    // count: number of elements matching predicate.
-    let count = (l: array_list<'a>, pred: ('a) -> bool) ->
-        let mut n = 0i64
-        for e in l.data[0..l.len]
-            if pred(e) then n = n + 1
-        n
-
-    // sort: sorts elements in place.
-    // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
-    let sort = (l: array_list<'a>*, cmp: ('a, 'a) -> int32) ->
-        slice.sort(l->data[0..l->len], cmp)
-
-    // reverse: reverses element order in place.
-    let reverse = (l: array_list<'a>*) ->
-        slice.reverse(l->data[0..l->len])
-
-    // retain: removes elements not matching predicate, in place.
-    // Compacts matching elements to the front and updates len.
-    let retain = (l: array_list<'a>*, pred: ('a) -> bool) ->
-        let mut j = 0i64
-        for i in 0..l->len
-            if pred(l->data[i]) then
-                if j != i then l->data[j] = l->data[i]
-                j = j + 1
-        l->len = j
-
-    // apply: transforms each element in place. Same type in and out.
-    let apply = (l: array_list<'a>*, f: ('a) -> 'a) ->
-        for i in 0..l->len
-            l->data[i] = f(l->data[i])
-
-    // applyi: transforms each element in place with index.
-    let applyi = (l: array_list<'a>*, f: (int64, 'a) -> 'a) ->
-        for i in 0..l->len
-            l->data[i] = f(i, l->data[i])
-
-// =========================================================================
-// slice — functional operations on built-in 'a[] slices
-// =========================================================================
-
-module slice =
-
-    // fold: left fold (first to last).
-    // fold_left: left fold (first to last).
-    let fold_left = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        for e in s
-            acc = f(acc, e)
-        acc
-
-    // fold_right: right fold (last to first).
-    let fold_right = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        let mut i = s.len - 1
-        loop
-            if i < 0 then break acc
-            acc = f(acc, s[i])
-            i = i - 1
-
-    // try_reduce: fold using first element as init. Returns none if empty.
-    let try_reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
-        if s.len == 0 then default('a?)
-        else
-            let mut acc = s[0]
-            for e in s[1..s.len]
-                acc = f(acc, e)
-            some(acc)
-
-    // reduce: fold using first element as init. Aborts if empty.
-    let reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
-        slice.try_reduce(s, f)!
-
-    // scan: like fold, returns all intermediate values. Caller must free.
-    let scan = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
-        let result = alloc('b[s.len + 1] { })!
-        let mut acc = init
-        result[0] = acc
-        let mut j = 1i64
-        for e in s
-            acc = f(acc, e)
-            result[j] = acc
-            j = j + 1
-        result
-
-    // map: transforms each element. Caller must free.
-    let map = (s: const 'a[], f: ('a) -> 'b) ->
-        let result = alloc('b[s.len] { })!
-        for i, e in s
-            result[i] = f(e)
-        result
-
-    // mapi: transforms each element with index. Caller must free.
-    let mapi = (s: const 'a[], f: (int64, 'a) -> 'b) ->
-        let result = alloc('b[s.len] { })!
-        for i, e in s
-            result[i] = f(i, e)
-        result
-
-    // filter: returns elements matching predicate. Caller must free.
-    let filter = (s: const 'a[], pred: ('a) -> bool) ->
-        let mut n = 0i64
-        for e in s
-            if pred(e) then n = n + 1
-        let result = alloc('a[n] { })!
-        let mut j = 0i64
-        for e in s
-            if pred(e) then
-                result[j] = e
-                j = j + 1
-        result
-
-    // iter: applies f to each element for side effects.
-    let iter = (s: const 'a[], f: ('a) -> 'b) ->
-        for e in s
-            f(e)
-
-    // iteri: applies f to each (index, element) for side effects.
-    let iteri = (s: const 'a[], f: (int64, 'a) -> 'b) ->
-        for i, e in s
-            f(i, e)
-
-    // any: true if any element matches predicate.
-    let any = (s: const 'a[], pred: ('a) -> bool) ->
-        for e in s
-            if pred(e) then return true
-        false
-
-    // all: true if all elements match predicate.
-    let all = (s: const 'a[], pred: ('a) -> bool) ->
-        for e in s
-            if !pred(e) then return false
-        true
-
-    // try_find: returns first element matching predicate, or none.
-    let try_find = (s: const 'a[], pred: ('a) -> bool) ->
-        for e in s
-            if pred(e) then return some(e)
-        default('a?)
-
-    // find: returns first element matching predicate. Aborts if none.
-    let find = (s: const 'a[], pred: ('a) -> bool) ->
-        slice.try_find(s, pred)!
-
-    // try_first: returns the first element as option.
-    let try_first = (s: const 'a[]) ->
-        if s.len == 0 then default('a?)
-        else some(s[0])
-
-    // first: returns the first element. Aborts if empty.
-    let first = (s: const 'a[]) ->
-        slice.try_first(s)!
-
-    // try_last: returns the last element as option.
-    let try_last = (s: const 'a[]) ->
-        if s.len == 0 then default('a?)
-        else some(s[s.len - 1])
-
-    // last: returns the last element. Aborts if empty.
-    let last = (s: const 'a[]) ->
-        slice.try_last(s)!
-
-    // count: number of elements matching predicate.
-    let count = (s: const 'a[], pred: ('a) -> bool) ->
-        let mut n = 0i64
-        for e in s
-            if pred(e) then n = n + 1
-        n
-
-    // reverse: reverses element order in place.
-    let reverse = (s: 'a[]) ->
-        let mut lo = 0i64
-        let mut hi = s.len - 1
-        loop
-            if lo >= hi then break
-            let tmp = s[lo]
-            s[lo] = s[hi]
-            s[hi] = tmp
-            lo = lo + 1
-            hi = hi - 1
-
-    // copy: returns a heap-allocated copy. Caller must free.
-    let copy = (s: const 'a[]) ->
-        let result = alloc('a[s.len] { })!
-        for i, e in s
-            result[i] = e
-        result
-
-    // retain: removes elements not matching predicate, in place.
-    // Compacts matching elements to the front and returns a subslice of the result.
-    // Elements past the returned subslice length are stale.
-    let retain = (s: 'a[], pred: ('a) -> bool) ->
-        let mut j = 0i64
-        for i in 0..s.len
-            if pred(s[i]) then
-                if j != i then s[j] = s[i]
-                j = j + 1
-        s[0..j]
-
-    // apply: transforms each element in place. Same type in and out.
-    let apply = (s: 'a[], f: ('a) -> 'a) ->
-        for i in 0..s.len
-            s[i] = f(s[i])
-
-    // applyi: transforms each element in place with index.
-    let applyi = (s: 'a[], f: (int64, 'a) -> 'a) ->
-        for i in 0..s.len
-            s[i] = f(i, s[i])
-
-    // sort_range: sorts s[lo..hi] (inclusive) in place using quicksort.
-    private let sort_range = (s: 'a[], lo: int64, hi: int64, cmp: ('a, 'a) -> int32) ->
-        if lo >= hi then return
-        let pivot = s[hi]
-        let mut i = lo
-        for j in lo..hi
-            if cmp(s[j], pivot) < 0 then
-                let tmp = s[i]
-                s[i] = s[j]
-                s[j] = tmp
+    module array_list =
+
+        private let grow = (l: array_list<'a>*) ->
+            let new_cap = l->data.len * 2
+            let mut new_data = alloc('a[new_cap] { })!
+            for i, e in l->data[0..l->len]
+                new_data[i] = e
+            free(l->data)
+            l->data = new_data
+
+        // make: creates an empty array_list with default capacity 8. Caller must drop.
+        let make = <'a>() ->
+            array_list { data = alloc('a[8] { })!, len = 0 }
+
+        // make_with_capacity: creates an empty array_list with given capacity. Caller must drop.
+        let make_with_capacity = <'a>(cap: int64) ->
+            let actual = if cap < 1i64 then 1i64 else cap
+            array_list { data = alloc('a[actual] { })!, len = 0 }
+
+        // drop: frees backing storage. Does not free element values.
+        let drop = (l: array_list<'a>) ->
+            free(l.data)
+
+        // copy: returns a deep copy. Caller must drop.
+        let copy = (l: array_list<'a>) ->
+            let new_data = alloc('a[l.data.len] { })!
+            for i, e in l.data[0..l.len]
+                new_data[i] = e
+            array_list { data = new_data, len = l.len }
+
+        // get: returns element at index. Bounds-checked by underlying slice.
+        let get = (l: array_list<'a>, index: int64) ->
+            l.data[index]
+
+        // len: returns the number of elements.
+        let len =(l: array_list<'a>) ->
+            l.len
+
+        // is_empty: true if no elements.
+        let is_empty = (l: array_list<'a>) ->
+            l.len == 0
+
+        // try_first: returns the first element as option.
+        let try_first = (l: array_list<'a>) ->
+            if l.len == 0 then default('a?)
+            else some(l.data[0])
+
+        // first: returns the first element. Aborts if empty.
+        let first = (l: array_list<'a>) ->
+            array_list.try_first(l)!
+
+        // try_last: returns the last element as option.
+        let try_last = (l: array_list<'a>) ->
+            if l.len == 0 then default('a?)
+            else some(l.data[l.len - 1])
+
+        // last: returns the last element. Aborts if empty.
+        let last = (l: array_list<'a>) ->
+            array_list.try_last(l)!
+
+        // to_slice: returns non-owning subslice of active elements.
+        // Valid only while array_list is live and not mutated.
+        let to_slice = (l: array_list<'a>) ->
+            l.data[0..l.len]
+
+        // add: appends element. Grows if needed.
+        let add = (l: array_list<'a>*, value: 'a) ->
+            if l->len == l->data.len then array_list.grow(l)
+            l->data[l->len] = value
+            l->len = l->len + 1
+
+        // update: sets element at index.
+        let update = (l: array_list<'a>*, index: int64, value: 'a) ->
+            l->data[index] = value
+
+        // insert: inserts element at index, shifting right.
+        let insert = (l: array_list<'a>*, index: int64, value: 'a) ->
+            if l->len == l->data.len then array_list.grow(l)
+            let mut i = l->len
+            loop
+                if i <= index then break
+                l->data[i] = l->data[i - 1]
+                i = i - 1
+            l->data[index] = value
+            l->len = l->len + 1
+
+        // remove_at: removes and returns element at index, shifting left.
+        let remove_at = (l: array_list<'a>*, index: int64) ->
+            let value = l->data[index]
+            let mut i = index
+            loop
+                if i >= l->len - 1 then break
+                l->data[i] = l->data[i + 1]
                 i = i + 1
-        let tmp = s[i]
-        s[i] = s[hi]
-        s[hi] = tmp
-        slice.sort_range(s, lo, i - 1, cmp)
-        slice.sort_range(s, i + 1, hi, cmp)
+            l->len = l->len - 1
+            value
 
-    // sort: sorts a slice in place using quicksort.
-    // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
-    let sort = (s: 'a[], cmp: ('a, 'a) -> int32) ->
-        if s.len > 1 then slice.sort_range(s, 0i64, s.len - 1, cmp)
+        // pop: removes and returns last element. Aborts if empty.
+        let pop = (l: array_list<'a>*) ->
+            assert(l->len > 0)
+            l->len = l->len - 1
+            l->data[l->len]
 
-// =========================================================================
-// linked_list — doubly-linked list with O(1) prepend/append
-// Pointer-based nodes. Each node is a separate heap allocation.
-// =========================================================================
+        // clear: removes all elements without freeing storage.
+        let clear = (l: array_list<'a>*) ->
+            l->len = 0
 
-module linked_list =
+        // fold_left: left fold (first to last).
+        let fold_left = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            for e in l.data[0..l.len]
+                acc = f(acc, e)
+            acc
+
+        // fold_right: right fold (last to first).
+        let fold_right = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            let mut i = l.len - 1
+            loop
+                if i < 0 then break acc
+                acc = f(acc, l.data[i])
+                i = i - 1
+
+        // try_reduce: fold using first element as init. Returns none if empty.
+        let try_reduce = (l: array_list<'a>, f: ('a, 'a) -> 'a) ->
+            if l.len == 0 then default('a?)
+            else
+                let mut acc = l.data[0]
+                for e in l.data[1..l.len]
+                    acc = f(acc, e)
+                some(acc)
+
+        // reduce: fold using first element as init. Aborts if empty.
+        let reduce = (l: array_list<'a>, f: ('a, 'a) -> 'a) ->
+            array_list.try_reduce(l, f)!
+
+        // scan: like fold, returns all intermediate accumulator values.
+        // Result has length(l) + 1 elements. Caller must drop.
+        let scan = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut result = array_list.make_with_capacity<'b>(l.len + 1)
+            let mut acc = init
+            array_list.add(&result, acc)
+            for e in l.data[0..l.len]
+                acc = f(acc, e)
+                array_list.add(&result, acc)
+            result
+
+        // map: transforms each element. Returns new array_list. Caller must drop.
+        let map = (l: array_list<'a>, f: ('a) -> 'b) ->
+            let mut result = array_list.make_with_capacity<'b>(l.len)
+            for e in l.data[0..l.len]
+                array_list.add(&result, f(e))
+            result
+
+        // mapi: transforms each element with index. Caller must drop.
+        let mapi = (l: array_list<'a>, f: (int64, 'a) -> 'b) ->
+            let mut result = array_list.make_with_capacity<'b>(l.len)
+            for i, e in l.data[0..l.len]
+                array_list.add(&result, f(i, e))
+            result
+
+        // filter: returns new array_list with matching elements. Caller must drop.
+        let filter = (l: array_list<'a>, pred: ('a) -> bool) ->
+            let mut result = array_list.make<'a>()
+            for e in l.data[0..l.len]
+                if pred(e) then array_list.add(&result, e)
+            result
+
+        // iter: applies f to each element for side effects.
+        let iter = (l: array_list<'a>, f: ('a) -> 'b) ->
+            for e in l.data[0..l.len]
+                f(e)
+
+        // iteri: applies f to each (index, element) for side effects.
+        let iteri = (l: array_list<'a>, f: (int64, 'a) -> 'b) ->
+            for i, e in l.data[0..l.len]
+                f(i, e)
+
+        // any: true if any element matches predicate.
+        let any = (l: array_list<'a>, pred: ('a) -> bool) ->
+            for e in l.data[0..l.len]
+                if pred(e) then return true
+            false
+
+        // all: true if all elements match predicate.
+        let all = (l: array_list<'a>, pred: ('a) -> bool) ->
+            for e in l.data[0..l.len]
+                if !pred(e) then return false
+            true
+
+        // try_find: returns first element matching predicate, or none.
+        let try_find = (l: array_list<'a>, pred: ('a) -> bool) ->
+            for e in l.data[0..l.len]
+                if pred(e) then return some(e)
+            default('a?)
+
+        // find: returns first element matching predicate. Aborts if none.
+        let find = (l: array_list<'a>, pred: ('a) -> bool) ->
+            array_list.try_find(l, pred)!
+
+        // count: number of elements matching predicate.
+        let count = (l: array_list<'a>, pred: ('a) -> bool) ->
+            let mut n = 0i64
+            for e in l.data[0..l.len]
+                if pred(e) then n = n + 1
+            n
+
+        // sort: sorts elements in place.
+        // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
+        let sort = (l: array_list<'a>*, cmp: ('a, 'a) -> int32) ->
+            slice.sort(l->data[0..l->len], cmp)
+
+        // reverse: reverses element order in place.
+        let reverse = (l: array_list<'a>*) ->
+            slice.reverse(l->data[0..l->len])
+
+        // retain: removes elements not matching predicate, in place.
+        // Compacts matching elements to the front and updates len.
+        let retain = (l: array_list<'a>*, pred: ('a) -> bool) ->
+            let mut j = 0i64
+            for i in 0..l->len
+                if pred(l->data[i]) then
+                    if j != i then l->data[j] = l->data[i]
+                    j = j + 1
+            l->len = j
+
+        // apply: transforms each element in place. Same type in and out.
+        let apply = (l: array_list<'a>*, f: ('a) -> 'a) ->
+            for i in 0..l->len
+                l->data[i] = f(l->data[i])
+
+        // applyi: transforms each element in place with index.
+        let applyi = (l: array_list<'a>*, f: (int64, 'a) -> 'a) ->
+            for i in 0..l->len
+                l->data[i] = f(i, l->data[i])
+
+    // =========================================================================
+    // slice — functional operations on built-in 'a[] slices
+    // =========================================================================
+
+    module slice =
+
+        // fold: left fold (first to last).
+        // fold_left: left fold (first to last).
+        let fold_left = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            for e in s
+                acc = f(acc, e)
+            acc
+
+        // fold_right: right fold (last to first).
+        let fold_right = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            let mut i = s.len - 1
+            loop
+                if i < 0 then break acc
+                acc = f(acc, s[i])
+                i = i - 1
+
+        // try_reduce: fold using first element as init. Returns none if empty.
+        let try_reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
+            if s.len == 0 then default('a?)
+            else
+                let mut acc = s[0]
+                for e in s[1..s.len]
+                    acc = f(acc, e)
+                some(acc)
+
+        // reduce: fold using first element as init. Aborts if empty.
+        let reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
+            slice.try_reduce(s, f)!
+
+        // scan: like fold, returns all intermediate values. Caller must free.
+        let scan = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+            let result = alloc('b[s.len + 1] { })!
+            let mut acc = init
+            result[0] = acc
+            let mut j = 1i64
+            for e in s
+                acc = f(acc, e)
+                result[j] = acc
+                j = j + 1
+            result
+
+        // map: transforms each element. Caller must free.
+        let map = (s: const 'a[], f: ('a) -> 'b) ->
+            let result = alloc('b[s.len] { })!
+            for i, e in s
+                result[i] = f(e)
+            result
+
+        // mapi: transforms each element with index. Caller must free.
+        let mapi = (s: const 'a[], f: (int64, 'a) -> 'b) ->
+            let result = alloc('b[s.len] { })!
+            for i, e in s
+                result[i] = f(i, e)
+            result
+
+        // filter: returns elements matching predicate. Caller must free.
+        let filter = (s: const 'a[], pred: ('a) -> bool) ->
+            let mut n = 0i64
+            for e in s
+                if pred(e) then n = n + 1
+            let result = alloc('a[n] { })!
+            let mut j = 0i64
+            for e in s
+                if pred(e) then
+                    result[j] = e
+                    j = j + 1
+            result
+
+        // iter: applies f to each element for side effects.
+        let iter = (s: const 'a[], f: ('a) -> 'b) ->
+            for e in s
+                f(e)
+
+        // iteri: applies f to each (index, element) for side effects.
+        let iteri = (s: const 'a[], f: (int64, 'a) -> 'b) ->
+            for i, e in s
+                f(i, e)
+
+        // any: true if any element matches predicate.
+        let any = (s: const 'a[], pred: ('a) -> bool) ->
+            for e in s
+                if pred(e) then return true
+            false
+
+        // all: true if all elements match predicate.
+        let all = (s: const 'a[], pred: ('a) -> bool) ->
+            for e in s
+                if !pred(e) then return false
+            true
+
+        // try_find: returns first element matching predicate, or none.
+        let try_find = (s: const 'a[], pred: ('a) -> bool) ->
+            for e in s
+                if pred(e) then return some(e)
+            default('a?)
+
+        // find: returns first element matching predicate. Aborts if none.
+        let find = (s: const 'a[], pred: ('a) -> bool) ->
+            slice.try_find(s, pred)!
+
+        // try_first: returns the first element as option.
+        let try_first = (s: const 'a[]) ->
+            if s.len == 0 then default('a?)
+            else some(s[0])
+
+        // first: returns the first element. Aborts if empty.
+        let first = (s: const 'a[]) ->
+            slice.try_first(s)!
+
+        // try_last: returns the last element as option.
+        let try_last = (s: const 'a[]) ->
+            if s.len == 0 then default('a?)
+            else some(s[s.len - 1])
+
+        // last: returns the last element. Aborts if empty.
+        let last = (s: const 'a[]) ->
+            slice.try_last(s)!
+
+        // count: number of elements matching predicate.
+        let count = (s: const 'a[], pred: ('a) -> bool) ->
+            let mut n = 0i64
+            for e in s
+                if pred(e) then n = n + 1
+            n
+
+        // reverse: reverses element order in place.
+        let reverse = (s: 'a[]) ->
+            let mut lo = 0i64
+            let mut hi = s.len - 1
+            loop
+                if lo >= hi then break
+                let tmp = s[lo]
+                s[lo] = s[hi]
+                s[hi] = tmp
+                lo = lo + 1
+                hi = hi - 1
+
+        // copy: returns a heap-allocated copy. Caller must free.
+        let copy = (s: const 'a[]) ->
+            let result = alloc('a[s.len] { })!
+            for i, e in s
+                result[i] = e
+            result
+
+        // retain: removes elements not matching predicate, in place.
+        // Compacts matching elements to the front and returns a subslice of the result.
+        // Elements past the returned subslice length are stale.
+        let retain = (s: 'a[], pred: ('a) -> bool) ->
+            let mut j = 0i64
+            for i in 0..s.len
+                if pred(s[i]) then
+                    if j != i then s[j] = s[i]
+                    j = j + 1
+            s[0..j]
+
+        // apply: transforms each element in place. Same type in and out.
+        let apply = (s: 'a[], f: ('a) -> 'a) ->
+            for i in 0..s.len
+                s[i] = f(s[i])
+
+        // applyi: transforms each element in place with index.
+        let applyi = (s: 'a[], f: (int64, 'a) -> 'a) ->
+            for i in 0..s.len
+                s[i] = f(i, s[i])
+
+        // sort_range: sorts s[lo..hi] (inclusive) in place using quicksort.
+        private let sort_range = (s: 'a[], lo: int64, hi: int64, cmp: ('a, 'a) -> int32) ->
+            if lo >= hi then return
+            let pivot = s[hi]
+            let mut i = lo
+            for j in lo..hi
+                if cmp(s[j], pivot) < 0 then
+                    let tmp = s[i]
+                    s[i] = s[j]
+                    s[j] = tmp
+                    i = i + 1
+            let tmp = s[i]
+            s[i] = s[hi]
+            s[hi] = tmp
+            slice.sort_range(s, lo, i - 1, cmp)
+            slice.sort_range(s, i + 1, hi, cmp)
+
+        // sort: sorts a slice in place using quicksort.
+        // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
+        let sort = (s: 'a[], cmp: ('a, 'a) -> int32) ->
+            if s.len > 1 then slice.sort_range(s, 0i64, s.len - 1, cmp)
+
+    // =========================================================================
+    // linked_list — doubly-linked list with O(1) prepend/append
+    // Pointer-based nodes. Each node is a separate heap allocation.
+    // =========================================================================
 
     struct dl_node =
         value: 'a
@@ -455,400 +455,400 @@ module linked_list =
         tail: dl_node<'a>*?
         len:  int64
 
-    // make: creates an empty linked_list.
-    let make = <'a>() ->
-        linked_list { head = default(dl_node<'a>*?), tail = default(dl_node<'a>*?), len = 0 }
+    module linked_list =
 
-    // drop: frees all nodes. Does not free element values.
-    let drop = (l: linked_list<'a>) ->
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                let next = ptr->next
-                free(ptr)
-                cur = next
+        // make: creates an empty linked_list.
+        let make = <'a>() ->
+            linked_list { head = default(dl_node<'a>*?), tail = default(dl_node<'a>*?), len = 0 }
 
-    // len: number of elements.
-    let len = (l: linked_list<'a>) ->
-        l.len
-
-    // is_empty: true if no elements.
-    let is_empty = (l: linked_list<'a>) ->
-        l.len == 0
-
-    // try_first: returns first element as option.
-    let try_first = (l: linked_list<'a>) ->
-        match l.head with
-        | none -> default('a?)
-        | some(ptr) -> some(ptr->value)
-
-    // first: returns first element. Aborts if empty.
-    let first = (l: linked_list<'a>) ->
-        linked_list.try_first(l)!
-
-    // try_last: returns last element as option.
-    let try_last = (l: linked_list<'a>) ->
-        match l.tail with
-        | none -> default('a?)
-        | some(ptr) -> some(ptr->value)
-
-    // last: returns last element. Aborts if empty.
-    let last = (l: linked_list<'a>) ->
-        linked_list.try_last(l)!
-
-    // prepend: inserts at head. O(1).
-    let prepend = (l: linked_list<'a>*, value: 'a) ->
-        let n = alloc(dl_node { value = value })!
-        n->prev = default(dl_node<'a>*?)
-        n->next = l->head
-        match l->head with
-        | none -> l->tail = some(n)
-        | some(old) -> old->prev = some(n)
-        l->head = some(n)
-        l->len = l->len + 1
-
-    // append: inserts at tail. O(1).
-    let append = (l: linked_list<'a>*, value: 'a) ->
-        let n = alloc(dl_node { value = value })!
-        n->next = default(dl_node<'a>*?)
-        n->prev = l->tail
-        match l->tail with
-        | none -> l->head = some(n)
-        | some(old) -> old->next = some(n)
-        l->tail = some(n)
-        l->len = l->len + 1
-
-    // insert: inserts value before the element at index. O(n) traversal.
-    // index 0 = prepend, index len = append.
-    let insert = (l: linked_list<'a>*, index: int64, value: 'a) ->
-        if index <= 0 then linked_list.prepend(l, value)
-        else if index >= l->len then linked_list.append(l, value)
-        else
-            let mut cur = l->head
-            let mut i = 0i64
+        // drop: frees all nodes. Does not free element values.
+        let drop = (l: linked_list<'a>) ->
+            let mut cur = l.head
             loop
                 match cur with
                 | none -> break
-                | some(at) ->
-                    if i == index then
-                        let n = alloc(dl_node { value = value })!
-                        n->next = some(at)
-                        n->prev = at->prev
-                        match at->prev with
-                        | none -> l->head = some(n)
-                        | some(p) -> p->next = some(n)
-                        at->prev = some(n)
-                        l->len = l->len + 1
-                        break
-                    i = i + 1
-                    cur = at->next
+                | some(ptr) ->
+                    let next = ptr->next
+                    free(ptr)
+                    cur = next
 
-    // copy: returns a deep copy. Caller must drop.
-    let copy = (l: linked_list<'a>) ->
-        let mut result = linked_list.make<'a>()
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break result
-            | some(ptr) ->
-                linked_list.append(&result, ptr->value)
-                cur = ptr->next
+        // len: number of elements.
+        let len = (l: linked_list<'a>) ->
+            l.len
 
-    // pop_first: removes and returns head element, or none if empty.
-    let pop_first = (l: linked_list<'a>*) ->
-        match l->head with
-        | none -> default('a?)
-        | some(ptr) ->
-            let val = ptr->value
-            l->head = ptr->next
+        // is_empty: true if no elements.
+        let is_empty = (l: linked_list<'a>) ->
+            l.len == 0
+
+        // try_first: returns first element as option.
+        let try_first = (l: linked_list<'a>) ->
+            match l.head with
+            | none -> default('a?)
+            | some(ptr) -> some(ptr->value)
+
+        // first: returns first element. Aborts if empty.
+        let first = (l: linked_list<'a>) ->
+            linked_list.try_first(l)!
+
+        // try_last: returns last element as option.
+        let try_last = (l: linked_list<'a>) ->
+            match l.tail with
+            | none -> default('a?)
+            | some(ptr) -> some(ptr->value)
+
+        // last: returns last element. Aborts if empty.
+        let last = (l: linked_list<'a>) ->
+            linked_list.try_last(l)!
+
+        // prepend: inserts at head. O(1).
+        let prepend = (l: linked_list<'a>*, value: 'a) ->
+            let n = alloc(dl_node { value = value })!
+            n->prev = default(dl_node<'a>*?)
+            n->next = l->head
             match l->head with
-            | none -> l->tail = default(dl_node<'a>*?)
-            | some(new_head) -> new_head->prev = default(dl_node<'a>*?)
-            free(ptr)
-            l->len = l->len - 1
-            some(val)
+            | none -> l->tail = some(n)
+            | some(old) -> old->prev = some(n)
+            l->head = some(n)
+            l->len = l->len + 1
 
-    // pop_last: removes and returns tail element, or none if empty.
-    let pop_last = (l: linked_list<'a>*) ->
-        match l->tail with
-        | none -> default('a?)
-        | some(ptr) ->
-            let val = ptr->value
-            l->tail = ptr->prev
+        // append: inserts at tail. O(1).
+        let append = (l: linked_list<'a>*, value: 'a) ->
+            let n = alloc(dl_node { value = value })!
+            n->next = default(dl_node<'a>*?)
+            n->prev = l->tail
             match l->tail with
-            | none -> l->head = default(dl_node<'a>*?)
-            | some(new_tail) -> new_tail->next = default(dl_node<'a>*?)
-            free(ptr)
-            l->len = l->len - 1
-            some(val)
+            | none -> l->head = some(n)
+            | some(old) -> old->next = some(n)
+            l->tail = some(n)
+            l->len = l->len + 1
 
-    // clear: removes all elements, freeing nodes.
-    let clear = (l: linked_list<'a>*) ->
-        let mut cur = l->head
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                let next = ptr->next
-                free(ptr)
-                cur = next
-        l->head = default(dl_node<'a>*?)
-        l->tail = default(dl_node<'a>*?)
-        l->len = 0
+        // insert: inserts value before the element at index. O(n) traversal.
+        // index 0 = prepend, index len = append.
+        let insert = (l: linked_list<'a>*, index: int64, value: 'a) ->
+            if index <= 0 then linked_list.prepend(l, value)
+            else if index >= l->len then linked_list.append(l, value)
+            else
+                let mut cur = l->head
+                let mut i = 0i64
+                loop
+                    match cur with
+                    | none -> break
+                    | some(at) ->
+                        if i == index then
+                            let n = alloc(dl_node { value = value })!
+                            n->next = some(at)
+                            n->prev = at->prev
+                            match at->prev with
+                            | none -> l->head = some(n)
+                            | some(p) -> p->next = some(n)
+                            at->prev = some(n)
+                            l->len = l->len + 1
+                            break
+                        i = i + 1
+                        cur = at->next
 
-    // fold_left: left fold (head to tail).
-    let fold_left = (l: linked_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break acc
-            | some(ptr) ->
-                acc = f(acc, ptr->value)
-                cur = ptr->next
-
-    // fold_right: right fold (tail to head).
-    let fold_right = (l: linked_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        let mut cur = l.tail
-        loop
-            match cur with
-            | none -> break acc
-            | some(ptr) ->
-                acc = f(acc, ptr->value)
-                cur = ptr->prev
-
-    // try_reduce: fold using first element as init. Returns none if empty.
-    let try_reduce = (l: linked_list<'a>, f: ('a, 'a) -> 'a) ->
-        match l.head with
-        | none -> default('a?)
-        | some(ptr) ->
-            let mut acc = ptr->value
-            let mut cur = ptr->next
+        // copy: returns a deep copy. Caller must drop.
+        let copy = (l: linked_list<'a>) ->
+            let mut result = linked_list.make<'a>()
+            let mut cur = l.head
             loop
                 match cur with
-                | none -> break some(acc)
-                | some(p) ->
-                    acc = f(acc, p->value)
-                    cur = p->next
+                | none -> break result
+                | some(ptr) ->
+                    linked_list.append(&result, ptr->value)
+                    cur = ptr->next
 
-    // reduce: fold using first element as init. Aborts if empty.
-    let reduce = (l: linked_list<'a>, f: ('a, 'a) -> 'a) ->
-        linked_list.try_reduce(l, f)!
-
-    // scan: like fold, returns all intermediate values. Caller must free.
-    let scan = (l: linked_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let result = alloc('b[l.len + 1] { })!
-        let mut acc = init
-        result[0] = acc
-        let mut cur = l.head
-        let mut j = 1i64
-        loop
-            match cur with
-            | none -> break result
+        // pop_first: removes and returns head element, or none if empty.
+        let pop_first = (l: linked_list<'a>*) ->
+            match l->head with
+            | none -> default('a?)
             | some(ptr) ->
-                acc = f(acc, ptr->value)
-                result[j] = acc
-                j = j + 1
-                cur = ptr->next
+                let val = ptr->value
+                l->head = ptr->next
+                match l->head with
+                | none -> l->tail = default(dl_node<'a>*?)
+                | some(new_head) -> new_head->prev = default(dl_node<'a>*?)
+                free(ptr)
+                l->len = l->len - 1
+                some(val)
 
-    // map: transforms each element. Returns new linked_list. Caller must drop.
-    let map = (l: linked_list<'a>, f: ('a) -> 'b) ->
-        let mut result = linked_list.make<'b>()
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break result
+        // pop_last: removes and returns tail element, or none if empty.
+        let pop_last = (l: linked_list<'a>*) ->
+            match l->tail with
+            | none -> default('a?)
             | some(ptr) ->
-                linked_list.append(&result, f(ptr->value))
-                cur = ptr->next
+                let val = ptr->value
+                l->tail = ptr->prev
+                match l->tail with
+                | none -> l->head = default(dl_node<'a>*?)
+                | some(new_tail) -> new_tail->next = default(dl_node<'a>*?)
+                free(ptr)
+                l->len = l->len - 1
+                some(val)
 
-    // mapi: transforms each element with index. Returns new linked_list. Caller must drop.
-    let mapi = (l: linked_list<'a>, f: (int64, 'a) -> 'b) ->
-        let mut result = linked_list.make<'b>()
-        let mut cur = l.head
-        let mut idx = 0i64
-        loop
-            match cur with
-            | none -> break result
-            | some(ptr) ->
-                linked_list.append(&result, f(idx, ptr->value))
-                idx = idx + 1
-                cur = ptr->next
-
-    // filter: returns new linked_list with matching elements. Caller must drop.
-    let filter = (l: linked_list<'a>, pred: ('a) -> bool) ->
-        let mut result = linked_list.make<'a>()
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break result
-            | some(ptr) ->
-                if pred(ptr->value) then linked_list.append(&result, ptr->value)
-                cur = ptr->next
-
-    // iter: applies f to each element for side effects.
-    let iter = (l: linked_list<'a>, f: ('a) -> 'b) ->
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                f(ptr->value)
-                cur = ptr->next
-
-    // iteri: applies f to each (index, element) for side effects.
-    let iteri = (l: linked_list<'a>, f: (int64, 'a) -> 'b) ->
-        let mut cur = l.head
-        let mut idx = 0i64
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                f(idx, ptr->value)
-                idx = idx + 1
-                cur = ptr->next
-
-    // any: true if any element matches predicate.
-    let any = (l: linked_list<'a>, pred: ('a) -> bool) ->
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break false
-            | some(ptr) ->
-                if pred(ptr->value) then break true
-                cur = ptr->next
-
-    // all: true if all elements match predicate.
-    let all = (l: linked_list<'a>, pred: ('a) -> bool) ->
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break true
-            | some(ptr) ->
-                if !pred(ptr->value) then break false
-                cur = ptr->next
-
-    // try_find: returns first element matching predicate, or none.
-    let try_find = (l: linked_list<'a>, pred: ('a) -> bool) ->
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break default('a?)
-            | some(ptr) ->
-                if pred(ptr->value) then break some(ptr->value)
-                cur = ptr->next
-
-    // find: returns first element matching predicate. Aborts if none.
-    let find = (l: linked_list<'a>, pred: ('a) -> bool) ->
-        linked_list.try_find(l, pred)!
-
-    // count: number of elements matching predicate.
-    let count = (l: linked_list<'a>, pred: ('a) -> bool) ->
-        let mut n = 0i64
-        let mut cur = l.head
-        loop
-            match cur with
-            | none -> break n
-            | some(ptr) ->
-                if pred(ptr->value) then n = n + 1
-                cur = ptr->next
-
-    // to_slice: converts to a heap-allocated slice. Caller must free.
-    let to_slice = (l: linked_list<'a>) ->
-        let result = alloc('a[l.len] { })!
-        let mut cur = l.head
-        let mut j = 0i64
-        loop
-            match cur with
-            | none -> break result
-            | some(ptr) ->
-                result[j] = ptr->value
-                j = j + 1
-                cur = ptr->next
-
-    // sort: sorts elements in place.
-    // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
-    let sort = (l: linked_list<'a>*, cmp: ('a, 'a) -> int32) ->
-        if l->len <= 1 then return
-        let s = linked_list.to_slice(*l)
-        slice.sort(s, cmp)
-        let mut cur = l->head
-        let mut j = 0i64
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                ptr->value = s[j]
-                j = j + 1
-                cur = ptr->next
-        free(s)
-
-    // reverse: reverses element order in place by rewiring node pointers. O(n).
-    let reverse = (l: linked_list<'a>*) ->
-        let mut cur = l->head
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                let next = ptr->next
-                ptr->next = ptr->prev
-                ptr->prev = next
-                cur = next
-        let old_head = l->head
-        l->head = l->tail
-        l->tail = old_head
-
-    // retain: removes elements not matching predicate in place, freeing their nodes. O(n).
-    let retain = (l: linked_list<'a>*, pred: ('a) -> bool) ->
-        let mut cur = l->head
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                let next = ptr->next
-                if !pred(ptr->value) then
-                    match ptr->prev with
-                    | none -> l->head = ptr->next
-                    | some(p) -> p->next = ptr->next
-                    match ptr->next with
-                    | none -> l->tail = ptr->prev
-                    | some(n) -> n->prev = ptr->prev
+        // clear: removes all elements, freeing nodes.
+        let clear = (l: linked_list<'a>*) ->
+            let mut cur = l->head
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    let next = ptr->next
                     free(ptr)
-                    l->len = l->len - 1
-                cur = next
+                    cur = next
+            l->head = default(dl_node<'a>*?)
+            l->tail = default(dl_node<'a>*?)
+            l->len = 0
 
-    // apply: transforms each element in place. Same type in and out.
-    let apply = (l: linked_list<'a>*, f: ('a) -> 'a) ->
-        let mut cur = l->head
-        loop
-            match cur with
-            | none -> break
+        // fold_left: left fold (head to tail).
+        let fold_left = (l: linked_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break acc
+                | some(ptr) ->
+                    acc = f(acc, ptr->value)
+                    cur = ptr->next
+
+        // fold_right: right fold (tail to head).
+        let fold_right = (l: linked_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            let mut cur = l.tail
+            loop
+                match cur with
+                | none -> break acc
+                | some(ptr) ->
+                    acc = f(acc, ptr->value)
+                    cur = ptr->prev
+
+        // try_reduce: fold using first element as init. Returns none if empty.
+        let try_reduce = (l: linked_list<'a>, f: ('a, 'a) -> 'a) ->
+            match l.head with
+            | none -> default('a?)
             | some(ptr) ->
-                ptr->value = f(ptr->value)
-                cur = ptr->next
+                let mut acc = ptr->value
+                let mut cur = ptr->next
+                loop
+                    match cur with
+                    | none -> break some(acc)
+                    | some(p) ->
+                        acc = f(acc, p->value)
+                        cur = p->next
 
-    // applyi: transforms each element in place with index.
-    let applyi = (l: linked_list<'a>*, f: (int64, 'a) -> 'a) ->
-        let mut cur = l->head
-        let mut idx = 0i64
-        loop
-            match cur with
-            | none -> break
-            | some(ptr) ->
-                ptr->value = f(idx, ptr->value)
-                idx = idx + 1
-                cur = ptr->next
+        // reduce: fold using first element as init. Aborts if empty.
+        let reduce = (l: linked_list<'a>, f: ('a, 'a) -> 'a) ->
+            linked_list.try_reduce(l, f)!
 
-// =========================================================================
-// hash_dict — hash map with open addressing and linear probing
-// Entry-struct layout. Hash/eq functions stored in struct.
-// Entry state: 0 = empty, 1 = occupied, 2 = deleted (tombstone).
-// =========================================================================
+        // scan: like fold, returns all intermediate values. Caller must free.
+        let scan = (l: linked_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let result = alloc('b[l.len + 1] { })!
+            let mut acc = init
+            result[0] = acc
+            let mut cur = l.head
+            let mut j = 1i64
+            loop
+                match cur with
+                | none -> break result
+                | some(ptr) ->
+                    acc = f(acc, ptr->value)
+                    result[j] = acc
+                    j = j + 1
+                    cur = ptr->next
 
-module hash_dict =
+        // map: transforms each element. Returns new linked_list. Caller must drop.
+        let map = (l: linked_list<'a>, f: ('a) -> 'b) ->
+            let mut result = linked_list.make<'b>()
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break result
+                | some(ptr) ->
+                    linked_list.append(&result, f(ptr->value))
+                    cur = ptr->next
+
+        // mapi: transforms each element with index. Returns new linked_list. Caller must drop.
+        let mapi = (l: linked_list<'a>, f: (int64, 'a) -> 'b) ->
+            let mut result = linked_list.make<'b>()
+            let mut cur = l.head
+            let mut idx = 0i64
+            loop
+                match cur with
+                | none -> break result
+                | some(ptr) ->
+                    linked_list.append(&result, f(idx, ptr->value))
+                    idx = idx + 1
+                    cur = ptr->next
+
+        // filter: returns new linked_list with matching elements. Caller must drop.
+        let filter = (l: linked_list<'a>, pred: ('a) -> bool) ->
+            let mut result = linked_list.make<'a>()
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break result
+                | some(ptr) ->
+                    if pred(ptr->value) then linked_list.append(&result, ptr->value)
+                    cur = ptr->next
+
+        // iter: applies f to each element for side effects.
+        let iter = (l: linked_list<'a>, f: ('a) -> 'b) ->
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    f(ptr->value)
+                    cur = ptr->next
+
+        // iteri: applies f to each (index, element) for side effects.
+        let iteri = (l: linked_list<'a>, f: (int64, 'a) -> 'b) ->
+            let mut cur = l.head
+            let mut idx = 0i64
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    f(idx, ptr->value)
+                    idx = idx + 1
+                    cur = ptr->next
+
+        // any: true if any element matches predicate.
+        let any = (l: linked_list<'a>, pred: ('a) -> bool) ->
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break false
+                | some(ptr) ->
+                    if pred(ptr->value) then break true
+                    cur = ptr->next
+
+        // all: true if all elements match predicate.
+        let all = (l: linked_list<'a>, pred: ('a) -> bool) ->
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break true
+                | some(ptr) ->
+                    if !pred(ptr->value) then break false
+                    cur = ptr->next
+
+        // try_find: returns first element matching predicate, or none.
+        let try_find = (l: linked_list<'a>, pred: ('a) -> bool) ->
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break default('a?)
+                | some(ptr) ->
+                    if pred(ptr->value) then break some(ptr->value)
+                    cur = ptr->next
+
+        // find: returns first element matching predicate. Aborts if none.
+        let find = (l: linked_list<'a>, pred: ('a) -> bool) ->
+            linked_list.try_find(l, pred)!
+
+        // count: number of elements matching predicate.
+        let count = (l: linked_list<'a>, pred: ('a) -> bool) ->
+            let mut n = 0i64
+            let mut cur = l.head
+            loop
+                match cur with
+                | none -> break n
+                | some(ptr) ->
+                    if pred(ptr->value) then n = n + 1
+                    cur = ptr->next
+
+        // to_slice: converts to a heap-allocated slice. Caller must free.
+        let to_slice = (l: linked_list<'a>) ->
+            let result = alloc('a[l.len] { })!
+            let mut cur = l.head
+            let mut j = 0i64
+            loop
+                match cur with
+                | none -> break result
+                | some(ptr) ->
+                    result[j] = ptr->value
+                    j = j + 1
+                    cur = ptr->next
+
+        // sort: sorts elements in place.
+        // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
+        let sort = (l: linked_list<'a>*, cmp: ('a, 'a) -> int32) ->
+            if l->len <= 1 then return
+            let s = linked_list.to_slice(*l)
+            slice.sort(s, cmp)
+            let mut cur = l->head
+            let mut j = 0i64
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    ptr->value = s[j]
+                    j = j + 1
+                    cur = ptr->next
+            free(s)
+
+        // reverse: reverses element order in place by rewiring node pointers. O(n).
+        let reverse = (l: linked_list<'a>*) ->
+            let mut cur = l->head
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    let next = ptr->next
+                    ptr->next = ptr->prev
+                    ptr->prev = next
+                    cur = next
+            let old_head = l->head
+            l->head = l->tail
+            l->tail = old_head
+
+        // retain: removes elements not matching predicate in place, freeing their nodes. O(n).
+        let retain = (l: linked_list<'a>*, pred: ('a) -> bool) ->
+            let mut cur = l->head
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    let next = ptr->next
+                    if !pred(ptr->value) then
+                        match ptr->prev with
+                        | none -> l->head = ptr->next
+                        | some(p) -> p->next = ptr->next
+                        match ptr->next with
+                        | none -> l->tail = ptr->prev
+                        | some(n) -> n->prev = ptr->prev
+                        free(ptr)
+                        l->len = l->len - 1
+                    cur = next
+
+        // apply: transforms each element in place. Same type in and out.
+        let apply = (l: linked_list<'a>*, f: ('a) -> 'a) ->
+            let mut cur = l->head
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    ptr->value = f(ptr->value)
+                    cur = ptr->next
+
+        // applyi: transforms each element in place with index.
+        let applyi = (l: linked_list<'a>*, f: (int64, 'a) -> 'a) ->
+            let mut cur = l->head
+            let mut idx = 0i64
+            loop
+                match cur with
+                | none -> break
+                | some(ptr) ->
+                    ptr->value = f(idx, ptr->value)
+                    idx = idx + 1
+                    cur = ptr->next
+
+    // =========================================================================
+    // hash_dict — hash map with open addressing and linear probing
+    // Entry-struct layout. Hash/eq functions stored in struct.
+    // Entry state: 0 = empty, 1 = occupied, 2 = deleted (tombstone).
+    // =========================================================================
 
     struct hd_entry =
         key:   'a
@@ -861,184 +861,184 @@ module hash_dict =
         hash:    ('a) -> int64
         eq:      ('a, 'a) -> bool
 
-    // make: creates empty hash_dict with default capacity 16. Caller must drop.
-    // 'b must be explicitly provided; 'a is inferred from hash/eq.
-    let make = <'b>(hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
-        hash_dict { buckets = alloc(hd_entry<'a, 'b>[16] { })!, len = 0, hash = hash, eq = eq }
+    module hash_dict =
 
-    // make_with_capacity: creates empty hash_dict with given capacity. Caller must drop.
-    let make_with_capacity = <'b>(cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
-        let actual = if cap < 4i64 then 4i64 else cap
-        hash_dict { buckets = alloc(hd_entry<'a, 'b>[actual] { })!, len = 0, hash = hash, eq = eq }
+        // make: creates empty hash_dict with default capacity 16. Caller must drop.
+        // 'b must be explicitly provided; 'a is inferred from hash/eq.
+        let make = <'b>(hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+            hash_dict { buckets = alloc(hd_entry<'a, 'b>[16] { })!, len = 0, hash = hash, eq = eq }
 
-    // drop: frees bucket storage. Does not free key/value heap data.
-    let drop = (d: hash_dict<'a, 'b>) ->
-        free(d.buckets)
+        // make_with_capacity: creates empty hash_dict with given capacity. Caller must drop.
+        let make_with_capacity = <'b>(cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+            let actual = if cap < 4i64 then 4i64 else cap
+            hash_dict { buckets = alloc(hd_entry<'a, 'b>[actual] { })!, len = 0, hash = hash, eq = eq }
 
-    private let rehash = (d: hash_dict<'a, 'b>*) ->
-        let old = d->buckets
-        let old_cap = old.len
-        let new_cap = old_cap * 2
-        d->buckets = alloc(hd_entry<'a, 'b>[new_cap] { })!
-        d->len = 0
-        for i in 0..old_cap
-            let entry = old[i]
-            if entry.state == 1 then
-                let h = d->hash(entry.key)
-                let mut idx = h % new_cap
-                if idx < 0 then idx = idx + new_cap
-                loop
-                    if d->buckets[idx].state == 0 then
-                        d->buckets[idx].key = entry.key
-                        d->buckets[idx].value = entry.value
-                        d->buckets[idx].state = 1
-                        d->len = d->len + 1
-                        break
-                    idx = (idx + 1) % new_cap
-        free(old)
+        // drop: frees bucket storage. Does not free key/value heap data.
+        let drop = (d: hash_dict<'a, 'b>) ->
+            free(d.buckets)
 
-    // put: inserts or updates a key-value pair. Rehashes at 70% load.
-    let put = (d: hash_dict<'a, 'b>*, key: 'a, value: 'b) ->
-        if d->len * 10 >= d->buckets.len * 7 then hash_dict.rehash(d)
-        let cap = d->buckets.len
-        let h = d->hash(key)
-        let mut idx = h % cap
-        if idx < 0 then idx = idx + cap
-        let mut first_del = -1i64
-        loop
-            let entry = d->buckets[idx]
-            if entry.state == 0 then
-                let ins = if first_del >= 0 then first_del else idx
-                d->buckets[ins].key = key
-                d->buckets[ins].value = value
-                d->buckets[ins].state = 1
-                d->len = d->len + 1
-                break
-            if entry.state == 2 && first_del < 0 then
-                first_del = idx
-            if entry.state == 1 && d->eq(entry.key, key) then
-                d->buckets[idx].value = value
-                break
-            idx = (idx + 1) % cap
+        private let rehash = (d: hash_dict<'a, 'b>*) ->
+            let old = d->buckets
+            let old_cap = old.len
+            let new_cap = old_cap * 2
+            d->buckets = alloc(hd_entry<'a, 'b>[new_cap] { })!
+            d->len = 0
+            for i in 0..old_cap
+                let entry = old[i]
+                if entry.state == 1 then
+                    let h = d->hash(entry.key)
+                    let mut idx = h % new_cap
+                    if idx < 0 then idx = idx + new_cap
+                    loop
+                        if d->buckets[idx].state == 0 then
+                            d->buckets[idx].key = entry.key
+                            d->buckets[idx].value = entry.value
+                            d->buckets[idx].state = 1
+                            d->len = d->len + 1
+                            break
+                        idx = (idx + 1) % new_cap
+            free(old)
 
-    // try_get: returns value for key, or none.
-    let try_get = (d: hash_dict<'a, 'b>, key: 'a) ->
-        let cap = d.buckets.len
-        let h = d.hash(key)
-        let mut idx = h % cap
-        if idx < 0 then idx = idx + cap
-        loop
-            let entry = d.buckets[idx]
-            if entry.state == 0 then break default('b?)
-            if entry.state == 1 && d.eq(entry.key, key) then
-                break some(entry.value)
-            idx = (idx + 1) % cap
+        // put: inserts or updates a key-value pair. Rehashes at 70% load.
+        let put = (d: hash_dict<'a, 'b>*, key: 'a, value: 'b) ->
+            if d->len * 10 >= d->buckets.len * 7 then hash_dict.rehash(d)
+            let cap = d->buckets.len
+            let h = d->hash(key)
+            let mut idx = h % cap
+            if idx < 0 then idx = idx + cap
+            let mut first_del = -1i64
+            loop
+                let entry = d->buckets[idx]
+                if entry.state == 0 then
+                    let ins = if first_del >= 0 then first_del else idx
+                    d->buckets[ins].key = key
+                    d->buckets[ins].value = value
+                    d->buckets[ins].state = 1
+                    d->len = d->len + 1
+                    break
+                if entry.state == 2 && first_del < 0 then
+                    first_del = idx
+                if entry.state == 1 && d->eq(entry.key, key) then
+                    d->buckets[idx].value = value
+                    break
+                idx = (idx + 1) % cap
 
-    // get: returns value for key. Aborts if not found.
-    let get = (d: hash_dict<'a, 'b>, key: 'a) ->
-        hash_dict.try_get(d, key)!
+        // try_get: returns value for key, or none.
+        let try_get = (d: hash_dict<'a, 'b>, key: 'a) ->
+            let cap = d.buckets.len
+            let h = d.hash(key)
+            let mut idx = h % cap
+            if idx < 0 then idx = idx + cap
+            loop
+                let entry = d.buckets[idx]
+                if entry.state == 0 then break default('b?)
+                if entry.state == 1 && d.eq(entry.key, key) then
+                    break some(entry.value)
+                idx = (idx + 1) % cap
 
-    // has: true if key exists.
-    let has = (d: hash_dict<'a, 'b>, key: 'a) ->
-        hash_dict.try_get(d, key).is_some
+        // get: returns value for key. Aborts if not found.
+        let get = (d: hash_dict<'a, 'b>, key: 'a) ->
+            hash_dict.try_get(d, key)!
 
-    // len: number of entries.
-    let len = (d: hash_dict<'a, 'b>) ->
-        d.len
+        // has: true if key exists.
+        let has = (d: hash_dict<'a, 'b>, key: 'a) ->
+            hash_dict.try_get(d, key).is_some
 
-    // is_empty: true if no entries.
-    let is_empty = (d: hash_dict<'a, 'b>) ->
-        d.len == 0
+        // len: number of entries.
+        let len = (d: hash_dict<'a, 'b>) ->
+            d.len
 
-    // try_remove: removes entry for key. Returns value or none.
-    let try_remove = (d: hash_dict<'a, 'b>*, key: 'a) ->
-        let cap = d->buckets.len
-        let h = d->hash(key)
-        let mut idx = h % cap
-        if idx < 0 then idx = idx + cap
-        loop
-            let entry = d->buckets[idx]
-            if entry.state == 0 then break default('b?)
-            if entry.state == 1 && d->eq(entry.key, key) then
-                let val = entry.value
-                d->buckets[idx].state = 2
-                d->len = d->len - 1
-                break some(val)
-            idx = (idx + 1) % cap
+        // is_empty: true if no entries.
+        let is_empty = (d: hash_dict<'a, 'b>) ->
+            d.len == 0
 
-    // remove: removes entry for key, returns value. Aborts if not found.
-    let remove = (d: hash_dict<'a, 'b>*, key: 'a) ->
-        hash_dict.try_remove(d, key)!
+        // try_remove: removes entry for key. Returns value or none.
+        let try_remove = (d: hash_dict<'a, 'b>*, key: 'a) ->
+            let cap = d->buckets.len
+            let h = d->hash(key)
+            let mut idx = h % cap
+            if idx < 0 then idx = idx + cap
+            loop
+                let entry = d->buckets[idx]
+                if entry.state == 0 then break default('b?)
+                if entry.state == 1 && d->eq(entry.key, key) then
+                    let val = entry.value
+                    d->buckets[idx].state = 2
+                    d->len = d->len - 1
+                    break some(val)
+                idx = (idx + 1) % cap
 
-    // fold: folds over all (key, value) pairs.
-    let fold = (d: hash_dict<'a, 'b>, init: 'c, f: ('c, 'a, 'b) -> 'c) ->
-        let mut acc = init
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 then
-                acc = f(acc, entry.key, entry.value)
-        acc
+        // remove: removes entry for key, returns value. Aborts if not found.
+        let remove = (d: hash_dict<'a, 'b>*, key: 'a) ->
+            hash_dict.try_remove(d, key)!
 
-    // iter: applies f to each (key, value) pair for side effects.
-    let iter = (d: hash_dict<'a, 'b>, f: ('a, 'b) -> 'c) ->
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 then
-                f(entry.key, entry.value)
+        // fold: folds over all (key, value) pairs.
+        let fold = (d: hash_dict<'a, 'b>, init: 'c, f: ('c, 'a, 'b) -> 'c) ->
+            let mut acc = init
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 then
+                    acc = f(acc, entry.key, entry.value)
+            acc
 
-    // keys: returns all keys as heap-allocated slice. Caller must free.
-    let keys = (d: hash_dict<'a, 'b>) ->
-        let result = alloc('a[d.len] { })!
-        let mut j = 0i64
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 then
-                result[j] = entry.key
-                j = j + 1
-        result
+        // iter: applies f to each (key, value) pair for side effects.
+        let iter = (d: hash_dict<'a, 'b>, f: ('a, 'b) -> 'c) ->
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 then
+                    f(entry.key, entry.value)
 
-    // values: returns all values as heap-allocated slice. Caller must free.
-    let values = (d: hash_dict<'a, 'b>) ->
-        let result = alloc('b[d.len] { })!
-        let mut j = 0i64
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 then
-                result[j] = entry.value
-                j = j + 1
-        result
+        // keys: returns all keys as heap-allocated slice. Caller must free.
+        let keys = (d: hash_dict<'a, 'b>) ->
+            let result = alloc('a[d.len] { })!
+            let mut j = 0i64
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 then
+                    result[j] = entry.key
+                    j = j + 1
+            result
 
-    // count: number of entries matching predicate.
-    let count = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
-        let mut n = 0i64
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 && pred(entry.key, entry.value) then
-                n = n + 1
-        n
+        // values: returns all values as heap-allocated slice. Caller must free.
+        let values = (d: hash_dict<'a, 'b>) ->
+            let result = alloc('b[d.len] { })!
+            let mut j = 0i64
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 then
+                    result[j] = entry.value
+                    j = j + 1
+            result
 
-    // any: true if any entry matches predicate.
-    let any = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 && pred(entry.key, entry.value) then
-                return true
-        false
+        // count: number of entries matching predicate.
+        let count = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
+            let mut n = 0i64
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 && pred(entry.key, entry.value) then
+                    n = n + 1
+            n
 
-    // all: true if all entries match predicate.
-    let all = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
-        for i in 0..d.buckets.len
-            let entry = d.buckets[i]
-            if entry.state == 1 && !pred(entry.key, entry.value) then
-                return false
-        true
+        // any: true if any entry matches predicate.
+        let any = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 && pred(entry.key, entry.value) then
+                    return true
+            false
 
-// =========================================================================
-// hash_set — hash set with open addressing and linear probing
-// Same probing strategy as hash_dict, without values.
-// =========================================================================
+        // all: true if all entries match predicate.
+        let all = (d: hash_dict<'a, 'b>, pred: ('a, 'b) -> bool) ->
+            for i in 0..d.buckets.len
+                let entry = d.buckets[i]
+                if entry.state == 1 && !pred(entry.key, entry.value) then
+                    return false
+            true
 
-module hash_set =
+    // =========================================================================
+    // hash_set — hash set with open addressing and linear probing
+    // Same probing strategy as hash_dict, without values.
+    // =========================================================================
 
     struct hs_entry =
         key:   'a
@@ -1050,158 +1050,160 @@ module hash_set =
         hash:    ('a) -> int64
         eq:      ('a, 'a) -> bool
 
-    // make: creates empty hash_set with default capacity 16. Caller must drop.
-    let make = (hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
-        hash_set { buckets = alloc(hs_entry<'a>[16] { })!, len = 0, hash = hash, eq = eq }
+    module hash_set =
 
-    // make_with_capacity: creates empty hash_set with given capacity. Caller must drop.
-    let make_with_capacity = (cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
-        let actual = if cap < 4i64 then 4i64 else cap
-        hash_set { buckets = alloc(hs_entry<'a>[actual] { })!, len = 0, hash = hash, eq = eq }
+        // make: creates empty hash_set with default capacity 16. Caller must drop.
+        let make = (hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+            hash_set { buckets = alloc(hs_entry<'a>[16] { })!, len = 0, hash = hash, eq = eq }
 
-    // drop: frees bucket storage.
-    let drop = (s: hash_set<'a>) ->
-        free(s.buckets)
+        // make_with_capacity: creates empty hash_set with given capacity. Caller must drop.
+        let make_with_capacity = (cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+            let actual = if cap < 4i64 then 4i64 else cap
+            hash_set { buckets = alloc(hs_entry<'a>[actual] { })!, len = 0, hash = hash, eq = eq }
 
-    private let rehash = (s: hash_set<'a>*) ->
-        let old = s->buckets
-        let old_cap = old.len
-        let new_cap = old_cap * 2
-        s->buckets = alloc(hs_entry<'a>[new_cap] { })!
-        s->len = 0
-        for i in 0..old_cap
-            let entry = old[i]
-            if entry.state == 1 then
-                let h = s->hash(entry.key)
-                let mut idx = h % new_cap
-                if idx < 0 then idx = idx + new_cap
-                loop
-                    if s->buckets[idx].state == 0 then
-                        s->buckets[idx].key = entry.key
-                        s->buckets[idx].state = 1
-                        s->len = s->len + 1
-                        break
-                    idx = (idx + 1) % new_cap
-        free(old)
+        // drop: frees bucket storage.
+        let drop = (s: hash_set<'a>) ->
+            free(s.buckets)
 
-    // add: inserts key if not present. Rehashes at 70% load.
-    let add = (s: hash_set<'a>*, key: 'a) ->
-        if s->len * 10 >= s->buckets.len * 7 then hash_set.rehash(s)
-        let cap = s->buckets.len
-        let h = s->hash(key)
-        let mut idx = h % cap
-        if idx < 0 then idx = idx + cap
-        let mut first_del = -1i64
-        loop
-            let entry = s->buckets[idx]
-            if entry.state == 0 then
-                let ins = if first_del >= 0 then first_del else idx
-                s->buckets[ins].key = key
-                s->buckets[ins].state = 1
-                s->len = s->len + 1
-                break
-            if entry.state == 2 && first_del < 0 then
-                first_del = idx
-            if entry.state == 1 && s->eq(entry.key, key) then
-                break
-            idx = (idx + 1) % cap
+        private let rehash = (s: hash_set<'a>*) ->
+            let old = s->buckets
+            let old_cap = old.len
+            let new_cap = old_cap * 2
+            s->buckets = alloc(hs_entry<'a>[new_cap] { })!
+            s->len = 0
+            for i in 0..old_cap
+                let entry = old[i]
+                if entry.state == 1 then
+                    let h = s->hash(entry.key)
+                    let mut idx = h % new_cap
+                    if idx < 0 then idx = idx + new_cap
+                    loop
+                        if s->buckets[idx].state == 0 then
+                            s->buckets[idx].key = entry.key
+                            s->buckets[idx].state = 1
+                            s->len = s->len + 1
+                            break
+                        idx = (idx + 1) % new_cap
+            free(old)
 
-    // has: true if key exists.
-    let has = (s: hash_set<'a>, key: 'a) ->
-        let cap = s.buckets.len
-        let h = s.hash(key)
-        let mut idx = h % cap
-        if idx < 0 then idx = idx + cap
-        loop
-            let entry = s.buckets[idx]
-            if entry.state == 0 then break false
-            if entry.state == 1 && s.eq(entry.key, key) then break true
-            idx = (idx + 1) % cap
+        // add: inserts key if not present. Rehashes at 70% load.
+        let add = (s: hash_set<'a>*, key: 'a) ->
+            if s->len * 10 >= s->buckets.len * 7 then hash_set.rehash(s)
+            let cap = s->buckets.len
+            let h = s->hash(key)
+            let mut idx = h % cap
+            if idx < 0 then idx = idx + cap
+            let mut first_del = -1i64
+            loop
+                let entry = s->buckets[idx]
+                if entry.state == 0 then
+                    let ins = if first_del >= 0 then first_del else idx
+                    s->buckets[ins].key = key
+                    s->buckets[ins].state = 1
+                    s->len = s->len + 1
+                    break
+                if entry.state == 2 && first_del < 0 then
+                    first_del = idx
+                if entry.state == 1 && s->eq(entry.key, key) then
+                    break
+                idx = (idx + 1) % cap
 
-    // remove: removes key. Returns true if it was present.
-    let remove = (s: hash_set<'a>*, key: 'a) ->
-        let cap = s->buckets.len
-        let h = s->hash(key)
-        let mut idx = h % cap
-        if idx < 0 then idx = idx + cap
-        loop
-            let entry = s->buckets[idx]
-            if entry.state == 0 then break false
-            if entry.state == 1 && s->eq(entry.key, key) then
-                s->buckets[idx].state = 2
-                s->len = s->len - 1
-                break true
-            idx = (idx + 1) % cap
+        // has: true if key exists.
+        let has = (s: hash_set<'a>, key: 'a) ->
+            let cap = s.buckets.len
+            let h = s.hash(key)
+            let mut idx = h % cap
+            if idx < 0 then idx = idx + cap
+            loop
+                let entry = s.buckets[idx]
+                if entry.state == 0 then break false
+                if entry.state == 1 && s.eq(entry.key, key) then break true
+                idx = (idx + 1) % cap
 
-    // len: number of elements.
-    let len = (s: hash_set<'a>) ->
-        s.len
+        // remove: removes key. Returns true if it was present.
+        let remove = (s: hash_set<'a>*, key: 'a) ->
+            let cap = s->buckets.len
+            let h = s->hash(key)
+            let mut idx = h % cap
+            if idx < 0 then idx = idx + cap
+            loop
+                let entry = s->buckets[idx]
+                if entry.state == 0 then break false
+                if entry.state == 1 && s->eq(entry.key, key) then
+                    s->buckets[idx].state = 2
+                    s->len = s->len - 1
+                    break true
+                idx = (idx + 1) % cap
 
-    // is_empty: true if no elements.
-    let is_empty = (s: hash_set<'a>) ->
-        s.len == 0
+        // len: number of elements.
+        let len = (s: hash_set<'a>) ->
+            s.len
 
-    // clear: removes all elements.
-    let clear = (s: hash_set<'a>*) ->
-        for i in 0..s->buckets.len
-            s->buckets[i].state = 0
-        s->len = 0
+        // is_empty: true if no elements.
+        let is_empty = (s: hash_set<'a>) ->
+            s.len == 0
 
-    // fold: folds over all elements.
-    let fold = (s: hash_set<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
-        let mut acc = init
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 then
-                acc = f(acc, entry.key)
-        acc
+        // clear: removes all elements.
+        let clear = (s: hash_set<'a>*) ->
+            for i in 0..s->buckets.len
+                s->buckets[i].state = 0
+            s->len = 0
 
-    // iter: applies f to each element for side effects.
-    let iter = (s: hash_set<'a>, f: ('a) -> 'b) ->
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 then
-                f(entry.key)
+        // fold: folds over all elements.
+        let fold = (s: hash_set<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 then
+                    acc = f(acc, entry.key)
+            acc
 
-    // filter: returns new hash_set with matching elements. Caller must drop.
-    let filter = (s: hash_set<'a>, pred: ('a) -> bool) ->
-        let mut result = hash_set.make(s.hash, s.eq)
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 && pred(entry.key) then
-                hash_set.add(&result, entry.key)
-        result
+        // iter: applies f to each element for side effects.
+        let iter = (s: hash_set<'a>, f: ('a) -> 'b) ->
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 then
+                    f(entry.key)
 
-    // to_slice: returns all elements as heap-allocated slice. Caller must free.
-    let to_slice = (s: hash_set<'a>) ->
-        let result = alloc('a[s.len] { })!
-        let mut j = 0i64
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 then
-                result[j] = entry.key
-                j = j + 1
-        result
+        // filter: returns new hash_set with matching elements. Caller must drop.
+        let filter = (s: hash_set<'a>, pred: ('a) -> bool) ->
+            let mut result = hash_set.make(s.hash, s.eq)
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 && pred(entry.key) then
+                    hash_set.add(&result, entry.key)
+            result
 
-    // any: true if any element matches predicate.
-    let any = (s: hash_set<'a>, pred: ('a) -> bool) ->
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 && pred(entry.key) then return true
-        false
+        // to_slice: returns all elements as heap-allocated slice. Caller must free.
+        let to_slice = (s: hash_set<'a>) ->
+            let result = alloc('a[s.len] { })!
+            let mut j = 0i64
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 then
+                    result[j] = entry.key
+                    j = j + 1
+            result
 
-    // all: true if all elements match predicate.
-    let all = (s: hash_set<'a>, pred: ('a) -> bool) ->
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 && !pred(entry.key) then return false
-        true
+        // any: true if any element matches predicate.
+        let any = (s: hash_set<'a>, pred: ('a) -> bool) ->
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 && pred(entry.key) then return true
+            false
 
-    // count: number of elements matching predicate.
-    let count = (s: hash_set<'a>, pred: ('a) -> bool) ->
-        let mut n = 0i64
-        for i in 0..s.buckets.len
-            let entry = s.buckets[i]
-            if entry.state == 1 && pred(entry.key) then
-                n = n + 1
-        n
+        // all: true if all elements match predicate.
+        let all = (s: hash_set<'a>, pred: ('a) -> bool) ->
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 && !pred(entry.key) then return false
+            true
+
+        // count: number of elements matching predicate.
+        let count = (s: hash_set<'a>, pred: ('a) -> bool) ->
+            let mut n = 0i64
+            for i in 0..s.buckets.len
+                let entry = s.buckets[i]
+                if entry.state == 1 && pred(entry.key) then
+                    n = n + 1
+            n

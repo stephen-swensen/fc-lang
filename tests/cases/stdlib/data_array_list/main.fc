@@ -1,4 +1,4 @@
-import array_list from std::data::
+import array_list from std::data
 
 let main = (args: str[]) ->
     // make and basic operations

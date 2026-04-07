@@ -1,4 +1,4 @@
-import linked_list from std::data::
+import linked_list from std::data
 
 let main = (args: str[]) ->
     let mut l = linked_list.make<int32>()

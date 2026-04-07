@@ -1,4 +1,4 @@
-import slice from std::data::
+import slice from std::data
 
 let main = (args: str[]) ->
     let s = int32[5] { 1, 2, 3, 4, 5 }

@@ -1,0 +1,37 @@
+// Generic calls across sibling modules, both nested in a parent.
+// module api calls module helpers' generic functions, with type variables
+// flowing through (not resolved to concrete at the call site).
+module parent =
+    module helpers =
+        let identity = (x: 'a) -> x
+
+        let try_first = (s: const 'a[]) ->
+            if s.len == 0 then default('a?)
+            else some(s[0])
+
+        let fold = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
+            let mut acc = init
+            for e in s
+                acc = f(acc, e)
+            acc
+
+    module api =
+        // Generic calling cross-sibling generic, type var passes through
+        let first = (s: const 'a[]) ->
+            helpers.try_first(s)!
+
+        let apply_twice = (x: 'a) ->
+            helpers.identity(helpers.identity(x))
+
+        // Cross-sibling with multi-type-var generic
+        let sum = (s: const int32[]) ->
+            helpers.fold(s, 0, (acc: int32, x: int32) -> acc + x)
+
+import api from parent
+
+let main = (args: str[]) ->
+    let s = int32[3] { 10, 20, 30 }
+    assert(api.first(s) == 10)
+    assert(api.apply_twice(42) == 42)
+    assert(api.sum(s) == 60)
+    0
