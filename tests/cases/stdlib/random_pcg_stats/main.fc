@@ -1,0 +1,93 @@
+// Statistical quality tests for pcg_random.
+// All tests use fixed seeds so results are deterministic.
+import random from std::
+import pcg_random from random
+
+let main = (args: str[]) ->
+    let n = 1000000
+
+    // ================================================================
+    // 1. Uniform distribution — bucket test
+    //    Generate 1M values into 10 buckets via next_bounded_uint32.
+    //    Each bucket should hold ~100K values.
+    // ================================================================
+    let num_buckets = 10
+    let mut r1 = pcg_random.make(12345u64)
+    let mut buckets = alloc(int32[10] { })!
+    defer free(buckets)
+
+    for i in 0..n
+        let val = pcg_random.next_bounded_uint32(&r1, (uint32)num_buckets)
+        let idx = (int32)val
+        buckets[idx] = buckets[idx] + 1
+        assert(i >= 0)
+
+    // Each bucket should be within 5% of expected (100000 +/- 5000)
+    let expected = n / num_buckets
+    let tolerance = expected / 20
+    for i in 0..num_buckets
+        assert(buckets[i] > expected - tolerance)
+        assert(buckets[i] < expected + tolerance)
+
+    // ================================================================
+    // 2. Chi-squared test on the bucket distribution
+    //    For 9 degrees of freedom:
+    //      p=0.01 critical value  ~21.67
+    //      p=0.001 critical value ~27.88
+    //    We use a generous threshold of 50.
+    // ================================================================
+    let mut chi_sq = 0.0
+    let expected_f = (float64)expected
+    for i in 0..num_buckets
+        let diff = (float64)buckets[i] - expected_f
+        chi_sq = chi_sq + (diff * diff) / expected_f
+    assert(chi_sq < 50.0)
+
+    // ================================================================
+    // 3. Bit frequency — each of 32 bit positions should be ~50% set
+    //    Generate 1M uint32 values, count 1-bits per position.
+    // ================================================================
+    let mut r2 = pcg_random.make(67890u64)
+    let mut bit_counts = alloc(int32[32] { })!
+    defer free(bit_counts)
+
+    for i in 0..n
+        let val = pcg_random.next_uint32(&r2)
+        for j in 0..32
+            if (val >> (uint32)j) & 1u32 == 1u32 then
+                bit_counts[j] = bit_counts[j] + 1
+        assert(i >= 0)
+
+    // Each bit position should be set ~500000 times (+/- 2%)
+    let bit_expected = n / 2
+    let bit_tol = bit_expected / 50
+    for i in 0..32
+        assert(bit_counts[i] > bit_expected - bit_tol)
+        assert(bit_counts[i] < bit_expected + bit_tol)
+
+    // ================================================================
+    // 4. Chi-squared on bit frequencies
+    //    32 bit positions, each with expected count 500000.
+    //    31 df, p=0.001 critical value ~61.1; threshold 100.
+    // ================================================================
+    let bit_expected_f = (float64)bit_expected
+    let mut bit_chi_sq = 0.0
+    for i in 0..32
+        let diff = (float64)bit_counts[i] - bit_expected_f
+        bit_chi_sq = bit_chi_sq + (diff * diff) / bit_expected_f
+    assert(bit_chi_sq < 100.0)
+
+    // ================================================================
+    // 5. No consecutive duplicate uint32 values
+    //    Probability of any duplicate in 1M draws from 2^32 is ~0.01%;
+    //    consecutive duplicates are astronomically unlikely.
+    // ================================================================
+    let mut r3 = pcg_random.make(11111u64)
+    let mut prev = pcg_random.next_uint32(&r3)
+    for i in 1..n
+        let curr = pcg_random.next_uint32(&r3)
+        assert(curr != prev)
+        prev = curr
+        assert(i > 0)
+
+    0
