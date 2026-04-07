@@ -1,0 +1,54 @@
+// Systematic test: non-void last expression discarded in every statement-context
+// block type that has defers. Ensures no -Werror=unused-value from bare _blk temps.
+let returns_int = () -> 42
+
+let main = (args: str[]) ->
+    let mut acc = 0
+
+    // 1. for-range body
+    for i in 0..3
+        let s = alloc("x")!
+        defer free(s)
+        acc = acc + 1
+        returns_int()
+
+    // 2. for-slice body
+    let mut data = int32[3] { }
+    data.ptr[0] = 1
+    data.ptr[1] = 2
+    data.ptr[2] = 3
+    for x in data
+        let s = alloc("x")!
+        defer free(s)
+        acc = acc + x
+        returns_int()
+
+    // 3. void if-then body
+    if true then
+        let s = alloc("x")!
+        defer free(s)
+        acc = acc + 10
+        returns_int()
+
+    // 4. void loop body (with break)
+    let mut n = 0
+    loop
+        let s = alloc("x")!
+        defer free(s)
+        n = n + 1
+        if n == 2 then break
+        returns_int()
+
+    // 5. void match arm body
+    let v = 5
+    match v with
+    | 5 ->
+        let s = alloc("x")!
+        defer free(s)
+        acc = acc + 20
+        returns_int()
+    | _ ->
+        returns_int()
+
+    assert(acc == 39)
+    0

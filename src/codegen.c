@@ -935,8 +935,17 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return,
             else
                 fprintf(out, "_blk%d;\n", tid);
         } else {
+            /* Cast non-void expressions to (void) when their value is
+             * discarded (non-last statement, or last with discard_value).
+             * Prevents -Wunused-value for GCC statement expressions like
+             * non-void match/block used as statements. */
+            bool is_last = (i == last_real_idx);
+            bool void_cast = s->type && s->type->kind != TYPE_VOID &&
+                             (!is_last || discard_value);
+            if (void_cast) fprintf(out, "(void)(");
             emit_expr(s, out);
-            fprintf(out, ";\n");
+            if (void_cast) fprintf(out, ");\n");
+            else fprintf(out, ";\n");
         }
     }
     /* Emit end-of-block defers for fall-through.
