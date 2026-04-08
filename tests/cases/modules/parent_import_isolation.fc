@@ -1,0 +1,29 @@
+// Parent binding uses an imported name. Child has a different import that
+// shadows it. On-demand type checking of the parent binding (triggered from
+// the child) must use the parent's imports, not the child's.
+module lib_a =
+    let helper = (x: int32) -> x * 2
+
+module lib_b =
+    let helper = (x: int32) -> x * 3
+
+module outer =
+    import helper from lib_a
+
+    module inner =
+        import helper from lib_b
+
+        // Triggers on-demand check of parent_fn.
+        // parent_fn uses "helper" which should be lib_a (x*2), not lib_b (x*3).
+        let use_it = () -> parent_fn(10)
+
+        // Also verify child's own import works correctly
+        let use_own = () -> helper(10)
+
+    let parent_fn = (x: int32) -> helper(x)
+
+let main = (args: str[]) ->
+    assert(outer.inner.use_it() == 20)   // parent's helper: 10 * 2
+    assert(outer.inner.use_own() == 30)  // child's helper: 10 * 3
+    assert(outer.parent_fn(10) == 20)    // direct call: 10 * 2
+    0

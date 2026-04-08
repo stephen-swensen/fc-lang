@@ -75,3 +75,7 @@ Discovered while expanding test coverage for namespaced generic cross-references
 ### Union companion module variant construction (pass2.c)
 
 **Bug 6 — Companion union variant construction failed when module took priority.** When a union and module share a name (companion pattern), `shape.circle(r)` was interpreted as module member access, failing with "module has no member 'circle'". Fix: when module member lookup fails, check for a companion union with the same name and fall through to variant construction if a matching variant exists. For external access through module chains (e.g., `outer.shape.circle`), the parent module's members table is tracked during chain resolution so the companion union can be found in the correct scope.
+
+### Parent chain on-demand import_scope leak (pass2.c)
+
+**Bug 7 — Child module's imports leaked into parent's on-demand type check.** When a child module triggered on-demand type checking of a parent binding, the child's `import_scope` was active during the check. If parent and child had different imports of the same name, the parent binding would resolve the child's import instead of its own. Fix: added `import_scope` to `ModuleScopeChain` so each parent level records its import scope. The on-demand check now saves/restores `import_scope` to the parent's value. The chain link is captured from `saved_imports` (before the child's imports are pushed), not from `ctx->import_scope` (which would already include the child's imports).

@@ -145,6 +145,7 @@ typedef struct OnDemandVisited {
  * Enables child modules to see symbols from all ancestor modules. */
 typedef struct ModuleScopeChain {
     SymbolTable *members;
+    struct ImportScope *import_scope; /* import scope at this module level */
     struct ModuleScopeChain *parent;
 } ModuleScopeChain;
 
@@ -1500,11 +1501,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         e->type = type_error();
                         return e->type;
                     }
-                    /* Find the parent members table that contains this symbol */
+                    /* Find the parent that contains this symbol to restore its context */
                     SymbolTable *parent_members = NULL;
+                    ImportScope *parent_imports = NULL;
                     for (ModuleScopeChain *p = ctx->parent_modules; p; p = p->parent) {
                         if (symtab_lookup(p->members, e->ident.name) == psym) {
                             parent_members = p->members;
+                            parent_imports = p->import_scope;
                             break;
                         }
                     }
@@ -1512,12 +1515,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     ctx->on_demand_visited = &vis;
                     SymbolTable *saved_mod = ctx->module_symtab;
                     Scope *saved_scope = ctx->scope;
+                    ImportScope *saved_imports = ctx->import_scope;
                     ctx->module_symtab = parent_members;
+                    if (parent_imports) ctx->import_scope = parent_imports;
                     ctx->scope = scope_new(ctx->arena, NULL);
                     ctx->scope->is_global = true;
                     check_decl_let(ctx, psym->decl);
                     ctx->scope = saved_scope;
                     ctx->module_symtab = saved_mod;
+                    ctx->import_scope = saved_imports;
                     ctx->on_demand_visited = vis.next;
                 }
                 if (psym->decl && psym->decl->kind == DECL_LET && psym->decl->let.codegen_name)
@@ -4749,8 +4755,9 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 ImportScope sub_import_scope = { .table = sub_sym->imports, .parent = ctx->import_scope };
                 if (sub_sym->imports) ctx->import_scope = &sub_import_scope;
 
-                /* Push current module onto parent chain */
-                ModuleScopeChain parent_link = { .members = ctx->module_symtab, .parent = ctx->parent_modules };
+                /* Push current module onto parent chain (use saved_imports, not
+                 * ctx->import_scope which already has the child's imports pushed) */
+                ModuleScopeChain parent_link = { .members = ctx->module_symtab, .import_scope = saved_imports, .parent = ctx->parent_modules };
                 if (ctx->module_symtab) ctx->parent_modules = &parent_link;
                 ctx->module_symtab = sub_sym->members;
                 ctx->scope = scope_new(ctx->arena, ctx->scope);
