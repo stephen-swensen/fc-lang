@@ -95,11 +95,12 @@ void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
 static void import_table_add(ImportTable *tbl, const char *local_name,
                               const char *source_name, DeclKind kind,
                               SymbolTable *source_members, Symbol *msym) {
-    /* Check for existing entry with same local_name (shadowing: replace) */
+    /* Check for existing entry with same local_name AND kind (shadowing: replace).
+     * Different kinds coexist — e.g., a struct and its companion module both
+     * live in the table under the same name, found by kind-specific lookup. */
     for (int i = 0; i < tbl->count; i++) {
-        if (tbl->entries[i].local_name == local_name) {
+        if (tbl->entries[i].local_name == local_name && tbl->entries[i].kind == kind) {
             tbl->entries[i].source_name = source_name;
-            tbl->entries[i].kind = kind;
             tbl->entries[i].source_members = source_members;
             tbl->entries[i].ns_prefix = msym->ns_prefix;
             tbl->entries[i].module_members = msym->members;

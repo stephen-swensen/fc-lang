@@ -185,8 +185,14 @@ static Symbol *import_scope_lookup_until(ImportScope *scope, const char *name,
         if (s->table) {
             for (int i = s->table->count - 1; i >= 0; i--) {
                 ImportRef *ref = &s->table->entries[i];
-                if (ref->local_name == name)
+                if (ref->local_name == name) {
+                    /* Module imports need namespace-aware lookup to avoid
+                     * finding the wrong module when two namespaces define
+                     * modules with the same source name. */
+                    if (ref->kind == DECL_MODULE)
+                        return symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix);
                     return symtab_lookup(ref->source_members, ref->source_name);
+                }
             }
         }
     }
@@ -670,10 +676,6 @@ static bool unify(Type *param_type, Type *arg_type,
     }
 }
 
-/* Look up a module symbol: inner scope first, then imports, then global */
-static Symbol *lookup_module(CheckCtx *ctx, const char *name) {
-    return resolve_symbol_kind(ctx, name, DECL_MODULE);
-}
 
 /* Check if any type binding still contains unresolved type variables */
 static bool bindings_contain_type_vars(Type **bindings, int count) {
@@ -683,30 +685,35 @@ static bool bindings_contain_type_vars(Type **bindings, int count) {
 }
 
 /* Find the Symbol for an EXPR_CALL's callee, looking up global/module symbols */
+/* Find the callee symbol for an EXPR_CALL.  Uses resolved_sym / companion_module
+ * from EXPR_IDENT — no re-resolution needed.  For qualified calls (mod.func),
+ * walks the EXPR_FIELD chain using the stored resolved symbols. */
 static Symbol *find_callee_symbol(CheckCtx *ctx, Expr *callee) {
-    if (callee->kind == EXPR_IDENT) {
-        return resolve_symbol(ctx, callee->ident.name);
-    }
+    (void)ctx;
+    if (callee->kind == EXPR_IDENT)
+        return callee->ident.resolved_sym;
     if (callee->kind == EXPR_FIELD) {
-        /* Resolve the module chain for qualified calls (mod.func or mod1.mod2.func) */
         Expr *obj = callee->field.object;
         Symbol *mod = NULL;
         if (obj->kind == EXPR_IDENT) {
-            mod = lookup_module(ctx, obj->ident.name);
+            if (obj->ident.resolved_sym && obj->ident.resolved_sym->kind == DECL_MODULE)
+                mod = obj->ident.resolved_sym;
+            else if (obj->ident.companion_module)
+                mod = obj->ident.companion_module;
         } else if (obj->kind == EXPR_FIELD) {
-            /* Multi-level: walk EXPR_FIELD chain to find root EXPR_IDENT,
-             * then resolve each intermediate module segment */
+            /* Multi-level: walk EXPR_FIELD chain from root using resolved_sym */
             Expr *cur = obj;
             while (cur->kind == EXPR_FIELD) cur = cur->field.object;
-            if (cur->kind == EXPR_IDENT) {
-                mod = lookup_module(ctx, cur->ident.name);
-                if (mod && mod->members) {
-                    /* Walk intermediate module segments */
+            if (cur->kind == EXPR_IDENT && cur->ident.resolved_sym) {
+                Symbol *root = cur->ident.resolved_sym;
+                if (root->kind != DECL_MODULE && cur->ident.companion_module)
+                    root = cur->ident.companion_module;
+                if (root->kind == DECL_MODULE && root->members) {
+                    mod = root;
                     Expr **segs = NULL;
                     int depth = 0, seg_cap = 0;
                     for (Expr *e = obj; e->kind == EXPR_FIELD; e = e->field.object)
                         DA_APPEND(segs, depth, seg_cap, e);
-                    /* segs is in reverse order (innermost first); walk from depth-1 to 0 */
                     for (int k = depth - 1; k >= 0; k--) {
                         Symbol *next = symtab_lookup_kind(mod->members,
                             segs[k]->field.name, DECL_MODULE);
@@ -1434,6 +1441,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->ident.codegen_name = cg_name;
             e->ident.is_local = !is_global_binding;
             e->ident.is_mut = is_mut;
+            /* For global-scope bindings (module-level or top-level lets),
+             * look up the Symbol so EXPR_FIELD and EXPR_CALL can use it
+             * without re-resolving.  Local bindings (parameters, block-scoped
+             * lets) have resolved_sym = NULL. */
+            if (is_global_binding) {
+                /* Use kind-aware lookup: scope found a let binding, so look
+                 * for the DECL_LET symbol specifically.  This avoids returning
+                 * a struct symbol if a companion struct shares the name. */
+                if (ctx->module_symtab)
+                    e->ident.resolved_sym = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_LET);
+                if (!e->ident.resolved_sym)
+                    e->ident.resolved_sym = global_lookup_kind(ctx->symtab, e->ident.name, DECL_LET, ctx->current_ns);
+            }
             e->type = t;
             e->prov = scope_lookup_prov(ctx->scope, e->ident.name);
             return t;
@@ -1443,10 +1463,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Symbol *msym = symtab_lookup(ctx->module_symtab, e->ident.name);
             if (msym) {
                 if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+                    e->ident.resolved_sym = msym;
+                    e->ident.companion_module = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_MODULE);
                     e->type = msym->type;
                     return e->type;
                 }
                 if (msym->kind == DECL_MODULE) {
+                    e->ident.resolved_sym = msym;
                     e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
                     return e->type;
                 }
@@ -1480,6 +1503,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->type = type_error();
                     return e->type;
                 }
+                e->ident.resolved_sym = msym;
                 e->type = msym->type;
                 return e->type;
             }
@@ -1497,10 +1521,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 Symbol *isym = import_scope_lookup_until(imp, e->ident.name, stop);
                 if (isym) {
                     if (isym->kind == DECL_STRUCT || isym->kind == DECL_UNION) {
+                        e->ident.resolved_sym = isym;
+                        e->ident.companion_module = import_scope_lookup_kind_until(imp, e->ident.name, DECL_MODULE, stop);
                         e->type = isym->type;
                         return e->type;
                     }
                     if (isym->kind == DECL_MODULE) {
+                        e->ident.resolved_sym = isym;
                         e->type = type_void();
                         return e->type;
                     }
@@ -1539,6 +1566,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         e->type = type_error();
                         return e->type;
                     }
+                    e->ident.resolved_sym = isym;
                     e->type = isym->type;
                     return e->type;
                 }
@@ -1549,10 +1577,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 Symbol *psym = symtab_lookup(p->members, e->ident.name);
                 if (psym) {
                     if (psym->kind == DECL_STRUCT || psym->kind == DECL_UNION) {
+                        e->ident.resolved_sym = psym;
+                        e->ident.companion_module = symtab_lookup_kind(p->members, e->ident.name, DECL_MODULE);
                         e->type = psym->type;
                         return e->type;
                     }
                     if (psym->kind == DECL_MODULE) {
+                        e->ident.resolved_sym = psym;
                         e->type = type_void();
                         return e->type;
                     }
@@ -1591,6 +1622,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         e->type = type_error();
                         return e->type;
                     }
+                    e->ident.resolved_sym = psym;
                     e->type = psym->type;
                     return e->type;
                 }
@@ -1626,6 +1658,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* For struct/union type names used in expressions (e.g., variant construction),
          * return the type itself */
         if (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION) {
+            e->ident.resolved_sym = sym;
+            e->ident.companion_module = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
             e->type = sym->type;
             return e->type;
         }
@@ -1639,6 +1673,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
+            e->ident.resolved_sym = ns_mod;
             e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
             return e->type;
         }
@@ -1679,6 +1714,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         if (sym->decl && sym->decl->kind == DECL_LET)
             e->ident.is_mut = sym->decl->let.is_mut;
+        e->ident.resolved_sym = sym;
         e->type = sym->type;
         return e->type;
     }
@@ -2127,17 +2163,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             Type *union_type = ft;
             const char *variant_name = e->call.func->field.name;
 
-            /* Look up the union symbol for generic instantiation */
+            /* Look up the union symbol for generic instantiation.
+             * Use resolved_sym from EXPR_IDENT — no re-resolution. */
             Symbol *union_sym = NULL;
             if (e->call.func->field.object->kind == EXPR_IDENT) {
-                const char *uname = e->call.func->field.object->ident.name;
-                union_sym = resolve_symbol(ctx, uname);
+                union_sym = e->call.func->field.object->ident.resolved_sym;
             } else if (e->call.func->field.object->kind == EXPR_FIELD) {
                 /* Module-qualified path: walk EXPR_FIELD chain to find module, then union */
                 Expr *cur = e->call.func->field.object;
                 while (cur->kind == EXPR_FIELD) cur = cur->field.object;
                 if (cur->kind == EXPR_IDENT) {
-                    Symbol *root = resolve_symbol_kind(ctx, cur->ident.name, DECL_MODULE);
+                    Symbol *root = cur->ident.resolved_sym;
+                    if (root && root->kind != DECL_MODULE && cur->ident.companion_module)
+                        root = cur->ident.companion_module;
                     if (root && root->members) {
                         /* Walk intermediate fields to find the innermost module */
                         Symbol *walk = root;
@@ -2889,32 +2927,29 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *obj_type = check_expr(ctx, e->field.object);
         if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
 
-        /* Try to resolve the object as a module reference (handles nested chains).
-         * Only attempt when the object could be a module or type-associated module:
-         * - TYPE_VOID: EXPR_IDENT returned the module sentinel
-         * - TYPE_STRUCT/TYPE_UNION from non-local scope: could be a type name with
-         *   a companion module (e.g., vec2.zero() where vec2 is both struct and module)
-         * Skip for local bindings (parameters, let variables) to prevent a parameter
-         * named "data" from being confused with a module named "data". */
+        /* Resolve the object as a module reference using resolved_sym from EXPR_IDENT.
+         * EXPR_IDENT already determined what the name refers to — we never re-resolve.
+         *
+         * Three cases:
+         * (a) EXPR_IDENT resolved to a module (resolved_sym->kind == DECL_MODULE)
+         * (b) EXPR_IDENT resolved to a struct/union with a companion module
+         * (c) EXPR_FIELD chain (a.b.member) — walk using root IDENT's resolved_sym
+         *
+         * If resolved_sym is NULL, the object was a local binding (parameter, let
+         * variable) — skip module lookup entirely and go to field access. */
         Symbol *mod_sym = NULL;
-        SymbolTable *mod_parent_members = NULL; /* members table where mod_sym was found */
-        bool could_be_module = (obj_type->kind == TYPE_VOID) ||
-            (e->field.object->kind == EXPR_IDENT &&
-             !e->field.object->ident.is_local &&
-             (obj_type->kind == TYPE_STRUCT || obj_type->kind == TYPE_UNION));
-        if (e->field.object->kind == EXPR_IDENT && could_be_module) {
-            const char *name = e->field.object->ident.name;
-            mod_sym = resolve_symbol_kind(ctx, name, DECL_MODULE);
+        SymbolTable *mod_owner = NULL; /* members table containing mod_sym (for chain companion lookup) */
+        if (e->field.object->kind == EXPR_IDENT) {
+            Symbol *rsym = e->field.object->ident.resolved_sym;
+            if (rsym && rsym->kind == DECL_MODULE)
+                mod_sym = rsym;
+            else if (e->field.object->ident.companion_module)
+                mod_sym = e->field.object->ident.companion_module;
         }
 
-        /* If object's EXPR_FIELD might be a module chain (a.b.member), walk the chain
-         * from the root IDENT to find nested modules.  Gate on the root IDENT — only
-         * enter when the root could be a module reference (TYPE_VOID or non-local
-         * struct/union from companion pattern). */
+        /* For nested module chains (a.b.member), walk from the root IDENT's
+         * resolved_sym through submodules.  Only enter if root has a resolved_sym. */
         if (!mod_sym && e->field.object->kind == EXPR_FIELD) {
-            /* Walk up the nested EXPR_FIELD chain to find the deepest module. */
-            /* We need to re-resolve: the object is already type-checked and set to void.
-             * Walk the chain from root to find the module. */
             Expr **chain = NULL;
             int depth = 0, chain_cap = 0;
             Expr *cur = e->field.object;
@@ -2922,17 +2957,21 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 DA_APPEND(chain, depth, chain_cap, cur);
                 cur = cur->field.object;
             }
-            if (cur->kind == EXPR_IDENT && !cur->ident.is_local) {
-                Symbol *root = resolve_symbol_kind(ctx, cur->ident.name, DECL_MODULE);
-                if (root && root->members) {
+            if (cur->kind == EXPR_IDENT && cur->ident.resolved_sym) {
+                Symbol *root = cur->ident.resolved_sym;
+                /* For companion pattern: root might be a struct/union, use its companion */
+                if (root->kind != DECL_MODULE && cur->ident.companion_module)
+                    root = cur->ident.companion_module;
+                if (root->kind == DECL_MODULE && root->members) {
                     Symbol *walk = root;
+                    SymbolTable *owner = NULL;
                     for (int k = depth - 1; k >= 0; k--) {
                         Symbol *next = symtab_lookup_kind(walk->members, chain[k]->field.name, DECL_MODULE);
                         if (!next) { walk = NULL; break; }
-                        mod_parent_members = walk->members;
+                        owner = walk->members;
                         walk = next;
                     }
-                    if (walk) mod_sym = walk;
+                    if (walk) { mod_sym = walk; mod_owner = owner; }
                 }
             }
             free(chain);
@@ -2944,10 +2983,19 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 /* Companion union fallback: if a union shares the module's name,
                  * check if the field matches a variant of that union. This allows
                  * shape.circle(r) where "shape" is both a module and a union.
-                 * Search current scope first, then the parent module where mod_sym was found. */
-                Symbol *companion = resolve_symbol_kind(ctx, mod_sym->name, DECL_UNION);
-                if (!companion && mod_parent_members)
-                    companion = symtab_lookup_kind(mod_parent_members, mod_sym->name, DECL_UNION);
+                 * Use the IDENT's resolved_sym (the union) rather than re-resolving. */
+                Symbol *companion = NULL;
+                if (e->field.object->kind == EXPR_IDENT &&
+                    e->field.object->ident.resolved_sym &&
+                    (e->field.object->ident.resolved_sym->kind == DECL_UNION ||
+                     e->field.object->ident.resolved_sym->kind == DECL_STRUCT))
+                    companion = e->field.object->ident.resolved_sym;
+                /* For EXPR_FIELD chains (outer.shape.variant), the companion type
+                 * is a sibling of the module in the parent's members table */
+                if (!companion && mod_owner)
+                    companion = symtab_lookup_kind(mod_owner, mod_sym->name, DECL_UNION);
+                if (!companion && mod_owner)
+                    companion = symtab_lookup_kind(mod_owner, mod_sym->name, DECL_STRUCT);
                 if (companion && companion->type && companion->type->kind == TYPE_UNION) {
                     Type *ut = companion->type;
                     for (int v = 0; v < ut->unio.variant_count; v++) {
@@ -3073,10 +3121,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
 
         /* If the object is an IDENT referencing a union type, this is variant construction.
-         * Only attempt this when obj_type is a union — if EXPR_IDENT resolved the name
-         * to a different type (e.g., a parameter), don't re-resolve as a union. */
+         * Use resolved_sym from EXPR_IDENT — no re-resolution needed. */
         if (e->field.object->kind == EXPR_IDENT && obj_type->kind == TYPE_UNION) {
-            Symbol *sym = resolve_symbol(ctx, e->field.object->ident.name);
+            Symbol *sym = e->field.object->ident.resolved_sym;
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
                 e->field.is_variant_constructor = true;
                 if (sym->is_generic) {

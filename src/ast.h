@@ -120,7 +120,14 @@ struct Expr {
         struct { const char *value; int length; } cstring_lit;
 
         /* EXPR_IDENT */
-        struct { const char *name; const char *codegen_name; bool is_local; bool is_mut; } ident;
+        struct {
+            const char *name;
+            const char *codegen_name;
+            bool is_local;
+            bool is_mut;
+            struct Symbol *resolved_sym;       /* Symbol resolved by pass2 (module, struct, union, let) */
+            struct Symbol *companion_module;   /* non-NULL when resolved_sym is a struct/union with a companion module */
+        } ident;
 
         /* EXPR_BINARY */
         struct { TokenKind op; Expr *left; Expr *right; } binary;

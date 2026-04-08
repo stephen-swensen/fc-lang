@@ -53,6 +53,19 @@ Resolution order is now: at each module level, check members then that level's i
 
 4. **EXPR_FIELD**: The inline 4-step symbol lookup for union variant construction was replaced with a call to `resolve_symbol` for consistency.
 
+### ~~Eliminate EXPR_FIELD re-resolution of identifiers~~ ✓ Done
+
+EXPR_FIELD had three sites that re-resolved the object's name via `resolve_symbol` / `resolve_symbol_kind`, ignoring what EXPR_IDENT had already determined. This caused repeated bugs where parameters or locals with names matching modules or types were incorrectly re-resolved (e.g., a parameter named `data` being treated as module `data`).
+
+**What was changed:**
+
+- Added `resolved_sym` and `companion_module` fields to EXPR_IDENT in ast.h. EXPR_IDENT stores the Symbol it resolved to and, for struct/union names, the companion module if one exists.
+- EXPR_FIELD, EXPR_CALL variant construction, and `find_callee_symbol` now read these stored pointers instead of re-resolving. No code path in EXPR_FIELD calls `resolve_symbol` or `resolve_symbol_kind` anymore.
+- Fixed `import_table_add` to allow struct and companion module entries to coexist under the same name (different kinds), instead of the module replacing the struct.
+- Fixed `import_scope_lookup_until` to use namespace-aware lookup for DECL_MODULE refs, preventing cross-namespace module confusion.
+
+**Architectural invariant:** EXPR_IDENT is the single source of truth for identifier resolution. Later expression handlers (EXPR_FIELD, EXPR_CALL) read the stored result — they never re-resolve.
+
 ### Eliminate the `base_name` field on Type
 
 `base_name` exists on TYPE_STRUCT and TYPE_UNION for display purposes (showing source names in error messages). But `qualified_name` serves the same display role. If the display logic is unified to always derive the display name from `qualified_name` or the canonical name, `base_name` becomes dead weight. Removing it would simplify the Type struct and eliminate one of the lingering sources of "which name do I use?" confusion in the codebase.
