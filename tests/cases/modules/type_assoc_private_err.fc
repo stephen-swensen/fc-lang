@@ -1,3 +1,5 @@
+import vec2 from geometry
+
 module geometry =
     struct vec2 =
         x: int32
@@ -5,8 +7,6 @@ module geometry =
 
     module vec2 =
         private let internal = (v: vec2) -> v.x
-
-import vec2 from geometry
 
 let main = (args: str[]) ->
     let p = vec2 { x = 3, y = 4 }

@@ -1,7 +1,7 @@
 namespace acme::
 
-module helpers =
-    let value = 42
-
 // File-level import in a namespace file
 import value from helpers
+
+module helpers =
+    let value = 42

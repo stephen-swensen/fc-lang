@@ -1,9 +1,9 @@
+import shape from shapes
+
 module shapes =
     union shape =
         | circle(int32)
         | rect(int32)
-
-import shape from shapes
 
 let area = (s: shape) ->
     match s with

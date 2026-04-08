@@ -1,10 +1,10 @@
 // Test: extern union as function parameter and return value
+import int_or_float from u
+
 module u from "test_union.h" =
     extern union int_or_float as int_or_float =
         i: int32
         f: float32
-
-import int_or_float from u
 
 let get_int = (v: int_or_float) ->
     v.i

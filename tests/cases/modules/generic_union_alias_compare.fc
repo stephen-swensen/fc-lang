@@ -1,9 +1,9 @@
+import wrapper as w from lib
+
 module lib =
     union wrapper =
         | val('a)
         | empty
-
-import wrapper as w from lib
 
 let check = (a: lib.wrapper<int32>, b: w<int32>) ->
     if a == b then 10

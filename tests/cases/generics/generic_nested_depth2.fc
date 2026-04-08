@@ -2,6 +2,8 @@
 // Regression test: monomorph/codegen must resolve self-qualified generic
 // calls (e.g. inner.try_first from inner.first) when the module is nested
 // two levels deep.
+import inner from outer
+
 module outer =
     module inner =
         let try_first = (s: const 'a[]) ->
@@ -25,8 +27,6 @@ module outer =
         // Two type-var sets: 'a from the slice, 'b = int32 from init
         let sum = (s: const int32[]) ->
             inner.fold(s, 0, (acc: int32, x: int32) -> acc + x)
-
-import inner from outer
 
 let main = (args: str[]) ->
     let s = int32[3] { 10, 20, 30 }

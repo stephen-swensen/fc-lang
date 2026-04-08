@@ -468,6 +468,22 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 child->struc.is_c_union ? "union" : "struct", mod_name);
         }
     }
+    /* Validate: imports must come before all other declarations in a module */
+    {
+        bool seen_non_import = false;
+        for (int j = 0; j < d->module.decl_count; j++) {
+            Decl *child = d->module.decls[j];
+            if (child->kind == DECL_IMPORT) {
+                if (seen_non_import) {
+                    diag_error(child->loc,
+                        "imports must appear at the top of module '%s', before other declarations",
+                        mod_name);
+                }
+            } else {
+                seen_non_import = true;
+            }
+        }
+    }
     for (int j = 0; j < d->module.decl_count; j++) {
         Decl *child = d->module.decls[j];
         switch (child->kind) {
@@ -796,6 +812,29 @@ static void resolve_nested_module_imports(SymbolTable *members,
 
 void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                    FileImportScopes *file_scopes) {
+    /* Phase 0: Validate that file-level imports come before other declarations.
+     * Namespace declarations are exempt (they must come first). */
+    {
+        const char *cur_file = NULL;
+        bool seen_non_import = false;
+        for (int i = 0; i < prog->decl_count; i++) {
+            Decl *d = prog->decls[i];
+            if (d->loc.filename != cur_file) {
+                cur_file = d->loc.filename;
+                seen_non_import = false;
+            }
+            if (d->kind == DECL_NAMESPACE) continue;
+            if (d->kind == DECL_IMPORT) {
+                if (seen_non_import) {
+                    diag_error(d->loc,
+                        "imports must appear at the top of the file, before other declarations");
+                }
+            } else {
+                seen_non_import = true;
+            }
+        }
+    }
+
     /* Phase 1: Register modules.
      * Track current namespace as we iterate — DECL_NAMESPACE resets it. */
     const char *current_ns = NULL;

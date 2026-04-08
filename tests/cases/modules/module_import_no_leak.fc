@@ -1,3 +1,5 @@
+import * from outer
+
 module inner =
     let secret = 42
 
@@ -5,8 +7,6 @@ module outer =
     import secret from inner
     let get_secret = () -> secret
     let public_val = 10
-
-import * from outer
 
 let main = (args: str[]) ->
     assert(public_val + get_secret() == 52)

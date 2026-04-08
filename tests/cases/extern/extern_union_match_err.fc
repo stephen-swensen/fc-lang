@@ -1,10 +1,10 @@
 // Test: pattern matching on extern union is an error
+import dummy from u
+
 module u from "stdint.h" =
     extern union dummy =
         x: int32
         y: int32
-
-import dummy from u
 
 let main = (args: str[]) ->
     let d = default(dummy)

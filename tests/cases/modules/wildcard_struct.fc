@@ -1,11 +1,11 @@
+import * from geometry
+
 module geometry =
     struct vec2 =
         x: int32
         y: int32
 
     let make = (x: int32, y: int32) -> vec2 { x = x, y = y }
-
-import * from geometry
 
 let main = (args: str[]) ->
     let v = make(10, 20)

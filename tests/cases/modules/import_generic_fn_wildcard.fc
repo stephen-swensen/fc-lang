@@ -1,8 +1,8 @@
+import * from utils
+
 module utils =
     let identity = (x: 'a) -> x
     let add_one = (x: int32) -> x + 1
-
-import * from utils
 
 let main = (args: str[]) ->
     let _result =

@@ -1,5 +1,8 @@
 // Test: extern union with partial field declarations
 // Only declare a subset of the C union's fields
+import partial_a from u
+import big_union from u
+
 module u from "test_union.h" =
     extern struct partial_a as partial_a =
         x: int32
@@ -10,9 +13,6 @@ module u from "test_union.h" =
         tag: int32
         a: partial_a
         // b, c, raw are NOT declared
-
-import partial_a from u
-import big_union from u
 
 let main = (args: str[]) ->
     // sizeof should reflect the real C union size, not just declared fields

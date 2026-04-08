@@ -1,5 +1,5 @@
-module helpers =
-    let value = 42
-
 // File-level import — should be visible only within this file
 import value from helpers
+
+module helpers =
+    let value = 42

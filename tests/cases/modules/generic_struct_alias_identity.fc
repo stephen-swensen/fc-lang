@@ -1,9 +1,9 @@
+import pair as p from containers
+
 module containers =
     struct pair =
         first: 'a
         second: 'b
-
-import pair as p from containers
 
 let main = (args: str[]) ->
     let _result =

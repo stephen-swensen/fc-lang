@@ -2980,7 +2980,7 @@ module math =
 
 ### Importing
 
-Imports are **transparent aliases** that introduce names into a lexical scope, following the same scoping and shadowing rules as `let` bindings. An import does not create a new type; it creates a name that resolves to the original definition. Imports may appear at file level or inside module bodies.
+Imports are **transparent aliases** that introduce names into a lexical scope. An import does not create a new type; it creates a name that resolves to the original definition. Imports may appear at file level or inside module bodies, but **must come before all other declarations** — at the top of the file (after any `namespace` declaration) or at the top of a module body. This is enforced by the compiler.
 
 **Import forms:**
 
@@ -3057,7 +3057,7 @@ import * from outer                     // brings get — does NOT bring secret
 
 ### Shadowing
 
-Later imports shadow earlier ones in the same scope. Inner scopes shadow outer scopes. Imports shadow top-level declarations. This matches `let` binding semantics:
+Later imports shadow earlier ones in the same scope. Inner scopes shadow outer scopes. Members (declarations) always take priority over imports at the same level — a module's own `let` beats an import with the same name, and a top-level `let` beats a file-level import. A child module's import can shadow a parent module's member.
 
 ```fc
 module mod_a =

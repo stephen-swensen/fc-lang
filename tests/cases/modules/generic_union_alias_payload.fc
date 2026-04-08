@@ -1,9 +1,9 @@
+import result as res from lib
+
 module lib =
     union result =
         | ok('a)
         | err(int32)
-
-import result as res from lib
 
 let main = (args: str[]) ->
     let _result =

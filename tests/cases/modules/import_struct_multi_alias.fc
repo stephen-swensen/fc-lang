@@ -1,9 +1,9 @@
+import point as pt, point as coord from geometry
+
 module geometry =
     struct point =
         x: int32
         y: int32
-
-import point as pt, point as coord from geometry
 
 let take_pt = (p: pt) -> p.x
 let take_coord = (p: coord) -> p.y

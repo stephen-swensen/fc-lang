@@ -1,12 +1,12 @@
+// wildcard import from middle brings get_secret but NOT secret (non-forwarding)
+import * from middle
+
 module inner =
     let secret = 99
 
 module middle =
     import secret from inner
     let get_secret = () -> secret
-
-// wildcard import from middle brings get_secret but NOT secret (non-forwarding)
-import * from middle
 
 let main = (args: str[]) ->
     assert(get_secret() == 99)

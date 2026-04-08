@@ -1,0 +1,9 @@
+module src =
+    let value = 42
+
+module m =
+    let x = 1
+    import value from src
+
+let main = (args: str[]) ->
+    0

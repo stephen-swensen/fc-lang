@@ -1,4 +1,8 @@
 // Test: extern union with struct-typed fields
+import key_event from ev
+import mouse_event from ev
+import event from ev
+
 module ev from "test_union.h" =
     extern struct key_event as key_event =
         type: uint32
@@ -13,10 +17,6 @@ module ev from "test_union.h" =
         type: uint32
         key: key_event
         mouse: mouse_event
-
-import key_event from ev
-import mouse_event from ev
-import event from ev
 
 let main = (args: str[]) ->
     // Create union with struct-typed field

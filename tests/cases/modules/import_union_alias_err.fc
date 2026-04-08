@@ -1,9 +1,9 @@
+import color as col from shapes
+
 module shapes =
     union color =
         | red
         | green
-
-import color as col from shapes
 
 let main = (args: str[]) ->
     let c = col.red

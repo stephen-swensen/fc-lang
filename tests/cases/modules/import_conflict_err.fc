@@ -1,11 +1,11 @@
 // Top-level let beats file-level import — same name is not a conflict,
 // the let simply takes priority (members beat imports).
+import add from math
+
 module math =
     let add = (a: int32, b: int32) -> a + b
 
 let add = (a: int32, b: int32) -> a + b + 1
-
-import add from math
 
 let main = (args: str[]) ->
     // Top-level let wins: a + b + 1

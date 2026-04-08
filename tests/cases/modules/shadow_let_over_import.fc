@@ -1,7 +1,7 @@
+import value from m
+
 module m =
     let value = 100
-
-import value from m
 
 let main = (args: str[]) ->
     let value = 42

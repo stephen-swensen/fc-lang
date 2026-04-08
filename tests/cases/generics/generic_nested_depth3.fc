@@ -1,6 +1,9 @@
 // Generic function calling generic function at depth 3.
 // Regression test: three-deep generic call chain (reduce -> try_reduce -> fold)
 // where each callee is resolved via self-qualified name in a deeply nested module.
+import b from a
+import c from b
+
 module a =
     module b =
         module c =
@@ -23,9 +26,6 @@ module a =
 
             let first = (s: const 'a[]) ->
                 c.try_first(s)!
-
-import b from a
-import c from b
 
 let main = (args: str[]) ->
     let s = int32[4] { 10, 20, 30, 40 }

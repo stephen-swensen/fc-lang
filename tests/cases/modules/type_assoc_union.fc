@@ -1,3 +1,6 @@
+import shape from shapes
+import shape_ops from shapes
+
 module shapes =
     union shape =
         | circle(int32)
@@ -8,9 +11,6 @@ module shapes =
             match s with
             | circle(r) -> r * r * 3
             | rect(side) -> side * side
-
-import shape from shapes
-import shape_ops from shapes
 
 let main = (args: str[]) ->
     let c = shape.circle(1)

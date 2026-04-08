@@ -1,4 +1,7 @@
 // Test: extern structs with struct-typed fields (nested structs)
+import point from geom
+import rect from geom
+
 module geom from "test_struct.h" =
     extern struct point as point =
         x: int32
@@ -6,9 +9,6 @@ module geom from "test_struct.h" =
     extern struct rect as rect =
         origin: point
         size: point
-
-import point from geom
-import rect from geom
 
 let main = (args: str[]) ->
     // Create nested struct via literals

@@ -1,6 +1,8 @@
 // Generic calls across sibling modules, both nested in a parent.
 // module api calls module helpers' generic functions, with type variables
 // flowing through (not resolved to concrete at the call site).
+import api from parent
+
 module parent =
     module helpers =
         let identity = (x: 'a) -> x
@@ -26,8 +28,6 @@ module parent =
         // Cross-sibling with multi-type-var generic
         let sum = (s: const int32[]) ->
             helpers.fold(s, 0, (acc: int32, x: int32) -> acc + x)
-
-import api from parent
 
 let main = (args: str[]) ->
     let s = int32[3] { 10, 20, 30 }

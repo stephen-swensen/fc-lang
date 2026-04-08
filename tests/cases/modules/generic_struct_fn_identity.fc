@@ -1,10 +1,10 @@
+import box from factory
+import wrap from factory
+
 module factory =
     struct box =
         value: 'a
     let wrap = (x: 'a) -> box { value = x }
-
-import box from factory
-import wrap from factory
 
 let main = (args: str[]) ->
     let _result =

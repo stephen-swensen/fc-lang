@@ -1,12 +1,12 @@
 namespace acme::
 
-module helpers =
-    let value = 42
-    let double = (x: int32) -> x * 2
-
 // File-level imports are visible to all modules in this file
 import value from helpers
 import double from helpers
+
+module helpers =
+    let value = 42
+    let double = (x: int32) -> x * 2
 
 module consumer =
     let get = () -> value

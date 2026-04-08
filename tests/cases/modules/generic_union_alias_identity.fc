@@ -1,9 +1,9 @@
+import holder as h from shapes
+
 module shapes =
     union holder =
         | val(int32)
         | empty
-
-import holder as h from shapes
 
 let main = (args: str[]) ->
     let _result =

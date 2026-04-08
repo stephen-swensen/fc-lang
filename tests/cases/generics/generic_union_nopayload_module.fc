@@ -1,6 +1,8 @@
 // No-payload variant construction for module-qualified generic unions.
 // Regression test: m.union_name<Types>.variant must instantiate the
 // generic union, not emit the unmonomorphized template name.
+import maybe from m
+
 module m =
     union color =
         | red
@@ -20,8 +22,6 @@ module m =
         match x with
         | just(v) -> v
         | nothing -> 0
-
-import maybe from m
 
 let main = (args: str[]) ->
     // Module-qualified no-payload variant with generic type args

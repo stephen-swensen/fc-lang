@@ -1,6 +1,8 @@
 // Generic companion struct + module at depth 2, with generic methods
 // calling each other. The key pattern: box.map calls box.make, both
 // generic, both inside a companion module nested in a parent module.
+import box from lib
+
 module lib =
     struct box =
         value: 'a
@@ -16,8 +18,6 @@ module lib =
         // Chain: map_twice -> map -> make
         let map_twice = (b: box<'a>, f: ('a) -> 'a) ->
             box.map(box.map(b, f), f)
-
-import box from lib
 
 let main = (args: str[]) ->
     let b = box.make(10)

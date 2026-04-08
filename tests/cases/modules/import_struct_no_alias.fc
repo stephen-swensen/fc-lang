@@ -1,9 +1,9 @@
+import point from geometry
+
 module geometry =
     struct point =
         x: int32
         y: int32
-
-import point from geometry
 
 let make = (x: int32, y: int32) -> point { x = x, y = y }
 

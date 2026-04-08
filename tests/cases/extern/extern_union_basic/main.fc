@@ -1,10 +1,10 @@
 // Test: extern union basic usage — literal, field access, default, mutation, sizeof
+import int_or_float from u
+
 module u from "test_union.h" =
     extern union int_or_float as int_or_float =
         i: int32
         f: float32
-
-import int_or_float from u
 
 let main = (args: str[]) ->
     // Literal — set the int field

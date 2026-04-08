@@ -1,10 +1,10 @@
 // Test: sizeof on extern struct
+import timespec from t
+
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
         tv_sec: int64
         tv_nsec: int64
-
-import timespec from t
 
 let main = (args: str[]) ->
     let s = sizeof(timespec)

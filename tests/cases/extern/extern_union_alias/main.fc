@@ -1,10 +1,10 @@
 // Test: extern union with as alias
+import int_or_float from u
+
 module u from "test_union.h" =
     extern union IntOrFloat as int_or_float =
         i: int32
         f: float32
-
-import int_or_float from u
 
 let main = (args: str[]) ->
     let v = int_or_float { i = 7 }

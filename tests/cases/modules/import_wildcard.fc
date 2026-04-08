@@ -1,8 +1,8 @@
+import * from math
+
 module math =
     let add = (a: int32, b: int32) -> a + b
     let mul = (a: int32, b: int32) -> a * b
-
-import * from math
 
 let main = (args: str[]) ->
     assert(add(mul(3, 4), 5) == 17)

@@ -1,11 +1,11 @@
+import point as pt from geometry
+
 module geometry =
     struct point =
         x: int32
         y: int32
 
     let sum = (p: point) -> p.x + p.y
-
-import point as pt from geometry
 
 let add_points = (a: pt, b: pt) -> pt { x = a.x + b.x, y = a.y + b.y }
 
