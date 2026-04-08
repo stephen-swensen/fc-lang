@@ -1,0 +1,16 @@
+// Parameter shadows a module name in a dotted access chain.
+// m.send(data) where data is a parameter should not be confused
+// with m.data.something when m has a submodule named data.
+module outer =
+    module data =
+        let value = 99
+
+    let process = (data: const uint8[]) ->
+        (int32)data.len
+
+let main = (args: str[]) ->
+    let buf = uint8[2] { 1u8, 2u8 }
+    assert(outer.process(buf) == 2)
+    // Module chain access still works
+    assert(outer.data.value == 99)
+    0

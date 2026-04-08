@@ -2890,18 +2890,27 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
 
         /* Try to resolve the object as a module reference (handles nested chains).
-         * For EXPR_IDENT "math", find module "math".
-         * For EXPR_FIELD "geometry.shapes", recursively find submodule "shapes" in "geometry".
-         * Also handles type-associated modules (same name as struct/union). */
+         * Only attempt when the object could be a module or type-associated module:
+         * - TYPE_VOID: EXPR_IDENT returned the module sentinel
+         * - TYPE_STRUCT/TYPE_UNION from non-local scope: could be a type name with
+         *   a companion module (e.g., vec2.zero() where vec2 is both struct and module)
+         * Skip for local bindings (parameters, let variables) to prevent a parameter
+         * named "data" from being confused with a module named "data". */
         Symbol *mod_sym = NULL;
         SymbolTable *mod_parent_members = NULL; /* members table where mod_sym was found */
-        if (e->field.object->kind == EXPR_IDENT) {
+        bool could_be_module = (obj_type->kind == TYPE_VOID) ||
+            (e->field.object->kind == EXPR_IDENT &&
+             !e->field.object->ident.is_local &&
+             (obj_type->kind == TYPE_STRUCT || obj_type->kind == TYPE_UNION));
+        if (e->field.object->kind == EXPR_IDENT && could_be_module) {
             const char *name = e->field.object->ident.name;
             mod_sym = resolve_symbol_kind(ctx, name, DECL_MODULE);
         }
 
-        /* If object's EXPR_FIELD resolved to a module (for nested chains like a.b.member),
-         * try to find the module by walking the EXPR_FIELD chain. */
+        /* If object's EXPR_FIELD might be a module chain (a.b.member), walk the chain
+         * from the root IDENT to find nested modules.  Gate on the root IDENT — only
+         * enter when the root could be a module reference (TYPE_VOID or non-local
+         * struct/union from companion pattern). */
         if (!mod_sym && e->field.object->kind == EXPR_FIELD) {
             /* Walk up the nested EXPR_FIELD chain to find the deepest module. */
             /* We need to re-resolve: the object is already type-checked and set to void.
@@ -2913,7 +2922,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 DA_APPEND(chain, depth, chain_cap, cur);
                 cur = cur->field.object;
             }
-            if (cur->kind == EXPR_IDENT) {
+            if (cur->kind == EXPR_IDENT && !cur->ident.is_local) {
                 Symbol *root = resolve_symbol_kind(ctx, cur->ident.name, DECL_MODULE);
                 if (root && root->members) {
                     Symbol *walk = root;
@@ -3063,8 +3072,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
-        /* If the object is an IDENT referencing a union type, this is variant construction */
-        if (e->field.object->kind == EXPR_IDENT) {
+        /* If the object is an IDENT referencing a union type, this is variant construction.
+         * Only attempt this when obj_type is a union — if EXPR_IDENT resolved the name
+         * to a different type (e.g., a parameter), don't re-resolve as a union. */
+        if (e->field.object->kind == EXPR_IDENT && obj_type->kind == TYPE_UNION) {
             Symbol *sym = resolve_symbol(ctx, e->field.object->ident.name);
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
                 e->field.is_variant_constructor = true;

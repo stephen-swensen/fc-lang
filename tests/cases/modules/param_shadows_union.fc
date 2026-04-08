@@ -1,0 +1,17 @@
+// Function parameter shadows a union type name.
+// The parameter's type should be used, not the union.
+union shape =
+    | circle(int32)
+    | rect(int32)
+
+module m =
+    let get_value = (shape: int32) -> shape + 1
+
+let main = (args: str[]) ->
+    assert(m.get_value(5) == 6)
+    // Union access still works through the type name
+    let s = shape.circle(10)
+    match s with
+    | circle(r) -> assert(r == 10)
+    | rect(w) -> assert(false)
+    0

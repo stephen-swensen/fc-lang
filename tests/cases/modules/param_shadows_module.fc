@@ -1,0 +1,20 @@
+// Function parameter shadows a module with the same name.
+// The parameter's type (slice) should be used for field access,
+// not the module.
+module data =
+    let value = 99
+
+module net =
+    let send = (data: const uint8[]) ->
+        (int32)data.len
+
+    let recv = (data: uint8[]) ->
+        (int32)data.len
+
+let main = (args: str[]) ->
+    let buf = uint8[3] { 1u8, 2u8, 3u8 }
+    assert(net.send(buf) == 3)
+    assert(net.recv(buf) == 3)
+    // Direct module access still works
+    assert(data.value == 99)
+    0

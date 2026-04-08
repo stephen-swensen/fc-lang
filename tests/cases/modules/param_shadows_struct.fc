@@ -1,0 +1,18 @@
+// Function parameter shadows a struct type name.
+// Field access on the parameter should use the parameter's actual type.
+struct point =
+    x: int32
+    y: int32
+
+module m =
+    // Parameter named "point" shadows the struct type name.
+    // point.x should access the slice element, not the struct field.
+    let len_of = (point: uint8[]) -> (int32)point.len
+
+let main = (args: str[]) ->
+    let buf = uint8[2] { 1u8, 2u8 }
+    assert(m.len_of(buf) == 2)
+    // Struct access still works through the type name
+    let p = point { x = 3, y = 4 }
+    assert(p.x == 3)
+    0

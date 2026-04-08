@@ -1,0 +1,19 @@
+// Parameter named after a companion-patterned type should use the
+// parameter's type, not trigger companion module lookup.
+struct point =
+    x: int32
+    y: int32
+
+module point =
+    let origin = () -> point { x = 0, y = 0 }
+
+module m =
+    let sum_bytes = (point: uint8[]) -> (int32)point.len
+
+let main = (args: str[]) ->
+    let buf = uint8[5] { 1u8, 2u8, 3u8, 4u8, 5u8 }
+    assert(m.sum_bytes(buf) == 5)
+    // Companion pattern still works when accessed by type name
+    let p = point.origin()
+    assert(p.x == 0)
+    0
