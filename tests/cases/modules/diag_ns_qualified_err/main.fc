@@ -1,0 +1,6 @@
+import shapes from vendor::
+
+let main = (args: str[]) ->
+    let r = shapes.rect { w = 1, h = 2 }
+    let z = r.z
+    0
