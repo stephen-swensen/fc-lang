@@ -1442,12 +1442,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
                     return e->type;
                 }
-                /* Use the mangled codegen_name */
-                if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name) {
-                    e->ident.codegen_name = msym->decl->let.codegen_name;
-                }
-                if (msym->decl && msym->decl->kind == DECL_LET)
-                    e->ident.is_mut = msym->decl->let.is_mut;
                 if (!msym->type && msym->decl && msym->decl->kind == DECL_LET) {
                     /* On-demand type check for module sibling with cycle detection */
                     bool cycle = false;
@@ -1469,6 +1463,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     ctx->scope = saved_scope;
                     ctx->on_demand_visited = vis.next;
                 }
+                if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name)
+                    e->ident.codegen_name = msym->decl->let.codegen_name;
+                if (msym->decl && msym->decl->kind == DECL_LET)
+                    e->ident.is_mut = msym->decl->let.is_mut;
                 if (!msym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();
@@ -1490,11 +1488,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
                     return e->type;
                 }
-                /* Let bindings from ancestor modules */
-                if (psym->decl && psym->decl->kind == DECL_LET && psym->decl->let.codegen_name)
-                    e->ident.codegen_name = psym->decl->let.codegen_name;
-                if (psym->decl && psym->decl->kind == DECL_LET)
-                    e->ident.is_mut = psym->decl->let.is_mut;
                 if (!psym->type && psym->decl && psym->decl->kind == DECL_LET) {
                     /* On-demand type check for parent binding with cycle detection */
                     bool cycle = false;
@@ -1527,6 +1520,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     ctx->module_symtab = saved_mod;
                     ctx->on_demand_visited = vis.next;
                 }
+                if (psym->decl && psym->decl->kind == DECL_LET && psym->decl->let.codegen_name)
+                    e->ident.codegen_name = psym->decl->let.codegen_name;
+                if (psym->decl && psym->decl->kind == DECL_LET)
+                    e->ident.is_mut = psym->decl->let.is_mut;
                 if (!psym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();
@@ -1547,10 +1544,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (isym->kind == DECL_MODULE) {
                     e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
                     return e->type;
-                }
-                /* Use the mangled codegen_name */
-                if (isym->decl && isym->decl->kind == DECL_LET && isym->decl->let.codegen_name) {
-                    e->ident.codegen_name = isym->decl->let.codegen_name;
                 }
                 if (!isym->type && isym->decl && isym->decl->kind == DECL_LET) {
                     /* On-demand type check for imported symbol with cycle detection */
@@ -1579,6 +1572,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         ctx->on_demand_visited = vis.next;
                     }
                 }
+                if (isym->decl && isym->decl->kind == DECL_LET && isym->decl->let.codegen_name)
+                    e->ident.codegen_name = isym->decl->let.codegen_name;
                 if (isym->decl && isym->decl->kind == DECL_LET)
                     e->ident.is_mut = isym->decl->let.is_mut;
                 if (!isym->type) {
