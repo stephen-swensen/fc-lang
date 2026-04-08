@@ -162,10 +162,10 @@ int main(int argc, char **argv) {
     }
 
     /* Discover transitive monomorphized instances (generic-calling-generic) */
-    mono_discover_transitive(&mono, &arena, &intern_table, &symtab);
+    mono_discover_transitive(&mono, &arena, &intern_table);
 
     /* Finalize: sort monomorphized types for correct C emission order */
-    mono_finalize_types(&mono, &arena, &intern_table, &symtab);
+    mono_finalize_types(&mono, &arena, &intern_table);
 
     /* Code generation */
     if (!output_path) {

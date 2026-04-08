@@ -35,19 +35,15 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern,
 MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
 
 /* Recursively resolve generic struct/union stubs with concrete type_args into
- * mangled names in a type tree. Call after type_substitute() to ensure nested
- * references (e.g. self-referential fields) have proper C identifiers.
- * symtab (optional): used to canonicalize struct names before mangling. */
-void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type,
-                              SymbolTable *symtab);
-
+ * mangled names in a type tree. Uses resolved_sym on Type (set by pass1/pass2)
+ * to get canonical names without symtab re-lookup. */
+void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
 
 /* Finalize monomorphized types: ensure all concrete_types are built and
  * topologically sort entries so by-value struct dependencies are emitted first. */
-void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
+void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern);
 
 /* Discover all transitive monomorphized instances by walking template function
  * bodies. Generic calls inside generic functions aren't resolved until the outer
  * function is instantiated; this fixpoint loop finds them all. Call after pass2. */
-void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern,
-                              SymbolTable *symtab);
+void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern);

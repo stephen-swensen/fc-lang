@@ -398,6 +398,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         if (!sym)
             sym = resolve_symbol(ctx, t->struc.name);
         if (sym && sym->type) {
+            /* Store resolved symbol on the type for mono to use */
+            t->struc.resolved_sym = sym;
             /* If the stub has type args (e.g. box<int32>), instantiate the generic */
             if (t->struc.type_arg_count > 0 && sym->is_generic && sym->type_param_count > 0) {
                 /* Resolve each type arg */
@@ -2781,7 +2783,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                 if (mi && !mi->concrete_type) {
                     Type *ct = type_copy(ctx->arena, concrete);
-                    mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct, ctx->symtab);
+                    mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
                     mi->concrete_type = ct;
                 }
             }

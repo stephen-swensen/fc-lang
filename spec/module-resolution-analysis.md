@@ -44,11 +44,13 @@ To make this work, pass1 now registers module-scoped types in the module's membe
 
 Removed all fallback symtab re-resolution from monomorph (`discover_in_expr` for both EXPR_CALL and EXPR_STRUCT_LIT) and codegen (deferred generic call path). Both now rely solely on `resolved_callee`/`resolved_sym` set by pass2. Pass2 is the single source of truth for name resolution of calls and struct literals.
 
+### 5. Eliminated symtab dependency from monomorph — DONE
+
+Added `resolved_sym` field to TYPE_STRUCT and TYPE_UNION in types.h. Set by pass1 (after all members are registered, to avoid use-after-realloc) and pass2 (in resolve_type and canonicalize_stub_names). Propagated through type_copy and type_substitute. Removed the `SymbolTable *symtab` parameter from `mono_resolve_type_names`, `discover_nested_types`, `mono_finalize_types`, and `mono_discover_transitive`. monomorph.c now has zero symtab references — all type name canonicalization uses the `resolved_sym` pointer set by earlier phases.
+
 ## Remaining Architectural Debt
 
 - **EXPR_IDENT resolution** (pass2.c): Cannot be consolidated because each scope source has unique on-demand type-checking behavior (cycle detection, context save/restore) entangled with the lookup. A future refactor could separate "find symbol + report source" from "do source-specific post-processing."
-
-- **`mono_resolve_type_names`** (monomorph.c): Still does its own symtab lookups for type name canonicalization. This operates on `Type` objects (not expressions) which don't carry `resolved_sym` pointers. Fixing this would require adding a `resolved_sym` field to the `Type` struct.
 
 ## Related Bugs Found and Fixed
 

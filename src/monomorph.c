@@ -59,26 +59,23 @@ MonoInstance *mono_find(MonoTable *t, const char *mangled_name) {
     return NULL;
 }
 
-void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type,
-                              SymbolTable *symtab) {
+void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type) {
     if (!type) return;
     switch (type->kind) {
-    case TYPE_POINTER: mono_resolve_type_names(t, a, intern, type->pointer.pointee, symtab); return;
-    case TYPE_SLICE:   mono_resolve_type_names(t, a, intern, type->slice.elem, symtab); return;
-    case TYPE_OPTION:  mono_resolve_type_names(t, a, intern, type->option.inner, symtab); return;
-    case TYPE_FIXED_ARRAY: mono_resolve_type_names(t, a, intern, type->fixed_array.elem, symtab); return;
+    case TYPE_POINTER: mono_resolve_type_names(t, a, intern, type->pointer.pointee); return;
+    case TYPE_SLICE:   mono_resolve_type_names(t, a, intern, type->slice.elem); return;
+    case TYPE_OPTION:  mono_resolve_type_names(t, a, intern, type->option.inner); return;
+    case TYPE_FIXED_ARRAY: mono_resolve_type_names(t, a, intern, type->fixed_array.elem); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
-            mono_resolve_type_names(t, a, intern, type->func.param_types[i], symtab);
-        mono_resolve_type_names(t, a, intern, type->func.return_type, symtab);
+            mono_resolve_type_names(t, a, intern, type->func.param_types[i]);
+        mono_resolve_type_names(t, a, intern, type->func.return_type);
         return;
     case TYPE_STRUCT:
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
-            /* Canonicalize name via symtab before mangling */
-            if (symtab && !mono_find(t, type->struc.name)) {
-                const char *lookup = type->struc.base_name ? type->struc.base_name : type->struc.name;
-                Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_STRUCT);
-                if (!sym) sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
+            /* Canonicalize name via resolved_sym from pass1/pass2 */
+            if (!mono_find(t, type->struc.name)) {
+                Symbol *sym = (Symbol *)type->struc.resolved_sym;
                 if (sym && sym->type && sym->type->struc.name != type->struc.name) {
                     if (!type->struc.base_name) type->struc.base_name = type->struc.name;
                     type->struc.name = sym->type->struc.name;
@@ -91,14 +88,12 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             }
         }
         for (int i = 0; i < type->struc.field_count; i++)
-            mono_resolve_type_names(t, a, intern, type->struc.fields[i].type, symtab);
+            mono_resolve_type_names(t, a, intern, type->struc.fields[i].type);
         return;
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
-            if (symtab && !mono_find(t, type->unio.name)) {
-                const char *lookup = type->unio.base_name ? type->unio.base_name : type->unio.name;
-                Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_UNION);
-                if (!sym) sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
+            if (!mono_find(t, type->unio.name)) {
+                Symbol *sym = (Symbol *)type->unio.resolved_sym;
                 if (sym && sym->type && sym->type->unio.name != type->unio.name) {
                     if (!type->unio.base_name) type->unio.base_name = type->unio.name;
                     type->unio.name = sym->type->unio.name;
@@ -111,7 +106,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             }
         }
         for (int i = 0; i < type->unio.variant_count; i++)
-            mono_resolve_type_names(t, a, intern, type->unio.variants[i].payload, symtab);
+            mono_resolve_type_names(t, a, intern, type->unio.variants[i].payload);
         return;
     default: return;
     }
@@ -128,14 +123,13 @@ static Type **substitute_type_args(Arena *a, Type **type_args, int type_arg_coun
 
 /* Recursively walk an expression tree to discover transitive mono instances */
 static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *intern,
-                              SymbolTable *symtab,
                               const char **var_names, Type **concrete, int var_count) {
     if (!e) return;
     switch (e->kind) {
     case EXPR_CALL:
-        discover_in_expr(e->call.func, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->call.func, t, a, intern, var_names, concrete, var_count);
         for (int i = 0; i < e->call.arg_count; i++)
-            discover_in_expr(e->call.args[i], t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->call.args[i], t, a, intern, var_names, concrete, var_count);
         /* Resolve deferred generic call */
         if (!e->call.mangled_name && e->call.type_arg_count > 0) {
             Type **concrete_args = substitute_type_args(a, e->call.type_args,
@@ -167,7 +161,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         return;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, var_names, concrete, var_count);
         /* Register generic struct instances created under substitution */
         if (e->type && e->type->kind == TYPE_STRUCT && type_contains_type_var(e->type)) {
             /* Use resolved_sym from pass2 — always set for struct literals */
@@ -210,7 +204,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                         }
                         if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct, symtab);
+                        mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
                     }
                 }
@@ -219,98 +213,98 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         }
         return;
     case EXPR_BINARY:
-        discover_in_expr(e->binary.left, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->binary.right, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->binary.left, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->binary.right, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_UNARY_PREFIX:
-        discover_in_expr(e->unary_prefix.operand, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->unary_prefix.operand, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_UNARY_POSTFIX:
-        discover_in_expr(e->unary_postfix.operand, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->unary_postfix.operand, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        discover_in_expr(e->field.object, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->field.object, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_INDEX:
-        discover_in_expr(e->index.object, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->index.index, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->index.object, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->index.index, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_IF:
-        discover_in_expr(e->if_expr.cond, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->if_expr.then_body, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->if_expr.else_body, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->if_expr.cond, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->if_expr.then_body, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->if_expr.else_body, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
-            discover_in_expr(e->block.stmts[i], t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->block.stmts[i], t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_FUNC:
         for (int i = 0; i < e->func.body_count; i++)
-            discover_in_expr(e->func.body[i], t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->func.body[i], t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_LET:
-        discover_in_expr(e->let_expr.let_init, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->let_expr.let_init, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_ASSIGN:
-        discover_in_expr(e->assign.target, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->assign.value, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->assign.target, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->assign.value, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_RETURN:
-        discover_in_expr(e->return_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->return_expr.value, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_BREAK:
-        discover_in_expr(e->break_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->break_expr.value, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_LOOP:
         for (int i = 0; i < e->loop_expr.body_count; i++)
-            discover_in_expr(e->loop_expr.body[i], t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->loop_expr.body[i], t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_FOR:
-        discover_in_expr(e->for_expr.iter, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->for_expr.iter, t, a, intern, var_names, concrete, var_count);
         for (int i = 0; i < e->for_expr.body_count; i++)
-            discover_in_expr(e->for_expr.body[i], t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->for_expr.body[i], t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_MATCH:
-        discover_in_expr(e->match_expr.subject, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->match_expr.subject, t, a, intern, var_names, concrete, var_count);
         for (int i = 0; i < e->match_expr.arm_count; i++)
             for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                discover_in_expr(e->match_expr.arms[i].body[j], t, a, intern, symtab, var_names, concrete, var_count);
+                discover_in_expr(e->match_expr.arms[i].body[j], t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_CAST:
-        discover_in_expr(e->cast.operand, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->cast.operand, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_SOME:
-        discover_in_expr(e->some_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->some_expr.value, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_SLICE:
-        discover_in_expr(e->slice.object, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->slice.lo, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->slice.hi, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->slice.object, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->slice.lo, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->slice.hi, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_ALLOC:
-        discover_in_expr(e->alloc_expr.size_expr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->alloc_expr.init_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->alloc_expr.size_expr, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->alloc_expr.init_expr, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_FREE:
-        discover_in_expr(e->free_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->free_expr.operand, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_ASSERT:
-        discover_in_expr(e->assert_expr.condition, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->assert_expr.condition, t, a, intern, var_names, concrete, var_count);
         if (e->assert_expr.message)
-            discover_in_expr(e->assert_expr.message, t, a, intern, symtab, var_names, concrete, var_count);
+            discover_in_expr(e->assert_expr.message, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_DEFER:
-        discover_in_expr(e->defer_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->defer_expr.value, t, a, intern, var_names, concrete, var_count);
         return;
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++) {
             if (!e->interp_string.segments[i].is_literal)
-                discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, symtab, var_names, concrete, var_count);
+                discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, var_names, concrete, var_count);
         }
         return;
     case EXPR_SLICE_LIT:
-        discover_in_expr(e->slice_lit.ptr_expr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->slice_lit.len_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->slice_lit.ptr_expr, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->slice_lit.len_expr, t, a, intern, var_names, concrete, var_count);
         return;
     default: return;
     }
@@ -377,33 +371,27 @@ static void topo_visit(MonoTable *t, int idx, int *state, int *order, int *order
  * references that don't have a MonoInstance yet. This handles structs referenced
  * only as field types (never directly constructed via struct literals). */
 static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
-                                   InternTable *intern, SymbolTable *symtab) {
+                                   InternTable *intern) {
     if (!type) return;
     switch (type->kind) {
-    case TYPE_POINTER: discover_nested_types(type->pointer.pointee, t, a, intern, symtab); return;
-    case TYPE_SLICE:   discover_nested_types(type->slice.elem, t, a, intern, symtab); return;
-    case TYPE_OPTION:  discover_nested_types(type->option.inner, t, a, intern, symtab); return;
-    case TYPE_FIXED_ARRAY: discover_nested_types(type->fixed_array.elem, t, a, intern, symtab); return;
+    case TYPE_POINTER: discover_nested_types(type->pointer.pointee, t, a, intern); return;
+    case TYPE_SLICE:   discover_nested_types(type->slice.elem, t, a, intern); return;
+    case TYPE_OPTION:  discover_nested_types(type->option.inner, t, a, intern); return;
+    case TYPE_FIXED_ARRAY: discover_nested_types(type->fixed_array.elem, t, a, intern); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
-            discover_nested_types(type->func.param_types[i], t, a, intern, symtab);
-        discover_nested_types(type->func.return_type, t, a, intern, symtab);
+            discover_nested_types(type->func.param_types[i], t, a, intern);
+        discover_nested_types(type->func.return_type, t, a, intern);
         return;
     case TYPE_STRUCT:
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
-            /* Check if already fully mangled and registered */
             if (mono_find(t, type->struc.name)) {
-                /* Recurse into fields only */
                 for (int i = 0; i < type->struc.field_count; i++)
-                    discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+                    discover_nested_types(type->struc.fields[i].type, t, a, intern);
                 return;
             }
-            /* Find the template symbol to get the canonical base name for mangling.
-             * Try base_name first (parser name), then name (may be canonical from pass1). */
-            const char *lookup = type->struc.base_name ? type->struc.base_name : type->struc.name;
-            Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_STRUCT);
-            if (!sym) sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
-            /* Use the symbol's canonical name for mangling */
+            /* Use resolved_sym from pass1/pass2 for the canonical name */
+            Symbol *sym = (Symbol *)type->struc.resolved_sym;
             const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->struc.type_args, type->struc.type_arg_count);
@@ -414,7 +402,6 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                     mono_register(t, a, intern, sym->type->struc.name, NULL,
                         type->struc.type_args, type->struc.type_arg_count,
                         sym->decl, DECL_STRUCT, sym->type_params, sym->type_param_count);
-                    /* Build concrete type */
                     MonoInstance *mi = mono_find(t, mangled);
                     if (mi && !mi->concrete_type) {
                         int ntp = sym->type_param_count < type->struc.type_arg_count
@@ -424,26 +411,23 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                         if (ct == sym->type) ct = type_copy(a, ct);
                         if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct, symtab);
+                        mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
                     }
                 }
             }
         }
-        /* Recurse into fields (for by-value nested structs) */
         for (int i = 0; i < type->struc.field_count; i++)
-            discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+            discover_nested_types(type->struc.fields[i].type, t, a, intern);
         return;
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (mono_find(t, type->unio.name)) {
                 for (int i = 0; i < type->unio.variant_count; i++)
-                    discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+                    discover_nested_types(type->unio.variants[i].payload, t, a, intern);
                 return;
             }
-            const char *lookup = type->unio.base_name ? type->unio.base_name : type->unio.name;
-            Symbol *sym = symtab_lookup_kind(symtab, lookup, DECL_UNION);
-            if (!sym) sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
+            Symbol *sym = (Symbol *)type->unio.resolved_sym;
             const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->unio.type_args, type->unio.type_arg_count);
@@ -463,20 +447,20 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                         if (ct == sym->type) ct = type_copy(a, ct);
                         if (!ct->unio.base_name) ct->unio.base_name = ct->unio.name;
                         ct->unio.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct, symtab);
+                        mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
                     }
                 }
             }
         }
         for (int i = 0; i < type->unio.variant_count; i++)
-            discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+            discover_nested_types(type->unio.variants[i].payload, t, a, intern);
         return;
     default: return;
     }
 }
 
-void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
+void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern) {
     if (t->count == 0) return;
 
     /* Discover any concrete generic structs/unions referenced in field types
@@ -491,10 +475,10 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
                 Type *ct = inst->concrete_type;
                 if (ct->kind == TYPE_STRUCT) {
                     for (int f = 0; f < ct->struc.field_count; f++)
-                        discover_nested_types(ct->struc.fields[f].type, t, a, intern, symtab);
+                        discover_nested_types(ct->struc.fields[f].type, t, a, intern);
                 } else if (ct->kind == TYPE_UNION) {
                     for (int v = 0; v < ct->unio.variant_count; v++)
-                        discover_nested_types(ct->unio.variants[v].payload, t, a, intern, symtab);
+                        discover_nested_types(ct->unio.variants[v].payload, t, a, intern);
                 }
             }
         }
@@ -507,7 +491,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     for (int i = 0; i < t->count; i++) {
         MonoInstance *inst = &t->entries[i];
         if (inst->concrete_type)
-            mono_resolve_type_names(t, a, intern, inst->concrete_type, symtab);
+            mono_resolve_type_names(t, a, intern, inst->concrete_type);
     }
 
     /* Topologically sort struct/union entries so by-value dependencies come first.
@@ -537,8 +521,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     free(order);
 }
 
-void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern,
-                              SymbolTable *symtab) {
+void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern) {
     int discovered = 0;
     while (discovered < t->count) {
         int batch_end = t->count;
@@ -549,7 +532,7 @@ void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern,
             if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
             Expr *fn = tmpl->let.init;
             for (int j = 0; j < fn->func.body_count; j++) {
-                discover_in_expr(fn->func.body[j], t, a, intern, symtab,
+                discover_in_expr(fn->func.body[j], t, a, intern,
                     inst->type_param_names, inst->type_args, inst->type_param_count);
             }
         }

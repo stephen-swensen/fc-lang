@@ -294,6 +294,7 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
                     t->struc.name = canon;
                     if (qname) t->struc.qualified_name = qname;
                 }
+                t->struc.resolved_sym = sym;
             }
         }
         /* Don't recurse into fields — stubs have field_count=0 */
@@ -671,6 +672,16 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             for (int k = 0; k < msym->type->unio.variant_count; k++)
                 canonicalize_stub_names(msym->type->unio.variants[k].payload, members);
         }
+    }
+
+    /* Set resolved_sym on each type now that the symtab is stable (no more reallocs).
+     * This bridges pass1 symbol info to mono without requiring symtab re-lookup. */
+    for (int j = 0; j < members->count; j++) {
+        Symbol *msym = &members->symbols[j];
+        if (msym->kind == DECL_STRUCT && msym->type && msym->type->kind == TYPE_STRUCT)
+            msym->type->struc.resolved_sym = msym;
+        if (msym->kind == DECL_UNION && msym->type && msym->type->kind == TYPE_UNION)
+            msym->type->unio.resolved_sym = msym;
     }
 
     /* Register module-scoped struct/union types in the global symbol table under

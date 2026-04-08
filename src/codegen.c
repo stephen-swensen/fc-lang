@@ -3025,7 +3025,7 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     if (g_subst && type_contains_type_var(t)) {
         t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
         if (!type_contains_type_var(t))
-            mono_resolve_type_names(g_mono, g_arena, g_intern, t, g_symtab);
+            mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
     if (t->kind == TYPE_FIXED_ARRAY) {
@@ -3097,7 +3097,7 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
     if (g_subst && type_contains_type_var(t)) {
         t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
         if (!type_contains_type_var(t))
-            mono_resolve_type_names(g_mono, g_arena, g_intern, t, g_symtab);
+            mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;
     /* Fixed-array types: recurse into element, don't generate standalone eq func */

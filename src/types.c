@@ -663,6 +663,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         ns->struc.field_count = t->struc.field_count;
         ns->struc.type_args = new_targs;
         ns->struc.type_arg_count = new_targ_count;
+        ns->struc.resolved_sym = t->struc.resolved_sym;
         return ns;
     }
     case TYPE_UNION: {
@@ -693,6 +694,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         nu->unio.variant_count = t->unio.variant_count;
         nu->unio.type_args = new_targs;
         nu->unio.type_arg_count = new_targ_count;
+        nu->unio.resolved_sym = t->unio.resolved_sym;
         return nu;
     }
     default: return t;
