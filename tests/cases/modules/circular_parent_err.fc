@@ -1,0 +1,12 @@
+// Circular type dependency through parent chain: child references parent
+// let binding via parent chain, parent references child's binding via
+// module member access, creating a type inference cycle.
+let helper = (x: int32) -> x
+
+module outer =
+    module inner =
+        let x = helper(y)
+
+    let y = helper(inner.x)
+
+let main = (args: str[]) -> 0
