@@ -1,0 +1,5 @@
+import add from math
+
+let main = (args: str[]) ->
+    assert(add(10, 3) == 13)
+    0

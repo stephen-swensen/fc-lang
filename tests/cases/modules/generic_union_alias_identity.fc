@@ -1,5 +1,3 @@
-import holder as h from shapes
-
 module shapes =
     union holder =
         | val(int32)
@@ -8,7 +6,7 @@ module shapes =
 let main = (args: str[]) ->
     let _result =
         let a = shapes.holder.val(42)
-        let b = h.val(42)
+        let b = shapes.holder.val(42)
         if a == b then 42 else 1
     assert(_result == 42)
     0

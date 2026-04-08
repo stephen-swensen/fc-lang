@@ -1,9 +1,6 @@
 // Generic function calling generic function at depth 3.
 // Regression test: three-deep generic call chain (reduce -> try_reduce -> fold)
 // where each callee is resolved via self-qualified name in a deeply nested module.
-import b from a
-import c from b
-
 module a =
     module b =
         module c =
@@ -29,11 +26,11 @@ module a =
 
 let main = (args: str[]) ->
     let s = int32[4] { 10, 20, 30, 40 }
-    assert(c.first(s) == 10)
-    assert(c.reduce(s, (x: int32, y: int32) -> x + y) == 100)
+    assert(a.b.c.first(s) == 10)
+    assert(a.b.c.reduce(s, (x: int32, y: int32) -> x + y) == 100)
 
     // Multiple instantiations at different types
     let bools = bool[3] { true, false, true }
-    assert(c.first(bools))
-    assert(c.reduce(bools, (x: bool, y: bool) -> x && y) == false)
+    assert(a.b.c.first(bools))
+    assert(a.b.c.reduce(bools, (x: bool, y: bool) -> x && y) == false)
     0

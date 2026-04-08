@@ -1,0 +1,4 @@
+import * from math
+
+let main = (args: str[]) ->
+    secret(5)

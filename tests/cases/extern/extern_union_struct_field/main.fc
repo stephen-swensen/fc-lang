@@ -1,8 +1,4 @@
 // Test: extern union with struct-typed fields
-import key_event from ev
-import mouse_event from ev
-import event from ev
-
 module ev from "test_union.h" =
     extern struct key_event as key_event =
         type: uint32
@@ -20,8 +16,8 @@ module ev from "test_union.h" =
 
 let main = (args: str[]) ->
     // Create union with struct-typed field
-    let k = key_event { type = 1u32, timestamp = 100u32, keycode = 42 }
-    let e = event { key = k }
+    let k = ev.key_event { type = 1u32, timestamp = 100u32, keycode = 42 }
+    let e = ev.event { key = k }
 
     // Read struct-typed field
     let k2 = e.key
@@ -37,15 +33,15 @@ let main = (args: str[]) ->
     assert(e.type == 1u32)
 
     // Create union with a different struct field
-    let m = mouse_event { type = 2u32, timestamp = 200u32, x = 10, y = 20 }
-    let e2 = event { mouse = m }
+    let m = ev.mouse_event { type = 2u32, timestamp = 200u32, x = 10, y = 20 }
+    let e2 = ev.event { mouse = m }
     assert(e2.mouse.x == 10)
     assert(e2.mouse.y == 20)
     assert(e2.type == 2u32)
 
     // Mutation: assign struct-typed field
-    let mut e3 = event { type = 0u32 }
-    e3.key = key_event { type = 3u32, timestamp = 300u32, keycode = 99 }
+    let mut e3 = ev.event { type = 0u32 }
+    e3.key = ev.key_event { type = 3u32, timestamp = 300u32, keycode = 99 }
     assert(e3.key.keycode == 99)
 
     // Mutation: sub-field through union

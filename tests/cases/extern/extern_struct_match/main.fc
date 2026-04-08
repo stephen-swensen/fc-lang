@@ -1,13 +1,11 @@
 // Test: pattern matching on extern struct
-import timespec from t
-
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
         tv_sec: int64
         tv_nsec: int64
 
 let main = (args: str[]) ->
-    let ts = timespec { tv_sec = 42, tv_nsec = 100 }
+    let ts = t.timespec { tv_sec = 42, tv_nsec = 100 }
     match ts with
     | { tv_sec = s, tv_nsec = ns } ->
         if s == 42 then

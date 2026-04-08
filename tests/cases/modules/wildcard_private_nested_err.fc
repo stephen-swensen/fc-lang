@@ -1,9 +1,0 @@
-import * from outer
-
-module outer =
-    let public_fn = () -> 42
-    private module internal =
-        let secret = 99
-
-let main = (args: str[]) ->
-    internal.secret

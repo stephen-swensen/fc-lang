@@ -1,21 +1,19 @@
 // Test: equality comparison on extern union (memcmp-based)
-import int_or_float from u
-
 module u from "test_union.h" =
     extern union int_or_float as int_or_float =
         i: int32
         f: float32
 
 let main = (args: str[]) ->
-    let a = int_or_float { i = 42 }
-    let b = int_or_float { i = 42 }
-    let c = int_or_float { i = 99 }
+    let a = u.int_or_float { i = 42 }
+    let b = u.int_or_float { i = 42 }
+    let c = u.int_or_float { i = 99 }
     // Same bytes should be equal
     assert(a == b)
     // Different bytes should not be equal
     assert(a != c)
     // Default values should be equal
-    let d = default(int_or_float)
-    let e = default(int_or_float)
+    let d = default(u.int_or_float)
+    let e = default(u.int_or_float)
     assert(d == e)
     0

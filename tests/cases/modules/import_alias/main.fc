@@ -1,0 +1,5 @@
+import add as plus from math
+
+let main = (args: str[]) ->
+    assert(plus(20, 5) == 25)
+    0

@@ -1,0 +1,6 @@
+import value from math
+
+let main = (args: str[]) ->
+    let value = 100
+    assert(value == 100)
+    0

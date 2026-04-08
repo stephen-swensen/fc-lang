@@ -1,0 +1,5 @@
+module mod_a =
+    let value = 10
+
+module mod_b =
+    let value = 20

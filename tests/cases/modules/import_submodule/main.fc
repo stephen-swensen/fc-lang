@@ -1,0 +1,5 @@
+import shapes from geometry
+
+let main = (args: str[]) ->
+    assert(shapes.area(3, 4) == 12)
+    0

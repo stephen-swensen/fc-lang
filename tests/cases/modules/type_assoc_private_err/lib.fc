@@ -1,0 +1,7 @@
+module geometry =
+    struct vec2 =
+        x: int32
+        y: int32
+
+    module vec2 =
+        private let internal = (v: vec2) -> v.x

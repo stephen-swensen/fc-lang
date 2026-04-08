@@ -1,0 +1,6 @@
+module containers =
+    struct box =
+        value: 'a
+
+    let wrap = (x: 'a) -> box { value = x }
+    let unwrap = (b: box<'a>) -> b.value

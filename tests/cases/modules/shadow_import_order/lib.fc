@@ -1,0 +1,5 @@
+module a =
+    let value = 10
+
+module b =
+    let value = 42

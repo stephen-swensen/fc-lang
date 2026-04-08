@@ -95,8 +95,6 @@ module c_signal from "signal.h" define "_POSIX_C_SOURCE" "200809L" =
 module c_stdio from "stdio.h" =
     extern snprintf: (cstr, usize, const cstr, ...) -> int32
 
-import sigval from c_signal
-
 // ============================================================
 // Entry point — main receives command-line args as str[]
 // Return value becomes the process exit code.
@@ -524,9 +522,9 @@ let main = (args: str[]) ->
     assert(sizeof(c_time.timespec) == 16i64)
 
     // Extern unions — untagged, fields overlap in memory
-    let sv = sigval { sival_int = 42 }
+    let sv = c_signal.sigval { sival_int = 42 }
     assert(sv.sival_int == 42)
-    let mut sv2 = default(sigval)
+    let mut sv2 = default(c_signal.sigval)
     sv2.sival_int = 99
     assert(sv2.sival_int == 99)
 

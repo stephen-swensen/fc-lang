@@ -1,0 +1,3 @@
+module utils =
+    let identity = (x: 'a) -> x
+    let pair_first = (a: 'a, b: 'b) -> a

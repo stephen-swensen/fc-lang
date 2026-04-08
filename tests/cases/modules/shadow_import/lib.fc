@@ -1,0 +1,2 @@
+module math =
+    let value = 42

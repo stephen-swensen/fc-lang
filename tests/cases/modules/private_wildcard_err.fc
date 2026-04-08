@@ -1,8 +1,0 @@
-import * from math
-
-module math =
-    private let secret = (x: int32) -> x * 100
-    let add = (a: int32, b: int32) -> a + b
-
-let main = (args: str[]) ->
-    secret(5)

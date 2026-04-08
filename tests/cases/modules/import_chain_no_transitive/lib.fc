@@ -1,0 +1,6 @@
+module inner =
+    let secret = 99
+
+module middle =
+    import secret from inner
+    let get_secret = () -> secret

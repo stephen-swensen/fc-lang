@@ -1,0 +1,5 @@
+import add as plus, mul as times from math
+
+let main = (args: str[]) ->
+    assert(plus(times(3, 4), 5) == 17)
+    0

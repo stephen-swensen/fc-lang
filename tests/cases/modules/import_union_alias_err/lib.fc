@@ -1,0 +1,4 @@
+module shapes =
+    union color =
+        | red
+        | green

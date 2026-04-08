@@ -1,0 +1,6 @@
+import value from a
+import value from b
+
+let main = (args: str[]) ->
+    assert(value == 42)
+    0

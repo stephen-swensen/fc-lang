@@ -1,0 +1,6 @@
+import * from geometry
+
+let main = (args: str[]) ->
+    let v = make(10, 20)
+    assert(v.x + v.y == 30)
+    0

@@ -1,0 +1,8 @@
+import vec2 from geometry
+
+let main = (args: str[]) ->
+    let a = vec2 { x = 3, y = 4 }
+    let b = vec2 { x = 10, y = 20 }
+    let c = vec2.add(a, b)
+    assert(c.x + c.y == 37)
+    0

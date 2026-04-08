@@ -1,0 +1,6 @@
+import box as wrapper from containers
+
+let main = (args: str[]) ->
+    let b = containers.wrap(42)
+    assert(containers.unwrap(b) == 42)
+    0

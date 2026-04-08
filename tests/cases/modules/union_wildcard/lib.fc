@@ -1,0 +1,7 @@
+module shapes =
+    union shape =
+        | circle(int32)
+        | square(int32)
+    let area = (s: shape) -> match s with
+        | circle(r) -> r
+        | square(s) -> s

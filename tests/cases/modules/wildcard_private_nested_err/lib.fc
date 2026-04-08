@@ -1,0 +1,4 @@
+module outer =
+    let public_fn = () -> 42
+    private module internal =
+        let secret = 99

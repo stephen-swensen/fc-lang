@@ -1,0 +1,6 @@
+import value from m
+
+let main = (args: str[]) ->
+    let value = 42
+    assert(value == 42)
+    0

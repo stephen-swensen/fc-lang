@@ -1,0 +1,10 @@
+module shapes =
+    union shape =
+        | circle(int32)
+        | rect(int32)
+
+    module shape_ops =
+        let area_approx = (s: shape) ->
+            match s with
+            | circle(r) -> r * r * 3
+            | rect(side) -> side * side

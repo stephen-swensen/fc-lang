@@ -1,6 +1,3 @@
-import box from factory
-import wrap from factory
-
 module factory =
     struct box =
         value: 'a
@@ -8,8 +5,8 @@ module factory =
 
 let main = (args: str[]) ->
     let _result =
-        let a = box { value = 99 }
-        let b = wrap(99)
+        let a = factory.box { value = 99 }
+        let b = factory.wrap(99)
         if a == b then 42 else 1
     assert(_result == 42)
     0

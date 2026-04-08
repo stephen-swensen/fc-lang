@@ -1,6 +1,4 @@
 // Test: extern union basic usage — literal, field access, default, mutation, sizeof
-import int_or_float from u
-
 module u from "test_union.h" =
     extern union int_or_float as int_or_float =
         i: int32
@@ -8,11 +6,11 @@ module u from "test_union.h" =
 
 let main = (args: str[]) ->
     // Literal — set the int field
-    let v = int_or_float { i = 42 }
+    let v = u.int_or_float { i = 42 }
     assert(v.i == 42)
 
     // Default — zero-initialized
-    let mut v2 = default(int_or_float)
+    let mut v2 = default(u.int_or_float)
     assert(v2.i == 0)
 
     // Mutation
@@ -23,7 +21,7 @@ let main = (args: str[]) ->
     assert(f == 1.0f32)
 
     // Sizeof — union size is max of members (at least 4 bytes)
-    let sz = sizeof(int_or_float)
+    let sz = sizeof(u.int_or_float)
     assert(sz >= 4)
 
     0

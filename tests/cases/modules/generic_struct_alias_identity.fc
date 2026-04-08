@@ -1,5 +1,3 @@
-import pair as p from containers
-
 module containers =
     struct pair =
         first: 'a
@@ -8,7 +6,7 @@ module containers =
 let main = (args: str[]) ->
     let _result =
         let a = containers.pair { first = 10, second = 20 }
-        let b = p { first = 10, second = 20 }
+        let b = containers.pair { first = 10, second = 20 }
         if a == b then 42 else 1
     assert(_result == 42)
     0

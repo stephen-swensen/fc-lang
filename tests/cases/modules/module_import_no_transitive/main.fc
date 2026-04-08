@@ -1,0 +1,6 @@
+// import * from middle should NOT bring 'secret' — it's middle's import, not its own decl
+import * from middle
+
+let main = (args: str[]) ->
+    assert(get() == 42)
+    0

@@ -1,23 +1,21 @@
 // Test: extern union as function parameter and return value
-import int_or_float from u
-
 module u from "test_union.h" =
     extern union int_or_float as int_or_float =
         i: int32
         f: float32
 
-let get_int = (v: int_or_float) ->
+let get_int = (v: u.int_or_float) ->
     v.i
 
 let make_int = (n: int32) ->
-    int_or_float { i = n }
+    u.int_or_float { i = n }
 
 let main = (args: str[]) ->
     let v = make_int(77)
     let n = get_int(v)
     assert(n == 77)
     // Pass via pointer
-    let mut v2 = int_or_float { i = 10 }
+    let mut v2 = u.int_or_float { i = 10 }
     let p = &v2
     assert(p->i == 10)
     0

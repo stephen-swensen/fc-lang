@@ -1,5 +1,3 @@
-import identity from containers
-
 module containers =
     let identity = (x: 'a) -> x
 
@@ -10,6 +8,6 @@ module geo =
 
 let main = (args: str[]) ->
     let p = geo.point { x = 20, y = 22 }
-    let q = identity(p)
+    let q = containers.identity(p)
     assert(q.x + q.y == 42)
     0

@@ -1,0 +1,4 @@
+module shapes =
+    union shape =
+        | circle(int32)
+        | rect(int32)

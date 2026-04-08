@@ -1,0 +1,12 @@
+import shape as sh from shapes
+
+let area = (s: sh) ->
+    match s with
+    | circle(r) -> r * r
+    | rect(w) -> w * w
+
+let main = (args: str[]) ->
+    let c = sh.circle(5)
+    let r = sh.rect(4)
+    assert(area(c) + area(r) == 41)
+    0

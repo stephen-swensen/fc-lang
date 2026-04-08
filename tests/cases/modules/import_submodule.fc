@@ -1,9 +1,0 @@
-import shapes from geometry
-
-module geometry =
-    module shapes =
-        let area = (w: int32, h: int32) -> w * h
-
-let main = (args: str[]) ->
-    assert(shapes.area(3, 4) == 12)
-    0

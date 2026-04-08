@@ -1,0 +1,6 @@
+import add from global::math
+
+let main = (args: str[]) ->
+    let _result = add(1, 2)
+    assert(_result == 3)
+    0

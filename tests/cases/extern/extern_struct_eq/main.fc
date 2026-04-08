@@ -1,15 +1,13 @@
 // Test: equality comparison on extern struct
-import timespec from t
-
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
         tv_sec: int64
         tv_nsec: int64
 
 let main = (args: str[]) ->
-    let a = timespec { tv_sec = 1, tv_nsec = 2 }
-    let b = timespec { tv_sec = 1, tv_nsec = 2 }
-    let c = timespec { tv_sec = 1, tv_nsec = 3 }
+    let a = t.timespec { tv_sec = 1, tv_nsec = 2 }
+    let b = t.timespec { tv_sec = 1, tv_nsec = 2 }
+    let c = t.timespec { tv_sec = 1, tv_nsec = 3 }
     if a == b then
         if a != c then 0
         else 2

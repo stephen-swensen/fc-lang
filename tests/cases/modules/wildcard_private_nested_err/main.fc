@@ -1,0 +1,4 @@
+import * from outer
+
+let main = (args: str[]) ->
+    internal.secret

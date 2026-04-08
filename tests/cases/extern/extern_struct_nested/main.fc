@@ -1,7 +1,4 @@
 // Test: extern structs with struct-typed fields (nested structs)
-import point from geom
-import rect from geom
-
 module geom from "test_struct.h" =
     extern struct point as point =
         x: int32
@@ -12,8 +9,8 @@ module geom from "test_struct.h" =
 
 let main = (args: str[]) ->
     // Create nested struct via literals
-    let p = point { x = 10, y = 20 }
-    let r = rect { origin = point { x = 1, y = 2 }, size = point { x = 100, y = 200 } }
+    let p = geom.point { x = 10, y = 20 }
+    let r = geom.rect { origin = geom.point { x = 1, y = 2 }, size = geom.point { x = 100, y = 200 } }
 
     // Direct field access
     assert(r.origin.x == 1)
@@ -23,7 +20,7 @@ let main = (args: str[]) ->
 
     // Assign struct field
     let mut r2 = r
-    r2.origin = point { x = 5, y = 6 }
+    r2.origin = geom.point { x = 5, y = 6 }
     assert(r2.origin.x == 5)
     assert(r2.origin.y == 6)
     // size unchanged

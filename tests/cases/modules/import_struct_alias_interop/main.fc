@@ -1,0 +1,10 @@
+import point as pt from geometry
+
+let add_points = (a: pt, b: pt) -> pt { x = a.x + b.x, y = a.y + b.y }
+
+let main = (args: str[]) ->
+    let a = pt { x = 3, y = 4 }
+    let b = pt { x = 10, y = 20 }
+    let c = add_points(a, b)
+    assert(geometry.sum(c) == 37)
+    0

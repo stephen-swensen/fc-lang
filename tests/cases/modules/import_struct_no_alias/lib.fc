@@ -1,0 +1,4 @@
+module geometry =
+    struct point =
+        x: int32
+        y: int32

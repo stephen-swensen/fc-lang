@@ -1,8 +1,5 @@
 // Test: extern union with deeply nested struct fields
 // Access through union -> struct -> struct without importing intermediate types
-// Only import the top-level union — intermediate types are accessed via fields
-import event from ev
-
 module ev from "test_event.h" =
     extern struct keysym as keysym =
         scancode: int32
@@ -16,7 +13,7 @@ module ev from "test_event.h" =
         key: key_event
 
 let main = (args: str[]) ->
-    let mut e = default(event)
+    let mut e = default(ev.event)
 
     // Nested field access through union -> struct -> struct
     e.key.keysym.sym = 42

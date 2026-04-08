@@ -1,16 +1,14 @@
-import wrapper as w from lib
-
 module lib =
     union wrapper =
         | val('a)
         | empty
 
-let check = (a: lib.wrapper<int32>, b: w<int32>) ->
+let check = (a: lib.wrapper<int32>, b: lib.wrapper<int32>) ->
     if a == b then 10
     else 20
 
 let main = (args: str[]) ->
     let a = lib.wrapper<int32>.val(42)
-    let b = w<int32>.val(42)
+    let b = lib.wrapper<int32>.val(42)
     assert(check(a, b) == 10)
     0

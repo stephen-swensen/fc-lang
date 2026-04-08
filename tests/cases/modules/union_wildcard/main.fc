@@ -1,0 +1,6 @@
+import * from shapes
+
+let main = (args: str[]) ->
+    let c = shape.circle(5)
+    assert(area(c) == 5)
+    0

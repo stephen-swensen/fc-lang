@@ -1,9 +1,0 @@
-import value from m
-
-module m =
-    let value = 100
-
-let main = (args: str[]) ->
-    let value = 42
-    assert(value == 42)
-    0
