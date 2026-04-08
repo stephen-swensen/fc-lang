@@ -2842,14 +2842,15 @@ After all errors are reported, the compiler prints a summary:
 
 ### Compilation pipeline
 
-The compiler processes source in four stages:
+The compiler processes source in five stages:
 
 1. **Lex & parse** — each source file is tokenized (with indentation converted to `INDENT`/`DEDENT` tokens) and parsed into an AST. Syntax errors are fatal.
 2. **Pass 1 (declaration collection)** — all files are scanned to collect top-level names, struct/union layouts, function signatures, module and namespace declarations. This enables forward references and cross-file module access regardless of file order.
-3. **Pass 2 (type checking)** — expressions are type-checked bottom-up with scope tracking. Type errors are accumulated, not fatal.
-4. **Code generation** — the typed AST is emitted as C11 source.
+3. **Pass 2 (type checking)** — expressions are type-checked bottom-up with scope tracking. Type errors are accumulated, not fatal. Generic function and type instantiations are registered as they are encountered.
+4. **Monomorphization** — transitive generic instantiations are discovered (generic functions calling other generic functions), concrete types are built for all instantiations, and type dependencies are topologically sorted so by-value struct/union dependencies are emitted before their dependents.
+5. **Code generation** — the typed AST is emitted as C11 source containing only concrete, fully-typed code. No type variables or generic machinery appear in the output.
 
-If any errors are accumulated during passes 1 or 2, code generation is skipped and the compiler exits with code 1.
+If any errors are accumulated during passes 1 or 2, later stages are skipped and the compiler exits with code 1.
 
 ---
 
@@ -2999,7 +3000,7 @@ import func_a from acme::graphics::module_a           // named member
 **Rules:**
 - `::` terminates namespace paths; `.` navigates into modules/submodules
 - `import *` works on modules only — not bare namespaces
-- `import T from M` brings both the type `T` and its type-associated module `T` (if any) into scope
+- `import T from M` brings both the type `T` (struct or union) and its type-associated module `T` (if any) into scope
 
 **Aliases** do not create new types. The same type can be imported under multiple aliases, and values of any alias are interchangeable:
 
@@ -3030,7 +3031,7 @@ import lib from mylib::
 import * from std::types
 ```
 
-**Module-level imports** are visible within the declaring module and all its child modules:
+**Module-level imports** are visible within the declaring module and all its child modules. A child module can see its parent's imports, but the parent's imports and child's imports are independent — each module's declarations are type-checked in their own import context:
 
 ```fc
 module parent =
@@ -3039,6 +3040,8 @@ module parent =
     module child =
         let quad = (x: int32) -> double(double(x))   // sees parent's import
 ```
+
+If a child module imports a name that shadows a parent's import, the child's import takes precedence within the child. The parent's declarations still see the parent's original import, even when type-checked on-demand from within the child.
 
 ### Non-forwarding rule
 
@@ -3095,11 +3098,13 @@ let main = (args: str[]) ->
 
 Dot notation works for all modules visible in the current scope — same-namespace modules, imported modules, and modules in the import chain. Cross-namespace modules must be imported first; dot notation then accesses their members.
 
+**Forward references** — within a module, declarations can reference each other regardless of source order. When a reference targets a declaration whose type has not yet been determined, the compiler performs on-demand type checking — pausing the current declaration to resolve the referenced one first. This works across all scope levels: siblings in the same module, ancestor module bindings (parent chain), imported bindings, and global declarations. Circular type dependencies (where A's type depends on B's type which depends on A's type) are detected and reported as errors. Note that mutual *calls* between functions are not circular type dependencies — function signatures are determined from their parameters, so mutual recursion is valid.
+
 **Circular references** between modules are not allowed. If A references B, B may not reference A (directly or transitively). The compiler detects cycles during the first pass. Mutual pointer references between types must be within the same module.
 
 ### Type-associated modules
 
-A module may share a name with a type in the same scope — the idiomatic way to define constructors and static operations:
+A module may share a name with a struct or union in the same scope — the idiomatic way to define constructors and static operations:
 
 ```fc
 module geometry =
@@ -3113,6 +3118,25 @@ module geometry =
 ```
 
 `vec2 { ... }` is struct construction; `vec2.zero` is module access. Inside `module vec2`, the struct is visible from the enclosing scope (module members are checked before imports in the resolution order).
+
+The same pattern works with unions:
+
+```fc
+module game =
+    union shape =
+        | circle(int32)
+        | rect(int32)
+
+    module shape =
+        let area = (s: shape) ->
+            match s with
+            | circle(r) -> r * r
+            | rect(w) -> w * w
+
+        let make_circle = (r: int32) -> shape.circle(r)
+```
+
+When a module and union share a name, **module members take priority**. If a name is not found in the module, the compiler falls through to check if it matches a variant of the companion union. This means `shape.area(s)` resolves to the module function, while `shape.circle(5)` resolves to variant construction (since there is no module member named `circle`). If a module member and a variant share the same name, the module member wins.
 
 ### Qualified type names in diagnostics
 
@@ -4059,7 +4083,7 @@ POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `ne
 
 ## std::data
 
-Generic data structures and collection utilities. Lives in the `std::data::` namespace; import individual modules with `import <module> from std::data::`. Contains:
+Generic data structures and collection utilities. Lives in the `std::` namespace under `module data`; import individual modules with `import data from std::` then `import <module> from data` (or access directly as `std::data.array_list.make()`). Each data structure uses the companion pattern — the struct sits alongside its same-named module within `module data`. Contains:
 
 - **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
 - **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.

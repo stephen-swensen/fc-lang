@@ -48,9 +48,9 @@ Removed all fallback symtab re-resolution from monomorph (`discover_in_expr` for
 
 Added `resolved_sym` field to TYPE_STRUCT and TYPE_UNION in types.h. Set by pass1 (after all members are registered, to avoid use-after-realloc) and pass2 (in resolve_type and canonicalize_stub_names). Propagated through type_copy and type_substitute. Removed the `SymbolTable *symtab` parameter from `mono_resolve_type_names`, `discover_nested_types`, `mono_finalize_types`, and `mono_discover_transitive`. monomorph.c now has zero symtab references — all type name canonicalization uses the `resolved_sym` pointer set by earlier phases.
 
-## Remaining Architectural Debt
+### 6. EXPR_IDENT resolution audit — DONE
 
-- **EXPR_IDENT resolution** (pass2.c): Cannot be consolidated because each scope source has unique on-demand type-checking behavior (cycle detection, context save/restore) entangled with the lookup. A future refactor could separate "find symbol + report source" from "do source-specific post-processing."
+Audited the four scope sources (module_symtab, parent_chain, import_chain, global) for consistency. Found and fixed three issues: missing on-demand type checking in the parent_chain path, inconsistent codegen_name/is_mut ordering, and an import_scope leak from child modules into parent on-demand checks. Consolidating into a `resolve_symbol_with_source` + switch pattern was evaluated and rejected — the bugs found were a missing code path, a context setup bug, and cosmetic ordering, none of which would have been prevented by consolidation. The four parallel blocks are now consistent and correct.
 
 ## Related Bugs Found and Fixed
 
