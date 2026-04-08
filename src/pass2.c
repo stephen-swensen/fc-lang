@@ -1495,6 +1495,38 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     e->ident.codegen_name = psym->decl->let.codegen_name;
                 if (psym->decl && psym->decl->kind == DECL_LET)
                     e->ident.is_mut = psym->decl->let.is_mut;
+                if (!psym->type && psym->decl && psym->decl->kind == DECL_LET) {
+                    /* On-demand type check for parent binding with cycle detection */
+                    bool cycle = false;
+                    for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                        if (v->decl == psym->decl) { cycle = true; break; }
+                    }
+                    if (cycle) {
+                        diag_error(e->loc, "circular dependency: '%s' depends on itself",
+                            e->ident.name);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    /* Find the parent members table that contains this symbol */
+                    SymbolTable *parent_members = NULL;
+                    for (ModuleScopeChain *p = ctx->parent_modules; p; p = p->parent) {
+                        if (symtab_lookup(p->members, e->ident.name) == psym) {
+                            parent_members = p->members;
+                            break;
+                        }
+                    }
+                    OnDemandVisited vis = { .decl = psym->decl, .next = ctx->on_demand_visited };
+                    ctx->on_demand_visited = &vis;
+                    SymbolTable *saved_mod = ctx->module_symtab;
+                    Scope *saved_scope = ctx->scope;
+                    ctx->module_symtab = parent_members;
+                    ctx->scope = scope_new(ctx->arena, NULL);
+                    ctx->scope->is_global = true;
+                    check_decl_let(ctx, psym->decl);
+                    ctx->scope = saved_scope;
+                    ctx->module_symtab = saved_mod;
+                    ctx->on_demand_visited = vis.next;
+                }
                 if (!psym->type) {
                     diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                     e->type = type_error();

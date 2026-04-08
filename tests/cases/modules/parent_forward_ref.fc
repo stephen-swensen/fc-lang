@@ -1,0 +1,21 @@
+// Child module references parent let binding declared after the child.
+// Tests on-demand type checking through the parent chain — the parent
+// binding's type must be resolved lazily when first referenced.
+module outer =
+    module child =
+        let use_val = () -> parent_val + 1
+        let use_fn = () -> parent_fn(10)
+
+    let parent_val = 42
+    let parent_fn = (x: int32) -> x * 2
+
+    // Also test grandchild -> grandparent forward ref
+    module mid =
+        module grandchild =
+            let use_grandparent = () -> parent_val + parent_fn(5)
+
+let main = (args: str[]) ->
+    assert(outer.child.use_val() == 43)
+    assert(outer.child.use_fn() == 20)
+    assert(outer.mid.grandchild.use_grandparent() == 52)
+    0
