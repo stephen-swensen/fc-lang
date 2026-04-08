@@ -3,7 +3,7 @@
 #include "common.h"
 #include "pass1.h"
 
-typedef struct {
+typedef struct MonoInstance {
     const char *generic_name;    /* original name (interned) */
     const char *mangled_name;    /* C output name (interned) */
     const char *ns_prefix;       /* namespace prefix, NULL for global */
@@ -18,7 +18,7 @@ typedef struct {
     int type_param_count;
 } MonoInstance;
 
-typedef struct {
+typedef struct MonoTable {
     MonoInstance *entries;
     int count;
     int capacity;

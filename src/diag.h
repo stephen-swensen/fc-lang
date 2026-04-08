@@ -3,7 +3,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 
-typedef struct {
+typedef struct SrcLoc {
     const char *filename;
     int line;
     int col;

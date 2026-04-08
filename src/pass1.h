@@ -5,7 +5,7 @@
 /* Symbol collected by pass 1 */
 typedef struct SymbolTable SymbolTable;
 
-typedef struct {
+typedef struct Symbol {
     const char *name;
     const char *ns_prefix;  /* namespace prefix (mangled), NULL = global */
     DeclKind kind;
@@ -27,7 +27,7 @@ struct SymbolTable {
 };
 
 /* Import reference: transparent alias pointing to a source module's member */
-typedef struct {
+typedef struct ImportRef {
     const char *local_name;        /* interned — name visible in importing scope */
     const char *source_name;       /* interned — name in source module's members */
     DeclKind kind;
@@ -47,12 +47,12 @@ typedef struct ImportTable {
 } ImportTable;
 
 /* Per-file import scope */
-typedef struct {
+typedef struct FileImportScope {
     const char *filename;          /* interned, or NULL for single-file mode */
     ImportTable imports;
 } FileImportScope;
 
-typedef struct {
+typedef struct FileImportScopes {
     FileImportScope *scopes;
     int count;
     int capacity;

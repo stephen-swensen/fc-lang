@@ -16,7 +16,7 @@ typedef struct ArenaPage {
     char data[];
 } ArenaPage;
 
-typedef struct {
+typedef struct Arena {
     ArenaPage *first;
     ArenaPage *current;
 } Arena;
@@ -28,13 +28,13 @@ void arena_free(Arena *a);
 
 /* ---- String interning ---- */
 
-typedef struct {
+typedef struct InternEntry {
     const char *str;
     int length;
     uint32_t hash;
 } InternEntry;
 
-typedef struct {
+typedef struct InternTable {
     InternEntry *entries;
     int count;
     int capacity;

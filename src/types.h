@@ -71,7 +71,7 @@ struct Type {
             int field_count;
             Type **type_args;
             int type_arg_count;
-            void *resolved_sym;         /* Symbol* for template type, set by pass1/pass2; used by mono to avoid symtab re-lookup */
+            struct Symbol *resolved_sym; /* template type symbol, set by pass1/pass2; used by mono to avoid symtab re-lookup */
         } struc;
         struct {
             const char *name;
@@ -81,7 +81,7 @@ struct Type {
             int variant_count;
             Type **type_args;
             int type_arg_count;
-            void *resolved_sym;         /* Symbol* for template type, set by pass1/pass2; used by mono to avoid symtab re-lookup */
+            struct Symbol *resolved_sym; /* template type symbol, set by pass1/pass2; used by mono to avoid symtab re-lookup */
         } unio;
         struct { Type *elem; int64_t size; } fixed_array;
         struct { const char *name; } type_var;

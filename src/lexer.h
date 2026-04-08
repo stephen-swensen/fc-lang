@@ -4,7 +4,7 @@
 
 #define MAX_INTERP_DEPTH 8
 
-typedef struct {
+typedef struct Lexer {
     const char *source;
     const char *current;
     const char *start;      /* start of current token */

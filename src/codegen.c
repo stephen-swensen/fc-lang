@@ -1711,7 +1711,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 /* Use resolved_callee from pass2 — always set for all call patterns
                    (single-level and multi-level qualified calls) */
                 const char *base_name = NULL;
-                Symbol *callee_sym = (Symbol *)e->call.resolved_callee;
+                Symbol *callee_sym = e->call.resolved_callee;
                 if (callee_sym) {
                     base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
                                  && callee_sym->decl->let.codegen_name)

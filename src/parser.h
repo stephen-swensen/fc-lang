@@ -2,7 +2,7 @@
 #include "ast.h"
 #include "common.h"
 
-typedef struct {
+typedef struct Parser {
     Token *tokens;
     int token_count;
     int pos;

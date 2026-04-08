@@ -115,7 +115,7 @@ typedef enum {
     TOK_COUNT
 } TokenKind;
 
-typedef struct {
+typedef struct Token {
     TokenKind kind;
     const char *start;  /* pointer into source buffer */
     int length;

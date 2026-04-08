@@ -70,7 +70,7 @@ struct Param {
     SrcLoc loc;
 };
 
-typedef struct {
+typedef struct Capture {
     const char *name;           /* FC source name */
     const char *codegen_name;   /* C codegen name from outer scope */
     Type *type;
@@ -81,7 +81,7 @@ struct FieldInit {
     Expr *value;
 };
 
-typedef struct {
+typedef struct InterpSegment {
     bool is_literal;        /* true = literal text, false = format expression */
     const char *text;       /* literal text or format specifier string */
     int text_length;        /* length of text or spec */
@@ -89,7 +89,7 @@ typedef struct {
     Expr *expr;             /* for format segments: the expression (NULL for literals) */
 } InterpSegment;
 
-typedef struct {
+typedef struct FieldPattern {
     const char *name;       /* struct field name */
     Pattern *pattern;       /* inner pattern (binding, literal, nested struct, etc.) */
     Type *resolved_type;    /* filled by pass2: resolved type of this field */
@@ -141,7 +141,7 @@ struct Expr {
             bool is_indirect;     /* callee is a function value (fat pointer) */
             bool is_extern_call;  /* callee is an extern function (no _ctx) */
             const char *mangled_name;   /* C function name for monomorphized call, NULL for non-generic */
-            void *resolved_callee;      /* Symbol* resolved in pass2, used by mono discovery */
+            struct Symbol *resolved_callee; /* resolved in pass2, used by mono discovery */
         } call;
 
         /* EXPR_FIELD, EXPR_DEREF_FIELD */
@@ -206,7 +206,7 @@ struct Expr {
             const char *type_name;
             FieldInit *fields;
             int field_count;
-            void *resolved_sym;     /* Symbol* resolved in pass2, used by mono discovery */
+            struct Symbol *resolved_sym; /* resolved in pass2, used by mono discovery */
         } struct_lit;
 
         /* EXPR_ARRAY_LIT */
@@ -426,7 +426,7 @@ struct Decl {
 
 /* ---- Program ---- */
 
-typedef struct {
+typedef struct Program {
     Decl **decls;
     int decl_count;
 } Program;

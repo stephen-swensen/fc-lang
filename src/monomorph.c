@@ -75,7 +75,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
             /* Canonicalize name via resolved_sym from pass1/pass2 */
             if (!mono_find(t, type->struc.name)) {
-                Symbol *sym = (Symbol *)type->struc.resolved_sym;
+                Symbol *sym = type->struc.resolved_sym;
                 if (sym && sym->type && sym->type->struc.name != type->struc.name) {
                     if (!type->struc.base_name) type->struc.base_name = type->struc.name;
                     type->struc.name = sym->type->struc.name;
@@ -93,7 +93,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (!mono_find(t, type->unio.name)) {
-                Symbol *sym = (Symbol *)type->unio.resolved_sym;
+                Symbol *sym = type->unio.resolved_sym;
                 if (sym && sym->type && sym->type->unio.name != type->unio.name) {
                     if (!type->unio.base_name) type->unio.base_name = type->unio.name;
                     type->unio.name = sym->type->unio.name;
@@ -145,7 +145,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
             if (all_concrete) {
                 /* Use resolved_callee from pass2 — always set for all call patterns
                  * (single-level and multi-level qualified calls) */
-                Symbol *callee_sym = (Symbol *)e->call.resolved_callee;
+                Symbol *callee_sym = e->call.resolved_callee;
                 if (callee_sym) {
                     const char *base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
                                              && callee_sym->decl->let.codegen_name)
@@ -165,7 +165,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         /* Register generic struct instances created under substitution */
         if (e->type && e->type->kind == TYPE_STRUCT && type_contains_type_var(e->type)) {
             /* Use resolved_sym from pass2 — always set for struct literals */
-            Symbol *struct_sym = (Symbol *)e->struct_lit.resolved_sym;
+            Symbol *struct_sym = e->struct_lit.resolved_sym;
             if (struct_sym && struct_sym->is_generic) {
                 const char **vars = NULL;
                 int vc = 0, vcap = 0;
@@ -391,7 +391,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                 return;
             }
             /* Use resolved_sym from pass1/pass2 for the canonical name */
-            Symbol *sym = (Symbol *)type->struc.resolved_sym;
+            Symbol *sym = type->struc.resolved_sym;
             const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->struc.type_args, type->struc.type_arg_count);
@@ -427,7 +427,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                     discover_nested_types(type->unio.variants[i].payload, t, a, intern);
                 return;
             }
-            Symbol *sym = (Symbol *)type->unio.resolved_sym;
+            Symbol *sym = type->unio.resolved_sym;
             const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->unio.type_args, type->unio.type_arg_count);
