@@ -1,0 +1,9 @@
+// Forward references within the current module still work correctly
+// with the interleaved resolution.
+module m =
+    let first = () -> second() + 1
+    let second = () -> 41
+
+let main = (args: str[]) ->
+    assert(m.first() == 42)
+    0

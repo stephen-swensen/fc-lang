@@ -1,0 +1,6 @@
+import app from lib::
+
+let main = (args: str[]) ->
+    assert(app.engine.inc_twice(10) == 12)
+    assert(app.engine.pass(42) == 42)
+    0

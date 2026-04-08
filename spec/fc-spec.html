@@ -3073,16 +3073,17 @@ import value from mod_b                 // shadows — value is now 20
 
 The compiler resolves identifiers through a scope chain, innermost to outermost:
 
-1. **Local scope** — `let` bindings in the current function body
-2. **Module members** — the enclosing module's own declarations (functions, types, constants, nested modules)
-3. **Ancestor module members** — declarations from parent modules, grandparent modules, and so on to the outermost module. The nearest ancestor wins (same shadowing rule as `let` bindings). This is what allows nested modules to reference types and functions defined in enclosing modules without importing them.
-4. **Import chain** — imports from innermost to outermost scope:
+1. **Local scope** — `let` bindings in the current function body (innermost block outward to the enclosing module boundary)
+2. **Interleaved module resolution** — at each module level, members are checked then that level's imports, before moving to the parent:
+   - Current module's own declarations (functions, types, constants, nested modules)
    - Current module's imports
-   - Parent module's imports (and so on, to any depth)
+   - Parent module's declarations → parent module's imports
+   - Grandparent module's declarations → grandparent module's imports
+   - *(and so on, to any depth)*
    - File-level imports
-5. **Global declarations** — module definitions and entry-point file declarations
+3. **Global declarations** — module definitions and entry-point file declarations
 
-Module members (including ancestor members) always take priority over imports. Later declarations shadow earlier ones at each level.
+At each level, members take priority over imports. A child's import shadows a parent's member — consistent with the rule that imports follow the same lexical scoping rules as `let` bindings. Later declarations shadow earlier ones at each level.
 
 ### Direct module access
 

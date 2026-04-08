@@ -1,0 +1,31 @@
+// Companion pattern works with interleaved resolution: variant construction
+// falls through from module to companion union even when accessed from a
+// child module that shadows other parent names.
+module src =
+    let value = 10
+
+module outer =
+    let value = 42
+
+    union shape =
+        | circle(int32)
+        | rect(int32)
+
+    module shape =
+        let area = (s: shape) ->
+            match s with
+            | circle(r) -> r * r
+            | rect(w) -> w * w
+
+    module child =
+        import value from src
+        let test = () ->
+            // Companion variant construction still works in child
+            let s = shape.circle(5)
+            // Child's import of value shadows parent's member
+            shape.area(s) + value
+
+let main = (args: str[]) ->
+    // area(circle(5)) = 25, value = 10 (from import, not 42 from parent)
+    assert(outer.child.test() == 35)
+    0

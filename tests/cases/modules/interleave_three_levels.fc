@@ -1,0 +1,20 @@
+// Three levels of nesting: grandchild's import shadows both parent and
+// grandparent members.
+module src =
+    let value = 100
+
+module top =
+    let value = 1
+
+    module mid =
+        let value = 2
+
+        module bot =
+            import value from src
+            let get = () -> value
+
+let main = (args: str[]) ->
+    assert(top.mid.bot.get() == 100)
+    assert(top.mid.value == 2)
+    assert(top.value == 1)
+    0

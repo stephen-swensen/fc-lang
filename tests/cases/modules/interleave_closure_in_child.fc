@@ -1,0 +1,13 @@
+// Closure capture in nested module: a lambda captures a local from
+// its enclosing function, not from a parent module scope.
+module parent =
+    let val = 100
+
+    module child =
+        let apply = (n: int32) ->
+            let f = (x: int32) -> x + n
+            f(7)
+
+let main = (args: str[]) ->
+    assert(parent.child.apply(3) == 10)
+    0

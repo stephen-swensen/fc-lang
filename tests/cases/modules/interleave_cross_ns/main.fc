@@ -1,0 +1,6 @@
+import outer from acme::
+
+let main = (args: str[]) ->
+    // inner's import (10) should shadow outer's member (42)
+    assert(outer.inner.get() == 10)
+    0

@@ -1,0 +1,13 @@
+namespace lib::
+
+module core =
+    let apply = (x: 'a, f: ('a) -> 'a) -> f(x)
+    let identity = (x: 'a) -> x
+
+module app =
+    module engine =
+        import apply from core
+        import identity from core
+        let inc_twice = (x: int32) ->
+            apply(apply(x, (n: int32) -> n + 1), (n: int32) -> n + 1)
+        let pass = (x: int32) -> identity(x)

@@ -1,0 +1,6 @@
+import outer from mylib::
+
+let main = (args: str[]) ->
+    assert(outer.inner.get() == 42)
+    assert(outer.inner.apply() == 43)
+    0

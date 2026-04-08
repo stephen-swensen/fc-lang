@@ -1,0 +1,12 @@
+namespace mylib::
+
+module helpers =
+    let value = 42
+    let inc = (x: int32) -> x + 1
+
+module outer =
+    // Nested module does a whole-module import of a namespace sibling
+    module inner =
+        import helpers
+        let get = () -> helpers.value
+        let apply = () -> helpers.inc(helpers.value)

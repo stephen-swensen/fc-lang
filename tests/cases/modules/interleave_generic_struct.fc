@@ -1,0 +1,23 @@
+// Child's imported generic struct shadows a parent's generic struct.
+module types_a =
+    struct box =
+        val: 'a
+        tag: int32
+
+module types_b =
+    struct box =
+        val: 'a
+
+module parent =
+    import box from types_a
+
+    module child =
+        import box from types_b
+        let make = () ->
+            // child's box has only val, not tag
+            let b = box { val = 42 }
+            b.val
+
+let main = (args: str[]) ->
+    assert(parent.child.make() == 42)
+    0

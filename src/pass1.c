@@ -101,6 +101,7 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
             tbl->entries[i].source_name = source_name;
             tbl->entries[i].kind = kind;
             tbl->entries[i].source_members = source_members;
+            tbl->entries[i].ns_prefix = msym->ns_prefix;
             tbl->entries[i].module_members = msym->members;
             tbl->entries[i].is_generic = msym->is_generic;
             tbl->entries[i].type_params = msym->type_params;
@@ -114,6 +115,7 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
         .source_name = source_name,
         .kind = kind,
         .source_members = source_members,
+        .ns_prefix = msym->ns_prefix,
         .module_members = msym->members,
         .is_generic = msym->is_generic,
         .type_params = msym->type_params,
@@ -442,7 +444,8 @@ static const char *make_qualified(InternTable *intern, const char *prefix, const
 static void register_module_members(Decl *d, const char *mangle_prefix,
                                     const char *display_prefix,
                                     SymbolTable *members, InternTable *intern,
-                                    SymbolTable *global_symtab) {
+                                    SymbolTable *global_symtab,
+                                    const char *ns_prefix) {
     const char *mod_name = d->module.name;
     /* Validate: from-modules may only contain extern declarations,
      * and non-from modules may not contain extern declarations. */
@@ -604,10 +607,11 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 symtab_add(members, sub_name, DECL_MODULE, child);
                 Symbol *sub_sym = &members->symbols[members->count - 1];
                 sub_sym->is_private = child->is_private;
+                sub_sym->ns_prefix = ns_prefix;
                 SymbolTable *sub_members = malloc(sizeof(SymbolTable));
                 symtab_init(sub_members);
                 sub_sym->members = sub_members;
-                register_module_members(child, sub_prefix, make_qualified(intern, display_prefix, sub_name), sub_members, intern, global_symtab);
+                register_module_members(child, sub_prefix, make_qualified(intern, display_prefix, sub_name), sub_members, intern, global_symtab, ns_prefix);
                 break;
             }
             if (existing) {
@@ -618,10 +622,11 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             symtab_add(members, sub_name, DECL_MODULE, child);
             Symbol *sub_sym = &members->symbols[members->count - 1];
             sub_sym->is_private = child->is_private;
+            sub_sym->ns_prefix = ns_prefix;
             SymbolTable *sub_members = malloc(sizeof(SymbolTable));
             symtab_init(sub_members);
             sub_sym->members = sub_members;
-            register_module_members(child, sub_prefix, make_qualified(intern, display_prefix, sub_name), sub_members, intern, global_symtab);
+            register_module_members(child, sub_prefix, make_qualified(intern, display_prefix, sub_name), sub_members, intern, global_symtab, ns_prefix);
             break;
         }
         default:
@@ -774,16 +779,18 @@ static void resolve_module_imports(SymbolTable *symtab, InternTable *intern) {
     }
 }
 
-/* Recursively process imports for nested submodules */
+/* Recursively process imports for nested submodules.
+ * Each nested module now carries its enclosing namespace's ns_prefix on the
+ * Symbol (set during register_module_members), so process_module_level_imports
+ * reads the correct namespace context directly from ms->ns_prefix. */
 static void resolve_nested_module_imports(SymbolTable *members,
                                            SymbolTable *global_symtab,
-                                           InternTable *intern,
-                                           const char *ns_prefix __attribute__((unused))) {
+                                           InternTable *intern) {
     for (int i = 0; i < members->count; i++) {
         Symbol *ms = &members->symbols[i];
         if (ms->kind != DECL_MODULE || !ms->members) continue;
         process_module_level_imports(ms, global_symtab, intern);
-        resolve_nested_module_imports(ms->members, global_symtab, intern, ms->ns_prefix);
+        resolve_nested_module_imports(ms->members, global_symtab, intern);
     }
 }
 
@@ -849,7 +856,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 SymbolTable *members = malloc(sizeof(SymbolTable));
                 symtab_init(members);
                 mod_sym->members = members;
-                register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab);
+                register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab, ns_prefix);
                 continue;
             }
             if (existing->kind == DECL_MODULE) {
@@ -870,7 +877,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         mod_sym->members = members;
 
         /* Walk child decls, compute mangled names, register in members */
-        register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab);
+        register_module_members(d, mangle_prefix, display_prefix, members, intern, symtab, ns_prefix);
     }
 
     /* Phase 2: Register top-level (non-module) decls.
@@ -987,7 +994,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
     for (int i = 0; i < symtab->count; i++) {
         Symbol *ms = &symtab->symbols[i];
         if (ms->kind != DECL_MODULE || !ms->members) continue;
-        resolve_nested_module_imports(ms->members, symtab, intern, ms->ns_prefix);
+        resolve_nested_module_imports(ms->members, symtab, intern);
     }
 
     /* Phase 3b: File-level imports */

@@ -1,0 +1,7 @@
+import outer from acme::
+
+let main = (args: str[]) ->
+    assert(outer.inner.get() == 10)
+    assert(outer.inner.apply(5) == 10)
+    assert(outer.mid.deep.get_deep() == 10)
+    0

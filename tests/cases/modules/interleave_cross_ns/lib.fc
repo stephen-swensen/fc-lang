@@ -1,0 +1,14 @@
+namespace acme::
+
+module src =
+    let value = 10
+
+module outer =
+    let value = 42
+
+    module inner =
+        // Nested module imports from namespace sibling — tests both the
+        // ns_prefix propagation fix AND interleaved resolution (child's
+        // import shadows parent's member)
+        import value from src
+        let get = () -> value

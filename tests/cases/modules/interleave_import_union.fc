@@ -1,0 +1,25 @@
+// Child's imported union type shadows a parent's union with the same name.
+module shapes_a =
+    union shape =
+        | circle(int32)
+        | empty_a
+
+module shapes_b =
+    union shape =
+        | square(int32)
+        | empty_b
+
+module parent =
+    import shape from shapes_a
+
+    module child =
+        import shape from shapes_b
+        let make = () ->
+            let s = shape.square(7)
+            match s with
+            | square(n) -> n
+            | empty_b -> 0
+
+let main = (args: str[]) ->
+    assert(parent.child.make() == 7)
+    0

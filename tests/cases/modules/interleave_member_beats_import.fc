@@ -1,0 +1,12 @@
+// A module's own member beats its own import at the same level.
+module src =
+    let value = 10
+
+module m =
+    import value from src
+    let value = 42
+    let get = () -> value
+
+let main = (args: str[]) ->
+    assert(m.get() == 42)
+    0

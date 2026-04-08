@@ -1,0 +1,5 @@
+import app from vendor::
+
+let main = (args: str[]) ->
+    assert(app.core.compute(3, 5) == 13)
+    0

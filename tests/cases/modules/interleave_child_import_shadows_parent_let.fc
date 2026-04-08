@@ -1,0 +1,15 @@
+// Child's import shadows a parent module's let binding.
+// Resolution order: child members → child imports → parent members → ...
+module src =
+    let value = 10
+
+module parent =
+    let value = 42
+
+    module child =
+        import value from src
+        let get = () -> value
+
+let main = (args: str[]) ->
+    assert(parent.child.get() == 10)
+    0

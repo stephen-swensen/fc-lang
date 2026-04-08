@@ -1,0 +1,5 @@
+import outer from beta::
+
+let main = (args: str[]) ->
+    assert(outer.inner.sum3(1, 2, 3) == 6)
+    0

@@ -60,7 +60,9 @@ static void scope_add(Scope *s, const char *name, const char *codegen_name, Type
 
 /* Scope lookup with lambda boundary crossing and mutability tracking.
    Boundary crossings are counted when moving FROM a boundary scope to its parent,
-   so bindings within the boundary scope itself are not treated as captures. */
+   so bindings within the boundary scope itself are not treated as captures.
+   Stops at the first is_global scope (current module boundary) — parent module
+   bindings are resolved by the interleaved parent/import loop in EXPR_IDENT. */
 static Type *scope_lookup_capture(Scope *s, const char *name,
     const char **out_codegen_name, bool *out_is_mut, int *out_crossings,
     bool *out_is_global)
@@ -77,6 +79,10 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
                 return sc->locals[i].type;
             }
         }
+        /* Stop after searching the current module's global scope — don't walk
+         * into parent module scopes.  The interleaved resolution loop handles
+         * parent members and imports in the correct order. */
+        if (sc->is_global) break;
         /* Count boundary when leaving this scope to search parent */
         if (sc->is_lambda_boundary) crossings++;
     }
@@ -170,30 +176,29 @@ typedef struct {
 static Type *check_expr(CheckCtx *ctx, Expr *e);
 static void check_decl_let(CheckCtx *ctx, Decl *d);
 
-/* Look up a name in the import scope chain (innermost first = shadowing) */
-static Symbol *import_chain_lookup(ImportScope *scope, const char *name) {
-    while (scope) {
-        if (scope->table) {
-            for (int i = scope->table->count - 1; i >= 0; i--) {
-                ImportRef *ref = &scope->table->entries[i];
-                if (ref->local_name == name) {
-                    /* General lookup: return first match by name in source table.
-                     * For kind-specific module lookups, use import_chain_lookup_kind
-                     * which does namespace-aware resolution. */
+/* Look up a name in the import scope chain (innermost first = shadowing).
+ * Searches from `scope` up to (but not including) `stop`.
+ * Pass stop=NULL to search the entire chain. */
+static Symbol *import_scope_lookup_until(ImportScope *scope, const char *name,
+                                         ImportScope *stop) {
+    for (ImportScope *s = scope; s && s != stop; s = s->parent) {
+        if (s->table) {
+            for (int i = s->table->count - 1; i >= 0; i--) {
+                ImportRef *ref = &s->table->entries[i];
+                if (ref->local_name == name)
                     return symtab_lookup(ref->source_members, ref->source_name);
-                }
             }
         }
-        scope = scope->parent;
     }
     return NULL;
 }
 
-static Symbol *import_chain_lookup_kind(ImportScope *scope, const char *name, DeclKind kind) {
-    while (scope) {
-        if (scope->table) {
-            for (int i = scope->table->count - 1; i >= 0; i--) {
-                ImportRef *ref = &scope->table->entries[i];
+static Symbol *import_scope_lookup_kind_until(ImportScope *scope, const char *name,
+                                              DeclKind kind, ImportScope *stop) {
+    for (ImportScope *s = scope; s && s != stop; s = s->parent) {
+        if (s->table) {
+            for (int i = s->table->count - 1; i >= 0; i--) {
+                ImportRef *ref = &s->table->entries[i];
                 if (ref->local_name == name && ref->kind == kind) {
                     if (kind == DECL_MODULE)
                         return symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix);
@@ -201,28 +206,29 @@ static Symbol *import_chain_lookup_kind(ImportScope *scope, const char *name, De
                 }
             }
         }
-        scope = scope->parent;
     }
     return NULL;
 }
 
-/* Walk ancestor module chain for a symbol by name (nearest ancestor wins = shadowing) */
-static Symbol *parent_chain_lookup(ModuleScopeChain *chain, const char *name) {
-    for (ModuleScopeChain *p = chain; p; p = p->parent) {
-        Symbol *sym = symtab_lookup(p->members, name);
-        if (sym) return sym;
+/* Look up ImportRef metadata within a bounded import scope range */
+static ImportRef *import_scope_find_ref_until(ImportScope *scope, const char *name,
+                                              ImportScope *stop) {
+    for (ImportScope *s = scope; s && s != stop; s = s->parent) {
+        if (s->table) {
+            for (int i = s->table->count - 1; i >= 0; i--) {
+                ImportRef *ref = &s->table->entries[i];
+                if (ref->local_name == name) return ref;
+            }
+        }
     }
     return NULL;
 }
 
-/* Walk ancestor module chain for a symbol by name + kind */
-static Symbol *parent_chain_lookup_kind(ModuleScopeChain *chain, const char *name, DeclKind kind) {
-    for (ModuleScopeChain *p = chain; p; p = p->parent) {
-        Symbol *sym = symtab_lookup_kind(p->members, name, kind);
-        if (sym) return sym;
-    }
-    return NULL;
+/* Convenience wrappers that search the entire chain (stop=NULL) */
+static Symbol *import_chain_lookup(ImportScope *scope, const char *name) {
+    return import_scope_lookup_until(scope, name, NULL);
 }
+
 
 /* Namespace-aware global symtab lookup for non-module symbols.
  * Top-level structs/unions/lets (ns_prefix=NULL) are only visible to global:: code.
@@ -241,50 +247,55 @@ static Symbol *global_lookup_kind(SymbolTable *symtab, const char *name, DeclKin
     return sym;
 }
 
-/* Unified 4-step symbol resolution: module_symtab -> parent_chain -> import_chain -> global.
- * This is the canonical lookup order for all name resolution in the type checker. */
+/* Interleaved symbol resolution: at each module level, check members then
+ * that level's imports before moving to the parent.  This ensures a child's
+ * import can shadow a parent's member — consistent with "imports follow the
+ * same lexical scoping rules as let bindings."
+ *
+ * Order: module_symtab → current imports → parent[0] members → parent[0]
+ *        imports → … → remaining imports → global. */
 static Symbol *resolve_symbol(CheckCtx *ctx, const char *name) {
-    Symbol *sym = NULL;
-    if (ctx->module_symtab)
-        sym = symtab_lookup(ctx->module_symtab, name);
-    if (!sym)
-        sym = parent_chain_lookup(ctx->parent_modules, name);
-    if (!sym)
-        sym = import_chain_lookup(ctx->import_scope, name);
-    if (!sym)
-        sym = global_lookup(ctx->symtab, name, ctx->current_ns);
-    return sym;
+    /* 1. Current module members */
+    if (ctx->module_symtab) {
+        Symbol *sym = symtab_lookup(ctx->module_symtab, name);
+        if (sym) return sym;
+    }
+    /* 2. Interleaved: current imports → parent members → parent imports → … */
+    ImportScope *imp = ctx->import_scope;
+    for (ModuleScopeChain *p = ctx->parent_modules; ; p = p->parent) {
+        ImportScope *stop = p ? p->import_scope : NULL;
+        Symbol *sym = import_scope_lookup_until(imp, name, stop);
+        if (sym) return sym;
+        if (!p) break;
+        sym = symtab_lookup(p->members, name);
+        if (sym) return sym;
+        imp = p->import_scope;
+    }
+    /* 3. Global */
+    return global_lookup(ctx->symtab, name, ctx->current_ns);
 }
 
 static Symbol *resolve_symbol_kind(CheckCtx *ctx, const char *name, DeclKind kind) {
-    Symbol *sym = NULL;
-    if (ctx->module_symtab)
-        sym = symtab_lookup_kind(ctx->module_symtab, name, kind);
-    if (!sym)
-        sym = parent_chain_lookup_kind(ctx->parent_modules, name, kind);
-    if (!sym)
-        sym = import_chain_lookup_kind(ctx->import_scope, name, kind);
-    if (!sym) {
-        if (kind == DECL_MODULE)
-            sym = symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
-        else
-            sym = global_lookup_kind(ctx->symtab, name, kind, ctx->current_ns);
+    /* 1. Current module members */
+    if (ctx->module_symtab) {
+        Symbol *sym = symtab_lookup_kind(ctx->module_symtab, name, kind);
+        if (sym) return sym;
     }
-    return sym;
-}
-
-/* Look up ImportRef metadata from import chain (for generic info) */
-static ImportRef *import_chain_find_ref(ImportScope *scope, const char *name) {
-    while (scope) {
-        if (scope->table) {
-            for (int i = scope->table->count - 1; i >= 0; i--) {
-                ImportRef *ref = &scope->table->entries[i];
-                if (ref->local_name == name) return ref;
-            }
-        }
-        scope = scope->parent;
+    /* 2. Interleaved: current imports → parent members → parent imports → … */
+    ImportScope *imp = ctx->import_scope;
+    for (ModuleScopeChain *p = ctx->parent_modules; ; p = p->parent) {
+        ImportScope *stop = p ? p->import_scope : NULL;
+        Symbol *sym = import_scope_lookup_kind_until(imp, name, kind, stop);
+        if (sym) return sym;
+        if (!p) break;
+        sym = symtab_lookup_kind(p->members, name, kind);
+        if (sym) return sym;
+        imp = p->import_scope;
     }
-    return NULL;
+    /* 3. Global */
+    if (kind == DECL_MODULE)
+        return symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+    return global_lookup_kind(ctx->symtab, name, kind, ctx->current_ns);
 }
 
 static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
@@ -1390,7 +1401,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         return e->type;
 
     case EXPR_IDENT: {
-        /* Check local scope first */
+        /* 1. Check local scope (stops at current module boundary) */
         const char *cg_name = NULL;
         bool is_mut = false;
         int boundary_crossings = 0;
@@ -1431,7 +1442,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->prov = scope_lookup_prov(ctx->scope, e->ident.name);
             return t;
         }
-        /* Check module symtab (for within-module sibling references) */
+        /* 2. Check module symtab (for within-module sibling/forward references) */
         if (ctx->module_symtab) {
             Symbol *msym = symtab_lookup(ctx->module_symtab, e->ident.name);
             if (msym) {
@@ -1477,121 +1488,122 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
         }
-        /* Check parent module chain (for nested modules accessing ancestor symbols) */
+        /* 3. Interleaved import/parent resolution: at each module level, check
+         * that level's imports before moving to the parent's members.  This
+         * ensures a child's import shadows a parent's member. */
         {
-            Symbol *psym = parent_chain_lookup(ctx->parent_modules, e->ident.name);
-            if (psym) {
-                if (psym->kind == DECL_STRUCT || psym->kind == DECL_UNION) {
-                    e->type = psym->type;
-                    return e->type;
-                }
-                if (psym->kind == DECL_MODULE) {
-                    e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
-                    return e->type;
-                }
-                if (!psym->type && psym->decl && psym->decl->kind == DECL_LET) {
-                    /* On-demand type check for parent binding with cycle detection */
-                    bool cycle = false;
-                    for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
-                        if (v->decl == psym->decl) { cycle = true; break; }
+            ImportScope *imp = ctx->import_scope;
+            ModuleScopeChain *p = ctx->parent_modules;
+            while (true) {
+                ImportScope *stop = p ? p->import_scope : NULL;
+
+                /* Check imports at this level */
+                Symbol *isym = import_scope_lookup_until(imp, e->ident.name, stop);
+                if (isym) {
+                    if (isym->kind == DECL_STRUCT || isym->kind == DECL_UNION) {
+                        e->type = isym->type;
+                        return e->type;
                     }
-                    if (cycle) {
-                        diag_error(e->loc, "circular dependency: '%s' depends on itself",
-                            e->ident.name);
+                    if (isym->kind == DECL_MODULE) {
+                        e->type = type_void();
+                        return e->type;
+                    }
+                    if (!isym->type && isym->decl && isym->decl->kind == DECL_LET) {
+                        bool cycle = false;
+                        for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                            if (v->decl == isym->decl) { cycle = true; break; }
+                        }
+                        if (cycle) {
+                            diag_error(e->loc, "circular dependency: '%s' depends on itself through imports",
+                                e->ident.name);
+                            e->type = type_error();
+                            return e->type;
+                        }
+                        ImportRef *ref = import_scope_find_ref_until(imp, e->ident.name, stop);
+                        if (ref) {
+                            OnDemandVisited vis = { .decl = isym->decl, .next = ctx->on_demand_visited };
+                            ctx->on_demand_visited = &vis;
+                            SymbolTable *saved_mod = ctx->module_symtab;
+                            Scope *saved_scope = ctx->scope;
+                            ctx->module_symtab = ref->source_members;
+                            ctx->scope = scope_new(ctx->arena, NULL);
+                            ctx->scope->is_global = true;
+                            check_decl_let(ctx, isym->decl);
+                            ctx->scope = saved_scope;
+                            ctx->module_symtab = saved_mod;
+                            ctx->on_demand_visited = vis.next;
+                        }
+                    }
+                    if (isym->decl && isym->decl->kind == DECL_LET && isym->decl->let.codegen_name)
+                        e->ident.codegen_name = isym->decl->let.codegen_name;
+                    if (isym->decl && isym->decl->kind == DECL_LET)
+                        e->ident.is_mut = isym->decl->let.is_mut;
+                    if (!isym->type) {
+                        diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
                         e->type = type_error();
                         return e->type;
                     }
-                    /* Find the parent that contains this symbol to restore its context */
-                    SymbolTable *parent_members = NULL;
-                    ImportScope *parent_imports = NULL;
-                    for (ModuleScopeChain *p = ctx->parent_modules; p; p = p->parent) {
-                        if (symtab_lookup(p->members, e->ident.name) == psym) {
-                            parent_members = p->members;
-                            parent_imports = p->import_scope;
-                            break;
-                        }
-                    }
-                    OnDemandVisited vis = { .decl = psym->decl, .next = ctx->on_demand_visited };
-                    ctx->on_demand_visited = &vis;
-                    SymbolTable *saved_mod = ctx->module_symtab;
-                    Scope *saved_scope = ctx->scope;
-                    ImportScope *saved_imports = ctx->import_scope;
-                    ctx->module_symtab = parent_members;
-                    if (parent_imports) ctx->import_scope = parent_imports;
-                    ctx->scope = scope_new(ctx->arena, NULL);
-                    ctx->scope->is_global = true;
-                    check_decl_let(ctx, psym->decl);
-                    ctx->scope = saved_scope;
-                    ctx->module_symtab = saved_mod;
-                    ctx->import_scope = saved_imports;
-                    ctx->on_demand_visited = vis.next;
-                }
-                if (psym->decl && psym->decl->kind == DECL_LET && psym->decl->let.codegen_name)
-                    e->ident.codegen_name = psym->decl->let.codegen_name;
-                if (psym->decl && psym->decl->kind == DECL_LET)
-                    e->ident.is_mut = psym->decl->let.is_mut;
-                if (!psym->type) {
-                    diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
-                    e->type = type_error();
-                    return e->type;
-                }
-                e->type = psym->type;
-                return e->type;
-            }
-        }
-        /* Check import chain (lexically scoped imports) */
-        {
-            Symbol *isym = import_chain_lookup(ctx->import_scope, e->ident.name);
-            if (isym) {
-                if (isym->kind == DECL_STRUCT || isym->kind == DECL_UNION) {
                     e->type = isym->type;
                     return e->type;
                 }
-                if (isym->kind == DECL_MODULE) {
-                    e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
-                    return e->type;
-                }
-                if (!isym->type && isym->decl && isym->decl->kind == DECL_LET) {
-                    /* On-demand type check for imported symbol with cycle detection */
-                    bool cycle = false;
-                    for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
-                        if (v->decl == isym->decl) { cycle = true; break; }
-                    }
-                    if (cycle) {
-                        diag_error(e->loc, "circular dependency: '%s' depends on itself through imports",
-                            e->ident.name);
-                        e->type = type_error();
+
+                if (!p) break;
+
+                /* Check parent members at this level */
+                Symbol *psym = symtab_lookup(p->members, e->ident.name);
+                if (psym) {
+                    if (psym->kind == DECL_STRUCT || psym->kind == DECL_UNION) {
+                        e->type = psym->type;
                         return e->type;
                     }
-                    ImportRef *ref = import_chain_find_ref(ctx->import_scope, e->ident.name);
-                    if (ref) {
-                        OnDemandVisited vis = { .decl = isym->decl, .next = ctx->on_demand_visited };
+                    if (psym->kind == DECL_MODULE) {
+                        e->type = type_void();
+                        return e->type;
+                    }
+                    if (!psym->type && psym->decl && psym->decl->kind == DECL_LET) {
+                        bool cycle = false;
+                        for (OnDemandVisited *v = ctx->on_demand_visited; v; v = v->next) {
+                            if (v->decl == psym->decl) { cycle = true; break; }
+                        }
+                        if (cycle) {
+                            diag_error(e->loc, "circular dependency: '%s' depends on itself",
+                                e->ident.name);
+                            e->type = type_error();
+                            return e->type;
+                        }
+                        OnDemandVisited vis = { .decl = psym->decl, .next = ctx->on_demand_visited };
                         ctx->on_demand_visited = &vis;
                         SymbolTable *saved_mod = ctx->module_symtab;
                         Scope *saved_scope = ctx->scope;
-                        ctx->module_symtab = ref->source_members;
+                        ImportScope *saved_imports = ctx->import_scope;
+                        ctx->module_symtab = p->members;
+                        ctx->import_scope = p->import_scope;
                         ctx->scope = scope_new(ctx->arena, NULL);
                         ctx->scope->is_global = true;
-                        check_decl_let(ctx, isym->decl);
+                        check_decl_let(ctx, psym->decl);
                         ctx->scope = saved_scope;
                         ctx->module_symtab = saved_mod;
+                        ctx->import_scope = saved_imports;
                         ctx->on_demand_visited = vis.next;
                     }
-                }
-                if (isym->decl && isym->decl->kind == DECL_LET && isym->decl->let.codegen_name)
-                    e->ident.codegen_name = isym->decl->let.codegen_name;
-                if (isym->decl && isym->decl->kind == DECL_LET)
-                    e->ident.is_mut = isym->decl->let.is_mut;
-                if (!isym->type) {
-                    diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
-                    e->type = type_error();
+                    if (psym->decl && psym->decl->kind == DECL_LET && psym->decl->let.codegen_name)
+                        e->ident.codegen_name = psym->decl->let.codegen_name;
+                    if (psym->decl && psym->decl->kind == DECL_LET)
+                        e->ident.is_mut = psym->decl->let.is_mut;
+                    if (!psym->type) {
+                        diag_error(e->loc, "use of '%s' before its type is resolved", e->ident.name);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    e->type = psym->type;
                     return e->type;
                 }
-                e->type = isym->type;
-                return e->type;
+
+                imp = p->import_scope;
+                p = p->parent;
             }
         }
-        /* Check global symbol table (namespace-aware) */
+        /* 4. Check global symbol table (namespace-aware) */
         Symbol *sym = global_lookup(ctx->symtab, e->ident.name, ctx->current_ns);
         /* Modules use namespace-aware lookup with error messaging */
         if (!sym) sym = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
@@ -3057,15 +3069,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
         /* If the object is an IDENT referencing a union type, this is variant construction */
         if (e->field.object->kind == EXPR_IDENT) {
-            Symbol *sym = NULL;
-            if (ctx->module_symtab)
-                sym = symtab_lookup(ctx->module_symtab, e->field.object->ident.name);
-            if (!sym)
-                sym = parent_chain_lookup(ctx->parent_modules, e->field.object->ident.name);
-            if (!sym)
-                sym = import_chain_lookup(ctx->import_scope, e->field.object->ident.name);
-            if (!sym)
-                sym = global_lookup(ctx->symtab, e->field.object->ident.name, ctx->current_ns);
+            Symbol *sym = resolve_symbol(ctx, e->field.object->ident.name);
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
                 e->field.is_variant_constructor = true;
                 if (sym->is_generic) {

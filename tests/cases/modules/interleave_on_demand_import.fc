@@ -1,0 +1,17 @@
+// On-demand type checking of imported binding works at the correct
+// import scope level.  Child imports a function that is forward-declared
+// in its source module — on-demand must resolve in the source's context.
+module provider =
+    let compute = () -> base_val + 1
+    let base_val = 41
+
+module parent =
+    let base_val = 0
+
+    module child =
+        import compute from provider
+        let get = () -> compute()
+
+let main = (args: str[]) ->
+    assert(parent.child.get() == 42)
+    0

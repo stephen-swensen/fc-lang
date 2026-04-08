@@ -1,0 +1,8 @@
+import shapes from geo::
+
+let main = (args: str[]) ->
+    let r = shapes.rect.square(5)
+    assert(shapes.rect.area(r) == 25)
+    let p = shapes.tools.origin()
+    assert(p.x == 0)
+    0

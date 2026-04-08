@@ -1,0 +1,12 @@
+// Parent members are still visible to children when not shadowed.
+// The interleaved loop finds them after checking child imports.
+module parent =
+    let x = 10
+    let y = 20
+
+    module child =
+        let sum = () -> x + y
+
+let main = (args: str[]) ->
+    assert(parent.child.sum() == 30)
+    0

@@ -1,0 +1,21 @@
+// Different names resolved at different levels of the interleaved chain.
+// a: from child's import, b: from parent member, c: from grandparent import.
+module src_a =
+    let a = 1
+
+module src_c =
+    let c = 3
+
+module grandparent =
+    import c from src_c
+
+    module parent =
+        let b = 2
+
+        module child =
+            import a from src_a
+            let sum = () -> a + b + c
+
+let main = (args: str[]) ->
+    assert(grandparent.parent.child.sum() == 6)
+    0

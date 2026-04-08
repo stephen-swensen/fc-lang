@@ -1,0 +1,19 @@
+// Child's imported generic function shadows a parent's generic function.
+module lib_a =
+    let apply = (x: 'a, f: ('a) -> 'a) -> f(x)
+
+module lib_b =
+    let apply = (x: 'a, f: ('a) -> 'a) -> f(f(x))
+
+module parent =
+    import apply from lib_a
+
+    module child =
+        import apply from lib_b
+        let double_inc = (x: int32) ->
+            apply(x, (n: int32) -> n + 1)
+
+let main = (args: str[]) ->
+    // child's apply calls f twice, so double_inc(10) = 10+1+1 = 12
+    assert(parent.child.double_inc(10) == 12)
+    0

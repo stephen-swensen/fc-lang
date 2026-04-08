@@ -39,21 +39,19 @@ FC is closest to Zig in spirit — both target C, both use unconstrained generic
 
 ## Action items
 
-### Implement interleaved import/parent resolution in EXPR_IDENT
+### ~~Implement interleaved import/parent resolution in EXPR_IDENT~~ ✓ Done
 
-The intended resolution order is: at each module level, check members then that level's imports before moving to the parent. This means a child's import can shadow a parent's member — consistent with "imports follow the same lexical scoping rules as let bindings."
+Resolution order is now: at each module level, check members then that level's imports before moving to the parent. A child's import shadows a parent's member — consistent with "imports follow the same lexical scoping rules as let bindings."
 
-**Current state:** `resolve_symbol` and `resolve_symbol_kind` still use the old order (all parent members before all imports). These need to be rewritten to walk one module level at a time, checking members then imports at each level. The `import_scope_lookup_until` and `import_scope_lookup_kind_until` helpers exist for searching imports within a single level (using the start/stop ImportScope pointer trick), and `import_scope_find_ref_until` exists for getting the ImportRef for on-demand context. The `ModuleScopeChain` already stores `import_scope` at each level.
+**What was changed:**
 
-**The deeper issue:** EXPR_IDENT resolution bypasses `resolve_symbol` entirely. It first calls `scope_lookup_capture`, which walks the entire scope chain including parent module scopes. Parent module `let` bindings are added to the scope chain during `check_decl_let`, so they're found via scope before the import check ever runs. This means parent members still beat child imports for bare identifier resolution even if `resolve_symbol` is fixed.
+1. **`resolve_symbol` / `resolve_symbol_kind`**: Rewritten to walk one module level at a time using `import_scope_lookup_until` / `import_scope_lookup_kind_until` with start/stop ImportScope boundaries from the `ModuleScopeChain`.
 
-**The fix has two parts:**
+2. **`scope_lookup_capture`**: Stops at the current module boundary (the first `is_global` scope) instead of walking into parent module scopes. Closure capture semantics are preserved because captures only cross `is_lambda_boundary` scopes within the current module.
 
-1. **`resolve_symbol` / `resolve_symbol_kind`**: Rewrite to walk one module level at a time: current members → current imports → parent members → parent imports → ... → global. The helpers are already in place.
+3. **EXPR_IDENT**: The separate parent_chain and import_chain blocks were merged into a single interleaved loop. At each level, imports are checked first (within that level's range), then parent members — each with correct on-demand type checking context.
 
-2. **`scope_lookup_capture`**: Must stop at the current module boundary (the nearest `is_global` scope) instead of walking into parent module scopes. The EXPR_IDENT interleaved loop then handles parent members and imports in the correct order. The complication: `scope_lookup_capture` also drives closure capture analysis (counting `is_lambda_boundary` crossings), so the change must not break capture semantics — local `let` bindings across lambda boundaries still need to be detected as captures.
-
-3. **EXPR_IDENT**: The parent_chain and import_chain blocks need to be merged into a single interleaved loop. The on-demand type checking logic differs per source (parent members need parent context, import symbols need source module context), so the loop needs a shared on-demand handler parameterized by context.
+4. **EXPR_FIELD**: The inline 4-step symbol lookup for union variant construction was replaced with a call to `resolve_symbol` for consistency.
 
 ### Eliminate the `base_name` field on Type
 

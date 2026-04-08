@@ -1,0 +1,25 @@
+// On-demand type checking of parent binding works correctly with
+// interleaved resolution.  The parent's binding uses a name from its
+// own import scope (not the child's).
+module lib_x =
+    let helper = (x: int32) -> x * 2
+
+module lib_y =
+    let helper = (x: int32) -> x * 3
+
+module outer =
+    import helper from lib_x
+
+    // parent_fn is declared AFTER child — forces on-demand when child uses it
+    module inner =
+        import helper from lib_y
+
+        let use_parent = () -> parent_fn(10)
+        let use_own = () -> helper(10)
+
+    let parent_fn = (x: int32) -> helper(x)
+
+let main = (args: str[]) ->
+    assert(outer.inner.use_parent() == 20)  // parent's helper: 10 * 2
+    assert(outer.inner.use_own() == 30)     // child's helper: 10 * 3
+    0

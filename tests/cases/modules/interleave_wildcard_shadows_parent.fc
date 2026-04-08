@@ -1,0 +1,17 @@
+// Wildcard import in child shadows parent's member.
+module lib =
+    let value = 10
+    let other = 20
+
+module parent =
+    let value = 42
+
+    module child =
+        import * from lib
+        let get = () -> value
+        let get_other = () -> other
+
+let main = (args: str[]) ->
+    assert(parent.child.get() == 10)
+    assert(parent.child.get_other() == 20)
+    0

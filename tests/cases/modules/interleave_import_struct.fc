@@ -1,0 +1,24 @@
+// Child's imported struct type shadows a parent's struct with the same name.
+module types_a =
+    struct point =
+        x: int32
+        y: int32
+
+module types_b =
+    struct point =
+        x: int32
+        y: int32
+        z: int32
+
+module parent =
+    import point from types_a
+
+    module child =
+        import point from types_b
+        let make = () ->
+            let p = point { x = 1, y = 2, z = 3 }
+            p.x + p.y + p.z
+
+let main = (args: str[]) ->
+    assert(parent.child.make() == 6)
+    0

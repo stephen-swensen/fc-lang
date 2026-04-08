@@ -1,0 +1,25 @@
+// Child's imported generic union shadows parent's generic union.
+module unions_a =
+    union maybe =
+        | just('a)
+        | nothing_a
+
+module unions_b =
+    union maybe =
+        | just('a)
+        | nothing_b
+
+module parent =
+    import maybe from unions_a
+
+    module child =
+        import maybe from unions_b
+        let make_just = (x: int32) ->
+            let m = maybe<int32>.just(x)
+            match m with
+            | just(v) -> v
+            | nothing_b -> 0
+
+let main = (args: str[]) ->
+    assert(parent.child.make_just(42) == 42)
+    0

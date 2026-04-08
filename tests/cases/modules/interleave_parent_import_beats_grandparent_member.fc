@@ -1,0 +1,16 @@
+// Parent's import shadows grandparent's member (interleaved at each level).
+module src =
+    let value = 50
+
+module grandparent =
+    let value = 1
+
+    module parent =
+        import value from src
+
+        module child =
+            let get = () -> value
+
+let main = (args: str[]) ->
+    assert(grandparent.parent.child.get() == 50)
+    0

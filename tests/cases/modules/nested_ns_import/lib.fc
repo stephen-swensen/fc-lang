@@ -1,0 +1,19 @@
+namespace acme::
+
+module helpers =
+    let value = 10
+    let double = (x: int32) -> x * 2
+
+module outer =
+    // Nested module imports from namespace sibling
+    module inner =
+        import value from helpers
+        import double from helpers
+        let get = () -> value
+        let apply = (x: int32) -> double(x)
+
+    // Deeply nested: grandchild also imports from namespace sibling
+    module mid =
+        module deep =
+            import value from helpers
+            let get_deep = () -> value
