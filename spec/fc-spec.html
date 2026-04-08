@@ -2982,6 +2982,8 @@ module math =
 
 Imports are **transparent aliases** that introduce names into a lexical scope. An import does not create a new type; it creates a name that resolves to the original definition. Imports may appear at file level or inside module bodies, but **must come before all other declarations** — at the top of the file (after any `namespace` declaration) or at the top of a module body. This is enforced by the compiler.
 
+**Design rationale.** FC has two scoping regimes: function bodies use strict lexical scoping (bindings visible only after their declaration point), while module bodies have order-independent member visibility (all members can reference each other regardless of source order, enabling mutual recursion without annotations). Imports sit at the boundary — they are declared in module bodies but introduce names from outside. The imports-first rule establishes a clear boundary: imports set up the module's external vocabulary, then member declarations use it. Without this rule, imports would either need to be order-dependent (inconsistent with member visibility) or hoisted (making source position misleading). Requiring imports first avoids both problems.
+
 **Import forms:**
 
 ```fc
