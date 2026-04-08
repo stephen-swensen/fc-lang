@@ -1,0 +1,11 @@
+// Nested module struct: diagnostic should show "outer.inner.point"
+module outer =
+    module inner =
+        struct point =
+            x: int32
+            y: int32
+
+let main = (args: str[]) ->
+    let p = outer.inner.point { x = 1, y = 2 }
+    let z = p.z
+    0

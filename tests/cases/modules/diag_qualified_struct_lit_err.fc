@@ -1,0 +1,9 @@
+// Struct literal field error on module-scoped struct: should show "m.point"
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let p = m.point { x = 1, z = 2 }
+    0

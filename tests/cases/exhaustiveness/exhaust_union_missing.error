@@ -1,1 +1,1 @@
-non-exhaustive match: missing variant 'dot'
+non-exhaustive match: missing variant 'dot' of union 'shape'

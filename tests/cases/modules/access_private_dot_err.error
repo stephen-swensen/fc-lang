@@ -1,1 +1,1 @@
-cannot access private member
+cannot access private member 'secret' of module 'm'

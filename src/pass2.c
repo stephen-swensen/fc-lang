@@ -886,7 +886,7 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
             }
         }
         if (!field_type) {
-            diag_error(loc, "struct '%s' has no field '%s'", struct_type->struc.name, fname);
+            diag_error(loc, "struct '%s' has no field '%s'", type_name(struct_type), fname);
             continue;
         }
 
@@ -2289,7 +2289,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
             }
             diag_error(e->loc, "union '%s' has no variant '%s'",
-                union_type->unio.name, variant_name);
+                type_name(union_type), variant_name);
             e->type = type_error();
             return e->type;
         }
@@ -3284,7 +3284,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
         }
         diag_error(e->loc, "struct '%s' has no field '%s'",
-            obj_type->struc.name, e->field.name);
+            type_name(obj_type), e->field.name);
         e->type = type_error();
         return e->type;
     }
@@ -3320,7 +3320,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             }
         }
         diag_error(e->loc, "struct '%s' has no field '%s'",
-            pointee->struc.name, e->field.name);
+            type_name(pointee), e->field.name);
         e->type = type_error();
         return e->type;
     }
@@ -3952,7 +3952,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
         }
         if (!found) {
             diag_error(pat->loc, "union '%s' has no variant '%s'",
-                type->unio.name, pat->variant.variant);
+                type_name(type), pat->variant.variant);
             return;
         }
         break;
@@ -3977,7 +3977,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
                 }
             }
             if (!field_type) {
-                diag_error(pat->loc, "struct '%s' has no field '%s'", type->struc.name, fname);
+                diag_error(pat->loc, "struct '%s' has no field '%s'", type_name(type), fname);
                 continue;
             }
             pat->struc.fields[fi].resolved_type = field_type;
@@ -4490,7 +4490,7 @@ static void report_witness(CheckCtx *ctx, SrcLoc loc, MatPat *witness, Type *sub
     case CTOR_VARIANT:
         if (witness_type && witness_type->kind == TYPE_UNION)
             diag_error(loc, "non-exhaustive match: missing variant '%s' of union '%s'",
-                interesting->ctor.name, witness_type->unio.name);
+                interesting->ctor.name, type_name(witness_type));
         else
             diag_error(loc, "non-exhaustive match: missing variant '%s'",
                 interesting->ctor.name);

@@ -1,1 +1,1 @@
-missing variant 'err'
+non-exhaustive match: missing variant 'err' of union 'status'

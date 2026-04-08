@@ -1,0 +1,10 @@
+// Pattern matching error on module-scoped struct: should show "m.point"
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let p = m.point { x = 1, y = 2 }
+    match p with
+    | { x = x, z = z } -> x + z

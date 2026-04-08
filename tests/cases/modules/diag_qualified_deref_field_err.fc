@@ -1,0 +1,11 @@
+// Deref field error on module-scoped struct: should show "m.point"
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let mut p = m.point { x = 1, y = 2 }
+    let ptr = &p
+    let z = ptr->z
+    0

@@ -1,1 +1,1 @@
-missing variant 'one'
+non-exhaustive match: missing variant 'one' of union 'bit'

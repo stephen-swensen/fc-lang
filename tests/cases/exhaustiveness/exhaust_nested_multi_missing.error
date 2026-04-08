@@ -1,1 +1,1 @@
-missing variant 'green'
+non-exhaustive match: missing variant 'green' of union 'rgb'

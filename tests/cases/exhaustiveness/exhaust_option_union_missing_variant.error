@@ -1,1 +1,1 @@
-missing variant 'west'
+non-exhaustive match: missing variant 'west' of union 'dir'

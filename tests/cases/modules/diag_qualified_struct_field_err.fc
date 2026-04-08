@@ -1,0 +1,10 @@
+// Error diagnostic should show qualified name "m.point", not mangled "m__point"
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+let main = (args: str[]) ->
+    let p = m.point { x = 1, y = 2 }
+    let z = p.z
+    0

@@ -1,0 +1,12 @@
+// Non-exhaustive match on module-scoped union: diagnostic should show qualified name
+module m =
+    union color =
+        | red
+        | green
+        | blue
+
+let main = (args: str[]) ->
+    let c = m.color.red
+    match c with
+    | red -> 1
+    | green -> 2

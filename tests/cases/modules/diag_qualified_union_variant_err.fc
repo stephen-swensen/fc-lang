@@ -1,0 +1,13 @@
+// Error diagnostic should show qualified name "m.shape", not mangled "m__shape"
+module m =
+    union shape =
+        | circle(int32)
+        | rect(int32)
+
+let main = (args: str[]) ->
+    let s = m.shape.circle(5)
+    match s with
+    | circle(r) -> r
+    | rect(w) -> w
+    | triangle(t) -> t
+    0
