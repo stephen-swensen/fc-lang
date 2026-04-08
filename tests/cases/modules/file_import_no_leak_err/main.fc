@@ -1,0 +1,5 @@
+// "value" was imported at file level in lib.fc, but file-level imports
+// are per-file — they must not leak to other files.
+let main = (args: str[]) ->
+    let x = value
+    0

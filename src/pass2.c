@@ -224,10 +224,6 @@ static ImportRef *import_scope_find_ref_until(ImportScope *scope, const char *na
     return NULL;
 }
 
-/* Convenience wrappers that search the entire chain (stop=NULL) */
-static Symbol *import_chain_lookup(ImportScope *scope, const char *name) {
-    return import_scope_lookup_until(scope, name, NULL);
-}
 
 
 /* Namespace-aware global symtab lookup for non-module symbols.
@@ -4865,7 +4861,11 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         }
     }
 
-    /* Second pass: type-check top-level (non-module) decls */
+    /* Second pass: type-check top-level (non-module) decls.
+     *
+     * Top-level lets are treated like module members: they take priority over
+     * file-level imports, consistent with the uniform rule that members beat
+     * imports at every level. */
     ctx.current_ns = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
@@ -4873,38 +4873,11 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             ctx.current_ns = d->ns.name;
             continue;
         }
-        if (d->kind == DECL_IMPORT && d->import.from_module) {
-            /* Member import: add imported symbol to scope so it shadows
-             * any earlier top-level let with the same name. */
-            ImportTable *file_tbl = NULL;
-            if (file_scopes) {
-                const char *fn = d->loc.filename;
-                for (int fi = 0; fi < file_scopes->count; fi++) {
-                    if (file_scopes->scopes[fi].filename == fn) {
-                        file_tbl = &file_scopes->scopes[fi].imports;
-                        break;
-                    }
-                }
-            }
-            if (file_tbl) {
-                const char *local_name = d->import.alias ? d->import.alias : d->import.name;
-                ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
-                Symbol *isym = import_chain_lookup(&file_import_scope, local_name);
-                if (isym && isym->decl && isym->decl->kind == DECL_LET) {
-                    const char *cg = isym->decl->let.codegen_name
-                                     ? isym->decl->let.codegen_name
-                                     : isym->decl->let.name;
-                    scope_add(ctx.scope, local_name, cg,
-                              isym->type ? isym->type : type_void(), false);
-                }
-            }
-            continue;
-        }
         if (d->kind == DECL_LET) {
             /* Set up file-level import scope for this decl's file */
+            const char *fn = d->loc.filename;
             ImportTable *file_tbl = NULL;
             if (file_scopes) {
-                const char *fn = d->loc.filename;
                 for (int fi = 0; fi < file_scopes->count; fi++) {
                     if (file_scopes->scopes[fi].filename == fn) {
                         file_tbl = &file_scopes->scopes[fi].imports;

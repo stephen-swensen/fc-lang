@@ -3080,8 +3080,8 @@ The compiler resolves identifiers through a scope chain, innermost to outermost:
    - Parent module's declarations → parent module's imports
    - Grandparent module's declarations → grandparent module's imports
    - *(and so on, to any depth)*
-   - File-level imports
-3. **Global declarations** — module definitions and entry-point file declarations
+3. **File-level imports** — imports declared at the top level of the current file. These are per-file: each file's imports are visible only to modules defined in that file, never to modules in other files (even in the same namespace). File-level imports sit at the bottom of the import chain, after all module-level imports.
+4. **Global declarations** — module definitions and entry-point file declarations
 
 At each level, members take priority over imports. A child's import shadows a parent's member — consistent with the rule that imports follow the same lexical scoping rules as `let` bindings. Later declarations shadow earlier ones at each level.
 

@@ -73,6 +73,8 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - **Two-pass**: First pass collects top-level names/types/layouts; second pass type-checks expressions
 - Top-level declarations can reference each other regardless of order
 - Local bindings resolve left-to-right within function bodies
+- **Name resolution order**: local scope → current module members → current module imports → parent members → parent imports → *(repeat for each ancestor)* → file-level imports → global declarations. At each module level, members are checked then imports before moving to the parent (interleaved resolution). A child's import can shadow a parent's member.
+- **File-level imports are per-file**: each file's imports are visible only to modules defined in that file, never to other files (even in the same namespace). They sit at the bottom of the import chain, after all module-level imports.
 
 ### Generated C Patterns
 - Signed integer arithmetic uses cast-through-unsigned to define overflow: `(int32_t)((uint32_t)a + (uint32_t)b)`

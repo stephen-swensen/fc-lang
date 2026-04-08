@@ -1,0 +1,5 @@
+namespace acme::
+
+// Same namespace, different file — must not see lib.fc's file-level import
+module consumer =
+    let get = () -> value

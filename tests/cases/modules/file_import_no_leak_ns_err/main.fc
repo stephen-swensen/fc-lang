@@ -1,0 +1,5 @@
+import consumer from acme::
+
+let main = (args: str[]) ->
+    let x = consumer.get()
+    0

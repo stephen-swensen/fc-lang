@@ -1,0 +1,8 @@
+module helpers =
+    let value = 42
+
+// File-level import is visible to modules in the same file
+import value from helpers
+
+module consumer =
+    let get = () -> value

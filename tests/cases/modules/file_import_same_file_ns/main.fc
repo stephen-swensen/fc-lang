@@ -1,0 +1,6 @@
+import consumer from acme::
+
+let main = (args: str[]) ->
+    assert(consumer.get() == 42)
+    assert(consumer.apply(5) == 10)
+    0
