@@ -2987,22 +2987,21 @@ Imports are **transparent aliases** that introduce names into a lexical scope. A
 **Import forms:**
 
 ```fc
-// Same-namespace (global:: implicit)
-import module_a                                       // whole module
-import module_a as m                                  // aliased
+// Member imports (named or wildcard)
 import func_a from module_a                           // named member
-import func_a as f, func_b from module_a              // multiple
+import func_a as f, func_b from module_a              // multiple with alias
 import * from module_a                                // all public members
 
-// Cross-namespace
-import module_a from acme::graphics::                 // whole module
-import func_a from acme::graphics::module_a           // named member
+// Cross-namespace whole-module import
+import module_a from acme::graphics::                 // brings module into scope
 ```
 
 **Rules:**
 - `::` terminates namespace paths; `.` navigates into modules/submodules
 - `import *` works on modules only — not bare namespaces
 - `import T from M` brings both the type `T` (struct or union) and its type-associated module `T` (if any) into scope
+- Bare `import MODULE` (without `from`) is not supported — same-namespace modules are already visible by name; cross-namespace modules use `import MODULE from ns::`
+- `import ... from global::` is not allowed — the global namespace is implicit and not importable
 
 **Aliases** do not create new types. The same type can be imported under multiple aliases, and values of any alias are interchangeable:
 
