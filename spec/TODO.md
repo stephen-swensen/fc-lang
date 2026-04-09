@@ -4,7 +4,23 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 - **Packed structs and bit-level layout control**: Support `packed struct` for exact bit layout without padding, and potentially bit fields. Currently FC emits C structs with C's default layout rules, offering no control over padding or alignment beyond what the C compiler provides. Packed structs would enable memory-mapped I/O, binary protocol parsing, and compact serialization formats.
 
-- **Platform flags and cross-platform support model**: Design the naming and semantics of conditional compilation flags for platform targeting (e.g., `windows` vs `mingw` vs `win32`). Needs a clear specification of: which flags are user-defined vs compiler-provided, what platforms/toolchains are officially supported, what stdlib functions require which flags, and a confirmed support matrix (platform × toolchain × flag). Consider whether the compiler should auto-detect the target and set flags implicitly rather than requiring `--flag` from the user. Document in the spec (Part 6, conditional compilation section) with guidance on stdlib portability expectations.
+- **Platform flags and cross-platform support model**: The current `--flag windows` approach conflates OS with toolchain/environment. MSYS2 UCRT64 is "Windows" but with GCC/MinGW and partial POSIX compatibility, which is fundamentally different from native MSVC. Research into how Zig and Rust handle this:
+
+  **Both use a structured target taxonomy** decomposed into typed axes, not flat string flags:
+  - **OS**: `linux`, `windows`, `macos`, `freebsd`, `freestanding` (for embedded/bare-metal)
+  - **Arch**: `x86_64`, `aarch64`, `arm`, `riscv64`
+  - **ABI/env**: `gnu`, `musl`, `msvc`, `eabi` — this is the axis that distinguishes MSYS2/MinGW (`gnu`) from native MSVC (`msvc`)
+
+  **Both auto-detect from the host by default**; the user only specifies a target explicitly for cross-compilation. Since FC delegates to a C compiler, auto-detection could sniff the C compiler's predefined macros (`cc -dM -E`).
+
+  **Both keep user-defined flags separate** from the built-in platform taxonomy (Rust: `--cfg` / Cargo features; Zig: build options).
+
+  **Design options for FC**:
+  1. **Value-carrying flags** — e.g., `#if os == "windows" && env == "gnu"`. More expressive, mirrors Zig/Rust, but requires extending `#if` to support equality comparisons on string-valued flags.
+  2. **Auto-detected boolean flags** — compiler sniffs the C compiler and sets booleans (`windows`, `linux`, `x86_64`, `gnu`, `msvc`, `freestanding`, etc.). `#if` stays as-is with presence checks: `#if windows && gnu`. Simpler, mirrors what C does with `_WIN32`/`__linux__`/`__MINGW64__`. Less structured but probably sufficient in practice.
+  3. Keep `--flag` for user-defined flags on top of whichever approach.
+
+  **Open questions**: which approach fits FC's pragmatic style better; what the embedded/freestanding story looks like (runtime assumptions like `abort()`/`malloc` may not exist); confirmed support matrix (platform × toolchain × flag); spec documentation (Part 6, conditional compilation section) with stdlib portability guidance.
 
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:
   - **Abort/signal handling** (core lang): `expressions/assert_fail`, `assert_message_fail`, `div_by_zero`, `div_by_zero_u32`, `mod_by_zero`, `options/unwrap_none`, `slices/slice_bounds`, `slices/subslice_bounds_abort`, `structs/fixed_array_overflow_err` — likely different exit codes from `abort()` on Windows vs Linux (Windows doesn't use POSIX signals).
