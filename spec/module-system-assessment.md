@@ -66,6 +66,37 @@ EXPR_FIELD had three sites that re-resolved the object's name via `resolve_symbo
 
 **Architectural invariant:** EXPR_IDENT is the single source of truth for identifier resolution. Later expression handlers (EXPR_FIELD, EXPR_CALL) read the stored result — they never re-resolve.
 
+### ~~Fix nested module namespace propagation~~ ✓ Done
+
+Nested modules (modules inside modules) did not inherit their enclosing namespace's `ns_prefix` — it was left as NULL. This meant nested modules couldn't import from same-namespace sibling modules (`import value from helpers` inside a nested module in `acme::` couldn't find `helpers`).
+
+**What was changed:** Added `ns_prefix` parameter to `register_module_members` in pass1.c so nested module Symbols inherit the enclosing namespace. Also set `ns_prefix` on ImportRefs in `import_table_add` to match, so `import_scope_lookup_kind_until` uses namespace-aware lookup consistently. Removed the unused `ns_prefix` parameter from `resolve_nested_module_imports`.
+
+### ~~Fix file-level import scoping and members-beat-imports rule~~ ✓ Done
+
+Two issues fixed:
+
+1. **File-level import leak:** File-level imports in the global namespace were added to the shared root scope, leaking across files. Fixed by removing the root-scope import addition entirely — file-level imports are now only visible through the per-file `import_scope` chain.
+
+2. **Members beat imports uniformly:** Previously, file-level imports could shadow top-level `let` bindings (a special case). Removed this exception — members (declarations) now beat imports at every level, uniformly. This is consistent with how module members beat module imports.
+
+### ~~Enforce imports-first ordering~~ ✓ Done
+
+Imports must appear at the top of a file (after any `namespace` declaration) and at the top of a module body, before all other declarations. This eliminates ambiguity about source-order-dependent resolution and is the natural consequence of FC's order-independent member visibility within modules (where imports are the preamble, not interleaved declarations).
+
+### ~~Simplify import syntax~~ ✓ Done
+
+Removed bare `import MODULE` (without `from`) — same-namespace modules are already visible by name, making it redundant. Removed `import ... from global::` for both whole-module and member imports — the global namespace is implicit and not importable. Removed the global namespace fallback from non-global namespace import resolution — library code cannot implicitly access application-level (global namespace) declarations.
+
+The three supported import forms are now:
+- `import NAME from MODULE` — named member import
+- `import * from MODULE` — wildcard member import
+- `import MODULE from ns::` — cross-namespace whole-module import
+
+### ~~Fix diagnostics showing mangled names~~ ✓ Done
+
+Error messages were showing internal mangled C names (e.g., `outer__shape`) instead of qualified source names (e.g., `outer.shape`). Fixed 7 diagnostic sites in pass2.c to use `type_name()` which returns `qualified_name` — the fully qualified FC path including namespace prefix where applicable (e.g., `vendor::shapes.rect`).
+
 ### Eliminate the `base_name` field on Type
 
 `base_name` exists on TYPE_STRUCT and TYPE_UNION for display purposes (showing source names in error messages). But `qualified_name` serves the same display role. If the display logic is unified to always derive the display name from `qualified_name` or the canonical name, `base_name` becomes dead weight. Removing it would simplify the Type struct and eliminate one of the lingering sources of "which name do I use?" confusion in the codebase.

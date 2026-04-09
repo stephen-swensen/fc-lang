@@ -191,7 +191,7 @@ Every new feature, bug fix, or spec change must include tests covering the happy
 
 - During development, use `make test-gcc FILTER=pattern` for fast iteration on relevant tests
 - Run `make test-all` to confirm all tests pass (both gcc and clang) before presenting a final summary of changes
-- Skip tests for changes that only touch `demos/` — demo apps are standalone and don't affect compiler tests
+- Skip tests for changes that only touch `demos/` or `spec/` (except `spec/examples.fc`) — demo apps and spec documents don't affect compiler tests
 
 ## Spec Reference
 
