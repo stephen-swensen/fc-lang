@@ -1,1 +1,1 @@
-cannot import from 'global::'
+cannot import from 'global::'; global-namespace modules are already visible by name

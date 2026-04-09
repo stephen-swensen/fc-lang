@@ -1,5 +1,3 @@
-import math as m
-
 let main = (args: str[]) ->
-    assert(m.add(m.mul(3, 4), 5) == 17)
+    assert(math.add(math.mul(3, 4), 5) == 17)
     0

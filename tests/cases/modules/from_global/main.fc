@@ -1,4 +1,4 @@
-import add from global::math
+import add from math
 
 let main = (args: str[]) ->
     let _result = add(1, 2)

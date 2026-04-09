@@ -5,8 +5,7 @@ module helpers =
     let inc = (x: int32) -> x + 1
 
 module outer =
-    // Nested module does a whole-module import of a namespace sibling
+    // Nested module accesses namespace sibling directly (no import needed)
     module inner =
-        import helpers
         let get = () -> helpers.value
         let apply = () -> helpers.inc(helpers.value)

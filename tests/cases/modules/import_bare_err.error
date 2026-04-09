@@ -1,0 +1,1 @@
+bare 'import math' is not supported; use 'import math from ns::' for cross-namespace or access members directly

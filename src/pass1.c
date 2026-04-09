@@ -177,11 +177,19 @@ static void process_member_import(Decl *d, ImportTable *target,
     const char *mod_name = d->import.from_module;
     const char *from_ns = d->import.from_namespace;
 
+    if (from_ns && strcmp(from_ns, "global") == 0) {
+        diag_error(d->loc, "cannot import from 'global::'; use 'import %s from %s' instead",
+            d->import.is_wildcard ? "*" : d->import.name, mod_name);
+        return;
+    }
+
     /* Look up the source module: global symtab first, then import table
      * (a prior whole-module import in the same scope may have brought it in) */
     const char *lookup_ns = from_ns ? from_ns : current_ns;
     Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
-    if (!mod_sym) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
+    /* Fall back to global namespace only if we're already in the global namespace.
+     * Non-global namespaces cannot implicitly access global-namespace modules. */
+    if (!mod_sym && !lookup_ns) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
     if (!mod_sym || mod_sym->kind != DECL_MODULE) {
         /* Check the target import table for a whole-module import */
         for (int k = 0; k < target->count; k++) {
@@ -761,7 +769,7 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
                 continue;
             }
             if (strcmp(imp_ns, "global") == 0) {
-                diag_error(d->loc, "cannot import from 'global::'; the global namespace is implicit and not importable");
+                diag_error(d->loc, "cannot import from 'global::'; global-namespace modules are already visible by name");
                 continue;
             }
             const char *name = d->import.name;
@@ -773,16 +781,12 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
             const char *import_name = d->import.alias ? d->import.alias : name;
             import_table_add_module(imports, import_name, src, global_symtab);
         } else {
-            /* import MODULE [as ALIAS] */
-            const char *name = d->import.name;
-            Symbol *src = symtab_lookup_module(global_symtab, name, mod_ns);
-            if (!src) src = symtab_lookup_module(global_symtab, name, NULL);
-            if (!src || src->kind != DECL_MODULE) {
-                diag_error(d->loc, "unknown module '%s'", name);
-                continue;
-            }
-            const char *import_name = d->import.alias ? d->import.alias : name;
-            import_table_add_module(imports, import_name, src, global_symtab);
+            /* import MODULE [as ALIAS] — bare whole-module imports are not supported.
+             * Same-namespace modules are already visible by name; cross-namespace
+             * modules require 'import MODULE from ns::'. */
+            diag_error(d->loc,
+                "bare 'import %s' is not supported; use 'import %s from ns::' for cross-namespace or access members directly",
+                d->import.name, d->import.name);
         }
     }
 }
@@ -1056,16 +1060,12 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         ImportTable *file_tbl = get_file_imports(file_scopes, d->loc.filename);
 
         if (!mod_name && !from_ns) {
-            /* import MODULE [as ALIAS] — whole module import */
-            const char *name = d->import.name;
-            Symbol *sym = symtab_lookup_module(symtab, name, current_ns);
-            if (!sym) sym = symtab_lookup_module(symtab, name, NULL);
-            if (!sym || sym->kind != DECL_MODULE) {
-                diag_error(d->loc, "unknown module '%s'", name);
-                continue;
-            }
-            const char *import_name = d->import.alias ? d->import.alias : name;
-            import_table_add_module(file_tbl, import_name, sym, symtab);
+            /* import MODULE [as ALIAS] — bare whole-module imports are not supported.
+             * Same-namespace modules are already visible by name; cross-namespace
+             * modules require 'import MODULE from ns::'. */
+            diag_error(d->loc,
+                "bare 'import %s' is not supported; use 'import %s from ns::' for cross-namespace or access members directly",
+                d->import.name, d->import.name);
             continue;
         }
 
@@ -1075,7 +1075,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 continue;
             }
             if (strcmp(from_ns, "global") == 0) {
-                diag_error(d->loc, "cannot import from 'global::'; the global namespace is implicit and not importable");
+                diag_error(d->loc, "cannot import from 'global::'; global-namespace modules are already visible by name");
                 continue;
             }
             /* import MODULE from namespace:: — cross-namespace whole module import */
