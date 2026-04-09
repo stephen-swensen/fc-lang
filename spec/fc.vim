@@ -64,15 +64,6 @@ syn match fcInterp contained "}"
 " Percent escape
 syn match fcPercentEsc contained "%%"
 
-" Line comments
-syn match fcComment "//.*$" contains=fcTodo
-
-" Block comments (nestable)
-syn region fcBlockComment start="/\*" end="\*/" contains=fcBlockComment,fcTodo
-
-" TODO/FIXME/XXX/NOTE in comments
-syn keyword fcTodo contained TODO FIXME XXX NOTE HACK BUG
-
 " Operators
 syn match fcOperator "->"
 syn match fcOperator "\.\."
@@ -92,6 +83,15 @@ syn match fcPreProc "^#if\>"
 syn match fcPreProc "^#else\s\+if\>"
 syn match fcPreProc "^#else\>"
 syn match fcPreProc "^#end\>"
+
+" Line comments
+syn match fcComment "//.*$" contains=fcTodo
+
+" Block comments (nestable)
+syn region fcBlockComment start="/\*" end="\*/" contains=fcBlockComment,fcTodo
+
+" TODO/FIXME/XXX/NOTE in comments
+syn keyword fcTodo contained TODO FIXME XXX NOTE HACK BUG
 
 " Highlighting links
 hi def link fcKeyword       Keyword
