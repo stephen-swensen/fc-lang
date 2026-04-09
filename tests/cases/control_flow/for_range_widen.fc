@@ -2,7 +2,7 @@ let main = (args: str[]) ->
     let _result =
         let mut sum = 0i64
         for i in 0i8..5
-            sum = sum + (int64)i
-        (int32)sum
+            sum = sum + (int64) i
+        (int32) sum
     assert(_result == 10)
     0

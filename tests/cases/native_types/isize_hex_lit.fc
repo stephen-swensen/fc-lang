@@ -3,5 +3,5 @@ let main = (args: str[]) ->
     let b = 0xAu
     let c = 0b1010i
     let d = 0o12u
-    assert((int32)a + (int32)b + (int32)c + (int32)d == 40)
+    assert((int32) a + (int32) b + (int32) c + (int32) d == 40)
     0

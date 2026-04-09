@@ -8,6 +8,6 @@ let main = (args: str[]) ->
         let prod = c * d
         let mut result = 0i64
         if sum == 30 then result = prod - sum
-        (int32)result
+        (int32) result
     assert(_result == 20)
     0

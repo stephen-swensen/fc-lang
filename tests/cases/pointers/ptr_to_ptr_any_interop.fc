@@ -10,6 +10,6 @@ module c from "stdlib.h" =
 let main = (args: str[]) ->
     let s = "99end"
     let mut end = default(any*)
-    let val = c.strtol((cstr)s, &end, 10)
-    assert((int32)val == 99)
+    let val = c.strtol((cstr) s, &end, 10)
+    assert((int32) val == 99)
     0

@@ -155,7 +155,7 @@ let main = (args: str[]) ->
     assert(linked_list.last(l) == 6)
 
     // applyi (l is now 10, 8, 6)
-    linked_list.applyi(&l, (i: int64, x: int32) -> x + (int32)i)
+    linked_list.applyi(&l, (i: int64, x: int32) -> x + (int32) i)
     assert(linked_list.first(l) == 10) // 10 + 0
     assert(linked_list.last(l) == 8)   // 6 + 2
     let ai_s = linked_list.to_slice(l)

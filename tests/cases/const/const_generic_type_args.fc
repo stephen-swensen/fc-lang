@@ -10,7 +10,7 @@ struct box =
 let get_err = (r: result<int32, const str>) ->
     match r with
     | ok(v) -> v
-    | err(s) -> (int32)s.len
+    | err(s) -> (int32) s.len
 
 let main = (args: str[]) ->
     // const as second type arg in type annotation + expression construction
@@ -18,6 +18,6 @@ let main = (args: str[]) ->
     assert(get_err(r) == 4)
     // const as sole type arg
     let mut x = 42
-    let b = box { value = (const int32*)&x }
+    let b = box { value = (const int32*) &x }
     assert(*b.value == 42)
     0

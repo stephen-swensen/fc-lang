@@ -4,6 +4,6 @@ struct point =
 
 let main = (args: str[]) ->
     let mut p = point { x = 1, y = 2 }
-    let cp = (const point*)&p
+    let cp = (const point*) &p
     cp->x = 10
     0

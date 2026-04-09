@@ -1,5 +1,5 @@
 // str-to-cstr cast works at file level (hoisted into C main)
-let s = (cstr)"hello"
+let s = (cstr) "hello"
 
 let main = (args: str[]) ->
     assert(*s == 104)

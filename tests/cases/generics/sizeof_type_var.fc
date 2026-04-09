@@ -2,5 +2,5 @@ let get_size = <'a>() -> sizeof('a)
 
 let main = (args: str[]) ->
     let s = get_size<int32>()
-    assert((int32)s == 4)
+    assert((int32) s == 4)
     0

@@ -14,7 +14,7 @@ let main = (args: str[]) ->
                 let n = io.read(buf, 16, rf)
                 io.close(rf)
                 if n == 5i64 then 42
-                else (int32)n
+                else (int32) n
             | none -> 2
         | none -> 1
     assert(_result == 42)

@@ -4,5 +4,5 @@ let snd = (a: 'a, b: 'b) -> b
 let main = (args: str[]) ->
     let x = fst(42, true)
     let y = snd(10, 7i8)
-    assert(x + (int32)y == 49)
+    assert(x + (int32) y == 49)
     0

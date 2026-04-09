@@ -4,5 +4,5 @@ struct pair =
 
 let main = (args: str[]) ->
     let p = pair { x = 10i, y = 20u }
-    assert((int32)p.x + (int32)p.y == 30)
+    assert((int32) p.x + (int32) p.y == 30)
     0

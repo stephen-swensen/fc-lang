@@ -10,7 +10,7 @@ let call_eq = (h: hasher<'a>, a: 'a, b: 'a) ->
     h.eq(a, b)
 
 let main = (args: str[]) ->
-    let h = hasher { hash = (x: int32) -> (int64)x, eq = (a: int32, b: int32) -> a == b }
+    let h = hasher { hash = (x: int32) -> (int64) x, eq = (a: int32, b: int32) -> a == b }
     assert(call_hash(h, 42) == 42i64)
     assert(call_eq(h, 5, 5))
     assert(!call_eq(h, 5, 6))

@@ -1,12 +1,12 @@
 // All boundary values that should compile successfully
-let use_i8 = (x: int8) -> (int32)x
-let use_u8 = (x: uint8) -> (int32)x
-let use_i16 = (x: int16) -> (int32)x
-let use_u16 = (x: uint16) -> (int32)x
+let use_i8 = (x: int8) -> (int32) x
+let use_u8 = (x: uint8) -> (int32) x
+let use_i16 = (x: int16) -> (int32) x
+let use_u16 = (x: uint16) -> (int32) x
 let use_i32 = (x: int32) -> x
-let use_u32 = (x: uint32) -> (int32)x
-let use_u64 = (x: uint64) -> (int32)x
-let use_i64 = (x: int64) -> (int32)x
+let use_u32 = (x: uint32) -> (int32) x
+let use_u64 = (x: uint64) -> (int32) x
+let use_i64 = (x: int64) -> (int32) x
 
 let main = (args: str[]) ->
     use_i8(127i8)

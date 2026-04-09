@@ -8,7 +8,7 @@ module point =
     let origin = () -> point { x = 0, y = 0 }
 
 module m =
-    let sum_bytes = (point: uint8[]) -> (int32)point.len
+    let sum_bytes = (point: uint8[]) -> (int32) point.len
 
 let main = (args: str[]) ->
     let buf = uint8[5] { 1u8, 2u8, 3u8, 4u8, 5u8 }

@@ -27,7 +27,7 @@ module io =
     // f: any* — opaque FILE* handle (e.g. stdout, or from open).
     // returns: int64 — number of bytes actually written.
     let write = (s: const str, f: any*) ->
-        (int64) c.fwrite(s.ptr, 1u, (usize)s.len, f)
+        (int64) c.fwrite(s.ptr, 1u, (usize) s.len, f)
 
     // read: reads up to n bytes from file handle f into buf.
     // buf: uint8[] — mutable destination buffer; non-const because read fills it.
@@ -35,14 +35,14 @@ module io =
     // f: any* — opaque FILE* handle.
     // returns: int64 — number of bytes actually read, or 0 on EOF/error.
     let read = (buf: uint8[], n: int64, f: any*) ->
-        (int64) c.fread(buf.ptr, 1u, (usize)n, f)
+        (int64) c.fread(buf.ptr, 1u, (usize) n, f)
 
     // open: opens a file at path with the given mode (e.g. "r", "w", "rb").
     // path: const str — file path; const because open only reads it.
     // mode: const str — fopen mode string; const because open only reads it.
     // returns: any*? — opaque FILE* on success, none on failure.
     let open = (path: const str, mode: const str) ->
-        c.fopen((cstr)path, (cstr)mode)
+        c.fopen((cstr) path, (cstr) mode)
 
     // close: closes a file handle. The handle must not be used after this call.
     // f: any* — opaque FILE* handle to close.
@@ -64,13 +64,13 @@ module io =
     // whence: int32 — seek_set (start), seek_cur (current), or seek_end (end).
     // returns: int32 — 0 on success, nonzero on error.
     let seek = (f: any*, offset: int64, whence: int32) ->
-        c.fseek(f, (isize)offset, whence)
+        c.fseek(f, (isize) offset, whence)
 
     // tell: returns the current file position indicator.
     // f: any* — opaque FILE* handle.
     // returns: int64 — byte offset from start, or -1 on error.
     let tell = (f: any*) ->
-        (int64)c.ftell(f)
+        (int64) c.ftell(f)
 
     // eof: tests end-of-file indicator on a file handle.
     // f: any* — opaque FILE* handle.
@@ -82,14 +82,14 @@ module io =
     // path: const str — file path to delete.
     // returns: bool — true on success.
     let remove = (path: const str) ->
-        c.remove((cstr)path) == 0
+        c.remove((cstr) path) == 0
 
     // rename: renames or moves a file.
     // old_path: const str — current file path.
     // new_path: const str — new file path.
     // returns: bool — true on success.
     let rename = (old_path: const str, new_path: const str) ->
-        c.rename((cstr)old_path, (cstr)new_path) == 0
+        c.rename((cstr) old_path, (cstr) new_path) == 0
 
     // read_all: reads an entire file into a heap-allocated string.
     // path: const str — file path to read.
@@ -112,7 +112,7 @@ module io =
     let read_char = (f: any*) ->
         let ch = c.fgetc(f)
         if ch == -1 then default(uint8?)
-        else some((uint8)ch)
+        else some((uint8) ch)
 
     // mkdir: creates a directory at the given path.
     // path: const str — directory path to create.
@@ -122,30 +122,30 @@ module io =
         extern _mkdir as win_mkdir: (const cstr) -> int32
 
     let mkdir = (path: const str) ->
-        d.win_mkdir((cstr)path) == 0
+        d.win_mkdir((cstr) path) == 0
 #else
     private module st from "sys/stat.h" =
         extern mkdir: (const cstr, int32) -> int32
 
     let mkdir = (path: const str) ->
-        st.mkdir((cstr)path, 493) == 0
+        st.mkdir((cstr) path, 493) == 0
 #end
 
     // exists: checks whether a file or directory exists at path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists.
     let exists = (path: const str) ->
-        u.access((cstr)path, 0) == 0
+        u.access((cstr) path, 0) == 0
 
     // can_read: checks whether the current process has read permission for path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists and is readable.
     let can_read = (path: const str) ->
-        u.access((cstr)path, 4) == 0
+        u.access((cstr) path, 4) == 0
 
     // can_write: checks whether the current process has write permission for path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists and is writable.
     let can_write = (path: const str) ->
-        u.access((cstr)path, 2) == 0
+        u.access((cstr) path, 2) == 0
 

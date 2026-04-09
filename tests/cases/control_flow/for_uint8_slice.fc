@@ -8,7 +8,7 @@ let main = (args: str[]) ->
 
         let mut total = 0i32
         for x in buf
-            total = total + (int32)x
+            total = total + (int32) x
 
         total
     assert(_result == 100)

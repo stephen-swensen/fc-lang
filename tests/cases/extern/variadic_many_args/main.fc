@@ -16,6 +16,6 @@ let main = (args: str[]) ->
             42, i8_val, i16_val, u8_val, c"end")
         // "42 1 2 3 end" = 12 chars
         let len = mem.strlen(buf.ptr)
-        (int32)len
+        (int32) len
     assert(_result == 12)
     0

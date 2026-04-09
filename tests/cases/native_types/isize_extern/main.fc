@@ -16,7 +16,7 @@ let main = (args: str[]) ->
     let r2 = if cmp == 0 then 1 else 0
 
     // cast usize to int32 for return
-    let r3 = (int32)len
+    let r3 = (int32) len
 
     assert(r1 + r2 + r3 == 7)
     0

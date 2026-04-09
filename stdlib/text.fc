@@ -9,16 +9,16 @@ module text =
     // parse_int32: parses a string as a 32-bit signed integer (base 10).
     // returns: int32? — some(value) on success, none if the string is not a valid integer.
     let parse_int32 = (s: const str) ->
-        let cs = (cstr)s
+        let cs = (cstr) s
         let mut endptr = default(cstr)
         let val = c.strtoll(cs, &endptr, 10)
         if endptr == cs then default(int32?)
-        else some((int32)val)
+        else some((int32) val)
 
     // parse_int64: parses a string as a 64-bit signed integer (base 10).
     // returns: int64? — some(value) on success, none if the string is not a valid integer.
     let parse_int64 = (s: const str) ->
-        let cs = (cstr)s
+        let cs = (cstr) s
         let mut endptr = default(cstr)
         let val = c.strtoll(cs, &endptr, 10)
         if endptr == cs then default(int64?)
@@ -27,7 +27,7 @@ module text =
     // parse_float32: parses a string as a 32-bit float.
     // returns: float32? — some(value) on success, none if the string is not a valid number.
     let parse_float32 = (s: const str) ->
-        let cs = (cstr)s
+        let cs = (cstr) s
         let mut endptr = default(cstr)
         let val = c.strtof(cs, &endptr)
         if endptr == cs then default(float32?)
@@ -36,7 +36,7 @@ module text =
     // parse_float64: parses a string as a 64-bit float.
     // returns: float64? — some(value) on success, none if the string is not a valid number.
     let parse_float64 = (s: const str) ->
-        let cs = (cstr)s
+        let cs = (cstr) s
         let mut endptr = default(cstr)
         let val = c.strtod(cs, &endptr)
         if endptr == cs then default(float64?)
@@ -174,18 +174,18 @@ module text =
         let mut idx = 0i64
         let mut start = 0i64
         if delim.len == 0i64 then
-            parts[0] = (str)s
+            parts[0] = (str) s
         else
             let mut i = 0i64
             loop
                 if i > s.len - delim.len then break
                 if s[i..i + delim.len] == delim then
-                    parts[idx] = (str)s[start..i]
+                    parts[idx] = (str) s[start..i]
                     idx = idx + 1i64
                     start = i + delim.len
                     i = start
                 else i = i + 1i64
-            parts[idx] = (str)s[start..s.len]
+            parts[idx] = (str) s[start..s.len]
         parts
 
     // join: joins an array of strings with a delimiter. Returns a heap-allocated string.

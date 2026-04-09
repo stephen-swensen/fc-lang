@@ -7,6 +7,6 @@ let main = (args: str[]) ->
         let prod = a * b
         let mut result = 0i64
         if a > b then result = sum + diff + prod
-        (int32)result
+        (int32) result
     assert(_result == 70)
     0

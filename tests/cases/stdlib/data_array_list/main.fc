@@ -85,7 +85,7 @@ let main = (args: str[]) ->
     array_list.drop(doubled)
 
     // mapi
-    let indexed = array_list.mapi(l, (i: int64, x: int32) -> (int32)i + x)
+    let indexed = array_list.mapi(l, (i: int64, x: int32) -> (int32) i + x)
     assert(array_list.get(indexed, 0i64) == 10)
     assert(array_list.get(indexed, 1i64) == 26)
     assert(array_list.get(indexed, 2i64) == 7)
@@ -159,7 +159,7 @@ let main = (args: str[]) ->
     assert(array_list.get(rv, 1i64) == 20)
 
     // applyi
-    array_list.applyi(&rv, (i: int64, x: int32) -> x + (int32)i)
+    array_list.applyi(&rv, (i: int64, x: int32) -> x + (int32) i)
     assert(array_list.get(rv, 0i64) == 30) // 30 + 0
     assert(array_list.get(rv, 1i64) == 21) // 20 + 1
     array_list.drop(rv)

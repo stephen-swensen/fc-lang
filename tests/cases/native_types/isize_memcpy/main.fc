@@ -16,8 +16,8 @@ let main = (args: str[]) ->
     c.memcpy(buf, src, len + 1u)
 
     // verify the copy worked
-    let result = (cstr)buf
+    let result = (cstr) buf
     let rlen = c.strlen(result)
-    free((int32*)buf)
-    assert((int32)rlen == 5)
+    free((int32*) buf)
+    assert((int32) rlen == 5)
     0

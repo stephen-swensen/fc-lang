@@ -13,7 +13,7 @@ let main = (args: str[]) ->
     // Send from sock1 to sock2
     let msg = "udp test"
     let sent = net.send_to(sock1, msg, net.make_addr(net.inaddr_loopback, port2))
-    assert(sent == (int64)msg.len)
+    assert(sent == (int64) msg.len)
 
     // Receive on sock2
     let mut buf = uint8[32] {}
@@ -23,7 +23,7 @@ let main = (args: str[]) ->
     // Verify data matches
     let mut i = 0
     for c in buf
-        if i < (int32)received then
+        if i < (int32) received then
             assert(c == msg[i])
             i = i + 1
 

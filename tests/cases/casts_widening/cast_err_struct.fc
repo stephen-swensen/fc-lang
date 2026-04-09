@@ -4,5 +4,5 @@ struct point =
 
 let main = (args: str[]) ->
     let p = point { x = 1, y = 2 }
-    let x = (int32)p
+    let x = (int32) p
     x

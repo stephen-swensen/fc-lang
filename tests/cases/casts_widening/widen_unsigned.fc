@@ -9,6 +9,6 @@ let main = (args: str[]) ->
         let cd = c + d
         let mut result = 0u64
         if cd == 70u64 then result = ab + bc + cd
-        (int32)result
+        (int32) result
     assert(_result == 150)
     0

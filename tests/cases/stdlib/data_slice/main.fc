@@ -28,7 +28,7 @@ let main = (args: str[]) ->
     assert(doubled[4i64] == 10)
     free(doubled)
 
-    let indexed = slice.mapi(s, (i: int64, x: int32) -> (int32)i * 10 + x)
+    let indexed = slice.mapi(s, (i: int64, x: int32) -> (int32) i * 10 + x)
     assert(indexed[0i64] == 1)  // 0*10 + 1
     assert(indexed[3i64] == 34) // 3*10 + 4
     free(indexed)
@@ -88,7 +88,7 @@ let main = (args: str[]) ->
 
     // applyi
     let mut ai = int32[3] { 10, 20, 30 }
-    slice.applyi(ai, (i: int64, x: int32) -> x + (int32)i)
+    slice.applyi(ai, (i: int64, x: int32) -> x + (int32) i)
     assert(ai[0] == 10) // 10 + 0
     assert(ai[1] == 21) // 20 + 1
     assert(ai[2] == 32) // 30 + 2

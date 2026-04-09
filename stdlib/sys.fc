@@ -20,8 +20,8 @@ module sys =
     // returns: const str? — the value if set, none if unset. Const because the
     //   returned str points into the process environment block.
     let env = (name: const str) ->
-        match c.getenv((cstr)name) with
-        | some(cs) -> some((const str)cs)
+        match c.getenv((cstr) name) with
+        | some(cs) -> some((const str) cs)
         | none -> default(const str?)
 
     // exit: terminates the process immediately with the given exit code.
@@ -42,25 +42,25 @@ module sys =
     // Checks TMPDIR, TMP, TEMP (in order).
     // returns: const str? — the temp directory path if found, none otherwise.
     let temp_dir = () ->
-        match c.getenv((cstr)"TMPDIR") with
-        | some(cs) -> some((const str)cs)
+        match c.getenv((cstr) "TMPDIR") with
+        | some(cs) -> some((const str) cs)
         | none ->
-            match c.getenv((cstr)"TMP") with
-            | some(cs) -> some((const str)cs)
+            match c.getenv((cstr) "TMP") with
+            | some(cs) -> some((const str) cs)
             | none ->
-                match c.getenv((cstr)"TEMP") with
-                | some(cs) -> some((const str)cs)
+                match c.getenv((cstr) "TEMP") with
+                | some(cs) -> some((const str) cs)
                 | none -> default(const str?)
 
     // home_dir: returns the user's home directory path.
     // Checks HOME (Linux, macOS, MinGW), then USERPROFILE (Windows).
     // returns: const str? — the home directory path if found, none otherwise.
     let home_dir = () ->
-        match c.getenv((cstr)"HOME") with
-        | some(cs) -> some((const str)cs)
+        match c.getenv((cstr) "HOME") with
+        | some(cs) -> some((const str) cs)
         | none ->
-            match c.getenv((cstr)"USERPROFILE") with
-            | some(cs) -> some((const str)cs)
+            match c.getenv((cstr) "USERPROFILE") with
+            | some(cs) -> some((const str) cs)
             | none -> default(const str?)
 
     // sleep: suspends the calling thread for at least ms milliseconds.

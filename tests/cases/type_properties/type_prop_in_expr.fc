@@ -20,7 +20,7 @@ let main = (args: str[]) ->
 
     // Use in arithmetic
     let z = uint8.max - uint8.min  // 255 - 0 = 255
-    if (int32)z != 255 then return 4
+    if (int32) z != 255 then return 4
 
     // Use in let binding and pass to function
     let limit = clamp(int32.bits)  // clamp(32) = 32

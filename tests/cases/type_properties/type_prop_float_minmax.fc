@@ -16,5 +16,5 @@ let main = (args: str[]) ->
     if float32.bits != 32 then return 8
     if float64.bits != 64 then return 9
     // float64.max > float32.max (after cast)
-    if float64.max <= (float64)float32.max then return 10
+    if float64.max <= (float64) float32.max then return 10
     0

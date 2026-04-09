@@ -6,7 +6,7 @@ module c from "stdlib.h" =
 
 let main = (args: str[]) ->
     // Use extern constant in expression passed to extern function
-    let val = c.abs((int32)(0 - c.EXIT_FAILURE))
+    let val = c.abs((int32) (0 - c.EXIT_FAILURE))
     assert(val >= 0)
 
     // Verify EXIT_SUCCESS is 0 on all POSIX platforms

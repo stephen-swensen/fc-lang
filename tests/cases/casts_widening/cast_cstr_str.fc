@@ -5,7 +5,7 @@ let main = (args: str[]) ->
     let _result =
         match c.getenv(c"PATH") with
         | some(cs) ->
-            let s = (str)cs
+            let s = (str) cs
             if s.len > 0i64 then 1 else 0
         | none -> 0
     assert(_result == 1)

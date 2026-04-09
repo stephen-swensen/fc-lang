@@ -7,7 +7,7 @@ let main = (args: str[]) ->
     let copy = alloc(buf)!
     buf.ptr[0] = 0u8
 
-    let result = (int32)copy[0] + (int32)copy[1] + (int32)copy[2]
+    let result = (int32) copy[0] + (int32) copy[1] + (int32) copy[2]
     free(copy)
     assert(result == 198)
     0

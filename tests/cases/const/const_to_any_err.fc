@@ -5,6 +5,6 @@ let use_any = (p: any*) ->
 
 let main = (args: str[]) ->
     let mut x = 42
-    let cp = (const int32*)&x
+    let cp = (const int32*) &x
     use_any(cp)
     0

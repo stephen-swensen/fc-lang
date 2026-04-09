@@ -7,5 +7,5 @@ let main = (args: str[]) ->
     let b = identity(10u)
     let c = add_them(20i, 22i)
     let d = add_them(5u, 7u)
-    assert((int32)a + (int32)b + (int32)c + (int32)d == 106)
+    assert((int32) a + (int32) b + (int32) c + (int32) d == 106)
     0

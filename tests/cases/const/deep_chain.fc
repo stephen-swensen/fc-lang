@@ -35,7 +35,7 @@ let main = (args: str[]) ->
     let v2 = xp->y->z.a.b.c->val
 
     // const read through full chain
-    let cxp = (const x_node*)xp
+    let cxp = (const x_node*) xp
     let v3 = cxp->y->z.a.b.c->val
 
     // v1=42, v2=99, v3=99

@@ -6,8 +6,8 @@ let main = (args: str[]) ->
     let mut b = alloc(usize[2] { })!
     b[0] = 5u
     b[1] = 7u
-    let r1 = (int32)a[0] + (int32)a[1] + (int32)a[2]
-    let r2 = (int32)b[0] + (int32)b[1]
+    let r1 = (int32) a[0] + (int32) a[1] + (int32) a[2]
+    let r2 = (int32) b[0] + (int32) b[1]
     free(a)
     free(b)
     assert(r1 + r2 == 72)

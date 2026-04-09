@@ -6,7 +6,7 @@ module outer =
         let value = 99
 
     let process = (data: const uint8[]) ->
-        (int32)data.len
+        (int32) data.len
 
 let main = (args: str[]) ->
     let buf = uint8[2] { 1u8, 2u8 }

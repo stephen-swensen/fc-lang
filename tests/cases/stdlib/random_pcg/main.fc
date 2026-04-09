@@ -35,8 +35,8 @@ let main = (args: str[]) ->
     // next_float32 is in [0.0, 1.0)
     let mut r4 = pcg_random.make(42u64)
     let f32 = pcg_random.next_float32(&r4)
-    assert((float64)f32 >= 0.0)
-    assert((float64)f32 < 1.0)
+    assert((float64) f32 >= 0.0)
+    assert((float64) f32 < 1.0)
 
     // next_bounded_uint32
     let mut r5 = pcg_random.make(42u64)

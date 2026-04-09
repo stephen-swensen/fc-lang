@@ -5,7 +5,7 @@ let make_str = (n: int32) ->
 
 let main = (args: str[]) ->
     let s = make_str(7)
-    let result = (int32)s.len
+    let result = (int32) s.len
     free(s)
     assert(result == 1)
     0

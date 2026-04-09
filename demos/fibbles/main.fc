@@ -206,8 +206,8 @@ let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
 
 let place_food = (pcg_state: pcg_random*, body: vec2[], head: int32, len: int32) ->
     loop
-        let x = (int32)pcg_random.next_bounded_uint32(pcg_state, (uint32)grid_w)
-        let y = (int32)pcg_random.next_bounded_uint32(pcg_state, (uint32)grid_h)
+        let x = (int32) pcg_random.next_bounded_uint32(pcg_state, (uint32) grid_w)
+        let y = (int32) pcg_random.next_bounded_uint32(pcg_state, (uint32) grid_h)
         if !on_snake(body, head, len, x, y) then
             break vec2 { x = x, y = y }
 
@@ -235,7 +235,7 @@ let gen_tone = (freq: int32, duration_ms: int32) ->
             buf[i] = 8000i16
         else
             buf[i] = -8000i16
-    sound { data = (any*) buf, bytes = (uint32)(num_samples * 2) }
+    sound { data = (any*) buf, bytes = (uint32) (num_samples * 2) }
 
 let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
     let num_samples = samples_ms(duration_ms)
@@ -338,7 +338,7 @@ let main = (args: str[]) ->
     sdl.set_resizable(win, 0)
     let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
     sdl.set_logical_size(ren, grid_w * cell, grid_h * cell)
-    let mut pcg_state = pcg_random.make((uint64)sys.time())
+    let mut pcg_state = pcg_random.make((uint64) sys.time())
 
     // Init audio (square wave sound effects)
     let mut desired = default(audio_spec)
@@ -361,7 +361,7 @@ let main = (args: str[]) ->
     let mut boff = fill_tone(bonus_mem, 0, 587, 60)
     boff = fill_tone(bonus_mem, boff, 784, 60)
     fill_tone(bonus_mem, boff, 1047, 80)
-    let bonus_snd = sound { data = (any*) bonus_mem, bytes = (uint32)(bonus_n * 2) }
+    let bonus_snd = sound { data = (any*) bonus_mem, bytes = (uint32) (bonus_n * 2) }
 
     let death_n = samples_ms(120) + samples_ms(120) + samples_ms(150) + samples_ms(250)
     let death_mem = alloc(int16, (usize) death_n)!
@@ -369,7 +369,7 @@ let main = (args: str[]) ->
     doff = fill_tone(death_mem, doff, 330, 120)
     doff = fill_tone(death_mem, doff, 220, 150)
     fill_tone(death_mem, doff, 110, 250)
-    let death_snd = sound { data = (any*) death_mem, bytes = (uint32)(death_n * 2) }
+    let death_snd = sound { data = (any*) death_mem, bytes = (uint32) (death_n * 2) }
 
     // Load high score
     let mut high_score = load_high_score()

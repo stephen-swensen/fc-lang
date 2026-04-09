@@ -4,5 +4,5 @@ let greeting = () ->
 
 let main = (args: str[]) ->
     let s = greeting()
-    assert((int32)s.len == 5)
+    assert((int32) s.len == 5)
     0

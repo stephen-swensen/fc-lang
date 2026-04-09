@@ -16,7 +16,7 @@ let main = (args: str[]) ->
 
     // Clean up
     io.remove("/tmp/fc_test_mkdir/test.txt")
-    c.rmdir((cstr)"/tmp/fc_test_mkdir")
+    c.rmdir((cstr) "/tmp/fc_test_mkdir")
 
     0
 

@@ -2,4 +2,4 @@ let identity = (x: 'a) -> x
 
 let main = (args: str[]) ->
     let s = identity("hello")
-    (int32)s.len - 5
+    (int32) s.len - 5

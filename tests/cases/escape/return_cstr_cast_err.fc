@@ -1,6 +1,6 @@
 // Error: returning cstr from str->cstr cast (alloca copy)
 let bad = (s: str) ->
-    (cstr)s
+    (cstr) s
 
 let main = (args: str[]) ->
     let c = bad("hello")

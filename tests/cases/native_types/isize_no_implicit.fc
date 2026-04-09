@@ -1,4 +1,4 @@
-let take_isize = (x: isize) -> (int32)x
+let take_isize = (x: isize) -> (int32) x
 
 let main = (args: str[]) ->
     let a = 42

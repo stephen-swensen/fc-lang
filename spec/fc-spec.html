@@ -681,7 +681,7 @@ The following are **built-in type names** and may not be used as user-defined ty
 
 Implicit widening conversions are allowed in binary expressions and comparisons where no information can be lost — see §Operators & Access. All other numeric conversions require an explicit cast. `if` conditions must be `bool` typed — numeric values do not implicitly coerce to bool.
 
-**Platform-width types (`isize`, `usize`)** have no implicit widening to or from fixed-width types. Since their width varies by target (32-bit or 64-bit), no fixed-width conversion is guaranteed lossless on all platforms. All conversions require explicit casts: `(isize)x`, `(int64)y`, etc. FC's default types (`int32` for integers, `int64` for `sizeof` and slice `.len`) remain fixed-width — `isize`/`usize` are opt-in for C interop and embedded targets where matching the platform's native size types matters.
+**Platform-width types (`isize`, `usize`)** have no implicit widening to or from fixed-width types. Since their width varies by target (32-bit or 64-bit), no fixed-width conversion is guaranteed lossless on all platforms. All conversions require explicit casts: `(isize) x`, `(int64) y`, etc. FC's default types (`int32` for integers, `int64` for `sizeof` and slice `.len`) remain fixed-width — `isize`/`usize` are opt-in for C interop and embedded targets where matching the platform's native size types matters.
 
 ### Literals
 
@@ -834,7 +834,7 @@ let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer resp
 let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
 ```
 
-Pointer-to-pointer casts include const changes: `(const int32*)ptr` freezes a pointer (safe), `(int32*)const_ptr` strips const (unsafe). For slices, `(const str)s` and `(str)const_s` work similarly. See §The const qualifier.
+Pointer-to-pointer casts include const changes: `(const int32*) ptr` freezes a pointer (safe), `(int32*) const_ptr` strips const (unsafe). For slices, `(const str) s` and `(str) const_s` work similarly. See §The const qualifier.
 
 **str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string via `alloca`. The copy lives until the enclosing function returns. This is the safe way to pass FC strings to C functions that expect null-terminated strings:
 
@@ -843,7 +843,7 @@ let s = "hello"
 let cs = (cstr) s   // stack copy with null terminator
 ```
 
-The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. The compiler's escape analysis tracks the result as stack-allocated — returning a `(cstr)str` cast from a function is a compile error. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
+The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. The compiler's escape analysis tracks the result as stack-allocated — returning a `(cstr) str` cast from a function is a compile error. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
 
 **Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
 
@@ -942,11 +942,11 @@ Both directions are available via regular cast syntax:
 
 ```fc
 let mut x = 42
-let cp = (const int32*)&x    // freeze — non-const to const (safe)
-let mp = (int32*)cp           // strip const (unsafe, for C interop escape hatches)
+let cp = (const int32*) &x    // freeze — non-const to const (safe)
+let mp = (int32*) cp           // strip const (unsafe, for C interop escape hatches)
 ```
 
-Slice const casts also work: `(const str)s` to freeze, `(str)const_s` to strip.
+Slice const casts also work: `(const str) s` to freeze, `(str) const_s` to strip.
 
 #### Deep const
 
@@ -972,7 +972,7 @@ The compiler rejects these operations through const:
 
 ```fc
 let mut x = 42
-let cp = (const int32*)&x
+let cp = (const int32*) &x
 *cp = 10                 // compile error: cannot assign through const pointer/slice
 cp->field = 10           // compile error (for struct pointers)
 const_slice[0] = 10      // compile error
@@ -1151,10 +1151,10 @@ In generated C, signed arithmetic is emitted as a cast through the unsigned equi
 
 ```c
 // FC: let x = a + b   (a, b: int32)
-int32_t x = (int32_t)((uint32_t)a + (uint32_t)b);
+int32_t x = (int32_t) ((uint32_t) a + (uint32_t) b);
 
 // FC: let x = a + b   (a, b: int64)
-int64_t x = (int64_t)((uint64_t)a + (uint64_t)b);
+int64_t x = (int64_t) ((uint64_t) a + (uint64_t) b);
 ```
 
 Each signed type casts through its same-width unsigned counterpart — `int8` through `uint8_t`, `int16` through `uint16_t`, and so on. All signed integer types share the same two's complement layout as their unsigned counterparts — the cast is a reinterpretation of bits, not a computation. Unsigned addition is guaranteed to wrap in C, so the result is fully defined behavior on any C11 compiler with no additional flags required.
@@ -1764,12 +1764,12 @@ let main = (args: str[]) ->
 > The compiler generates a C `main` wrapper that converts `argc`/`argv` into a `str[]` slice:
 > ```c
 > int main(int argc, char** argv) {
->     fc_slice_uint8* _args = (fc_slice_uint8*)alloca(argc * sizeof(fc_slice_uint8));
+>     fc_slice_uint8* _args = (fc_slice_uint8*) alloca(argc * sizeof(fc_slice_uint8));
 >     for (int i = 0; i < argc; i++) {
->         _args[i].ptr = (uint8_t*)argv[i];
->         _args[i].len = (int64_t)strlen(argv[i]);
+>         _args[i].ptr = (uint8_t*) argv[i];
+>         _args[i].len = (int64_t) strlen(argv[i]);
 >     }
->     fc_slice_slice_uint8 args = { .ptr = _args, .len = (int64_t)argc };
+>     fc_slice_slice_uint8 args = { .ptr = _args, .len = (int64_t) argc };
 >     return fc_main(args);
 > }
 > ```
@@ -2241,7 +2241,7 @@ FC's `str` type makes no null-termination guarantee. A `str` is a fat pointer �
 
 String literal memory lives in static read-only storage — the compiler emits the bytes into the binary's read-only data section, and the `str` fat pointer is constructed with `.ptr` pointing to that static data. This has two consequences:
 
-- **Mutating a string literal element is a compile error.** String literals have type `const str` — the compiler rejects writes through const slices. Casting away const with `(str)s` and then writing is undefined behavior — the data is physically in read-only memory.
+- **Mutating a string literal element is a compile error.** String literals have type `const str` — the compiler rejects writes through const slices. Casting away const with `(str) s` and then writing is undefined behavior — the data is physically in read-only memory.
 - **Freeing a string literal is a compile error.** The compiler's escape analysis rejects `free` on static memory, and the const qualifier additionally prevents freeing const pointers/slices.
 
 These hazards are caught at compile time via the const type system and escape analysis, unlike C where they are only detected at runtime (if at all).
@@ -2272,7 +2272,7 @@ The resulting slice shares memory with the original pointer — no allocation oc
 For C functions expecting a null-terminated string, use `(cstr)` to create a stack copy with a null terminator, or use `c"..."` literals for constant strings:
 
 ```fc
-libc.puts((cstr)s)           // stack copy with null terminator
+libc.puts((cstr) s)           // stack copy with null terminator
 libc.puts(c"hello")          // cstr literal — always null-terminated
 ```
 
@@ -2319,10 +2319,10 @@ module mem from "string.h" =
 
 let main = (args: str[]) ->
     let size = 256u                           // usize — matches C's size_t exactly
-    let buf = (uint8*)c.malloc(size)!         // raw pointer, no slice overhead
-    mem.memset((any*)buf, 0, size)            // zero-fill with platform-native size
+    let buf = (uint8*) c.malloc(size)!         // raw pointer, no slice overhead
+    mem.memset((any*) buf, 0, size)            // zero-fill with platform-native size
     // ... use buf with pointer arithmetic ...
-    c.c_free((any*)buf)
+    c.c_free((any*) buf)
 ```
 
 This compiles to the same C you would write by hand — `malloc(256)`, `memset(buf, 0, 256)` — with no intermediate slice construction and no `int64` arithmetic. The `usize` type emits `size_t` in the generated C, so on an 8-bit AVR it is 16 bits, on a 32-bit ARM it is 32 bits, and on a 64-bit host it is 64 bits — matching the target's native address width in every case.
@@ -2421,7 +2421,7 @@ get_align<int32>()   // 4
 get_align<int64>()   // 8
 ```
 
-Transpiles to `(int64_t)_Alignof(...)` in C11.
+Transpiles to `(int64_t) _Alignof(...)` in C11.
 
 ### Equality
 
@@ -2518,7 +2518,7 @@ float64.bits    // 64
 - **`.bits`**: bit width of the type as `int32` (8, 16, 32, or 64)
 
 > **Transpilation**
-> Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `int32.max` becomes `INT32_MAX`, `float64.nan` becomes `((double)NAN)`.
+> Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `int32.max` becomes `INT32_MAX`, `float64.nan` becomes `((double) NAN)`.
 
 # PART 5 — Generics
 
@@ -3395,7 +3395,7 @@ The expression text is captured at compile time from the source code. The filena
 > ({ if (!(x > 0)) { fprintf(stderr, "file.fc:10: assertion failed: x > 0\n"); abort(); } })
 >
 > // assert(x > 0, "msg")
-> ({ if (!(x > 0)) { fc_str _am0 = msg; fprintf(stderr, "file.fc:10: assertion failed: x > 0: %.*s\n", (int)_am0.len, (const char*)_am0.ptr); abort(); } })
+> ({ if (!(x > 0)) { fc_str _am0 = msg; fprintf(stderr, "file.fc:10: assertion failed: x > 0: %.*s\n", (int) _am0.len, (const char*) _am0.ptr); abort(); } })
 > ```
 
 ---
@@ -3561,7 +3561,7 @@ let buf = alloc(int32[4] { })!               // heap slice, all zeros — same a
 In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
-> `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d){ .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
 
 ### Initialization after alloc
 
@@ -3587,7 +3587,7 @@ let p = alloc(point3d)!
 ```
 
 > **Transpilation**
-> `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d){ .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
+> `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d) { .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
 
 # PART 8 — C Interop
 
@@ -3605,7 +3605,7 @@ C library bindings are declared using `extern` inside a module with a `from` cla
 >     private module c from "stdio.h" =
 >         extern fwrite: (any*, uint64, uint64, any*) -> uint64
 >     let write = (s: const str, f: any*) ->
->         (int64) c.fwrite((any*)s.ptr, 1u64, (uint64)s.len, f)
+>         (int64) c.fwrite((any*) s.ptr, 1u64, (uint64) s.len, f)
 > ```
 
 ```fc
@@ -3849,7 +3849,7 @@ module pthreads from "pthread.h" =
 
 Higher-level FC types must be explicitly lowered at C call sites:
 
-- `str` — use `(cstr)s` to create a null-terminated stack copy, or `c"..."` for constant strings. The `cstr` is always non-const (fresh stack copy). If the extern expects `const char*`, declare the parameter as `const cstr`.
+- `str` — use `(cstr) s` to create a null-terminated stack copy, or `c"..."` for constant strings. The `cstr` is always non-const (fresh stack copy). If the extern expects `const char*`, declare the parameter as `const cstr`.
 - `const cstr` / `cstr` — pass directly. `const cstr` maps to `const char*` (read-only), `cstr` maps to `char*` (mutable). Use `c"..."` literals for constant strings (type is `const cstr`).
 - `T?` — unwrap with `x!` or `match` before passing
 - Structs — memory-compatible with C structs if declared in the same field order
@@ -3872,7 +3872,7 @@ module c from "stdlib.h" =
     extern strtol: (const cstr, cstr*, int32) -> int64
 
 let mut end = default(uint8*)
-let val = c.strtol((cstr)s, &end, 10)   // const cstr → (const char*), &end → (char**)
+let val = c.strtol((cstr) s, &end, 10)   // const cstr → (const char*), &end → (char**)
 ```
 
 The `any**` cast covers opaque handle APIs where a C function writes a handle through a `T**` out-parameter:
@@ -3908,7 +3908,7 @@ module c from "stdio.h" =
 
 let val = 42i8
 c.fprintf(stdout, c"value: %d name: %s\n", val, c"hello")
-// generated C: fprintf(stdout, (const char*)"value: %d name: %s\n", (int)val, (const char*)"hello")
+// generated C: fprintf(stdout, (const char*) "value: %d name: %s\n", (int) val, (const char*) "hello")
 ```
 
 **Variadic declarations are extern-only** — FC functions cannot be variadic. The `...` syntax is only valid inside extern function type signatures. Attempting to use `...` in a regular function definition is a parse error.
@@ -3998,10 +3998,10 @@ let main = (args: str[]) ->
     let mut nums = int32[5] { 5, 2, 8, 1, 9 }
 
     // Pass a named function — trampoline bridges FC's (a, b, _ctx) to C's (a, b)
-    libc.qsort(nums.ptr, 5u, (usize)sizeof(int32), int_compare)
+    libc.qsort(nums.ptr, 5u, (usize) sizeof(int32), int_compare)
 
     // Pass a non-capturing lambda directly — same trampoline mechanism
-    libc.qsort(nums.ptr, 5u, (usize)sizeof(int32),
+    libc.qsort(nums.ptr, 5u, (usize) sizeof(int32),
         (a: const any*, b: const any*) ->
             *((const int32*) b) - *((const int32*) a))
 ```

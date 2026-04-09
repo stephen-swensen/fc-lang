@@ -5,5 +5,5 @@ let deref_opt = (p: const int32*?) ->
 
 let main = (args: str[]) ->
     let mut x = 55
-    let p = some((const int32*)&x)
+    let p = some((const int32*) &x)
     deref_opt(p) - 55

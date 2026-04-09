@@ -1,9 +1,9 @@
 let main = (args: str[]) ->
     let a = 100i64
-    let b = (int32)a
-    let c = (float64)b
-    let d = (int32)c
-    let e = (uint32)d
-    let f = (int32)e
+    let b = (int32) a
+    let c = (float64) b
+    let d = (int32) c
+    let e = (uint32) d
+    let f = (int32) e
     assert(f == 100)
     0

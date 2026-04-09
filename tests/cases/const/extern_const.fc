@@ -4,4 +4,4 @@ let check_cstr = (c: const cstr) ->
 let main = (args: str[]) ->
     let c = c"A"
     let ch = check_cstr(c)
-    (int32)ch - 65
+    (int32) ch - 65

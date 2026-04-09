@@ -8,6 +8,6 @@ let main = (args: str[]) ->
     let s = make_str()
     let len = c.strlen(s)
     free(s)
-    let r = (int32)(usize)len
+    let r = (int32) (usize) len
     assert(r == 5)
     0

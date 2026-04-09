@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
     let s = "hello"
     let copy = alloc(s)!
-    let v = (int32)copy.len
+    let v = (int32) copy.len
     free(copy)
     assert(v == 5)
     0

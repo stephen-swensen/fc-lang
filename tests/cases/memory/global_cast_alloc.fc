@@ -1,9 +1,9 @@
 // File-level alloc cast to any*
-let p = (any*)alloc(int32)!
+let p = (any*) alloc(int32)!
 
 let main = (args: str[]) ->
-    let ip = (int32*)p
+    let ip = (int32*) p
     *ip = 42
-    assert(*((int32*)p) == 42)
+    assert(*((int32*) p) == 42)
     free(p)
     0

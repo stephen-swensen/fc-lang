@@ -19,7 +19,7 @@ let main = (args: str[]) ->
     // arithmetic check: known value from std::random testing
     let hi = 2440530669u32
     let lo = 968358053u32
-    let combined = ((uint64)hi << 32) | (uint64)lo
+    let combined = ((uint64) hi << 32) | (uint64) lo
     let expected = 10481999409208359077u64
     assert(combined == expected)
 

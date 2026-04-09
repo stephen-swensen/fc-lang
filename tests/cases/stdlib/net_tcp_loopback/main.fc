@@ -18,7 +18,7 @@ let main = (args: str[]) ->
     // --- Send data from client, receive on server side ---
     let msg = "hello"
     let sent = net.send_bytes(client, msg)
-    assert(sent == (int64)msg.len)
+    assert(sent == (int64) msg.len)
 
     let mut buf = uint8[32] {}
     let received = net.recv_bytes(peer, buf, 32)
@@ -27,7 +27,7 @@ let main = (args: str[]) ->
     // Verify data matches
     let mut i = 0
     for c in buf
-        if i < (int32)received then
+        if i < (int32) received then
             assert(c == msg[i])
             i = i + 1
 

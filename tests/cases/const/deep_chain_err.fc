@@ -23,7 +23,7 @@ let main = (args: str[]) ->
     let mut z = z_node { a = a_node { b = b_node { c = &e } } }
     let mut y = y_node { z = z }
     let mut x = x_node { y = &y }
-    let cxp = (const x_node*)&x
+    let cxp = (const x_node*) &x
     // const write through full chain: should be rejected
     cxp->y->z.a.b.c->val = 99
     0

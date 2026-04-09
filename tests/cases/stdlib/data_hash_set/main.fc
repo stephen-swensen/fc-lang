@@ -1,6 +1,6 @@
 import hash_set from std::data
 
-let hash_int = (x: int32) -> (int64)x * 2654435761i64
+let hash_int = (x: int32) -> (int64) x * 2654435761i64
 let eq_int = (a: int32, b: int32) -> a == b
 
 let main = (args: str[]) ->

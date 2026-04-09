@@ -18,16 +18,16 @@ let main = (args: str[]) ->
     let o = uint64.min
 
     // Verify known values
-    let sum8 = (int32)a + (int32)b   // -128 + 127 = -1
-    let check = (int32)j   // 255
-    if (int32)i != 0 then return 1
+    let sum8 = (int32) a + (int32) b   // -128 + 127 = -1
+    let check = (int32) j   // 255
+    if (int32) i != 0 then return 1
     if check != 255 then return 2
     if sum8 != -1 then return 3
     if e >= 0 then return 4
     if f <= 0 then return 5
     if o != 0u64 then return 6
     if m != 0u32 then return 7
-    if h <= (int64)f then return 8
+    if h <= (int64) f then return 8
     // int16 min/max
     if int16.min >= 0i16 then return 9
     if int16.max <= 0i16 then return 10

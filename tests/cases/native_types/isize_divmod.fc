@@ -7,5 +7,5 @@ let main = (args: str[]) ->
     let d = 7u
     let q2 = c / d
     let r2 = c % d
-    assert((int32)q + (int32)r + (int32)q2 + (int32)r2 == 32)
+    assert((int32) q + (int32) r + (int32) q2 + (int32) r2 == 32)
     0

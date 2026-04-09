@@ -6,5 +6,5 @@ module libc from "stdlib.h" =
 let main = (args: str[]) ->
     let cmp = (a: const any*, b: const any*) -> *(const int32*) a - *(const int32*) b
     let mut nums = int32[3] { 3, 1, 2 }
-    libc.qsort(nums.ptr, 3u, (usize)sizeof(int32), cmp)
+    libc.qsort(nums.ptr, 3u, (usize) sizeof(int32), cmp)
     0

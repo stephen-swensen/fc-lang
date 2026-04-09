@@ -7,7 +7,7 @@ module geometry =
 let main = (args: str[]) ->
     let mut p = geometry.point { x = 7, y = 8 }
     let ptr = &p
-    let void_ptr = (any*)ptr
-    let back = (geometry.point*)void_ptr
+    let void_ptr = (any*) ptr
+    let back = (geometry.point*) void_ptr
     assert(back->x + back->y == 15)
     0

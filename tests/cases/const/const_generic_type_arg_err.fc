@@ -5,5 +5,5 @@ struct box =
 
 let main = (args: str[]) ->
     let b = box { value = 42 }
-    let _x = (box<const int32>)b
+    let _x = (box<const int32>) b
     0

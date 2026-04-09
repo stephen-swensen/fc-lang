@@ -4,6 +4,6 @@ let main = (args: str[]) ->
     let s = "hello"          // const str
     let copy = alloc(s)!     // str (non-const — fresh heap copy)
     copy[0] = 72u8            // write through non-const: OK
-    let len = (int32)copy.len
+    let len = (int32) copy.len
     free(copy)
     len - 5

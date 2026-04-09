@@ -3,19 +3,19 @@ import net from std::
 let main = (args: str[]) ->
     // make_addr with inaddr_any
     let a1 = net.make_addr(net.inaddr_any, 8080u16)
-    assert(a1.sin_family == (uint16)net.af_inet)
+    assert(a1.sin_family == (uint16) net.af_inet)
     assert(net.net_to_host16(a1.sin_port) == 8080u16)
     assert(a1.sin_addr.s_addr == 0u32)
 
     // make_addr with inaddr_loopback
     let a2 = net.make_addr(net.inaddr_loopback, 9000u16)
-    assert(a2.sin_family == (uint16)net.af_inet)
+    assert(a2.sin_family == (uint16) net.af_inet)
     assert(net.net_to_host16(a2.sin_port) == 9000u16)
     assert(a2.sin_addr.s_addr == net.host_to_net32(net.inaddr_loopback))
 
     // make_addr_str
     let a3 = net.make_addr_str("127.0.0.1", 8080u16)
-    assert(a3.sin_family == (uint16)net.af_inet)
+    assert(a3.sin_family == (uint16) net.af_inet)
     assert(net.net_to_host16(a3.sin_port) == 8080u16)
     assert(a3.sin_addr.s_addr == net.host_to_net32(net.inaddr_loopback))
 

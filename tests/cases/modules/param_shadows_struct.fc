@@ -7,7 +7,7 @@ struct point =
 module m =
     // Parameter named "point" shadows the struct type name.
     // point.x should access the slice element, not the struct field.
-    let len_of = (point: uint8[]) -> (int32)point.len
+    let len_of = (point: uint8[]) -> (int32) point.len
 
 let main = (args: str[]) ->
     let buf = uint8[2] { 1u8, 2u8 }

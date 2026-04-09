@@ -6,10 +6,10 @@ module data =
 
 module net =
     let send = (data: const uint8[]) ->
-        (int32)data.len
+        (int32) data.len
 
     let recv = (data: uint8[]) ->
-        (int32)data.len
+        (int32) data.len
 
 let main = (args: str[]) ->
     let buf = uint8[3] { 1u8, 2u8, 3u8 }

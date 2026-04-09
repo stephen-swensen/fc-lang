@@ -5,10 +5,10 @@ let main = (args: str[]) ->
     let ninf32 = float32.neg_inf
     let ninf64 = float64.neg_inf
     // inf > max
-    if (float64)inf32 <= (float64)float32.max then return 1
+    if (float64) inf32 <= (float64) float32.max then return 1
     if inf64 <= float64.max then return 2
     // neg_inf < -max
-    if (float64)ninf32 >= (float64)(0.0f32 - float32.max) then return 3
+    if (float64) ninf32 >= (float64) (0.0f32 - float32.max) then return 3
     if ninf64 >= 0.0 - float64.max then return 4
     // inf + inf == inf
     if inf64 + inf64 != inf64 then return 5

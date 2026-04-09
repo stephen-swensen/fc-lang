@@ -18,11 +18,11 @@ let main = (args: str[]) ->
     // Accept and exchange data
     let peer = net.accept(server)!
     let msg = "resolved"
-    assert(net.send_bytes(client, msg) == (int64)msg.len)
+    assert(net.send_bytes(client, msg) == (int64) msg.len)
 
     let mut buf = uint8[32] {}
     let n = net.recv_bytes(peer, buf, 32)
-    assert(n == (int64)msg.len)
+    assert(n == (int64) msg.len)
     assert(buf[0i64..n] == msg)
 
     net.close(peer)

@@ -37,25 +37,25 @@ module random =
         // Returns the upper 32 bits of the 64-bit state after one step.
         let next_uint32 = (r: lcg_random*) ->
             lcg_random.step(r)
-            (uint32)(r->state >> 32)
+            (uint32) (r->state >> 32)
 
         // next_uint64: generates a pseudorandom uint64 from two uint32 outputs.
         let next_uint64 = (r: lcg_random*) ->
-            let hi = (uint64)lcg_random.next_uint32(r)
-            let lo = (uint64)lcg_random.next_uint32(r)
+            let hi = (uint64) lcg_random.next_uint32(r)
+            let lo = (uint64) lcg_random.next_uint32(r)
             (hi << 32) | lo
 
         // next_float64: generates a uniform float64 in [0.0, 1.0).
         // Uses the top 53 bits of a uint64 divided by 2^53 (9007199254740992).
         let next_float64 = (r: lcg_random*) ->
             let bits = lcg_random.next_uint64(r)
-            (float64)(bits >> 11) / 9007199254740992.0
+            (float64) (bits >> 11) / 9007199254740992.0
 
         // next_float32: generates a uniform float32 in [0.0, 1.0).
         // Uses the top 24 bits of a uint32 divided by 2^24 (16777216).
         let next_float32 = (r: lcg_random*) ->
             let bits = lcg_random.next_uint32(r)
-            (float32)(bits >> 8) / 16777216.0f32
+            (float32) (bits >> 8) / 16777216.0f32
 
         // next_bounded_uint32: generates a uniform uint32 in [0, bound).
         // Uses rejection sampling to eliminate modulo bias. The threshold
@@ -117,33 +117,33 @@ module random =
 
         // next_uint32: generates a pseudorandom uint32 using XSH-RR output.
         // Saves old state, advances, then applies the permutation:
-        //   xorshifted = (uint32)(((old >> 18) ^ old) >> 27)
-        //   rot        = (uint32)(old >> 59)
+        //   xorshifted = (uint32) (((old >> 18) ^ old) >> 27)
+        //   rot        = (uint32) (old >> 59)
         //   result     = rotate_right(xorshifted, rot)
         let next_uint32 = (r: pcg_random*) ->
             let old_state = r->state
             pcg_random.step(r)
-            let xorshifted = (uint32)(((old_state >> 18) ^ old_state) >> 27)
-            let rot = (uint32)(old_state >> 59)
+            let xorshifted = (uint32) (((old_state >> 18) ^ old_state) >> 27)
+            let rot = (uint32) (old_state >> 59)
             (xorshifted >> rot) | (xorshifted << ((32u32 - rot) & 31u32))
 
         // next_uint64: generates a pseudorandom uint64 from two uint32 outputs.
         let next_uint64 = (r: pcg_random*) ->
-            let hi = (uint64)pcg_random.next_uint32(r)
-            let lo = (uint64)pcg_random.next_uint32(r)
+            let hi = (uint64) pcg_random.next_uint32(r)
+            let lo = (uint64) pcg_random.next_uint32(r)
             (hi << 32) | lo
 
         // next_float64: generates a uniform float64 in [0.0, 1.0).
         // Uses the top 53 bits of a uint64 divided by 2^53 (9007199254740992).
         let next_float64 = (r: pcg_random*) ->
             let bits = pcg_random.next_uint64(r)
-            (float64)(bits >> 11) / 9007199254740992.0
+            (float64) (bits >> 11) / 9007199254740992.0
 
         // next_float32: generates a uniform float32 in [0.0, 1.0).
         // Uses the top 24 bits of a uint32 divided by 2^24 (16777216).
         let next_float32 = (r: pcg_random*) ->
             let bits = pcg_random.next_uint32(r)
-            (float32)(bits >> 8) / 16777216.0f32
+            (float32) (bits >> 8) / 16777216.0f32
 
         // next_bounded_uint32: generates a uniform uint32 in [0, bound).
         // Uses rejection sampling to eliminate modulo bias. The threshold

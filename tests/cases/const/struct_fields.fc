@@ -8,4 +8,4 @@ let get_name_len = (c: config) ->
 let main = (args: str[]) ->
     let c = config { name = "test", value = 42 }
     let len = get_name_len(c)
-    c.value + (int32)len - 42 - 4
+    c.value + (int32) len - 42 - 4

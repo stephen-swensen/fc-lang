@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let name = (cstr)"hello world"
+        let name = (cstr) "hello world"
         let s = "%.5s{name}!"
         let mut r = 0
         if s == "hello!" then r = r + 1

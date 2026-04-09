@@ -10,14 +10,14 @@ let int_compare = (a: const any*, b: const any*) ->
 let main = (args: str[]) ->
     let mut nums = int32[5] { 5, 2, 8, 1, 9 }
     // Sort ascending using a named top-level comparator function
-    libc.qsort(nums.ptr, 5u, (usize)sizeof(int32), int_compare)
+    libc.qsort(nums.ptr, 5u, (usize) sizeof(int32), int_compare)
     if nums[0] != 1 then return 1
     if nums[1] != 2 then return 1
     if nums[2] != 5 then return 1
     if nums[3] != 8 then return 1
     if nums[4] != 9 then return 1
     // Sort descending using a non-capturing lambda comparator
-    libc.qsort(nums.ptr, 5u, (usize)sizeof(int32),
+    libc.qsort(nums.ptr, 5u, (usize) sizeof(int32),
         (a: const any*, b: const any*) ->
             *((const int32*) b) - *((const int32*) a))
     if nums[0] != 9 then return 1

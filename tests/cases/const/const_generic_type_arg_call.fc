@@ -4,5 +4,5 @@ let make = <'a>() -> default('a)
 
 let main = (args: str[]) ->
     let x = make<const int32*>()
-    assert(x == (const int32*)0i)
+    assert(x == (const int32*) 0i)
     0

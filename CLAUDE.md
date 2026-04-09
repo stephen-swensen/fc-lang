@@ -78,7 +78,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - **Imports must come first**: imports must appear at the top of a file (after any `namespace` declaration) and at the top of a module body, before all other declarations. The compiler enforces this.
 
 ### Generated C Patterns
-- Signed integer arithmetic uses cast-through-unsigned to define overflow: `(int32_t)((uint32_t)a + (uint32_t)b)`
+- Signed integer arithmetic uses cast-through-unsigned to define overflow: `(int32_t) ((uint32_t) a + (uint32_t) b)`
 - Shift amounts are masked to avoid C UB: `a << (b & 31)` for 32-bit types
 - Bounds checks emit `abort()` before slice accesses
 - Option unwrap (`x!`) emits a tag check before value read
@@ -90,7 +90,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42i`, `42u`
 - No implicit widening to/from `isize`/`usize` — explicit casts required
 - String types: `str` = `uint8[]` (fat pointer), `cstr` = `uint8*` (null-terminated, C interop)
-- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(int32)buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width required), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
+- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(int32) buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width required), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
 - `any*` = opaque pointer (`void*`), cannot be dereferenced
 
 ### Control Flow

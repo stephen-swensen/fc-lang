@@ -7,4 +7,4 @@ module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
 let main = (args: str[]) ->
     let s = sizeof(t.timespec)
     // struct timespec is 16 bytes on 64-bit Linux (two int64 fields)
-    if s == 16 then 0 else (int32)s
+    if s == 16 then 0 else (int32) s

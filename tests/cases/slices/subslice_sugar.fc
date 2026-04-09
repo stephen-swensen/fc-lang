@@ -9,7 +9,7 @@ let main = (args: str[]) ->
     let tail = buf[2..]
     let head_sum = head[0] + head[1] + head[2]
     let tail_sum = tail[0] + tail[1] + tail[2]
-    let head_len = (int32)head.len
-    let tail_len = (int32)tail.len
+    let head_len = (int32) head.len
+    let tail_len = (int32) tail.len
     assert(head_sum + tail_sum + head_len + tail_len == 42)
     0

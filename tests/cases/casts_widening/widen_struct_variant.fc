@@ -14,9 +14,9 @@ let main = (args: str[]) ->
         let h = holder.val(42)
         let v = 
             match h with
-            | val(n) -> (int32)n
+            | val(n) -> (int32) n
             | empty -> 0
         // 10 + 20 + 42 = 72
-        (int32)(p.x + p.y) + v
+        (int32) (p.x + p.y) + v
     assert(_result == 72)
     0

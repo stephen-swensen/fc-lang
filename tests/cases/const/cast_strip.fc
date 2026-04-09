@@ -1,4 +1,4 @@
 let main = (args: str[]) ->
     let s = "hello"
-    let ms = (str)s
-    (int32)ms.len - 5
+    let ms = (str) s
+    (int32) ms.len - 5
