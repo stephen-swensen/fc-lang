@@ -109,10 +109,6 @@ Module-scoped types are registered in the global symtab under mangled names (e.g
 
 The parser creates all type references as TYPE_STRUCT stubs regardless of whether the target is a struct or union, because the parser doesn't know the target kind at parse time. This causes downstream complexity: `canonicalize_stub_names` must try both DECL_STRUCT and DECL_UNION, `resolve_type` must search for both kinds, and `unify` needs a struct/union kind mismatch handler. Most languages either resolve types to their kind during parsing (if there's a type namespace) or use a kind-agnostic "type reference" node. FC should adopt the latter — a TYPE_REF or TYPE_STUB kind that explicitly represents "unresolved type reference" without implying struct. This would make the stub → resolved type transition explicit and remove the need for kind-guessing fallbacks.
 
-### Constraint syntax for generics (future)
-
-The obvious next feature request. The unconstrained model is fully forward-compatible — constraints would add pre-checks that reject invalid instantiations earlier (at the definition site rather than the call site). The monomorphization infrastructure already supports this; it's a pass2 addition, not an architectural change.
-
 ## Design decisions confirmed
 
 ### No re-export pattern
