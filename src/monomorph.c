@@ -77,12 +77,10 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             if (!mono_find(t, type->struc.name)) {
                 Symbol *sym = type->struc.resolved_sym;
                 if (sym && sym->type && sym->type->struc.name != type->struc.name) {
-                    if (!type->struc.base_name) type->struc.base_name = type->struc.name;
                     type->struc.name = sym->type->struc.name;
                 }
             }
             if (!mono_find(t, type->struc.name)) {
-                if (!type->struc.base_name) type->struc.base_name = type->struc.name;
                 type->struc.name = mangle_generic_name(a, intern,
                     type->struc.name, type->struc.type_args, type->struc.type_arg_count);
             }
@@ -95,18 +93,24 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             if (!mono_find(t, type->unio.name)) {
                 Symbol *sym = type->unio.resolved_sym;
                 if (sym && sym->type && sym->type->unio.name != type->unio.name) {
-                    if (!type->unio.base_name) type->unio.base_name = type->unio.name;
                     type->unio.name = sym->type->unio.name;
                 }
             }
             if (!mono_find(t, type->unio.name)) {
-                if (!type->unio.base_name) type->unio.base_name = type->unio.name;
                 type->unio.name = mangle_generic_name(a, intern,
                     type->unio.name, type->unio.type_args, type->unio.type_arg_count);
             }
         }
         for (int i = 0; i < type->unio.variant_count; i++)
             mono_resolve_type_names(t, a, intern, type->unio.variants[i].payload);
+        return;
+    case TYPE_STUB:
+        if (type->stub.type_arg_count > 0 && !type_contains_type_var(type)) {
+            if (!mono_find(t, type->stub.name)) {
+                type->stub.name = mangle_generic_name(a, intern,
+                    type->stub.name, type->stub.type_args, type->stub.type_arg_count);
+            }
+        }
         return;
     default: return;
     }
@@ -202,7 +206,6 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                         if (ct == struct_sym->type) {
                             ct = type_copy(a, ct);
                         }
-                        if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
@@ -321,6 +324,9 @@ static const char *find_by_value_dep(Type *type) {
     case TYPE_UNION:
         /* A union embedded by value is a direct dependency */
         return type->unio.name;
+    case TYPE_STUB:
+        /* An unresolved stub by value is a direct dependency */
+        return type->stub.name;
     case TYPE_FIXED_ARRAY:
         /* Fixed arrays of structs are by-value */
         return find_by_value_dep(type->fixed_array.elem);
@@ -371,23 +377,23 @@ static void topo_visit(MonoTable *t, int idx, int *state, int *order, int *order
  * references that don't have a MonoInstance yet. This handles structs referenced
  * only as field types (never directly constructed via struct literals). */
 static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
-                                   InternTable *intern) {
+                                   InternTable *intern, SymbolTable *symtab) {
     if (!type) return;
     switch (type->kind) {
-    case TYPE_POINTER: discover_nested_types(type->pointer.pointee, t, a, intern); return;
-    case TYPE_SLICE:   discover_nested_types(type->slice.elem, t, a, intern); return;
-    case TYPE_OPTION:  discover_nested_types(type->option.inner, t, a, intern); return;
-    case TYPE_FIXED_ARRAY: discover_nested_types(type->fixed_array.elem, t, a, intern); return;
+    case TYPE_POINTER: discover_nested_types(type->pointer.pointee, t, a, intern, symtab); return;
+    case TYPE_SLICE:   discover_nested_types(type->slice.elem, t, a, intern, symtab); return;
+    case TYPE_OPTION:  discover_nested_types(type->option.inner, t, a, intern, symtab); return;
+    case TYPE_FIXED_ARRAY: discover_nested_types(type->fixed_array.elem, t, a, intern, symtab); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
-            discover_nested_types(type->func.param_types[i], t, a, intern);
-        discover_nested_types(type->func.return_type, t, a, intern);
+            discover_nested_types(type->func.param_types[i], t, a, intern, symtab);
+        discover_nested_types(type->func.return_type, t, a, intern, symtab);
         return;
     case TYPE_STRUCT:
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (mono_find(t, type->struc.name)) {
                 for (int i = 0; i < type->struc.field_count; i++)
-                    discover_nested_types(type->struc.fields[i].type, t, a, intern);
+                    discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
                 return;
             }
             /* Use resolved_sym from pass1/pass2 for the canonical name */
@@ -395,7 +401,6 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->struc.type_args, type->struc.type_arg_count);
-            if (!type->struc.base_name) type->struc.base_name = type->struc.name;
             type->struc.name = mangled;
             if (!mono_find(t, mangled)) {
                 if (sym && sym->is_generic && sym->decl) {
@@ -409,7 +414,6 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                         Type *ct = type_substitute(a, sym->type,
                             sym->type_params, type->struc.type_args, ntp);
                         if (ct == sym->type) ct = type_copy(a, ct);
-                        if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                         ct->struc.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
@@ -418,20 +422,19 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             }
         }
         for (int i = 0; i < type->struc.field_count; i++)
-            discover_nested_types(type->struc.fields[i].type, t, a, intern);
+            discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
         return;
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (mono_find(t, type->unio.name)) {
                 for (int i = 0; i < type->unio.variant_count; i++)
-                    discover_nested_types(type->unio.variants[i].payload, t, a, intern);
+                    discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
                 return;
             }
             Symbol *sym = type->unio.resolved_sym;
             const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->unio.type_args, type->unio.type_arg_count);
-            if (!type->unio.base_name) type->unio.base_name = type->unio.name;
             type->unio.name = mangled;
             if (!mono_find(t, mangled)) {
                 if (sym && sym->is_generic && sym->decl) {
@@ -445,7 +448,6 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                         Type *ct = type_substitute(a, sym->type,
                             sym->type_params, type->unio.type_args, ntp);
                         if (ct == sym->type) ct = type_copy(a, ct);
-                        if (!ct->unio.base_name) ct->unio.base_name = ct->unio.name;
                         ct->unio.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
@@ -454,13 +456,44 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             }
         }
         for (int i = 0; i < type->unio.variant_count; i++)
-            discover_nested_types(type->unio.variants[i].payload, t, a, intern);
+            discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+        return;
+    case TYPE_STUB:
+        if (type->stub.type_arg_count > 0 && !type_contains_type_var(type)) {
+            if (mono_find(t, type->stub.name)) return;
+            const char *base_name = type->stub.name;
+            const char *mangled = mangle_generic_name(a, intern,
+                base_name, type->stub.type_args, type->stub.type_arg_count);
+            type->stub.name = mangled;
+            if (!mono_find(t, mangled) && symtab) {
+                Symbol *sym = symtab_lookup_kind(symtab, base_name, DECL_STRUCT);
+                if (!sym) sym = symtab_lookup_kind(symtab, base_name, DECL_UNION);
+                if (sym && sym->is_generic && sym->decl && sym->type) {
+                    DeclKind dk = sym->kind;
+                    mono_register(t, a, intern, base_name, NULL,
+                        type->stub.type_args, type->stub.type_arg_count,
+                        sym->decl, dk, sym->type_params, sym->type_param_count);
+                    MonoInstance *mi = mono_find(t, mangled);
+                    if (mi && !mi->concrete_type) {
+                        int ntp = sym->type_param_count < type->stub.type_arg_count
+                                  ? sym->type_param_count : type->stub.type_arg_count;
+                        Type *ct = type_substitute(a, sym->type,
+                            sym->type_params, type->stub.type_args, ntp);
+                        if (ct == sym->type) ct = type_copy(a, ct);
+                        if (ct->kind == TYPE_STRUCT) ct->struc.name = mangled;
+                        else if (ct->kind == TYPE_UNION) ct->unio.name = mangled;
+                        mono_resolve_type_names(t, a, intern, ct);
+                        mi->concrete_type = ct;
+                    }
+                }
+            }
+        }
         return;
     default: return;
     }
 }
 
-void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern) {
+void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     if (t->count == 0) return;
 
     /* Discover any concrete generic structs/unions referenced in field types
@@ -475,10 +508,10 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern) {
                 Type *ct = inst->concrete_type;
                 if (ct->kind == TYPE_STRUCT) {
                     for (int f = 0; f < ct->struc.field_count; f++)
-                        discover_nested_types(ct->struc.fields[f].type, t, a, intern);
+                        discover_nested_types(ct->struc.fields[f].type, t, a, intern, symtab);
                 } else if (ct->kind == TYPE_UNION) {
                     for (int v = 0; v < ct->unio.variant_count; v++)
-                        discover_nested_types(ct->unio.variants[v].payload, t, a, intern);
+                        discover_nested_types(ct->unio.variants[v].payload, t, a, intern, symtab);
                 }
             }
         }

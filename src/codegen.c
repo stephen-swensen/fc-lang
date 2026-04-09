@@ -52,6 +52,7 @@ static DeferScope *g_defer_scope = NULL;
 static void emit_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
+static Type *resolve_struct_stub(Type *t);
 
 static bool is_hoisted(const char *codegen_name) {
     for (int i = 0; i < g_hoisted_count; i++)
@@ -489,6 +490,17 @@ static void emit_type(Type *t, FILE *out) {
         if (t->is_const) fprintf(out, "const ");
         fprintf(out, "void*");
         break;
+    case TYPE_STUB: {
+        /* Resolve stub to the actual type and emit it */
+        Type *resolved = resolve_struct_stub(t);
+        if (resolved != t) {
+            emit_type(resolved, out);
+        } else {
+            /* Fallback: use the stub name directly as the C type name */
+            fprintf(out, "%s", t->stub.name);
+        }
+        break;
+    }
     default:
         fprintf(out, "/* TODO: type %d */", t->kind);
         break;
@@ -564,6 +576,15 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_VOID:
         fprintf(out, "void");
         break;
+    case TYPE_STUB: {
+        Type *resolved = resolve_struct_stub(t);
+        if (resolved != t) {
+            emit_type_ident(resolved, out);
+        } else {
+            fprintf(out, "%s", t->stub.name);
+        }
+        break;
+    }
     default:           fprintf(out, "unknown");   break;
     }
 }
@@ -3028,6 +3049,8 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
             mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
+    /* Resolve stubs before type classification */
+    if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
     if (t->kind == TYPE_FIXED_ARRAY) {
         /* Fixed-array field: need slice typedef for the element type (field access returns slice) */
         collect_types_in_type(t->fixed_array.elem, slices, options, fns);
@@ -3052,13 +3075,11 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     }
 }
 
-/* Resolve struct/union stub types (name only, 0 fields) to full definitions */
+/* Resolve TYPE_STUB types (unresolved name-only references) to full definitions */
 static Type *resolve_struct_stub(Type *t) {
     if (!g_symtab) return t;
-    /* Parser creates all user-defined type references as TYPE_STRUCT stubs
-       (field_count=0), even for unions. Resolve via symbol table or mono table. */
-    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0) {
-        Symbol *sym = symtab_lookup(g_symtab, t->struc.name);
+    if (t->kind == TYPE_STUB) {
+        Symbol *sym = symtab_lookup(g_symtab, t->stub.name);
         if (sym && sym->type) {
             if ((sym->type->kind == TYPE_STRUCT && sym->type->struc.field_count > 0) ||
                 (sym->type->kind == TYPE_UNION && sym->type->unio.variant_count > 0))
@@ -3066,22 +3087,7 @@ static Type *resolve_struct_stub(Type *t) {
         }
         if (g_mono) {
             for (int i = 0; i < g_mono->count; i++) {
-                if (g_mono->entries[i].mangled_name == t->struc.name &&
-                    g_mono->entries[i].concrete_type)
-                    return g_mono->entries[i].concrete_type;
-            }
-        }
-    }
-    if (t->kind == TYPE_UNION && t->unio.variant_count == 0) {
-        Symbol *sym = symtab_lookup(g_symtab, t->unio.name);
-        if (sym && sym->type) {
-            if ((sym->type->kind == TYPE_UNION && sym->type->unio.variant_count > 0) ||
-                (sym->type->kind == TYPE_STRUCT && sym->type->struc.field_count > 0))
-                return sym->type;
-        }
-        if (g_mono) {
-            for (int i = 0; i < g_mono->count; i++) {
-                if (g_mono->entries[i].mangled_name == t->unio.name &&
+                if (g_mono->entries[i].mangled_name == t->stub.name &&
                     g_mono->entries[i].concrete_type)
                     return g_mono->entries[i].concrete_type;
             }
@@ -3100,6 +3106,8 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
             mono_resolve_type_names(g_mono, g_arena, g_intern, t);
     }
     if (type_contains_type_var(t)) return;
+    /* Resolve stubs before checking if eq func is needed */
+    if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
     /* Fixed-array types: recurse into element, don't generate standalone eq func */
     if (t->kind == TYPE_FIXED_ARRAY) {
         collect_eq_types(t->fixed_array.elem, eqs);
@@ -3612,16 +3620,18 @@ static void emit_eq_func_name(Type *t, FILE *out) {
 static bool fn_type_uses_struct_option(Type *f) {
     Type *rt = f->func.return_type;
     if (rt) {
-        if (rt->kind == TYPE_STRUCT || rt->kind == TYPE_UNION) return true;
+        if (rt->kind == TYPE_STRUCT || rt->kind == TYPE_UNION || rt->kind == TYPE_STUB) return true;
         if (rt->kind == TYPE_OPTION && rt->option.inner &&
-            (rt->option.inner->kind == TYPE_STRUCT || rt->option.inner->kind == TYPE_UNION))
+            (rt->option.inner->kind == TYPE_STRUCT || rt->option.inner->kind == TYPE_UNION ||
+             rt->option.inner->kind == TYPE_STUB))
             return true;
     }
     for (int i = 0; i < f->func.param_count; i++) {
         Type *pt = f->func.param_types[i];
-        if (pt->kind == TYPE_STRUCT || pt->kind == TYPE_UNION) return true;
+        if (pt->kind == TYPE_STRUCT || pt->kind == TYPE_UNION || pt->kind == TYPE_STUB) return true;
         if (pt->kind == TYPE_OPTION && pt->option.inner &&
-            (pt->option.inner->kind == TYPE_STRUCT || pt->option.inner->kind == TYPE_UNION))
+            (pt->option.inner->kind == TYPE_STRUCT || pt->option.inner->kind == TYPE_UNION ||
+             pt->option.inner->kind == TYPE_STUB))
             return true;
     }
     return false;
@@ -3640,6 +3650,7 @@ static void emit_eq_forward(Type *t, FILE *out) {
 /* Emit the comparison expression for two values of type t.
    a_prefix/b_prefix are "a"/"b" (or "a.field"/"b.field"). */
 static void emit_value_eq(Type *t, const char *a_expr, const char *b_expr, FILE *out) {
+    if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
     if (type_needs_eq_func(t)) {
         emit_eq_func_name(t, out);
         fprintf(out, "(%s, %s)", a_expr, b_expr);
@@ -4213,7 +4224,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < options.count; i++) {
         Type *o = options.types[i];
         if (o->option.inner &&
-            (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION))
+            (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION ||
+             o->option.inner->kind == TYPE_STUB))
             continue; /* defer until after struct/union defs */
         fprintf(out, "typedef struct { ");
         emit_type(o->option.inner, out);
@@ -4264,6 +4276,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             const char *inner_name = NULL;
             if (o->option.inner->kind == TYPE_STRUCT) inner_name = o->option.inner->struc.name;
             else if (o->option.inner->kind == TYPE_UNION) inner_name = o->option.inner->unio.name;
+            else if (o->option.inner->kind == TYPE_STUB) inner_name = o->option.inner->stub.name;
             if (inner_name && inner_name == def_name) {
                 fprintf(out, "typedef struct { ");
                 emit_type(o->option.inner, out);

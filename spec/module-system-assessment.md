@@ -97,17 +97,17 @@ The three supported import forms are now:
 
 Error messages were showing internal mangled C names (e.g., `outer__shape`) instead of qualified source names (e.g., `outer.shape`). Fixed 7 diagnostic sites in pass2.c to use `type_name()` which returns `qualified_name` — the fully qualified FC path including namespace prefix where applicable (e.g., `vendor::shapes.rect`).
 
-### Eliminate the `base_name` field on Type
+### ~~Eliminate the `base_name` field on Type~~ ✓ Done
 
-`base_name` exists on TYPE_STRUCT and TYPE_UNION for display purposes (showing source names in error messages). But `qualified_name` serves the same display role. If the display logic is unified to always derive the display name from `qualified_name` or the canonical name, `base_name` becomes dead weight. Removing it would simplify the Type struct and eliminate one of the lingering sources of "which name do I use?" confusion in the codebase.
+Removed `base_name` from TYPE_STRUCT and TYPE_UNION. The `qualified_name` field now serves as the sole display name. Ensured `qualified_name` is always set — including for top-level types (previously only module-scoped types had it). Removed ~34 lines of `base_name` setting/copying across pass1, pass2, monomorph, parser, and types.c.
 
-### Investigate global registration of module-scoped types with ns_prefix=NULL
+### ~~Investigate global registration of module-scoped types with ns_prefix=NULL~~ Not a real issue
 
-Module-scoped types are registered in the global symtab under mangled names (e.g., `std__data__array_list`) with `ns_prefix = NULL`. This means they bypass namespace isolation — they're accessible from any namespace context if you know the mangled name. In practice nobody writes mangled names in source code, but it means the global symtab is a flat namespace of mangled names that sidesteps the namespace rules. This was a pragmatic choice to make `resolve_type` work across namespaces, but it warrants investigation: can these entries carry their proper `ns_prefix` without breaking cross-namespace type resolution? Or is there a cleaner way to make module-scoped types findable without polluting the global namespace?
+Module-scoped types are registered in the global symtab under mangled names (e.g., `acme__shapes__point`) with `ns_prefix = NULL`. This is an internal implementation detail for `resolve_type` to find types across module boundaries. It does not create a namespace isolation gap: mangled names contain `__` which is rejected in user identifiers (`dunder_ident_err` test), so they are unreachable from FC source. The mangled name itself encodes the full namespace/module path. No action needed.
 
-### Fix parser creating all type references as TYPE_STRUCT stubs
+### ~~Fix parser creating all type references as TYPE_STRUCT stubs~~ ✓ Done
 
-The parser creates all type references as TYPE_STRUCT stubs regardless of whether the target is a struct or union, because the parser doesn't know the target kind at parse time. This causes downstream complexity: `canonicalize_stub_names` must try both DECL_STRUCT and DECL_UNION, `resolve_type` must search for both kinds, and `unify` needs a struct/union kind mismatch handler. Most languages either resolve types to their kind during parsing (if there's a type namespace) or use a kind-agnostic "type reference" node. FC should adopt the latter — a TYPE_REF or TYPE_STUB kind that explicitly represents "unresolved type reference" without implying struct. This would make the stub → resolved type transition explicit and remove the need for kind-guessing fallbacks.
+Added a TYPE_STUB kind to TypeKind with its own `stub` struct member (name, qualified_name, type_args, type_arg_count). The parser now creates TYPE_STUB for all type references instead of TYPE_STRUCT with field_count=0. This eliminates the kind-guessing pattern: `canonicalize_stub_names`, `resolve_type`, and `unify` no longer need to check both DECL_STRUCT and DECL_UNION for stubs — they just handle TYPE_STUB directly. The `field_count == 0` stub detection pattern has been completely removed from the codebase.
 
 ## Design decisions confirmed
 

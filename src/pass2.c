@@ -344,7 +344,7 @@ static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
     return resolve_dotted_name_ex(ctx, dotted_name, NULL);
 }
 
-/* Resolve a named type stub (TYPE_STRUCT with no fields) to the actual type from symtab */
+/* Resolve a TYPE_STUB to the actual type from symtab */
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
 
@@ -398,30 +398,28 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         return nf;
     }
 
-    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name) {
+    if (t->kind == TYPE_STUB && t->stub.name) {
         /* Look up as struct or union using the standard scope chain.
          * Kind-filtering avoids returning a module in the companion pattern. */
         Symbol *sym = NULL;
 
-        if (strchr(t->struc.name, '.'))
-            sym = resolve_dotted_name(ctx, t->struc.name);
+        if (strchr(t->stub.name, '.'))
+            sym = resolve_dotted_name(ctx, t->stub.name);
         if (!sym)
-            sym = resolve_symbol_kind(ctx, t->struc.name, DECL_STRUCT);
+            sym = resolve_symbol_kind(ctx, t->stub.name, DECL_STRUCT);
         if (!sym)
-            sym = resolve_symbol_kind(ctx, t->struc.name, DECL_UNION);
+            sym = resolve_symbol_kind(ctx, t->stub.name, DECL_UNION);
         if (!sym)
-            sym = resolve_symbol(ctx, t->struc.name);
+            sym = resolve_symbol(ctx, t->stub.name);
         if (sym && sym->type) {
-            /* Store resolved symbol on the type for mono to use */
-            t->struc.resolved_sym = sym;
             /* If the stub has type args (e.g. box<int32>), instantiate the generic */
-            if (t->struc.type_arg_count > 0 && sym->is_generic && sym->type_param_count > 0) {
+            if (t->stub.type_arg_count > 0 && sym->is_generic && sym->type_param_count > 0) {
                 /* Resolve each type arg */
                 int ntp = sym->type_param_count;
-                int nta = t->struc.type_arg_count;
+                int nta = t->stub.type_arg_count;
                 Type **resolved_args = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)nta);
                 for (int i = 0; i < nta; i++) {
-                    resolved_args[i] = resolve_type(ctx, t->struc.type_args[i]);
+                    resolved_args[i] = resolve_type(ctx, t->stub.type_args[i]);
                 }
 
                 /* Check if any resolved arg contains type vars */
@@ -455,7 +453,7 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 if (!has_tv) {
                     /* Register mono instance only with concrete types.
                      * Use canonical name from sym->type (already mangled by pass1),
-                     * not the stub name t->struc.name which may contain dots. */
+                     * not the stub name which may contain dots. */
                     DeclKind dk = sym->kind;
                     const char *canon_name = (sym->type->kind == TYPE_STRUCT)
                         ? sym->type->struc.name : sym->type->unio.name;
@@ -465,10 +463,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                         sym->type_params, ntp);
                     /* Update the concrete type's name to the mangled name */
                     if (concrete->kind == TYPE_STRUCT) {
-                        if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
                         concrete->struc.name = mangled;
                     } else if (concrete->kind == TYPE_UNION) {
-                        if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                         concrete->unio.name = mangled;
                     }
                     /* Build resolved concrete_type for codegen (separate copy
@@ -567,23 +563,36 @@ static bool unify(Type *param_type, Type *arg_type,
     }
 
     if (param_type->kind != arg_type->kind) {
-        /* Handle struct/union stub mismatch: the parser creates all type refs as
-         * TYPE_STRUCT stubs, but the resolved type may be TYPE_UNION.  Unify their
-         * type_args so generic type variables get bound correctly. */
-        if ((param_type->kind == TYPE_STRUCT && arg_type->kind == TYPE_UNION) ||
-            (param_type->kind == TYPE_UNION && arg_type->kind == TYPE_STRUCT)) {
-            int pa = (param_type->kind == TYPE_STRUCT) ? param_type->struc.type_arg_count : param_type->unio.type_arg_count;
-            int aa = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.type_arg_count : arg_type->unio.type_arg_count;
-            Type **pt_args = (param_type->kind == TYPE_STRUCT) ? param_type->struc.type_args : param_type->unio.type_args;
-            Type **at_args = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.type_args : arg_type->unio.type_args;
+        /* Handle kind mismatches between TYPE_STUB, TYPE_STRUCT, and TYPE_UNION.
+         * Stubs are kind-agnostic type references; unify their type_args so
+         * generic type variables get bound correctly. */
+        bool p_is_udt = param_type->kind == TYPE_STRUCT || param_type->kind == TYPE_UNION || param_type->kind == TYPE_STUB;
+        bool a_is_udt = arg_type->kind == TYPE_STRUCT || arg_type->kind == TYPE_UNION || arg_type->kind == TYPE_STUB;
+        if (p_is_udt && a_is_udt) {
+            int pa = (param_type->kind == TYPE_STRUCT) ? param_type->struc.type_arg_count
+                   : (param_type->kind == TYPE_UNION) ? param_type->unio.type_arg_count
+                   : param_type->stub.type_arg_count;
+            int aa = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.type_arg_count
+                   : (arg_type->kind == TYPE_UNION) ? arg_type->unio.type_arg_count
+                   : arg_type->stub.type_arg_count;
+            Type **pt_args = (param_type->kind == TYPE_STRUCT) ? param_type->struc.type_args
+                           : (param_type->kind == TYPE_UNION) ? param_type->unio.type_args
+                           : param_type->stub.type_args;
+            Type **at_args = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.type_args
+                           : (arg_type->kind == TYPE_UNION) ? arg_type->unio.type_args
+                           : arg_type->stub.type_args;
             if (pa > 0 && pa == aa) {
                 for (int i = 0; i < pa; i++)
                     if (!unify(pt_args[i], at_args[i], var_names, bindings, var_count))
                         return false;
                 return true;
             }
-            const char *na = param_type->kind == TYPE_STRUCT ? param_type->struc.name : param_type->unio.name;
-            const char *nb = arg_type->kind == TYPE_STRUCT ? arg_type->struc.name : arg_type->unio.name;
+            const char *na = (param_type->kind == TYPE_STRUCT) ? param_type->struc.name
+                           : (param_type->kind == TYPE_UNION) ? param_type->unio.name
+                           : param_type->stub.name;
+            const char *nb = (arg_type->kind == TYPE_STRUCT) ? arg_type->struc.name
+                           : (arg_type->kind == TYPE_UNION) ? arg_type->unio.name
+                           : arg_type->stub.name;
             return na == nb;
         }
         /* Fixed-array field accepts slice of matching element type */
@@ -671,6 +680,18 @@ static bool unify(Type *param_type, Type *arg_type,
             return true;
         }
         return false;
+    case TYPE_STUB:
+        /* Unify type_args if both stubs have them */
+        if (param_type->stub.type_arg_count > 0 &&
+            arg_type->stub.type_arg_count == param_type->stub.type_arg_count) {
+            for (int i = 0; i < param_type->stub.type_arg_count; i++) {
+                if (!unify(param_type->stub.type_args[i], arg_type->stub.type_args[i],
+                           var_names, bindings, var_count))
+                    return false;
+            }
+            return true;
+        }
+        return param_type->stub.name == arg_type->stub.name;
     default:
         return type_eq(param_type, arg_type);
     }
@@ -823,12 +844,10 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
 
         Type *result = type_copy(ctx->arena, t);
         if (result->kind == TYPE_STRUCT) {
-            if (!result->struc.base_name) result->struc.base_name = result->struc.name;
             result->struc.name = type_mangled;
             result->struc.type_args = type_bindings;
             result->struc.type_arg_count = tntp;
         } else {
-            if (!result->unio.base_name) result->unio.base_name = result->unio.name;
             result->unio.name = type_mangled;
             result->unio.type_args = type_bindings;
             result->unio.type_arg_count = tntp;
@@ -842,10 +861,8 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
                 ct = type_copy(ctx->arena, ct);
             }
             if (ct->kind == TYPE_STRUCT) {
-                if (!ct->struc.base_name) ct->struc.base_name = ct->struc.name;
                 ct->struc.name = type_mangled;
             } else {
-                if (!ct->unio.base_name) ct->unio.base_name = ct->unio.name;
                 ct->unio.name = type_mangled;
             }
             mi->concrete_type = ct;
@@ -2248,7 +2265,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         union_sym->type->unio.name, NULL,
                         bindings, ntp, union_sym->decl,
                         DECL_UNION, union_sym->type_params, ntp);
-                    if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                     concrete->unio.name = mangled;
                     MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                     if (mi) mi->concrete_type = concrete;
@@ -2857,7 +2873,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     st->struc.name, NULL,
                     bindings, ntp, sym->decl,
                     DECL_STRUCT, sym->type_params, ntp);
-                if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
                 concrete->struc.name = mangled;
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                 if (mi && !mi->concrete_type) {
@@ -3063,10 +3078,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                             bindings, ntp, member->decl,
                             dk, member->type_params, ntp);
                         if (dk == DECL_UNION) {
-                            if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                             concrete->unio.name = mangled;
                         } else {
-                            if (!concrete->struc.base_name) concrete->struc.base_name = concrete->struc.name;
                             concrete->struc.name = mangled;
                         }
                         MonoInstance *mi = mono_find(ctx->mono_table, mangled);
@@ -3164,7 +3177,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                             sym->type->unio.name, NULL,
                             bindings, ntp, sym->decl,
                             DECL_UNION, sym->type_params, ntp);
-                        if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                         concrete->unio.name = mangled;
                         MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                         if (mi) mi->concrete_type = concrete;
@@ -3211,7 +3223,6 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                             ctx->intern, usym->type->unio.name, NULL,
                             bindings, ntp, usym->decl,
                             DECL_UNION, usym->type_params, ntp);
-                        if (!concrete->unio.base_name) concrete->unio.base_name = concrete->unio.name;
                         concrete->unio.name = mangled;
                         MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                         if (mi && !mi->concrete_type) mi->concrete_type = concrete;
@@ -3700,9 +3711,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     /* Not a variable — try to resolve as a type name */
                     Type *stub = arena_alloc(ctx->arena, sizeof(Type));
                     memset(stub, 0, sizeof(Type));
-                    stub->kind = TYPE_STRUCT;
-                    stub->struc.name = name;
-                    stub->struc.base_name = name;
+                    stub->kind = TYPE_STUB;
+                    stub->stub.name = name;
                     Type *ty = resolve_type(ctx, stub);
                     if (ty != stub) {
                         /* Resolved as type — treat as alloc(T) */

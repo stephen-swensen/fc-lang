@@ -270,12 +270,12 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
     return result;
 }
 
-/* Canonicalize generic struct/union stub names in a type tree.
- * Walks through compound type wrappers and, for TYPE_STRUCT/TYPE_UNION stubs
- * (field_count/variant_count == 0) with type_arg_count > 0, updates the stub's
- * name to the canonical mangled form from the module's symbol table.
- * This is a NAME-ONLY update: preserves type_args, doesn't replace with full type,
- * doesn't create circular references. Mutates the type in place. */
+/* Canonicalize generic stub names in a type tree.
+ * Walks through compound type wrappers and, for TYPE_STUB nodes with
+ * type_arg_count > 0, updates the stub's name to the canonical mangled form
+ * from the module's symbol table. This is a NAME-ONLY update: preserves
+ * type_args, doesn't replace with full type, doesn't create circular
+ * references. Mutates the type in place. */
 static void canonicalize_stub_names(Type *t, SymbolTable *members) {
     if (!t) return;
     switch (t->kind) {
@@ -288,38 +288,28 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
             canonicalize_stub_names(t->func.param_types[i], members);
         canonicalize_stub_names(t->func.return_type, members);
         return;
-    case TYPE_STRUCT:
-        if (t->struc.field_count == 0 && t->struc.type_arg_count > 0 && t->struc.name) {
-            /* Try struct first, then union — parser creates all type refs as TYPE_STRUCT
-             * stubs since it doesn't know the target kind yet */
-            Symbol *sym = symtab_lookup_kind(members, t->struc.name, DECL_STRUCT);
+    case TYPE_STUB:
+        if (t->stub.type_arg_count > 0 && t->stub.name) {
+            /* Try struct first, then union — stubs are kind-agnostic */
+            Symbol *sym = symtab_lookup_kind(members, t->stub.name, DECL_STRUCT);
             if (!sym)
-                sym = symtab_lookup_kind(members, t->struc.name, DECL_UNION);
+                sym = symtab_lookup_kind(members, t->stub.name, DECL_UNION);
             if (sym && sym->type) {
                 const char *canon = (sym->type->kind == TYPE_STRUCT)
                     ? sym->type->struc.name : sym->type->unio.name;
                 const char *qname = (sym->type->kind == TYPE_STRUCT)
                     ? sym->type->struc.qualified_name : sym->type->unio.qualified_name;
-                if (canon != t->struc.name) {
-                    t->struc.base_name = t->struc.name;
-                    t->struc.name = canon;
-                    if (qname) t->struc.qualified_name = qname;
+                if (canon != t->stub.name) {
+                    t->stub.name = canon;
+                    if (qname) t->stub.qualified_name = qname;
                 }
-                t->struc.resolved_sym = sym;
             }
         }
-        /* Don't recurse into fields — stubs have field_count=0 */
+        return;
+    case TYPE_STRUCT:
+        /* Don't recurse into fields of real struct types */
         return;
     case TYPE_UNION:
-        if (t->unio.variant_count == 0 && t->unio.type_arg_count > 0 && t->unio.name) {
-            Symbol *sym = symtab_lookup_kind(members, t->unio.name, DECL_UNION);
-            if (sym && sym->type && sym->type->unio.name != t->unio.name) {
-                t->unio.base_name = t->unio.name;
-                t->unio.name = sym->type->unio.name;
-                if (sym->type->unio.qualified_name)
-                    t->unio.qualified_name = sym->type->unio.qualified_name;
-            }
-        }
         return;
     default: return;
     }
@@ -327,9 +317,9 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
 
 /* Resolve type stubs in a type tree against a symbol table.
  * Recursively walks the type tree (through pointers, slices, options, fixed arrays,
- * and function types) and replaces TYPE_STRUCT stubs (field_count == 0) with the
- * actual type from the symtab. Used to resolve references to sibling extern types
- * within the same from-module. */
+ * and function types) and replaces TYPE_STUB nodes with the actual type from the
+ * symtab. Used to resolve references to sibling extern types within the same
+ * from-module. */
 static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
     if (!t) return t;
     if (t->kind == TYPE_POINTER) {
@@ -388,12 +378,10 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
         r->func.return_type = ret;
         return r;
     }
-    if (t->kind == TYPE_STRUCT && t->struc.field_count == 0 && t->struc.name
-        && t->struc.type_arg_count == 0) {
-        Symbol *sym = symtab_lookup_kind(members, t->struc.name, DECL_STRUCT);
+    if (t->kind == TYPE_STUB && t->stub.name && t->stub.type_arg_count == 0) {
+        Symbol *sym = symtab_lookup_kind(members, t->stub.name, DECL_STRUCT);
         if (sym && sym->type) return sym->type;
-        /* Also check for union stubs */
-        sym = symtab_lookup_kind(members, t->struc.name, DECL_UNION);
+        sym = symtab_lookup_kind(members, t->stub.name, DECL_UNION);
         if (sym && sym->type) return sym->type;
     }
     return t;
@@ -408,7 +396,7 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     memset(st, 0, sizeof(Type));
     st->kind = TYPE_STRUCT;
     st->struc.name = d->struc.name;
-    st->struc.base_name = d->struc.name;
+    st->struc.qualified_name = d->struc.name;
     st->struc.c_name = d->struc.c_name;
     st->struc.is_c_union = d->struc.is_c_union;
     st->struc.fields = d->struc.fields;
@@ -429,7 +417,7 @@ static Type *register_union_sym(SymbolTable *tab, Decl *d) {
     memset(ut, 0, sizeof(Type));
     ut->kind = TYPE_UNION;
     ut->unio.name = d->unio.name;
-    ut->unio.base_name = d->unio.name;
+    ut->unio.qualified_name = d->unio.name;
     ut->unio.variants = d->unio.variants;
     ut->unio.variant_count = d->unio.variant_count;
     ut->unio.type_args = NULL;
@@ -526,7 +514,6 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 memset(st, 0, sizeof(Type));
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
-                st->struc.base_name = src_name;
                 st->struc.qualified_name = make_qualified(intern, display_prefix, src_name);
                 st->struc.c_name = child->struc.c_name;
                 st->struc.is_c_union = child->struc.is_c_union;
@@ -562,7 +549,6 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 memset(ut, 0, sizeof(Type));
                 ut->kind = TYPE_UNION;
                 ut->unio.name = mangled;
-                ut->unio.base_name = src_name;
                 ut->unio.qualified_name = make_qualified(intern, display_prefix, src_name);
                 ut->unio.variants = child->unio.variants;
                 ut->unio.variant_count = child->unio.variant_count;
@@ -607,6 +593,8 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                     reason = "struct"; break;
                 case TYPE_UNION:
                     reason = "union"; break;
+                case TYPE_STUB:
+                    reason = "struct"; break;  /* stubs may resolve to struct or union */
                 case TYPE_VOID:
                     reason = "void"; break;
                 default: break;

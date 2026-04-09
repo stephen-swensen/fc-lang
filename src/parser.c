@@ -305,13 +305,11 @@ static Type *parse_type(Parser *p) {
             type_name = intern(p->intern, buf, (int)strlen(buf));
         }
         Type *udt = arena_alloc(p->arena, sizeof(Type));
-        udt->kind = TYPE_STRUCT;  /* will be resolved to correct kind in pass2 */
-        udt->struc.name = type_name;
-        udt->struc.base_name = type_name;
-        udt->struc.fields = NULL;
-        udt->struc.field_count = 0;
-        udt->struc.type_args = NULL;
-        udt->struc.type_arg_count = 0;
+        udt->kind = TYPE_STUB;
+        udt->stub.name = type_name;
+        udt->stub.qualified_name = NULL;
+        udt->stub.type_args = NULL;
+        udt->stub.type_arg_count = 0;
         /* Check for type arguments: name<Type, ...> */
         if (check(p, TOK_LT)) {
             /* Scan forward to verify this is a type arg list (not comparison) */
@@ -336,9 +334,9 @@ static Type *parse_type(Parser *p) {
             } while (1);
             if (valid && check(p, TOK_GT)) {
                 advance_p(p); /* consume > */
-                udt->struc.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                memcpy(udt->struc.type_args, targs, sizeof(Type*) * (size_t)ta_count);
-                udt->struc.type_arg_count = ta_count;
+                udt->stub.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                memcpy(udt->stub.type_args, targs, sizeof(Type*) * (size_t)ta_count);
+                udt->stub.type_arg_count = ta_count;
                 free(targs);
             } else {
                 /* Not type args — backtrack */
@@ -921,11 +919,11 @@ static Expr *parse_prefix(Parser *p) {
                 if (!elem_type) {
                     /* User-defined type — create stub */
                     elem_type = arena_alloc(p->arena, sizeof(Type));
-                    elem_type->kind = TYPE_STRUCT;
-                    elem_type->struc.name = type_name_str;
-                    elem_type->struc.base_name = type_name_str;
-                    elem_type->struc.fields = NULL;
-                    elem_type->struc.field_count = 0;
+                    elem_type->kind = TYPE_STUB;
+                    elem_type->stub.name = type_name_str;
+                    elem_type->stub.qualified_name = NULL;
+                    elem_type->stub.type_args = NULL;
+                    elem_type->stub.type_arg_count = 0;
                 }
                 expect(p, TOK_LBRACKET);
 

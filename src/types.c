@@ -182,19 +182,22 @@ bool type_is_numeric(Type *t) {
     return type_is_integer(t) || type_is_float(t);
 }
 
+/* Extract the name from a type for stub comparison purposes */
+static const char *type_udt_name(Type *t) {
+    if (t->kind == TYPE_STUB) return t->stub.name;
+    if (t->kind == TYPE_STRUCT) return t->struc.name;
+    if (t->kind == TYPE_UNION) return t->unio.name;
+    return NULL;
+}
+
 bool type_eq(Type *a, Type *b) {
     if (a == b) return true;
     if (a->kind == TYPE_ERROR || b->kind == TYPE_ERROR) return true;
     if (a->kind != b->kind) {
-        /* A struct stub might need to match a union type or vice versa.
-         * Both stub and real type might have different kinds if parser defaults to TYPE_STRUCT. */
-        if ((a->kind == TYPE_STRUCT && b->kind == TYPE_UNION) ||
-            (a->kind == TYPE_UNION && b->kind == TYPE_STRUCT)) {
-            /* Compare by name — one might be a parser stub */
-            const char *na = a->kind == TYPE_STRUCT ? a->struc.name : a->unio.name;
-            const char *nb = b->kind == TYPE_STRUCT ? b->struc.name : b->unio.name;
-            return na == nb;  /* interned string comparison */
-        }
+        /* A stub might need to match a struct or union type (or vice versa). */
+        const char *na = type_udt_name(a);
+        const char *nb = type_udt_name(b);
+        if (na && nb) return na == nb;  /* interned string comparison */
         return false;
     }
     switch (a->kind) {
@@ -208,6 +211,7 @@ bool type_eq(Type *a, Type *b) {
     case TYPE_ANY_PTR: return a->is_const == b->is_const;
     case TYPE_STRUCT:  return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
+    case TYPE_STUB:    return a->stub.name == b->stub.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
     case TYPE_FUNC:
         if (a->func.param_count != b->func.param_count) return false;
@@ -223,12 +227,10 @@ bool type_eq_ignore_const(Type *a, Type *b) {
     if (a == b) return true;
     if (a->kind == TYPE_ERROR || b->kind == TYPE_ERROR) return true;
     if (a->kind != b->kind) {
-        if ((a->kind == TYPE_STRUCT && b->kind == TYPE_UNION) ||
-            (a->kind == TYPE_UNION && b->kind == TYPE_STRUCT)) {
-            const char *na = a->kind == TYPE_STRUCT ? a->struc.name : a->unio.name;
-            const char *nb = b->kind == TYPE_STRUCT ? b->struc.name : b->unio.name;
-            return na == nb;
-        }
+        /* A stub might need to match a struct or union type (or vice versa). */
+        const char *na = type_udt_name(a);
+        const char *nb = type_udt_name(b);
+        if (na && nb) return na == nb;
         return false;
     }
     switch (a->kind) {
@@ -239,6 +241,7 @@ bool type_eq_ignore_const(Type *a, Type *b) {
                                   type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
     case TYPE_STRUCT:  return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
+    case TYPE_STUB:    return a->stub.name == b->stub.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
     case TYPE_FUNC:
         if (a->func.param_count != b->func.param_count) return false;
@@ -354,11 +357,11 @@ const char *type_name(Type *t) {
         return buf;
     }
     case TYPE_STRUCT: {
-        if (t->struc.type_arg_count > 0 && t->struc.base_name) {
+        if (t->struc.type_arg_count > 0 && t->struc.qualified_name) {
             static char stbufs[4][256];
             static int stidx = 0;
             char *buf = stbufs[stidx & 3]; stidx++;
-            const char *display = t->struc.qualified_name ? t->struc.qualified_name : t->struc.base_name;
+            const char *display = t->struc.qualified_name;
             int pos = 0;
             pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", display);
             for (int i = 0; i < t->struc.type_arg_count; i++) {
@@ -372,11 +375,11 @@ const char *type_name(Type *t) {
         return t->struc.name;
     }
     case TYPE_UNION: {
-        if (t->unio.type_arg_count > 0 && t->unio.base_name) {
+        if (t->unio.type_arg_count > 0 && t->unio.qualified_name) {
             static char utbufs[4][256];
             static int utidx = 0;
             char *buf = utbufs[utidx & 3]; utidx++;
-            const char *display = t->unio.qualified_name ? t->unio.qualified_name : t->unio.base_name;
+            const char *display = t->unio.qualified_name;
             int pos = 0;
             pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", display);
             for (int i = 0; i < t->unio.type_arg_count; i++) {
@@ -388,6 +391,10 @@ const char *type_name(Type *t) {
         }
         if (t->unio.qualified_name) return t->unio.qualified_name;
         return t->unio.name;
+    }
+    case TYPE_STUB: {
+        if (t->stub.qualified_name) return t->stub.qualified_name;
+        return t->stub.name;
     }
     case TYPE_ANY_PTR:   return "any*";
     case TYPE_TYPE_VAR:  return t->type_var.name;
@@ -515,6 +522,8 @@ bool type_needs_eq_func(Type *t) {
     case TYPE_OPTION:
         /* Pointer options use C native == (NULL for none) */
         return !(t->option.inner && t->option.inner->kind == TYPE_POINTER);
+    case TYPE_STUB:
+        return false;  /* unresolved stubs don't need eq functions */
     default:
         return false;
     }
@@ -543,6 +552,10 @@ bool type_contains_type_var(Type *t) {
             if (type_contains_type_var(t->unio.variants[i].payload)) return true;
         for (int i = 0; i < t->unio.type_arg_count; i++)
             if (type_contains_type_var(t->unio.type_args[i])) return true;
+        return false;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            if (type_contains_type_var(t->stub.type_args[i])) return true;
         return false;
     default: return false;
     }
@@ -577,6 +590,10 @@ void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
             type_collect_vars(t->unio.variants[i].payload, vars, count, cap);
         for (int i = 0; i < t->unio.type_arg_count; i++)
             type_collect_vars(t->unio.type_args[i], vars, count, cap);
+        return;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            type_collect_vars(t->stub.type_args[i], vars, count, cap);
         return;
     default: return;
     }
@@ -656,7 +673,6 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *ns = arena_alloc(a, sizeof(Type));
         ns->kind = TYPE_STRUCT;
         ns->struc.name = t->struc.name;
-        ns->struc.base_name = t->struc.base_name;
         ns->struc.qualified_name = t->struc.qualified_name;
         ns->struc.c_name = t->struc.c_name;
         ns->struc.fields = fields;
@@ -688,7 +704,6 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *nu = arena_alloc(a, sizeof(Type));
         nu->kind = TYPE_UNION;
         nu->unio.name = t->unio.name;
-        nu->unio.base_name = t->unio.base_name;
         nu->unio.qualified_name = t->unio.qualified_name;
         nu->unio.variants = vars;
         nu->unio.variant_count = t->unio.variant_count;
@@ -696,6 +711,26 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         nu->unio.type_arg_count = new_targ_count;
         nu->unio.resolved_sym = t->unio.resolved_sym;
         return nu;
+    }
+    case TYPE_STUB: {
+        bool changed = false;
+        Type **new_targs = NULL;
+        int new_targ_count = t->stub.type_arg_count;
+        if (new_targ_count > 0) {
+            new_targs = arena_alloc(a, sizeof(Type*) * (size_t)new_targ_count);
+            for (int i = 0; i < new_targ_count; i++) {
+                new_targs[i] = type_substitute(a, t->stub.type_args[i], var_names, concrete, count);
+                if (new_targs[i] != t->stub.type_args[i]) changed = true;
+            }
+        }
+        if (!changed) return t;
+        Type *ns = arena_alloc(a, sizeof(Type));
+        ns->kind = TYPE_STUB;
+        ns->stub.name = t->stub.name;
+        ns->stub.qualified_name = t->stub.qualified_name;
+        ns->stub.type_args = new_targs;
+        ns->stub.type_arg_count = new_targ_count;
+        return ns;
     }
     default: return t;
     }
@@ -735,6 +770,7 @@ char *mangle_type_name(Type *t) {
     case TYPE_VOID:    return str_dup("void");
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
+    case TYPE_STUB:    return str_dup(t->stub.name);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
     case TYPE_FIXED_ARRAY: {
         char *inner = mangle_type_name(t->fixed_array.elem);

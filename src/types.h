@@ -26,6 +26,7 @@ typedef enum {
     TYPE_ANY_PTR,
     TYPE_TYPE_VAR,
     TYPE_FIXED_ARRAY, /* fixed-size inline array: T[N] */
+    TYPE_STUB,       /* unresolved type reference: name only, resolved by pass1/pass2 */
     TYPE_ERROR,      /* poison type for error recovery */
 
     TYPE_COUNT
@@ -63,7 +64,6 @@ struct Type {
         } func;
         struct {
             const char *name;
-            const char *base_name;      /* display only: FC source name before module mangling; not used for resolution */
             const char *qualified_name;  /* fully qualified FC path (e.g. "std::types.tuple2") */
             const char *c_name;         /* C struct/union tag name for extern types, NULL for normal */
             bool is_c_union;            /* true for extern union (untagged C union layout) */
@@ -75,7 +75,6 @@ struct Type {
         } struc;
         struct {
             const char *name;
-            const char *base_name;      /* display only: FC source name before module mangling; not used for resolution */
             const char *qualified_name;  /* fully qualified FC path (e.g. "geometry.shape") */
             UnionVariant *variants;
             int variant_count;
@@ -85,6 +84,14 @@ struct Type {
         } unio;
         struct { Type *elem; int64_t size; } fixed_array;
         struct { const char *name; } type_var;
+        /* TYPE_STUB: unresolved type reference created by the parser.
+         * Resolved to TYPE_STRUCT or TYPE_UNION by pass1/pass2. */
+        struct {
+            const char *name;
+            const char *qualified_name;
+            Type **type_args;
+            int type_arg_count;
+        } stub;
     };
 };
 
