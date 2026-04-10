@@ -3825,6 +3825,54 @@ match ts with                                        // pattern matching
 - Fields may reference other extern struct or extern union types declared in the same `from` module.
 - Bitfields and anonymous inner structs are not supported — use `any*` for those types.
 
+#### Packed extern structs
+
+FC has no native `packed struct` keyword. Packed layouts (no padding between fields, alignment 1) are accessed by declaring the type in a C header with `__attribute__((packed))` and mirroring the field layout in an `extern struct`. The C compiler handles all unaligned-access codegen — FC just emits ordinary field references.
+
+```c
+// my_proto.h
+#include <stdint.h>
+struct __attribute__((packed)) tcp_header {
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint32_t seq;
+    uint32_t ack;
+    uint8_t  flags;
+};
+_Static_assert(sizeof(struct tcp_header) == 13, "tcp_header must be 13 bytes");
+```
+
+```fc
+module proto from "my_proto.h" =
+    extern struct tcp_header =
+        src_port: uint16
+        dst_port: uint16
+        seq: uint32
+        ack: uint32
+        flags: uint8
+
+let h = proto.tcp_header { src_port = 80u16, seq = 1u32, ... }
+let n = sizeof(proto.tcp_header)            // 13, not 16
+```
+
+All extern struct features work transparently against a packed C type: construction, field read/write, `default`, `sizeof`, structural equality, by-value and `T*` parameter passing, nesting inside other extern structs.
+
+**The one restriction** — you cannot take the address of a field with `&h.field`. Doing so generates a pointer that may not be naturally aligned, which gcc and clang reject under `-Waddress-of-packed-member`. Since FC compiles generated C with `-Werror`, this becomes a build failure.
+
+The workaround is to copy the field to a local first:
+
+```fc
+let mut tmp = h.seq        // copy out
+tmp = tmp + 1u32           // mutate the local
+h.seq = tmp                // copy back
+```
+
+This is the same restriction a native `packed struct` keyword would impose, just enforced by the C compiler instead of by FC.
+
+**Recommended practice:**
+- Add a `_Static_assert(sizeof(struct foo) == N, ...)` in the C header so size drift between the C definition and the FC mirror is caught at compile time. Field reordering is not caught automatically — keep the two declarations side by side.
+- Bit fields can also be declared in the C header, but FC has no syntax for accessing them. Expose them through C accessor functions (`extern get_flag: (header*) -> uint8`) or pack them into a plain integer field and shift/mask in FC.
+
 ### Extern unions
 
 C union types (untagged, overlapping memory) can be imported using `extern union` inside a `from` module. This is analogous to `extern struct` — the compiler uses the C union directly instead of generating its own definition. Extern unions are distinct from FC's tagged `union` type: they have no discriminant tag and their fields overlap in memory.

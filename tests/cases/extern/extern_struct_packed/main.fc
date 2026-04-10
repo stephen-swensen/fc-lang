@@ -1,0 +1,62 @@
+// Test: packed C struct accessed via extern struct.
+// FC mirrors the field layout; the C compiler handles packing.
+// Exercises sizeof, default, construction, and field read/write.
+module p from "test_packed.h" =
+    extern struct packed_header =
+        src_port: uint16
+        dst_port: uint16
+        seq: uint32
+        ack: uint32
+        flags: uint8
+
+let main = (args: str[]) ->
+    // sizeof reflects the packed layout (13), not the padded one (16).
+    assert(sizeof(p.packed_header) == 13)
+
+    // default zero-initializes every field.
+    let mut h = default(p.packed_header)
+    assert(h.src_port == 0u16)
+    assert(h.dst_port == 0u16)
+    assert(h.seq == 0u32)
+    assert(h.ack == 0u32)
+    assert(h.flags == 0u8)
+
+    // Field-by-field mutation through a let mut binding.
+    h.src_port = 80u16
+    h.dst_port = 4242u16
+    h.seq = 0x1000_0000u32
+    h.ack = 0x2000_0000u32
+    h.flags = 0x18u8
+    assert(h.src_port == 80u16)
+    assert(h.dst_port == 4242u16)
+    assert(h.seq == 0x1000_0000u32)
+    assert(h.ack == 0x2000_0000u32)
+    assert(h.flags == 0x18u8)
+
+    // Construction via designated initializer.
+    let h2 = p.packed_header {
+        src_port = 1u16,
+        dst_port = 2u16,
+        seq = 3u32,
+        ack = 4u32,
+        flags = 5u8,
+    }
+    assert(h2.src_port == 1u16)
+    assert(h2.dst_port == 2u16)
+    assert(h2.seq == 3u32)
+    assert(h2.ack == 4u32)
+    assert(h2.flags == 5u8)
+
+    // Whole-struct copy preserves all fields.
+    let h3 = h2
+    assert(h3.seq == 3u32)
+    assert(h3.flags == 5u8)
+
+    // Workaround for the &field restriction: copy to a local, mutate, copy back.
+    // Taking &h.seq directly would trigger -Waddress-of-packed-member under -Werror.
+    let mut tmp = h.seq
+    tmp = tmp + 1u32
+    h.seq = tmp
+    assert(h.seq == 0x1000_0001u32)
+
+    0

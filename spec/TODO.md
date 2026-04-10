@@ -2,7 +2,7 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
-- **Packed structs and bit-level layout control**: Support `packed struct` for exact bit layout without padding, and potentially bit fields. Currently FC emits C structs with C's default layout rules, offering no control over padding or alignment beyond what the C compiler provides. Packed structs would enable memory-mapped I/O, binary protocol parsing, and compact serialization formats.
+- **Bit fields (evaluate)**: Investigate first-class bit field syntax (e.g., `field: uint8 : 3`) for hardware register layouts. Bit fields in C have lots of implementation-defined behavior (bit ordering, signedness, straddling), so a native FC feature would need to fix those choices. Today, bit fields are accessible by declaring a packed struct in a C header and exposing accessor functions. Defer until a concrete use case justifies the design work.
 
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:
   - **Abort/signal handling** (core lang): `expressions/assert_fail`, `assert_message_fail`, `div_by_zero`, `div_by_zero_u32`, `mod_by_zero`, `options/unwrap_none`, `slices/slice_bounds`, `slices/subslice_bounds_abort`, `structs/fixed_array_overflow_err` — likely different exit codes from `abort()` on Windows vs Linux (Windows doesn't use POSIX signals).

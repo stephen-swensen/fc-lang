@@ -4,6 +4,24 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Packed structs (resolved 2026-04-10)
+
+Originally listed as "Packed structs and bit-level layout control" — add a `packed struct` keyword so FC could emit `__attribute__((packed))` and disallow `&field` to keep `-Werror` clean. Use cases: memory-mapped I/O, binary protocol parsing, compact on-disk formats.
+
+**Resolution:** no native feature needed. Packed types are already accessible through `extern struct` against a C header that defines the packed layout. FC's existing extern-struct machinery (construction, field read/write, `default`, `sizeof`, equality, by-value and `T*` parameter passing) all work transparently because the C compiler handles the unaligned-access codegen — FC just emits ordinary field references. The single restriction is that taking `&packed_field` triggers `-Waddress-of-packed-member`, which fails under `-Werror`; the workaround is the same one a native feature would force on you (copy to a local first).
+
+A regression test at `tests/cases/extern/extern_struct_packed/` locks this in: a C header declares `struct __attribute__((packed)) packed_header` with a `_Static_assert` on its 13-byte size, the FC side mirrors the field layout, and the test exercises construction, default, field read/write, whole-struct copy, and the copy-to-local workaround for `&field`. The C-interop section of the spec documents the pattern.
+
+**Tradeoffs accepted:**
+
+- Users have to maintain a C header alongside their FC code (a few lines per type).
+- No layout cross-checking between the C side and the FC mirror — drift would only show up at runtime. Mitigated by `_Static_assert(sizeof(...) == N, ...)` in the header for size checks; field reordering is still on the user.
+- No bit-field syntax. Tracked separately in TODO.md as a future evaluation.
+
+The native feature would only be worth revisiting if FC ends up with many packed structs in self-contained `.fc` code where the C-header overhead becomes annoying duplication, or if FC pursues self-hosting goals that disallow C-header dependencies.
+
+---
+
 ## Platform flags and cross-platform support model (resolved 2026-04-09)
 
 The original `--flag windows` approach conflated OS with toolchain/environment — MSYS2 UCRT64 and native MSVC both look like "Windows" but use different ABIs. Resolved by introducing a structured taxonomy along three axes (`os`, `arch`, `env`), auto-detected from the host C compiler.
