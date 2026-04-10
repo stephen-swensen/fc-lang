@@ -4,6 +4,8 @@ An HTTP client (curl clone) written in FC, demonstrating TCP client networking w
 
 Supports HTTP/1.0 GET, HEAD, POST, custom headers, verbose output, and file output. HTTPS is not supported (no TLS).
 
+Runs on Linux and on Windows under MSYS2 / MinGW (UCRT64 or MINGW64). The `run.sh` auto-detects the host and links Winsock (`-lws2_32`) on Windows.
+
 ## Usage
 
 ```

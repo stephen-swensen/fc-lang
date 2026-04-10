@@ -1,10 +1,15 @@
 // fing — a ping clone written in FC
-// Uses ICMP datagram sockets (no root required on most Linux systems).
-// Supports both IP addresses and hostnames.
+// Uses ICMP raw sockets, POSIX gettimeofday, and SO_RCVTIMEO with timeval —
+// all of which differ on Windows (IcmpSendEcho API, GetSystemTimeAsFileTime,
+// DWORD-millisecond timeout). Currently Linux-only; the rest of the file is
+// gated on `#if os == "linux"` and a stub main prints a friendly message on
+// other platforms.
 
 import net from std::
 import sys from std::
 import io from std::
+
+#if os == "linux"
 
 // Extra C bindings not in std::net
 module sock_ext from "sys/socket.h" define "_POSIX_C_SOURCE" "200809L" =
@@ -142,3 +147,12 @@ let main = (args: str[]) ->
         io.write("rtt min/avg/max = %d{min_us / 1000}.%d{(min_us % 1000) / 100}/%d{avg_us / 1000}.%d{(avg_us % 1000) / 100}/%d{max_us / 1000}.%d{(max_us % 1000) / 100} ms\n", stdout)
 
     if received == 0 then 1 else 0
+
+#else
+
+let main = (args: str[]) ->
+    io.write("fing is currently Linux-only — uses ICMP raw sockets, gettimeofday, and timeval-based SO_RCVTIMEO that don't directly map to Windows.\n", stderr)
+    sys.exit(1)
+    1
+
+#end

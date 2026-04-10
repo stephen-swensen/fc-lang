@@ -2,6 +2,8 @@
 
 A ping clone written in FC, demonstrating network programming with the `std::net` stdlib module.
 
+**Linux only.** fing uses ICMP raw sockets, `gettimeofday`, and `SO_RCVTIMEO` with a `timeval` struct — none of which directly map to Windows. The Windows ICMP API is `IcmpSendEcho` from `<icmpapi.h>` (a different programming model), and `SO_RCVTIMEO` on Winsock takes a `DWORD` of milliseconds rather than a `timeval`. On Windows, `run.sh` still builds and runs the binary, but it just prints a message and exits.
+
 ## Usage
 
 ```
