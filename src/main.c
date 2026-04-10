@@ -6,6 +6,7 @@
 #include "codegen.h"
 #include "monomorph.h"
 #include "diag.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,9 +56,27 @@ int main(int argc, char **argv) {
     Flag *flags = NULL;
     int flag_count = 0, flag_cap = 0;
 
+    /* Auto-detect host platform via the C compiler, unless --no-auto-detect
+     * is passed. Detection writes os/arch/env entries that the user can
+     * override with --flag (later set_flag calls replace by name). */
+    bool auto_detect = true;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-auto-detect") == 0) {
+            auto_detect = false;
+            break;
+        }
+    }
+    if (auto_detect) {
+        const char *cc = getenv("CC");
+        if (!cc || !*cc) cc = "cc";
+        platform_detect_flags(&flags, &flag_count, &flag_cap, cc);
+    }
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_path = argv[++i];
+        } else if (strcmp(argv[i], "--no-auto-detect") == 0) {
+            /* Already handled above. */
         } else if (strcmp(argv[i], "--flag") == 0 && i + 1 < argc) {
             const char *arg = argv[++i];
             const char *eq = strchr(arg, '=');
@@ -83,7 +102,21 @@ int main(int argc, char **argv) {
                 f.name_len = (int)strlen(arg);
                 f.value = NULL;
             }
-            DA_APPEND(flags, flag_count, flag_cap, f);
+            /* User flag override: if a flag with this name already exists
+             * (e.g., from auto-detect), replace it in place so the user's
+             * value wins and there is exactly one entry per name. */
+            bool replaced = false;
+            for (int j = 0; j < flag_count; j++) {
+                if (flags[j].name_len == f.name_len &&
+                    memcmp(flags[j].name, f.name, (size_t)f.name_len) == 0) {
+                    flags[j] = f;
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) {
+                DA_APPEND(flags, flag_count, flag_cap, f);
+            }
         } else if (argv[i][0] != '-') {
             DA_APPEND(input_paths, input_count, input_cap, argv[i]);
         } else {

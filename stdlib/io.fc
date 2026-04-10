@@ -117,7 +117,7 @@ module io =
     // mkdir: creates a directory at the given path.
     // path: const str — directory path to create.
     // returns: bool — true on success, false if it already exists or on error.
-#if windows
+#if os == "windows"
     private module d from "direct.h" =
         extern _mkdir as win_mkdir: (const cstr) -> int32
 

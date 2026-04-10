@@ -4,6 +4,27 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Platform flags and cross-platform support model (resolved 2026-04-09)
+
+The original `--flag windows` approach conflated OS with toolchain/environment — MSYS2 UCRT64 and native MSVC both look like "Windows" but use different ABIs. Resolved by introducing a structured taxonomy along three axes (`os`, `arch`, `env`), auto-detected from the host C compiler.
+
+**Resolution:**
+
+- `#if` expression evaluator (commit 5cf85e3) — added `!`, `&&`, `||`, parentheses, and string equality (`flag == "value"`), so flags can carry values via `--flag name=value`. This made the structured taxonomy expressible at the language level.
+- Platform auto-detection (`src/platform.c`) — runs `$CC -dM -E -x c /dev/null` and parses `#define` lines to set built-in `os`/`arch`/`env` flags. Defaults the env to `gnu` on Linux (musl detection deferred); distinguishes MinGW from MSVC on Windows; leaves env unset on macOS/FreeBSD where it is implied by the OS.
+- User override semantics — `--flag os=...` replaces an auto-detected entry rather than appending alongside it. This gives cross-compilation for free with no separate `--target` flag.
+- `--no-auto-detect` CLI option — disables the compiler probe entirely, for reproducible builds and testing.
+- Reserved-but-not-enforced built-in names — users can shadow `os`/`arch`/`env` if they want, since the override mechanism works the same way for any name.
+
+**Deferred:**
+
+- Musl detection on Linux. Requires header probing (`#include <features.h>`) and is genuinely tricky because musl defines `__GLIBC__` for compat in some headers. Defer until a real consumer needs to differentiate.
+- Freestanding / embedded support (`os=freestanding`). Reserved in the documented taxonomy but not detected, since stdlib currently assumes a hosted environment (`abort`, `malloc`, `alloca`, etc.).
+- `--target x86_64-linux-gnu` shorthand. Per-axis `--flag` works fine for cross-compilation; sugar can come later if it proves valuable.
+- Native MSVC / `cl.exe` host detection. The probe command uses GCC/Clang-style flags (`-dM -E`) and assumes a POSIX-ish shell (`popen`, `/dev/null`). MSVC uses different invocation conventions and is not yet supported as a probe target.
+
+---
+
 ## Design Decisions (from Active section)
 
 ### Platform contract

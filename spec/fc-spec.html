@@ -3202,10 +3202,12 @@ Directives always appear at **column 1** (the first column), regardless of the s
 
 ### Flags
 
-Flags are user-defined and passed on the command line. There are no built-in flags. A flag has two independent attributes:
+A flag has two independent attributes:
 
-- **Presence** — whether the flag was passed at all.
-- **Value** — an optional string. A flag may be passed *bare* (no value) or *valued* (with a string payload).
+- **Presence** — whether the flag was set at all.
+- **Value** — an optional string. A flag may be set *bare* (no value) or *valued* (with a string payload).
+
+Flags can be set on the command line with `--flag`:
 
 ```
 fc --flag debug main.fc              # bare: debug is set, no value
@@ -3214,6 +3216,37 @@ fc --flag debug --flag os=linux main.fc
 ```
 
 An empty value after `=` (e.g., `--flag os=`) is a command-line error.
+
+### Built-in flags
+
+FC auto-detects the host platform by probing the C compiler's predefined macros (`$CC -dM -E -x c /dev/null`, where `CC` defaults to `cc`). Detection sets the following built-in flags, which may then be used in any `#if` expression:
+
+| Flag | Typical values |
+|---|---|
+| `os` | `linux`, `macos`, `windows`, `freebsd` |
+| `arch` | `x86_64`, `aarch64`, `arm`, `riscv64`, `wasm32` |
+| `env` | `gnu`, `msvc` |
+
+The `env` axis exists to disambiguate the cases where a single OS supports multiple incompatible C ABIs. It is meaningful on Linux and Windows, and intentionally absent on macOS and FreeBSD:
+
+- **Linux** ships two real, mutually-incompatible libcs: glibc and musl. Code that compiles against one does not always link or run against the other (different headers, different symbol versioning, different `errno` quirks). FC currently sets `env=gnu` on Linux unconditionally — reliable musl detection requires header probing and is deferred.
+- **Windows** has the MinGW vs. native MSVC split. MinGW (GCC/Clang targeting Windows, including MSYS2 UCRT64) produces binaries with a GNU-style toolchain interface and POSIX-ish header shims like `<sys/stat.h>`. Native MSVC has neither. Code that calls `mkdir` from `<sys/stat.h>` works under MinGW and fails under MSVC. FC sets `env=gnu` for MinGW and `env=msvc` for native MSVC.
+- **macOS** has exactly one supported toolchain (Apple's clang) producing exactly one ABI (Mach-O against libSystem). There is no "macOS but with a different libc" you might encounter in the wild. The OS name fully determines the ABI, so adding an env value would carry zero new information and force every macOS check to be written as `os == "macos" && env == "darwin"` for no benefit. FC leaves `env` unset on macOS.
+- **FreeBSD** is the same story: one base-system libc, one ABI per release.
+
+This mirrors how Zig and Rust name their targets: `x86_64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`, and `x86_64-windows-msvc` all carry an explicit ABI suffix, but `x86_64-apple-darwin` and `x86_64-unknown-freebsd` do not — the ABI slot is structurally absent because the OS slot already determines it.
+
+The practical effect: a guard like `#if os == "windows" && env == "gnu"` fires only on MinGW Windows. On macOS, `env == "gnu"` is correctly false (you are not on a GNU env), and `env != "msvc"` is correctly true (matching the inequality semantics described above — an unset flag is "not equal to" any specific value).
+
+Any axis whose value cannot be determined is left unset rather than guessed — an unset flag fails both presence and value checks, so `#if os != "linux"` is true even when no `os` flag is set at all (matching the inequality semantics described above).
+
+**User override:** passing `--flag` on the command line with the same name as a built-in replaces the auto-detected value. This is the same mechanism used for cross-compilation:
+
+```
+fc --flag os=windows --flag env=gnu src.fc    # target MinGW Windows from any host
+```
+
+**Disabling auto-detection:** pass `--no-auto-detect` to suppress the compiler probe entirely. With this flag, only explicitly-passed `--flag` arguments are visible to `#if`.
 
 ### Expressions
 

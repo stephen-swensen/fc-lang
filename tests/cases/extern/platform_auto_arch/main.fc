@@ -1,0 +1,15 @@
+let main = (args: str[]) ->
+    let mut matched = false
+#if arch == "x86_64"
+    matched = true
+#else if arch == "aarch64"
+    matched = true
+#else if arch == "arm"
+    matched = true
+#else if arch == "riscv64"
+    matched = true
+#else if arch == "wasm32"
+    matched = true
+#end
+    assert(matched)
+    0

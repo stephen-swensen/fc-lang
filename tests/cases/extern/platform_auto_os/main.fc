@@ -1,0 +1,15 @@
+let main = (args: str[]) ->
+    // Auto-detection should set `os` to one of the canonical values on
+    // every supported host.
+    let mut matched = false
+#if os == "linux"
+    matched = true
+#else if os == "macos"
+    matched = true
+#else if os == "windows"
+    matched = true
+#else if os == "freebsd"
+    matched = true
+#end
+    assert(matched)
+    0

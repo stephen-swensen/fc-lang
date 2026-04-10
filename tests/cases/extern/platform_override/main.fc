@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    // Host is not freebsd in any CI we run, so auto-detect cannot possibly
+    // have set os=freebsd. A match here proves the user --flag replaced
+    // the auto-detected value.
+    let mut r = 0
+#if os == "freebsd"
+    r = 1
+#end
+    assert(r == 1)
+    0
