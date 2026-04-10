@@ -3219,7 +3219,7 @@ An empty value after `=` (e.g., `--flag os=`) is a command-line error.
 
 ### Built-in flags
 
-FC auto-detects the host platform by probing the C compiler's predefined macros (`$CC -dM -E -x c /dev/null`, where `CC` defaults to `cc`). Detection sets the following built-in flags, which may then be used in any `#if` expression:
+FC auto-detects its host platform at the time the `fc` binary itself is built, using `#ifdef` checks against the C compiler's predefined macros. The values are baked into the binary as static constants — there is no runtime subprocess and detection costs nothing per `fc` invocation. This is the same approach zig, rust, and gcc use to record their host triple. Detection sets the following built-in flags, which may then be used in any `#if` expression:
 
 | Flag | Typical values |
 |---|---|

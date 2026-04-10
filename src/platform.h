@@ -3,22 +3,27 @@
 
 #include "lexer.h"
 
-/* Auto-detect host platform by probing the C compiler's predefined macros.
+/* Populate built-in os/arch/env flags for the host that built the fc binary.
  *
- * Runs `<cc> -dM -E -x c /dev/null` and parses the `#define` lines to set
- * built-in flags in the canonical taxonomy:
+ * Detection happens at fc compile time via #ifdef checks against the C
+ * compiler's predefined macros — there is no runtime subprocess. The values
+ * are baked into fc itself when it is built, which is fast (~no overhead per
+ * invocation) and matches what zig, rust, and gcc do for their host triple.
+ *
+ * Canonical taxonomy:
  *
  *   os  = linux | macos | windows | freebsd
  *   arch = x86_64 | aarch64 | arm | riscv64 | wasm32
- *   env = gnu | msvc
+ *   env = gnu  (the only documented value; native MSVC is unsupported)
  *
- * Any axis whose value cannot be determined is left unset rather than guessed.
- * Appends entries to the given flag array; caller must ensure the array can
- * grow via DA_APPEND. Detected names/values are strdup-allocated and owned by
- * the flag array (do not appear in argv).
+ * Any axis whose value cannot be determined at fc build time is left unset.
+ * Users can override any axis at runtime via `--flag name=value`, and the
+ * `--no-auto-detect` CLI flag suppresses these defaults entirely.
  *
- * cc: the C compiler to probe (e.g., "cc", "gcc", "clang"). Must be non-NULL.
+ * Appends entries to the given flag array; caller must ensure it can grow
+ * via DA_APPEND. Names and values are static string literals owned by the
+ * compiled binary, not heap-allocated.
  */
-void platform_detect_flags(Flag **flags, int *count, int *cap, const char *cc);
+void platform_detect_flags(Flag **flags, int *count, int *cap);
 
 #endif

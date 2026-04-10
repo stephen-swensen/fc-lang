@@ -11,7 +11,7 @@ The original `--flag windows` approach conflated OS with toolchain/environment �
 **Resolution:**
 
 - `#if` expression evaluator (commit 5cf85e3) — added `!`, `&&`, `||`, parentheses, and string equality (`flag == "value"`), so flags can carry values via `--flag name=value`. This made the structured taxonomy expressible at the language level.
-- Platform auto-detection (`src/platform.c`) — runs `$CC -dM -E -x c /dev/null` and parses `#define` lines to set built-in `os`/`arch`/`env` flags. Defaults the env to `gnu` on Linux (musl detection deferred); sets `gnu` for MinGW Windows; leaves env unset on macOS/FreeBSD where it is implied by the OS.
+- Platform auto-detection (`src/platform.c`) — uses compile-time `#ifdef` checks against the C compiler's predefined macros to bake `os`/`arch`/`env` values into the `fc` binary at build time. Initially implemented as a runtime `popen("cc -dM -E ...")` probe; switched to compile-time detection after profiling showed the subprocess cost dominated `fc` startup (~6 ms per invocation, ~10 seconds across the test suite). Defaults the env to `gnu` on Linux (musl detection deferred); sets `gnu` for MinGW Windows; leaves env unset on macOS/FreeBSD where it is implied by the OS.
 - User override semantics — `--flag os=...` replaces an auto-detected entry rather than appending alongside it. This gives cross-compilation for free with no separate `--target` flag.
 - `--no-auto-detect` CLI option — disables the compiler probe entirely, for reproducible builds and testing.
 - Reserved-but-not-enforced built-in names — users can shadow `os`/`arch`/`env` if they want, since the override mechanism works the same way for any name.

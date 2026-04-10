@@ -56,9 +56,10 @@ int main(int argc, char **argv) {
     Flag *flags = NULL;
     int flag_count = 0, flag_cap = 0;
 
-    /* Auto-detect host platform via the C compiler, unless --no-auto-detect
-     * is passed. Detection writes os/arch/env entries that the user can
-     * override with --flag (later set_flag calls replace by name). */
+    /* Auto-detect host platform from compile-time #ifdefs in platform.c,
+     * unless --no-auto-detect is passed. Detection writes os/arch/env
+     * entries that the user can override below with --flag (later set_flag
+     * calls replace by name). */
     bool auto_detect = true;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--no-auto-detect") == 0) {
@@ -67,9 +68,7 @@ int main(int argc, char **argv) {
         }
     }
     if (auto_detect) {
-        const char *cc = getenv("CC");
-        if (!cc || !*cc) cc = "cc";
-        platform_detect_flags(&flags, &flag_count, &flag_cap, cc);
+        platform_detect_flags(&flags, &flag_count, &flag_cap);
     }
 
     for (int i = 1; i < argc; i++) {
