@@ -52,14 +52,38 @@ int main(int argc, char **argv) {
     const char **input_paths = NULL;
     int input_count = 0, input_cap = 0;
     const char *output_path = NULL;
-    const char **flags = NULL;
+    Flag *flags = NULL;
     int flag_count = 0, flag_cap = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--flag") == 0 && i + 1 < argc) {
-            DA_APPEND(flags, flag_count, flag_cap, argv[++i]);
+            const char *arg = argv[++i];
+            const char *eq = strchr(arg, '=');
+            Flag f = {0};
+            if (eq) {
+                if (eq == arg) {
+                    fprintf(stderr, "fc: --flag requires a name before '='\n");
+                    return 1;
+                }
+                if (*(eq + 1) == '\0') {
+                    fprintf(stderr, "fc: --flag '%s' has empty value after '='\n", arg);
+                    return 1;
+                }
+                f.name = arg;
+                f.name_len = (int)(eq - arg);
+                f.value = eq + 1;
+            } else {
+                if (*arg == '\0') {
+                    fprintf(stderr, "fc: --flag requires a name\n");
+                    return 1;
+                }
+                f.name = arg;
+                f.name_len = (int)strlen(arg);
+                f.value = NULL;
+            }
+            DA_APPEND(flags, flag_count, flag_cap, f);
         } else if (argv[i][0] != '-') {
             DA_APPEND(input_paths, input_count, input_cap, argv[i]);
         } else {

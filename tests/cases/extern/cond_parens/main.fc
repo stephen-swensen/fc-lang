@@ -1,0 +1,14 @@
+let main = (args: str[]) ->
+    // Without parens, && binds tighter than ||: a || b && c means a || (b && c).
+    // With parens, (a || b) && c should be true only if c is set.
+    let mut r = 0
+#if (debug || missing_flag) && verbose
+    r = 1
+#end
+    let mut s = 0
+#if debug || missing_flag && missing_other
+    s = 2
+#end
+    assert(r == 1)
+    assert(s == 2)
+    0

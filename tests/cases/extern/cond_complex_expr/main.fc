@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    // Platform taxonomy pattern: windows+gnu (MinGW-style).
+    let mut r = 0
+#if (os == "windows" && env == "gnu") || (os == "linux")
+    r = 1
+#else
+    r = 2
+#end
+    assert(r == 1)
+    0

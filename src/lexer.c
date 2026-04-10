@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 void lexer_init(Lexer *l, const char *source, InternTable *intern,
-                const char **flags, int flag_count) {
+                const Flag *flags, int flag_count) {
     l->source = source;
     l->current = source;
     l->start = source;
@@ -526,18 +526,152 @@ static Token *raw_tokenize(Lexer *l, int *out_count) {
 
 #define MAX_COND_DEPTH 32
 
-static bool flag_is_set(const char **flags, int flag_count, const char *name, int name_len) {
+/* Look up a flag by name. Returns NULL if not set. */
+static const Flag *flag_lookup(const Flag *flags, int flag_count,
+                                const char *name, int name_len) {
     for (int i = 0; i < flag_count; i++) {
-        if ((int)strlen(flags[i]) == name_len && memcmp(flags[i], name, (size_t)name_len) == 0)
-            return true;
+        if (flags[i].name_len == name_len &&
+            memcmp(flags[i].name, name, (size_t)name_len) == 0) {
+            return &flags[i];
+        }
     }
+    return NULL;
+}
+
+/* Recursive-descent evaluator for #if expressions.
+ *
+ *   cond   = or_expr
+ *   or_expr  = and_expr ('||' and_expr)*
+ *   and_expr = unary    ('&&' unary)*
+ *   unary    = '!' unary | primary
+ *   primary  = '(' cond ')'
+ *            | IDENT                     (presence check)
+ *            | IDENT '==' STRING_LIT     (value equality)
+ *            | IDENT '!=' STRING_LIT     (value inequality)
+ */
+typedef struct {
+    Token *tokens;
+    int count;
+    int pos;
+    const Flag *flags;
+    int flag_count;
+    SrcLoc directive_loc;  /* for error reporting */
+} CondEval;
+
+static bool eval_or(CondEval *e);
+
+static SrcLoc tok_loc(Token t) {
+    return (SrcLoc){ .line = t.line, .col = t.col };
+}
+
+/* Peek at the current token, skipping newlines (a directive expression spans one logical line,
+ * but the tokenizer may emit NEWLINE tokens we want to treat as end-of-expression). */
+static bool at_expr_end(CondEval *e) {
+    return e->pos >= e->count || e->tokens[e->pos].kind == TOK_NEWLINE;
+}
+
+static bool eval_primary(CondEval *e) {
+    if (at_expr_end(e)) {
+        diag_fatal(e->directive_loc, "unexpected end of #if expression");
+    }
+    Token t = e->tokens[e->pos];
+    if (t.kind == TOK_LPAREN) {
+        e->pos++;
+        bool v = eval_or(e);
+        if (at_expr_end(e) || e->tokens[e->pos].kind != TOK_RPAREN) {
+            diag_fatal(tok_loc(t), "expected ')' in #if expression");
+        }
+        e->pos++;
+        return v;
+    }
+    if (t.kind == TOK_IDENT) {
+        e->pos++;
+        const Flag *f = flag_lookup(e->flags, e->flag_count, t.start, t.length);
+        if (!at_expr_end(e) && (e->tokens[e->pos].kind == TOK_EQEQ ||
+                                e->tokens[e->pos].kind == TOK_BANGEQ)) {
+            TokenKind op = e->tokens[e->pos].kind;
+            e->pos++;
+            if (at_expr_end(e) || e->tokens[e->pos].kind != TOK_STRING_LIT) {
+                diag_fatal(tok_loc(t),
+                    "expected string literal after '==' or '!=' in #if expression");
+            }
+            Token str_tok = e->tokens[e->pos];
+            e->pos++;
+            /* String literal token includes surrounding quotes; content is inside. */
+            int content_len = str_tok.length - 2;
+            const char *content = str_tok.start + 1;
+            bool eq = false;
+            if (f && f->value) {
+                int value_len = (int)strlen(f->value);
+                eq = (value_len == content_len &&
+                      memcmp(f->value, content, (size_t)content_len) == 0);
+            }
+            return (op == TOK_EQEQ) ? eq : !eq;
+        }
+        /* Bare identifier: presence check */
+        return f != NULL;
+    }
+    diag_fatal(tok_loc(t), "expected identifier, '!', or '(' in #if expression");
     return false;
+}
+
+static bool eval_unary(CondEval *e) {
+    if (!at_expr_end(e) && e->tokens[e->pos].kind == TOK_BANG) {
+        e->pos++;
+        return !eval_unary(e);
+    }
+    return eval_primary(e);
+}
+
+static bool eval_and(CondEval *e) {
+    bool left = eval_unary(e);
+    while (!at_expr_end(e) && e->tokens[e->pos].kind == TOK_AMPAMP) {
+        e->pos++;
+        bool right = eval_unary(e);
+        left = left && right;
+    }
+    return left;
+}
+
+static bool eval_or(CondEval *e) {
+    bool left = eval_and(e);
+    while (!at_expr_end(e) && e->tokens[e->pos].kind == TOK_PIPEPIPE) {
+        e->pos++;
+        bool right = eval_and(e);
+        left = left || right;
+    }
+    return left;
+}
+
+/* Evaluate the expression starting at *i+1 (i points to the #if/#else if directive).
+ * On return, *i points to the last token consumed by the expression (caller advances). */
+static bool eval_cond_expr(Token *tokens, int count, int *i,
+                            const Flag *flags, int flag_count,
+                            SrcLoc directive_loc) {
+    CondEval e = {
+        .tokens = tokens,
+        .count = count,
+        .pos = *i + 1,
+        .flags = flags,
+        .flag_count = flag_count,
+        .directive_loc = directive_loc,
+    };
+    if (at_expr_end(&e)) {
+        diag_fatal(directive_loc, "#if requires an expression");
+    }
+    bool result = eval_or(&e);
+    if (!at_expr_end(&e)) {
+        diag_fatal(tok_loc(e.tokens[e.pos]),
+            "unexpected token in #if expression");
+    }
+    *i = e.pos - 1;
+    return result;
 }
 
 /* Filter out tokens in inactive #if/#else if/#else/#end branches.
  * Directive tokens are always stripped from output. */
 static Token *filter_conditionals(Token *tokens, int count,
-                                   const char **flags, int flag_count,
+                                   const Flag *flags, int flag_count,
                                    int *out_count) {
     Token *out = NULL;
     int olen = 0, ocap = 0;
@@ -556,26 +690,16 @@ static Token *filter_conditionals(Token *tokens, int count,
         if (t.kind == TOK_HASH_IF) {
             /* Validate column 1 */
             if (t.col != 1) {
-                SrcLoc loc = { .line = t.line, .col = t.col };
-                diag_fatal(loc, "#if must appear at column 1");
-            }
-            /* Next non-newline token must be an identifier (the flag name) */
-            int j = i + 1;
-            while (j < count && tokens[j].kind == TOK_NEWLINE) j++;
-            if (j >= count || tokens[j].kind != TOK_IDENT) {
-                SrcLoc loc = { .line = t.line, .col = t.col };
-                diag_fatal(loc, "#if requires a flag name");
+                diag_fatal(tok_loc(t), "#if must appear at column 1");
             }
             bool parent_active = active[depth];
             depth++;
             if (depth >= MAX_COND_DEPTH) {
-                SrcLoc loc = { .line = t.line, .col = t.col };
-                diag_fatal(loc, "too many nested #if directives");
+                diag_fatal(tok_loc(t), "too many nested #if directives");
             }
-            bool flag_set = flag_is_set(flags, flag_count, tokens[j].start, tokens[j].length);
-            active[depth] = parent_active && flag_set;
-            done[depth] = flag_set;
-            i = j; /* skip flag name token */
+            bool cond = eval_cond_expr(tokens, count, &i, flags, flag_count, tok_loc(t));
+            active[depth] = parent_active && cond;
+            done[depth] = cond;
             /* Skip trailing newline after directive */
             if (i + 1 < count && tokens[i + 1].kind == TOK_NEWLINE) i++;
             continue;
@@ -583,24 +707,15 @@ static Token *filter_conditionals(Token *tokens, int count,
 
         if (t.kind == TOK_HASH_ELSE_IF) {
             if (t.col != 1) {
-                SrcLoc loc = { .line = t.line, .col = t.col };
-                diag_fatal(loc, "#else if must appear at column 1");
+                diag_fatal(tok_loc(t), "#else if must appear at column 1");
             }
             if (depth == 0) {
-                SrcLoc loc = { .line = t.line, .col = t.col };
-                diag_fatal(loc, "#else if without matching #if");
-            }
-            int j = i + 1;
-            while (j < count && tokens[j].kind == TOK_NEWLINE) j++;
-            if (j >= count || tokens[j].kind != TOK_IDENT) {
-                SrcLoc loc = { .line = t.line, .col = t.col };
-                diag_fatal(loc, "#else if requires a flag name");
+                diag_fatal(tok_loc(t), "#else if without matching #if");
             }
             bool parent_active = (depth >= 2) ? active[depth - 1] : true;
-            bool flag_set = flag_is_set(flags, flag_count, tokens[j].start, tokens[j].length);
-            active[depth] = parent_active && !done[depth] && flag_set;
-            if (flag_set) done[depth] = true;
-            i = j;
+            bool cond = eval_cond_expr(tokens, count, &i, flags, flag_count, tok_loc(t));
+            active[depth] = parent_active && !done[depth] && cond;
+            if (cond) done[depth] = true;
             if (i + 1 < count && tokens[i + 1].kind == TOK_NEWLINE) i++;
             continue;
         }

@@ -3194,21 +3194,59 @@ FC supports compile-time conditional compilation via `#if`, `#else if`, `#else`,
 Directives always appear at **column 1** (the first column), regardless of the surrounding indentation level. This keeps them visually distinct from regular code and avoids ambiguity with the offside rule.
 
 ```
-#if flag_name
-#else if other_flag
+#if <expression>
+#else if <expression>
 #else
 #end
 ```
 
 ### Flags
 
-Flags are simple names — either set or not set. There are no valued flags, and there are no built-in flags. All flags are user-defined, passed on the command line:
+Flags are user-defined and passed on the command line. There are no built-in flags. A flag has two independent attributes:
+
+- **Presence** — whether the flag was passed at all.
+- **Value** — an optional string. A flag may be passed *bare* (no value) or *valued* (with a string payload).
 
 ```
-fc --flag debug main.fc
-fc --flag feature_x --flag debug main.fc
-fc --flag posix main.fc stdlib/io.fc stdlib/sys.fc
+fc --flag debug main.fc              # bare: debug is set, no value
+fc --flag os=windows main.fc         # valued: os is set to "windows"
+fc --flag debug --flag os=linux main.fc
 ```
+
+An empty value after `=` (e.g., `--flag os=`) is a command-line error.
+
+### Expressions
+
+The expression after `#if` or `#else if` supports identifiers, string-valued equality, boolean operators, and parentheses:
+
+```
+expr   = or_expr
+or_expr  = and_expr ('||' and_expr)*
+and_expr = unary    ('&&' unary)*
+unary    = '!' unary | primary
+primary  = '(' expr ')'
+         | IDENT                      // presence check
+         | IDENT '==' STRING          // value equality
+         | IDENT '!=' STRING          // value inequality
+```
+
+Standard precedence: `!` binds tightest, then `&&`, then `||`. The left side of `==` / `!=` is always a flag identifier; the right side is always a string literal. Identifier-to-identifier comparison and integer comparisons are not supported.
+
+**Presence vs. value checks.** The two forms test different things:
+
+- `#if debug` — true iff `debug` was passed (with or without a value).
+- `#if os == "windows"` — true iff `os` was passed **and** its value equals `"windows"`. A bare flag has no value, so value comparisons against a bare flag are always false.
+
+Worked examples for `os`:
+
+| Command-line | `#if os` | `#if os == "windows"` | `#if os != "windows"` |
+|---|---|---|---|
+| *(nothing)* | false | false | true |
+| `--flag os` | **true** | false | true |
+| `--flag os=windows` | **true** | **true** | false |
+| `--flag os=linux` | **true** | false | true |
+
+Note that `#if os != "windows"` is true when `os` is unset — inequality means "the flag is not set to this value", which includes the case where the flag is absent.
 
 ### Usage
 
@@ -3241,12 +3279,22 @@ let process = (data: uint8[]) ->
 Chaining with `#else if`:
 
 ```fc
-#if linux
+#if os == "linux"
 let platform = "linux"
-#else if macos
+#else if os == "macos"
 let platform = "macos"
 #else
 let platform = "unknown"
+#end
+```
+
+Combining operators — platform-taxonomy pattern (e.g., MinGW-style Windows):
+
+```fc
+#if (os == "windows" && env == "gnu") || os == "linux"
+let use_posix_io = true
+#else
+let use_posix_io = false
 #end
 ```
 
@@ -3257,6 +3305,7 @@ let platform = "unknown"
 - `#else` and `#else if` must appear between a matching `#if` and `#end`.
 - Nesting is allowed — `#if` blocks may contain other `#if` blocks.
 - Inactive branches are stripped at the token level and receive no checking.
+- Malformed expressions (missing operand, unbalanced parens, bare word after `==`, etc.) are compile errors.
 
 ---
 

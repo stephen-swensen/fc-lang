@@ -1,0 +1,11 @@
+let main = (args: str[]) ->
+    let mut r = 0
+#if os == "windows"
+    r = 1
+#else if os == "linux"
+    r = 2
+#else
+    r = 3
+#end
+    assert(r == 2)
+    0

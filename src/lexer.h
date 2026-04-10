@@ -22,13 +22,20 @@ typedef struct Lexer {
     int interp_fmt_line;                    /* line of format spec */
     int interp_fmt_col;                     /* col of format spec */
 
-    /* Conditional compilation flags (e.g., --flag debug) */
-    const char **flags;
+    /* Conditional compilation flags (e.g., --flag debug, --flag os=windows) */
+    const struct Flag *flags;
     int flag_count;
 } Lexer;
 
+/* A conditional compilation flag. value is NULL for bare (valueless) flags. */
+typedef struct Flag {
+    const char *name;    /* pointer into argv (NOT null-terminated — use name_len) */
+    int name_len;
+    const char *value;   /* NULL if bare; else null-terminated pointer into argv */
+} Flag;
+
 void lexer_init(Lexer *l, const char *source, InternTable *intern,
-                const char **flags, int flag_count);
+                const Flag *flags, int flag_count);
 
 /* Tokenize entire source into an array. Caller must free the array. */
 Token *lexer_tokenize(Lexer *l, int *out_count);

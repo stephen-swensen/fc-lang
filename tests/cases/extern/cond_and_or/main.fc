@@ -1,0 +1,12 @@
+let main = (args: str[]) ->
+    let mut r = 0
+#if debug && verbose
+    r = 1
+#end
+    let mut s = 0
+#if debug || missing_flag
+    s = 2
+#end
+    assert(r == 1)
+    assert(s == 2)
+    0

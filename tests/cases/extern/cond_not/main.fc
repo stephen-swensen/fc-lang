@@ -1,0 +1,14 @@
+let main = (args: str[]) ->
+    let mut r = 0
+#if !missing_flag
+    r = 42
+#end
+    let mut s = 0
+#if !debug
+    s = 1
+#else
+    s = 99
+#end
+    assert(r == 42)
+    assert(s == 99)
+    0

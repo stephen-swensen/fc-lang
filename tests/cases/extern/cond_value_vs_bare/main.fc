@@ -1,0 +1,20 @@
+let main = (args: str[]) ->
+    // os is passed bare (--flag os). Presence check passes; value compares fail.
+    let mut r = 0
+#if os
+    r = 1
+#end
+    let mut s = 0
+#if os == "windows"
+    s = 2
+#else
+    s = 3
+#end
+    let mut t = 0
+#if os != "anything"
+    t = 4
+#end
+    assert(r == 1)
+    assert(s == 3)
+    assert(t == 4)
+    0
