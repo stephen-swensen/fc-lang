@@ -8,7 +8,13 @@ A Snake/Nibbles clone written in FC using SDL2 for graphics and audio.
 ./demos/fibbles/run.sh
 ```
 
-Requires `libsdl2-dev` (or equivalent) installed on the system.
+The script auto-detects host OS (Linux or MSYS2/MinGW Windows) and picks the right SDL2 link line.
+
+Requires SDL2 installed for your environment:
+
+- Linux: `libsdl2-dev` (or your distro's equivalent)
+- MSYS2 UCRT64: `pacman -S mingw-w64-ucrt-x86_64-SDL2`
+- MSYS2 MINGW64: `pacman -S mingw-w64-x86_64-SDL2`
 
 Controls:
 

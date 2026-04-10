@@ -8,6 +8,13 @@ TESTDIR="tests/cases"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
+# On Windows (MSYS2/MinGW), net.fc uses Winsock and needs -lws2_32. Adding it
+# unconditionally is harmless on tests that don't pull in winsock symbols.
+EXTRA_LIBS=""
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) EXTRA_LIBS="-lws2_32" ;;
+esac
+
 start_time=$(date +%s%N)
 JOBS="${JOBS:-$(nproc)}"
 
@@ -54,7 +61,7 @@ run_one_test() {
     # Compile C -> binary (include source dir for local .h files)
     local src_dir
     src_dir="$(dirname "$(echo $fc_files | awk '{print $1}')")"
-    if ! "$CC" -std=c11 -Wall -Werror -I "$src_dir" -o "$bin_file" "$c_file" -lm 2>"$TMPDIR/${slug}.cc_stderr"; then
+    if ! "$CC" -std=c11 -Wall -Werror -I "$src_dir" -o "$bin_file" "$c_file" -lm $EXTRA_LIBS 2>"$TMPDIR/${slug}.cc_stderr"; then
         echo "FAIL  $test_display (C compilation failed)"
         cat "$TMPDIR/${slug}.cc_stderr" >&2
         return
