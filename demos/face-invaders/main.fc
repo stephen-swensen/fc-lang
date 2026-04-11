@@ -218,7 +218,6 @@ let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, scale: int32,
         for col in 0..3
             if (bits >> (2 - col)) & 1 == 1 then
                 fill(r, ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb, 255u8)
-    return
 
 let text_width = (s: const str, scale: int32) ->
     (int32) s.len * 4 * scale - scale
@@ -230,13 +229,11 @@ let draw_text = (r: any*, s: const str, ox: int32, oy: int32, scale: int32,
         if ch != ' ' then
             draw_char(r, ch, x, oy, scale, cr, cg, cb)
         x = x + 4 * scale
-    return
 
 let draw_text_centered = (r: any*, s: const str, cx: int32, oy: int32, scale: int32,
                           cr: uint8, cg: uint8, cb: uint8) ->
     let w = text_width(s, scale)
     draw_text(r, s, cx - w / 2, oy, scale, cr, cg, cb)
-    return
 
 // ============================================================
 // Enemy sprites — three face-themed pixel-art aliens.
@@ -372,7 +369,6 @@ let draw_enemy = (r: any*, kind: int32, px: int32, py: int32, frame: int32) ->
         for col in 0..15
             if (bits >> (14 - col)) & 1 == 1 then
                 fill(r, px + col * ps, py + row * ps, ps, ps, cr, cg, cb, 255u8)
-    return
 
 // ============================================================
 // Player ship (drawn at bottom of screen)
@@ -418,7 +414,6 @@ let draw_player = (r: any*, px: int32, py: int32, flash: bool) ->
     fill(r, px + 38, py + 8, 2, 2, 30u8, 30u8, 30u8, 255u8)
     // smile mouth
     fill(r, px + 33, py + 10, 6, 1, 30u8, 30u8, 30u8, 255u8)
-    return
 
 // ============================================================
 // Bullet drawing
@@ -436,7 +431,6 @@ let draw_bullet = (r: any*, b: bullet*) ->
         // Red enemy plasma
         fill(r, bx - 4, by - 8, 8, 16, 255u8, 90u8, 90u8, 120u8)
         fill(r, bx - 2, by - 8, 4, 16, 255u8, 160u8, 160u8, 255u8)
-    return
 
 // ============================================================
 // Starfield
@@ -450,7 +444,6 @@ let init_stars = (rng: pcg_random*) ->
         stars[i].speed = 0.3 + t * 2.5
         let b = 80.0 + pcg_random.next_float64(rng) * 175.0
         stars[i].brightness = (uint8) b
-    return
 
 let update_stars = () ->
     for i in 0..120
@@ -458,7 +451,6 @@ let update_stars = () ->
         if stars[i].y >= (float64) logical_h then
             stars[i].y = 0.0
             // x stays the same — looks like streaks, which is fine
-    return
 
 let draw_stars = (r: any*) ->
     for i in 0..120
@@ -472,7 +464,6 @@ let draw_stars = (r: any*) ->
             fill(r, x, y, 1, 2, b, b, 255u8, 255u8)
         else
             fill(r, x, y, 1, 1, b, b, 255u8, 255u8)
-    return
 
 // ============================================================
 // Particles
@@ -497,7 +488,6 @@ let spawn_burst = (rng: pcg_random*, cx: float64, cy: float64, count: int32,
             particles[i].g = cg
             particles[i].b = cb
             spawned = spawned + 1
-    return
 
 let update_particles = () ->
     for i in 0..256
@@ -507,7 +497,6 @@ let update_particles = () ->
             particles[i].vy = particles[i].vy + 0.08
             particles[i].vx = particles[i].vx * 0.985
             particles[i].life = particles[i].life - 1
-    return
 
 let draw_particles = (r: any*) ->
     for i in 0..256
@@ -519,7 +508,6 @@ let draw_particles = (r: any*) ->
                     (int32) particles[i].y - size / 2,
                     size, size,
                     particles[i].r, particles[i].g, particles[i].b, alpha)
-    return
 
 // ============================================================
 // Enemy formation helpers
@@ -564,17 +552,14 @@ let reset_formation = () ->
     game->fire_interval = base_fire_interval - (game->wave - 1) * 5
     if game->fire_interval < 15 then
         game->fire_interval = 15
-    return
 
 let clear_bullets = () ->
     for i in 0..64
         bullets[i].alive = false
-    return
 
 let clear_particles = () ->
     for i in 0..256
         particles[i].life = 0
-    return
 
 let reset_game = () ->
     game->player_x = (float64) (logical_w / 2 - player_w / 2)
@@ -588,7 +573,6 @@ let reset_game = () ->
     reset_formation()
     game->phase = game_phase.playing
     game->phase_timer = 0
-    return
 
 let fire_player_bullet = () ->
     if game->cooldown > 0 then return
@@ -601,7 +585,6 @@ let fire_player_bullet = () ->
             bullets[i].from_player = true
             game->cooldown = 14
             return
-    return
 
 let fire_enemy_bullet = (rng: pcg_random*) ->
     if game->alive_count == 0 then return
@@ -621,7 +604,6 @@ let fire_enemy_bullet = (rng: pcg_random*) ->
             bullets[bi].alive = true
             bullets[bi].from_player = false
             return
-    return
 
 // ============================================================
 // Update phase
@@ -633,7 +615,6 @@ let update_bullets = () ->
             bullets[i].y = bullets[i].y + bullets[i].vy
             if bullets[i].y < -20.0 || bullets[i].y > (float64) (logical_h + 20) then
                 bullets[i].alive = false
-    return
 
 let formation_bounds = () ->
     // Returns the on-screen bounding box of alive enemies via &outparams.
@@ -651,7 +632,7 @@ let formation_bounds = () ->
     let hi = ((int64) max_row & 0xFFFF) << 32
     low | mid | hi
 
-let advance_formation = (rng: pcg_random*, audio_dev: uint32, step_snd: sound, step2_snd: sound) ->
+let advance_formation = (audio_dev: uint32, step_snd: sound, step2_snd: sound) ->
     let packed = formation_bounds()
     let min_col = (int32) (packed & 0xFFFF)
     let max_col = (int32) ((packed >> 16) & 0xFFFF)
@@ -689,8 +670,6 @@ let advance_formation = (rng: pcg_random*, audio_dev: uint32, step_snd: sound, s
     if bottom_y >= (float64) player_y then
         game->phase = game_phase.game_over
         game->phase_timer = 0
-    rng->state = rng->state  // keep rng param alive for later use
-    return
 
 let bullet_hits_enemy = (bi: int32) ->
     let bx = bullets[bi].x
@@ -769,7 +748,6 @@ let process_collisions = (rng: pcg_random*, audio_dev: uint32,
                     else
                         game->phase = game_phase.dying
                         game->phase_timer = 60
-    return
 
 // ============================================================
 // Sound effects
@@ -873,7 +851,6 @@ let save_high_score = (score: int32) ->
             io.close(fp)
         | none -> return
     | none -> return
-    return
 
 // ============================================================
 // HUD / overlays
@@ -909,7 +886,6 @@ let draw_hud = (r: any*) ->
         fill(r, lx, 30, 32, 6, 80u8, 220u8, 240u8, 255u8)
         fill(r, lx + 4, 24, 24, 6, 80u8, 220u8, 240u8, 255u8)
         fill(r, lx + 12, 20, 8, 4, 255u8, 230u8, 80u8, 255u8)
-    return
 
 let draw_splash = (r: any*) ->
     // Title: "FACE INVADERS"
@@ -937,7 +913,6 @@ let draw_splash = (r: any*) ->
                        logical_w / 2, 540, 3, 160u8, 180u8, 220u8)
     draw_text_centered(r, "PRESS SPACE TO START",
                        logical_w / 2, 600, 4, 255u8, 230u8, 80u8)
-    return
 
 let draw_game_over = (r: any*) ->
     fill(r, 0, 260, logical_w, 200, 0u8, 0u8, 0u8, 170u8)
@@ -946,18 +921,15 @@ let draw_game_over = (r: any*) ->
         draw_text_centered(r, "NEW HIGH SCORE.", logical_w / 2, 380, 5, 255u8, 230u8, 80u8)
     draw_text_centered(r, "SPACE TO RESTART   ESC TO QUIT",
                        logical_w / 2, 430, 3, 200u8, 200u8, 220u8)
-    return
 
 let draw_paused = (r: any*) ->
     fill(r, 0, 300, logical_w, 120, 0u8, 0u8, 0u8, 170u8)
     draw_text_centered(r, "PAUSED", logical_w / 2, 330, 8, 255u8, 255u8, 255u8)
-    return
 
 let draw_wave_clear = (r: any*) ->
     draw_text_centered(r, "WAVE CLEAR.", logical_w / 2, 320, 7, 255u8, 230u8, 80u8)
     let nxt = "WAVE %d{game->wave + 1}"
     draw_text_centered(r, (const str) nxt, logical_w / 2, 400, 5, 255u8, 255u8, 255u8)
-    return
 
 // ============================================================
 // Per-frame render
@@ -1018,7 +990,6 @@ let render = (r: any*, frame_count: int32) ->
     | _ -> nop()
 
     sdl.present(r)
-    return
 
 // ============================================================
 // Main
@@ -1215,7 +1186,7 @@ let main = (args: str[]) ->
             game->move_timer = game->move_timer + 1
             if game->move_timer >= game->move_interval then
                 game->move_timer = 0
-                advance_formation(&rng, audio_dev, step_low, step_high)
+                advance_formation(audio_dev, step_low, step_high)
 
             // Enemy fire
             game->fire_timer = game->fire_timer + 1
