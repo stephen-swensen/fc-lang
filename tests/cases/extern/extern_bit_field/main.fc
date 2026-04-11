@@ -1,0 +1,51 @@
+// Test: C bit fields accessed via plain extern struct.
+// FC declares each bit field as its underlying integer type with no width
+// annotation. The C compiler handles shift/mask at every field access, so
+// FC needs no awareness of bit widths.
+module b from "bits.h" =
+    extern struct reg =
+        enable: uint32
+        mode: uint32
+        priority: uint32
+        reserved: uint32
+
+let main = (args: str[]) ->
+    // default zero-initializes every bit field.
+    let mut r = default(b.reg)
+    assert(r.enable == 0u32)
+    assert(r.mode == 0u32)
+    assert(r.priority == 0u32)
+
+    // Writes — C masks and stores the low bits of each value.
+    r.enable = 1u32
+    r.mode = 5u32       // fits in 3 bits
+    r.priority = 12u32  // fits in 4 bits
+    assert(r.enable == 1u32)
+    assert(r.mode == 5u32)
+    assert(r.priority == 12u32)
+
+    // Designated-initializer construction across bit fields.
+    let r2 = b.reg { enable = 1u32, mode = 7u32, priority = 15u32, reserved = 0u32 }
+    assert(r2.enable == 1u32)
+    assert(r2.mode == 7u32)
+    assert(r2.priority == 15u32)
+
+    // Whole-struct copy preserves every bit field.
+    let r3 = r2
+    assert(r3.mode == 7u32)
+
+    // Structural equality — FC emits field-by-field reads, each bit field
+    // read through the C compiler compares correctly.
+    assert(r2 == r3)
+    let r4 = b.reg { enable = 0u32, mode = 7u32, priority = 15u32, reserved = 0u32 }
+    assert(r2 != r4)
+
+    // Workaround for the &field restriction: copy to a local, mutate, copy
+    // back. Taking &r.mode would fail at C compile time because bit fields
+    // are not addressable.
+    let mut tmp = r.mode
+    tmp = tmp + 1u32
+    r.mode = tmp
+    assert(r.mode == 6u32)
+
+    0

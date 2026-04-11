@@ -3823,7 +3823,7 @@ match ts with                                        // pattern matching
 - All fields must be declared with FC types that are assignment-compatible with the actual C field types.
 - The compiler always emits `struct C_name` in the generated C. This works for both `struct timespec` (no typedef) and `typedef struct SDL_Rect { ... } SDL_Rect;` (where the struct tag matches the typedef name).
 - Fields may reference other extern struct or extern union types declared in the same `from` module.
-- Bitfields and anonymous inner structs are not supported — use `any*` for those types.
+- Anonymous inner structs are not supported — use `any*` for those types. Bit fields are supported; see §Packed extern structs below.
 
 #### Packed extern structs
 
@@ -3871,7 +3871,46 @@ This is the same restriction a native `packed struct` keyword would impose, just
 
 **Recommended practice:**
 - Add a `_Static_assert(sizeof(struct foo) == N, ...)` in the C header so size drift between the C definition and the FC mirror is caught at compile time. Field reordering is not caught automatically — keep the two declarations side by side.
-- Bit fields can also be declared in the C header, but FC has no syntax for accessing them. Expose them through C accessor functions (`extern get_flag: (header*) -> uint8`) or pack them into a plain integer field and shift/mask in FC.
+
+#### Bit fields
+
+C bit fields follow the same pattern — declare them in a C header, mirror them in an `extern struct`, and access them like ordinary fields. FC needs no awareness of the bit widths: since the C compiler owns the struct definition, it emits the shift/mask code for every read and write automatically.
+
+```c
+// reg.h
+struct reg {
+    unsigned int enable   : 1;
+    unsigned int mode     : 3;   // 0..7
+    unsigned int priority : 4;   // 0..15
+    unsigned int reserved : 24;
+};
+```
+
+```fc
+module r from "reg.h" =
+    extern struct reg =
+        enable: uint32
+        mode: uint32
+        priority: uint32
+        reserved: uint32
+
+let mut reg = default(r.reg)
+reg.enable = 1u32
+reg.mode = 5u32        // masked to 3 bits by the C compiler
+reg.priority = 12u32   // masked to 4 bits
+```
+
+The FC field type should be the underlying C integer type of the bit field (`unsigned int` → `uint32`, `unsigned char` → `uint8`, and so on). The declared FC type is the type of the *value* the C compiler yields on read and accepts on write — the fact that only a few bits are actually stored is invisible from FC's side.
+
+All extern struct features work: `default`, designated-initializer construction, field read/write, whole-struct copy, structural equality (FC's per-struct comparison does field-by-field reads, and each bit field read goes through the C compiler correctly). Bit fields can be mixed freely with ordinary fields in the same struct, nested inside other extern structs, and passed by value or by `T*`.
+
+**Two restrictions**, both enforced by the C compiler rather than FC:
+
+1. **`&bit_field` is rejected.** Bit fields are not addressable in C at all. Taking `&reg.mode` produces a C compile error (`cannot take address of bit-field 'mode'` on gcc, `address of bit-field requested` on clang). The same copy-to-local workaround used for packed fields applies.
+
+2. **Literal values that overflow the bit width are rejected at compile time.** Writing `reg.mode = 9u32` to a 3-bit field triggers `-Werror=overflow` because 9 doesn't fit. This is a free bonus — you get literal-width checking from the C compiler without FC needing to track bit widths. Values computed at runtime still truncate silently, matching normal C bit field semantics.
+
+Because FC mirrors only the field name and the underlying integer type, the two declarations can drift if the C header changes bit widths without the FC side noticing. A `_Static_assert(sizeof(struct reg) == N, ...)` in the header catches size changes; explicit range asserts in FC code (`assert(reg.mode < 8u32)`) catch individual field width expectations.
 
 ### Extern unions
 

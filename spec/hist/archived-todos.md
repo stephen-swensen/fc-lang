@@ -4,21 +4,30 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
-## Packed structs (resolved 2026-04-10)
+## Packed structs and bit-level layout control (resolved 2026-04-10)
 
-Originally listed as "Packed structs and bit-level layout control" — add a `packed struct` keyword so FC could emit `__attribute__((packed))` and disallow `&field` to keep `-Werror` clean. Use cases: memory-mapped I/O, binary protocol parsing, compact on-disk formats.
+Originally listed as "Packed structs and bit-level layout control" — add a `packed struct` keyword so FC could emit `__attribute__((packed))` and disallow `&field` to keep `-Werror` clean, plus first-class bit field syntax for hardware register layouts. Use cases: memory-mapped I/O, binary protocol parsing, compact on-disk formats, register maps.
 
-**Resolution:** no native feature needed. Packed types are already accessible through `extern struct` against a C header that defines the packed layout. FC's existing extern-struct machinery (construction, field read/write, `default`, `sizeof`, equality, by-value and `T*` parameter passing) all work transparently because the C compiler handles the unaligned-access codegen — FC just emits ordinary field references. The single restriction is that taking `&packed_field` triggers `-Waddress-of-packed-member`, which fails under `-Werror`; the workaround is the same one a native feature would force on you (copy to a local first).
+**Resolution:** no native features needed for either packed structs or bit fields. Both are accessible through `extern struct` against a C header that defines the layout, with zero FC compiler changes.
 
-A regression test at `tests/cases/extern/extern_struct_packed/` locks this in: a C header declares `struct __attribute__((packed)) packed_header` with a `_Static_assert` on its 13-byte size, the FC side mirrors the field layout, and the test exercises construction, default, field read/write, whole-struct copy, and the copy-to-local workaround for `&field`. The C-interop section of the spec documents the pattern.
+For **packed structs**, the C header declares the type with `__attribute__((packed))`, the FC side mirrors the field layout as an `extern struct`, and every extern-struct operation (construction, field read/write, `default`, `sizeof`, structural equality, by-value and `T*` parameter passing, nesting) works transparently. The C compiler handles the unaligned-access codegen — FC just emits ordinary field references. The single restriction is that taking `&packed_field` triggers `-Waddress-of-packed-member`, which fails under `-Werror`; the workaround is to copy the field to a local first.
+
+For **bit fields**, the same pattern applies with no width annotation on the FC side. FC declares each bit field as its underlying integer type (`unsigned int : 3` → `uint32`), and the C compiler emits the shift/mask for every read and write automatically because it owns the struct definition from the header. Empirically verified against gcc and clang: `default`, designated-initializer construction, field read/write, whole-struct copy, and structural equality all work. Taking `&bit_field` is rejected at C compile time with a clear error (`cannot take address of bit-field 'name'`). As a bonus, the C compiler catches literal writes that don't fit the declared bit width (`field = 9` into a 3-bit field) under `-Werror=overflow`, giving FC free compile-time range checking for constants without FC tracking bit widths at all.
+
+Regression tests:
+
+- `tests/cases/extern/extern_struct_packed/` — packed `tcp_header` with a `_Static_assert` on its 13-byte size; exercises construction, default, field read/write, whole-struct copy, and the copy-to-local workaround for `&field`.
+- `tests/cases/extern/extern_bit_field/` — `struct reg` with 1-, 3-, 4-, and 24-bit fields mirrored as plain `uint32`; exercises the same operations plus structural equality across bit-field fields.
+
+The C-interop section of the spec documents both patterns under "Packed extern structs" and "Bit fields."
 
 **Tradeoffs accepted:**
 
-- Users have to maintain a C header alongside their FC code (a few lines per type).
-- No layout cross-checking between the C side and the FC mirror — drift would only show up at runtime. Mitigated by `_Static_assert(sizeof(...) == N, ...)` in the header for size checks; field reordering is still on the user.
-- No bit-field syntax. Tracked separately in TODO.md as a future evaluation.
+- Users maintain a C header alongside their FC code (a few lines per type).
+- No layout cross-checking between the C side and the FC mirror — drift shows up at runtime. Mitigated by `_Static_assert(sizeof(...) == N, ...)` in the header for size checks and explicit range asserts in FC for bit field width expectations. Field reordering is still on the user.
+- Runtime (non-literal) values that overflow a bit field still truncate silently, matching C bit field semantics.
 
-The native feature would only be worth revisiting if FC ends up with many packed structs in self-contained `.fc` code where the C-header overhead becomes annoying duplication, or if FC pursues self-hosting goals that disallow C-header dependencies.
+In practice, nearly every real use case for packed structs and bit fields already starts from an external definition — network RFCs, file format specs, vendor hardware headers, kernel ABI — so the extern C header is the natural integration point, not an imposition. Native FC syntax for either feature would only be worth revisiting if self-hosted FC code ends up with many such types where the C-header overhead becomes annoying duplication, or if FC pursues goals that disallow C-header dependencies.
 
 ---
 
