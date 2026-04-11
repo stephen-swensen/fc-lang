@@ -1355,6 +1355,22 @@ let result = loop
 | `break expr` | `void` | enclosing `loop` expression |
 | `continue` | `void` | — |
 | `defer expr` | `void` | — (schedules `expr` to run at block scope exit) |
+| `void()` | `void` | — (explicit void value) |
+
+### `void()` — the explicit void value
+
+`void()` is a built-in primary expression that produces a `void` value. It is the canonical way to produce a void-typed expression where one is required — most commonly as a fall-through arm in a statement-level `match` where some arms do real work and others should do nothing:
+
+```fc
+match phase with
+| playing -> tick()
+| paused -> render_overlay()
+| _ -> void()          // every other phase: do nothing
+```
+
+Unlike `return`, `void()` does not transfer control — it is an inert value. This matters inside a `match` that gets lowered to a GCC statement expression: a bare `return` there would exit the *enclosing function*, not the match. `void()` produces a genuine void value and lets the match complete normally.
+
+`void` alone (without the trailing parentheses) is still only valid in type position. `void()` compiles to the C expression `((void)0)` and optimizes to nothing at `-O1` and above.
 
 ---
 

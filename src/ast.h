@@ -21,6 +21,7 @@ typedef enum {
     EXPR_CHAR_LIT,
     EXPR_STRING_LIT,
     EXPR_CSTRING_LIT,
+    EXPR_VOID_LIT,      /* void() — a void-typed expression */
     EXPR_IDENT,
     EXPR_BINARY,
     EXPR_UNARY_PREFIX,

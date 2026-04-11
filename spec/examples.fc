@@ -282,6 +282,19 @@ let main = (args: str[]) ->
         assert(x == 5)  // only reached when x > 0
     check_positive(5)
 
+    // void() is the void-typed expression — use it as a fall-through arm in
+    // statement-level matches so every arm has the same (void) type without
+    // needing a `| _ -> return` that would exit the enclosing function.
+    let log_phase = (p: shape, counter: int32*) ->
+        match p with
+        | circle(_) -> *counter = *counter + 1
+        | _ -> void()
+    let mut seen = 0
+    log_phase(shape.circle(3), &seen)
+    log_phase(shape.empty, &seen)
+    log_phase(shape.circle(7), &seen)
+    assert(seen == 2)
+
     // Closures capture let bindings by copy (let mut cannot be captured)
     let threshold = 50
     let above = (n: int32) -> n > threshold

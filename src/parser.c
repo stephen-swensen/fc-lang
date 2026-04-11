@@ -1183,6 +1183,23 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_VOID: {
+        /* `void()` — the void-typed expression.  `void` alone (without the
+         * trailing `()`) is still only valid in type position, so we require
+         * the parentheses here and emit a targeted diagnostic otherwise. */
+        advance_p(p);
+        if (!check(p, TOK_LPAREN)) {
+            diag_fatal(loc, "'void' is a type; use 'void()' to produce a void value");
+        }
+        advance_p(p); /* ( */
+        if (!check(p, TOK_RPAREN)) {
+            diag_fatal(loc_from_token(current(p)),
+                "void() takes no arguments");
+        }
+        advance_p(p); /* ) */
+        return alloc_expr(p, EXPR_VOID_LIT, loc);
+    }
+
     case TOK_SIZEOF: {
         advance_p(p);
         expect(p, TOK_LPAREN);

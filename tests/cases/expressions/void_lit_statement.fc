@@ -1,0 +1,7 @@
+// void() as a bare statement — emits ((void)0), does nothing.
+let main = (args: str[]) ->
+    void()
+    let x = 42
+    void()
+    assert(x == 42)
+    0

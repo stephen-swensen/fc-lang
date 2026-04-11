@@ -130,15 +130,6 @@ let particles = alloc(particle[256] { })!
 let game = alloc(game_state)!
 
 // ============================================================
-// Misc helpers
-// ============================================================
-
-// Void no-op — use as a fall-through arm in statement-level matches
-// so the match stays exhaustive without a bare `return` (which would
-// exit the enclosing function from inside a statement-expression).
-let nop = () -> return
-
-// ============================================================
 // Low-level drawing helpers
 // ============================================================
 
@@ -987,7 +978,7 @@ let render = (r: any*, frame_count: int32) ->
     | paused -> draw_paused(r)
     | wave_clear -> draw_wave_clear(r)
     | game_over -> draw_game_over(r)
-    | _ -> nop()
+    | _ -> void()
 
     sdl.present(r)
 
@@ -1128,13 +1119,13 @@ let main = (args: str[]) ->
                         if audio_dev > 0u32 then
                             sdl.clear_audio(audio_dev)
                             sdl.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
-                    | _ -> nop()
+                    | _ -> void()
 
                 if k == sdl.key_p then
                     match game->phase with
                     | playing -> game->phase = game_phase.paused
                     | paused -> game->phase = game_phase.playing
-                    | _ -> nop()
+                    | _ -> void()
 
                 if k == sdl.key_c then
                     match game->phase with
@@ -1143,9 +1134,9 @@ let main = (args: str[]) ->
                         match sys.home_dir() with
                         | some(hd) ->
                             io.remove("%s{hd}/.face-invaders/highscore.txt")
-                            nop()
-                        | none -> nop()
-                    | _ -> nop()
+                            void()
+                        | none -> void()
+                    | _ -> void()
 
             if (int32) event.type == sdl.keyup_event then
                 let k = event.key.keysym.sym
@@ -1230,7 +1221,7 @@ let main = (args: str[]) ->
                     game->new_high = true
                     save_high_score(game->score)
                     io.write("NEW HIGH SCORE: %d{game->score}.\n", stdout)
-        | _ -> nop()
+        | _ -> void()
 
         // --------- Render ---------
         render(ren, frame_count)

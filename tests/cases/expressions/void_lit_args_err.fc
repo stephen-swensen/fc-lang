@@ -1,0 +1,4 @@
+// void() takes no arguments.
+let main = (args: str[]) ->
+    void(42)
+    0

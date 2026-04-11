@@ -1,0 +1,15 @@
+// void() as the last expression of a function body makes the function
+// return void.  Useful when the preceding expression happens to be
+// non-void (e.g. an SDL call returning int32) and you want to drop it.
+
+let side_effect = (counter: int32*) ->
+    *counter = *counter + 1
+    42                    // non-void tail
+    void()                // explicit void result
+
+let main = (args: str[]) ->
+    let mut n = 0
+    side_effect(&n)
+    side_effect(&n)
+    assert(n == 2)
+    0

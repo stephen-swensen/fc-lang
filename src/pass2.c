@@ -1410,6 +1410,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         e->type = type_char();
         return e->type;
 
+    case EXPR_VOID_LIT:
+        e->type = type_void();
+        return e->type;
+
     case EXPR_STRING_LIT:
         e->type = type_const_str();
         e->prov = PROV_STATIC;
@@ -4614,6 +4618,7 @@ static bool is_const_expr(Expr *e) {
     case EXPR_CHAR_LIT:
     case EXPR_STRING_LIT:
     case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT:
         return true;
     /* Type operators — compile-time constants in C */
     case EXPR_SIZEOF:
@@ -4687,6 +4692,7 @@ static bool is_file_init_expr(Expr *e) {
     case EXPR_CHAR_LIT:
     case EXPR_STRING_LIT:
     case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT:
     case EXPR_SIZEOF:
     case EXPR_ALIGNOF:
     case EXPR_DEFAULT:

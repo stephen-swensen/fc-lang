@@ -1443,6 +1443,10 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "%s", e->bool_lit.value ? "true" : "false");
         break;
 
+    case EXPR_VOID_LIT:
+        fprintf(out, "((void)0)");
+        break;
+
     case EXPR_CHAR_LIT:
         fprintf(out, "'\\x%02x'", e->char_lit.value);
         break;
@@ -4007,6 +4011,7 @@ static void detect_features_expr(Expr *e) {
     case EXPR_INT_LIT:
     case EXPR_FLOAT_LIT:
     case EXPR_BOOL_LIT:
+    case EXPR_VOID_LIT:
     case EXPR_CHAR_LIT:
     case EXPR_STRING_LIT:
     case EXPR_CSTRING_LIT:

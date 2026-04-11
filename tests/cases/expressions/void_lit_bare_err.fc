@@ -1,0 +1,6 @@
+// Bare `void` (without the trailing `()`) is still only valid in type
+// position.  In expression position it's an error that nudges toward void().
+
+let main = (args: str[]) ->
+    let x = void
+    0

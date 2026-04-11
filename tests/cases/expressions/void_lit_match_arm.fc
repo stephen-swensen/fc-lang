@@ -1,0 +1,22 @@
+// void() as a fall-through arm in a statement-level match.
+// Replaces the old "| _ -> return" hack that leaked out of the enclosing
+// function when the match was compiled to a GCC statement expression.
+
+union phase =
+    | idle
+    | running
+    | stopped
+
+let act = (p: phase, counter: int32*) ->
+    match p with
+    | running -> *counter = *counter + 1
+    | _ -> void()
+
+let main = (args: str[]) ->
+    let mut n = 0
+    act(phase.idle, &n)
+    act(phase.running, &n)
+    act(phase.stopped, &n)
+    act(phase.running, &n)
+    assert(n == 2)
+    0
