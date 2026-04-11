@@ -1039,40 +1039,17 @@ let main = (args: str[]) ->
 
     sdl.init(sdl.init_video | sdl.init_audio)
 
-    // Pick a window size that fits the display. We query the usable bounds
-    // (desktop minus taskbar/dock), then scale the 16:9 logical canvas down
-    // to at most 90% of the available space. The logical size stays 1280x720;
-    // RenderSetLogicalSize scales it to whatever window we end up with.
-    let mut win_w = logical_w
-    let mut win_h = logical_h
-    let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
-    if sdl.num_video_displays() > 0 then
-        let ok = sdl.get_display_usable_bounds(0, &db)
-        if ok != 0 then
-            sdl.get_display_bounds(0, &db)
-        io.write("Display 0 usable bounds: %d{db.w}x%d{db.h}\n", stdout)
-        let max_w = db.w * 9 / 10
-        let max_h = db.h * 9 / 10
-        // Scale preserving 16:9 (logical aspect ratio)
-        let fit_w_by_h = max_h * 16 / 9
-        if fit_w_by_h <= max_w then
-            win_w = fit_w_by_h
-            win_h = max_h
-        else
-            win_w = max_w
-            win_h = max_w * 9 / 16
-        // Never upscale beyond the logical resolution
-        if win_w > logical_w then
-            win_w = logical_w
-            win_h = logical_h
-
-    io.write("Window size: %d{win_w}x%d{win_h}\n", stdout)
-
-    // Windowed with high-DPI support. F11 toggles fullscreen-desktop at runtime.
-    let flags = sdl.window_shown | sdl.window_allow_highdpi
+    // We create the window resizable and then maximize it immediately:
+    // the maximized window is sized by the OS to the usable desktop area,
+    // which gives the nicest letterboxing of our 16:9 logical canvas.
+    // F11 can then toggle true fullscreen-desktop at runtime.
+    let initial_w = 960
+    let initial_h = 540
+    let flags = sdl.window_shown | sdl.window_allow_highdpi | sdl.window_resizable
     let win = sdl.create_window(c"Face Invaders",
                                 sdl.pos_centered, sdl.pos_centered,
-                                win_w, win_h, flags)
+                                initial_w, initial_h, flags)
+    sdl.maximize_window(win)
     let mut fullscreen = false
 
     // Accelerated renderer with vsync. Logical size decouples draw coordinates
@@ -1148,10 +1125,22 @@ let main = (args: str[]) ->
 
                 if k == sdl.key_f11 then
                     fullscreen = !fullscreen
-                    let fs_flag = if fullscreen
-                                  then sdl.window_fullscreen_desktop
-                                  else 0u32
-                    sdl.set_fullscreen(win, fs_flag)
+                    if fullscreen then
+                        // Fake fullscreen: borderless window sized exactly
+                        // to the display bounds. Sidesteps SDL's real
+                        // fullscreen path and the DPI-drawable quirks that
+                        // made it scale off-screen on some WMs.
+                        let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
+                        sdl.get_display_bounds(0, &db)
+                        sdl.set_bordered(win, 0)
+                        sdl.set_window_position(win, db.x, db.y)
+                        sdl.set_window_size(win, db.w, db.h)
+                    else
+                        sdl.set_bordered(win, 1)
+                        sdl.restore_window(win)
+                        sdl.maximize_window(win)
+                    // Re-apply logical size after any window resize.
+                    sdl.set_logical_size(ren, logical_w, logical_h)
 
                 if k == sdl.key_left || k == sdl.key_a then
                     game->move_left = true

@@ -24,6 +24,7 @@ module sdl from "SDL2/SDL.h" =
     extern SDL_WINDOW_FULLSCREEN_DESKTOP as window_fullscreen_desktop: uint32
     extern SDL_WINDOW_ALLOW_HIGHDPI as window_allow_highdpi: uint32
     extern SDL_WINDOW_BORDERLESS as window_borderless: uint32
+    extern SDL_WINDOW_RESIZABLE as window_resizable: uint32
     extern SDL_WINDOWPOS_CENTERED as pos_centered: int32
 
     // --- Renderer flags ---
@@ -73,6 +74,11 @@ module sdl from "SDL2/SDL.h" =
     extern SDL_SetWindowTitle as set_title: (any*, const cstr) -> void
     extern SDL_SetWindowFullscreen as set_fullscreen: (any*, uint32) -> int32
     extern SDL_GetWindowSize as get_window_size: (any*, int32*, int32*) -> void
+    extern SDL_SetWindowSize as set_window_size: (any*, int32, int32) -> void
+    extern SDL_SetWindowPosition as set_window_position: (any*, int32, int32) -> void
+    extern SDL_SetWindowBordered as set_bordered: (any*, int32) -> void
+    extern SDL_MaximizeWindow as maximize_window: (any*) -> void
+    extern SDL_RestoreWindow as restore_window: (any*) -> void
     extern SDL_ShowCursor as show_cursor: (int32) -> int32
 
     // --- Renderer ---
