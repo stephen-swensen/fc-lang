@@ -496,6 +496,10 @@ FC requires a **libc providing `malloc`, `free`, `abort`, `memcmp`, `strlen`, an
 
 **Not supported:** no-libc bare metal (nothing providing `malloc`/`abort`/`snprintf`), static-memory-only environments where heap allocation is forbidden, and custom allocator-only environments where libc's `malloc` cannot be used. FC's core language features — heap allocation (`alloc`/`free`), string interpolation, bounds-check traps (`abort`) — depend on those runtime symbols being available. Platforms without them are better served by C directly.
 
+#### SIMD / vector types
+
+FC does not provide first-class SIMD or vector types (e.g., `float32x4`, `int32x8`) at this time. Code that needs explicit vectorization should rely on the C compiler's auto-vectorizer — GCC and Clang already vectorize many loops automatically — or drop down to C via `extern` for hand-written intrinsics. A future revision may add language-level vector types backed by GCC/Clang's `__attribute__((vector_size(N)))`, but this is out of scope for this version.
+
 ---
 
 ## Indentation and Layout

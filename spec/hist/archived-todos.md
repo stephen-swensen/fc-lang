@@ -4,6 +4,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## SIMD / vector types (retired 2026-04-10)
+
+Originally listed as an evaluation item: investigate first-class vector types for SIMD operations (e.g., `float32x4`, `int32x8`), likely emitted as GCC/Clang `__attribute__((vector_size(N)))` typedefs that get arithmetic operators for free.
+
+**Resolution:** out of scope for 1.0. GCC and Clang already auto-vectorize many numeric loops, so most FC programs get SIMD "for free" through the C compiler without any language changes. Explicit vector types only pay off when auto-vectorization fails or guaranteed vectorization is required — a narrow enough niche that code needing it can drop to C via `extern` for hand-written intrinsics. The spec's Platform contract section now documents this as a deliberate non-feature, pointing users at the auto-vectorizer and `extern` as the two escape hatches. Worth revisiting only if FC targets performance-critical numeric workloads where the auto-vectorizer's coverage becomes a bottleneck in practice.
+
+---
+
 ## Packed structs and bit-level layout control (resolved 2026-04-10)
 
 Originally listed as "Packed structs and bit-level layout control" — add a `packed struct` keyword so FC could emit `__attribute__((packed))` and disallow `&field` to keep `-Werror` clean, plus first-class bit field syntax for hardware register layouts. Use cases: memory-mapped I/O, binary protocol parsing, compact on-disk formats, register maps.
