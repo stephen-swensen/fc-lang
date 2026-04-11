@@ -1,0 +1,126 @@
+// SDL2 bindings for Face Invaders.
+// Extends the minimal set used by fibbles with accelerated rendering,
+// fullscreen-desktop support, high-DPI awareness, alpha blending, and
+// the extra primitives face-invaders needs (lines, outlines, hints).
+
+module sdl from "SDL2/SDL.h" =
+    // --- Extern structs ---
+    extern struct SDL_Rect as rect =
+        x: int32
+        y: int32
+        w: int32
+        h: int32
+
+    extern struct SDL_Point as point =
+        x: int32
+        y: int32
+
+    // --- Init flags ---
+    extern SDL_INIT_VIDEO as init_video: uint32
+    extern SDL_INIT_AUDIO as init_audio: uint32
+
+    // --- Window flags ---
+    extern SDL_WINDOW_SHOWN as window_shown: uint32
+    extern SDL_WINDOW_FULLSCREEN_DESKTOP as window_fullscreen_desktop: uint32
+    extern SDL_WINDOW_ALLOW_HIGHDPI as window_allow_highdpi: uint32
+    extern SDL_WINDOW_BORDERLESS as window_borderless: uint32
+    extern SDL_WINDOWPOS_CENTERED as pos_centered: int32
+
+    // --- Renderer flags ---
+    extern SDL_RENDERER_SOFTWARE as renderer_sw: uint32
+    extern SDL_RENDERER_ACCELERATED as renderer_accel: uint32
+    extern SDL_RENDERER_PRESENTVSYNC as renderer_vsync: uint32
+
+    // --- Blend modes ---
+    extern SDL_BLENDMODE_NONE as blend_none: int32
+    extern SDL_BLENDMODE_BLEND as blend_alpha: int32
+    extern SDL_BLENDMODE_ADD as blend_add: int32
+
+    // --- Events ---
+    extern SDL_QUIT as quit_event: int32
+    extern SDL_KEYDOWN as keydown_event: int32
+    extern SDL_KEYUP as keyup_event: int32
+
+    // --- Keys ---
+    extern SDLK_UP as key_up: int32
+    extern SDLK_DOWN as key_down: int32
+    extern SDLK_LEFT as key_left: int32
+    extern SDLK_RIGHT as key_right: int32
+    extern SDLK_ESCAPE as key_escape: int32
+    extern SDLK_SPACE as key_space: int32
+    extern SDLK_RETURN as key_return: int32
+    extern SDLK_z as key_z: int32
+    extern SDLK_x as key_x: int32
+    extern SDLK_a as key_a: int32
+    extern SDLK_d as key_d: int32
+    extern SDLK_p as key_p: int32
+    extern SDLK_c as key_c: int32
+    extern SDLK_F11 as key_f11: int32
+
+    // --- Lifecycle ---
+    extern SDL_Init as init: (uint32) -> int32
+    extern SDL_Quit as quit: () -> void
+    extern SDL_SetHint as set_hint: (const cstr, const cstr) -> int32
+
+    // --- Display ---
+    extern SDL_GetNumVideoDisplays as num_video_displays: () -> int32
+    extern SDL_GetDisplayBounds as get_display_bounds: (int32, rect*) -> int32
+    extern SDL_GetDisplayUsableBounds as get_display_usable_bounds: (int32, rect*) -> int32
+
+    // --- Window ---
+    extern SDL_CreateWindow as create_window: (const cstr, int32, int32, int32, int32, uint32) -> any*
+    extern SDL_DestroyWindow as destroy_window: (any*) -> void
+    extern SDL_SetWindowTitle as set_title: (any*, const cstr) -> void
+    extern SDL_SetWindowFullscreen as set_fullscreen: (any*, uint32) -> int32
+    extern SDL_GetWindowSize as get_window_size: (any*, int32*, int32*) -> void
+    extern SDL_ShowCursor as show_cursor: (int32) -> int32
+
+    // --- Renderer ---
+    extern SDL_CreateRenderer as create_renderer: (any*, int32, uint32) -> any*
+    extern SDL_DestroyRenderer as destroy_renderer: (any*) -> void
+    extern SDL_RenderSetLogicalSize as set_logical_size: (any*, int32, int32) -> int32
+    extern SDL_GetRendererOutputSize as get_output_size: (any*, int32*, int32*) -> int32
+    extern SDL_SetRenderDrawColor as set_color: (any*, uint8, uint8, uint8, uint8) -> int32
+    extern SDL_SetRenderDrawBlendMode as set_blend_mode: (any*, int32) -> int32
+    extern SDL_RenderClear as clear: (any*) -> int32
+    extern SDL_RenderFillRect as fill_rect: (any*, const rect*) -> int32
+    extern SDL_RenderDrawRect as draw_rect: (any*, const rect*) -> int32
+    extern SDL_RenderDrawLine as draw_line: (any*, int32, int32, int32, int32) -> int32
+    extern SDL_RenderDrawPoint as draw_point: (any*, int32, int32) -> int32
+    extern SDL_RenderPresent as present: (any*) -> void
+
+    // --- Timing ---
+    extern SDL_Delay as delay: (uint32) -> void
+    extern SDL_GetTicks as get_ticks: () -> uint32
+
+    // --- Audio ---
+    extern AUDIO_S16SYS as audio_s16sys: uint16
+
+    extern struct SDL_AudioSpec as audio_spec =
+        freq: int32
+        format: uint16
+        channels: uint8
+        silence: uint8
+        samples: uint16
+        padding: uint16
+        size: uint32
+        callback: any*
+        userdata: any*
+
+    extern SDL_OpenAudioDevice as open_audio: (any*, int32, const audio_spec*, audio_spec*, int32) -> uint32
+    extern SDL_PauseAudioDevice as pause_audio: (uint32, int32) -> void
+    extern SDL_QueueAudio as queue_audio: (uint32, any*, uint32) -> int32
+    extern SDL_ClearQueuedAudio as clear_audio: (uint32) -> void
+    extern SDL_CloseAudioDevice as close_audio: (uint32) -> void
+
+    // --- Events ---
+    extern struct SDL_Keysym as sdl_keysym =
+        scancode: int32
+        sym: int32
+    extern struct SDL_KeyboardEvent as keyboard_event =
+        type: uint32
+        keysym: sdl_keysym
+    extern union SDL_Event as sdl_event =
+        type: uint32
+        key: keyboard_event
+    extern SDL_PollEvent as poll_event: (sdl_event*) -> int32

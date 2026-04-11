@@ -1,0 +1,1287 @@
+// Face Invaders — a Space Invaders clone written in FC using SDL2.
+// Fullscreen-desktop with DPI awareness, accelerated vsync rendering,
+// particle explosions, a parallax starfield, and pixel-art face-themed
+// enemies. No C helper files — everything is pure FC.
+
+import rect from sdl
+import sdl_event from sdl
+import audio_spec from sdl
+import io from std::
+import text from std::
+import sys from std::
+import math from std::
+import pcg_random from std::random
+
+// ============================================================
+// Constants (logical coordinates — SDL handles DPI scaling)
+// ============================================================
+
+let logical_w = 1280
+let logical_h = 720
+
+let enemy_cols = 11
+let enemy_rows = 5
+let enemy_w = 60
+let enemy_h = 44
+let enemy_gap_x = 26
+let enemy_gap_y = 20
+let enemy_start_y = 140
+
+let player_w = 72
+let player_h = 32
+let player_y = 632
+let player_speed = 8
+
+let player_bullet_vy = -16
+let enemy_bullet_vy = 8
+
+let bullet_w = 4
+let bullet_h = 16
+
+let base_move_interval = 28    // ticks per enemy formation step at wave 1
+let min_move_interval = 4
+let base_fire_interval = 55    // ticks per enemy fire at wave 1
+
+let starting_lives = 3
+
+// ============================================================
+// Types
+// ============================================================
+
+union game_phase =
+    | splash
+    | playing
+    | paused
+    | wave_clear
+    | dying
+    | game_over
+
+struct enemy =
+    col: int32
+    row: int32
+    alive: bool
+    flash: int32          // hit-flash timer (unused — dead on hit)
+
+struct bullet =
+    x: float64
+    y: float64
+    vy: float64
+    alive: bool
+    from_player: bool
+
+struct star =
+    x: float64
+    y: float64
+    speed: float64
+    brightness: uint8
+
+struct particle =
+    x: float64
+    y: float64
+    vx: float64
+    vy: float64
+    life: int32
+    max_life: int32
+    r: uint8
+    g: uint8
+    b: uint8
+
+struct game_state =
+    // Player
+    player_x: float64
+    cooldown: int32
+    lives: int32
+
+    // Formation
+    formation_x: float64
+    formation_y: float64
+    formation_dir: int32      // +1 or -1
+    move_timer: int32
+    move_interval: int32
+    fire_timer: int32
+    fire_interval: int32
+    alive_count: int32
+    step_sound_toggle: int32
+
+    // Score / wave
+    score: int32
+    wave: int32
+    high_score: int32
+    new_high: bool
+
+    // Phase
+    phase: game_phase
+    phase_timer: int32
+
+    // Input edge latches
+    move_left: bool
+    move_right: bool
+    fire_held: bool
+
+// ============================================================
+// File-level heap state — showcase of richer top-level
+// initializers (alloc, array/struct literals, default).
+// ============================================================
+
+let enemies = alloc(enemy[55] { })!
+let bullets = alloc(bullet[64] { })!
+let stars = alloc(star[120] { })!
+let particles = alloc(particle[256] { })!
+let game = alloc(game_state)!
+
+// ============================================================
+// Misc helpers
+// ============================================================
+
+// Void no-op — use as a fall-through arm in statement-level matches
+// so the match stays exhaustive without a bare `return` (which would
+// exit the enclosing function from inside a statement-expression).
+let nop = () -> return
+
+// ============================================================
+// Low-level drawing helpers
+// ============================================================
+
+let fill = (r: any*, x: int32, y: int32, w: int32, h: int32,
+            cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
+    let mut rc = rect { x = x, y = y, w = w, h = h }
+    sdl.set_color(r, cr, cg, cb, ca)
+    sdl.fill_rect(r, &rc)
+    return
+
+let outline = (r: any*, x: int32, y: int32, w: int32, h: int32,
+               cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
+    let mut rc = rect { x = x, y = y, w = w, h = h }
+    sdl.set_color(r, cr, cg, cb, ca)
+    sdl.draw_rect(r, &rc)
+    return
+
+let line = (r: any*, x1: int32, y1: int32, x2: int32, y2: int32,
+            cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
+    sdl.set_color(r, cr, cg, cb, ca)
+    sdl.draw_line(r, x1, y1, x2, y2)
+    return
+
+// ============================================================
+// 3x5 pixel font (bitmap packed into an int32: 5 rows of 3 bits)
+// ============================================================
+
+let glyph = (ch: uint8) ->
+    if ch == 'A' then 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'B' then 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+    else if ch == 'C' then 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+    else if ch == 'D' then 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+    else if ch == 'E' then 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+    else if ch == 'F' then 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    else if ch == 'G' then 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+    else if ch == 'H' then 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'I' then 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    else if ch == 'J' then 1 | (1 << 3) | (1 << 6) | (5 << 9) | (2 << 12)
+    else if ch == 'K' then 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+    else if ch == 'L' then 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+    else if ch == 'M' then 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'N' then 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'O' then 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    else if ch == 'P' then 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    else if ch == 'Q' then 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+    else if ch == 'R' then 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'S' then 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+    else if ch == 'T' then 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    else if ch == 'U' then 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    else if ch == 'V' then 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+    else if ch == 'W' then 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+    else if ch == 'X' then 5 | (5 << 3) | (2 << 6) | (5 << 9) | (5 << 12)
+    else if ch == 'Y' then 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    else if ch == 'Z' then 7 | (1 << 3) | (2 << 6) | (4 << 9) | (7 << 12)
+    else if ch == '0' then 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+    else if ch == '1' then 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    else if ch == '2' then 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+    else if ch == '3' then 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+    else if ch == '4' then 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
+    else if ch == '5' then 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+    else if ch == '6' then 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    else if ch == '7' then 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+    else if ch == '8' then 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    else if ch == '9' then 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
+    else if ch == '+' then 0 | (2 << 3) | (7 << 6) | (2 << 9) | (0 << 12)
+    else if ch == '-' then 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
+    else if ch == ':' then 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+    else if ch == '!' then 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+    else if ch == '.' then 0 | (0 << 3) | (0 << 6) | (0 << 9) | (2 << 12)
+    else 0
+
+let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, scale: int32,
+                 cr: uint8, cg: uint8, cb: uint8) ->
+    let g = glyph(ch)
+    for row in 0..5
+        let bits = (g >> (row * 3)) & 7
+        for col in 0..3
+            if (bits >> (2 - col)) & 1 == 1 then
+                fill(r, ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb, 255u8)
+    return
+
+let text_width = (s: const str, scale: int32) ->
+    (int32) s.len * 4 * scale - scale
+
+let draw_text = (r: any*, s: const str, ox: int32, oy: int32, scale: int32,
+                 cr: uint8, cg: uint8, cb: uint8) ->
+    let mut x = ox
+    for ch in s
+        if ch != ' ' then
+            draw_char(r, ch, x, oy, scale, cr, cg, cb)
+        x = x + 4 * scale
+    return
+
+let draw_text_centered = (r: any*, s: const str, cx: int32, oy: int32, scale: int32,
+                          cr: uint8, cg: uint8, cb: uint8) ->
+    let w = text_width(s, scale)
+    draw_text(r, s, cx - w / 2, oy, scale, cr, cg, cb)
+    return
+
+// ============================================================
+// Enemy sprites — three face-themed pixel-art aliens.
+// Each enemy is a 15x11 grid rendered at pixel_size (typically 4px),
+// plus some accent pixels outside the grid.
+// ============================================================
+
+// Row-major 15x11 bitmaps encoded as 16-bit rows (MSB = leftmost pixel).
+// Two animation frames per enemy.
+
+// Type 0 — grunt: scowling alien with antennae
+let grunt_frame0 = (row: int32) ->
+    if      row == 0 then 0b0000010001000000
+    else if row == 1 then 0b0000001010000000
+    else if row == 2 then 0b0001111111111000
+    else if row == 3 then 0b0011111111111100
+    else if row == 4 then 0b0110011011001100
+    else if row == 5 then 0b0110011011001100
+    else if row == 6 then 0b0011111111111100
+    else if row == 7 then 0b0001100000011000
+    else if row == 8 then 0b0011010110101100
+    else if row == 9 then 0b0110000000000110
+    else                   0b0100000000000010
+
+let grunt_frame1 = (row: int32) ->
+    if      row == 0 then 0b0100010001000100
+    else if row == 1 then 0b0010001010001000
+    else if row == 2 then 0b0001111111111000
+    else if row == 3 then 0b0011111111111100
+    else if row == 4 then 0b0110011011001100
+    else if row == 5 then 0b0110011011001100
+    else if row == 6 then 0b0011111111111100
+    else if row == 7 then 0b0011100000011100
+    else if row == 8 then 0b0110101101011010
+    else if row == 9 then 0b0000110110110000
+    else                   0b0011000000000110
+
+// Type 1 — soldier: round helmeted face
+let soldier_frame0 = (row: int32) ->
+    if      row == 0 then 0b0000011111100000
+    else if row == 1 then 0b0001111111111000
+    else if row == 2 then 0b0011100000011100
+    else if row == 3 then 0b0111011011101110
+    else if row == 4 then 0b0111111111111110
+    else if row == 5 then 0b0111100110011110
+    else if row == 6 then 0b0011111111111100
+    else if row == 7 then 0b0001111111111000
+    else if row == 8 then 0b0001100110011000
+    else if row == 9 then 0b0110000000000110
+    else                   0b1100000000000011
+
+let soldier_frame1 = (row: int32) ->
+    if      row == 0 then 0b0000011111100000
+    else if row == 1 then 0b0001111111111000
+    else if row == 2 then 0b0011100000011100
+    else if row == 3 then 0b0111011011101110
+    else if row == 4 then 0b0111111111111110
+    else if row == 5 then 0b0111100110011110
+    else if row == 6 then 0b0011111111111100
+    else if row == 7 then 0b0001111111111000
+    else if row == 8 then 0b0011000000001100
+    else if row == 9 then 0b0011000110001100
+    else                   0b0110000000000110
+
+// Type 2 — boss: menacing big-eye overlord
+let boss_frame0 = (row: int32) ->
+    if      row == 0 then 0b0000011111100000
+    else if row == 1 then 0b0000111111110000
+    else if row == 2 then 0b0011111111111100
+    else if row == 3 then 0b0111101111011110
+    else if row == 4 then 0b0111001111001110
+    else if row == 5 then 0b0111111111111110
+    else if row == 6 then 0b0011000110001100
+    else if row == 7 then 0b0110111111111110
+    else if row == 8 then 0b0110000000000110
+    else if row == 9 then 0b0011000000001100
+    else                   0b0001100000011000
+
+let boss_frame1 = (row: int32) ->
+    if      row == 0 then 0b0000011111100000
+    else if row == 1 then 0b0000111111110000
+    else if row == 2 then 0b0011111111111100
+    else if row == 3 then 0b0111101111011110
+    else if row == 4 then 0b0111001111001110
+    else if row == 5 then 0b0111111111111110
+    else if row == 6 then 0b0001101111011000
+    else if row == 7 then 0b0011011001101100
+    else if row == 8 then 0b0110000000000110
+    else if row == 9 then 0b0000110000110000
+    else                   0b0011000000001100
+
+let enemy_bit = (kind: int32, frame: int32, row: int32) ->
+    if kind == 0 then
+        if frame == 0 then grunt_frame0(row)
+        else grunt_frame1(row)
+    else if kind == 1 then
+        if frame == 0 then soldier_frame0(row)
+        else soldier_frame1(row)
+    else
+        if frame == 0 then boss_frame0(row)
+        else boss_frame1(row)
+
+let enemy_color = (kind: int32) ->
+    // returns packed (r, g, b) via outparam-free trick: we just use if-else
+    // downstream. (FC has no tuples yet — a struct would also work.)
+    kind
+
+let draw_enemy = (r: any*, kind: int32, px: int32, py: int32, frame: int32) ->
+    // Pixel size: 4 for smaller rows, tuned so grids stay crisp.
+    let ps = 4
+    // Per-row color
+    let mut cr = 255u8
+    let mut cg = 255u8
+    let mut cb = 255u8
+    if kind == 0 then
+        // lime grunt
+        cr = 110u8
+        cg = 255u8
+        cb = 130u8
+    else if kind == 1 then
+        // orange soldier
+        cr = 255u8
+        cg = 180u8
+        cb = 80u8
+    else
+        // pink boss
+        cr = 255u8
+        cg = 90u8
+        cb = 120u8
+
+    for row in 0..11
+        let bits = enemy_bit(kind, frame, row)
+        for col in 0..15
+            if (bits >> (14 - col)) & 1 == 1 then
+                fill(r, px + col * ps, py + row * ps, ps, ps, cr, cg, cb, 255u8)
+    return
+
+// ============================================================
+// Player ship (drawn at bottom of screen)
+// ============================================================
+
+let draw_player = (r: any*, px: int32, py: int32, flash: bool) ->
+    // Chunky pixel-art ship. Base 72x32 footprint.
+    let mut br = 80u8
+    let mut bg = 220u8
+    let mut bb = 240u8
+    let mut hi_r = 220u8
+    let mut hi_g = 250u8
+    let mut hi_b = 255u8
+    if flash then
+        br = 255u8
+        bg = 120u8
+        bb = 120u8
+        hi_r = 255u8
+        hi_g = 200u8
+        hi_b = 200u8
+
+    // Engine glow — orange rectangles below the ship
+    fill(r, px + 16, py + 28, 8, 4, 255u8, 160u8, 40u8, 255u8)
+    fill(r, px + 48, py + 28, 8, 4, 255u8, 160u8, 40u8, 255u8)
+    fill(r, px + 18, py + 30, 4, 4, 255u8, 220u8, 80u8, 200u8)
+    fill(r, px + 50, py + 30, 4, 4, 255u8, 220u8, 80u8, 200u8)
+
+    // Wings (trapezoid body)
+    fill(r, px + 4,  py + 20, 64, 8, br, bg, bb, 255u8)
+    fill(r, px + 8,  py + 14, 56, 6, br, bg, bb, 255u8)
+    fill(r, px + 20, py + 8,  32, 6, br, bg, bb, 255u8)
+    fill(r, px + 32, py + 2,  8,  6, br, bg, bb, 255u8)
+
+    // Highlight strip
+    fill(r, px + 10, py + 14, 52, 2, hi_r, hi_g, hi_b, 255u8)
+    fill(r, px + 22, py + 8,  28, 2, hi_r, hi_g, hi_b, 255u8)
+
+    // Cockpit — yellow smiley
+    fill(r, px + 32, py + 4, 8, 4, 255u8, 230u8, 80u8, 255u8)
+    fill(r, px + 30, py + 8, 12, 4, 255u8, 230u8, 80u8, 255u8)
+    // smile eyes
+    fill(r, px + 32, py + 8, 2, 2, 30u8, 30u8, 30u8, 255u8)
+    fill(r, px + 38, py + 8, 2, 2, 30u8, 30u8, 30u8, 255u8)
+    // smile mouth
+    fill(r, px + 33, py + 10, 6, 1, 30u8, 30u8, 30u8, 255u8)
+    return
+
+// ============================================================
+// Bullet drawing
+// ============================================================
+
+let draw_bullet = (r: any*, b: bullet*) ->
+    let bx = (int32) b->x
+    let by = (int32) b->y
+    if b->from_player then
+        // Bright yellow core with a soft cyan halo
+        fill(r, bx - 3, by - 10, 6, 20, 100u8, 200u8, 255u8, 110u8)
+        fill(r, bx - 1, by - 10, 2, 20, 255u8, 255u8, 120u8, 255u8)
+        fill(r, bx - 2, by - 4,  4, 8, 255u8, 240u8, 180u8, 200u8)
+    else
+        // Red enemy plasma
+        fill(r, bx - 4, by - 8, 8, 16, 255u8, 90u8, 90u8, 120u8)
+        fill(r, bx - 2, by - 8, 4, 16, 255u8, 160u8, 160u8, 255u8)
+    return
+
+// ============================================================
+// Starfield
+// ============================================================
+
+let init_stars = (rng: pcg_random*) ->
+    for i in 0..120
+        stars[i].x = pcg_random.next_float64(rng) * (float64) logical_w
+        stars[i].y = pcg_random.next_float64(rng) * (float64) logical_h
+        let t = pcg_random.next_float64(rng)
+        stars[i].speed = 0.3 + t * 2.5
+        let b = 80.0 + pcg_random.next_float64(rng) * 175.0
+        stars[i].brightness = (uint8) b
+    return
+
+let update_stars = () ->
+    for i in 0..120
+        stars[i].y = stars[i].y + stars[i].speed
+        if stars[i].y >= (float64) logical_h then
+            stars[i].y = 0.0
+            // x stays the same — looks like streaks, which is fine
+    return
+
+let draw_stars = (r: any*) ->
+    for i in 0..120
+        let b = stars[i].brightness
+        let x = (int32) stars[i].x
+        let y = (int32) stars[i].y
+        if stars[i].speed > 1.8 then
+            // Fast stars: 2x2 bright
+            fill(r, x, y, 2, 2, b, b, 255u8, 255u8)
+        else if stars[i].speed > 1.0 then
+            fill(r, x, y, 1, 2, b, b, 255u8, 255u8)
+        else
+            fill(r, x, y, 1, 1, b, b, 255u8, 255u8)
+    return
+
+// ============================================================
+// Particles
+// ============================================================
+
+let spawn_burst = (rng: pcg_random*, cx: float64, cy: float64, count: int32,
+                   cr: uint8, cg: uint8, cb: uint8) ->
+    let mut spawned = 0
+    for i in 0..256
+        if spawned >= count then break
+        if particles[i].life <= 0 then
+            let angle = pcg_random.next_float64(rng) * 6.2831853
+            let speed = 1.5 + pcg_random.next_float64(rng) * 5.0
+            particles[i].x = cx
+            particles[i].y = cy
+            particles[i].vx = math.cos(angle) * speed
+            particles[i].vy = math.sin(angle) * speed
+            let life = 30 + (int32) (pcg_random.next_float64(rng) * 25.0)
+            particles[i].life = life
+            particles[i].max_life = life
+            particles[i].r = cr
+            particles[i].g = cg
+            particles[i].b = cb
+            spawned = spawned + 1
+    return
+
+let update_particles = () ->
+    for i in 0..256
+        if particles[i].life > 0 then
+            particles[i].x = particles[i].x + particles[i].vx
+            particles[i].y = particles[i].y + particles[i].vy
+            particles[i].vy = particles[i].vy + 0.08
+            particles[i].vx = particles[i].vx * 0.985
+            particles[i].life = particles[i].life - 1
+    return
+
+let draw_particles = (r: any*) ->
+    for i in 0..256
+        if particles[i].life > 0 then
+            let t = (float64) particles[i].life / (float64) particles[i].max_life
+            let alpha = (uint8) (t * 255.0)
+            let size = if t > 0.6 then 4 else if t > 0.3 then 3 else 2
+            fill(r, (int32) particles[i].x - size / 2,
+                    (int32) particles[i].y - size / 2,
+                    size, size,
+                    particles[i].r, particles[i].g, particles[i].b, alpha)
+    return
+
+// ============================================================
+// Enemy formation helpers
+// ============================================================
+
+let enemy_kind_for_row = (row: int32) ->
+    if row == 0 then 2
+    else if row <= 2 then 1
+    else 0
+
+let enemy_points = (kind: int32) ->
+    if kind == 0 then 10
+    else if kind == 1 then 20
+    else 30
+
+let enemy_screen_x = (idx: int32) ->
+    let col = enemies[idx].col
+    game->formation_x + (float64) (col * (enemy_w + enemy_gap_x))
+
+let enemy_screen_y = (idx: int32) ->
+    let row = enemies[idx].row
+    game->formation_y + (float64) (row * (enemy_h + enemy_gap_y))
+
+let reset_formation = () ->
+    let mut i = 0
+    for row in 0..5
+        for col in 0..11
+            enemies[i].col = col
+            enemies[i].row = row
+            enemies[i].alive = true
+            enemies[i].flash = 0
+            i = i + 1
+    game->formation_x = 70.0
+    game->formation_y = (float64) enemy_start_y + (float64) ((game->wave - 1) * 20)
+    if game->formation_y > 260.0 then
+        game->formation_y = 260.0
+    game->formation_dir = 1
+    game->alive_count = 55
+    game->move_timer = 0
+    game->fire_timer = 0
+    game->move_interval = base_move_interval
+    game->fire_interval = base_fire_interval - (game->wave - 1) * 5
+    if game->fire_interval < 15 then
+        game->fire_interval = 15
+    return
+
+let clear_bullets = () ->
+    for i in 0..64
+        bullets[i].alive = false
+    return
+
+let clear_particles = () ->
+    for i in 0..256
+        particles[i].life = 0
+    return
+
+let reset_game = () ->
+    game->player_x = (float64) (logical_w / 2 - player_w / 2)
+    game->cooldown = 0
+    game->lives = starting_lives
+    game->score = 0
+    game->wave = 1
+    game->new_high = false
+    clear_bullets()
+    clear_particles()
+    reset_formation()
+    game->phase = game_phase.playing
+    game->phase_timer = 0
+    return
+
+let fire_player_bullet = () ->
+    if game->cooldown > 0 then return
+    for i in 0..64
+        if !bullets[i].alive then
+            bullets[i].x = game->player_x + (float64) (player_w / 2)
+            bullets[i].y = (float64) (player_y - 4)
+            bullets[i].vy = (float64) player_bullet_vy
+            bullets[i].alive = true
+            bullets[i].from_player = true
+            game->cooldown = 14
+            return
+    return
+
+let fire_enemy_bullet = (rng: pcg_random*) ->
+    if game->alive_count == 0 then return
+    // Pick a random column, then fire from its bottom-most alive enemy.
+    let col = (int32) pcg_random.next_bounded_uint32(rng, (uint32) enemy_cols)
+    let mut chosen = -1
+    for i in 0..55
+        if enemies[i].alive && enemies[i].col == col then
+            if chosen == -1 || enemies[i].row > enemies[chosen].row then
+                chosen = i
+    if chosen < 0 then return
+    for bi in 0..64
+        if !bullets[bi].alive then
+            bullets[bi].x = enemy_screen_x(chosen) + (float64) (enemy_w / 2)
+            bullets[bi].y = enemy_screen_y(chosen) + (float64) enemy_h
+            bullets[bi].vy = (float64) enemy_bullet_vy
+            bullets[bi].alive = true
+            bullets[bi].from_player = false
+            return
+    return
+
+// ============================================================
+// Update phase
+// ============================================================
+
+let update_bullets = () ->
+    for i in 0..64
+        if bullets[i].alive then
+            bullets[i].y = bullets[i].y + bullets[i].vy
+            if bullets[i].y < -20.0 || bullets[i].y > (float64) (logical_h + 20) then
+                bullets[i].alive = false
+    return
+
+let formation_bounds = () ->
+    // Returns the on-screen bounding box of alive enemies via &outparams.
+    let mut min_col = enemy_cols
+    let mut max_col = -1
+    let mut max_row = -1
+    for i in 0..55
+        if enemies[i].alive then
+            if enemies[i].col < min_col then min_col = enemies[i].col
+            if enemies[i].col > max_col then max_col = enemies[i].col
+            if enemies[i].row > max_row then max_row = enemies[i].row
+    // Pack as int64 (bits 0-15 min_col, 16-31 max_col, 32-47 max_row)
+    let low = (int64) min_col & 0xFFFF
+    let mid = ((int64) max_col & 0xFFFF) << 16
+    let hi = ((int64) max_row & 0xFFFF) << 32
+    low | mid | hi
+
+let advance_formation = (rng: pcg_random*, audio_dev: uint32, step_snd: sound, step2_snd: sound) ->
+    let packed = formation_bounds()
+    let min_col = (int32) (packed & 0xFFFF)
+    let max_col = (int32) ((packed >> 16) & 0xFFFF)
+    let max_row = (int32) ((packed >> 32) & 0xFFFF)
+    if max_col < 0 then return
+
+    let left_x = game->formation_x + (float64) (min_col * (enemy_w + enemy_gap_x))
+    let right_x = game->formation_x + (float64) (max_col * (enemy_w + enemy_gap_x) + enemy_w)
+
+    let mut descend = false
+    if game->formation_dir > 0 && right_x + 12.0 >= (float64) logical_w then
+        descend = true
+        game->formation_dir = -1
+    else if game->formation_dir < 0 && left_x - 12.0 <= 0.0 then
+        descend = true
+        game->formation_dir = 1
+
+    if descend then
+        game->formation_y = game->formation_y + 16.0
+    else
+        game->formation_x = game->formation_x + (float64) (game->formation_dir * 10)
+
+    // Play alternating "step" sound
+    if audio_dev > 0u32 then
+        if game->step_sound_toggle == 0 then
+            sdl.clear_audio(audio_dev)
+            sdl.queue_audio(audio_dev, step_snd.data, step_snd.bytes)
+        else
+            sdl.clear_audio(audio_dev)
+            sdl.queue_audio(audio_dev, step2_snd.data, step2_snd.bytes)
+        game->step_sound_toggle = 1 - game->step_sound_toggle
+
+    // Check if formation has reached the player line — instant loss
+    let bottom_y = game->formation_y + (float64) (max_row * (enemy_h + enemy_gap_y) + enemy_h)
+    if bottom_y >= (float64) player_y then
+        game->phase = game_phase.game_over
+        game->phase_timer = 0
+    rng->state = rng->state  // keep rng param alive for later use
+    return
+
+let bullet_hits_enemy = (bi: int32) ->
+    let bx = bullets[bi].x
+    let by = bullets[bi].y
+    let mut hit = -1
+    for ei in 0..55
+        if enemies[ei].alive && hit < 0 then
+            let ex = enemy_screen_x(ei)
+            let ey = enemy_screen_y(ei)
+            if bx >= ex && bx < ex + (float64) enemy_w &&
+               by >= ey && by < ey + (float64) enemy_h then
+                hit = ei
+    hit
+
+let bullet_hits_player = (bi: int32) ->
+    let bx = bullets[bi].x
+    let by = bullets[bi].y
+    let px = game->player_x
+    let py = (float64) player_y
+    let in_x = bx >= px && bx < px + (float64) player_w
+    let in_y = by >= py && by < py + (float64) player_h
+    in_x && in_y
+
+let process_collisions = (rng: pcg_random*, audio_dev: uint32,
+                          hit_snd: sound, die_snd: sound) ->
+    for bi in 0..64
+        if bullets[bi].alive then
+            if bullets[bi].from_player then
+                let ei = bullet_hits_enemy(bi)
+                if ei >= 0 then
+                    let kind = enemy_kind_for_row(enemies[ei].row)
+                    game->score = game->score + enemy_points(kind)
+                    enemies[ei].alive = false
+                    game->alive_count = game->alive_count - 1
+                    bullets[bi].alive = false
+                    // Burst
+                    let cx = enemy_screen_x(ei) + (float64) (enemy_w / 2)
+                    let cy = enemy_screen_y(ei) + (float64) (enemy_h / 2)
+                    let mut rr = 255u8
+                    let mut gg = 180u8
+                    let mut bb = 80u8
+                    if kind == 0 then
+                        rr = 110u8
+                        gg = 255u8
+                        bb = 130u8
+                    else if kind == 2 then
+                        rr = 255u8
+                        gg = 120u8
+                        bb = 160u8
+                    spawn_burst(rng, cx, cy, 22, rr, gg, bb)
+                    if audio_dev > 0u32 then
+                        sdl.clear_audio(audio_dev)
+                        sdl.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
+                    // Speed up formation as enemies die
+                    let target =
+                        base_move_interval - (55 - game->alive_count) / 3
+                        - (game->wave - 1) * 3
+                    game->move_interval = if target < min_move_interval
+                                          then min_move_interval
+                                          else target
+            else
+                if bullet_hits_player(bi) then
+                    bullets[bi].alive = false
+                    game->lives = game->lives - 1
+                    let cx = game->player_x + (float64) (player_w / 2)
+                    let cy = (float64) (player_y + player_h / 2)
+                    spawn_burst(rng, cx, cy, 36, 120u8, 220u8, 255u8)
+                    spawn_burst(rng, cx, cy, 18, 255u8, 180u8, 80u8)
+                    if audio_dev > 0u32 then
+                        sdl.clear_audio(audio_dev)
+                        sdl.queue_audio(audio_dev, die_snd.data, die_snd.bytes)
+                    if game->lives <= 0 then
+                        game->phase = game_phase.game_over
+                        game->phase_timer = 0
+                    else
+                        game->phase = game_phase.dying
+                        game->phase_timer = 60
+    return
+
+// ============================================================
+// Sound effects
+// ============================================================
+
+struct sound =
+    data: any*
+    bytes: uint32
+
+let samples_ms = (ms: int32) ->
+    44100 * ms / 1000
+
+let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32, amp: int32) ->
+    let num_samples = samples_ms(duration_ms)
+    let period = if freq > 0 then 44100 / freq else 44100
+    let half = period / 2
+    for i in 0..num_samples
+        let fade = if i < num_samples / 4
+                   then (i * 4) * 256 / num_samples
+                   else if i > num_samples * 3 / 4
+                        then ((num_samples - i) * 4) * 256 / num_samples
+                        else 256
+        let v = amp * fade / 256
+        if (i % period) < half then
+            buf[offset + i] = (int16) v
+        else
+            buf[offset + i] = (int16) -v
+    offset + num_samples
+
+let make_sound = (n: int32, buf: int16*) ->
+    sound { data = (any*) buf, bytes = (uint32) (n * 2) }
+
+let gen_shoot = () ->
+    let n = samples_ms(60)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 880, 60, 7000)
+    make_sound(n, mem)
+
+let gen_hit = () ->
+    let n = samples_ms(40) + samples_ms(40)
+    let mem = alloc(int16, (usize) n)!
+    let off = fill_tone(mem, 0, 500, 40, 8000)
+    fill_tone(mem, off, 380, 40, 7000)
+    make_sound(n, mem)
+
+let gen_die = () ->
+    let n = samples_ms(120) + samples_ms(120) + samples_ms(150) + samples_ms(220)
+    let mem = alloc(int16, (usize) n)!
+    let mut off = fill_tone(mem, 0, 440, 120, 9000)
+    off = fill_tone(mem, off, 330, 120, 9000)
+    off = fill_tone(mem, off, 220, 150, 9000)
+    fill_tone(mem, off, 110, 220, 9000)
+    make_sound(n, mem)
+
+let gen_step_low = () ->
+    let n = samples_ms(80)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 110, 80, 5500)
+    make_sound(n, mem)
+
+let gen_step_high = () ->
+    let n = samples_ms(80)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 160, 80, 5500)
+    make_sound(n, mem)
+
+let gen_wave_clear = () ->
+    let n = samples_ms(90) + samples_ms(90) + samples_ms(90) + samples_ms(160)
+    let mem = alloc(int16, (usize) n)!
+    let mut off = fill_tone(mem, 0, 523, 90, 8000)
+    off = fill_tone(mem, off, 659, 90, 8000)
+    off = fill_tone(mem, off, 784, 90, 8000)
+    fill_tone(mem, off, 1047, 160, 8000)
+    make_sound(n, mem)
+
+// ============================================================
+// High score persistence
+// ============================================================
+
+let load_high_score = () ->
+    match sys.home_dir() with
+    | some(hd) ->
+        match io.open("%s{hd}/.face-invaders/highscore.txt", "r") with
+        | some(fp) ->
+            let mut buf = uint8[32] { }
+            io.read(buf, 32, fp)
+            io.close(fp)
+            match text.parse_int32((const str) buf) with
+            | some(v) -> v
+            | none -> 0
+        | none -> 0
+    | none -> 0
+
+let save_high_score = (score: int32) ->
+    match sys.home_dir() with
+    | some(hd) ->
+        io.mkdir("%s{hd}/.face-invaders")
+        match io.open("%s{hd}/.face-invaders/highscore.txt", "w") with
+        | some(fp) ->
+            io.write("%d{score}\n", fp)
+            io.close(fp)
+        | none -> return
+    | none -> return
+    return
+
+// ============================================================
+// HUD / overlays
+// ============================================================
+
+let draw_hud = (r: any*) ->
+    // Top bar background
+    fill(r, 0, 0, logical_w, 64, 6u8, 8u8, 20u8, 220u8)
+    fill(r, 0, 64, logical_w, 2, 100u8, 180u8, 255u8, 255u8)
+
+    // SCORE (left)
+    draw_text(r, "SCORE", 30, 12, 3, 100u8, 200u8, 255u8)
+    let score_str = "%d{game->score}"
+    draw_text(r, (const str) score_str, 30, 36, 4, 255u8, 255u8, 255u8)
+
+    // WAVE (center)
+    draw_text_centered(r, "WAVE", logical_w / 2, 12, 3, 100u8, 200u8, 255u8)
+    let wave_str = "%d{game->wave}"
+    draw_text_centered(r, (const str) wave_str, logical_w / 2, 36, 4, 255u8, 255u8, 255u8)
+
+    // HIGH (right-of-center area)
+    let hi_label = "HIGH"
+    let hi_x = logical_w * 3 / 4
+    draw_text_centered(r, hi_label, hi_x, 12, 3, 100u8, 200u8, 255u8)
+    let hi_str = "%d{game->high_score}"
+    draw_text_centered(r, (const str) hi_str, hi_x, 36, 4, 255u8, 240u8, 120u8)
+
+    // LIVES (far right — draw as small ship icons)
+    let mut lx = logical_w - 30
+    for i in 0..game->lives
+        lx = lx - 40
+        // small 32x12 ship icon
+        fill(r, lx, 30, 32, 6, 80u8, 220u8, 240u8, 255u8)
+        fill(r, lx + 4, 24, 24, 6, 80u8, 220u8, 240u8, 255u8)
+        fill(r, lx + 12, 20, 8, 4, 255u8, 230u8, 80u8, 255u8)
+    return
+
+let draw_splash = (r: any*) ->
+    // Title: "FACE INVADERS"
+    draw_text_centered(r, "FACE", logical_w / 2, 140, 12, 120u8, 220u8, 255u8)
+    draw_text_centered(r, "INVADERS", logical_w / 2, 220, 12, 255u8, 120u8, 160u8)
+
+    // Decorative row of enemies
+    let demo_y = 340
+    draw_enemy(r, 2, logical_w / 2 - 320, demo_y, 0)
+    draw_enemy(r, 1, logical_w / 2 - 160, demo_y, 0)
+    draw_enemy(r, 0, logical_w / 2,       demo_y, 0)
+    draw_enemy(r, 1, logical_w / 2 + 160, demo_y, 0)
+    draw_enemy(r, 2, logical_w / 2 + 280, demo_y, 0)
+
+    // Scoring legend
+    draw_enemy(r, 2, logical_w / 2 - 240, 430, 0)
+    draw_text(r, "30 PTS", logical_w / 2 - 160, 450, 4, 255u8, 255u8, 255u8)
+    draw_enemy(r, 1, logical_w / 2 - 20,  430, 0)
+    draw_text(r, "20 PTS", logical_w / 2 + 60, 450, 4, 255u8, 255u8, 255u8)
+    draw_enemy(r, 0, logical_w / 2 + 200, 430, 0)
+    draw_text(r, "10 PTS", logical_w / 2 + 280, 450, 4, 255u8, 255u8, 255u8)
+
+    // Controls
+    draw_text_centered(r, "ARROWS MOVE    SPACE FIRE    ESC QUIT",
+                       logical_w / 2, 540, 3, 160u8, 180u8, 220u8)
+    draw_text_centered(r, "PRESS SPACE TO START",
+                       logical_w / 2, 600, 4, 255u8, 230u8, 80u8)
+    return
+
+let draw_game_over = (r: any*) ->
+    fill(r, 0, 260, logical_w, 200, 0u8, 0u8, 0u8, 170u8)
+    draw_text_centered(r, "GAME OVER", logical_w / 2, 290, 10, 255u8, 100u8, 100u8)
+    if game->new_high then
+        draw_text_centered(r, "NEW HIGH SCORE.", logical_w / 2, 380, 5, 255u8, 230u8, 80u8)
+    draw_text_centered(r, "SPACE TO RESTART   ESC TO QUIT",
+                       logical_w / 2, 430, 3, 200u8, 200u8, 220u8)
+    return
+
+let draw_paused = (r: any*) ->
+    fill(r, 0, 300, logical_w, 120, 0u8, 0u8, 0u8, 170u8)
+    draw_text_centered(r, "PAUSED", logical_w / 2, 330, 8, 255u8, 255u8, 255u8)
+    return
+
+let draw_wave_clear = (r: any*) ->
+    draw_text_centered(r, "WAVE CLEAR.", logical_w / 2, 320, 7, 255u8, 230u8, 80u8)
+    let nxt = "WAVE %d{game->wave + 1}"
+    draw_text_centered(r, (const str) nxt, logical_w / 2, 400, 5, 255u8, 255u8, 255u8)
+    return
+
+// ============================================================
+// Per-frame render
+// ============================================================
+
+let render = (r: any*, frame_count: int32) ->
+    // Deep space background with vertical gradient
+    sdl.set_blend_mode(r, sdl.blend_none)
+    sdl.set_color(r, 4u8, 6u8, 18u8, 255u8)
+    sdl.clear(r)
+    // Gradient bands
+    for band in 0..16
+        let y = band * (logical_h / 16)
+        let h = logical_h / 16
+        let v = (uint8) (4 + band)
+        fill(r, 0, y, logical_w, h, v, (uint8) (v + 2u8), (uint8) (v + 14u8), 255u8)
+
+    sdl.set_blend_mode(r, sdl.blend_alpha)
+    draw_stars(r)
+
+    // Bullets
+    for i in 0..64
+        if bullets[i].alive then
+            draw_bullet(r, &bullets[i])
+
+    // Enemies
+    let frame = (frame_count / 30) % 2
+    for i in 0..55
+        if enemies[i].alive then
+            let kind = enemy_kind_for_row(enemies[i].row)
+            draw_enemy(r, kind, (int32) enemy_screen_x(i), (int32) enemy_screen_y(i), frame)
+
+    // Particles
+    draw_particles(r)
+
+    // Player (hidden during dying respawn flicker)
+    let show_player = match game->phase with
+    | splash -> false
+    | dying -> (game->phase_timer / 6) % 2 == 0
+    | game_over -> false
+    | _ -> true
+    if show_player then
+        draw_player(r, (int32) game->player_x, player_y, false)
+
+    // HUD
+    let show_hud = match game->phase with
+    | splash -> false
+    | _ -> true
+    if show_hud then
+        draw_hud(r)
+
+    // Phase overlays
+    match game->phase with
+    | splash -> draw_splash(r)
+    | paused -> draw_paused(r)
+    | wave_clear -> draw_wave_clear(r)
+    | game_over -> draw_game_over(r)
+    | _ -> nop()
+
+    sdl.present(r)
+    return
+
+// ============================================================
+// Main
+// ============================================================
+
+let main = (args: str[]) ->
+    io.write("=== FACE INVADERS ===\n", stdout)
+    io.write("A Space Invaders clone in FC (fullscreen, DPI-aware SDL2)\n\n", stdout)
+    io.write("Controls:\n", stdout)
+    io.write("  Arrow keys  Move\n", stdout)
+    io.write("  SPACE       Fire / Start / Restart\n", stdout)
+    io.write("  P           Pause\n", stdout)
+    io.write("  F11         Toggle fullscreen\n", stdout)
+    io.write("  ESC         Quit\n", stdout)
+    io.write("  C (splash)  Clear high score\n\n", stdout)
+
+    // Request smooth linear scaling when SDL blits logical → physical.
+    sdl.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"linear")
+
+    sdl.init(sdl.init_video | sdl.init_audio)
+
+    // Pick a window size that fits the display. We query the usable bounds
+    // (desktop minus taskbar/dock), then scale the 16:9 logical canvas down
+    // to at most 90% of the available space. The logical size stays 1280x720;
+    // RenderSetLogicalSize scales it to whatever window we end up with.
+    let mut win_w = logical_w
+    let mut win_h = logical_h
+    let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
+    if sdl.num_video_displays() > 0 then
+        let ok = sdl.get_display_usable_bounds(0, &db)
+        if ok != 0 then
+            sdl.get_display_bounds(0, &db)
+        io.write("Display 0 usable bounds: %d{db.w}x%d{db.h}\n", stdout)
+        let max_w = db.w * 9 / 10
+        let max_h = db.h * 9 / 10
+        // Scale preserving 16:9 (logical aspect ratio)
+        let fit_w_by_h = max_h * 16 / 9
+        if fit_w_by_h <= max_w then
+            win_w = fit_w_by_h
+            win_h = max_h
+        else
+            win_w = max_w
+            win_h = max_w * 9 / 16
+        // Never upscale beyond the logical resolution
+        if win_w > logical_w then
+            win_w = logical_w
+            win_h = logical_h
+
+    io.write("Window size: %d{win_w}x%d{win_h}\n", stdout)
+
+    // Windowed with high-DPI support. F11 toggles fullscreen-desktop at runtime.
+    let flags = sdl.window_shown | sdl.window_allow_highdpi
+    let win = sdl.create_window(c"Face Invaders",
+                                sdl.pos_centered, sdl.pos_centered,
+                                win_w, win_h, flags)
+    let mut fullscreen = false
+
+    // Accelerated renderer with vsync. Logical size decouples draw coordinates
+    // from the physical window/backing pixels — SDL scales automatically.
+    let ren = sdl.create_renderer(win, -1,
+                                  sdl.renderer_accel | sdl.renderer_vsync)
+    sdl.set_logical_size(ren, logical_w, logical_h)
+    sdl.set_blend_mode(ren, sdl.blend_alpha)
+    sdl.show_cursor(0)
+
+    // Log the actual backing size for transparency
+    let mut out_w = 0
+    let mut out_h = 0
+    sdl.get_output_size(ren, &out_w, &out_h)
+    io.write("Renderer backing: %d{out_w}x%d{out_h} (logical %d{logical_w}x%d{logical_h})\n",
+             stdout)
+
+    let mut rng = pcg_random.make((uint64) sys.time())
+
+    // Audio setup
+    let mut desired = default(audio_spec)
+    desired.freq = 44100
+    desired.format = sdl.audio_s16sys
+    desired.channels = 1u8
+    desired.samples = 1024u16
+    desired.callback = (any*) 0u
+    desired.userdata = (any*) 0u
+    let mut obtained = default(audio_spec)
+    let audio_dev = sdl.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    if audio_dev > 0u32 then
+        sdl.pause_audio(audio_dev, 0)
+
+    let shoot_snd = gen_shoot()
+    let hit_snd = gen_hit()
+    let die_snd = gen_die()
+    let step_low = gen_step_low()
+    let step_high = gen_step_high()
+    let wave_snd = gen_wave_clear()
+
+    // Startup state
+    game->high_score = load_high_score()
+    game->phase = game_phase.splash
+    game->phase_timer = 0
+    game->player_x = (float64) (logical_w / 2 - player_w / 2)
+    game->lives = starting_lives
+    game->wave = 1
+
+    init_stars(&rng)
+
+    let mut event = default(sdl_event)
+    let mut running = true
+    let mut frame_count = 0
+
+    loop
+        if !running then break
+        frame_count = frame_count + 1
+
+        // --------- Input ---------
+        loop
+            let has = sdl.poll_event(&event)
+            if has == 0 then break
+
+            if (int32) event.type == sdl.quit_event then
+                running = false
+                break
+
+            if (int32) event.type == sdl.keydown_event then
+                let k = event.key.keysym.sym
+
+                if k == sdl.key_escape then
+                    running = false
+                    break
+
+                if k == sdl.key_f11 then
+                    fullscreen = !fullscreen
+                    let fs_flag = if fullscreen
+                                  then sdl.window_fullscreen_desktop
+                                  else 0u32
+                    sdl.set_fullscreen(win, fs_flag)
+
+                if k == sdl.key_left || k == sdl.key_a then
+                    game->move_left = true
+                if k == sdl.key_right || k == sdl.key_d then
+                    game->move_right = true
+                if k == sdl.key_space then
+                    match game->phase with
+                    | splash -> reset_game()
+                    | game_over -> reset_game()
+                    | playing ->
+                        game->fire_held = true
+                        fire_player_bullet()
+                        if audio_dev > 0u32 then
+                            sdl.clear_audio(audio_dev)
+                            sdl.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
+                    | _ -> nop()
+
+                if k == sdl.key_p then
+                    match game->phase with
+                    | playing -> game->phase = game_phase.paused
+                    | paused -> game->phase = game_phase.playing
+                    | _ -> nop()
+
+                if k == sdl.key_c then
+                    match game->phase with
+                    | splash ->
+                        game->high_score = 0
+                        match sys.home_dir() with
+                        | some(hd) ->
+                            io.remove("%s{hd}/.face-invaders/highscore.txt")
+                            nop()
+                        | none -> nop()
+                    | _ -> nop()
+
+            if (int32) event.type == sdl.keyup_event then
+                let k = event.key.keysym.sym
+                if k == sdl.key_left || k == sdl.key_a then
+                    game->move_left = false
+                if k == sdl.key_right || k == sdl.key_d then
+                    game->move_right = false
+                if k == sdl.key_space then
+                    game->fire_held = false
+
+        if !running then break
+
+        // --------- Update ---------
+        update_stars()
+        update_particles()
+
+        match game->phase with
+        | playing ->
+            // Player movement
+            if game->move_left then
+                game->player_x = game->player_x - (float64) player_speed
+            if game->move_right then
+                game->player_x = game->player_x + (float64) player_speed
+            if game->player_x < 20.0 then game->player_x = 20.0
+            let max_x = (float64) (logical_w - player_w - 20)
+            if game->player_x > max_x then game->player_x = max_x
+
+            if game->cooldown > 0 then
+                game->cooldown = game->cooldown - 1
+
+            // Auto-fire while space held
+            if game->fire_held && game->cooldown == 0 then
+                fire_player_bullet()
+
+            update_bullets()
+
+            // Formation movement
+            game->move_timer = game->move_timer + 1
+            if game->move_timer >= game->move_interval then
+                game->move_timer = 0
+                advance_formation(&rng, audio_dev, step_low, step_high)
+
+            // Enemy fire
+            game->fire_timer = game->fire_timer + 1
+            if game->fire_timer >= game->fire_interval then
+                game->fire_timer = 0
+                fire_enemy_bullet(&rng)
+
+            // Collisions
+            process_collisions(&rng, audio_dev, hit_snd, die_snd)
+
+            // Wave clear
+            if game->alive_count == 0 then
+                game->phase = game_phase.wave_clear
+                game->phase_timer = 90
+                if audio_dev > 0u32 then
+                    sdl.clear_audio(audio_dev)
+                    sdl.queue_audio(audio_dev, wave_snd.data, wave_snd.bytes)
+        | wave_clear ->
+            update_bullets()
+            game->phase_timer = game->phase_timer - 1
+            if game->phase_timer <= 0 then
+                game->wave = game->wave + 1
+                clear_bullets()
+                reset_formation()
+                game->phase = game_phase.playing
+                sdl.set_title(win, c"Face Invaders - Wave %d{game->wave}")
+        | dying ->
+            update_bullets()
+            game->phase_timer = game->phase_timer - 1
+            if game->phase_timer <= 0 then
+                clear_bullets()
+                game->phase = game_phase.playing
+                game->player_x = (float64) (logical_w / 2 - player_w / 2)
+        | game_over ->
+            update_bullets()
+            // Lock in the high score exactly once on entering game_over
+            if game->phase_timer == 0 then
+                game->phase_timer = 1
+                if game->score > game->high_score then
+                    game->high_score = game->score
+                    game->new_high = true
+                    save_high_score(game->score)
+                    io.write("NEW HIGH SCORE: %d{game->score}.\n", stdout)
+        | _ -> nop()
+
+        // --------- Render ---------
+        render(ren, frame_count)
+
+        // Vsync handles pacing, but add a safety delay if vsync is unavailable
+        sdl.delay(1u32)
+
+    io.write("Final score: %d{game->score}\n", stdout)
+
+    if audio_dev > 0u32 then
+        sdl.close_audio(audio_dev)
+    sdl.destroy_renderer(ren)
+    sdl.destroy_window(win)
+    sdl.quit()
+    0
