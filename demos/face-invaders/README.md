@@ -34,7 +34,7 @@ Requires SDL2 installed for your environment:
 - Shoot the descending alien formation before it reaches your line.
 - Enemies accelerate as more of them die, and each wave gets faster.
 - Top row (boss): 30 pts. Middle rows (soldiers): 20 pts. Bottom rows (grunts): 10 pts.
-- You start with three lives. Lose one when an enemy bullet hits you.
+- You start with five lives. Lose one when an enemy bullet hits you.
 - High score persists to `~/.face-invaders/highscore.txt`.
 
 ## Display

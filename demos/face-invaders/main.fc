@@ -42,7 +42,7 @@ let base_move_interval = 30    // ticks per enemy formation step at wave 1
 let min_move_interval = 14     // floor — tense but not frantic
 let base_fire_interval = 55    // ticks per enemy fire at wave 1
 
-let starting_lives = 3
+let starting_lives = 5
 
 // ============================================================
 // Types
