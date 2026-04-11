@@ -498,7 +498,12 @@ FC requires a **libc providing `malloc`, `free`, `abort`, `memcmp`, `strlen`, an
 
 #### SIMD / vector types
 
-FC does not provide first-class SIMD or vector types (e.g., `float32x4`, `int32x8`) at this time. Code that needs explicit vectorization should rely on the C compiler's auto-vectorizer — GCC and Clang already vectorize many loops automatically — or drop down to C via `extern` for hand-written intrinsics. A future revision may add language-level vector types backed by GCC/Clang's `__attribute__((vector_size(N)))`, but this is out of scope for this version.
+FC does not provide first-class SIMD or vector types (e.g., `float32x4`, `int32x8`) at this time. Two escape hatches exist for code that needs vectorization:
+
+1. **Rely on the C compiler's auto-vectorizer.** GCC and Clang already vectorize many straight-line numeric loops automatically, so plain FC `for` loops over `float32[]` / `int32[]` slices often get SIMD codegen for free with no source changes.
+2. **Push the vectorized kernel into a C helper and call it via `extern`.** Note that the vector types themselves (`__m128`, `__m256`, `vector_size`-typed aliases) are opaque compiler primitives, not C structs, so they cannot cross the FC/C boundary via `extern struct` — and even if they could, per-intrinsic FFI calls would defeat inlining and dwarf the speedup. The workable pattern is to write a C function that takes plain pointers or lengths and does the entire vectorized loop internally using intrinsics, then declare that function as an `extern` in FC and call it with slices. The vector type never appears in FC; only the bulk kernel boundary does.
+
+A future revision may add language-level vector types backed by GCC/Clang's `__attribute__((vector_size(N)))`, but this is out of scope for this version.
 
 ---
 
