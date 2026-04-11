@@ -105,6 +105,7 @@ struct game_state =
 
     // Score / wave
     score: int32
+    score_locked: bool
     wave: int32
     high_score: int32
     new_high: bool
@@ -560,6 +561,7 @@ let reset_game = () ->
     game->cooldown = 0
     game->lives = starting_lives
     game->score = 0
+    game->score_locked = false
     game->wave = 1
     game->new_high = false
     clear_bullets()
@@ -695,7 +697,8 @@ let process_collisions = (rng: pcg_random*, audio_dev: uint32,
                 let ei = bullet_hits_enemy(bi)
                 if ei >= 0 then
                     let kind = enemy_kind_for_row(enemies[ei].row)
-                    game->score = game->score + enemy_points(kind)
+                    if !game->score_locked then
+                        game->score = game->score + enemy_points(kind)
                     enemies[ei].alive = false
                     game->alive_count = game->alive_count - 1
                     bullets[bi].alive = false
@@ -1122,6 +1125,13 @@ let main = (args: str[]) ->
                         if audio_dev > 0u32 then
                             sdl.clear_audio(audio_dev)
                             sdl.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
+                    | _ -> void()
+
+                if k == sdl.key_return then
+                    match game->phase with
+                    | playing ->
+                        game->lives = starting_lives
+                        game->score_locked = true
                     | _ -> void()
 
                 if k == sdl.key_p then
