@@ -492,9 +492,9 @@ FC requires a **GCC-compatible C11 compiler**. Supported toolchains:
 
 #### Runtime requirements
 
-FC targets **C11 hosted implementations with heap allocation** — a libc providing `malloc`, `free`, `abort`, `memcmp`, `strlen`, and `snprintf`. This covers desktop, server, mobile (iOS, Android NDK), and "rich" embedded platforms (Raspberry Pi, ESP32 with ESP-IDF, Arduino with avr-libc, ARM Cortex-M with newlib/picolibc).
+FC requires a **libc providing `malloc`, `free`, `abort`, `memcmp`, `strlen`, and `snprintf`** — that's the whole runtime contract. Whether the C implementation is technically *hosted* or *freestanding* in the C11 sense doesn't matter; what matters is that those six symbols are linkable. This covers desktop, server, and mobile (iOS, Android NDK), as well as embedded platforms that link against a libc — Raspberry Pi, ESP32 with ESP-IDF, Arduino with avr-libc, and ARM Cortex-M / RISC-V with newlib or picolibc. The last group is nominally freestanding in C11 terms, but the libc layer is present and that is what FC cares about.
 
-**Not supported:** C11 freestanding (no libc), static-memory-only bare metal, or custom allocator-only environments. FC's core language features — heap allocation (`alloc`/`free`), string interpolation, bounds-check traps (`abort`) — depend on a hosted-like environment. Platforms without these facilities are better served by C directly.
+**Not supported:** no-libc bare metal (nothing providing `malloc`/`abort`/`snprintf`), static-memory-only environments where heap allocation is forbidden, and custom allocator-only environments where libc's `malloc` cannot be used. FC's core language features — heap allocation (`alloc`/`free`), string interpolation, bounds-check traps (`abort`) — depend on those runtime symbols being available. Platforms without them are better served by C directly.
 
 ---
 
