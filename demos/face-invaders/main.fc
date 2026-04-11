@@ -908,7 +908,7 @@ let draw_splash = (r: any*) ->
     // Controls
     draw_text_centered(r, "ARROWS MOVE    SPACE FIRE    ESC QUIT",
                        logical_w / 2, 540, 3, 160u8, 180u8, 220u8)
-    draw_text_centered(r, "PRESS SPACE TO START",
+    draw_text_centered(r, "PRESS ENTER TO START",
                        logical_w / 2, 600, 4, 255u8, 230u8, 80u8)
 
 let draw_game_over = (r: any*) ->
@@ -916,7 +916,7 @@ let draw_game_over = (r: any*) ->
     draw_text_centered(r, "GAME OVER", logical_w / 2, 290, 10, 255u8, 100u8, 100u8)
     if game->new_high then
         draw_text_centered(r, "NEW HIGH SCORE.", logical_w / 2, 380, 5, 255u8, 230u8, 80u8)
-    draw_text_centered(r, "SPACE TO RESTART   ESC TO QUIT",
+    draw_text_centered(r, "ENTER TO RESTART   ESC TO QUIT",
                        logical_w / 2, 430, 3, 200u8, 200u8, 220u8)
 
 let draw_paused = (r: any*) ->
@@ -1117,8 +1117,6 @@ let main = (args: str[]) ->
                     game->move_right = true
                 if k == sdl.key_space then
                     match game->phase with
-                    | splash -> reset_game()
-                    | game_over -> reset_game()
                     | playing ->
                         game->fire_held = true
                         fire_player_bullet()
@@ -1129,6 +1127,8 @@ let main = (args: str[]) ->
 
                 if k == sdl.key_return then
                     match game->phase with
+                    | splash -> reset_game()
+                    | game_over -> reset_game()
                     | playing ->
                         game->lives = starting_lives
                         game->score_locked = true
