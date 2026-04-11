@@ -2,6 +2,8 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
+- **OR-patterns in match (`| a | b -> ...`)**: match arms currently take exactly one pattern, so sharing an arm body across several variants or literals requires duplicating it. Adding OR-patterns would let us write e.g. `| splash | game_over -> reset()` or `| 'A' | 'a' -> ...`. The main work lives in the parser (peel off `|` at the start of an arm into a list of alternatives under a new `PAT_OR` node), pass2 exhaustiveness (flatten to the existing per-variant check), and codegen (emit `if (... || ...)` for the compiled arm condition). Payload-binding alternatives need a binding-compatibility rule — either restrict to no-payload / literal alternatives in v1, or require all branches bind the same names and types.
+
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:
   - **Abort/signal handling** (core lang): `expressions/assert_fail`, `assert_message_fail`, `div_by_zero`, `div_by_zero_u32`, `mod_by_zero`, `options/unwrap_none`, `slices/slice_bounds`, `slices/subslice_bounds_abort`, `structs/fixed_array_overflow_err` — likely different exit codes from `abort()` on Windows vs Linux (Windows doesn't use POSIX signals).
   - **IO/stdio** (POSIX-dependent): all `io/*` and `stdlib/io_*` tests — likely need `--flag windows` for `io.mkdir`, and possibly other POSIX API differences (`unistd.h` access checks, file path handling).
