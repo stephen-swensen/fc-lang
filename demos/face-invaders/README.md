@@ -39,14 +39,31 @@ Requires SDL2 installed for your environment:
 
 ## Display
 
-The game opens a **fullscreen-desktop** window with
-`SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_ALLOW_HIGHDPI`, then uses
+The game opens a resizable, high-DPI aware window that is maximized
+immediately at startup (`SDL_MaximizeWindow`), then uses
 `SDL_RenderSetLogicalSize(1280, 720)` so all drawing happens in a fixed
 logical coordinate space. SDL scales that logical resolution to the
 physical backing pixels at blit time, which is how the game stays crisp
 on high-DPI displays without any per-platform scaling math in the game
 code itself. The `SDL_RENDER_SCALE_QUALITY=linear` hint gives smooth
 upscaling.
+
+**F11** toggles "fake fullscreen" — a borderless window manually sized
+to the display bounds via `SDL_GetDisplayBounds` + `SDL_SetWindowSize`.
+This sidesteps `SDL_WINDOW_FULLSCREEN_DESKTOP` entirely, which avoids a
+class of DPI/drawable-size quirks seen on some window managers.
+
+### Platform notes
+
+The primary runtime target is **Windows / MSYS2 / UCRT64**, where
+everything (including F11 fullscreen) works as intended. The game also
+runs on Linux/X11.
+
+Under **WSL2** (WSLg or X server forwarding) the rendering pipeline has
+known quirks — most visibly, fullscreen can end up scaled off-screen on
+some compositors. This is an environment limitation, not a game bug.
+The maximized default window works fine on WSL2, so the recommended
+WSL2 experience is to just use the default (don't hit F11).
 
 ## FC features demonstrated
 
