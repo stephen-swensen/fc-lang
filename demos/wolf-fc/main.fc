@@ -389,7 +389,7 @@ let decode_sprite = (raw: uint8[], raw_len: int32, palette: uint32[], out: uint3
             let start_row = start_x2 / 2
             let end_row = end_x2 / 2
             for row in start_row..end_row
-                let src_idx = pix_off + (row - start_row)
+                let src_idx = pix_off + row
                 if src_idx < raw_len && row < 64 && col < 64 then
                     let pi = (int32) raw[src_idx]
                     if pi > 0 then
@@ -425,16 +425,21 @@ let load_vswap = (path: const str, palette: uint32[]) ->
                 wall_tex[i * tex_pixels + px] = palette[(int32) page[px]]
         // Load sprite textures (decoded to 64x64 ARGB, 0 = transparent)
         let sprite_tex = alloc(uint32[num_sprites * tex_pixels] {})!
-        let raw_buf = alloc(uint8[16384] {})!
+        // Wolf3D loads all chunks into 4096-byte pages. Sprite command data
+        // can reference bytes beyond the stored chunk length, so we must read
+        // a full page worth of data.
+        let raw_buf = alloc(uint8[4096] {})!
         for i in 0..num_sprites
             let chunk_idx = sprite_start + i
             let off = read_i32(obuf, chunk_idx * 4)
             let len = read_u16(lbuf, chunk_idx * 2)
-            if len > 0 && len <= 16384 then
+            if len > 0 then
+                for bz in 0..4096
+                    raw_buf[bz] = 0u8
                 io.seek(f, (int64) off, io.seek_set)
-                io.read(raw_buf, (int64) len, f)
+                io.read(raw_buf, 4096i64, f)
                 let spr_out = alloc(uint32[tex_pixels] {})!
-                decode_sprite(raw_buf, len, palette, spr_out)
+                decode_sprite(raw_buf, 4096, palette, spr_out)
                 for px in 0..tex_pixels
                     sprite_tex[i * tex_pixels + px] = spr_out[px]
         some(vswap_result { wall_tex = wall_tex, num_walls = num_walls,
@@ -572,13 +577,25 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
             for i in 0..4096
                 w->map[i] = (int32) plane0[i]
 
-            // Extract static objects and player start from plane 1
+            // Extract objects, enemies, and player start from plane 1
+            // Enemy front-facing sprite IDs (VSWAP sprite page offsets):
+            //   guard=50, officer=100, SS=150, dog=198, mutant=248
+            let enemy_spr = alloc(int32[16] {})!
+            enemy_spr[0] = 50
+            enemy_spr[1] = 100
+            enemy_spr[2] = 150
+            enemy_spr[3] = 198
+            enemy_spr[4] = 248
+            for i in 5..16
+                enemy_spr[i] = 50
             let mut spr_count = 0
             // First pass: count sprites
             for y in 0..64
                 for x in 0..64
                     let v = (int32) plane1[y * 64 + x]
                     if v >= 23 && v <= 74 then
+                        spr_count = spr_count + 1
+                    if v >= 108 then
                         spr_count = spr_count + 1
             w->sprites = alloc(game_sprite[spr_count + 1] {})!
             w->num_sprites = 0
@@ -592,6 +609,14 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
                         w->sprites[si].y = (float64) y + 0.5
                         w->sprites[si].sprite_id = v - 23
                         w->num_sprites = w->num_sprites + 1
+                    if v >= 108 then
+                        let etype = (v - 108) / 16
+                        if etype >= 0 && etype < 16 then
+                            let si = w->num_sprites
+                            w->sprites[si].x = (float64) x + 0.5
+                            w->sprites[si].y = (float64) y + 0.5
+                            w->sprites[si].sprite_id = enemy_spr[etype]
+                            w->num_sprites = w->num_sprites + 1
                     if v == 19 then
                         w->p.x = (float64) x + 0.5
                         w->p.y = (float64) y + 0.5
@@ -1230,9 +1255,11 @@ let main = (args: str[]) ->
         sprite_tex = vd.sprite_tex
         num_spr_tex = vd.num_sprites
         io.write("Loaded %d{num_tex} wall textures, %d{num_spr_tex} sprites from VSWAP.WL6\n", stdout)
+        io.flush(stdout)
     | none ->
         textures = gen_textures()
         io.write("VSWAP.WL6 not found, using procedural textures\n", stdout)
+        io.flush(stdout)
 
     // World state
     let w = alloc(world)!
