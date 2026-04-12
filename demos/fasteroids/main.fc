@@ -1,0 +1,1205 @@
+// Fasteroids — a modern Asteroids clone written in FC using SDL2.
+// Vector-styled polygonal asteroids with neon glow lines, particle bursts,
+// thrust-and-rotate ship with screen wrap, procedural audio, and a starfield.
+
+import sdl2 from sdl2::
+import rect from sdl2::sdl2
+import sdl_event from sdl2::sdl2
+import audio_spec from sdl2::sdl2
+import io from std::
+import text from std::
+import sys from std::
+import math from std::
+import pcg_random from std::random
+
+// ============================================================
+// Constants
+// ============================================================
+
+let logical_w = 1280
+let logical_h = 720
+
+let max_asteroids = 64
+let max_bullets = 32
+let max_particles = 384
+let max_stars = 160
+
+let ship_radius = 14.0
+let ship_thrust = 0.18
+let ship_max_speed = 7.5
+let ship_friction = 0.992
+let ship_rot_speed = 0.085
+let ship_fire_cooldown = 9
+let ship_spawn_invuln = 120
+
+let bullet_speed = 11.5
+let bullet_lifetime = 56
+
+let starting_lives = 3
+let extra_life_score = 10000
+
+let asteroid_vert_count = 12
+let asteroid_radius_large = 50.0
+let asteroid_radius_medium = 26.0
+let asteroid_radius_small = 13.0
+
+let ufo_speed = 3.0
+let ufo_min_interval = 600
+let ufo_max_interval = 1500
+let ufo_fire_interval = 70
+
+let two_pi = 6.2831853071795864
+
+// ============================================================
+// Types
+// ============================================================
+
+union game_phase =
+    | splash
+    | playing
+    | paused
+    | dying
+    | game_over
+
+struct asteroid =
+    x: float64
+    y: float64
+    vx: float64
+    vy: float64
+    angle: float64
+    spin: float64
+    base_radius: float64
+    size: int32
+    alive: bool
+    verts: float64[12]
+
+struct bullet =
+    x: float64
+    y: float64
+    vx: float64
+    vy: float64
+    life: int32
+    alive: bool
+    from_player: bool
+
+struct particle =
+    x: float64
+    y: float64
+    vx: float64
+    vy: float64
+    life: int32
+    max_life: int32
+    r: uint8
+    g: uint8
+    b: uint8
+
+struct star =
+    x: float64
+    y: float64
+    speed: float64
+    brightness: uint8
+
+struct ufo_state =
+    x: float64
+    y: float64
+    vx: float64
+    vy: float64
+    alive: bool
+    fire_timer: int32
+    spawn_timer: int32
+    next_spawn: int32
+    is_small: bool
+
+struct game_state =
+    ship_x: float64
+    ship_y: float64
+    ship_vx: float64
+    ship_vy: float64
+    ship_angle: float64
+    thrust_on: bool
+    rotate_left: bool
+    rotate_right: bool
+    fire_held: bool
+    cooldown: int32
+    lives: int32
+    invuln: int32
+    score: int32
+    high_score: int32
+    new_high: bool
+    wave: int32
+    phase: game_phase
+    phase_timer: int32
+    next_extra: int32
+
+struct world =
+    asteroids: asteroid[]
+    bullets: bullet[]
+    particles: particle[]
+    stars: star[]
+    ufo: ufo_state
+    game: game_state
+
+// ============================================================
+// Drawing helpers
+// ============================================================
+
+let fill = (r: any*, x: int32, y: int32, w: int32, h: int32,
+            cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
+    let mut rc = rect { x = x, y = y, w = w, h = h }
+    sdl2.set_color(r, cr, cg, cb, ca)
+    sdl2.fill_rect(r, &rc)
+    return
+
+let glow_line = (r: any*, x1: int32, y1: int32, x2: int32, y2: int32,
+                 cr: uint8, cg: uint8, cb: uint8) ->
+    sdl2.set_color(r, cr, cg, cb, 50u8)
+    sdl2.draw_line(r, x1 - 1, y1 - 1, x2 - 1, y2 - 1)
+    sdl2.draw_line(r, x1 + 1, y1 + 1, x2 + 1, y2 + 1)
+    sdl2.draw_line(r, x1 - 1, y1 + 1, x2 - 1, y2 + 1)
+    sdl2.draw_line(r, x1 + 1, y1 - 1, x2 + 1, y2 - 1)
+    sdl2.set_color(r, cr, cg, cb, 255u8)
+    sdl2.draw_line(r, x1, y1, x2, y2)
+    return
+
+// ============================================================
+// 3x5 pixel font
+// ============================================================
+
+let glyph = (ch: uint8) ->
+    match ch with
+    | 'A' -> 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'B' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+    | 'C' -> 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+    | 'D' -> 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+    | 'E' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+    | 'F' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    | 'G' -> 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+    | 'H' -> 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'I' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    | 'J' -> 1 | (1 << 3) | (1 << 6) | (5 << 9) | (2 << 12)
+    | 'K' -> 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+    | 'L' -> 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+    | 'M' -> 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+    | 'N' -> 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'O' -> 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    | 'P' -> 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    | 'Q' -> 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+    | 'R' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+    | 'S' -> 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+    | 'T' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    | 'U' -> 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    | 'V' -> 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+    | 'W' -> 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+    | 'X' -> 5 | (5 << 3) | (2 << 6) | (5 << 9) | (5 << 12)
+    | 'Y' -> 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    | 'Z' -> 7 | (1 << 3) | (2 << 6) | (4 << 9) | (7 << 12)
+    | '0' -> 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+    | '1' -> 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    | '2' -> 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+    | '3' -> 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+    | '4' -> 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
+    | '5' -> 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+    | '6' -> 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    | '7' -> 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+    | '8' -> 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    | '9' -> 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
+    | ':' -> 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+    | '!' -> 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+    | '.' -> 0 | (0 << 3) | (0 << 6) | (0 << 9) | (2 << 12)
+    | '+' -> 0 | (2 << 3) | (7 << 6) | (2 << 9) | (0 << 12)
+    | '-' -> 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
+    | _ -> 0
+
+let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, scale: int32,
+                 cr: uint8, cg: uint8, cb: uint8) ->
+    let g = glyph(ch)
+    for row in 0..5
+        let bits = (g >> (row * 3)) & 7
+        for col in 0..3
+            if (bits >> (2 - col)) & 1 == 1 then
+                fill(r, ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb, 255u8)
+
+let text_width = (s: const str, scale: int32) ->
+    (int32) s.len * 4 * scale - scale
+
+let draw_text = (r: any*, s: const str, ox: int32, oy: int32, scale: int32,
+                 cr: uint8, cg: uint8, cb: uint8) ->
+    let mut x = ox
+    for ch in s
+        if ch != ' ' then
+            draw_char(r, ch, x, oy, scale, cr, cg, cb)
+        x = x + 4 * scale
+
+let draw_text_centered = (r: any*, s: const str, cx: int32, oy: int32, scale: int32,
+                          cr: uint8, cg: uint8, cb: uint8) ->
+    let w = text_width(s, scale)
+    draw_text(r, s, cx - w / 2, oy, scale, cr, cg, cb)
+
+// ============================================================
+// Screen-wrap helper
+// ============================================================
+
+let wrap_x = (v: float64) ->
+    let w = (float64) logical_w
+    if v < 0.0 then v + w
+    else if v >= w then v - w
+    else v
+
+let wrap_y = (v: float64) ->
+    let h = (float64) logical_h
+    if v < 0.0 then v + h
+    else if v >= h then v - h
+    else v
+
+let wrap_dist = (a: float64, b: float64, span: float64) ->
+    let d = a - b
+    if d > span * 0.5 then d - span
+    else if d < span * -0.5 then d + span
+    else d
+
+// ============================================================
+// Starfield
+// ============================================================
+
+let init_stars = (w: world*, rng: pcg_random*) ->
+    for i in 0..max_stars
+        w->stars[i].x = pcg_random.next_float64(rng) * (float64) logical_w
+        w->stars[i].y = pcg_random.next_float64(rng) * (float64) logical_h
+        let t = pcg_random.next_float64(rng)
+        w->stars[i].speed = 0.1 + t * 1.2
+        let b = 60.0 + pcg_random.next_float64(rng) * 180.0
+        w->stars[i].brightness = (uint8) b
+
+let update_stars = (w: world*) ->
+    for i in 0..max_stars
+        w->stars[i].y = w->stars[i].y + w->stars[i].speed
+        if w->stars[i].y >= (float64) logical_h then
+            w->stars[i].y = 0.0
+
+let draw_stars = (w: world*, r: any*) ->
+    for i in 0..max_stars
+        let b = w->stars[i].brightness
+        let x = (int32) w->stars[i].x
+        let y = (int32) w->stars[i].y
+        if w->stars[i].speed > 0.8 then
+            fill(r, x, y, 2, 2, b, b, 255u8, 200u8)
+        else
+            fill(r, x, y, 1, 1, b, b, 255u8, 160u8)
+
+// ============================================================
+// Particles
+// ============================================================
+
+let spawn_burst = (w: world*, rng: pcg_random*, cx: float64, cy: float64, count: int32,
+                   cr: uint8, cg: uint8, cb: uint8) ->
+    let mut spawned = 0
+    for i in 0..max_particles
+        if spawned >= count then break
+        if w->particles[i].life <= 0 then
+            let angle = pcg_random.next_float64(rng) * two_pi
+            let speed = 1.0 + pcg_random.next_float64(rng) * 5.5
+            w->particles[i].x = cx
+            w->particles[i].y = cy
+            w->particles[i].vx = math.cos(angle) * speed
+            w->particles[i].vy = math.sin(angle) * speed
+            let life = 20 + (int32) (pcg_random.next_float64(rng) * 30.0)
+            w->particles[i].life = life
+            w->particles[i].max_life = life
+            w->particles[i].r = cr
+            w->particles[i].g = cg
+            w->particles[i].b = cb
+            spawned = spawned + 1
+
+let update_particles = (w: world*) ->
+    for i in 0..max_particles
+        if w->particles[i].life > 0 then
+            w->particles[i].x = w->particles[i].x + w->particles[i].vx
+            w->particles[i].y = w->particles[i].y + w->particles[i].vy
+            w->particles[i].vx = w->particles[i].vx * 0.97
+            w->particles[i].vy = w->particles[i].vy * 0.97
+            w->particles[i].life = w->particles[i].life - 1
+
+let draw_particles = (w: world*, r: any*) ->
+    for i in 0..max_particles
+        if w->particles[i].life > 0 then
+            let t = (float64) w->particles[i].life / (float64) w->particles[i].max_life
+            let alpha = (uint8) (t * 255.0)
+            let size = if t > 0.5 then 3 else 2
+            fill(r, (int32) w->particles[i].x - size / 2,
+                    (int32) w->particles[i].y - size / 2,
+                    size, size,
+                    w->particles[i].r, w->particles[i].g, w->particles[i].b, alpha)
+
+// ============================================================
+// Asteroids
+// ============================================================
+
+let init_asteroid = (a: asteroid*, rng: pcg_random*, px: float64, py: float64,
+                     vx: float64, vy: float64, size: int32) ->
+    a->x = px
+    a->y = py
+    a->vx = vx
+    a->vy = vy
+    a->angle = pcg_random.next_float64(rng) * two_pi
+    a->spin = (pcg_random.next_float64(rng) - 0.5) * 0.04
+    a->size = size
+    a->alive = true
+    let base = if size == 2 then asteroid_radius_large
+               else if size == 1 then asteroid_radius_medium
+               else asteroid_radius_small
+    a->base_radius = base
+    for i in 0..asteroid_vert_count
+        a->verts[i] = base * (0.7 + pcg_random.next_float64(rng) * 0.6)
+
+let find_free_asteroid = (w: world*) ->
+    let mut result = -1
+    for i in 0..max_asteroids
+        if !w->asteroids[i].alive && result < 0 then
+            result = i
+    result
+
+let asteroid_points = (size: int32) ->
+    if size == 2 then 20
+    else if size == 1 then 50
+    else 100
+
+let draw_asteroid = (w: world*, r: any*, idx: int32) ->
+    let a = &w->asteroids[idx]
+    let cr = if a->size == 2 then 120u8 else if a->size == 1 then 160u8 else 200u8
+    let cg = if a->size == 2 then 140u8 else if a->size == 1 then 170u8 else 200u8
+    let cb = if a->size == 2 then 180u8 else if a->size == 1 then 200u8 else 220u8
+
+    let mut prev_sx = 0
+    let mut prev_sy = 0
+    let mut first_sx = 0
+    let mut first_sy = 0
+
+    for i in 0..asteroid_vert_count
+        let theta = a->angle + two_pi * (float64) i / (float64) asteroid_vert_count
+        let vr = a->verts[i]
+        let sx = (int32) (a->x + math.cos(theta) * vr)
+        let sy = (int32) (a->y + math.sin(theta) * vr)
+        if i == 0 then
+            first_sx = sx
+            first_sy = sy
+        else
+            glow_line(r, prev_sx, prev_sy, sx, sy, cr, cg, cb)
+        prev_sx = sx
+        prev_sy = sy
+    glow_line(r, prev_sx, prev_sy, first_sx, first_sy, cr, cg, cb)
+
+let spawn_wave_asteroids = (w: world*, rng: pcg_random*, count: int32) ->
+    for n in 0..count
+        let idx = find_free_asteroid(w)
+        if idx >= 0 then
+            let angle = pcg_random.next_float64(rng) * two_pi
+            let speed = 0.8 + pcg_random.next_float64(rng) * 1.5
+            let mut px = pcg_random.next_float64(rng) * (float64) logical_w
+            let mut py = pcg_random.next_float64(rng) * (float64) logical_h
+            let dx = wrap_dist(px, w->game.ship_x, (float64) logical_w)
+            let dy = wrap_dist(py, w->game.ship_y, (float64) logical_h)
+            let dist = math.sqrt(dx * dx + dy * dy)
+            if dist < 180.0 then
+                px = wrap_x(px + 200.0)
+                py = wrap_y(py + 200.0)
+            init_asteroid(&w->asteroids[idx], rng, px, py,
+                          math.cos(angle) * speed, math.sin(angle) * speed, 2)
+
+let split_asteroid = (w: world*, rng: pcg_random*, idx: int32) ->
+    let a = &w->asteroids[idx]
+    if a->size <= 0 then return
+    let new_size = a->size - 1
+    let px = a->x
+    let py = a->y
+    for k in 0..2
+        let ci = find_free_asteroid(w)
+        if ci >= 0 then
+            let angle = pcg_random.next_float64(rng) * two_pi
+            let speed = 1.5 + pcg_random.next_float64(rng) * 2.5
+            init_asteroid(&w->asteroids[ci], rng, px, py,
+                          math.cos(angle) * speed, math.sin(angle) * speed, new_size)
+
+let update_asteroids = (w: world*) ->
+    for i in 0..max_asteroids
+        if w->asteroids[i].alive then
+            w->asteroids[i].x = wrap_x(w->asteroids[i].x + w->asteroids[i].vx)
+            w->asteroids[i].y = wrap_y(w->asteroids[i].y + w->asteroids[i].vy)
+            w->asteroids[i].angle = w->asteroids[i].angle + w->asteroids[i].spin
+
+let count_alive_asteroids = (w: world*) ->
+    let mut n = 0
+    for i in 0..max_asteroids
+        if w->asteroids[i].alive then
+            n = n + 1
+    n
+
+// ============================================================
+// Ship drawing
+// ============================================================
+
+let draw_ship = (w: world*, r: any*, blink: bool, frame_count: int32) ->
+    if blink then return
+    let a = w->game.ship_angle
+    let cx = w->game.ship_x
+    let cy = w->game.ship_y
+
+    let nose_x = (int32) (cx + math.cos(a) * 20.0)
+    let nose_y = (int32) (cy + math.sin(a) * 20.0)
+    let back_l_x = (int32) (cx + math.cos(a + 2.5) * 16.0)
+    let back_l_y = (int32) (cy + math.sin(a + 2.5) * 16.0)
+    let back_r_x = (int32) (cx + math.cos(a - 2.5) * 16.0)
+    let back_r_y = (int32) (cy + math.sin(a - 2.5) * 16.0)
+    let tail_x = (int32) (cx + math.cos(a + math.pi) * 8.0)
+    let tail_y = (int32) (cy + math.sin(a + math.pi) * 8.0)
+
+    glow_line(r, nose_x, nose_y, back_l_x, back_l_y, 100u8, 220u8, 255u8)
+    glow_line(r, nose_x, nose_y, back_r_x, back_r_y, 100u8, 220u8, 255u8)
+    glow_line(r, back_l_x, back_l_y, tail_x, tail_y, 80u8, 180u8, 220u8)
+    glow_line(r, back_r_x, back_r_y, tail_x, tail_y, 80u8, 180u8, 220u8)
+
+    if w->game.thrust_on then
+        let flicker = (float64) (frame_count % 5)
+        let flame_len = 12.0 + flicker * 2.0
+        let flame_x = (int32) (cx + math.cos(a + math.pi) * flame_len)
+        let flame_y = (int32) (cy + math.sin(a + math.pi) * flame_len)
+        glow_line(r, back_l_x, back_l_y, flame_x, flame_y, 255u8, 160u8, 40u8)
+        glow_line(r, back_r_x, back_r_y, flame_x, flame_y, 255u8, 160u8, 40u8)
+
+// ============================================================
+// Bullets
+// ============================================================
+
+let fire_bullet = (w: world*) ->
+    if w->game.cooldown > 0 then return
+    for i in 0..max_bullets
+        if !w->bullets[i].alive then
+            let a = w->game.ship_angle
+            w->bullets[i].x = w->game.ship_x + math.cos(a) * 20.0
+            w->bullets[i].y = w->game.ship_y + math.sin(a) * 20.0
+            w->bullets[i].vx = math.cos(a) * bullet_speed + w->game.ship_vx * 0.3
+            w->bullets[i].vy = math.sin(a) * bullet_speed + w->game.ship_vy * 0.3
+            w->bullets[i].life = bullet_lifetime
+            w->bullets[i].alive = true
+            w->bullets[i].from_player = true
+            w->game.cooldown = ship_fire_cooldown
+            return
+
+let update_bullets = (w: world*) ->
+    for i in 0..max_bullets
+        if w->bullets[i].alive then
+            w->bullets[i].x = wrap_x(w->bullets[i].x + w->bullets[i].vx)
+            w->bullets[i].y = wrap_y(w->bullets[i].y + w->bullets[i].vy)
+            w->bullets[i].life = w->bullets[i].life - 1
+            if w->bullets[i].life <= 0 then
+                w->bullets[i].alive = false
+
+let draw_bullets = (w: world*, r: any*) ->
+    for i in 0..max_bullets
+        if w->bullets[i].alive then
+            let bx = (int32) w->bullets[i].x
+            let by = (int32) w->bullets[i].y
+            fill(r, bx - 2, by - 2, 4, 4, 255u8, 255u8, 200u8, 255u8)
+            fill(r, bx - 4, by - 4, 8, 8, 255u8, 255u8, 150u8, 60u8)
+
+// ============================================================
+// UFO
+// ============================================================
+
+let schedule_next_ufo = (w: world*, rng: pcg_random*) ->
+    w->ufo.alive = false
+    w->ufo.spawn_timer = 0
+    let range = (uint32) (ufo_max_interval - ufo_min_interval)
+    let rv = (int32) pcg_random.next_bounded_uint32(rng, range)
+    w->ufo.next_spawn = ufo_min_interval + rv
+
+let spawn_ufo = (w: world*, rng: pcg_random*) ->
+    w->ufo.alive = true
+    w->ufo.fire_timer = ufo_fire_interval
+    w->ufo.is_small = (int32) pcg_random.next_bounded_uint32(rng, 3u32) == 0
+    let from_right = (int32) pcg_random.next_bounded_uint32(rng, 2u32)
+    let y_pos = 60.0 + pcg_random.next_float64(rng) * 200.0
+    w->ufo.y = y_pos
+    w->ufo.vy = (pcg_random.next_float64(rng) - 0.5) * 0.8
+    if from_right == 0 then
+        w->ufo.x = -40.0
+        w->ufo.vx = ufo_speed
+    else
+        w->ufo.x = (float64) (logical_w + 40)
+        w->ufo.vx = 0.0 - ufo_speed
+
+let fire_ufo_bullet = (w: world*, rng: pcg_random*) ->
+    for i in 0..max_bullets
+        if !w->bullets[i].alive then
+            let aim_angle = if w->ufo.is_small then
+                let dx = wrap_dist(w->game.ship_x, w->ufo.x, (float64) logical_w)
+                let dy = wrap_dist(w->game.ship_y, w->ufo.y, (float64) logical_h)
+                let spread = (pcg_random.next_float64(rng) - 0.5) * 0.25
+                math.atan2(dy, dx) + spread
+            else
+                pcg_random.next_float64(rng) * two_pi
+            w->bullets[i].x = w->ufo.x
+            w->bullets[i].y = w->ufo.y
+            w->bullets[i].vx = math.cos(aim_angle) * 5.0
+            w->bullets[i].vy = math.sin(aim_angle) * 5.0
+            w->bullets[i].life = 90
+            w->bullets[i].alive = true
+            w->bullets[i].from_player = false
+            return
+
+let update_ufo = (w: world*, rng: pcg_random*) ->
+    if w->ufo.alive then
+        w->ufo.x = w->ufo.x + w->ufo.vx
+        w->ufo.y = w->ufo.y + w->ufo.vy
+        if w->ufo.x < -80.0 || w->ufo.x > (float64) (logical_w + 80) then
+            schedule_next_ufo(w, rng)
+        else
+            w->ufo.fire_timer = w->ufo.fire_timer - 1
+            if w->ufo.fire_timer <= 0 then
+                w->ufo.fire_timer = ufo_fire_interval
+                fire_ufo_bullet(w, rng)
+    else
+        w->ufo.spawn_timer = w->ufo.spawn_timer + 1
+        if w->ufo.spawn_timer >= w->ufo.next_spawn then
+            spawn_ufo(w, rng)
+
+let draw_ufo = (w: world*, r: any*) ->
+    if !w->ufo.alive then return
+    let x = (int32) w->ufo.x
+    let y = (int32) w->ufo.y
+    let hw = if w->ufo.is_small then 18 else 28
+    let hh = if w->ufo.is_small then 7 else 10
+    let cr = 255u8
+    let cg = 100u8
+    let cb = 180u8
+    // Top dome
+    glow_line(r, x - hw / 2, y - hh / 2, x + hw / 2, y - hh / 2, cr, cg, cb)
+    glow_line(r, x - hw / 2, y - hh / 2, x - hw, y, cr, cg, cb)
+    glow_line(r, x + hw / 2, y - hh / 2, x + hw, y, cr, cg, cb)
+    // Body
+    glow_line(r, x - hw, y, x + hw, y, cr, cg, cb)
+    glow_line(r, x - hw, y, x - hw / 2, y + hh / 2, cr, cg, cb)
+    glow_line(r, x + hw, y, x + hw / 2, y + hh / 2, cr, cg, cb)
+    glow_line(r, x - hw / 2, y + hh / 2, x + hw / 2, y + hh / 2, cr, cg, cb)
+
+// ============================================================
+// Collisions
+// ============================================================
+
+let circle_overlap = (x1: float64, y1: float64, r1: float64,
+                      x2: float64, y2: float64, r2: float64) ->
+    let dx = wrap_dist(x1, x2, (float64) logical_w)
+    let dy = wrap_dist(y1, y2, (float64) logical_h)
+    let dist_sq = dx * dx + dy * dy
+    let sum_r = r1 + r2
+    dist_sq < sum_r * sum_r
+
+let process_collisions = (w: world*, rng: pcg_random*,
+                          audio_dev: uint32, hit_snd: sound) ->
+    // Bullets vs asteroids (both player and UFO bullets destroy asteroids)
+    for bi in 0..max_bullets
+        if w->bullets[bi].alive then
+            for ai in 0..max_asteroids
+                if w->asteroids[ai].alive && w->bullets[bi].alive then
+                    if circle_overlap(w->bullets[bi].x, w->bullets[bi].y, 4.0,
+                                      w->asteroids[ai].x, w->asteroids[ai].y,
+                                      w->asteroids[ai].base_radius) then
+                        w->bullets[bi].alive = false
+                        if w->bullets[bi].from_player then
+                            let pts = asteroid_points(w->asteroids[ai].size)
+                            w->game.score = w->game.score + pts
+                        let cx = w->asteroids[ai].x
+                        let cy = w->asteroids[ai].y
+                        split_asteroid(w, rng, ai)
+                        w->asteroids[ai].alive = false
+                        spawn_burst(w, rng, cx, cy, 16, 180u8, 200u8, 255u8)
+                        if audio_dev > 0u32 then
+                            sdl2.clear_audio(audio_dev)
+                            sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
+
+    // Player bullets vs UFO
+    for bi in 0..max_bullets
+        if w->bullets[bi].alive && w->bullets[bi].from_player && w->ufo.alive then
+            let ur = if w->ufo.is_small then 18.0 else 28.0
+            if circle_overlap(w->bullets[bi].x, w->bullets[bi].y, 4.0,
+                              w->ufo.x, w->ufo.y, ur) then
+                w->bullets[bi].alive = false
+                let pts = if w->ufo.is_small then 1000 else 200
+                w->game.score = w->game.score + pts
+                spawn_burst(w, rng, w->ufo.x, w->ufo.y, 24, 255u8, 120u8, 200u8)
+                if audio_dev > 0u32 then
+                    sdl2.clear_audio(audio_dev)
+                    sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
+                schedule_next_ufo(w, rng)
+
+    // Ship vs asteroids (skip during invulnerability)
+    if w->game.invuln <= 0 then
+        for ai in 0..max_asteroids
+            if w->asteroids[ai].alive then
+                if circle_overlap(w->game.ship_x, w->game.ship_y, ship_radius,
+                                  w->asteroids[ai].x, w->asteroids[ai].y,
+                                  w->asteroids[ai].base_radius * 0.8) then
+                    split_asteroid(w, rng, ai)
+                    w->asteroids[ai].alive = false
+                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
+                                30, 100u8, 220u8, 255u8)
+                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
+                                15, 255u8, 160u8, 60u8)
+                    w->game.lives = w->game.lives - 1
+                    if w->game.lives <= 0 then
+                        w->game.phase = game_phase.game_over
+                        w->game.phase_timer = 0
+                    else
+                        w->game.phase = game_phase.dying
+                        w->game.phase_timer = 90
+                    return
+
+    // Ship vs UFO bullets (only non-player bullets can hit the ship)
+    if w->game.invuln <= 0 then
+        for bi in 0..max_bullets
+            if w->bullets[bi].alive && !w->bullets[bi].from_player then
+                if circle_overlap(w->game.ship_x, w->game.ship_y, ship_radius,
+                                  w->bullets[bi].x, w->bullets[bi].y, 4.0) then
+                    w->bullets[bi].alive = false
+                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
+                                30, 100u8, 220u8, 255u8)
+                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
+                                15, 255u8, 160u8, 60u8)
+                    w->game.lives = w->game.lives - 1
+                    if w->game.lives <= 0 then
+                        w->game.phase = game_phase.game_over
+                        w->game.phase_timer = 0
+                    else
+                        w->game.phase = game_phase.dying
+                        w->game.phase_timer = 90
+                    return
+
+// ============================================================
+// Sound effects
+// ============================================================
+
+struct sound =
+    data: any*
+    bytes: uint32
+
+let samples_ms = (ms: int32) ->
+    44100 * ms / 1000
+
+let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32, amp: int32) ->
+    let num_samples = samples_ms(duration_ms)
+    let period = if freq > 0 then 44100 / freq else 44100
+    let half = period / 2
+    for i in 0..num_samples
+        let fade = if i < num_samples / 4
+                   then (i * 4) * 256 / num_samples
+                   else if i > num_samples * 3 / 4
+                        then ((num_samples - i) * 4) * 256 / num_samples
+                        else 256
+        let v = amp * fade / 256
+        if (i % period) < half then
+            buf[offset + i] = (int16) v
+        else
+            buf[offset + i] = (int16) -v
+    offset + num_samples
+
+let make_sound = (n: int32, buf: int16*) ->
+    sound { data = (any*) buf, bytes = (uint32) (n * 2) }
+
+let gen_shoot = () ->
+    let n = samples_ms(50)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 1100, 50, 5000)
+    make_sound(n, mem)
+
+let gen_hit = () ->
+    let n = samples_ms(40) + samples_ms(60)
+    let mem = alloc(int16, (usize) n)!
+    let off = fill_tone(mem, 0, 200, 40, 8000)
+    fill_tone(mem, off, 120, 60, 6000)
+    make_sound(n, mem)
+
+let gen_thrust = () ->
+    let n = samples_ms(80)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 70, 80, 3000)
+    make_sound(n, mem)
+
+let gen_die = () ->
+    let n = samples_ms(100) + samples_ms(120) + samples_ms(160) + samples_ms(240)
+    let mem = alloc(int16, (usize) n)!
+    let mut off = fill_tone(mem, 0, 440, 100, 9000)
+    off = fill_tone(mem, off, 330, 120, 9000)
+    off = fill_tone(mem, off, 220, 160, 9000)
+    fill_tone(mem, off, 110, 240, 9000)
+    make_sound(n, mem)
+
+let gen_extra_life = () ->
+    let n = samples_ms(60) + samples_ms(60) + samples_ms(100)
+    let mem = alloc(int16, (usize) n)!
+    let mut off = fill_tone(mem, 0, 660, 60, 7000)
+    off = fill_tone(mem, off, 880, 60, 7000)
+    fill_tone(mem, off, 1100, 100, 7000)
+    make_sound(n, mem)
+
+// ============================================================
+// High score persistence
+// ============================================================
+
+let load_high_score = () ->
+    match sys.home_dir() with
+    | some(hd) ->
+        match io.open("%s{hd}/.fasteroids/highscore.txt", "r") with
+        | some(fp) ->
+            let mut buf = uint8[32] { }
+            io.read(buf, 32, fp)
+            io.close(fp)
+            match text.parse_int32((const str) buf) with
+            | some(v) -> v
+            | none -> 0
+        | none -> 0
+    | none -> 0
+
+let save_high_score = (score: int32) ->
+    match sys.home_dir() with
+    | some(hd) ->
+        io.mkdir("%s{hd}/.fasteroids")
+        match io.open("%s{hd}/.fasteroids/highscore.txt", "w") with
+        | some(fp) ->
+            io.write("%d{score}\n", fp)
+            io.close(fp)
+        | none -> return
+    | none -> return
+
+// ============================================================
+// Game state management
+// ============================================================
+
+let clear_bullets = (w: world*) ->
+    for i in 0..max_bullets
+        w->bullets[i].alive = false
+
+let clear_asteroids = (w: world*) ->
+    for i in 0..max_asteroids
+        w->asteroids[i].alive = false
+
+let clear_particles = (w: world*) ->
+    for i in 0..max_particles
+        w->particles[i].life = 0
+
+let reset_ship = (w: world*) ->
+    w->game.ship_x = (float64) (logical_w / 2)
+    w->game.ship_y = (float64) (logical_h / 2)
+    w->game.ship_vx = 0.0
+    w->game.ship_vy = 0.0
+    w->game.ship_angle = 0.0 - math.pi / 2.0
+    w->game.thrust_on = false
+    w->game.invuln = ship_spawn_invuln
+    w->game.cooldown = 0
+
+let reset_game = (w: world*, rng: pcg_random*) ->
+    reset_ship(w)
+    w->game.lives = starting_lives
+    w->game.score = 0
+    w->game.new_high = false
+    w->game.wave = 1
+    w->game.next_extra = extra_life_score
+    clear_bullets(w)
+    clear_asteroids(w)
+    clear_particles(w)
+    schedule_next_ufo(w, rng)
+    let num_rocks = 4
+    spawn_wave_asteroids(w, rng, num_rocks)
+    w->game.phase = game_phase.playing
+    w->game.phase_timer = 0
+
+// ============================================================
+// HUD / overlays
+// ============================================================
+
+let draw_hud = (w: world*, r: any*) ->
+    // Score top-left
+    let score_str = "%d{w->game.score}"
+    draw_text(r, (const str) score_str, 30, 20, 4, 255u8, 255u8, 255u8)
+
+    // High score top-center
+    draw_text_centered(r, "HI", logical_w / 2, 10, 3, 120u8, 160u8, 200u8)
+    let hi_str = "%d{w->game.high_score}"
+    draw_text_centered(r, (const str) hi_str, logical_w / 2, 30, 3, 200u8, 200u8, 220u8)
+
+    // Lives as small ship icons
+    for i in 0..w->game.lives
+        let lx = 30 + i * 30
+        let ly = 60
+        sdl2.set_color(r, 100u8, 220u8, 255u8, 255u8)
+        let a = 0.0 - math.pi / 2.0
+        let nx = lx + (int32) (math.cos(a) * 10.0)
+        let ny = ly + (int32) (math.sin(a) * 10.0)
+        let blx = lx + (int32) (math.cos(a + 2.5) * 8.0)
+        let bly = ly + (int32) (math.sin(a + 2.5) * 8.0)
+        let brx = lx + (int32) (math.cos(a - 2.5) * 8.0)
+        let bry = ly + (int32) (math.sin(a - 2.5) * 8.0)
+        sdl2.draw_line(r, nx, ny, blx, bly)
+        sdl2.draw_line(r, nx, ny, brx, bry)
+        sdl2.draw_line(r, blx, bly, brx, bry)
+
+    // Wave top-right
+    let wave_str = "WAVE %d{w->game.wave}"
+    draw_text(r, (const str) wave_str, logical_w - 200, 20, 3, 120u8, 200u8, 180u8)
+
+let draw_splash = (w: world*, r: any*) ->
+    draw_text_centered(r, "FASTEROIDS", logical_w / 2, 140, 12, 80u8, 200u8, 255u8)
+
+    draw_text_centered(r, "LEFT RIGHT  ROTATE    UP  THRUST    SPACE  FIRE",
+                       logical_w / 2, 380, 3, 160u8, 180u8, 220u8)
+    draw_text_centered(r, "DOWN  HYPERSPACE    P  PAUSE    ESC  QUIT",
+                       logical_w / 2, 420, 3, 160u8, 180u8, 220u8)
+
+    // Scoring legend
+    draw_text_centered(r, "LARGE 20    MEDIUM 50    SMALL 100    UFO 200",
+                       logical_w / 2, 490, 3, 200u8, 200u8, 220u8)
+
+    draw_text_centered(r, "PRESS ENTER TO START",
+                       logical_w / 2, 560, 4, 255u8, 230u8, 80u8)
+
+    if w->game.high_score > 0 then
+        let hi_str = "HIGH SCORE: %d{w->game.high_score}"
+        draw_text_centered(r, (const str) hi_str, logical_w / 2, 320, 4,
+                           255u8, 200u8, 100u8)
+
+let draw_game_over = (w: world*, r: any*) ->
+    fill(r, 0, 260, logical_w, 200, 0u8, 0u8, 0u8, 170u8)
+    draw_text_centered(r, "GAME OVER", logical_w / 2, 290, 10, 255u8, 80u8, 80u8)
+    if w->game.new_high then
+        draw_text_centered(r, "NEW HIGH SCORE.", logical_w / 2, 380, 5,
+                           255u8, 230u8, 80u8)
+    draw_text_centered(r, "ENTER TO RESTART   ESC TO QUIT",
+                       logical_w / 2, 430, 3, 200u8, 200u8, 220u8)
+
+let draw_paused = (r: any*) ->
+    fill(r, 0, 300, logical_w, 120, 0u8, 0u8, 0u8, 170u8)
+    draw_text_centered(r, "PAUSED", logical_w / 2, 330, 8, 255u8, 255u8, 255u8)
+
+// ============================================================
+// Per-frame render
+// ============================================================
+
+let render = (w: world*, r: any*, frame_count: int32) ->
+    sdl2.set_blend_mode(r, sdl2.blend_none)
+    sdl2.set_color(r, 2u8, 2u8, 8u8, 255u8)
+    sdl2.clear(r)
+
+    sdl2.set_blend_mode(r, sdl2.blend_alpha)
+    draw_stars(w, r)
+
+    // Asteroids
+    for i in 0..max_asteroids
+        if w->asteroids[i].alive then
+            draw_asteroid(w, r, i)
+
+    // UFO
+    draw_ufo(w, r)
+
+    // Bullets
+    draw_bullets(w, r)
+
+    // Particles
+    draw_particles(w, r)
+
+    // Ship
+    let show_ship = match w->game.phase with
+    | splash -> false
+    | dying -> (w->game.phase_timer / 6) % 2 == 0
+    | game_over -> false
+    | _ -> true
+    if show_ship then
+        let blink = w->game.invuln > 0 && (frame_count / 4) % 2 == 0
+        draw_ship(w, r, blink, frame_count)
+
+    // HUD
+    let show_hud = match w->game.phase with
+    | splash -> false
+    | _ -> true
+    if show_hud then
+        draw_hud(w, r)
+
+    // Overlays
+    match w->game.phase with
+    | splash -> draw_splash(w, r)
+    | paused -> draw_paused(r)
+    | game_over -> draw_game_over(w, r)
+    | _ -> void()
+
+    sdl2.present(r)
+
+// ============================================================
+// Main
+// ============================================================
+
+let main = (args: str[]) ->
+    io.write("=== FASTEROIDS ===\n", stdout)
+    io.write("A modern Asteroids clone in FC (SDL2, DPI-aware)\n\n", stdout)
+    io.write("Controls:\n", stdout)
+    io.write("  LEFT / A    Rotate left\n", stdout)
+    io.write("  RIGHT / D   Rotate right\n", stdout)
+    io.write("  UP / W      Thrust\n", stdout)
+    io.write("  SPACE       Fire\n", stdout)
+    io.write("  DOWN / H    Hyperspace\n", stdout)
+    io.write("  P           Pause\n", stdout)
+    io.write("  F11         Toggle fullscreen\n", stdout)
+    io.write("  ESC         Quit\n\n", stdout)
+
+    sdl2.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"linear")
+    sdl2.init(sdl2.init_video | sdl2.init_audio)
+
+    let initial_w = 960
+    let initial_h = 540
+    let flags = sdl2.window_shown | sdl2.window_allow_highdpi | sdl2.window_resizable
+    let win = sdl2.create_window(c"Fasteroids",
+                                sdl2.pos_centered, sdl2.pos_centered,
+                                initial_w, initial_h, flags)
+    sdl2.maximize_window(win)
+    let mut fullscreen = false
+
+    let ren = sdl2.create_renderer(win, -1,
+                                  sdl2.renderer_accel | sdl2.renderer_vsync)
+    sdl2.set_logical_size(ren, logical_w, logical_h)
+    sdl2.set_blend_mode(ren, sdl2.blend_alpha)
+    sdl2.show_cursor(0)
+
+    let mut out_w = 0
+    let mut out_h = 0
+    sdl2.get_output_size(ren, &out_w, &out_h)
+    io.write("Renderer backing: %d{out_w}x%d{out_h} (logical %d{logical_w}x%d{logical_h})\n",
+             stdout)
+
+    let mut rng = pcg_random.make((uint64) sys.time())
+
+    let w = alloc(world)!
+    w->asteroids = alloc(asteroid[64] { })!
+    w->bullets = alloc(bullet[32] { })!
+    w->particles = alloc(particle[384] { })!
+    w->stars = alloc(star[160] { })!
+
+    // Audio
+    let mut desired = default(audio_spec)
+    desired.freq = 44100
+    desired.format = sdl2.audio_s16sys
+    desired.channels = 1u8
+    desired.samples = 1024u16
+    desired.callback = (any*) 0u
+    desired.userdata = (any*) 0u
+    let mut obtained = default(audio_spec)
+    let audio_dev = sdl2.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    if audio_dev > 0u32 then
+        sdl2.pause_audio(audio_dev, 0)
+
+    let shoot_snd = gen_shoot()
+    let hit_snd = gen_hit()
+    let thrust_snd = gen_thrust()
+    let die_snd = gen_die()
+    let extra_snd = gen_extra_life()
+
+    w->game.high_score = load_high_score()
+    w->game.phase = game_phase.splash
+    w->game.phase_timer = 0
+    w->game.ship_x = (float64) (logical_w / 2)
+    w->game.ship_y = (float64) (logical_h / 2)
+    w->game.ship_angle = 0.0 - math.pi / 2.0
+    w->game.lives = starting_lives
+    w->game.wave = 1
+    w->game.next_extra = extra_life_score
+
+    init_stars(w, &rng)
+
+    // Spawn some asteroids on the splash screen for visual interest
+    spawn_wave_asteroids(w, &rng, 6)
+
+    let mut event = default(sdl_event)
+    let mut running = true
+    let mut frame_count = 0
+    let mut thrust_sound_timer = 0
+
+    loop
+        if !running then break
+        frame_count = frame_count + 1
+
+        // --------- Input ---------
+        loop
+            let has = sdl2.poll_event(&event)
+            if has == 0 then break
+
+            if (int32) event.type == sdl2.quit_event then
+                running = false
+                break
+
+            if (int32) event.type == sdl2.keydown_event then
+                let k = event.key.keysym.sym
+
+                if k == sdl2.key_escape then
+                    running = false
+                    break
+
+                if k == sdl2.key_f11 then
+                    fullscreen = !fullscreen
+                    if fullscreen then
+                        let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
+                        sdl2.get_display_bounds(0, &db)
+                        sdl2.set_bordered(win, 0)
+                        sdl2.set_window_position(win, db.x, db.y)
+                        sdl2.set_window_size(win, db.w, db.h)
+                    else
+                        sdl2.set_bordered(win, 1)
+                        sdl2.restore_window(win)
+                        sdl2.maximize_window(win)
+                    sdl2.set_logical_size(ren, logical_w, logical_h)
+
+                if k == sdl2.key_left || k == sdl2.key_a then
+                    w->game.rotate_left = true
+                if k == sdl2.key_right || k == sdl2.key_d then
+                    w->game.rotate_right = true
+                if k == sdl2.key_up || k == sdl2.key_w then
+                    w->game.thrust_on = true
+                if k == sdl2.key_space then
+                    match w->game.phase with
+                    | playing ->
+                        w->game.fire_held = true
+                        fire_bullet(w)
+                        if audio_dev > 0u32 then
+                            sdl2.clear_audio(audio_dev)
+                            sdl2.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
+                    | _ -> void()
+
+                if k == sdl2.key_return then
+                    match w->game.phase with
+                    | splash
+                    | game_over -> reset_game(w, &rng)
+                    | _ -> void()
+
+                if k == sdl2.key_p then
+                    match w->game.phase with
+                    | playing -> w->game.phase = game_phase.paused
+                    | paused -> w->game.phase = game_phase.playing
+                    | _ -> void()
+
+                if k == sdl2.key_h || k == sdl2.key_down then
+                    match w->game.phase with
+                    | playing ->
+                        w->game.ship_x = pcg_random.next_float64(&rng) * (float64) logical_w
+                        w->game.ship_y = pcg_random.next_float64(&rng) * (float64) logical_h
+                        w->game.ship_vx = 0.0
+                        w->game.ship_vy = 0.0
+                        w->game.invuln = 30
+                    | _ -> void()
+
+            if (int32) event.type == sdl2.keyup_event then
+                let k = event.key.keysym.sym
+                if k == sdl2.key_left || k == sdl2.key_a then
+                    w->game.rotate_left = false
+                if k == sdl2.key_right || k == sdl2.key_d then
+                    w->game.rotate_right = false
+                if k == sdl2.key_up || k == sdl2.key_w then
+                    w->game.thrust_on = false
+                if k == sdl2.key_space then
+                    w->game.fire_held = false
+
+        if !running then break
+
+        // --------- Update ---------
+        update_stars(w)
+        update_particles(w)
+        update_asteroids(w)
+
+        match w->game.phase with
+        | playing ->
+            // Rotation
+            if w->game.rotate_left then
+                w->game.ship_angle = w->game.ship_angle - ship_rot_speed
+            if w->game.rotate_right then
+                w->game.ship_angle = w->game.ship_angle + ship_rot_speed
+
+            // Thrust
+            if w->game.thrust_on then
+                w->game.ship_vx = w->game.ship_vx + math.cos(w->game.ship_angle) * ship_thrust
+                w->game.ship_vy = w->game.ship_vy + math.sin(w->game.ship_angle) * ship_thrust
+                let speed = math.sqrt(w->game.ship_vx * w->game.ship_vx +
+                                      w->game.ship_vy * w->game.ship_vy)
+                if speed > ship_max_speed then
+                    w->game.ship_vx = w->game.ship_vx * ship_max_speed / speed
+                    w->game.ship_vy = w->game.ship_vy * ship_max_speed / speed
+                thrust_sound_timer = thrust_sound_timer + 1
+                if thrust_sound_timer >= 10 && audio_dev > 0u32 then
+                    thrust_sound_timer = 0
+                    sdl2.queue_audio(audio_dev, thrust_snd.data, thrust_snd.bytes)
+            else
+                thrust_sound_timer = 0
+
+            // Friction
+            w->game.ship_vx = w->game.ship_vx * ship_friction
+            w->game.ship_vy = w->game.ship_vy * ship_friction
+
+            // Move and wrap
+            w->game.ship_x = wrap_x(w->game.ship_x + w->game.ship_vx)
+            w->game.ship_y = wrap_y(w->game.ship_y + w->game.ship_vy)
+
+            // Cooldown
+            if w->game.cooldown > 0 then
+                w->game.cooldown = w->game.cooldown - 1
+
+            // Auto-fire
+            if w->game.fire_held && w->game.cooldown == 0 then
+                fire_bullet(w)
+
+            // Invulnerability
+            if w->game.invuln > 0 then
+                w->game.invuln = w->game.invuln - 1
+
+            update_bullets(w)
+            update_ufo(w, &rng)
+            process_collisions(w, &rng, audio_dev, hit_snd)
+
+            // Check extra life
+            if w->game.score >= w->game.next_extra then
+                w->game.lives = w->game.lives + 1
+                w->game.next_extra = w->game.next_extra + extra_life_score
+                if audio_dev > 0u32 then
+                    sdl2.clear_audio(audio_dev)
+                    sdl2.queue_audio(audio_dev, extra_snd.data, extra_snd.bytes)
+
+            // Wave clear
+            if count_alive_asteroids(w) == 0 && !w->ufo.alive then
+                w->game.wave = w->game.wave + 1
+                let num_rocks = 3 + w->game.wave
+                if num_rocks > 11 then
+                    spawn_wave_asteroids(w, &rng, 11)
+                else
+                    spawn_wave_asteroids(w, &rng, num_rocks)
+                schedule_next_ufo(w, &rng)
+                clear_bullets(w)
+        | dying ->
+            update_bullets(w)
+            w->game.phase_timer = w->game.phase_timer - 1
+            if w->game.phase_timer <= 0 then
+                reset_ship(w)
+                clear_bullets(w)
+                w->game.phase = game_phase.playing
+        | game_over ->
+            if w->game.phase_timer == 0 then
+                w->game.phase_timer = 1
+                if w->game.score > w->game.high_score then
+                    w->game.high_score = w->game.score
+                    w->game.new_high = true
+                    save_high_score(w->game.score)
+                    io.write("NEW HIGH SCORE: %d{w->game.score}.\n", stdout)
+        | _ -> void()
+
+        // --------- Render ---------
+        render(w, ren, frame_count)
+        sdl2.delay(1u32)
+
+    io.write("Final score: %d{w->game.score}\n", stdout)
+
+    if audio_dev > 0u32 then
+        sdl2.close_audio(audio_dev)
+    sdl2.destroy_renderer(ren)
+    sdl2.destroy_window(win)
+    sdl2.quit()
+    0
