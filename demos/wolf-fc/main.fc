@@ -18,7 +18,7 @@ let screen_w = 640
 let screen_h = 400
 let tex_size = 64
 let tex_pixels = 4096
-let map_size = 24
+let fallback_map_size = 24
 let move_speed = 0.05
 let rot_speed = 0.035
 let run_mult = 2.5
@@ -51,6 +51,8 @@ struct world =
     p: player
     input: input_state
     map: int32[]
+    map_w: int32
+    map_h: int32
 
 // ============================================================
 // Color helpers
@@ -378,6 +380,172 @@ let load_vswap = (path: const str, palette: uint32[]) ->
         some(tex)
 
 // ============================================================
+// Carmack decompression
+// ============================================================
+
+let carmack_expand = (src: uint8[], src_off: int32, src_len: int32,
+                      dst: uint16[], max_words: int32) ->
+    let near_tag = 167
+    let far_tag = 168
+    let mut ip = src_off
+    let mut op = 0
+    let src_end = src_off + src_len
+    loop
+        if op >= max_words || ip + 1 >= src_end then break
+        let low = (int32) src[ip]
+        let high = (int32) src[ip + 1]
+        ip = ip + 2
+        let mut handled = false
+        if high == near_tag then
+            handled = true
+            if low == 0 then
+                let actual = (int32) src[ip]
+                ip = ip + 1
+                dst[op] = (uint16) (near_tag * 256 + actual)
+                op = op + 1
+            else
+                let offset = (int32) src[ip]
+                ip = ip + 1
+                for j in 0..low
+                    if op - offset + j >= 0 then
+                        dst[op + j] = dst[op - offset + j]
+                op = op + low
+        if !handled && high == far_tag then
+            handled = true
+            if low == 0 then
+                let actual = (int32) src[ip]
+                ip = ip + 1
+                dst[op] = (uint16) (far_tag * 256 + actual)
+                op = op + 1
+            else
+                let abs_pos = (int32) src[ip] | ((int32) src[ip + 1] << 8)
+                ip = ip + 2
+                for j in 0..low
+                    if abs_pos + j >= 0 then
+                        dst[op + j] = dst[abs_pos + j]
+                op = op + low
+        if !handled then
+            dst[op] = (uint16) (high * 256 + low)
+            op = op + 1
+    op
+
+// ============================================================
+// RLEW decompression
+// ============================================================
+
+let rlew_expand = (src: uint16[], src_words: int32, dst: uint16[], max_out: int32, tag: int32) ->
+    let mut ip = 1
+    let mut op = 0
+    loop
+        if ip >= src_words || op >= max_out then break
+        let word = (int32) src[ip]
+        ip = ip + 1
+        if word == tag then
+            let count = (int32) src[ip]
+            ip = ip + 1
+            let value = src[ip]
+            ip = ip + 1
+            for j in 0..count
+                if op + j < max_out then
+                    dst[op + j] = value
+            op = op + count
+        else
+            dst[op] = (uint16) word
+            op = op + 1
+    return
+
+// ============================================================
+// GAMEMAPS loader — reads a Wolf3D level
+// ============================================================
+
+let load_level = (head_path: const str, maps_path: const str, level: int32, w: world*) ->
+    match io.open(head_path, "rb") with
+    | none -> false
+    | some(hf) ->
+        defer io.close(hf)
+        let hbuf = alloc(uint8[402] {})!
+        io.read(hbuf, 402i64, hf)
+        let rlew_tag = read_u16(hbuf, 0)
+        let map_offset = read_i32(hbuf, 2 + level * 4)
+        if map_offset < 0 then return false
+
+        match io.open(maps_path, "rb") with
+        | none -> false
+        | some(mf) ->
+            defer io.close(mf)
+            // Read 38-byte level header
+            io.seek(mf, (int64) map_offset, io.seek_set)
+            let lh = alloc(uint8[38] {})!
+            io.read(lh, 38i64, mf)
+            let p0_off = read_i32(lh, 0)
+            let p1_off = read_i32(lh, 4)
+            let p0_len = read_u16(lh, 12)
+            let p1_len = read_u16(lh, 14)
+
+            // Decompress plane 0 (walls)
+            io.seek(mf, (int64) p0_off, io.seek_set)
+            let comp0 = alloc(uint8[p0_len] {})!
+            io.read(comp0, (int64) p0_len, mf)
+            let carm_size0 = read_u16(comp0, 0)
+            let carm_words0 = carm_size0 / 2
+            let carm0 = alloc(uint16[carm_words0 + 16] {})!
+            carmack_expand(comp0, 2, p0_len - 2, carm0, carm_words0)
+            let plane0 = alloc(uint16[4096] {})!
+            rlew_expand(carm0, carm_words0, plane0, 4096, rlew_tag)
+
+            // Decompress plane 1 (objects) for player start
+            io.seek(mf, (int64) p1_off, io.seek_set)
+            let comp1 = alloc(uint8[p1_len] {})!
+            io.read(comp1, (int64) p1_len, mf)
+            let carm_size1 = read_u16(comp1, 0)
+            let carm_words1 = carm_size1 / 2
+            let carm1 = alloc(uint16[carm_words1 + 16] {})!
+            carmack_expand(comp1, 2, p1_len - 2, carm1, carm_words1)
+            let plane1 = alloc(uint16[4096] {})!
+            rlew_expand(carm1, carm_words1, plane1, 4096, rlew_tag)
+
+            // Copy wall data to world map
+            w->map_w = 64
+            w->map_h = 64
+            w->map = alloc(int32[4096] {})!
+            for i in 0..4096
+                w->map[i] = (int32) plane0[i]
+
+            // Find player start from plane 1 (19=N, 20=E, 21=S, 22=W)
+            for y in 0..64
+                for x in 0..64
+                    let v = (int32) plane1[y * 64 + x]
+                    if v == 19 then
+                        w->p.x = (float64) x + 0.5
+                        w->p.y = (float64) y + 0.5
+                        w->p.dir_x = 0.0
+                        w->p.dir_y = -1.0
+                        w->p.plane_x = 0.66
+                        w->p.plane_y = 0.0
+                    if v == 20 then
+                        w->p.x = (float64) x + 0.5
+                        w->p.y = (float64) y + 0.5
+                        w->p.dir_x = 1.0
+                        w->p.dir_y = 0.0
+                        w->p.plane_x = 0.0
+                        w->p.plane_y = 0.66
+                    if v == 21 then
+                        w->p.x = (float64) x + 0.5
+                        w->p.y = (float64) y + 0.5
+                        w->p.dir_x = 0.0
+                        w->p.dir_y = 1.0
+                        w->p.plane_x = -0.66
+                        w->p.plane_y = 0.0
+                    if v == 22 then
+                        w->p.x = (float64) x + 0.5
+                        w->p.y = (float64) y + 0.5
+                        w->p.dir_x = -1.0
+                        w->p.dir_y = 0.0
+                        w->p.plane_x = 0.0
+                        w->p.plane_y = -0.66
+            true
+
+// ============================================================
 // Procedural textures (fallback when VSWAP not available)
 // ============================================================
 
@@ -420,45 +588,48 @@ let gen_textures = () ->
 // Map
 // ============================================================
 
-let set_row = (map: int32[], row: int32, data: const str) ->
-    for i in 0..map_size
+let set_row = (map: int32[], row: int32, width: int32, data: const str) ->
+    for i in 0..width
         if i < (int32) data.len then
             let ch = data[i]
             if ch >= '0' && ch <= '9' then
-                map[row * map_size + i] = (int32) (ch - '0')
+                map[row * width + i] = (int32) (ch - '0')
     return
 
 let init_map = () ->
-    let map = alloc(int32[map_size * map_size] {})!
-    set_row(map,  0, "111111111111111111111111")
-    set_row(map,  1, "100000100000000030000001")
-    set_row(map,  2, "100000000000000030000001")
-    set_row(map,  3, "100000100000000030000001")
-    set_row(map,  4, "111011100000000000000001")
-    set_row(map,  5, "100000000000000000022201")
-    set_row(map,  6, "100000000004440000020001")
-    set_row(map,  7, "100000000004040000020001")
-    set_row(map,  8, "100000000004040000022201")
-    set_row(map,  9, "100000000004440000000001")
-    set_row(map, 10, "100000000000000000000001")
-    set_row(map, 11, "100000000000000000000001")
-    set_row(map, 12, "100000000000000000000001")
-    set_row(map, 13, "100000000000000000000001")
-    set_row(map, 14, "133300000000000000000001")
-    set_row(map, 15, "100000000000000000044401")
-    set_row(map, 16, "100000000022200000040001")
-    set_row(map, 17, "100000000020200000040001")
-    set_row(map, 18, "100000000020200000044401")
-    set_row(map, 19, "100000000022200000000001")
-    set_row(map, 20, "100000000000000000000001")
-    set_row(map, 21, "100000000000000000000001")
-    set_row(map, 22, "100000000000000000000001")
-    set_row(map, 23, "111111111111111111111111")
+    let sz = fallback_map_size
+    let map = alloc(int32[sz * sz] {})!
+    set_row(map,  0, sz, "111111111111111111111111")
+    set_row(map,  1, sz, "100000100000000030000001")
+    set_row(map,  2, sz, "100000000000000030000001")
+    set_row(map,  3, sz, "100000100000000030000001")
+    set_row(map,  4, sz, "111011100000000000000001")
+    set_row(map,  5, sz, "100000000000000000022201")
+    set_row(map,  6, sz, "100000000004440000020001")
+    set_row(map,  7, sz, "100000000004040000020001")
+    set_row(map,  8, sz, "100000000004040000022201")
+    set_row(map,  9, sz, "100000000004440000000001")
+    set_row(map, 10, sz, "100000000000000000000001")
+    set_row(map, 11, sz, "100000000000000000000001")
+    set_row(map, 12, sz, "100000000000000000000001")
+    set_row(map, 13, sz, "100000000000000000000001")
+    set_row(map, 14, sz, "133300000000000000000001")
+    set_row(map, 15, sz, "100000000000000000044401")
+    set_row(map, 16, sz, "100000000022200000040001")
+    set_row(map, 17, sz, "100000000020200000040001")
+    set_row(map, 18, sz, "100000000020200000044401")
+    set_row(map, 19, sz, "100000000022200000000001")
+    set_row(map, 20, sz, "100000000000000000000001")
+    set_row(map, 21, sz, "100000000000000000000001")
+    set_row(map, 22, sz, "100000000000000000000001")
+    set_row(map, 23, sz, "111111111111111111111111")
     map
 
-let is_wall = (map: int32[], mx: int32, my: int32) ->
-    if mx < 0 || mx >= map_size || my < 0 || my >= map_size then true
-    else map[my * map_size + mx] > 0
+let is_wall = (w: world*, mx: int32, my: int32) ->
+    if mx < 0 || mx >= w->map_w || my < 0 || my >= w->map_h then true
+    else
+        let tile = w->map[my * w->map_w + mx]
+        (tile >= 1 && tile <= 63) || (tile >= 90 && tile <= 101)
 
 // ============================================================
 // Raycasting
@@ -514,9 +685,10 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32) ->
                 sd_y = sd_y + dd_y
                 map_y = map_y + step_y
                 side = 1
-            if map_x < 0 || map_x >= map_size || map_y < 0 || map_y >= map_size then
+            if map_x < 0 || map_x >= w->map_w || map_y < 0 || map_y >= w->map_h then
                 break
-            if w->map[map_y * map_size + map_x] > 0 then
+            let dda_tile = w->map[map_y * w->map_w + map_x]
+            if (dda_tile >= 1 && dda_tile <= 63) || (dda_tile >= 90 && dda_tile <= 101) then
                 break
 
         // Perpendicular distance (avoids fisheye)
@@ -528,8 +700,8 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32) ->
         if de >= screen_h then de = screen_h - 1
 
         // Which texture — Wolf3D: tile T uses pages (T-1)*2 (N/S) and (T-1)*2+1 (E/W)
-        let in_bounds = map_x >= 0 && map_x < map_size && map_y >= 0 && map_y < map_size
-        let tile = if in_bounds then w->map[map_y * map_size + map_x] else 1
+        let in_bounds = map_x >= 0 && map_x < w->map_w && map_y >= 0 && map_y < w->map_h
+        let tile = if in_bounds then w->map[map_y * w->map_w + map_x] else 1
         let mut raw_tid = 0
         if tile >= 1 && tile <= 63 then
             raw_tid = if side == 0 then (tile - 1) * 2 + 1 else (tile - 1) * 2
@@ -583,18 +755,15 @@ let clear_fb = (fb: uint32[]) ->
 
 let draw_minimap = (w: world*, fb: uint32[], show: bool) ->
     if !show then return
-    let s = 4
+    let s = if w->map_w > 32 then 2 else 4
     let ox = 8
     let oy = 8
 
     // Background
-    for my in 0..map_size
-        for mx in 0..map_size
-            let tile = w->map[my * map_size + mx]
-            let c = if tile == 1 then pack_argb(180, 60, 60)
-                    else if tile == 2 then pack_argb(140, 140, 140)
-                    else if tile == 3 then pack_argb(60, 60, 180)
-                    else if tile == 4 then pack_argb(140, 100, 50)
+    for my in 0..w->map_h
+        for mx in 0..w->map_w
+            let tile = w->map[my * w->map_w + mx]
+            let c = if (tile >= 1 && tile <= 63) || (tile >= 90 && tile <= 101) then pack_argb(140, 140, 140)
                     else pack_argb(20, 20, 20)
             for py in 0..s
                 for px in 0..s
@@ -736,11 +905,23 @@ let rotate_player = (w: world*, angle: float64) ->
 let try_move = (w: world*, dx: float64, dy: float64) ->
     let margin = 0.25
     let cx = if dx > 0.0 then w->p.x + dx + margin else w->p.x + dx - margin
-    if !is_wall(w->map, (int32) cx, (int32) w->p.y) then
+    if !is_wall(w, (int32) cx, (int32) w->p.y) then
         w->p.x = w->p.x + dx
     let cy = if dy > 0.0 then w->p.y + dy + margin else w->p.y + dy - margin
-    if !is_wall(w->map, (int32) w->p.x, (int32) cy) then
+    if !is_wall(w, (int32) w->p.x, (int32) cy) then
         w->p.y = w->p.y + dy
+    return
+
+let try_open_door = (w: world*) ->
+    // Check a couple cells ahead in the direction the player faces
+    for dist in 1..3
+        let cx = (int32) (w->p.x + w->p.dir_x * (float64) dist)
+        let cy = (int32) (w->p.y + w->p.dir_y * (float64) dist)
+        if cx >= 0 && cx < w->map_w && cy >= 0 && cy < w->map_h then
+            let tile = w->map[cy * w->map_w + cx]
+            if tile >= 90 && tile <= 101 then
+                w->map[cy * w->map_w + cx] = 108
+                return
     return
 
 let update_player = (w: world*) ->
@@ -852,20 +1033,30 @@ let main = (args: str[]) ->
     | none ->
         textures = gen_textures()
         io.write("VSWAP.WL6 not found, using procedural textures\n", stdout)
-    let map = init_map()
 
     // World state
     let w = alloc(world)!
-    w->p.x = 3.5
-    w->p.y = 2.5
-    w->p.dir_x = 1.0
-    w->p.dir_y = 0.0
-    w->p.plane_x = 0.0
-    w->p.plane_y = 0.66
     w->p.health = 100
     w->p.ammo = 8
     w->p.score = 0
-    w->map = map
+
+    // Try loading Wolf3D level 1, fall back to test map
+    let map_loaded = load_level("demos/wolf-fc/data/MAPHEAD.WL6",
+                                "demos/wolf-fc/data/GAMEMAPS.WL6", 0, w)
+    if map_loaded then
+        io.write("Loaded Wolf3D level 1 (%d{w->map_w}x%d{w->map_h})\n", stdout)
+        io.flush(stdout)
+    if !map_loaded then
+        io.write("GAMEMAPS not found, using test map\n", stdout)
+        w->map = init_map()
+        w->map_w = fallback_map_size
+        w->map_h = fallback_map_size
+        w->p.x = 3.5
+        w->p.y = 2.5
+        w->p.dir_x = 1.0
+        w->p.dir_y = 0.0
+        w->p.plane_x = 0.0
+        w->p.plane_y = 0.66
 
     // Audio
     let mut desired = default(audio_spec)
@@ -945,6 +1136,7 @@ let main = (args: str[]) ->
                 if k == sdl2.key_x then w->input.alt_held = true
                 if k == sdl2.key_v then w->input.fire_held = true
                 if k == sdl2.key_c then
+                    try_open_door(w)
                     if audio_dev > 0u32 then
                         sdl2.clear_audio(audio_dev)
                         sdl2.queue_audio(audio_dev, door_snd.data, door_snd.bytes)
