@@ -1,9 +1,10 @@
 // Fibbles — a Nibbles/Snake clone in FC using SDL2
 // Pure FC implementation (no C helper files).
 
-import rect from sdl
-import sdl_event from sdl
-import audio_spec from sdl
+import sdl2 from sdl2::
+import rect from sdl2::sdl2
+import sdl_event from sdl2::sdl2
+import audio_spec from sdl2::sdl2
 import io from std::
 import text from std::
 import sys from std::
@@ -89,14 +90,14 @@ let draw_text = (r: any*, text: const str, ox: int32, oy: int32, cr: uint8, cg: 
 
 let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
     let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
-    sdl.set_color(r, red, green, blue, 255u8)
-    sdl.fill_rect(r, &rc)
+    sdl2.set_color(r, red, green, blue, 255u8)
+    sdl2.fill_rect(r, &rc)
     return
 
 let draw_small_rect = (r: any*, x: int32, y: int32, w: int32, h: int32, red: uint8, green: uint8, blue: uint8) ->
     let mut rc = rect { x = x, y = y, w = w, h = h }
-    sdl.set_color(r, red, green, blue, 255u8)
-    sdl.fill_rect(r, &rc)
+    sdl2.set_color(r, red, green, blue, 255u8)
+    sdl2.fill_rect(r, &rc)
     return
 
 let draw_face = (r: any*, hx: int32, hy: int32, dx: int32, dy: int32, dead: bool) ->
@@ -208,8 +209,8 @@ let place_food = (pcg_state: pcg_random*, body: vec2[], head: int32, len: int32)
             break vec2 { x = x, y = y }
 
 let clear_screen = (r: any*) ->
-    sdl.set_color(r, 20u8, 20u8, 40u8, 255u8)
-    sdl.clear(r)
+    sdl2.set_color(r, 20u8, 20u8, 40u8, 255u8)
+    sdl2.clear(r)
     return
 
 // --- Sound effects (pre-generated square wave buffers) ---
@@ -245,8 +246,8 @@ let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
     offset + num_samples
 
 let play_sound = (dev: uint32, s: sound) ->
-    sdl.clear_audio(dev)
-    sdl.queue_audio(dev, s.data, s.bytes)
+    sdl2.clear_audio(dev)
+    sdl2.queue_audio(dev, s.data, s.bytes)
     return
 
 let load_high_score = () ->
@@ -304,7 +305,7 @@ let render_splash = (r: any*) ->
     for bx in 10..22
         draw_cell(r, bx, 22, 80u8, 80u8, 100u8)
 
-    sdl.present(r)
+    sdl2.present(r)
 
 // --- Main ---
 
@@ -325,26 +326,26 @@ let main = (args: str[]) ->
     io.write("Press SPACE to start...\n", stdout)
 
     // Init SDL
-    sdl.init(sdl.init_video | sdl.init_audio)
-    let win = sdl.create_window(c"Fibbles", 40, 40,
-        grid_w * cell, grid_h * cell, sdl.window_shown)
-    sdl.set_resizable(win, 0)
-    let ren = sdl.create_renderer(win, -1, sdl.renderer_sw)
-    sdl.set_logical_size(ren, grid_w * cell, grid_h * cell)
+    sdl2.init(sdl2.init_video | sdl2.init_audio)
+    let win = sdl2.create_window(c"Fibbles", 40, 40,
+        grid_w * cell, grid_h * cell, sdl2.window_shown)
+    sdl2.set_resizable(win, 0)
+    let ren = sdl2.create_renderer(win, -1, sdl2.renderer_sw)
+    sdl2.set_logical_size(ren, grid_w * cell, grid_h * cell)
     let mut pcg_state = pcg_random.make((uint64) sys.time())
 
     // Init audio (square wave sound effects)
     let mut desired = default(audio_spec)
     desired.freq = 44100
-    desired.format = sdl.audio_s16sys
+    desired.format = sdl2.audio_s16sys
     desired.channels = 1u8
     desired.samples = 1024u16
     desired.callback = (any*) 0u
     desired.userdata = (any*) 0u
     let mut obtained = default(audio_spec)
-    let audio_dev = sdl.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    let audio_dev = sdl2.open_audio((any*) 0u, 0, &desired, &obtained, 0)
     if audio_dev > 0u32 then
-        sdl.pause_audio(audio_dev, 0)
+        sdl2.pause_audio(audio_dev, 0)
 
     // Pre-generate sound effect buffers (zero allocation during gameplay)
     let eat_snd = gen_tone(880, 60)
@@ -380,7 +381,7 @@ let main = (args: str[]) ->
     let mut speed = 300
     let mut state = game_state.splash
     let mut running = true
-    let mut last_tick = sdl.get_ticks()
+    let mut last_tick = sdl2.get_ticks()
     let mut new_high = false
     let mut force_tick = false
 
@@ -393,7 +394,7 @@ let main = (args: str[]) ->
 
     let mut event = default(sdl_event)
 
-    sdl.set_title(win, c"Fibbles - Score: 0 (High: %d{high_score}) Level 1")
+    sdl2.set_title(win, c"Fibbles - Score: 0 (High: %d{high_score}) Level 1")
 
     // Main loop
     loop
@@ -401,20 +402,20 @@ let main = (args: str[]) ->
 
         // --- Input: drain all pending events ---
         loop
-            let has = sdl.poll_event(&event)
+            let has = sdl2.poll_event(&event)
             if has == 0 then break
 
-            if (int32) event.type == sdl.quit_event then
+            if (int32) event.type == sdl2.quit_event then
                 running = false
                 break
 
-            if (int32) event.type == sdl.keydown_event then
+            if (int32) event.type == sdl2.keydown_event then
                 let ekey = event.key.keysym.sym
-                if ekey == sdl.key_escape then
+                if ekey == sdl2.key_escape then
                     running = false
                     break
 
-                if ekey == sdl.key_space then
+                if ekey == sdl2.key_space then
                     if state == game_state.splash || state == game_state.over then
                         // Init snake
                         head_idx = 2
@@ -430,33 +431,33 @@ let main = (args: str[]) ->
                         body[1] = vec2 { x = cx - 1, y = cy }
                         body[2] = vec2 { x = cx, y = cy }
                         food = place_food(&pcg_state, body, head_idx, length)
-                        last_tick = sdl.get_ticks()
-                        sdl.set_title(win, c"Fibbles - Score: 0 (High: %d{high_score}) Level 1")
+                        last_tick = sdl2.get_ticks()
+                        sdl2.set_title(win, c"Fibbles - Score: 0 (High: %d{high_score}) Level 1")
                         state = game_state.playing
                     else if state == game_state.paused then
                         state = game_state.playing
-                        last_tick = sdl.get_ticks()
-                        sdl.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
+                        last_tick = sdl2.get_ticks()
+                        sdl2.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
                     else if state == game_state.playing then
                         state = game_state.paused
-                        sdl.set_title(win, c"Fibbles - PAUSED (SPACE to resume)")
+                        sdl2.set_title(win, c"Fibbles - PAUSED (SPACE to resume)")
 
-                if ekey == sdl.key_c && state == game_state.splash then
+                if ekey == sdl2.key_c && state == game_state.splash then
                     clear_high_score()
                     high_score = 0
-                    sdl.set_title(win, c"Fibbles - Score: 0 (High: 0) Level 1")
+                    sdl2.set_title(win, c"Fibbles - Score: 0 (High: 0) Level 1")
 
                 if state == game_state.playing then
                     // Same-direction arrow with no pending turns: immediate advance
                     let mut same_dir = false
                     if q_len == 0 then
-                        if ekey == sdl.key_up && dir_x == 0 && dir_y == -1 then
+                        if ekey == sdl2.key_up && dir_x == 0 && dir_y == -1 then
                             same_dir = true
-                        if ekey == sdl.key_down && dir_x == 0 && dir_y == 1 then
+                        if ekey == sdl2.key_down && dir_x == 0 && dir_y == 1 then
                             same_dir = true
-                        if ekey == sdl.key_left && dir_x == -1 && dir_y == 0 then
+                        if ekey == sdl2.key_left && dir_x == -1 && dir_y == 0 then
                             same_dir = true
-                        if ekey == sdl.key_right && dir_x == 1 && dir_y == 0 then
+                        if ekey == sdl2.key_right && dir_x == 1 && dir_y == 0 then
                             same_dir = true
                     if same_dir then
                         force_tick = true
@@ -468,19 +469,19 @@ let main = (args: str[]) ->
                         let ref_dx = if q_len > 0 then q_dx[q_len - 1] else dir_x
                         let ref_dy = if q_len > 0 then q_dy[q_len - 1] else dir_y
                         let mut accepted = false
-                        if ekey == sdl.key_up && ref_dy != 1 then
+                        if ekey == sdl2.key_up && ref_dy != 1 then
                             q_dx[q_len] = 0
                             q_dy[q_len] = -1
                             accepted = true
-                        if ekey == sdl.key_down && ref_dy != -1 && !accepted then
+                        if ekey == sdl2.key_down && ref_dy != -1 && !accepted then
                             q_dx[q_len] = 0
                             q_dy[q_len] = 1
                             accepted = true
-                        if ekey == sdl.key_left && ref_dx != 1 && !accepted then
+                        if ekey == sdl2.key_left && ref_dx != 1 && !accepted then
                             q_dx[q_len] = -1
                             q_dy[q_len] = 0
                             accepted = true
-                        if ekey == sdl.key_right && ref_dx != -1 && !accepted then
+                        if ekey == sdl2.key_right && ref_dx != -1 && !accepted then
                             q_dx[q_len] = 1
                             q_dy[q_len] = 0
                             accepted = true
@@ -491,7 +492,7 @@ let main = (args: str[]) ->
 
         // --- Update ---
         if state == game_state.playing then
-            let now = sdl.get_ticks()
+            let now = sdl2.get_ticks()
             if force_tick || now - last_tick >= (uint32) speed then
                 force_tick = false
                 last_tick = now
@@ -519,7 +520,7 @@ let main = (args: str[]) ->
                         save_high_score(score)
                         new_high = true
                         io.write("NEW HIGH SCORE: %d{score}!\n", stdout)
-                    sdl.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
+                    sdl2.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
                 else
                     // Self collision
                     if on_snake(body, head_idx, length, new_x, new_y) then
@@ -531,7 +532,7 @@ let main = (args: str[]) ->
                             save_high_score(score)
                             new_high = true
                             io.write("NEW HIGH SCORE: %d{score}!\n", stdout)
-                        sdl.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
+                        sdl2.set_title(win, c"Fibbles - GAME OVER  SPACE:restart  ESC:quit")
                     else
                         // Advance snake
                         head_idx = (head_idx + 1) % max_body
@@ -550,7 +551,7 @@ let main = (args: str[]) ->
                             if !bonus_active && pcg_random.next_bounded_uint32(&pcg_state, 4u32) == 0u32 then
                                 bonus = place_food(&pcg_state, body, head_idx, length)
                                 bonus_active = true
-                            sdl.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
+                            sdl2.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
 
                         // Check bonus food (no speed increase)
                         if bonus_active && new_x == bonus.x && new_y == bonus.y then
@@ -559,7 +560,7 @@ let main = (args: str[]) ->
                             length = length + 4
                             score = score + 20
                             bonus_active = false
-                            sdl.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
+                            sdl2.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
 
         // --- Render ---
         if state == game_state.splash then
@@ -625,17 +626,17 @@ let main = (args: str[]) ->
                 for di in 0..dcount
                     draw_char(ren, '0' + (uint8) digits[di], sox + di * 4, 13, 255u8, 255u8, 255u8)
 
-            sdl.present(ren)
+            sdl2.present(ren)
 
-        sdl.delay(16u32)
+        sdl2.delay(16u32)
 
     // Final score
     io.write("Final score: %d{score}\n", stdout)
 
     // Cleanup
     if audio_dev > 0u32 then
-        sdl.close_audio(audio_dev)
-    sdl.destroy_renderer(ren)
-    sdl.destroy_window(win)
-    sdl.quit()
+        sdl2.close_audio(audio_dev)
+    sdl2.destroy_renderer(ren)
+    sdl2.destroy_window(win)
+    sdl2.quit()
     0

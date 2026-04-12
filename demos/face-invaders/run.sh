@@ -8,7 +8,7 @@ set -e
 cd "$(dirname "$0")/../.."
 make -s fc
 
-SRCS="demos/face-invaders/sdl.fc demos/face-invaders/main.fc \
+SRCS="demos/shared/sdl2.fc demos/face-invaders/main.fc \
       stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/math.fc stdlib/random.fc"
 
 case "$(uname -s)" in

@@ -3,9 +3,10 @@
 // particle explosions, a parallax starfield, and pixel-art face-themed
 // enemies. No C helper files — everything is pure FC.
 
-import rect from sdl
-import sdl_event from sdl
-import audio_spec from sdl
+import sdl2 from sdl2::
+import rect from sdl2::sdl2
+import sdl_event from sdl2::sdl2
+import audio_spec from sdl2::sdl2
 import io from std::
 import text from std::
 import sys from std::
@@ -167,21 +168,21 @@ let game = alloc(game_state)!
 let fill = (r: any*, x: int32, y: int32, w: int32, h: int32,
             cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
     let mut rc = rect { x = x, y = y, w = w, h = h }
-    sdl.set_color(r, cr, cg, cb, ca)
-    sdl.fill_rect(r, &rc)
+    sdl2.set_color(r, cr, cg, cb, ca)
+    sdl2.fill_rect(r, &rc)
     return
 
 let outline = (r: any*, x: int32, y: int32, w: int32, h: int32,
                cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
     let mut rc = rect { x = x, y = y, w = w, h = h }
-    sdl.set_color(r, cr, cg, cb, ca)
-    sdl.draw_rect(r, &rc)
+    sdl2.set_color(r, cr, cg, cb, ca)
+    sdl2.draw_rect(r, &rc)
     return
 
 let line = (r: any*, x1: int32, y1: int32, x2: int32, y2: int32,
             cr: uint8, cg: uint8, cb: uint8, ca: uint8) ->
-    sdl.set_color(r, cr, cg, cb, ca)
-    sdl.draw_line(r, x1, y1, x2, y2)
+    sdl2.set_color(r, cr, cg, cb, ca)
+    sdl2.draw_line(r, x1, y1, x2, y2)
     return
 
 // ============================================================
@@ -858,11 +859,11 @@ let advance_formation = (audio_dev: uint32, step_snd: sound, step2_snd: sound) -
     // Play alternating "step" sound
     if audio_dev > 0u32 then
         if game->step_sound_toggle == 0 then
-            sdl.clear_audio(audio_dev)
-            sdl.queue_audio(audio_dev, step_snd.data, step_snd.bytes)
+            sdl2.clear_audio(audio_dev)
+            sdl2.queue_audio(audio_dev, step_snd.data, step_snd.bytes)
         else
-            sdl.clear_audio(audio_dev)
-            sdl.queue_audio(audio_dev, step2_snd.data, step2_snd.bytes)
+            sdl2.clear_audio(audio_dev)
+            sdl2.queue_audio(audio_dev, step2_snd.data, step2_snd.bytes)
         game->step_sound_toggle = 1 - game->step_sound_toggle
 
     // Check if formation has reached the player line — instant loss
@@ -916,8 +917,8 @@ let process_collisions = (rng: pcg_random*, audio_dev: uint32,
                 game->ufo_popup_y = ufo_y + ufo_h + 4
                 game->ufo_popup_timer = 90
                 if audio_dev > 0u32 then
-                    sdl.clear_audio(audio_dev)
-                    sdl.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
+                    sdl2.clear_audio(audio_dev)
+                    sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
                 schedule_next_ufo(rng)
             else if bullets[bi].from_player then
                 let ei = bullet_hits_enemy(bi)
@@ -944,8 +945,8 @@ let process_collisions = (rng: pcg_random*, audio_dev: uint32,
                         bb = 160u8
                     spawn_burst(rng, cx, cy, 22, rr, gg, bb)
                     if audio_dev > 0u32 then
-                        sdl.clear_audio(audio_dev)
-                        sdl.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
+                        sdl2.clear_audio(audio_dev)
+                        sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
                     // Speed up formation as enemies die. Gentler curve
                     // than the original: -1 step per 5 kills, -1 per wave.
                     let kill_bonus = (55 - game->alive_count) / 5
@@ -963,8 +964,8 @@ let process_collisions = (rng: pcg_random*, audio_dev: uint32,
                     spawn_burst(rng, cx, cy, 36, 120u8, 220u8, 255u8)
                     spawn_burst(rng, cx, cy, 18, 255u8, 180u8, 80u8)
                     if audio_dev > 0u32 then
-                        sdl.clear_audio(audio_dev)
-                        sdl.queue_audio(audio_dev, die_snd.data, die_snd.bytes)
+                        sdl2.clear_audio(audio_dev)
+                        sdl2.queue_audio(audio_dev, die_snd.data, die_snd.bytes)
                     if game->lives <= 0 then
                         game->phase = game_phase.game_over
                         game->phase_timer = 0
@@ -1160,9 +1161,9 @@ let draw_wave_clear = (r: any*) ->
 
 let render = (r: any*, frame_count: int32) ->
     // Deep space background with vertical gradient
-    sdl.set_blend_mode(r, sdl.blend_none)
-    sdl.set_color(r, 4u8, 6u8, 18u8, 255u8)
-    sdl.clear(r)
+    sdl2.set_blend_mode(r, sdl2.blend_none)
+    sdl2.set_color(r, 4u8, 6u8, 18u8, 255u8)
+    sdl2.clear(r)
     // Gradient bands
     for band in 0..16
         let y = band * (logical_h / 16)
@@ -1170,7 +1171,7 @@ let render = (r: any*, frame_count: int32) ->
         let v = (uint8) (4 + band)
         fill(r, 0, y, logical_w, h, v, (uint8) (v + 2u8), (uint8) (v + 14u8), 255u8)
 
-    sdl.set_blend_mode(r, sdl.blend_alpha)
+    sdl2.set_blend_mode(r, sdl2.blend_alpha)
     draw_stars(r)
 
     // Bunkers (drawn behind bullets/enemies but in front of stars)
@@ -1224,7 +1225,7 @@ let render = (r: any*, frame_count: int32) ->
     | game_over -> draw_game_over(r)
     | _ -> void()
 
-    sdl.present(r)
+    sdl2.present(r)
 
 // ============================================================
 // Main
@@ -1242,9 +1243,9 @@ let main = (args: str[]) ->
     io.write("  C (splash)  Clear high score\n\n", stdout)
 
     // Request smooth linear scaling when SDL blits logical → physical.
-    sdl.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"linear")
+    sdl2.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"linear")
 
-    sdl.init(sdl.init_video | sdl.init_audio)
+    sdl2.init(sdl2.init_video | sdl2.init_audio)
 
     // We create the window resizable and then maximize it immediately:
     // the maximized window is sized by the OS to the usable desktop area,
@@ -1252,25 +1253,25 @@ let main = (args: str[]) ->
     // F11 can then toggle true fullscreen-desktop at runtime.
     let initial_w = 960
     let initial_h = 540
-    let flags = sdl.window_shown | sdl.window_allow_highdpi | sdl.window_resizable
-    let win = sdl.create_window(c"Face Invaders",
-                                sdl.pos_centered, sdl.pos_centered,
+    let flags = sdl2.window_shown | sdl2.window_allow_highdpi | sdl2.window_resizable
+    let win = sdl2.create_window(c"Face Invaders",
+                                sdl2.pos_centered, sdl2.pos_centered,
                                 initial_w, initial_h, flags)
-    sdl.maximize_window(win)
+    sdl2.maximize_window(win)
     let mut fullscreen = false
 
     // Accelerated renderer with vsync. Logical size decouples draw coordinates
     // from the physical window/backing pixels — SDL scales automatically.
-    let ren = sdl.create_renderer(win, -1,
-                                  sdl.renderer_accel | sdl.renderer_vsync)
-    sdl.set_logical_size(ren, logical_w, logical_h)
-    sdl.set_blend_mode(ren, sdl.blend_alpha)
-    sdl.show_cursor(0)
+    let ren = sdl2.create_renderer(win, -1,
+                                  sdl2.renderer_accel | sdl2.renderer_vsync)
+    sdl2.set_logical_size(ren, logical_w, logical_h)
+    sdl2.set_blend_mode(ren, sdl2.blend_alpha)
+    sdl2.show_cursor(0)
 
     // Log the actual backing size for transparency
     let mut out_w = 0
     let mut out_h = 0
-    sdl.get_output_size(ren, &out_w, &out_h)
+    sdl2.get_output_size(ren, &out_w, &out_h)
     io.write("Renderer backing: %d{out_w}x%d{out_h} (logical %d{logical_w}x%d{logical_h})\n",
              stdout)
 
@@ -1279,15 +1280,15 @@ let main = (args: str[]) ->
     // Audio setup
     let mut desired = default(audio_spec)
     desired.freq = 44100
-    desired.format = sdl.audio_s16sys
+    desired.format = sdl2.audio_s16sys
     desired.channels = 1u8
     desired.samples = 1024u16
     desired.callback = (any*) 0u
     desired.userdata = (any*) 0u
     let mut obtained = default(audio_spec)
-    let audio_dev = sdl.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    let audio_dev = sdl2.open_audio((any*) 0u, 0, &desired, &obtained, 0)
     if audio_dev > 0u32 then
-        sdl.pause_audio(audio_dev, 0)
+        sdl2.pause_audio(audio_dev, 0)
 
     let shoot_snd = gen_shoot()
     let hit_snd = gen_hit()
@@ -1316,21 +1317,21 @@ let main = (args: str[]) ->
 
         // --------- Input ---------
         loop
-            let has = sdl.poll_event(&event)
+            let has = sdl2.poll_event(&event)
             if has == 0 then break
 
-            if (int32) event.type == sdl.quit_event then
+            if (int32) event.type == sdl2.quit_event then
                 running = false
                 break
 
-            if (int32) event.type == sdl.keydown_event then
+            if (int32) event.type == sdl2.keydown_event then
                 let k = event.key.keysym.sym
 
-                if k == sdl.key_escape then
+                if k == sdl2.key_escape then
                     running = false
                     break
 
-                if k == sdl.key_f11 then
+                if k == sdl2.key_f11 then
                     fullscreen = !fullscreen
                     if fullscreen then
                         // Fake fullscreen: borderless window sized exactly
@@ -1338,32 +1339,32 @@ let main = (args: str[]) ->
                         // fullscreen path and the DPI-drawable quirks that
                         // made it scale off-screen on some WMs.
                         let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
-                        sdl.get_display_bounds(0, &db)
-                        sdl.set_bordered(win, 0)
-                        sdl.set_window_position(win, db.x, db.y)
-                        sdl.set_window_size(win, db.w, db.h)
+                        sdl2.get_display_bounds(0, &db)
+                        sdl2.set_bordered(win, 0)
+                        sdl2.set_window_position(win, db.x, db.y)
+                        sdl2.set_window_size(win, db.w, db.h)
                     else
-                        sdl.set_bordered(win, 1)
-                        sdl.restore_window(win)
-                        sdl.maximize_window(win)
+                        sdl2.set_bordered(win, 1)
+                        sdl2.restore_window(win)
+                        sdl2.maximize_window(win)
                     // Re-apply logical size after any window resize.
-                    sdl.set_logical_size(ren, logical_w, logical_h)
+                    sdl2.set_logical_size(ren, logical_w, logical_h)
 
-                if k == sdl.key_left || k == sdl.key_a then
+                if k == sdl2.key_left || k == sdl2.key_a then
                     game->move_left = true
-                if k == sdl.key_right || k == sdl.key_d then
+                if k == sdl2.key_right || k == sdl2.key_d then
                     game->move_right = true
-                if k == sdl.key_space then
+                if k == sdl2.key_space then
                     match game->phase with
                     | playing ->
                         game->fire_held = true
                         fire_player_bullet()
                         if audio_dev > 0u32 then
-                            sdl.clear_audio(audio_dev)
-                            sdl.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
+                            sdl2.clear_audio(audio_dev)
+                            sdl2.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
                     | _ -> void()
 
-                if k == sdl.key_return then
+                if k == sdl2.key_return then
                     match game->phase with
                     | splash
                     | game_over -> reset_game(&rng)
@@ -1372,13 +1373,13 @@ let main = (args: str[]) ->
                         game->score_locked = true
                     | _ -> void()
 
-                if k == sdl.key_p then
+                if k == sdl2.key_p then
                     match game->phase with
                     | playing -> game->phase = game_phase.paused
                     | paused -> game->phase = game_phase.playing
                     | _ -> void()
 
-                if k == sdl.key_c then
+                if k == sdl2.key_c then
                     match game->phase with
                     | splash ->
                         game->high_score = 0
@@ -1389,13 +1390,13 @@ let main = (args: str[]) ->
                         | none -> void()
                     | _ -> void()
 
-            if (int32) event.type == sdl.keyup_event then
+            if (int32) event.type == sdl2.keyup_event then
                 let k = event.key.keysym.sym
-                if k == sdl.key_left || k == sdl.key_a then
+                if k == sdl2.key_left || k == sdl2.key_a then
                     game->move_left = false
-                if k == sdl.key_right || k == sdl.key_d then
+                if k == sdl2.key_right || k == sdl2.key_d then
                     game->move_right = false
-                if k == sdl.key_space then
+                if k == sdl2.key_space then
                     game->fire_held = false
 
         if !running then break
@@ -1447,8 +1448,8 @@ let main = (args: str[]) ->
                 game->phase = game_phase.wave_clear
                 game->phase_timer = 90
                 if audio_dev > 0u32 then
-                    sdl.clear_audio(audio_dev)
-                    sdl.queue_audio(audio_dev, wave_snd.data, wave_snd.bytes)
+                    sdl2.clear_audio(audio_dev)
+                    sdl2.queue_audio(audio_dev, wave_snd.data, wave_snd.bytes)
         | wave_clear ->
             update_bullets()
             game->phase_timer = game->phase_timer - 1
@@ -1459,7 +1460,7 @@ let main = (args: str[]) ->
                 reset_bunkers()
                 schedule_next_ufo(&rng)
                 game->phase = game_phase.playing
-                sdl.set_title(win, c"Face Invaders - Wave %d{game->wave}")
+                sdl2.set_title(win, c"Face Invaders - Wave %d{game->wave}")
         | dying ->
             update_bullets()
             update_ufo(&rng)
@@ -1484,13 +1485,13 @@ let main = (args: str[]) ->
         render(ren, frame_count)
 
         // Vsync handles pacing, but add a safety delay if vsync is unavailable
-        sdl.delay(1u32)
+        sdl2.delay(1u32)
 
     io.write("Final score: %d{game->score}\n", stdout)
 
     if audio_dev > 0u32 then
-        sdl.close_audio(audio_dev)
-    sdl.destroy_renderer(ren)
-    sdl.destroy_window(win)
-    sdl.quit()
+        sdl2.close_audio(audio_dev)
+    sdl2.destroy_renderer(ren)
+    sdl2.destroy_window(win)
+    sdl2.quit()
     0

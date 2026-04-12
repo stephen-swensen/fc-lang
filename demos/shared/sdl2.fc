@@ -1,9 +1,12 @@
-// SDL2 bindings for Face Invaders.
-// Extends the minimal set used by fibbles with accelerated rendering,
-// fullscreen-desktop support, high-DPI awareness, alpha blending, and
-// the extra primitives face-invaders needs (lines, outlines, hints).
+// SDL2 bindings for FC demos.
+// Shared by fibbles and face-invaders. Covers the union of bindings
+// either demo needs: accelerated rendering, fullscreen-desktop support,
+// high-DPI awareness, alpha blending, audio, events, and the
+// drawing primitives both demos use.
 
-module sdl from "SDL2/SDL.h" =
+namespace sdl2::
+
+module sdl2 from "SDL2/SDL.h" =
     // --- Extern structs ---
     extern struct SDL_Rect as rect =
         x: int32
@@ -77,6 +80,7 @@ module sdl from "SDL2/SDL.h" =
     extern SDL_SetWindowSize as set_window_size: (any*, int32, int32) -> void
     extern SDL_SetWindowPosition as set_window_position: (any*, int32, int32) -> void
     extern SDL_SetWindowBordered as set_bordered: (any*, int32) -> void
+    extern SDL_SetWindowResizable as set_resizable: (any*, int32) -> void
     extern SDL_MaximizeWindow as maximize_window: (any*) -> void
     extern SDL_RestoreWindow as restore_window: (any*) -> void
     extern SDL_ShowCursor as show_cursor: (int32) -> int32
