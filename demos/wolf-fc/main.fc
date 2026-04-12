@@ -1110,6 +1110,38 @@ let draw_hud = (w: world*, fb: uint32[], fps: int32) ->
     return
 
 // ============================================================
+// Weapon sprite overlay
+// ============================================================
+
+// Weapon sprite indices: knife=416, pistol=421, machinegun=426, chaingun=431
+let weapon_base = (weapon: int32) ->
+    if weapon == 0 then 416
+    else if weapon == 1 then 421
+    else if weapon == 2 then 426
+    else 431
+
+let draw_weapon = (fb: uint32[], sprite_tex: uint32[], num_spr_tex: int32,
+                   weapon: int32, anim_frame: int32) ->
+    let base = weapon_base(weapon)
+    let spr_id = base + anim_frame
+    if spr_id < 0 || spr_id >= num_spr_tex then return
+    let scale = 5
+    let spr_w = 64 * scale
+    let ox = (screen_w - spr_w) / 2
+    let oy = screen_h - 64 * scale
+    for col in 0..64
+        for row in 0..64
+            let c = sprite_tex[spr_id * tex_pixels + col * 64 + row]
+            if c != 0u32 then
+                for sy in 0..scale
+                    for sx in 0..scale
+                        let fx = ox + col * scale + sx
+                        let fy = oy + row * scale + sy
+                        if fx >= 0 && fx < screen_w && fy >= 0 && fy < screen_h then
+                            fb[fy * screen_w + fx] = c
+    return
+
+// ============================================================
 // Player movement
 // ============================================================
 
@@ -1461,6 +1493,9 @@ let main = (args: str[]) ->
     let mut fps_timer = sdl2.get_ticks()
     let mut step_timer = 0
     let mut fire_cooldown = 0
+    let mut cur_weapon = 1
+    let mut weapon_frame = 0
+    let mut weapon_timer = 0
     let mut sfx_buf = (int16*) (any*) 0u
     let mut sfx_len = 0
     let mut sfx_pos = 0
@@ -1567,9 +1602,11 @@ let main = (args: str[]) ->
         if !running then break
 
         // --------- Audio feedback ---------
-        // Gunfire: play once per press, then cooldown
+        // Gunfire: play once per press, then cooldown + weapon animation
         if w->input.fire_held && fire_cooldown == 0 then
             fire_cooldown = 20
+            weapon_frame = 1
+            weapon_timer = 0
             sfx_buf = (int16*) gun_snd.data
             sfx_len = (int32) gun_snd.bytes / 2
             sfx_pos = 0
@@ -1577,6 +1614,14 @@ let main = (args: str[]) ->
             fire_cooldown = fire_cooldown - 1
         if !w->input.fire_held then
             fire_cooldown = 0
+        // Animate weapon: cycle through attack frames 1-4, then back to 0 (ready)
+        if weapon_frame > 0 then
+            weapon_timer = weapon_timer + 1
+            if weapon_timer >= 5 then
+                weapon_timer = 0
+                weapon_frame = weapon_frame + 1
+                if weapon_frame > 4 then
+                    weapon_frame = 0
 
         // Mix music + SFX and queue audio
         if audio_dev > 0u32 then
@@ -1603,6 +1648,7 @@ let main = (args: str[]) ->
         clear_fb(fb, w->ceil_color, w->floor_color)
         cast_rays(w, fb, textures, num_tex, zbuf)
         draw_sprites(w, fb, zbuf, sprite_tex, num_spr_tex)
+        draw_weapon(fb, sprite_tex, num_spr_tex, cur_weapon, weapon_frame)
         draw_minimap(w, fb, show_map)
         draw_hud(w, fb, fps)
 
