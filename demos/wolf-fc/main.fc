@@ -1213,6 +1213,277 @@ let gen_door = () ->
     fill_tone(mem, 0, 150, 200, 5000)
     make_sound(n, mem)
 
+// Load a digitized sound from VSWAP (8-bit unsigned 7042 Hz -> 16-bit signed 44100 Hz)
+let load_digi_sound = (path: const str, sound_idx: int32) ->
+    match io.open(path, "rb") with
+    | none -> default(sound?)
+    | some(f) ->
+        defer io.close(f)
+        let hdr = alloc(uint8[6] {})!
+        io.read(hdr, 6i64, f)
+        let nc = read_u16(hdr, 0)
+        let ss = read_u16(hdr, 4)
+        let obuf = alloc(uint8[nc * 4] {})!
+        io.read(obuf, (int64) (nc * 4), f)
+        // Sound info directory is last chunk
+        let info_off = read_i32(obuf, (nc - 1) * 4)
+        io.seek(f, (int64) info_off + (int64) (sound_idx * 4), io.seek_set)
+        let ibuf = alloc(uint8[4] {})!
+        io.read(ibuf, 4i64, f)
+        let start_page = read_u16(ibuf, 0)
+        let total_len = read_u16(ibuf, 2)
+        if total_len == 0 then return default(sound?)
+        // Read raw unsigned 8-bit PCM at 7042 Hz
+        let page_off = read_i32(obuf, (ss + start_page) * 4)
+        io.seek(f, (int64) page_off, io.seek_set)
+        let raw = alloc(uint8[total_len] {})!
+        io.read(raw, (int64) total_len, f)
+        // Resample to 44100 Hz signed 16-bit
+        let out_len = total_len * 44100 / 7042
+        let mem = alloc(int16, (usize) out_len)!
+        for i in 0..out_len
+            let src = i * 7042 / 44100
+            let sample = if src < total_len then (int32) raw[src] else 128
+            mem[i] = (int16) ((sample - 128) * 256)
+        some(sound { data = (any*) mem, bytes = (uint32) (out_len * 2) })
+
+// ============================================================
+// OPL2 emulator (YM3812) — from public Yamaha spec
+// ============================================================
+
+struct opl2_chip =
+    op_phase: float64[18]
+    op_env: float64[18]
+    op_stage: int32[18]
+    op_tl: int32[18]
+    op_mult: int32[18]
+    op_ar: int32[18]
+    op_dr: int32[18]
+    op_sl: int32[18]
+    op_rr: int32[18]
+    op_wf: int32[18]
+    ch_fnum: int32[9]
+    ch_block: int32[9]
+    ch_key: bool[9]
+    ch_fb: int32[9]
+    ch_add: bool[9]
+    ch_prev0: float64[9]
+    ch_prev1: float64[9]
+    rate: float64
+
+let opl2_init = (sample_rate: float64) ->
+    let chip = alloc(opl2_chip)!
+    chip->rate = sample_rate
+    for i in 0..18
+        chip->op_tl[i] = 63
+        chip->op_mult[i] = 1
+    chip
+
+let op_index = (offset: int32) ->
+    let group = offset / 8
+    let slot = offset % 8
+    if group > 2 || slot > 5 then -1
+    else
+        let ch = group * 3 + slot % 3
+        let op = slot / 3
+        ch * 2 + op
+
+let opl2_write = (chip: opl2_chip*, reg: int32, val: int32) ->
+    let base = reg & 240
+    let off = reg & 31
+    if base == 32 then
+        let idx = op_index(off)
+        if idx >= 0 then chip->op_mult[idx] = val & 15
+    if base == 64 then
+        let idx = op_index(off)
+        if idx >= 0 then chip->op_tl[idx] = val & 63
+    if base == 96 then
+        let idx = op_index(off)
+        if idx >= 0 then
+            chip->op_ar[idx] = (val >> 4) & 15
+            chip->op_dr[idx] = val & 15
+    if base == 128 then
+        let idx = op_index(off)
+        if idx >= 0 then
+            chip->op_sl[idx] = (val >> 4) & 15
+            chip->op_rr[idx] = val & 15
+    if base == 224 then
+        let idx = op_index(off)
+        if idx >= 0 then chip->op_wf[idx] = val & 3
+    let ci = reg & 15
+    if base == 160 && ci < 9 then
+        chip->ch_fnum[ci] = (chip->ch_fnum[ci] & 768) | (val & 255)
+    if base == 176 && ci < 9 then
+        chip->ch_fnum[ci] = (chip->ch_fnum[ci] & 255) | ((val & 3) << 8)
+        chip->ch_block[ci] = (val >> 2) & 7
+        let new_key = (val & 32) != 0
+        if new_key && !chip->ch_key[ci] then
+            chip->op_stage[ci * 2] = 1
+            chip->op_env[ci * 2] = 0.0
+            chip->op_phase[ci * 2] = 0.0
+            chip->op_stage[ci * 2 + 1] = 1
+            chip->op_env[ci * 2 + 1] = 0.0
+            chip->op_phase[ci * 2 + 1] = 0.0
+        if !new_key && chip->ch_key[ci] then
+            if chip->op_stage[ci * 2] > 0 then
+                chip->op_stage[ci * 2] = 4
+            if chip->op_stage[ci * 2 + 1] > 0 then
+                chip->op_stage[ci * 2 + 1] = 4
+        chip->ch_key[ci] = new_key
+    if base == 192 && ci < 9 then
+        chip->ch_fb[ci] = (val >> 1) & 7
+        chip->ch_add[ci] = (val & 1) != 0
+    return
+
+let opl2_wave = (phase: float64, wf: int32) ->
+    let p = phase * 6.2831853071795864
+    let s = math.sin(p)
+    if wf == 0 then s
+    else if wf == 1 then if phase < 0.5 then s else 0.0
+    else if wf == 2 then math.abs(s)
+    else if phase < 0.25 then s else 0.0
+
+let opl2_env_step = (chip: opl2_chip*, idx: int32) ->
+    let stage = chip->op_stage[idx]
+    if stage == 0 then return
+    let mut env = chip->op_env[idx]
+    let rs = 1.0 / chip->rate
+    if stage == 1 then
+        let ar = chip->op_ar[idx]
+        if ar == 0 then return
+        env = env + (float64) ar * 320.0 * rs
+        if env >= 1.0 then
+            env = 1.0
+            chip->op_stage[idx] = 2
+    if stage == 2 then
+        let dr = chip->op_dr[idx]
+        let target = 1.0 - (float64) chip->op_sl[idx] / 15.0
+        if dr == 0 then
+            chip->op_stage[idx] = 3
+        else
+            env = env - (float64) dr * 80.0 * rs
+            if env <= target then
+                env = target
+                chip->op_stage[idx] = 3
+    if stage == 4 then
+        let rr = chip->op_rr[idx]
+        if rr == 0 then
+            env = 0.0
+            chip->op_stage[idx] = 0
+        else
+            env = env - (float64) rr * 80.0 * rs
+            if env <= 0.0 then
+                env = 0.0
+                chip->op_stage[idx] = 0
+    chip->op_env[idx] = env
+    return
+
+let opl2_mult_val = (m: int32) ->
+    if m == 0 then 0.5
+    else if m == 11 then 10.0
+    else if m == 13 then 12.0
+    else if m == 14 then 15.0
+    else (float64) m
+
+let opl2_sample = (chip: opl2_chip*) ->
+    let mut out = 0.0
+    for ch in 0..9
+        let fnum = chip->ch_fnum[ch]
+        let block = chip->ch_block[ch]
+        let base_freq = (float64) fnum * math.pow(2.0, (float64) (block - 1)) * 49716.0 / 1048576.0
+        let mi = ch * 2
+        let ci = ch * 2 + 1
+        opl2_env_step(chip, mi)
+        opl2_env_step(chip, ci)
+        // Modulator
+        let mf = base_freq * opl2_mult_val(chip->op_mult[mi])
+        chip->op_phase[mi] = chip->op_phase[mi] + mf / chip->rate
+        if chip->op_phase[mi] >= 1.0 then
+            chip->op_phase[mi] = chip->op_phase[mi] - 1.0
+        let mtl = (float64) chip->op_tl[mi] / 63.0
+        let mvol = chip->op_env[mi] * (1.0 - mtl)
+        let fb = chip->ch_fb[ch]
+        let mut fbv = 0.0
+        if fb > 0 then
+            fbv = (chip->ch_prev0[ch] + chip->ch_prev1[ch]) / 2.0 / math.pow(2.0, (float64) (8 - fb))
+        let mp = chip->op_phase[mi] + fbv
+        let mout = opl2_wave(mp - math.floor(mp), chip->op_wf[mi]) * mvol
+        chip->ch_prev1[ch] = chip->ch_prev0[ch]
+        chip->ch_prev0[ch] = mout
+        // Carrier
+        let cf = base_freq * opl2_mult_val(chip->op_mult[ci])
+        let ctl = (float64) chip->op_tl[ci] / 63.0
+        let cvol = chip->op_env[ci] * (1.0 - ctl)
+        chip->op_phase[ci] = chip->op_phase[ci] + cf / chip->rate
+        if chip->op_phase[ci] >= 1.0 then
+            chip->op_phase[ci] = chip->op_phase[ci] - 1.0
+        if chip->ch_add[ch] then
+            let cout = opl2_wave(chip->op_phase[ci], chip->op_wf[ci]) * cvol
+            out = out + mout + cout
+        else
+            let fmp = chip->op_phase[ci] + mout * 0.5
+            let cout = opl2_wave(fmp - math.floor(fmp), chip->op_wf[ci]) * cvol
+            out = out + cout
+    if out > 1.0 then out = 1.0
+    if out < -1.0 then out = -1.0
+    (int16) (out * 16000.0)
+
+// ============================================================
+// IMF music loading and pre-rendering
+// ============================================================
+
+let render_imf_track = (head_path: const str, data_path: const str, track: int32, rate: int32) ->
+    match io.open(head_path, "rb") with
+    | none -> default(sound?)
+    | some(hf) ->
+        defer io.close(hf)
+        let hbuf = alloc(uint8[4] {})!
+        io.seek(hf, (int64) (track * 4), io.seek_set)
+        io.read(hbuf, 4i64, hf)
+        let off = read_i32(hbuf, 0)
+        // Read next offset to get chunk size
+        io.read(hbuf, 4i64, hf)
+        let next_off = read_i32(hbuf, 0)
+        if off == next_off then return default(sound?)
+
+        match io.open(data_path, "rb") with
+        | none -> default(sound?)
+        | some(df) ->
+            defer io.close(df)
+            io.seek(df, (int64) off, io.seek_set)
+            // Read IMF length word
+            let lbuf = alloc(uint8[2] {})!
+            io.read(lbuf, 2i64, df)
+            let imf_len = read_u16(lbuf, 0)
+            if imf_len < 4 then return default(sound?)
+            // Read IMF data
+            let imf = alloc(uint8[imf_len] {})!
+            io.read(imf, (int64) imf_len, df)
+            // Count total delay ticks to determine output length
+            let num_entries = imf_len / 4
+            let mut total_ticks = 0
+            for i in 0..num_entries
+                total_ticks = total_ticks + read_u16(imf, i * 4 + 2)
+            // Render: 700 ticks/sec IMF rate -> sample_rate samples/sec
+            // Use rate/700 to avoid int32 overflow on large tick counts
+            let spt = rate / 700
+            let total_samples = total_ticks * spt + rate
+            let mem = alloc(int16, (usize) total_samples)!
+            let chip = opl2_init((float64) rate)
+            let mut sample_pos = 0
+            for i in 0..num_entries
+                let reg = (int32) imf[i * 4]
+                let val = (int32) imf[i * 4 + 1]
+                let delay = read_u16(imf, i * 4 + 2)
+                if reg > 0 then
+                    opl2_write(chip, reg, val)
+                let delay_samples = delay * spt
+                for s in 0..delay_samples
+                    if sample_pos < total_samples then
+                        mem[sample_pos] = opl2_sample(chip)
+                        sample_pos = sample_pos + 1
+            some(sound { data = (any*) mem, bytes = (uint32) (sample_pos * 2) })
+
 // ============================================================
 // Main
 // ============================================================
@@ -1303,8 +1574,59 @@ let main = (args: str[]) ->
         sdl2.pause_audio(audio_dev, 0)
 
     let step_snd = gen_footstep()
-    let gun_snd = gen_gunshot()
-    let door_snd = gen_door()
+    let vswap_path = "demos/wolf-fc/data/VSWAP.WL6"
+    // Try loading real Wolf3D sounds, fall back to procedural
+    let mut gun_snd = gen_gunshot()
+    let mut door_snd = gen_door()
+    let mut halt_snd = gen_door()
+    let mut loaded_sounds = 0
+    match load_digi_sound(vswap_path, 3) with
+    | some(s) ->
+        door_snd = s
+        loaded_sounds = loaded_sounds + 1
+    | none -> void()
+    match load_digi_sound(vswap_path, 5) with
+    | some(s) ->
+        gun_snd = s
+        loaded_sounds = loaded_sounds + 1
+    | none -> void()
+    match load_digi_sound(vswap_path, 0) with
+    | some(s) ->
+        halt_snd = s
+        loaded_sounds = loaded_sounds + 1
+    | none -> void()
+    if loaded_sounds > 0 then
+        io.write("Loaded %d{loaded_sounds} digitized sounds from VSWAP.WL6\n", stdout)
+        io.flush(stdout)
+
+    // Wolf3D level-to-music mapping (STARTMUSIC=261, track indices within music section)
+    // E1: GETTHEM, SEARCHN, POW, SUSPENSE, GETTHEM, SEARCHN, POW, SUSPENSE, WARMARCH, CORNER
+    let level_music = alloc(int32[60] {})!
+    level_music[0] = 3
+    level_music[1] = 4
+    level_music[2] = 5
+    level_music[3] = 6
+    level_music[4] = 3
+    level_music[5] = 4
+    level_music[6] = 5
+    level_music[7] = 6
+    level_music[8] = 2
+    level_music[9] = 0
+    for i in 10..60
+        level_music[i] = (i % 7) + 1
+
+    let mut music_buf = (int16*) (any*) 0u
+    let mut music_len = 0
+    let mut music_pos = 0
+    let music_track = 261 + level_music[0]
+    match render_imf_track("demos/wolf-fc/data/AUDIOHED.WL6",
+                           "demos/wolf-fc/data/AUDIOT.WL6", music_track, 44100) with
+    | some(ms) ->
+        music_buf = (int16*) ms.data
+        music_len = (int32) ms.bytes / 2
+        io.write("Rendered music track: %d{music_len} samples\n", stdout)
+        io.flush(stdout)
+    | none -> void()
 
     // Game loop state
     let mut event = default(sdl_event)
@@ -1314,6 +1636,11 @@ let main = (args: str[]) ->
     let mut fps_count = 0
     let mut fps_timer = sdl2.get_ticks()
     let mut step_timer = 0
+    let mut fire_cooldown = 0
+    let mut sfx_buf = (int16*) (any*) 0u
+    let mut sfx_len = 0
+    let mut sfx_pos = 0
+    let mix_buf = alloc(int16, 1024u)!
 
     io.write("Wolfenstein FC started.\n", stdout)
     io.write("  Arrows: move   Z: run   X+Arrows: strafe   C: open   V: shoot   Tab: map   PgUp/Dn: level\n", stdout)
@@ -1368,9 +1695,9 @@ let main = (args: str[]) ->
                 if k == sdl2.key_v then w->input.fire_held = true
                 if k == sdl2.key_c then
                     try_open_door(w)
-                    if audio_dev > 0u32 then
-                        sdl2.clear_audio(audio_dev)
-                        sdl2.queue_audio(audio_dev, door_snd.data, door_snd.bytes)
+                    sfx_buf = (int16*) door_snd.data
+                    sfx_len = (int32) door_snd.bytes / 2
+                    sfx_pos = 0
                 if k == sdl2.key_tab then show_map = !show_map
                 if k == sdl2.key_pageup then
                     if w->level < 59 then
@@ -1378,6 +1705,14 @@ let main = (args: str[]) ->
                         load_level("demos/wolf-fc/data/MAPHEAD.WL6",
                                    "demos/wolf-fc/data/GAMEMAPS.WL6", w->level, w)
                         set_level_colors(w, palette)
+                        let mt = 261 + level_music[w->level]
+                        match render_imf_track("demos/wolf-fc/data/AUDIOHED.WL6",
+                                               "demos/wolf-fc/data/AUDIOT.WL6", mt, 44100) with
+                        | some(ms) ->
+                            music_buf = (int16*) ms.data
+                            music_len = (int32) ms.bytes / 2
+                            music_pos = 0
+                        | none -> void()
                         io.write("Level %d{w->level + 1}\n", stdout)
                 if k == sdl2.key_pagedown then
                     if w->level > 0 then
@@ -1385,6 +1720,14 @@ let main = (args: str[]) ->
                         load_level("demos/wolf-fc/data/MAPHEAD.WL6",
                                    "demos/wolf-fc/data/GAMEMAPS.WL6", w->level, w)
                         set_level_colors(w, palette)
+                        let mt = 261 + level_music[w->level]
+                        match render_imf_track("demos/wolf-fc/data/AUDIOHED.WL6",
+                                               "demos/wolf-fc/data/AUDIOT.WL6", mt, 44100) with
+                        | some(ms) ->
+                            music_buf = (int16*) ms.data
+                            music_len = (int32) ms.bytes / 2
+                            music_pos = 0
+                        | none -> void()
                         io.write("Level %d{w->level + 1}\n", stdout)
 
             if (int32) event.type == sdl2.keyup_event then
@@ -1400,18 +1743,34 @@ let main = (args: str[]) ->
         if !running then break
 
         // --------- Audio feedback ---------
-        if w->input.move_fwd || w->input.move_back then
-            step_timer = step_timer + 1
-            if step_timer >= 12 && audio_dev > 0u32 then
-                step_timer = 0
-                sdl2.queue_audio(audio_dev, step_snd.data, step_snd.bytes)
-        else
-            step_timer = 0
+        // Gunfire: play once per press, then cooldown
+        if w->input.fire_held && fire_cooldown == 0 then
+            fire_cooldown = 20
+            sfx_buf = (int16*) gun_snd.data
+            sfx_len = (int32) gun_snd.bytes / 2
+            sfx_pos = 0
+        if fire_cooldown > 0 then
+            fire_cooldown = fire_cooldown - 1
+        if !w->input.fire_held then
+            fire_cooldown = 0
 
-        if w->input.fire_held then
-            if audio_dev > 0u32 then
-                sdl2.clear_audio(audio_dev)
-                sdl2.queue_audio(audio_dev, gun_snd.data, gun_snd.bytes)
+        // Mix music + SFX and queue audio
+        if audio_dev > 0u32 then
+            let chunk = 735
+            for i in 0..chunk
+                let mut s = 0
+                if music_len > 0 then
+                    s = (int32) music_buf[music_pos]
+                    music_pos = music_pos + 1
+                    if music_pos >= music_len then
+                        music_pos = 0
+                if sfx_pos < sfx_len then
+                    s = s + (int32) sfx_buf[sfx_pos]
+                    sfx_pos = sfx_pos + 1
+                if s > 32000 then s = 32000
+                if s < -32000 then s = -32000
+                mix_buf[i] = (int16) s
+            sdl2.queue_audio(audio_dev, (any*) mix_buf, (uint32) (chunk * 2))
 
         // --------- Update ---------
         update_player(w)
