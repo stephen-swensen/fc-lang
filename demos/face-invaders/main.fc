@@ -1127,7 +1127,7 @@ let main = (args: str[]) ->
 
                 if k == sdl.key_return then
                     match game->phase with
-                    | splash -> reset_game()
+                    | splash
                     | game_over -> reset_game()
                     | playing ->
                         game->lives = starting_lives
