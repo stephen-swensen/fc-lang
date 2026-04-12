@@ -25,12 +25,23 @@ let max_particles = 384
 let max_stars = 160
 
 let ship_radius = 14.0
-let ship_thrust = 0.18
-let ship_max_speed = 7.5
+let ship_thrust = 0.10
+let ship_max_speed = 5.5
 let ship_friction = 0.992
 let ship_rot_speed = 0.085
 let ship_fire_cooldown = 9
 let ship_spawn_invuln = 120
+
+let boost_thrust_mult = 3.5
+let boost_max_speed = 12.0
+let boost_ramp_frames = 40.0
+let boost_drain = 2.5
+let boost_recharge = 0.6
+let boost_min_activate = 30.0
+let bar_max = 200.0
+
+let ammo_cost = 10.0
+let ammo_recharge = 0.7
 
 let bullet_speed = 11.5
 let bullet_lifetime = 56
@@ -120,9 +131,14 @@ struct game_state =
     rotate_left: bool
     rotate_right: bool
     fire_held: bool
+    boost_on: bool
     cooldown: int32
     lives: int32
     invuln: int32
+    shield: int32
+    boost_energy: float64
+    boost_ramp: float64
+    ammo_energy: float64
     score: int32
     high_score: int32
     new_high: bool
@@ -457,13 +473,47 @@ let draw_ship = (w: world*, r: any*, blink: bool, frame_count: int32) ->
     glow_line(r, back_l_x, back_l_y, tail_x, tail_y, 80u8, 180u8, 220u8)
     glow_line(r, back_r_x, back_r_y, tail_x, tail_y, 80u8, 180u8, 220u8)
 
-    if w->game.thrust_on then
+    let show_flame = w->game.thrust_on || (w->game.boost_on && w->game.boost_energy > 0.0)
+    if show_flame then
         let flicker = (float64) (frame_count % 5)
-        let flame_len = 12.0 + flicker * 2.0
+        let is_boost = w->game.boost_on && w->game.boost_energy > 0.0
+        let flame_len = if is_boost then 20.0 + flicker * 4.0 else 12.0 + flicker * 2.0
         let flame_x = (int32) (cx + math.cos(a + math.pi) * flame_len)
         let flame_y = (int32) (cy + math.sin(a + math.pi) * flame_len)
-        glow_line(r, back_l_x, back_l_y, flame_x, flame_y, 255u8, 160u8, 40u8)
-        glow_line(r, back_r_x, back_r_y, flame_x, flame_y, 255u8, 160u8, 40u8)
+        let fr = if is_boost then 120u8 else 255u8
+        let fg = if is_boost then 180u8 else 160u8
+        let fb = if is_boost then 255u8 else 40u8
+        glow_line(r, back_l_x, back_l_y, flame_x, flame_y, fr, fg, fb)
+        glow_line(r, back_r_x, back_r_y, flame_x, flame_y, fr, fg, fb)
+
+    // Shield — hexagonal ring that fades with hits, thickness = 2x shield level
+    if w->game.shield > 0 then
+        let shield_r = 28.0
+        let segments = 6
+        let alpha = if w->game.shield == 3 then 180u8
+                    else if w->game.shield == 2 then 120u8
+                    else 60u8
+        let sr = if w->game.shield == 3 then 60u8
+                 else if w->game.shield == 2 then 40u8
+                 else 30u8
+        let sg = if w->game.shield == 3 then 200u8
+                 else if w->game.shield == 2 then 160u8
+                 else 100u8
+        let sb = 255u8
+        let thickness = w->game.shield * 2
+        for layer in 0..thickness
+            let lr = shield_r + (float64) layer - (float64) thickness * 0.5 + 0.5
+            let mut prev_hx = 0
+            let mut prev_hy = 0
+            for i in 0..segments + 1
+                let theta = two_pi * (float64) i / (float64) segments
+                let hx = (int32) (cx + math.cos(theta) * lr)
+                let hy = (int32) (cy + math.sin(theta) * lr)
+                if i > 0 then
+                    sdl2.set_color(r, sr, sg, sb, alpha)
+                    sdl2.draw_line(r, prev_hx, prev_hy, hx, hy)
+                prev_hx = hx
+                prev_hy = hy
 
 // ============================================================
 // Bullets
@@ -593,8 +643,33 @@ let circle_overlap = (x1: float64, y1: float64, r1: float64,
     let sum_r = r1 + r2
     dist_sq < sum_r * sum_r
 
+let ship_takes_hit = (w: world*, rng: pcg_random*, audio_dev: uint32,
+                      shield_snd: sound, die_snd: sound) ->
+    if w->game.shield > 0 then
+        w->game.shield = w->game.shield - 1
+        spawn_burst(w, rng, w->game.ship_x, w->game.ship_y, 10, 80u8, 200u8, 255u8)
+        w->game.invuln = 20
+        if audio_dev > 0u32 then
+            sdl2.clear_audio(audio_dev)
+            sdl2.queue_audio(audio_dev, shield_snd.data, shield_snd.bytes)
+    else
+        spawn_burst(w, rng, w->game.ship_x, w->game.ship_y, 40, 100u8, 220u8, 255u8)
+        spawn_burst(w, rng, w->game.ship_x, w->game.ship_y, 25, 255u8, 180u8, 60u8)
+        spawn_burst(w, rng, w->game.ship_x, w->game.ship_y, 20, 255u8, 80u8, 80u8)
+        if audio_dev > 0u32 then
+            sdl2.clear_audio(audio_dev)
+            sdl2.queue_audio(audio_dev, die_snd.data, die_snd.bytes)
+        w->game.lives = w->game.lives - 1
+        if w->game.lives <= 0 then
+            w->game.phase = game_phase.game_over
+            w->game.phase_timer = 0
+        else
+            w->game.phase = game_phase.dying
+            w->game.phase_timer = 90
+
 let process_collisions = (w: world*, rng: pcg_random*,
-                          audio_dev: uint32, hit_snd: sound) ->
+                          audio_dev: uint32, hit_snd: sound,
+                          shield_snd: sound, die_snd: sound) ->
     // Bullets vs asteroids (both player and UFO bullets destroy asteroids)
     for bi in 0..max_bullets
         if w->bullets[bi].alive then
@@ -640,17 +715,7 @@ let process_collisions = (w: world*, rng: pcg_random*,
                                   w->asteroids[ai].base_radius * 0.8) then
                     split_asteroid(w, rng, ai)
                     w->asteroids[ai].alive = false
-                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
-                                30, 100u8, 220u8, 255u8)
-                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
-                                15, 255u8, 160u8, 60u8)
-                    w->game.lives = w->game.lives - 1
-                    if w->game.lives <= 0 then
-                        w->game.phase = game_phase.game_over
-                        w->game.phase_timer = 0
-                    else
-                        w->game.phase = game_phase.dying
-                        w->game.phase_timer = 90
+                    ship_takes_hit(w, rng, audio_dev, shield_snd, die_snd)
                     return
 
     // Ship vs UFO bullets (only non-player bullets can hit the ship)
@@ -660,17 +725,7 @@ let process_collisions = (w: world*, rng: pcg_random*,
                 if circle_overlap(w->game.ship_x, w->game.ship_y, ship_radius,
                                   w->bullets[bi].x, w->bullets[bi].y, 4.0) then
                     w->bullets[bi].alive = false
-                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
-                                30, 100u8, 220u8, 255u8)
-                    spawn_burst(w, rng, w->game.ship_x, w->game.ship_y,
-                                15, 255u8, 160u8, 60u8)
-                    w->game.lives = w->game.lives - 1
-                    if w->game.lives <= 0 then
-                        w->game.phase = game_phase.game_over
-                        w->game.phase_timer = 0
-                    else
-                        w->game.phase = game_phase.dying
-                        w->game.phase_timer = 90
+                    ship_takes_hit(w, rng, audio_dev, shield_snd, die_snd)
                     return
 
 // ============================================================
@@ -723,13 +778,22 @@ let gen_thrust = () ->
     fill_tone(mem, 0, 70, 80, 3000)
     make_sound(n, mem)
 
-let gen_die = () ->
-    let n = samples_ms(100) + samples_ms(120) + samples_ms(160) + samples_ms(240)
+let gen_shield_hit = () ->
+    let n = samples_ms(30) + samples_ms(50)
     let mem = alloc(int16, (usize) n)!
-    let mut off = fill_tone(mem, 0, 440, 100, 9000)
-    off = fill_tone(mem, off, 330, 120, 9000)
-    off = fill_tone(mem, off, 220, 160, 9000)
-    fill_tone(mem, off, 110, 240, 9000)
+    let off = fill_tone(mem, 0, 1400, 30, 6000)
+    fill_tone(mem, off, 900, 50, 4000)
+    make_sound(n, mem)
+
+let gen_die = () ->
+    let n = samples_ms(120) + samples_ms(140) + samples_ms(180) +
+            samples_ms(240) + samples_ms(300)
+    let mem = alloc(int16, (usize) n)!
+    let mut off = fill_tone(mem, 0, 520, 120, 10000)
+    off = fill_tone(mem, off, 400, 140, 10000)
+    off = fill_tone(mem, off, 280, 180, 9000)
+    off = fill_tone(mem, off, 160, 240, 8000)
+    fill_tone(mem, off, 80, 300, 7000)
     make_sound(n, mem)
 
 let gen_extra_life = () ->
@@ -785,15 +849,24 @@ let clear_particles = (w: world*) ->
     for i in 0..max_particles
         w->particles[i].life = 0
 
+let respawn_ship = (w: world*) ->
+    w->game.ship_vx = 0.0
+    w->game.ship_vy = 0.0
+    w->game.thrust_on = false
+    w->game.boost_on = false
+    w->game.invuln = ship_spawn_invuln
+    w->game.cooldown = 0
+    w->game.shield = 3
+    w->game.boost_energy = bar_max
+    w->game.ammo_energy = bar_max
+
 let reset_ship = (w: world*) ->
     w->game.ship_x = (float64) (logical_w / 2)
     w->game.ship_y = (float64) (logical_h / 2)
-    w->game.ship_vx = 0.0
-    w->game.ship_vy = 0.0
     w->game.ship_angle = 0.0 - math.pi / 2.0
-    w->game.thrust_on = false
-    w->game.invuln = ship_spawn_invuln
-    w->game.cooldown = 0
+    respawn_ship(w)
+    w->game.boost_energy = bar_max
+    w->game.ammo_energy = bar_max
 
 let reset_game = (w: world*, rng: pcg_random*) ->
     reset_ship(w)
@@ -845,12 +918,27 @@ let draw_hud = (w: world*, r: any*) ->
     let wave_str = "WAVE %d{w->game.wave}"
     draw_text(r, (const str) wave_str, logical_w - 200, 20, 3, 120u8, 200u8, 180u8)
 
+    // Ammo bar — between score/lives (left) and HI (center)
+    let bar_w = 180
+    let bar_h = 12
+    let bar_y = 28
+    draw_text(r, "AMMO", 240, bar_y, 3, 255u8, 200u8, 80u8)
+    fill(r, 310, bar_y, bar_w, bar_h, 40u8, 40u8, 60u8, 180u8)
+    let ammo_fill = (int32) (w->game.ammo_energy / bar_max * (float64) bar_w)
+    fill(r, 310, bar_y, ammo_fill, bar_h, 255u8, 200u8, 60u8, 220u8)
+
+    // Boost bar — between HI (center) and WAVE (right)
+    draw_text(r, "BOOST", 760, bar_y, 3, 100u8, 180u8, 255u8)
+    fill(r, 840, bar_y, bar_w, bar_h, 40u8, 40u8, 60u8, 180u8)
+    let boost_fill = (int32) (w->game.boost_energy / bar_max * (float64) bar_w)
+    fill(r, 840, bar_y, boost_fill, bar_h, 80u8, 160u8, 255u8, 220u8)
+
 let draw_splash = (w: world*, r: any*) ->
     draw_text_centered(r, "FASTEROIDS", logical_w / 2, 140, 12, 80u8, 200u8, 255u8)
 
     draw_text_centered(r, "LEFT RIGHT  ROTATE    UP  THRUST    SPACE  FIRE",
                        logical_w / 2, 380, 3, 160u8, 180u8, 220u8)
-    draw_text_centered(r, "DOWN  HYPERSPACE    P  PAUSE    ESC  QUIT",
+    draw_text_centered(r, "DOWN  BOOST    P  PAUSE    ESC  QUIT",
                        logical_w / 2, 420, 3, 160u8, 180u8, 220u8)
 
     // Scoring legend
@@ -941,8 +1029,8 @@ let main = (args: str[]) ->
     io.write("  LEFT / A    Rotate left\n", stdout)
     io.write("  RIGHT / D   Rotate right\n", stdout)
     io.write("  UP / W      Thrust\n", stdout)
-    io.write("  SPACE       Fire\n", stdout)
-    io.write("  DOWN / H    Hyperspace\n", stdout)
+    io.write("  SPACE       Fire (uses ammo)\n", stdout)
+    io.write("  DOWN / X    Boost (uses energy)\n", stdout)
     io.write("  P           Pause\n", stdout)
     io.write("  F11         Toggle fullscreen\n", stdout)
     io.write("  ESC         Quit\n\n", stdout)
@@ -996,6 +1084,7 @@ let main = (args: str[]) ->
     let hit_snd = gen_hit()
     let thrust_snd = gen_thrust()
     let die_snd = gen_die()
+    let shield_snd = gen_shield_hit()
     let extra_snd = gen_extra_life()
 
     w->game.high_score = load_high_score()
@@ -1062,10 +1151,12 @@ let main = (args: str[]) ->
                     match w->game.phase with
                     | playing ->
                         w->game.fire_held = true
-                        fire_bullet(w)
-                        if audio_dev > 0u32 then
-                            sdl2.clear_audio(audio_dev)
-                            sdl2.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
+                        if w->game.ammo_energy >= ammo_cost then
+                            w->game.ammo_energy = w->game.ammo_energy - ammo_cost
+                            fire_bullet(w)
+                            if audio_dev > 0u32 then
+                                sdl2.clear_audio(audio_dev)
+                                sdl2.queue_audio(audio_dev, shoot_snd.data, shoot_snd.bytes)
                     | _ -> void()
 
                 if k == sdl2.key_return then
@@ -1080,15 +1171,8 @@ let main = (args: str[]) ->
                     | paused -> w->game.phase = game_phase.playing
                     | _ -> void()
 
-                if k == sdl2.key_h || k == sdl2.key_down then
-                    match w->game.phase with
-                    | playing ->
-                        w->game.ship_x = pcg_random.next_float64(&rng) * (float64) logical_w
-                        w->game.ship_y = pcg_random.next_float64(&rng) * (float64) logical_h
-                        w->game.ship_vx = 0.0
-                        w->game.ship_vy = 0.0
-                        w->game.invuln = 30
-                    | _ -> void()
+                if k == sdl2.key_down || k == sdl2.key_x then
+                    w->game.boost_on = true
 
             if (int32) event.type == sdl2.keyup_event then
                 let k = event.key.keysym.sym
@@ -1098,6 +1182,8 @@ let main = (args: str[]) ->
                     w->game.rotate_right = false
                 if k == sdl2.key_up || k == sdl2.key_w then
                     w->game.thrust_on = false
+                if k == sdl2.key_down || k == sdl2.key_x then
+                    w->game.boost_on = false
                 if k == sdl2.key_space then
                     w->game.fire_held = false
 
@@ -1116,15 +1202,35 @@ let main = (args: str[]) ->
             if w->game.rotate_right then
                 w->game.ship_angle = w->game.ship_angle + ship_rot_speed
 
-            // Thrust
-            if w->game.thrust_on then
-                w->game.ship_vx = w->game.ship_vx + math.cos(w->game.ship_angle) * ship_thrust
-                w->game.ship_vy = w->game.ship_vy + math.sin(w->game.ship_angle) * ship_thrust
+            // Boost state — active only while held AND energy remains
+            let boosting = w->game.boost_on && w->game.boost_energy > 0.0
+            if boosting then
+                w->game.boost_energy = w->game.boost_energy - boost_drain
+                if w->game.boost_energy < 0.0 then
+                    w->game.boost_energy = 0.0
+                w->game.boost_ramp = w->game.boost_ramp + 1.0
+                if w->game.boost_ramp > boost_ramp_frames then
+                    w->game.boost_ramp = boost_ramp_frames
+            else
+                w->game.boost_energy = w->game.boost_energy + boost_recharge
+                if w->game.boost_energy > bar_max then
+                    w->game.boost_energy = bar_max
+                w->game.boost_ramp = 0.0
+
+            // Thrust (ramps up during boost: 1x → boost_thrust_mult over boost_ramp_frames)
+            let ramp_t = if boosting then w->game.boost_ramp / boost_ramp_frames else 0.0
+            let thrust_mult = 1.0 + ramp_t * (boost_thrust_mult - 1.0)
+            let speed_mult = 1.0 + ramp_t * (boost_max_speed / ship_max_speed - 1.0)
+            let cur_thrust = ship_thrust * thrust_mult
+            let cur_max = ship_max_speed * speed_mult
+            if w->game.thrust_on || boosting then
+                w->game.ship_vx = w->game.ship_vx + math.cos(w->game.ship_angle) * cur_thrust
+                w->game.ship_vy = w->game.ship_vy + math.sin(w->game.ship_angle) * cur_thrust
                 let speed = math.sqrt(w->game.ship_vx * w->game.ship_vx +
                                       w->game.ship_vy * w->game.ship_vy)
-                if speed > ship_max_speed then
-                    w->game.ship_vx = w->game.ship_vx * ship_max_speed / speed
-                    w->game.ship_vy = w->game.ship_vy * ship_max_speed / speed
+                if speed > cur_max then
+                    w->game.ship_vx = w->game.ship_vx * cur_max / speed
+                    w->game.ship_vy = w->game.ship_vy * cur_max / speed
                 thrust_sound_timer = thrust_sound_timer + 1
                 if thrust_sound_timer >= 10 && audio_dev > 0u32 then
                     thrust_sound_timer = 0
@@ -1144,8 +1250,14 @@ let main = (args: str[]) ->
             if w->game.cooldown > 0 then
                 w->game.cooldown = w->game.cooldown - 1
 
-            // Auto-fire
-            if w->game.fire_held && w->game.cooldown == 0 then
+            // Ammo recharge
+            w->game.ammo_energy = w->game.ammo_energy + ammo_recharge
+            if w->game.ammo_energy > bar_max then
+                w->game.ammo_energy = bar_max
+
+            // Auto-fire (gated by ammo)
+            if w->game.fire_held && w->game.cooldown == 0 && w->game.ammo_energy >= ammo_cost then
+                w->game.ammo_energy = w->game.ammo_energy - ammo_cost
                 fire_bullet(w)
 
             // Invulnerability
@@ -1154,7 +1266,7 @@ let main = (args: str[]) ->
 
             update_bullets(w)
             update_ufo(w, &rng)
-            process_collisions(w, &rng, audio_dev, hit_snd)
+            process_collisions(w, &rng, audio_dev, hit_snd, shield_snd, die_snd)
 
             // Check extra life
             if w->game.score >= w->game.next_extra then
@@ -1178,7 +1290,7 @@ let main = (args: str[]) ->
             update_bullets(w)
             w->game.phase_timer = w->game.phase_timer - 1
             if w->game.phase_timer <= 0 then
-                reset_ship(w)
+                respawn_ship(w)
                 clear_bullets(w)
                 w->game.phase = game_phase.playing
         | game_over ->

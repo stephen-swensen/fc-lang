@@ -27,7 +27,7 @@ Requires SDL2 installed for your environment:
 | RIGHT / D | Rotate right |
 | UP / W | Thrust |
 | SPACE | Fire |
-| DOWN / H | Hyperspace (random teleport) |
+| DOWN / X | Boost (uses energy bar) |
 | P | Pause |
 | F11 | Toggle fullscreen |
 | ENTER | Start / restart |
