@@ -867,6 +867,12 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32, zb
         let mut raw_tid = 0
         if tile >= 1 && tile <= 63 then
             raw_tid = if side == 0 then (tile - 1) * 2 + 1 else (tile - 1) * 2
+        if tile >= 90 && tile <= 91 then
+            raw_tid = if side == 0 then 99 else 98
+        if tile >= 92 && tile <= 95 then
+            raw_tid = if side == 0 then 101 else 100
+        if tile >= 96 && tile <= 101 then
+            raw_tid = if side == 0 then 103 else 102
         let tid = if raw_tid >= 0 && raw_tid < num_tex then raw_tid else 0
 
         // Texture X coordinate
