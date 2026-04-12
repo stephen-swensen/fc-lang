@@ -11,6 +11,7 @@ import sys from std::
 import math from std::
 import opl2 from opl2::
 import chip from opl2::opl2
+import wolf3d from wolf3d::
 
 // ============================================================
 // Constants
@@ -56,6 +57,11 @@ struct game_sprite =
     sprite_id: int32
     obj_type: int32
     alive: bool
+    is_enemy: bool
+    enemy_health: int32
+    death_frame: int32
+    death_timer: int32
+    death_sprite: int32
 
 struct world =
     p: player
@@ -588,13 +594,8 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
             // Enemy front-facing sprite IDs (VSWAP sprite page offsets):
             //   guard=50, officer=100, SS=150, dog=198, mutant=248
             let enemy_spr = alloc(int32[16] {})!
-            enemy_spr[0] = 50
-            enemy_spr[1] = 100
-            enemy_spr[2] = 150
-            enemy_spr[3] = 198
-            enemy_spr[4] = 248
-            for i in 5..16
-                enemy_spr[i] = 50
+            for i in 0..16
+                enemy_spr[i] = wolf3d.standing_sprite(i)
             let mut spr_count = 0
             // First pass: count sprites
             for y in 0..64
@@ -629,6 +630,10 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
                             w->sprites[si].sprite_id = enemy_spr[etype]
                             w->sprites[si].obj_type = v
                             w->sprites[si].alive = true
+                            w->sprites[si].is_enemy = true
+                            w->sprites[si].enemy_health = wolf3d.enemy_health(etype)
+                            let dead_spr = wolf3d.dead_sprite(etype)
+                            w->sprites[si].death_sprite = dead_spr
                             w->num_sprites = w->num_sprites + 1
                     if v == 19 then
                         w->p.x = (float64) x + 0.5
@@ -875,11 +880,11 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32, zb
         if tile >= 1 && tile <= 63 then
             raw_tid = if side == 0 then (tile - 1) * 2 + 1 else (tile - 1) * 2
         if tile >= 90 && tile <= 91 then
-            raw_tid = if side == 0 then 99 else 98
+            raw_tid = if side == 0 then wolf3d.door_standard_v else wolf3d.door_standard_h
         if tile >= 92 && tile <= 95 then
-            raw_tid = if side == 0 then 101 else 100
+            raw_tid = if side == 0 then wolf3d.door_locked_v else wolf3d.door_locked_h
         if tile >= 96 && tile <= 101 then
-            raw_tid = if side == 0 then 103 else 102
+            raw_tid = if side == 0 then wolf3d.door_elevator_v else wolf3d.door_elevator_h
         let tid = if raw_tid >= 0 && raw_tid < num_tex then raw_tid else 0
 
         // Texture X coordinate
@@ -1132,12 +1137,8 @@ let draw_hud = (w: world*, fb: uint32[], fps: int32) ->
 // Weapon sprite overlay
 // ============================================================
 
-// Weapon sprite indices: knife=416, pistol=421, machinegun=426, chaingun=431
 let weapon_base = (weapon: int32) ->
-    if weapon == 0 then 416
-    else if weapon == 1 then 421
-    else if weapon == 2 then 426
-    else 431
+    wolf3d.weapon_sprite(weapon)
 
 let draw_weapon = (fb: uint32[], sprite_tex: uint32[], num_spr_tex: int32,
                    weapon: int32, anim_frame: int32) ->
@@ -1215,6 +1216,63 @@ let try_open_door = (w: world*) ->
                         w->map[dest] = tile
                         w->pushwalls[idx] = false
                         return
+    return
+
+// Hitscan: fire a ray and damage the first enemy in the line of fire
+let hitscan = (w: world*, damage: int32) ->
+    let px = w->p.x
+    let py = w->p.y
+    let dx = w->p.dir_x
+    let dy = w->p.dir_y
+    // Find closest enemy in front of player within a narrow cone
+    let mut best_dist = 1000.0
+    let mut best_idx = -1
+    for i in 0..w->num_sprites
+        if !w->sprites[i].alive || !w->sprites[i].is_enemy then continue
+        if w->sprites[i].death_frame > 0 then continue
+        let ex = w->sprites[i].x - px
+        let ey = w->sprites[i].y - py
+        let dist = math.sqrt(ex * ex + ey * ey)
+        if dist < 0.5 || dist > 30.0 then continue
+        // Check if enemy is in front and within ~10 degree cone
+        let dot = (ex * dx + ey * dy) / dist
+        if dot < 0.98 then continue
+        // Check line of sight (simple: walk along ray and check for walls)
+        let mut blocked = false
+        let steps = (int32) (dist * 4.0)
+        for s in 1..steps
+            let t = (float64) s / (float64) steps
+            let cx = (int32) (px + dx * dist * t)
+            let cy = (int32) (py + dy * dist * t)
+            if is_wall(w, cx, cy) then
+                blocked = true
+                break
+        if !blocked && dist < best_dist then
+            best_dist = dist
+            best_idx = i
+    if best_idx >= 0 then
+        w->sprites[best_idx].enemy_health = w->sprites[best_idx].enemy_health - damage
+        if w->sprites[best_idx].enemy_health <= 0 then
+            // Show dead sprite immediately
+            w->sprites[best_idx].death_frame = 5
+            w->sprites[best_idx].sprite_id = w->sprites[best_idx].death_sprite
+            w->p.score = w->p.score + 100
+    return
+
+// Update death animations
+let update_enemies = (w: world*) ->
+    for i in 0..w->num_sprites
+        if !w->sprites[i].is_enemy then continue
+        if w->sprites[i].death_frame > 0 && w->sprites[i].death_frame < 5 then
+            w->sprites[i].death_timer = w->sprites[i].death_timer - 1
+            if w->sprites[i].death_timer <= 0 then
+                w->sprites[i].death_frame = w->sprites[i].death_frame + 1
+                w->sprites[i].death_timer = 5
+                if w->sprites[i].death_frame < 5 then
+                    w->sprites[i].sprite_id = w->sprites[i].death_sprite + w->sprites[i].death_frame - 1
+                else
+                    // Dead: show final dead sprite (base + 49 = death_sprite + 4)
+                    w->sprites[i].sprite_id = w->sprites[i].death_sprite + 4
     return
 
 let check_pickups = (w: world*, audio_dev: uint32, door_snd: sound) ->
@@ -1512,17 +1570,17 @@ let main = (args: str[]) ->
     let mut door_snd = gen_door()
     let mut halt_snd = gen_door()
     let mut loaded_sounds = 0
-    match load_digi_sound(vswap_path, 3) with
+    match load_digi_sound(vswap_path, wolf3d.snd_door_open) with
     | some(s) ->
         door_snd = s
         loaded_sounds = loaded_sounds + 1
     | none -> void()
-    match load_digi_sound(vswap_path, 5) with
+    match load_digi_sound(vswap_path, wolf3d.snd_pistol) with
     | some(s) ->
         gun_snd = s
         loaded_sounds = loaded_sounds + 1
     | none -> void()
-    match load_digi_sound(vswap_path, 0) with
+    match load_digi_sound(vswap_path, wolf3d.snd_halt) with
     | some(s) ->
         halt_snd = s
         loaded_sounds = loaded_sounds + 1
@@ -1531,26 +1589,10 @@ let main = (args: str[]) ->
         io.write("Loaded %d{loaded_sounds} digitized sounds from VSWAP.WL6\n", stdout)
         io.flush(stdout)
 
-    // Wolf3D level-to-music mapping (STARTMUSIC=261, track indices within music section)
-    // E1: GETTHEM, SEARCHN, POW, SUSPENSE, GETTHEM, SEARCHN, POW, SUSPENSE, WARMARCH, CORNER
-    let level_music = alloc(int32[60] {})!
-    level_music[0] = 3
-    level_music[1] = 4
-    level_music[2] = 5
-    level_music[3] = 6
-    level_music[4] = 3
-    level_music[5] = 4
-    level_music[6] = 5
-    level_music[7] = 6
-    level_music[8] = 2
-    level_music[9] = 0
-    for i in 10..60
-        level_music[i] = (i % 7) + 1
-
     let mut music_buf = (int16*) (any*) 0u
     let mut music_len = 0
     let mut music_pos = 0
-    let music_track = 261 + level_music[0]
+    let music_track = wolf3d.music_start + wolf3d.level_music(0)
     match render_imf_track("demos/wolf-fc/data/AUDIOHED.WL6",
                            "demos/wolf-fc/data/AUDIOT.WL6", music_track, 44100) with
     | some(ms) ->
@@ -1640,7 +1682,7 @@ let main = (args: str[]) ->
                         load_level("demos/wolf-fc/data/MAPHEAD.WL6",
                                    "demos/wolf-fc/data/GAMEMAPS.WL6", w->level, w)
                         set_level_colors(w, palette)
-                        let mt = 261 + level_music[w->level]
+                        let mt = wolf3d.music_start + wolf3d.level_music(w->level)
                         match render_imf_track("demos/wolf-fc/data/AUDIOHED.WL6",
                                                "demos/wolf-fc/data/AUDIOT.WL6", mt, 44100) with
                         | some(ms) ->
@@ -1655,7 +1697,7 @@ let main = (args: str[]) ->
                         load_level("demos/wolf-fc/data/MAPHEAD.WL6",
                                    "demos/wolf-fc/data/GAMEMAPS.WL6", w->level, w)
                         set_level_colors(w, palette)
-                        let mt = 261 + level_music[w->level]
+                        let mt = wolf3d.music_start + wolf3d.level_music(w->level)
                         match render_imf_track("demos/wolf-fc/data/AUDIOHED.WL6",
                                                "demos/wolf-fc/data/AUDIOT.WL6", mt, 44100) with
                         | some(ms) ->
@@ -1684,6 +1726,12 @@ let main = (args: str[]) ->
             fire_cooldown = if w->p.weapon == 0 then 15 else if w->p.weapon >= 3 then 7 else 20
             weapon_frame = 1
             weapon_timer = 0
+            // Hitscan: knife is close range only, guns are long range
+            let dmg = 25
+            if w->p.weapon == 0 then
+                hitscan(w, dmg)
+            else
+                hitscan(w, dmg)
             if w->p.weapon > 0 then
                 w->p.ammo = w->p.ammo - 1
                 if w->p.ammo <= 0 then
@@ -1725,6 +1773,7 @@ let main = (args: str[]) ->
 
         // --------- Update ---------
         update_player(w)
+        update_enemies(w)
         check_pickups(w, audio_dev, door_snd)
 
         // --------- Render ---------

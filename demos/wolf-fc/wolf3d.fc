@@ -1,0 +1,100 @@
+// Wolf3D data format constants and sprite indices.
+// All values determined empirically from VSWAP.WL6 and GAMEMAPS.WL6 data analysis.
+
+namespace wolf3d::
+
+module wolf3d =
+    // Number of enemy types with unique sprite blocks
+    let num_enemy_types = 16
+
+    // Enemy type indices (derived from map plane 1 tile values: etype = (tile - 108) / 16)
+    let enemy_guard = 0
+    let enemy_officer = 1
+    let enemy_ss = 2
+    let enemy_dog = 3
+    let enemy_hans = 4
+    let enemy_schabbs = 5
+    let enemy_fake_hitler = 6
+    let enemy_mecha_hitler = 7
+    let enemy_mutant = 8
+    let enemy_ghost = 9
+    let enemy_spectre = 10
+
+    // Standing sprite base indices in VSWAP (first of 8 directional frames).
+    // Note: VSWAP sprite order differs from map tile order (dogs before officers).
+    let standing_sprite = (etype: int32) ->
+        if etype == 0 then 50       // guard
+        else if etype == 1 then 138  // officer
+        else if etype == 2 then 184  // SS
+        else if etype == 3 then 100  // dog
+        else if etype == 4 then 288  // Hans boss
+        else if etype == 5 then 288  // Schabbs (placeholder)
+        else if etype == 6 then 288  // Fake Hitler (placeholder)
+        else if etype == 7 then 288  // Mecha Hitler (placeholder)
+        else if etype == 8 then 237  // mutant
+        else 50
+
+    // Dead body sprite index in VSWAP (flat bottom-heavy sprite shown after death)
+    let dead_sprite = (etype: int32) ->
+        if etype == 0 then 99       // guard
+        else if etype == 1 then 183  // officer
+        else if etype == 2 then 233  // SS
+        else if etype == 3 then 134  // dog
+        else if etype == 8 then 284  // mutant
+        else 99
+
+    // Enemy health points
+    let enemy_health = (etype: int32) ->
+        if etype == 0 then 25       // guard
+        else if etype == 1 then 50   // officer
+        else if etype == 2 then 100  // SS
+        else if etype == 3 then 1    // dog
+        else if etype == 4 then 850  // Hans
+        else if etype == 5 then 850  // Schabbs
+        else if etype == 8 then 45   // mutant
+        else 25
+
+    // Weapon sprite base indices (each weapon has 5 frames: ready + 4 attack)
+    let weapon_knife = 416
+    let weapon_pistol = 421
+    let weapon_machinegun = 426
+    let weapon_chaingun = 431
+
+    let weapon_sprite = (weapon: int32) ->
+        if weapon == 0 then 416      // knife
+        else if weapon == 1 then 421  // pistol
+        else if weapon == 2 then 426  // machine gun
+        else 431                      // chain gun
+
+    // Door texture page indices in VSWAP wall section
+    let door_standard_h = 98
+    let door_standard_v = 99
+    let door_locked_h = 100
+    let door_locked_v = 101
+    let door_elevator_h = 102
+    let door_elevator_v = 103
+
+    // Wolf3D digitized sound indices (in VSWAP sound info directory)
+    let snd_halt = 0
+    let snd_dog_bark = 1
+    let snd_door_close = 2
+    let snd_door_open = 3
+    let snd_machine_gun = 4
+    let snd_pistol = 5
+
+    // IMF music: AUDIOHED index offset for first music track
+    let music_start = 261
+
+    // Level-to-music track mapping (offset from music_start)
+    let level_music = (level: int32) ->
+        if level == 0 then 3        // GETTHEM
+        else if level == 1 then 4    // SEARCHN
+        else if level == 2 then 5    // POW
+        else if level == 3 then 6    // SUSPENSE
+        else if level == 4 then 3
+        else if level == 5 then 4
+        else if level == 6 then 5
+        else if level == 7 then 6
+        else if level == 8 then 2    // WARMARCH (boss)
+        else if level == 9 then 0    // CORNER (secret)
+        else (level % 7) + 1
