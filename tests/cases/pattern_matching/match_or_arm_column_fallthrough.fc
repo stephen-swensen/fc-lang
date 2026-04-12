@@ -1,0 +1,18 @@
+// Arm-column fall-through: body-less arms buffer their pattern into
+// the next arm that has `->`. This match is exhaustive without `_`.
+union color =
+    | red
+    | green
+    | blue
+
+let category = (c: color) ->
+    match c with
+    | red
+    | blue -> 1
+    | green -> 2
+
+let main = (args: str[]) ->
+    assert(category(color.red) == 1)
+    assert(category(color.blue) == 1)
+    assert(category(color.green) == 2)
+    0

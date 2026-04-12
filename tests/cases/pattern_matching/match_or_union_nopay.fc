@@ -1,0 +1,17 @@
+union color =
+    | red
+    | green
+    | blue
+    | yellow
+
+let warm = (c: color) ->
+    match c with
+    | red | yellow -> true
+    | green | blue -> false
+
+let main = (args: str[]) ->
+    assert(warm(color.red))
+    assert(warm(color.yellow))
+    assert(!warm(color.green))
+    assert(!warm(color.blue))
+    0

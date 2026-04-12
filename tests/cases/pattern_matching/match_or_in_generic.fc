@@ -1,0 +1,19 @@
+let classify = (o: 'a?) ->
+    match o with
+    | some(_) -> 1
+    | none -> 0
+
+let small_int = (o: int32?) ->
+    match o with
+    | some(1 | 2 | 3) -> 10
+    | some(_) -> 20
+    | none -> 0
+
+let main = (args: str[]) ->
+    let n = default(int32?)
+    assert(classify(some(42)) == 1)
+    assert(classify(n) == 0)
+    assert(small_int(some(2)) == 10)
+    assert(small_int(some(9)) == 20)
+    assert(small_int(n) == 0)
+    0

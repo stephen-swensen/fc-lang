@@ -1708,7 +1708,9 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
 
 /* ---- Pattern parsing ---- */
 
-static Pattern *parse_pattern(Parser *p) {
+static Pattern *parse_pattern(Parser *p);
+
+static Pattern *parse_pattern_atom(Parser *p) {
     Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
     pat->loc = loc_from_token(current(p));
 
@@ -1839,7 +1841,77 @@ static Pattern *parse_pattern(Parser *p) {
     diag_fatal(loc, "expected pattern, got %s", token_kind_name(current(p)->kind));
 }
 
+/* parse_pattern handles or-patterns by collecting alternatives joined by `|`.
+   Nested ORs are flattened: (a | b) | c parses as a single 3-alt PAT_OR. */
+static Pattern *parse_pattern(Parser *p) {
+    Pattern *first = parse_pattern_atom(p);
+    if (!check(p, TOK_PIPE)) return first;
+
+    /* Accumulate alternatives, flattening any inner PAT_OR. */
+    Pattern **alts = NULL;
+    int count = 0, cap = 0;
+    if (first->kind == PAT_OR) {
+        for (int i = 0; i < first->or_pat.alt_count; i++)
+            DA_APPEND(alts, count, cap, first->or_pat.alts[i]);
+    } else {
+        DA_APPEND(alts, count, cap, first);
+    }
+    SrcLoc or_loc = first->loc;
+
+    while (check(p, TOK_PIPE)) {
+        advance_p(p); /* consume | */
+        Pattern *alt = parse_pattern_atom(p);
+        if (alt->kind == PAT_OR) {
+            for (int i = 0; i < alt->or_pat.alt_count; i++)
+                DA_APPEND(alts, count, cap, alt->or_pat.alts[i]);
+        } else {
+            DA_APPEND(alts, count, cap, alt);
+        }
+    }
+
+    Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
+    pat->kind = PAT_OR;
+    pat->loc = or_loc;
+    pat->or_pat.alts = arena_alloc(p->arena, sizeof(Pattern *) * (size_t)count);
+    memcpy(pat->or_pat.alts, alts, sizeof(Pattern *) * (size_t)count);
+    pat->or_pat.alt_count = count;
+    free(alts);
+    return pat;
+}
+
 /* ---- Match expression parsing ---- */
+
+/* Combine a list of buffered body-less or-alternatives with the current arm's
+   pattern, producing a flattened PAT_OR. The buffered patterns are stored
+   pre-flattened (each is either a non-OR pattern or a PAT_OR whose alts are
+   already flat). */
+static Pattern *or_prepend(Parser *p, Pattern **buffered, int buf_count, Pattern *tail) {
+    Pattern **alts = NULL;
+    int count = 0, cap = 0;
+    for (int i = 0; i < buf_count; i++) {
+        Pattern *b = buffered[i];
+        if (b->kind == PAT_OR) {
+            for (int j = 0; j < b->or_pat.alt_count; j++)
+                DA_APPEND(alts, count, cap, b->or_pat.alts[j]);
+        } else {
+            DA_APPEND(alts, count, cap, b);
+        }
+    }
+    if (tail->kind == PAT_OR) {
+        for (int j = 0; j < tail->or_pat.alt_count; j++)
+            DA_APPEND(alts, count, cap, tail->or_pat.alts[j]);
+    } else {
+        DA_APPEND(alts, count, cap, tail);
+    }
+    Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
+    pat->kind = PAT_OR;
+    pat->loc = buffered[0]->loc;
+    pat->or_pat.alts = arena_alloc(p->arena, sizeof(Pattern *) * (size_t)count);
+    memcpy(pat->or_pat.alts, alts, sizeof(Pattern *) * (size_t)count);
+    pat->or_pat.alt_count = count;
+    free(alts);
+    return pat;
+}
 
 static Expr *parse_match_expr(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
@@ -1854,6 +1926,12 @@ static Expr *parse_match_expr(Parser *p) {
     MatchArm *arms = NULL;
     int arm_count = 0, arm_cap = 0;
 
+    /* Fall-through buffer: when an arm has no `->`, its pattern is buffered
+       as an or-alternative to be folded into the next arm that does. */
+    Pattern **buffered = NULL;
+    int buf_count = 0, buf_cap = 0;
+    SrcLoc last_body_less_loc = {0};
+
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
@@ -1862,7 +1940,20 @@ static Expr *parse_match_expr(Parser *p) {
         MatchArm arm;
         arm.loc = loc_from_token(current(p));
         arm.pattern = parse_pattern(p);
-        expect(p, TOK_ARROW);
+
+        if (!check(p, TOK_ARROW)) {
+            /* Body-less arm — buffer as or-alternative for the next arm. */
+            last_body_less_loc = arm.loc;
+            DA_APPEND(buffered, buf_count, buf_cap, arm.pattern);
+            continue;
+        }
+
+        if (buf_count > 0) {
+            arm.pattern = or_prepend(p, buffered, buf_count, arm.pattern);
+            buf_count = 0;
+        }
+
+        advance_p(p); /* consume -> */
 
         /* Parse arm body */
         arm.body = parse_body(p, &arm.body_count);
@@ -1870,6 +1961,11 @@ static Expr *parse_match_expr(Parser *p) {
         DA_APPEND(arms, arm_count, arm_cap, arm);
         skip_newlines(p);
     }
+    if (buf_count > 0) {
+        diag_fatal(last_body_less_loc,
+                   "unterminated or-pattern: body-less arm must be followed by an arm with '->'");
+    }
+    free(buffered);
     expect(p, TOK_DEDENT);
 
     Expr *e = alloc_expr(p, EXPR_MATCH, loc);

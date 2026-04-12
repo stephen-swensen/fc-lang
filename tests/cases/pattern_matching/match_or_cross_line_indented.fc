@@ -1,0 +1,19 @@
+// Or-pattern alternatives on continuation lines must be indented
+// DEEPER than the arm-introducing `|` column.
+let small = (x: int32) ->
+    match x with
+    | 0
+        | 1
+        | 2 -> "small"
+    | _ -> "big"
+
+let main = (args: str[]) ->
+    let a = small(0)
+    let b = small(1)
+    let c = small(2)
+    let d = small(10)
+    assert(a.len == 5)
+    assert(b.len == 5)
+    assert(c.len == 5)
+    assert(d.len == 3)
+    0

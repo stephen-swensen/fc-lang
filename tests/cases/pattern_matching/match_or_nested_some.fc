@@ -1,0 +1,15 @@
+let classify = (o: int32?) ->
+    match o with
+    | some(1 | 2 | 3) -> 10
+    | some(_) -> 20
+    | none -> 0
+
+let main = (args: str[]) ->
+    let n = default(int32?)
+    assert(classify(some(1)) == 10)
+    assert(classify(some(2)) == 10)
+    assert(classify(some(3)) == 10)
+    assert(classify(some(4)) == 20)
+    assert(classify(some(100)) == 20)
+    assert(classify(n) == 0)
+    0

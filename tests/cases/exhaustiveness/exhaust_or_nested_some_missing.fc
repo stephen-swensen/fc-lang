@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let o = some(1i32)
+    let _r = match o with
+    | some(1 | 2) -> 10
+    | none -> 0
+    0

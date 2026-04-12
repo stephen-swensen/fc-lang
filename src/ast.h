@@ -319,6 +319,7 @@ typedef enum {
     PAT_SOME,
     PAT_VARIANT,
     PAT_STRUCT,
+    PAT_OR,    /* p1 | p2 | ... — disjunction; alternatives must be binding-free */
 } PatternKind;
 
 struct Pattern {
@@ -339,6 +340,7 @@ struct Pattern {
             FieldPattern *fields;
             int field_count;
         } struc;
+        struct { Pattern **alts; int alt_count; } or_pat;
     };
 };
 

@@ -1,0 +1,14 @@
+// An arm-column body-less arm whose own pattern is an inline OR
+// merges with the next arm, producing a single flat OR.
+let classify = (x: int32) ->
+    match x with
+    | 1 | 2
+    | 3 -> 10
+    | _ -> 99
+
+let main = (args: str[]) ->
+    assert(classify(1) == 10)
+    assert(classify(2) == 10)
+    assert(classify(3) == 10)
+    assert(classify(4) == 99)
+    0

@@ -1429,6 +1429,55 @@ match opt_shape with
 | none                  -> 0.0
 ```
 
+### Or-patterns
+
+A pattern can be a disjunction of alternatives using `|`:
+
+```fc
+match c with
+| 'A' | 'a' -> "letter a"
+| 'B' | 'b' -> "letter b"
+| _         -> "other"
+```
+
+Or-patterns may appear at any nesting depth:
+
+```fc
+match opt with
+| some(1 | 2 | 3) -> "small"
+| some(_)         -> "large"
+| none            -> "nothing"
+
+match point with
+| { x = 0 | 1, y = _ } -> "left edge"
+| _                    -> "elsewhere"
+```
+
+Exhaustiveness honors or-patterns fully: `| true | false -> ...` is a complete match over a `bool` scrutinee with no wildcard needed, and a nested or-pattern contributes to the coverage analysis like any other set of constructors.
+
+**Alternatives must be binding-free.** An or-pattern's alternatives may contain literals, `_`, `none`, no-payload variants, and payload patterns whose inner patterns are themselves binding-free (e.g. `some(1 | 2)`, `circle(_)`), but not a binding identifier like `some(x)`. Attempting to bind inside an alternative is a compile error.
+
+Or-patterns may span multiple lines in two equivalent forms. The **fall-through form** aligns alternatives at the arm column — any arm without a `->` becomes an or-alternative of the next arm that has one:
+
+```fc
+match c with
+| red
+| blue  -> "red or blue"
+| green -> "green"
+```
+
+The **continuation form** indents alternatives *deeper* than the arm-introducing `|`:
+
+```fc
+match x with
+| 0
+    | 1
+    | 2 -> "small"
+| _     -> "big"
+```
+
+Both forms produce the same AST. The fall-through form is preferred for readability when alternatives are short. A body-less arm at the end of the match (with nothing to fall through into) is a compile error.
+
 ### Struct destructuring in patterns
 
 Structs can be destructured in pattern position using `{ field = pattern }` syntax. Fields omitted from the pattern match anything:
@@ -1463,8 +1512,9 @@ match some_node with
 | `variant(pattern)` | matches variant, applies inner pattern to payload |
 | `{ field = pattern }` | struct destructuring, omitted fields match anything |
 | `{}` | matches any struct, binds nothing |
+| `pattern \| pattern \| ...` | or-pattern — matches if any alternative matches; alternatives must be binding-free |
 
-When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants.
+When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants. Inside an or-pattern alternative this rule is further constrained: because alternatives must be binding-free, a lone identifier must resolve to a no-payload variant (or be `_`); an unresolved bare name is a compile error rather than a binding.
 
 Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
 

@@ -658,17 +658,38 @@ static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     emit_expr(e, out);
 }
 
-/* Recursively emit condition checks for any pattern.
-   expr is the C expression for the value being matched.
-   type is the FC type of the value.
-   has_cond tracks whether "if (" has been emitted. */
-static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool *has_cond, FILE *out) {
+/* Returns true if this pattern produces any condition predicate — false for
+   wildcard/binding patterns and for struct/or patterns whose subpatterns are
+   all wildcard-only. Used to decide whether an arm needs an `if` at all. */
+static bool pattern_has_predicate(Pattern *pat) {
+    switch (pat->kind) {
+    case PAT_WILDCARD:
+    case PAT_BINDING:
+        return false;
+    case PAT_STRUCT:
+        for (int i = 0; i < pat->struc.field_count; i++)
+            if (pattern_has_predicate(pat->struc.fields[i].pattern)) return true;
+        return false;
+    case PAT_OR:
+        for (int i = 0; i < pat->or_pat.alt_count; i++)
+            if (pattern_has_predicate(pat->or_pat.alts[i])) return true;
+        return false;
+    default:
+        return true;
+    }
+}
+
+/* Emit predicates joined by ` && `, without any enclosing `if (`.
+   `first` tracks whether any predicate has been emitted yet in the current
+   conjunction chain — it flips to false on the first emission. */
+static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool *first, FILE *out) {
     switch (pat->kind) {
     case PAT_BINDING:
     case PAT_WILDCARD:
         break;
     case PAT_INT_LIT:
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         if (pat->int_lit.lit_type && (pat->int_lit.lit_type->kind == TYPE_UINT64 ||
             pat->int_lit.lit_type->kind == TYPE_UINT32 || pat->int_lit.lit_type->kind == TYPE_UINT16 ||
             pat->int_lit.lit_type->kind == TYPE_UINT8 || pat->int_lit.lit_type->kind == TYPE_USIZE))
@@ -677,15 +698,18 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
             fprintf(out, "%s == %" PRId64, expr, (int64_t)pat->int_lit.value);
         break;
     case PAT_BOOL_LIT:
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         fprintf(out, "%s == %s", expr, pat->bool_lit.value ? "true" : "false");
         break;
     case PAT_CHAR_LIT:
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         fprintf(out, "%s == '\\x%02x'", expr, pat->char_lit.value);
         break;
     case PAT_SOME: {
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         bool is_ptr = is_null_sentinel(type);
         if (is_ptr) fprintf(out, "%s != NULL", expr);
         else fprintf(out, "%s.has_value", expr);
@@ -693,19 +717,21 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
             char inner_expr[256];
             if (is_ptr) snprintf(inner_expr, sizeof(inner_expr), "%s", expr);
             else snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
-            emit_pat_conditions(pat->some_pat.inner, inner_expr, type->option.inner, has_cond, out);
+            emit_pat_predicate(pat->some_pat.inner, inner_expr, type->option.inner, first, out);
         }
         break;
     }
     case PAT_NONE:
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         if (is_null_sentinel(type))
             fprintf(out, "%s == NULL", expr);
         else
             fprintf(out, "!%s.has_value", expr);
         break;
     case PAT_VARIANT: {
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         const char *uname = type->unio.name;
         if (g_subst && type_contains_type_var(type)) {
             uname = mangle_generic_with_subst(uname, type);
@@ -722,7 +748,7 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
                 }
             }
             if (payload_type)
-                emit_pat_conditions(pat->variant.payload, payload_expr, payload_type, has_cond, out);
+                emit_pat_predicate(pat->variant.payload, payload_expr, payload_type, first, out);
         }
         break;
     }
@@ -730,17 +756,51 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
             char path[256];
             snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
-            emit_pat_conditions(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, has_cond, out);
+            emit_pat_predicate(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, first, out);
         }
         break;
     case PAT_STRING_LIT:
-        if (*has_cond) fprintf(out, " && "); else { fprintf(out, "if ("); *has_cond = true; }
+        if (!*first) fprintf(out, " && ");
+        *first = false;
         fprintf(out, "fc_eq_fc_str(%s, (fc_str){(uint8_t*)\"%.*s\", %d})",
             expr, pat->string_lit.length, pat->string_lit.value, pat->string_lit.length);
         break;
-    default:
+    case PAT_OR: {
+        if (!pattern_has_predicate(pat)) break;
+        if (!*first) fprintf(out, " && ");
+        *first = false;
+        fprintf(out, "(");
+        for (int i = 0; i < pat->or_pat.alt_count; i++) {
+            if (i > 0) fprintf(out, " || ");
+            fprintf(out, "(");
+            if (pattern_has_predicate(pat->or_pat.alts[i])) {
+                bool alt_first = true;
+                emit_pat_predicate(pat->or_pat.alts[i], expr, type, &alt_first, out);
+            } else {
+                fprintf(out, "1");
+            }
+            fprintf(out, ")");
+        }
+        fprintf(out, ")");
         break;
     }
+    }
+}
+
+/* Recursively emit condition checks for any pattern.
+   expr is the C expression for the value being matched.
+   type is the FC type of the value.
+   has_cond tracks whether "if (" has been emitted. */
+static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool *has_cond, FILE *out) {
+    if (!pattern_has_predicate(pat)) return;
+    if (!*has_cond) {
+        fprintf(out, "if (");
+        *has_cond = true;
+    } else {
+        fprintf(out, " && ");
+    }
+    bool first = true;
+    emit_pat_predicate(pat, expr, type, &first, out);
 }
 
 /* Recursively emit variable declarations for all bindings in a pattern.
@@ -815,6 +875,9 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
             snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
             emit_pat_bindings(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, out);
         }
+        break;
+    case PAT_OR:
+        /* Alternatives are binding-free in v1, so there's nothing to emit. */
         break;
     }
 }
@@ -3167,6 +3230,10 @@ static void collect_eq_from_pattern(Pattern *pat, TypeSet *eqs) {
     case PAT_STRUCT:
         for (int i = 0; i < pat->struc.field_count; i++)
             collect_eq_from_pattern(pat->struc.fields[i].pattern, eqs);
+        break;
+    case PAT_OR:
+        for (int i = 0; i < pat->or_pat.alt_count; i++)
+            collect_eq_from_pattern(pat->or_pat.alts[i], eqs);
         break;
     default:
         break;

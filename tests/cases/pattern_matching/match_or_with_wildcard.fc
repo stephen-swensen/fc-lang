@@ -1,0 +1,10 @@
+// A wildcard alternative absorbs everything; other alts are
+// redundant but not an error.
+let classify = (x: int32) ->
+    match x with
+    | 1 | _ -> 42
+
+let main = (args: str[]) ->
+    assert(classify(1) == 42)
+    assert(classify(100) == 42)
+    0

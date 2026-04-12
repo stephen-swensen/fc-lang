@@ -1,0 +1,6 @@
+// Inline or-pattern `| true | false` is exhaustive without wildcard.
+let main = (args: str[]) ->
+    let b = true
+    let _r = match b with
+    | true | false -> 0
+    0

@@ -1,0 +1,19 @@
+struct tile =
+    kind: int32
+    size: int32
+
+let is_small_kind = (o: tile?) ->
+    match o with
+    | some({ kind = 0 | 1, size = 1 | 2 }) -> true
+    | _ -> false
+
+let main = (args: str[]) ->
+    let n = default(tile?)
+    assert(is_small_kind(some(tile { kind = 0, size = 1 })))
+    assert(is_small_kind(some(tile { kind = 0, size = 2 })))
+    assert(is_small_kind(some(tile { kind = 1, size = 1 })))
+    assert(is_small_kind(some(tile { kind = 1, size = 2 })))
+    assert(!is_small_kind(some(tile { kind = 0, size = 3 })))
+    assert(!is_small_kind(some(tile { kind = 2, size = 1 })))
+    assert(!is_small_kind(n))
+    0

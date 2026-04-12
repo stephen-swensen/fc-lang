@@ -1,0 +1,11 @@
+// Inline or-pattern covers all three variants without wildcard.
+union color =
+    | red
+    | green
+    | blue
+
+let main = (args: str[]) ->
+    let c = color.red
+    let _r = match c with
+    | red | green | blue -> 42
+    0

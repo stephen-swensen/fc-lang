@@ -1,0 +1,12 @@
+let is_vowel = (c: char) ->
+    match c with
+    | 'a' | 'e' | 'i' | 'o' | 'u' -> true
+    | 'A' | 'E' | 'I' | 'O' | 'U' -> true
+    | _ -> false
+
+let main = (args: str[]) ->
+    assert(is_vowel('a'))
+    assert(is_vowel('U'))
+    assert(!is_vowel('b'))
+    assert(!is_vowel('Z'))
+    0

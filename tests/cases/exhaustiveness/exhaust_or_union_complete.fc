@@ -1,0 +1,13 @@
+// Arm-column fall-through exhausts all three variants without wildcard.
+union color =
+    | red
+    | green
+    | blue
+
+let main = (args: str[]) ->
+    let c = color.red
+    let _r = match c with
+    | red
+    | blue -> 1
+    | green -> 2
+    0

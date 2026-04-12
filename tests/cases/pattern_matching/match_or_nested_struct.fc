@@ -1,0 +1,14 @@
+struct point =
+    x: int32
+    y: int32
+
+let on_left_edge = (p: point) ->
+    match p with
+    | { x = 0 | 1, y = _ } -> true
+    | _ -> false
+
+let main = (args: str[]) ->
+    assert(on_left_edge(point { x = 0, y = 5 }))
+    assert(on_left_edge(point { x = 1, y = -3 }))
+    assert(!on_left_edge(point { x = 2, y = 0 }))
+    0

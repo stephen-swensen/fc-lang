@@ -1,0 +1,12 @@
+let is_yes = (s: const str) ->
+    match s with
+    | "yes" | "y" | "yeah" -> true
+    | _ -> false
+
+let main = (args: str[]) ->
+    assert(is_yes("yes"))
+    assert(is_yes("y"))
+    assert(is_yes("yeah"))
+    assert(!is_yes("no"))
+    assert(!is_yes(""))
+    0

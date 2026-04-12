@@ -1,0 +1,14 @@
+let classify = (x: int32) ->
+    match x with
+    | 1 | 2 | 3 -> 10
+    | 4 | 5 -> 20
+    | _ -> 99
+
+let main = (args: str[]) ->
+    assert(classify(1) == 10)
+    assert(classify(2) == 10)
+    assert(classify(3) == 10)
+    assert(classify(4) == 20)
+    assert(classify(5) == 20)
+    assert(classify(6) == 99)
+    0

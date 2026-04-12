@@ -1,0 +1,16 @@
+let describe = (x: int32) ->
+    match x with
+    | 0 -> 10
+    | 1 | 2 | 3 -> 20
+    | 4 -> 30
+    | 5 | 6 -> 40
+    | _ -> 99
+
+let main = (args: str[]) ->
+    assert(describe(0) == 10)
+    assert(describe(1) == 20)
+    assert(describe(3) == 20)
+    assert(describe(4) == 30)
+    assert(describe(6) == 40)
+    assert(describe(100) == 99)
+    0

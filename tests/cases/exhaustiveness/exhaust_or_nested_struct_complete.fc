@@ -1,0 +1,10 @@
+// Nested or-pattern flattens to the full 2x2 bool-field cartesian product.
+struct flags =
+    a: bool
+    b: bool
+
+let main = (args: str[]) ->
+    let f = flags { a = true, b = false }
+    let _r = match f with
+    | { a = true | false, b = true | false } -> 1
+    0

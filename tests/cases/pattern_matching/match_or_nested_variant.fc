@@ -1,0 +1,21 @@
+union shape =
+    | circle(int32)
+    | square(int32)
+    | empty
+
+let tiny = (s: shape) ->
+    match s with
+    | circle(1 | 2) -> true
+    | square(1 | 2 | 3) -> true
+    | circle(_) | square(_) -> false
+    | empty -> false
+
+let main = (args: str[]) ->
+    assert(tiny(shape.circle(1)))
+    assert(tiny(shape.circle(2)))
+    assert(!tiny(shape.circle(3)))
+    assert(tiny(shape.square(1)))
+    assert(tiny(shape.square(3)))
+    assert(!tiny(shape.square(4)))
+    assert(!tiny(shape.empty))
+    0

@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let x = 5
+    let _r = match x with
+    | 1 | y -> y
+    | _ -> 0
+    0

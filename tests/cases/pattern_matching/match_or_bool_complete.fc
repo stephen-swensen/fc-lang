@@ -1,0 +1,8 @@
+let describe = (b: bool) ->
+    match b with
+    | true | false -> 42
+
+let main = (args: str[]) ->
+    assert(describe(true) == 42)
+    assert(describe(false) == 42)
+    0

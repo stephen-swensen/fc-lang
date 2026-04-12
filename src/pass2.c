@@ -920,6 +920,9 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
             /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
             check_destruct_pattern(ctx, inner, field_type, is_mut, loc);
+        } else if (inner->kind == PAT_OR) {
+            diag_error(inner->loc, "or-patterns are not allowed in let destructuring");
+            return;
         } else {
             diag_error(inner->loc, "unsupported pattern in let destructuring");
             return;
@@ -3887,8 +3890,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     }
 }
 
-/* Recursively check any pattern in a match arm, resolving types and adding bindings */
-static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
+/* Recursively check any pattern in a match arm, resolving types and adding bindings.
+   When reject_bindings is true, any surviving PAT_BINDING (i.e. not converted to
+   PAT_VARIANT for no-payload variants) is an error — used inside or-pattern
+   alternatives in v1, which must be binding-free. */
+static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool reject_bindings) {
     if (type_is_error(type)) return;
     type = resolve_type(ctx, type);
     switch (pat->kind) {
@@ -3906,6 +3912,11 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
                     return;
                 }
             }
+        }
+        if (reject_bindings) {
+            diag_error(pat->loc, "or-pattern alternatives cannot bind variables: '%s'",
+                pat->binding.name);
+            return;
         }
         scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false);
         break;
@@ -3940,7 +3951,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
             return;
         }
         if (pat->some_pat.inner)
-            check_match_pattern(ctx, pat->some_pat.inner, type->option.inner);
+            check_match_pattern(ctx, pat->some_pat.inner, type->option.inner, reject_bindings);
         break;
     case PAT_NONE:
         if (type->kind != TYPE_OPTION) {
@@ -3959,7 +3970,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
                 found = true;
                 if (pat->variant.payload && type->unio.variants[v].payload) {
                     Type *payload_type = resolve_type(ctx, type->unio.variants[v].payload);
-                    check_match_pattern(ctx, pat->variant.payload, payload_type);
+                    check_match_pattern(ctx, pat->variant.payload, payload_type, reject_bindings);
                 }
                 break;
             }
@@ -3995,10 +4006,14 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type) {
                 continue;
             }
             pat->struc.fields[fi].resolved_type = field_type;
-            check_match_pattern(ctx, pat->struc.fields[fi].pattern, field_type);
+            check_match_pattern(ctx, pat->struc.fields[fi].pattern, field_type, reject_bindings);
         }
         break;
     }
+    case PAT_OR:
+        for (int i = 0; i < pat->or_pat.alt_count; i++)
+            check_match_pattern(ctx, pat->or_pat.alts[i], type, /*reject_bindings=*/true);
+        break;
     }
 }
 
@@ -4142,9 +4157,168 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
         m.ctor.str_val = pat->string_lit.value;
         m.ctor.arity = 0;
         return m;
+    case PAT_OR:
+        /* flatten_or_pattern should eliminate PAT_OR before reaching here;
+           fall through to wildcard as a safe default. */
+        m.is_wildcard = true;
+        return m;
     }
     m.is_wildcard = true;
     return m;
+}
+
+#define MAX_OR_EXPANSION 1024
+
+/* Flatten a pattern into an array of or-free Pattern* via cartesian product over
+   all PAT_OR positions. Leaf and or-free subtrees are shared with the input.
+   Returns the number of flattened patterns (>=1) and sets *out, or returns -1
+   and emits a diagnostic if the expansion exceeds MAX_OR_EXPANSION. */
+static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLoc match_loc) {
+    Arena *a = ctx->arena;
+
+    switch (pat->kind) {
+    case PAT_WILDCARD:
+    case PAT_BINDING:
+    case PAT_INT_LIT:
+    case PAT_CHAR_LIT:
+    case PAT_BOOL_LIT:
+    case PAT_STRING_LIT:
+    case PAT_NONE:
+        *out = arena_alloc(a, sizeof(Pattern *));
+        (*out)[0] = pat;
+        return 1;
+    case PAT_OR: {
+        Pattern **tmp = NULL;
+        int count = 0, cap = 0;
+        for (int i = 0; i < pat->or_pat.alt_count; i++) {
+            Pattern **sub;
+            int sc = flatten_or_pattern(ctx, pat->or_pat.alts[i], &sub, match_loc);
+            if (sc < 0) { free(tmp); return -1; }
+            for (int j = 0; j < sc; j++) {
+                if (count >= MAX_OR_EXPANSION) {
+                    diag_error(match_loc,
+                        "or-pattern expands to too many combinations — simplify");
+                    free(tmp);
+                    return -1;
+                }
+                DA_APPEND(tmp, count, cap, sub[j]);
+            }
+        }
+        *out = arena_alloc(a, sizeof(Pattern *) * (size_t)count);
+        memcpy(*out, tmp, sizeof(Pattern *) * (size_t)count);
+        free(tmp);
+        return count;
+    }
+    case PAT_SOME: {
+        if (!pat->some_pat.inner) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        Pattern **inners;
+        int ic = flatten_or_pattern(ctx, pat->some_pat.inner, &inners, match_loc);
+        if (ic < 0) return -1;
+        if (ic == 1 && inners[0] == pat->some_pat.inner) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        *out = arena_alloc(a, sizeof(Pattern *) * (size_t)ic);
+        for (int i = 0; i < ic; i++) {
+            Pattern *np = arena_alloc(a, sizeof(Pattern));
+            np->kind = PAT_SOME;
+            np->loc = pat->loc;
+            np->some_pat.inner = inners[i];
+            (*out)[i] = np;
+        }
+        return ic;
+    }
+    case PAT_VARIANT: {
+        if (!pat->variant.payload) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        Pattern **inners;
+        int ic = flatten_or_pattern(ctx, pat->variant.payload, &inners, match_loc);
+        if (ic < 0) return -1;
+        if (ic == 1 && inners[0] == pat->variant.payload) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        *out = arena_alloc(a, sizeof(Pattern *) * (size_t)ic);
+        for (int i = 0; i < ic; i++) {
+            Pattern *np = arena_alloc(a, sizeof(Pattern));
+            np->kind = PAT_VARIANT;
+            np->loc = pat->loc;
+            np->variant.variant = pat->variant.variant;
+            np->variant.payload = inners[i];
+            (*out)[i] = np;
+        }
+        return ic;
+    }
+    case PAT_STRUCT: {
+        int nf = pat->struc.field_count;
+        if (nf == 0) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        Pattern ***field_exp = arena_alloc(a, sizeof(Pattern **) * (size_t)nf);
+        int *field_counts = arena_alloc(a, sizeof(int) * (size_t)nf);
+        bool any_expanded = false;
+        for (int i = 0; i < nf; i++) {
+            int fc = flatten_or_pattern(ctx, pat->struc.fields[i].pattern,
+                                        &field_exp[i], match_loc);
+            if (fc < 0) return -1;
+            field_counts[i] = fc;
+            if (fc > 1 || field_exp[i][0] != pat->struc.fields[i].pattern)
+                any_expanded = true;
+        }
+        if (!any_expanded) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        long long total = 1;
+        for (int i = 0; i < nf; i++) {
+            total *= field_counts[i];
+            if (total > MAX_OR_EXPANSION) {
+                diag_error(match_loc,
+                    "or-pattern expands to too many combinations — simplify");
+                return -1;
+            }
+        }
+        Pattern **result = arena_alloc(a, sizeof(Pattern *) * (size_t)total);
+        int *idx = arena_alloc(a, sizeof(int) * (size_t)nf);
+        memset(idx, 0, sizeof(int) * (size_t)nf);
+        for (int n = 0; n < total; n++) {
+            FieldPattern *new_fields = arena_alloc(a, sizeof(FieldPattern) * (size_t)nf);
+            for (int i = 0; i < nf; i++) {
+                new_fields[i].name = pat->struc.fields[i].name;
+                new_fields[i].pattern = field_exp[i][idx[i]];
+                new_fields[i].resolved_type = pat->struc.fields[i].resolved_type;
+            }
+            Pattern *np = arena_alloc(a, sizeof(Pattern));
+            np->kind = PAT_STRUCT;
+            np->loc = pat->loc;
+            np->struc.fields = new_fields;
+            np->struc.field_count = nf;
+            result[n] = np;
+            for (int i = nf - 1; i >= 0; i--) {
+                idx[i]++;
+                if (idx[i] < field_counts[i]) break;
+                idx[i] = 0;
+            }
+        }
+        *out = result;
+        return (int)total;
+    }
+    }
+    *out = arena_alloc(a, sizeof(Pattern *));
+    (*out)[0] = pat;
+    return 1;
 }
 
 /* Enumerate all constructors for a type. Returns count, fills ctors array.
@@ -4520,15 +4694,28 @@ static void report_witness(CheckCtx *ctx, SrcLoc loc, MatPat *witness, Type *sub
 }
 
 static void check_match_exhaustiveness(CheckCtx *ctx, Expr *e, Type *subj_type) {
-    /* Build the pattern matrix (1 column per arm pattern) */
+    /* Build the pattern matrix. Each arm may contribute multiple rows if its
+       pattern contains any PAT_OR — flatten_or_pattern produces the cartesian
+       product of or-free patterns. */
     int arm_count = e->match_expr.arm_count;
-    PatRow *rows = arena_alloc(ctx->arena, arm_count * sizeof(PatRow));
+    PatRow *tmp_rows = NULL;
+    int row_count = 0, row_cap = 0;
     for (int i = 0; i < arm_count; i++) {
-        rows[i].len = 1;
-        rows[i].elems = arena_alloc(ctx->arena, sizeof(MatPat));
-        rows[i].elems[0] = pat_to_matpat(ctx, e->match_expr.arms[i].pattern, subj_type);
+        Pattern **flats;
+        int fc = flatten_or_pattern(ctx, e->match_expr.arms[i].pattern, &flats, e->loc);
+        if (fc < 0) { free(tmp_rows); return; }
+        for (int j = 0; j < fc; j++) {
+            PatRow row;
+            row.len = 1;
+            row.elems = arena_alloc(ctx->arena, sizeof(MatPat));
+            row.elems[0] = pat_to_matpat(ctx, flats[j], subj_type);
+            DA_APPEND(tmp_rows, row_count, row_cap, row);
+        }
     }
-    PatMatrix mat = { .rows = rows, .row_count = arm_count, .col_count = 1 };
+    PatRow *rows = arena_alloc(ctx->arena, row_count * sizeof(PatRow));
+    memcpy(rows, tmp_rows, row_count * sizeof(PatRow));
+    free(tmp_rows);
+    PatMatrix mat = { .rows = rows, .row_count = row_count, .col_count = 1 };
 
     TypeRow types;
     types.len = 1;
@@ -4570,7 +4757,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         ctx->scope = arm_scope;
 
         /* Check pattern and introduce bindings */
-        check_match_pattern(ctx, pat, subj_type);
+        check_match_pattern(ctx, pat, subj_type, /*reject_bindings=*/false);
 
         /* Type-check arm body */
         Type *arm_type = check_block(ctx, arm->body, arm->body_count);
