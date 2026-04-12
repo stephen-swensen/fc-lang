@@ -44,6 +44,24 @@ let base_fire_interval = 55    // ticks per enemy fire at wave 1
 
 let starting_lives = 5
 
+// Bunkers — 4 destructible barricades between player and enemies.
+// Each bunker is a 16x10 grid of cells; one int32 per row (LSB = col 0).
+let bunker_count = 4
+let bunker_rows = 10
+let bunker_cols = 16
+let bunker_cell_px = 6
+let bunker_w = 96              // bunker_cols * bunker_cell_px
+let bunker_h = 60              // bunker_rows * bunker_cell_px
+let bunker_y = 520
+
+// Mystery UFO — flies across the top of the screen for bonus points.
+let ufo_y = 78
+let ufo_w = 52
+let ufo_h = 20
+let ufo_speed_int = 3
+let ufo_min_interval = 900     // 15s @ 60fps
+let ufo_max_interval = 1800    // 30s @ 60fps
+
 // ============================================================
 // Types
 // ============================================================
@@ -119,6 +137,17 @@ struct game_state =
     move_right: bool
     fire_held: bool
 
+    // Mystery UFO
+    ufo_active: bool
+    ufo_x: float64
+    ufo_vx: float64
+    ufo_spawn_timer: int32
+    ufo_next_spawn: int32
+    ufo_popup_timer: int32
+    ufo_popup_val: int32
+    ufo_popup_x: int32
+    ufo_popup_y: int32
+
 // ============================================================
 // File-level heap state — showcase of richer top-level
 // initializers (alloc, array/struct literals, default).
@@ -128,6 +157,7 @@ let enemies = alloc(enemy[55] { })!
 let bullets = alloc(bullet[64] { })!
 let stars = alloc(star[120] { })!
 let particles = alloc(particle[256] { })!
+let bunker_bitmaps = alloc(int32[40] { })!   // bunker_count * bunker_rows
 let game = alloc(game_state)!
 
 // ============================================================
@@ -556,7 +586,177 @@ let clear_particles = () ->
     for i in 0..256
         particles[i].life = 0
 
-let reset_game = () ->
+// ============================================================
+// Bunkers
+// ============================================================
+
+// Classic inverted-U barricade with a 4-cell arch at the bottom center.
+let bunker_row_template = (row: int32) ->
+    match row with
+    | 0 -> 0x3FFC                // ..XXXXXXXXXXXX..
+    | 1 -> 0x7FFE                // .XXXXXXXXXXXXXX.
+    | 2 -> 0xFFFF
+    | 3 -> 0xFFFF
+    | 4 -> 0xFFFF
+    | 5 -> 0xFFFF
+    | 6 -> 0xFC3F                // XXXXXX....XXXXXX
+    | 7 -> 0xF81F                // XXXXX......XXXXX
+    | 8 -> 0xF00F                // XXXX........XXXX
+    | _ -> 0xF00F                // XXXX........XXXX
+
+let reset_bunkers = () ->
+    for b in 0..bunker_count
+        for row in 0..bunker_rows
+            bunker_bitmaps[b * bunker_rows + row] = bunker_row_template(row)
+
+// Evenly spaces 4 bunkers across a 960-wide central strip: x = 160, 448, 736, 1024.
+let bunker_screen_x = (b: int32) ->
+    160 + b * 288
+
+let bunker_cell_alive = (b: int32, row: int32, col: int32) ->
+    let bits = bunker_bitmaps[b * bunker_rows + row]
+    (bits >> col) & 1 == 1
+
+let clear_bunker_cell = (b: int32, row: int32, col: int32) ->
+    let idx = b * bunker_rows + row
+    bunker_bitmaps[idx] = bunker_bitmaps[idx] & ~(1 << col)
+
+let bullet_hits_bunker = (bi: int32) ->
+    let bx = (int32) bullets[bi].x
+    let by = (int32) bullets[bi].y
+    let mut hit = false
+    for b in 0..bunker_count
+        if !hit then
+            let bx0 = bunker_screen_x(b)
+            let lx = bx - bx0
+            let ly = by - bunker_y
+            if lx >= 0 && lx < bunker_w && ly >= 0 && ly < bunker_h then
+                let col = lx / bunker_cell_px
+                let row = ly / bunker_cell_px
+                if bunker_cell_alive(b, row, col) then
+                    clear_bunker_cell(b, row, col)
+                    // Chew a small crater so repeated hits feel punchy.
+                    if col > 0 && bunker_cell_alive(b, row, col - 1) then
+                        clear_bunker_cell(b, row, col - 1)
+                    if col < bunker_cols - 1 && bunker_cell_alive(b, row, col + 1) then
+                        clear_bunker_cell(b, row, col + 1)
+                    hit = true
+    hit
+
+// Clear any bunker cells overlapped by live enemies. Called after a
+// formation descent — faithful to the arcade, where invaders eat through
+// the shields as they reach them.
+let erode_bunkers_by_formation = () ->
+    for b in 0..bunker_count
+        let bx0 = bunker_screen_x(b)
+        for row in 0..bunker_rows
+            for col in 0..bunker_cols
+                if bunker_cell_alive(b, row, col) then
+                    let cx = bx0 + col * bunker_cell_px + bunker_cell_px / 2
+                    let cy = bunker_y + row * bunker_cell_px + bunker_cell_px / 2
+                    let mut touched = false
+                    for ei in 0..55
+                        if !touched && enemies[ei].alive then
+                            let ex = (int32) enemy_screen_x(ei)
+                            let ey = (int32) enemy_screen_y(ei)
+                            if cx >= ex && cx < ex + enemy_w &&
+                               cy >= ey && cy < ey + enemy_h then
+                                touched = true
+                    if touched then
+                        clear_bunker_cell(b, row, col)
+
+let draw_bunkers = (r: any*) ->
+    for b in 0..bunker_count
+        let bx0 = bunker_screen_x(b)
+        for row in 0..bunker_rows
+            for col in 0..bunker_cols
+                if bunker_cell_alive(b, row, col) then
+                    let cx = bx0 + col * bunker_cell_px
+                    let cy = bunker_y + row * bunker_cell_px
+                    fill(r, cx, cy, bunker_cell_px, bunker_cell_px,
+                         80u8, 240u8, 160u8, 255u8)
+
+// ============================================================
+// Mystery UFO
+// ============================================================
+
+let schedule_next_ufo = (rng: pcg_random*) ->
+    game->ufo_active = false
+    game->ufo_spawn_timer = 0
+    let range = (uint32) (ufo_max_interval - ufo_min_interval)
+    let r = (int32) pcg_random.next_bounded_uint32(rng, range)
+    game->ufo_next_spawn = ufo_min_interval + r
+
+let spawn_ufo = (rng: pcg_random*) ->
+    game->ufo_active = true
+    let from_right = (int32) pcg_random.next_bounded_uint32(rng, 2u32)
+    if from_right == 0 then
+        game->ufo_x = (float64) (-ufo_w)
+        game->ufo_vx = (float64) ufo_speed_int
+    else
+        game->ufo_x = (float64) (logical_w + 10)
+        game->ufo_vx = -(float64) ufo_speed_int
+
+let update_ufo = (rng: pcg_random*) ->
+    if game->ufo_active then
+        game->ufo_x = game->ufo_x + game->ufo_vx
+        if game->ufo_vx < 0.0 && game->ufo_x < (float64) -(ufo_w + 20) then
+            schedule_next_ufo(rng)
+        else if game->ufo_vx > 0.0 && game->ufo_x > (float64) (logical_w + 20) then
+            schedule_next_ufo(rng)
+    else
+        game->ufo_spawn_timer = game->ufo_spawn_timer + 1
+        if game->ufo_spawn_timer >= game->ufo_next_spawn then
+            spawn_ufo(rng)
+    if game->ufo_popup_timer > 0 then
+        game->ufo_popup_timer = game->ufo_popup_timer - 1
+
+let bullet_hits_ufo = (bi: int32) ->
+    if !game->ufo_active then
+        return false
+    if !bullets[bi].from_player then
+        return false
+    let bx = bullets[bi].x
+    let by = bullets[bi].y
+    let in_x = bx >= game->ufo_x && bx < game->ufo_x + (float64) ufo_w
+    let in_y = by >= (float64) ufo_y && by < (float64) (ufo_y + ufo_h)
+    in_x && in_y
+
+// Classic arcade-style mystery scores: 50, 100, 150, 200, 300.
+let ufo_random_points = (rng: pcg_random*) ->
+    let k = (int32) pcg_random.next_bounded_uint32(rng, 5u32)
+    match k with
+    | 0 -> 50
+    | 1 -> 100
+    | 2 -> 150
+    | 3 -> 200
+    | _ -> 300
+
+let draw_ufo = (r: any*) ->
+    if !game->ufo_active then return
+    let x = (int32) game->ufo_x
+    let y = ufo_y
+    // Dome
+    fill(r, x + 20, y + 0, 12, 4, 255u8, 200u8, 220u8, 255u8)
+    fill(r, x + 16, y + 4, 20, 4, 255u8, 140u8, 180u8, 255u8)
+    // Main disc
+    fill(r, x + 4,  y + 8,  44, 6, 255u8, 100u8, 140u8, 255u8)
+    fill(r, x + 0,  y + 10, 52, 4, 200u8, 60u8,  100u8, 255u8)
+    // Running lights
+    fill(r, x + 6,  y + 14, 4, 2, 255u8, 230u8, 80u8,  255u8)
+    fill(r, x + 16, y + 14, 4, 2, 120u8, 220u8, 255u8, 255u8)
+    fill(r, x + 26, y + 14, 4, 2, 255u8, 230u8, 80u8,  255u8)
+    fill(r, x + 36, y + 14, 4, 2, 120u8, 220u8, 255u8, 255u8)
+    fill(r, x + 46, y + 14, 4, 2, 255u8, 230u8, 80u8,  255u8)
+
+let draw_ufo_popup = (r: any*) ->
+    if game->ufo_popup_timer > 0 then
+        let s = "%d{game->ufo_popup_val}"
+        draw_text_centered(r, (const str) s,
+                           game->ufo_popup_x, game->ufo_popup_y, 4,
+                           255u8, 230u8, 80u8)
+
+let reset_game = (rng: pcg_random*) ->
     game->player_x = (float64) (logical_w / 2 - player_w / 2)
     game->cooldown = 0
     game->lives = starting_lives
@@ -567,6 +767,9 @@ let reset_game = () ->
     clear_bullets()
     clear_particles()
     reset_formation()
+    reset_bunkers()
+    game->ufo_popup_timer = 0
+    schedule_next_ufo(rng)
     game->phase = game_phase.playing
     game->phase_timer = 0
 
@@ -648,6 +851,7 @@ let advance_formation = (audio_dev: uint32, step_snd: sound, step2_snd: sound) -
 
     if descend then
         game->formation_y = game->formation_y + 16.0
+        erode_bunkers_by_formation()
     else
         game->formation_x = game->formation_x + (float64) (game->formation_dir * 10)
 
@@ -693,7 +897,29 @@ let process_collisions = (rng: pcg_random*, audio_dev: uint32,
                           hit_snd: sound, die_snd: sound) ->
     for bi in 0..64
         if bullets[bi].alive then
-            if bullets[bi].from_player then
+            if bullet_hits_bunker(bi) then
+                bullets[bi].alive = false
+                let cx = bullets[bi].x
+                let cy = bullets[bi].y
+                spawn_burst(rng, cx, cy, 6, 80u8, 240u8, 160u8)
+            else if bullets[bi].from_player && bullet_hits_ufo(bi) then
+                let pts = ufo_random_points(rng)
+                if !game->score_locked then
+                    game->score = game->score + pts
+                bullets[bi].alive = false
+                let cx = game->ufo_x + (float64) (ufo_w / 2)
+                let cy = (float64) (ufo_y + ufo_h / 2)
+                spawn_burst(rng, cx, cy, 30, 255u8, 120u8, 160u8)
+                spawn_burst(rng, cx, cy, 14, 255u8, 230u8, 80u8)
+                game->ufo_popup_val = pts
+                game->ufo_popup_x = (int32) cx
+                game->ufo_popup_y = ufo_y + ufo_h + 4
+                game->ufo_popup_timer = 90
+                if audio_dev > 0u32 then
+                    sdl.clear_audio(audio_dev)
+                    sdl.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
+                schedule_next_ufo(rng)
+            else if bullets[bi].from_player then
                 let ei = bullet_hits_enemy(bi)
                 if ei >= 0 then
                     let kind = enemy_kind_for_row(enemies[ei].row)
@@ -947,6 +1173,18 @@ let render = (r: any*, frame_count: int32) ->
     sdl.set_blend_mode(r, sdl.blend_alpha)
     draw_stars(r)
 
+    // Bunkers (drawn behind bullets/enemies but in front of stars)
+    let show_bunkers = match game->phase with
+    | splash -> false
+    | _ -> true
+    if show_bunkers then
+        draw_bunkers(r)
+
+    // Mystery UFO
+    if show_bunkers then
+        draw_ufo(r)
+        draw_ufo_popup(r)
+
     // Bullets
     for i in 0..64
         if bullets[i].alive then
@@ -1128,7 +1366,7 @@ let main = (args: str[]) ->
                 if k == sdl.key_return then
                     match game->phase with
                     | splash
-                    | game_over -> reset_game()
+                    | game_over -> reset_game(&rng)
                     | playing ->
                         game->lives = starting_lives
                         game->score_locked = true
@@ -1198,6 +1436,9 @@ let main = (args: str[]) ->
                 game->fire_timer = 0
                 fire_enemy_bullet(&rng)
 
+            // Mystery UFO
+            update_ufo(&rng)
+
             // Collisions
             process_collisions(&rng, audio_dev, hit_snd, die_snd)
 
@@ -1215,10 +1456,13 @@ let main = (args: str[]) ->
                 game->wave = game->wave + 1
                 clear_bullets()
                 reset_formation()
+                reset_bunkers()
+                schedule_next_ufo(&rng)
                 game->phase = game_phase.playing
                 sdl.set_title(win, c"Face Invaders - Wave %d{game->wave}")
         | dying ->
             update_bullets()
+            update_ufo(&rng)
             game->phase_timer = game->phase_timer - 1
             if game->phase_timer <= 0 then
                 clear_bullets()
