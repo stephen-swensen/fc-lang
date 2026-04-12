@@ -39,6 +39,7 @@ struct player =
     health: int32
     ammo: int32
     score: int32
+    weapon: int32
 
 struct input_state =
     move_fwd: bool
@@ -53,6 +54,8 @@ struct game_sprite =
     x: float64
     y: float64
     sprite_id: int32
+    obj_type: int32
+    alive: bool
 
 struct world =
     p: player
@@ -614,6 +617,8 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
                         w->sprites[si].x = (float64) x + 0.5
                         w->sprites[si].y = (float64) y + 0.5
                         w->sprites[si].sprite_id = v - 23
+                        w->sprites[si].obj_type = v
+                        w->sprites[si].alive = true
                         w->num_sprites = w->num_sprites + 1
                     if v >= 108 then
                         let etype = (v - 108) / 16
@@ -622,6 +627,8 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
                             w->sprites[si].x = (float64) x + 0.5
                             w->sprites[si].y = (float64) y + 0.5
                             w->sprites[si].sprite_id = enemy_spr[etype]
+                            w->sprites[si].obj_type = v
+                            w->sprites[si].alive = true
                             w->num_sprites = w->num_sprites + 1
                     if v == 19 then
                         w->p.x = (float64) x + 0.5
@@ -947,6 +954,7 @@ let draw_sprites = (w: world*, fb: uint32[], zbuf: float64[],
 
     for idx in 0..w->num_sprites
         let si = order[idx]
+        if !w->sprites[si].alive then continue
         let sx = w->sprites[si].x - px
         let sy = w->sprites[si].y - py
         let tx = inv_det * (dy * sx - dx * sy)
@@ -1115,8 +1123,9 @@ let draw_hud = (w: world*, fb: uint32[], fps: int32) ->
 
     // Status text
     draw_text_fb(fb, "HEALTH:%d{w->p.health}", 8, bar_y + 5, 2, red)
-    draw_text_fb(fb, "AMMO:%d{w->p.ammo}", 220, bar_y + 5, 2, yellow)
-    draw_text_fb(fb, "LEVEL:%d{w->level + 1}", 380, bar_y + 5, 2, white)
+    draw_text_fb(fb, "AMMO:%d{w->p.ammo}", 200, bar_y + 5, 2, yellow)
+    draw_text_fb(fb, "L%d{w->level + 1}", 360, bar_y + 5, 2, white)
+    draw_text_fb(fb, "SCORE:%d{w->p.score}", 440, bar_y + 5, 2, white)
     return
 
 // ============================================================
@@ -1206,6 +1215,43 @@ let try_open_door = (w: world*) ->
                         w->map[dest] = tile
                         w->pushwalls[idx] = false
                         return
+    return
+
+let check_pickups = (w: world*, audio_dev: uint32, door_snd: sound) ->
+    for i in 0..w->num_sprites
+        if !w->sprites[i].alive then continue
+        let ot = w->sprites[i].obj_type
+        // Only pick up collectible items (food, ammo, keys, treasure)
+        let collectible = (ot >= 43 && ot <= 55) || ot == 29
+        if !collectible then continue
+        let dx = w->p.x - w->sprites[i].x
+        let dy = w->p.y - w->sprites[i].y
+        if dx * dx + dy * dy < 0.5 then
+            w->sprites[i].alive = false
+            // Apply pickup effect
+            if ot == 43 || ot == 29 then
+                w->p.health = w->p.health + 10
+                if w->p.health > 100 then w->p.health = 100
+            if ot == 44 then
+                w->p.health = w->p.health + 25
+                if w->p.health > 100 then w->p.health = 100
+            if ot == 45 then
+                w->p.ammo = w->p.ammo + 8
+                if w->p.weapon == 0 then w->p.weapon = 1
+            if ot == 46 then
+                w->p.ammo = w->p.ammo + 6
+                w->p.weapon = if w->p.weapon < 2 then 2 else w->p.weapon
+            if ot == 47 then
+                w->p.ammo = w->p.ammo + 6
+                w->p.weapon = 3
+            if ot >= 48 && ot <= 51 then
+                w->p.score = w->p.score + 100
+            if ot == 52 then
+                w->p.health = 100
+                w->p.ammo = w->p.ammo + 25
+            // Play pickup sound (reuse door sound for now)
+            if audio_dev > 0u32 then
+                sdl2.queue_audio(audio_dev, door_snd.data, door_snd.bytes)
     return
 
 let update_player = (w: world*) ->
@@ -1523,7 +1569,7 @@ let main = (args: str[]) ->
     let mut fps_timer = sdl2.get_ticks()
     let mut step_timer = 0
     let mut fire_cooldown = 0
-    let mut cur_weapon = 1
+    w->p.weapon = 1
     let mut weapon_frame = 0
     let mut weapon_timer = 0
     let mut sfx_buf = (int16*) (any*) 0u
@@ -1633,10 +1679,16 @@ let main = (args: str[]) ->
 
         // --------- Audio feedback ---------
         // Gunfire: play once per press, then cooldown + weapon animation
-        if w->input.fire_held && fire_cooldown == 0 then
-            fire_cooldown = 20
+        let can_fire = w->p.weapon == 0 || w->p.ammo > 0
+        if w->input.fire_held && fire_cooldown == 0 && can_fire then
+            fire_cooldown = if w->p.weapon == 0 then 15 else if w->p.weapon >= 3 then 7 else 20
             weapon_frame = 1
             weapon_timer = 0
+            if w->p.weapon > 0 then
+                w->p.ammo = w->p.ammo - 1
+                if w->p.ammo <= 0 then
+                    w->p.ammo = 0
+                    w->p.weapon = 0
             sfx_buf = (int16*) gun_snd.data
             sfx_len = (int32) gun_snd.bytes / 2
             sfx_pos = 0
@@ -1673,12 +1725,13 @@ let main = (args: str[]) ->
 
         // --------- Update ---------
         update_player(w)
+        check_pickups(w, audio_dev, door_snd)
 
         // --------- Render ---------
         clear_fb(fb, w->ceil_color, w->floor_color)
         cast_rays(w, fb, textures, num_tex, zbuf)
         draw_sprites(w, fb, zbuf, sprite_tex, num_spr_tex)
-        draw_weapon(fb, sprite_tex, num_spr_tex, cur_weapon, weapon_frame)
+        draw_weapon(fb, sprite_tex, num_spr_tex, w->p.weapon, weapon_frame)
         draw_minimap(w, fb, show_map)
         draw_hud(w, fb, fps)
 
