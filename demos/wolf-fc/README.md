@@ -15,13 +15,14 @@ Requires SDL2 development libraries installed on your system.
 
 | Key | Action |
 |---|---|
-| Up / W | Move forward |
-| Down / S | Move backward |
-| Left / A | Turn left |
-| Right / D | Turn right |
-| Alt + Left/Right | Strafe |
-| Space | Run (hold) / Use / Open door |
-| Left Shift | Shoot |
+| Up | Move forward |
+| Down | Move backward |
+| Left | Turn left |
+| Right | Turn right |
+| Z | Run (hold) |
+| X + Left/Right | Strafe |
+| C | Open door / Use |
+| V | Shoot |
 | Tab | Toggle minimap |
 | F11 | Toggle fullscreen |
 | Escape | Quit |

@@ -434,22 +434,21 @@ let try_move = (w: world*, dx: float64, dy: float64) ->
 
 let update_player = (w: world*) ->
     let speed = if w->input.run_held then move_speed * run_mult else move_speed
+    let rspeed = if w->input.run_held then rot_speed * 1.8 else rot_speed
     if w->input.move_fwd then
         try_move(w, w->p.dir_x * speed, w->p.dir_y * speed)
     if w->input.move_back then
         try_move(w, 0.0 - w->p.dir_x * speed, 0.0 - w->p.dir_y * speed)
     if w->input.turn_left then
         if w->input.alt_held then
-            // Strafe left: move perpendicular to direction
             try_move(w, w->p.dir_y * speed, 0.0 - w->p.dir_x * speed)
         else
-            rotate_player(w, 0.0 - rot_speed)
+            rotate_player(w, 0.0 - rspeed)
     if w->input.turn_right then
         if w->input.alt_held then
-            // Strafe right: move perpendicular to direction
             try_move(w, 0.0 - w->p.dir_y * speed, w->p.dir_x * speed)
         else
-            rotate_player(w, rot_speed)
+            rotate_player(w, rspeed)
     return
 
 // ============================================================
@@ -573,7 +572,7 @@ let main = (args: str[]) ->
     let mut step_timer = 0
 
     io.write("Wolfenstein FC started.\n", stdout)
-    io.write("  Arrows/WASD: move   Space: run/use   Shift: shoot   Tab: map   F11: fullscreen\n", stdout)
+    io.write("  Arrows: move   Z: run   X+Arrows: strafe   C: open   V: shoot   Tab: map\n", stdout)
 
     loop
         if !running then break
@@ -616,43 +615,28 @@ let main = (args: str[]) ->
                         sdl2.maximize_window(win)
                     sdl2.set_logical_size(ren, screen_w, screen_h)
 
-                if k == sdl2.key_up || k == sdl2.key_w then
-                    w->input.move_fwd = true
-                if k == sdl2.key_down || k == sdl2.key_s then
-                    w->input.move_back = true
-                if k == sdl2.key_left || k == sdl2.key_a then
-                    w->input.turn_left = true
-                if k == sdl2.key_right || k == sdl2.key_d then
-                    w->input.turn_right = true
-                if k == sdl2.key_space then
-                    w->input.run_held = true
-                    // Space also triggers door use on press
+                if k == sdl2.key_up then w->input.move_fwd = true
+                if k == sdl2.key_down then w->input.move_back = true
+                if k == sdl2.key_left then w->input.turn_left = true
+                if k == sdl2.key_right then w->input.turn_right = true
+                if k == sdl2.key_z then w->input.run_held = true
+                if k == sdl2.key_x then w->input.alt_held = true
+                if k == sdl2.key_v then w->input.fire_held = true
+                if k == sdl2.key_c then
                     if audio_dev > 0u32 then
                         sdl2.clear_audio(audio_dev)
                         sdl2.queue_audio(audio_dev, door_snd.data, door_snd.bytes)
-                if k == sdl2.key_lshift then
-                    w->input.fire_held = true
-                if k == sdl2.key_lalt then
-                    w->input.alt_held = true
-                if k == sdl2.key_tab then
-                    show_map = !show_map
+                if k == sdl2.key_tab then show_map = !show_map
 
             if (int32) event.type == sdl2.keyup_event then
                 let k = event.key.keysym.sym
-                if k == sdl2.key_up || k == sdl2.key_w then
-                    w->input.move_fwd = false
-                if k == sdl2.key_down || k == sdl2.key_s then
-                    w->input.move_back = false
-                if k == sdl2.key_left || k == sdl2.key_a then
-                    w->input.turn_left = false
-                if k == sdl2.key_right || k == sdl2.key_d then
-                    w->input.turn_right = false
-                if k == sdl2.key_space then
-                    w->input.run_held = false
-                if k == sdl2.key_lshift then
-                    w->input.fire_held = false
-                if k == sdl2.key_lalt then
-                    w->input.alt_held = false
+                if k == sdl2.key_up then w->input.move_fwd = false
+                if k == sdl2.key_down then w->input.move_back = false
+                if k == sdl2.key_left then w->input.turn_left = false
+                if k == sdl2.key_right then w->input.turn_right = false
+                if k == sdl2.key_z then w->input.run_held = false
+                if k == sdl2.key_x then w->input.alt_held = false
+                if k == sdl2.key_v then w->input.fire_held = false
 
         if !running then break
 
