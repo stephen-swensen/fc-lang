@@ -47,12 +47,19 @@ struct input_state =
     fire_held: bool
     alt_held: bool
 
+struct game_sprite =
+    x: float64
+    y: float64
+    sprite_id: int32
+
 struct world =
     p: player
     input: input_state
     map: int32[]
     map_w: int32
     map_h: int32
+    sprites: game_sprite[]
+    num_sprites: int32
 
 // ============================================================
 // Color helpers
@@ -349,12 +356,46 @@ let init_palette = () ->
     pal
 
 // ============================================================
-// VSWAP loader — reads wall textures from Wolf3D data file
+// VSWAP loader — reads wall textures and sprites from Wolf3D data file
 // ============================================================
+
+struct vswap_result =
+    wall_tex: uint32[]
+    num_walls: int32
+    sprite_tex: uint32[]
+    num_sprites: int32
+
+let decode_sprite = (raw: uint8[], raw_len: int32, palette: uint32[], out: uint32[]) ->
+    if raw_len < 4 then return
+    let leftpix = read_u16(raw, 0)
+    let rightpix = read_u16(raw, 2)
+    if leftpix > 63 || rightpix > 63 || leftpix > rightpix then return
+    // For each column with data
+    for col in leftpix..(rightpix + 1)
+        let col_idx = col - leftpix
+        if 4 + col_idx * 2 + 1 >= raw_len then return
+        let cmd_off = read_u16(raw, 4 + col_idx * 2)
+        let mut pos = cmd_off
+        loop
+            if pos + 5 >= raw_len then break
+            let end_x2 = read_u16(raw, pos)
+            if end_x2 == 0 then break
+            let pix_off = read_u16(raw, pos + 2)
+            let start_x2 = read_u16(raw, pos + 4)
+            pos = pos + 6
+            let start_row = start_x2 / 2
+            let end_row = end_x2 / 2
+            for row in start_row..end_row
+                let src_idx = pix_off + (row - start_row)
+                if src_idx < raw_len && row < 64 && col < 64 then
+                    let pi = (int32) raw[src_idx]
+                    if pi > 0 then
+                        out[col * 64 + row] = palette[pi]
+    return
 
 let load_vswap = (path: const str, palette: uint32[]) ->
     match io.open(path, "rb") with
-    | none -> default(uint32[]?)
+    | none -> default(vswap_result?)
     | some(f) ->
         defer io.close(f)
         // Header: 3 uint16 values
@@ -362,22 +403,39 @@ let load_vswap = (path: const str, palette: uint32[]) ->
         io.read(hdr, 6i64, f)
         let num_chunks = read_u16(hdr, 0)
         let sprite_start = read_u16(hdr, 2)
+        let sound_start = read_u16(hdr, 4)
         let num_walls = sprite_start
-        // Read chunk offsets
+        let num_sprites = sound_start - sprite_start
+        // Read chunk offsets and lengths
         let obuf = alloc(uint8[num_chunks * 4] {})!
         io.read(obuf, (int64) (num_chunks * 4), f)
-        // Skip chunk lengths (wall pages are always 4096 bytes)
-        io.seek(f, (int64) (num_chunks * 2), io.seek_cur)
-        // Load wall textures: each is 4096 bytes, column-major, palette-indexed
-        let tex = alloc(uint32[num_walls * tex_pixels] {})!
+        let lbuf = alloc(uint8[num_chunks * 2] {})!
+        io.read(lbuf, (int64) (num_chunks * 2), f)
+        // Load wall textures
+        let wall_tex = alloc(uint32[num_walls * tex_pixels] {})!
         let page = alloc(uint8[4096] {})!
         for i in 0..num_walls
             let off = read_i32(obuf, i * 4)
             io.seek(f, (int64) off, io.seek_set)
             io.read(page, 4096i64, f)
             for px in 0..4096
-                tex[i * tex_pixels + px] = palette[(int32) page[px]]
-        some(tex)
+                wall_tex[i * tex_pixels + px] = palette[(int32) page[px]]
+        // Load sprite textures (decoded to 64x64 ARGB, 0 = transparent)
+        let sprite_tex = alloc(uint32[num_sprites * tex_pixels] {})!
+        let raw_buf = alloc(uint8[16384] {})!
+        for i in 0..num_sprites
+            let chunk_idx = sprite_start + i
+            let off = read_i32(obuf, chunk_idx * 4)
+            let len = read_u16(lbuf, chunk_idx * 2)
+            if len > 0 && len <= 16384 then
+                io.seek(f, (int64) off, io.seek_set)
+                io.read(raw_buf, (int64) len, f)
+                let spr_out = alloc(uint32[tex_pixels] {})!
+                decode_sprite(raw_buf, len, palette, spr_out)
+                for px in 0..tex_pixels
+                    sprite_tex[i * tex_pixels + px] = spr_out[px]
+        some(vswap_result { wall_tex = wall_tex, num_walls = num_walls,
+                            sprite_tex = sprite_tex, num_sprites = num_sprites })
 
 // ============================================================
 // Carmack decompression
@@ -511,10 +569,26 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
             for i in 0..4096
                 w->map[i] = (int32) plane0[i]
 
-            // Find player start from plane 1 (19=N, 20=E, 21=S, 22=W)
+            // Extract static objects and player start from plane 1
+            let mut spr_count = 0
+            // First pass: count sprites
             for y in 0..64
                 for x in 0..64
                     let v = (int32) plane1[y * 64 + x]
+                    if v >= 23 && v <= 74 then
+                        spr_count = spr_count + 1
+            w->sprites = alloc(game_sprite[spr_count + 1] {})!
+            w->num_sprites = 0
+            // Second pass: fill sprites and find player
+            for y in 0..64
+                for x in 0..64
+                    let v = (int32) plane1[y * 64 + x]
+                    if v >= 23 && v <= 74 then
+                        let si = w->num_sprites
+                        w->sprites[si].x = (float64) x + 0.5
+                        w->sprites[si].y = (float64) y + 0.5
+                        w->sprites[si].sprite_id = v - 23
+                        w->num_sprites = w->num_sprites + 1
                     if v == 19 then
                         w->p.x = (float64) x + 0.5
                         w->p.y = (float64) y + 0.5
@@ -635,7 +709,7 @@ let is_wall = (w: world*, mx: int32, my: int32) ->
 // Raycasting
 // ============================================================
 
-let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32) ->
+let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32, zbuf: float64[]) ->
     let px = w->p.x
     let py = w->p.y
     let dx = w->p.dir_x
@@ -731,6 +805,7 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32) ->
             let mut c = textures[tid * tex_pixels + tx * tex_size + ty]
             if side == 1 then c = darken(c)
             fb[y * screen_w + col] = c
+        zbuf[col] = perp
     return
 
 // ============================================================
@@ -747,6 +822,71 @@ let clear_fb = (fb: uint32[]) ->
     for y in half..screen_h
         for x in 0..screen_w
             fb[y * screen_w + x] = floor_c
+    return
+
+// ============================================================
+// Sprite rendering
+// ============================================================
+
+let draw_sprites = (w: world*, fb: uint32[], zbuf: float64[],
+                    sprite_tex: uint32[], num_spr_tex: int32) ->
+    let px = w->p.x
+    let py = w->p.y
+    let dx = w->p.dir_x
+    let dy = w->p.dir_y
+    let plx = w->p.plane_x
+    let ply = w->p.plane_y
+    let inv_det = 1.0 / (plx * dy - dx * ply)
+
+    // Sort sprites by distance (simple bubble sort, far first)
+    let order = alloc(int32[w->num_sprites] {})!
+    let dist = alloc(float64[w->num_sprites] {})!
+    for i in 0..w->num_sprites
+        order[i] = i
+        let sx = w->sprites[i].x - px
+        let sy = w->sprites[i].y - py
+        dist[i] = sx * sx + sy * sy
+    for i in 0..w->num_sprites
+        for j in (i + 1)..w->num_sprites
+            if dist[order[j]] > dist[order[i]] then
+                let tmp = order[i]
+                order[i] = order[j]
+                order[j] = tmp
+
+    for idx in 0..w->num_sprites
+        let si = order[idx]
+        let sx = w->sprites[si].x - px
+        let sy = w->sprites[si].y - py
+        let tx = inv_det * (dy * sx - dx * sy)
+        let ty = inv_det * (plx * sy - ply * sx)
+
+        if ty <= 0.1 then continue
+
+        let spr_screen_x = (int32) ((float64) (screen_w / 2) * (1.0 + tx / ty))
+        let spr_h = (int32) math.abs((float64) screen_h / ty)
+        let mut draw_sy = screen_h / 2 - spr_h / 2
+        let mut draw_ey = screen_h / 2 + spr_h / 2
+        if draw_sy < 0 then draw_sy = 0
+        if draw_ey >= screen_h then draw_ey = screen_h - 1
+        let draw_sx = spr_screen_x - spr_h / 2
+        let draw_ex = spr_screen_x + spr_h / 2
+
+        let spr_id = w->sprites[si].sprite_id
+        let has_tex = spr_id >= 0 && spr_id < num_spr_tex
+
+        for stripe in draw_sx..draw_ex
+            if stripe >= 0 && stripe < screen_w then
+                if ty < zbuf[stripe] then
+                    let tex_x = (stripe - draw_sx) * 64 / spr_h
+                    if tex_x >= 0 && tex_x < 64 then
+                        for y in draw_sy..draw_ey
+                            let tex_y = (y - (screen_h / 2 - spr_h / 2)) * 64 / spr_h
+                            if tex_y >= 0 && tex_y < 64 then
+                                let mut c = 0u32
+                                if has_tex then
+                                    c = sprite_tex[spr_id * tex_pixels + tex_x * 64 + tex_y]
+                                if c != 0u32 then
+                                    fb[y * screen_w + stripe] = c
     return
 
 // ============================================================
@@ -1019,17 +1159,22 @@ let main = (args: str[]) ->
     let screen_tex = sdl2.create_texture(ren, sdl2.pixel_argb8888,
                                          sdl2.tex_streaming, screen_w, screen_h)
     let fb = alloc(uint32[screen_w * screen_h] {})!
+    let zbuf = alloc(float64[screen_w] {})!
 
     // Try loading Wolf3D assets, fall back to procedural
     let palette = init_palette()
-    let vswap_result = load_vswap("demos/wolf-fc/data/VSWAP.WL6", palette)
+    let vswap_data = load_vswap("demos/wolf-fc/data/VSWAP.WL6", palette)
     let mut textures = alloc(uint32[4 * tex_pixels] {})!
     let mut num_tex = 4
-    match vswap_result with
-    | some(vtex) ->
-        textures = vtex
-        num_tex = (int32) vtex.len / tex_pixels
-        io.write("Loaded %d{num_tex} wall textures from VSWAP.WL6\n", stdout)
+    let mut sprite_tex = alloc(uint32[1] {})!
+    let mut num_spr_tex = 0
+    match vswap_data with
+    | some(vd) ->
+        textures = vd.wall_tex
+        num_tex = vd.num_walls
+        sprite_tex = vd.sprite_tex
+        num_spr_tex = vd.num_sprites
+        io.write("Loaded %d{num_tex} wall textures, %d{num_spr_tex} sprites from VSWAP.WL6\n", stdout)
     | none ->
         textures = gen_textures()
         io.write("VSWAP.WL6 not found, using procedural textures\n", stdout)
@@ -1173,7 +1318,8 @@ let main = (args: str[]) ->
 
         // --------- Render ---------
         clear_fb(fb)
-        cast_rays(w, fb, textures, num_tex)
+        cast_rays(w, fb, textures, num_tex, zbuf)
+        draw_sprites(w, fb, zbuf, sprite_tex, num_spr_tex)
         draw_minimap(w, fb, show_map)
         draw_hud(w, fb, fps)
 
