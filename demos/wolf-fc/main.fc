@@ -18,7 +18,6 @@ let screen_w = 640
 let screen_h = 400
 let tex_size = 64
 let tex_pixels = 4096
-let num_textures = 4
 let map_size = 24
 let move_speed = 0.05
 let rot_speed = 0.035
@@ -70,7 +69,316 @@ let darken = (c: uint32) ->
     (c & (255u32 << 24)) | ((r >> 1) << 16) | ((g >> 1) << 8) | (b >> 1)
 
 // ============================================================
-// Procedural textures
+// Binary read helpers
+// ============================================================
+
+let read_u16 = (buf: uint8[], off: int32) ->
+    (int32) buf[off] | ((int32) buf[off + 1] << 8)
+
+let read_i32 = (buf: uint8[], off: int32) ->
+    (int32) buf[off] | ((int32) buf[off + 1] << 8) | ((int32) buf[off + 2] << 16) | ((int32) buf[off + 3] << 24)
+
+// ============================================================
+// Wolf3D VGA palette (6-bit values, multiplied by 4 for 8-bit)
+// ============================================================
+
+let sp = (pal: uint32[], i: int32, r: int32, g: int32, b: int32) ->
+    pal[i] = pack_argb(r * 4, g * 4, b * 4)
+    return
+
+let init_palette = () ->
+    let pal = alloc(uint32[256] {})!
+    sp(pal, 0, 0, 0, 0)
+    sp(pal, 1, 0, 0, 42)
+    sp(pal, 2, 0, 42, 0)
+    sp(pal, 3, 0, 42, 42)
+    sp(pal, 4, 42, 0, 0)
+    sp(pal, 5, 42, 0, 42)
+    sp(pal, 6, 42, 21, 0)
+    sp(pal, 7, 42, 42, 42)
+    sp(pal, 8, 21, 21, 21)
+    sp(pal, 9, 21, 21, 63)
+    sp(pal, 10, 21, 63, 21)
+    sp(pal, 11, 21, 63, 63)
+    sp(pal, 12, 63, 21, 21)
+    sp(pal, 13, 63, 21, 63)
+    sp(pal, 14, 63, 63, 21)
+    sp(pal, 15, 63, 63, 63)
+    sp(pal, 16, 59, 59, 59)
+    sp(pal, 17, 55, 55, 55)
+    sp(pal, 18, 52, 52, 52)
+    sp(pal, 19, 48, 48, 48)
+    sp(pal, 20, 45, 45, 45)
+    sp(pal, 21, 42, 42, 42)
+    sp(pal, 22, 38, 38, 38)
+    sp(pal, 23, 35, 35, 35)
+    sp(pal, 24, 31, 31, 31)
+    sp(pal, 25, 28, 28, 28)
+    sp(pal, 26, 25, 25, 25)
+    sp(pal, 27, 21, 21, 21)
+    sp(pal, 28, 18, 18, 18)
+    sp(pal, 29, 14, 14, 14)
+    sp(pal, 30, 11, 11, 11)
+    sp(pal, 31, 8, 8, 8)
+    sp(pal, 32, 63, 0, 0)
+    sp(pal, 33, 59, 0, 0)
+    sp(pal, 34, 56, 0, 0)
+    sp(pal, 35, 53, 0, 0)
+    sp(pal, 36, 50, 0, 0)
+    sp(pal, 37, 47, 0, 0)
+    sp(pal, 38, 44, 0, 0)
+    sp(pal, 39, 41, 0, 0)
+    sp(pal, 40, 38, 0, 0)
+    sp(pal, 41, 34, 0, 0)
+    sp(pal, 42, 31, 0, 0)
+    sp(pal, 43, 28, 0, 0)
+    sp(pal, 44, 25, 0, 0)
+    sp(pal, 45, 22, 0, 0)
+    sp(pal, 46, 19, 0, 0)
+    sp(pal, 47, 16, 0, 0)
+    sp(pal, 48, 63, 54, 54)
+    sp(pal, 49, 63, 46, 46)
+    sp(pal, 50, 63, 39, 39)
+    sp(pal, 51, 63, 31, 31)
+    sp(pal, 52, 63, 23, 23)
+    sp(pal, 53, 63, 16, 16)
+    sp(pal, 54, 63, 8, 8)
+    sp(pal, 55, 63, 0, 0)
+    sp(pal, 56, 63, 42, 23)
+    sp(pal, 57, 63, 38, 16)
+    sp(pal, 58, 63, 34, 8)
+    sp(pal, 59, 63, 30, 0)
+    sp(pal, 60, 57, 27, 0)
+    sp(pal, 61, 51, 24, 0)
+    sp(pal, 62, 45, 21, 0)
+    sp(pal, 63, 39, 19, 0)
+    sp(pal, 64, 63, 63, 54)
+    sp(pal, 65, 63, 63, 46)
+    sp(pal, 66, 63, 63, 39)
+    sp(pal, 67, 63, 63, 31)
+    sp(pal, 68, 63, 62, 23)
+    sp(pal, 69, 63, 61, 16)
+    sp(pal, 70, 63, 61, 8)
+    sp(pal, 71, 63, 61, 0)
+    sp(pal, 72, 57, 54, 0)
+    sp(pal, 73, 51, 49, 0)
+    sp(pal, 74, 45, 43, 0)
+    sp(pal, 75, 39, 39, 0)
+    sp(pal, 76, 33, 33, 0)
+    sp(pal, 77, 28, 27, 0)
+    sp(pal, 78, 22, 21, 0)
+    sp(pal, 79, 16, 16, 0)
+    sp(pal, 80, 52, 63, 23)
+    sp(pal, 81, 49, 63, 16)
+    sp(pal, 82, 45, 63, 8)
+    sp(pal, 83, 40, 63, 0)
+    sp(pal, 84, 36, 57, 0)
+    sp(pal, 85, 32, 51, 0)
+    sp(pal, 86, 29, 45, 0)
+    sp(pal, 87, 24, 39, 0)
+    sp(pal, 88, 54, 63, 54)
+    sp(pal, 89, 47, 63, 46)
+    sp(pal, 90, 39, 63, 39)
+    sp(pal, 91, 32, 63, 31)
+    sp(pal, 92, 24, 63, 23)
+    sp(pal, 93, 16, 63, 16)
+    sp(pal, 94, 8, 63, 8)
+    sp(pal, 95, 0, 63, 0)
+    sp(pal, 96, 0, 63, 0)
+    sp(pal, 97, 0, 59, 0)
+    sp(pal, 98, 0, 56, 0)
+    sp(pal, 99, 0, 53, 0)
+    sp(pal, 100, 1, 50, 0)
+    sp(pal, 101, 1, 47, 0)
+    sp(pal, 102, 1, 44, 0)
+    sp(pal, 103, 1, 41, 0)
+    sp(pal, 104, 1, 38, 0)
+    sp(pal, 105, 1, 34, 0)
+    sp(pal, 106, 1, 31, 0)
+    sp(pal, 107, 1, 28, 0)
+    sp(pal, 108, 1, 25, 0)
+    sp(pal, 109, 1, 22, 0)
+    sp(pal, 110, 1, 19, 0)
+    sp(pal, 111, 1, 16, 0)
+    sp(pal, 112, 54, 63, 63)
+    sp(pal, 113, 46, 63, 63)
+    sp(pal, 114, 39, 63, 63)
+    sp(pal, 115, 31, 63, 62)
+    sp(pal, 116, 23, 63, 63)
+    sp(pal, 117, 16, 63, 63)
+    sp(pal, 118, 8, 63, 63)
+    sp(pal, 119, 0, 63, 63)
+    sp(pal, 120, 0, 57, 57)
+    sp(pal, 121, 0, 51, 51)
+    sp(pal, 122, 0, 45, 45)
+    sp(pal, 123, 0, 39, 39)
+    sp(pal, 124, 0, 33, 33)
+    sp(pal, 125, 0, 28, 28)
+    sp(pal, 126, 0, 22, 22)
+    sp(pal, 127, 0, 16, 16)
+    sp(pal, 128, 23, 47, 63)
+    sp(pal, 129, 16, 44, 63)
+    sp(pal, 130, 8, 42, 63)
+    sp(pal, 131, 0, 39, 63)
+    sp(pal, 132, 0, 35, 57)
+    sp(pal, 133, 0, 31, 51)
+    sp(pal, 134, 0, 27, 45)
+    sp(pal, 135, 0, 23, 39)
+    sp(pal, 136, 54, 54, 63)
+    sp(pal, 137, 46, 47, 63)
+    sp(pal, 138, 39, 39, 63)
+    sp(pal, 139, 31, 32, 63)
+    sp(pal, 140, 23, 24, 63)
+    sp(pal, 141, 16, 16, 63)
+    sp(pal, 142, 8, 9, 63)
+    sp(pal, 143, 0, 1, 63)
+    sp(pal, 144, 0, 0, 63)
+    sp(pal, 145, 0, 0, 59)
+    sp(pal, 146, 0, 0, 56)
+    sp(pal, 147, 0, 0, 53)
+    sp(pal, 148, 0, 0, 50)
+    sp(pal, 149, 0, 0, 47)
+    sp(pal, 150, 0, 0, 44)
+    sp(pal, 151, 0, 0, 41)
+    sp(pal, 152, 0, 0, 38)
+    sp(pal, 153, 0, 0, 34)
+    sp(pal, 154, 0, 0, 31)
+    sp(pal, 155, 0, 0, 28)
+    sp(pal, 156, 0, 0, 25)
+    sp(pal, 157, 0, 0, 22)
+    sp(pal, 158, 0, 0, 19)
+    sp(pal, 159, 0, 0, 16)
+    sp(pal, 160, 10, 10, 10)
+    sp(pal, 161, 63, 56, 13)
+    sp(pal, 162, 63, 53, 9)
+    sp(pal, 163, 63, 51, 6)
+    sp(pal, 164, 63, 48, 2)
+    sp(pal, 165, 63, 45, 0)
+    sp(pal, 166, 45, 8, 63)
+    sp(pal, 167, 42, 0, 63)
+    sp(pal, 168, 38, 0, 57)
+    sp(pal, 169, 32, 0, 51)
+    sp(pal, 170, 29, 0, 45)
+    sp(pal, 171, 24, 0, 39)
+    sp(pal, 172, 20, 0, 33)
+    sp(pal, 173, 17, 0, 28)
+    sp(pal, 174, 13, 0, 22)
+    sp(pal, 175, 10, 0, 16)
+    sp(pal, 176, 63, 54, 63)
+    sp(pal, 177, 63, 46, 63)
+    sp(pal, 178, 63, 39, 63)
+    sp(pal, 179, 63, 31, 63)
+    sp(pal, 180, 63, 23, 63)
+    sp(pal, 181, 63, 16, 63)
+    sp(pal, 182, 63, 8, 63)
+    sp(pal, 183, 63, 0, 63)
+    sp(pal, 184, 56, 0, 57)
+    sp(pal, 185, 50, 0, 51)
+    sp(pal, 186, 45, 0, 45)
+    sp(pal, 187, 39, 0, 39)
+    sp(pal, 188, 33, 0, 33)
+    sp(pal, 189, 27, 0, 28)
+    sp(pal, 190, 22, 0, 22)
+    sp(pal, 191, 16, 0, 16)
+    sp(pal, 192, 63, 58, 55)
+    sp(pal, 193, 63, 56, 52)
+    sp(pal, 194, 63, 54, 49)
+    sp(pal, 195, 63, 53, 47)
+    sp(pal, 196, 63, 51, 44)
+    sp(pal, 197, 63, 49, 41)
+    sp(pal, 198, 63, 47, 39)
+    sp(pal, 199, 63, 46, 36)
+    sp(pal, 200, 63, 44, 32)
+    sp(pal, 201, 63, 41, 28)
+    sp(pal, 202, 63, 39, 24)
+    sp(pal, 203, 60, 37, 23)
+    sp(pal, 204, 58, 35, 22)
+    sp(pal, 205, 55, 34, 21)
+    sp(pal, 206, 52, 32, 20)
+    sp(pal, 207, 50, 31, 19)
+    sp(pal, 208, 47, 30, 18)
+    sp(pal, 209, 45, 28, 17)
+    sp(pal, 210, 42, 26, 16)
+    sp(pal, 211, 40, 25, 15)
+    sp(pal, 212, 39, 24, 14)
+    sp(pal, 213, 36, 23, 13)
+    sp(pal, 214, 34, 22, 12)
+    sp(pal, 215, 32, 20, 11)
+    sp(pal, 216, 29, 19, 10)
+    sp(pal, 217, 27, 18, 9)
+    sp(pal, 218, 23, 16, 8)
+    sp(pal, 219, 21, 15, 7)
+    sp(pal, 220, 18, 14, 6)
+    sp(pal, 221, 16, 12, 6)
+    sp(pal, 222, 14, 11, 5)
+    sp(pal, 223, 10, 8, 3)
+    sp(pal, 224, 24, 0, 25)
+    sp(pal, 225, 0, 25, 25)
+    sp(pal, 226, 0, 24, 24)
+    sp(pal, 227, 0, 0, 7)
+    sp(pal, 228, 0, 0, 11)
+    sp(pal, 229, 12, 9, 4)
+    sp(pal, 230, 18, 0, 18)
+    sp(pal, 231, 20, 0, 20)
+    sp(pal, 232, 0, 0, 13)
+    sp(pal, 233, 7, 7, 7)
+    sp(pal, 234, 19, 19, 19)
+    sp(pal, 235, 23, 23, 23)
+    sp(pal, 236, 16, 16, 16)
+    sp(pal, 237, 12, 12, 12)
+    sp(pal, 238, 13, 13, 13)
+    sp(pal, 239, 54, 61, 61)
+    sp(pal, 240, 46, 58, 58)
+    sp(pal, 241, 39, 55, 55)
+    sp(pal, 242, 29, 50, 50)
+    sp(pal, 243, 18, 48, 48)
+    sp(pal, 244, 8, 45, 45)
+    sp(pal, 245, 8, 44, 44)
+    sp(pal, 246, 0, 41, 41)
+    sp(pal, 247, 0, 38, 38)
+    sp(pal, 248, 0, 35, 35)
+    sp(pal, 249, 0, 33, 33)
+    sp(pal, 250, 0, 31, 31)
+    sp(pal, 251, 0, 30, 30)
+    sp(pal, 252, 0, 29, 29)
+    sp(pal, 253, 0, 28, 28)
+    sp(pal, 254, 0, 27, 27)
+    sp(pal, 255, 38, 0, 34)
+    pal
+
+// ============================================================
+// VSWAP loader — reads wall textures from Wolf3D data file
+// ============================================================
+
+let load_vswap = (path: const str, palette: uint32[]) ->
+    match io.open(path, "rb") with
+    | none -> default(uint32[]?)
+    | some(f) ->
+        defer io.close(f)
+        // Header: 3 uint16 values
+        let hdr = alloc(uint8[6] {})!
+        io.read(hdr, 6i64, f)
+        let num_chunks = read_u16(hdr, 0)
+        let sprite_start = read_u16(hdr, 2)
+        let num_walls = sprite_start
+        // Read chunk offsets
+        let obuf = alloc(uint8[num_chunks * 4] {})!
+        io.read(obuf, (int64) (num_chunks * 4), f)
+        // Skip chunk lengths (wall pages are always 4096 bytes)
+        io.seek(f, (int64) (num_chunks * 2), io.seek_cur)
+        // Load wall textures: each is 4096 bytes, column-major, palette-indexed
+        let tex = alloc(uint32[num_walls * tex_pixels] {})!
+        let page = alloc(uint8[4096] {})!
+        for i in 0..num_walls
+            let off = read_i32(obuf, i * 4)
+            io.seek(f, (int64) off, io.seek_set)
+            io.read(page, 4096i64, f)
+            for px in 0..4096
+                tex[i * tex_pixels + px] = palette[(int32) page[px]]
+        some(tex)
+
+// ============================================================
+// Procedural textures (fallback when VSWAP not available)
 // ============================================================
 
 let gen_brick = (tex: uint32[], base: int32, r0: int32, g0: int32, b0: int32,
@@ -89,7 +397,7 @@ let gen_brick = (tex: uint32[], base: int32, r0: int32, g0: int32, b0: int32,
     return
 
 let gen_textures = () ->
-    let tex = alloc(uint32[num_textures * tex_pixels] {})!
+    let tex = alloc(uint32[4 * tex_pixels] {})!
     // 0: red brick
     gen_brick(tex, 0 * tex_pixels, 160, 50, 40, 16, 8, true)
     // 1: grey stone
@@ -156,7 +464,7 @@ let is_wall = (map: int32[], mx: int32, my: int32) ->
 // Raycasting
 // ============================================================
 
-let cast_rays = (w: world*, fb: uint32[], textures: uint32[]) ->
+let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32) ->
     let px = w->p.x
     let py = w->p.y
     let dx = w->p.dir_x
@@ -219,10 +527,13 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[]) ->
         if ds < 0 then ds = 0
         if de >= screen_h then de = screen_h - 1
 
-        // Which texture
+        // Which texture — Wolf3D: tile T uses pages (T-1)*2 (N/S) and (T-1)*2+1 (E/W)
         let in_bounds = map_x >= 0 && map_x < map_size && map_y >= 0 && map_y < map_size
-        let raw_tid = if in_bounds then w->map[map_y * map_size + map_x] - 1 else 0
-        let tid = if raw_tid >= 0 && raw_tid < num_textures then raw_tid else 0
+        let tile = if in_bounds then w->map[map_y * map_size + map_x] else 1
+        let mut raw_tid = 0
+        if tile >= 1 && tile <= 63 then
+            raw_tid = if side == 0 then (tile - 1) * 2 + 1 else (tile - 1) * 2
+        let tid = if raw_tid >= 0 && raw_tid < num_tex then raw_tid else 0
 
         // Texture X coordinate
         let mut wall_x = if side == 0 then py + perp * rdy else px + perp * rdx
@@ -528,8 +839,19 @@ let main = (args: str[]) ->
                                          sdl2.tex_streaming, screen_w, screen_h)
     let fb = alloc(uint32[screen_w * screen_h] {})!
 
-    // Generate procedural textures and map
-    let textures = gen_textures()
+    // Try loading Wolf3D assets, fall back to procedural
+    let palette = init_palette()
+    let vswap_result = load_vswap("demos/wolf-fc/data/VSWAP.WL6", palette)
+    let mut textures = alloc(uint32[4 * tex_pixels] {})!
+    let mut num_tex = 4
+    match vswap_result with
+    | some(vtex) ->
+        textures = vtex
+        num_tex = (int32) vtex.len / tex_pixels
+        io.write("Loaded %d{num_tex} wall textures from VSWAP.WL6\n", stdout)
+    | none ->
+        textures = gen_textures()
+        io.write("VSWAP.WL6 not found, using procedural textures\n", stdout)
     let map = init_map()
 
     // World state
@@ -659,7 +981,7 @@ let main = (args: str[]) ->
 
         // --------- Render ---------
         clear_fb(fb)
-        cast_rays(w, fb, textures)
+        cast_rays(w, fb, textures, num_tex)
         draw_minimap(w, fb, show_map)
         draw_hud(w, fb, fps)
 
