@@ -66,6 +66,8 @@ module sdl2 from "SDL2/SDL.h" =
     extern SDLK_m as key_m: int32
     extern SDLK_y as key_y: int32
     extern SDLK_v as key_v: int32
+    extern SDLK_PAGEUP as key_pageup: int32
+    extern SDLK_PAGEDOWN as key_pagedown: int32
     extern SDLK_LSHIFT as key_lshift: int32
     extern SDLK_TAB as key_tab: int32
     extern SDLK_LALT as key_lalt: int32

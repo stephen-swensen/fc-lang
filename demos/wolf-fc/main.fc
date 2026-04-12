@@ -60,6 +60,9 @@ struct world =
     map_h: int32
     sprites: game_sprite[]
     num_sprites: int32
+    level: int32
+    ceil_color: uint32
+    floor_color: uint32
 
 // ============================================================
 // Color helpers
@@ -620,6 +623,60 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
             true
 
 // ============================================================
+// Wolf3D ceiling colors (palette index per level, from WL_DEF.H)
+// ============================================================
+
+let set_level_colors = (w: world*, palette: uint32[]) ->
+    // Ceiling palette indices for all 60 levels
+    let ceil_idx = alloc(int32[60] {})!
+    // Episode 1
+    ceil_idx[0] = 29
+    ceil_idx[1] = 29
+    ceil_idx[2] = 29
+    ceil_idx[3] = 29
+    ceil_idx[4] = 29
+    ceil_idx[5] = 29
+    ceil_idx[6] = 29
+    ceil_idx[7] = 29
+    ceil_idx[8] = 29
+    ceil_idx[9] = 191
+    // Episode 2
+    ceil_idx[10] = 78
+    ceil_idx[11] = 78
+    ceil_idx[12] = 78
+    ceil_idx[13] = 29
+    ceil_idx[14] = 141
+    ceil_idx[15] = 78
+    ceil_idx[16] = 29
+    ceil_idx[17] = 45
+    ceil_idx[18] = 29
+    ceil_idx[19] = 141
+    // Episode 3
+    for i in 20..30
+        ceil_idx[i] = 29
+    // Episode 4
+    for i in 30..40
+        ceil_idx[i] = 181
+    // Episode 5
+    ceil_idx[40] = 29
+    ceil_idx[41] = 141
+    ceil_idx[42] = 29
+    ceil_idx[43] = 141
+    ceil_idx[44] = 29
+    ceil_idx[45] = 141
+    ceil_idx[46] = 29
+    ceil_idx[47] = 29
+    ceil_idx[48] = 29
+    ceil_idx[49] = 29
+    // Episode 6
+    for i in 50..60
+        ceil_idx[i] = 29
+    let li = if w->level >= 0 && w->level < 60 then w->level else 0
+    w->ceil_color = palette[ceil_idx[li]]
+    w->floor_color = palette[25]
+    return
+
+// ============================================================
 // Procedural textures (fallback when VSWAP not available)
 // ============================================================
 
@@ -812,9 +869,7 @@ let cast_rays = (w: world*, fb: uint32[], textures: uint32[], num_tex: int32, zb
 // Clear framebuffer (ceiling + floor gradient)
 // ============================================================
 
-let clear_fb = (fb: uint32[]) ->
-    let ceil_c = pack_argb(50, 50, 50)
-    let floor_c = pack_argb(90, 90, 90)
+let clear_fb = (fb: uint32[], ceil_c: uint32, floor_c: uint32) ->
     let half = screen_h / 2
     for y in 0..half
         for x in 0..screen_w
@@ -1024,7 +1079,7 @@ let draw_hud = (w: world*, fb: uint32[], fps: int32) ->
     // Status text
     draw_text_fb(fb, "HEALTH:%d{w->p.health}", 8, bar_y + 5, 2, red)
     draw_text_fb(fb, "AMMO:%d{w->p.ammo}", 220, bar_y + 5, 2, yellow)
-    draw_text_fb(fb, "SCORE:%d{w->p.score}", 400, bar_y + 5, 2, white)
+    draw_text_fb(fb, "LEVEL:%d{w->level + 1}", 380, bar_y + 5, 2, white)
     return
 
 // ============================================================
@@ -1189,6 +1244,8 @@ let main = (args: str[]) ->
     let map_loaded = load_level("demos/wolf-fc/data/MAPHEAD.WL6",
                                 "demos/wolf-fc/data/GAMEMAPS.WL6", 0, w)
     if map_loaded then
+        w->level = 0
+        set_level_colors(w, palette)
         io.write("Loaded Wolf3D level 1 (%d{w->map_w}x%d{w->map_h})\n", stdout)
         io.flush(stdout)
     if !map_loaded then
@@ -1202,6 +1259,8 @@ let main = (args: str[]) ->
         w->p.dir_y = 0.0
         w->p.plane_x = 0.0
         w->p.plane_y = 0.66
+        w->ceil_color = pack_argb(50, 50, 50)
+        w->floor_color = pack_argb(90, 90, 90)
 
     // Audio
     let mut desired = default(audio_spec)
@@ -1230,7 +1289,7 @@ let main = (args: str[]) ->
     let mut step_timer = 0
 
     io.write("Wolfenstein FC started.\n", stdout)
-    io.write("  Arrows: move   Z: run   X+Arrows: strafe   C: open   V: shoot   Tab: map\n", stdout)
+    io.write("  Arrows: move   Z: run   X+Arrows: strafe   C: open   V: shoot   Tab: map   PgUp/Dn: level\n", stdout)
 
     loop
         if !running then break
@@ -1286,6 +1345,20 @@ let main = (args: str[]) ->
                         sdl2.clear_audio(audio_dev)
                         sdl2.queue_audio(audio_dev, door_snd.data, door_snd.bytes)
                 if k == sdl2.key_tab then show_map = !show_map
+                if k == sdl2.key_pageup then
+                    if w->level < 59 then
+                        w->level = w->level + 1
+                        load_level("demos/wolf-fc/data/MAPHEAD.WL6",
+                                   "demos/wolf-fc/data/GAMEMAPS.WL6", w->level, w)
+                        set_level_colors(w, palette)
+                        io.write("Level %d{w->level + 1}\n", stdout)
+                if k == sdl2.key_pagedown then
+                    if w->level > 0 then
+                        w->level = w->level - 1
+                        load_level("demos/wolf-fc/data/MAPHEAD.WL6",
+                                   "demos/wolf-fc/data/GAMEMAPS.WL6", w->level, w)
+                        set_level_colors(w, palette)
+                        io.write("Level %d{w->level + 1}\n", stdout)
 
             if (int32) event.type == sdl2.keyup_event then
                 let k = event.key.keysym.sym
@@ -1317,7 +1390,7 @@ let main = (args: str[]) ->
         update_player(w)
 
         // --------- Render ---------
-        clear_fb(fb)
+        clear_fb(fb, w->ceil_color, w->floor_color)
         cast_rays(w, fb, textures, num_tex, zbuf)
         draw_sprites(w, fb, zbuf, sprite_tex, num_spr_tex)
         draw_minimap(w, fb, show_map)
