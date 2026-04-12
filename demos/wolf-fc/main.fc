@@ -62,6 +62,7 @@ struct world =
     map_h: int32
     sprites: game_sprite[]
     num_sprites: int32
+    pushwalls: bool[]
     level: int32
     ceil_color: uint32
     floor_color: uint32
@@ -576,6 +577,7 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
             w->map_w = 64
             w->map_h = 64
             w->map = alloc(int32[4096] {})!
+            w->pushwalls = alloc(bool[4096] {})!
             for i in 0..4096
                 w->map[i] = (int32) plane0[i]
 
@@ -601,10 +603,12 @@ let load_level = (head_path: const str, maps_path: const str, level: int32, w: w
                         spr_count = spr_count + 1
             w->sprites = alloc(game_sprite[spr_count + 1] {})!
             w->num_sprites = 0
-            // Second pass: fill sprites and find player
+            // Second pass: fill sprites, mark pushwalls, and find player
             for y in 0..64
                 for x in 0..64
                     let v = (int32) plane1[y * 64 + x]
+                    if v == 98 then
+                        w->pushwalls[y * 64 + x] = true
                     if v >= 23 && v <= 74 then
                         let si = w->num_sprites
                         w->sprites[si].x = (float64) x + 0.5
@@ -1172,10 +1176,30 @@ let try_open_door = (w: world*) ->
         let cx = (int32) (w->p.x + w->p.dir_x * (float64) dist)
         let cy = (int32) (w->p.y + w->p.dir_y * (float64) dist)
         if cx >= 0 && cx < w->map_w && cy >= 0 && cy < w->map_h then
-            let tile = w->map[cy * w->map_w + cx]
+            let idx = cy * w->map_w + cx
+            let tile = w->map[idx]
+            // Open doors
             if tile >= 90 && tile <= 101 then
-                w->map[cy * w->map_w + cx] = 108
+                w->map[idx] = 108
                 return
+            // Push walls: slide the wall 2 tiles in the direction the player faces
+            if tile >= 1 && tile <= 63 && w->pushwalls[idx] then
+                let dx = if w->p.dir_x > 0.5 then 1 else if w->p.dir_x < -0.5 then -1 else 0
+                let dy = if w->p.dir_y > 0.5 then 1 else if w->p.dir_y < -0.5 then -1 else 0
+                if dx != 0 || dy != 0 then
+                    // Slide the wall 2 cells
+                    let nx = cx + dx * 2
+                    let ny = cy + dy * 2
+                    if nx >= 0 && nx < w->map_w && ny >= 0 && ny < w->map_h then
+                        let dest = ny * w->map_w + nx
+                        let mid = (cy + dy) * w->map_w + (cx + dx)
+                        // Clear original and intermediate, place wall at destination
+                        w->map[idx] = 108
+                        if mid >= 0 && mid < w->map_w * w->map_h then
+                            w->map[mid] = 108
+                        w->map[dest] = tile
+                        w->pushwalls[idx] = false
+                        return
     return
 
 let update_player = (w: world*) ->
