@@ -9,6 +9,8 @@ import io from std::
 import text from std::
 import sys from std::
 import math from std::
+import opl2 from opl2::
+import chip from opl2::opl2
 
 // ============================================================
 // Constants
@@ -1247,187 +1249,9 @@ let load_digi_sound = (path: const str, sound_idx: int32) ->
             mem[i] = (int16) ((sample - 128) * 256)
         some(sound { data = (any*) mem, bytes = (uint32) (out_len * 2) })
 
+
 // ============================================================
-// OPL2 emulator (YM3812) — from public Yamaha spec
-// ============================================================
-
-struct opl2_chip =
-    op_phase: float64[18]
-    op_env: float64[18]
-    op_stage: int32[18]
-    op_tl: int32[18]
-    op_mult: int32[18]
-    op_ar: int32[18]
-    op_dr: int32[18]
-    op_sl: int32[18]
-    op_rr: int32[18]
-    op_wf: int32[18]
-    ch_fnum: int32[9]
-    ch_block: int32[9]
-    ch_key: bool[9]
-    ch_fb: int32[9]
-    ch_add: bool[9]
-    ch_prev0: float64[9]
-    ch_prev1: float64[9]
-    rate: float64
-
-let opl2_init = (sample_rate: float64) ->
-    let chip = alloc(opl2_chip)!
-    chip->rate = sample_rate
-    for i in 0..18
-        chip->op_tl[i] = 63
-        chip->op_mult[i] = 1
-    chip
-
-let op_index = (offset: int32) ->
-    let group = offset / 8
-    let slot = offset % 8
-    if group > 2 || slot > 5 then -1
-    else
-        let ch = group * 3 + slot % 3
-        let op = slot / 3
-        ch * 2 + op
-
-let opl2_write = (chip: opl2_chip*, reg: int32, val: int32) ->
-    let base = reg & 240
-    let off = reg & 31
-    if base == 32 then
-        let idx = op_index(off)
-        if idx >= 0 then chip->op_mult[idx] = val & 15
-    if base == 64 then
-        let idx = op_index(off)
-        if idx >= 0 then chip->op_tl[idx] = val & 63
-    if base == 96 then
-        let idx = op_index(off)
-        if idx >= 0 then
-            chip->op_ar[idx] = (val >> 4) & 15
-            chip->op_dr[idx] = val & 15
-    if base == 128 then
-        let idx = op_index(off)
-        if idx >= 0 then
-            chip->op_sl[idx] = (val >> 4) & 15
-            chip->op_rr[idx] = val & 15
-    if base == 224 then
-        let idx = op_index(off)
-        if idx >= 0 then chip->op_wf[idx] = val & 3
-    let ci = reg & 15
-    if base == 160 && ci < 9 then
-        chip->ch_fnum[ci] = (chip->ch_fnum[ci] & 768) | (val & 255)
-    if base == 176 && ci < 9 then
-        chip->ch_fnum[ci] = (chip->ch_fnum[ci] & 255) | ((val & 3) << 8)
-        chip->ch_block[ci] = (val >> 2) & 7
-        let new_key = (val & 32) != 0
-        if new_key && !chip->ch_key[ci] then
-            chip->op_stage[ci * 2] = 1
-            chip->op_env[ci * 2] = 0.0
-            chip->op_phase[ci * 2] = 0.0
-            chip->op_stage[ci * 2 + 1] = 1
-            chip->op_env[ci * 2 + 1] = 0.0
-            chip->op_phase[ci * 2 + 1] = 0.0
-        if !new_key && chip->ch_key[ci] then
-            if chip->op_stage[ci * 2] > 0 then
-                chip->op_stage[ci * 2] = 4
-            if chip->op_stage[ci * 2 + 1] > 0 then
-                chip->op_stage[ci * 2 + 1] = 4
-        chip->ch_key[ci] = new_key
-    if base == 192 && ci < 9 then
-        chip->ch_fb[ci] = (val >> 1) & 7
-        chip->ch_add[ci] = (val & 1) != 0
-    return
-
-let opl2_wave = (phase: float64, wf: int32) ->
-    let p = phase * 6.2831853071795864
-    let s = math.sin(p)
-    if wf == 0 then s
-    else if wf == 1 then if phase < 0.5 then s else 0.0
-    else if wf == 2 then math.abs(s)
-    else if phase < 0.25 then s else 0.0
-
-let opl2_env_step = (chip: opl2_chip*, idx: int32) ->
-    let stage = chip->op_stage[idx]
-    if stage == 0 then return
-    let mut env = chip->op_env[idx]
-    let rs = 1.0 / chip->rate
-    if stage == 1 then
-        let ar = chip->op_ar[idx]
-        if ar == 0 then return
-        env = env + (float64) ar * 320.0 * rs
-        if env >= 1.0 then
-            env = 1.0
-            chip->op_stage[idx] = 2
-    if stage == 2 then
-        let dr = chip->op_dr[idx]
-        let target = 1.0 - (float64) chip->op_sl[idx] / 15.0
-        if dr == 0 then
-            chip->op_stage[idx] = 3
-        else
-            env = env - (float64) dr * 80.0 * rs
-            if env <= target then
-                env = target
-                chip->op_stage[idx] = 3
-    if stage == 4 then
-        let rr = chip->op_rr[idx]
-        if rr == 0 then
-            env = 0.0
-            chip->op_stage[idx] = 0
-        else
-            env = env - (float64) rr * 80.0 * rs
-            if env <= 0.0 then
-                env = 0.0
-                chip->op_stage[idx] = 0
-    chip->op_env[idx] = env
-    return
-
-let opl2_mult_val = (m: int32) ->
-    if m == 0 then 0.5
-    else if m == 11 then 10.0
-    else if m == 13 then 12.0
-    else if m == 14 then 15.0
-    else (float64) m
-
-let opl2_sample = (chip: opl2_chip*) ->
-    let mut out = 0.0
-    for ch in 0..9
-        let fnum = chip->ch_fnum[ch]
-        let block = chip->ch_block[ch]
-        let base_freq = (float64) fnum * math.pow(2.0, (float64) (block - 1)) * 49716.0 / 1048576.0
-        let mi = ch * 2
-        let ci = ch * 2 + 1
-        opl2_env_step(chip, mi)
-        opl2_env_step(chip, ci)
-        // Modulator
-        let mf = base_freq * opl2_mult_val(chip->op_mult[mi])
-        chip->op_phase[mi] = chip->op_phase[mi] + mf / chip->rate
-        if chip->op_phase[mi] >= 1.0 then
-            chip->op_phase[mi] = chip->op_phase[mi] - 1.0
-        let mtl = (float64) chip->op_tl[mi] / 63.0
-        let mvol = chip->op_env[mi] * (1.0 - mtl)
-        let fb = chip->ch_fb[ch]
-        let mut fbv = 0.0
-        if fb > 0 then
-            fbv = (chip->ch_prev0[ch] + chip->ch_prev1[ch]) / 2.0 / math.pow(2.0, (float64) (8 - fb))
-        let mp = chip->op_phase[mi] + fbv
-        let mout = opl2_wave(mp - math.floor(mp), chip->op_wf[mi]) * mvol
-        chip->ch_prev1[ch] = chip->ch_prev0[ch]
-        chip->ch_prev0[ch] = mout
-        // Carrier
-        let cf = base_freq * opl2_mult_val(chip->op_mult[ci])
-        let ctl = (float64) chip->op_tl[ci] / 63.0
-        let cvol = chip->op_env[ci] * (1.0 - ctl)
-        chip->op_phase[ci] = chip->op_phase[ci] + cf / chip->rate
-        if chip->op_phase[ci] >= 1.0 then
-            chip->op_phase[ci] = chip->op_phase[ci] - 1.0
-        if chip->ch_add[ch] then
-            let cout = opl2_wave(chip->op_phase[ci], chip->op_wf[ci]) * cvol
-            out = out + mout + cout
-        else
-            let fmp = chip->op_phase[ci] + mout * 0.5
-            let cout = opl2_wave(fmp - math.floor(fmp), chip->op_wf[ci]) * cvol
-            out = out + cout
-    if out > 1.0 then out = 1.0
-    if out < -1.0 then out = -1.0
-    (int16) (out * 16000.0)
-
+// IMF music loading and pre-rendering (uses opl2 module)
 // ============================================================
 // IMF music loading and pre-rendering
 // ============================================================
@@ -1469,18 +1293,18 @@ let render_imf_track = (head_path: const str, data_path: const str, track: int32
             let spt = rate / 700
             let total_samples = total_ticks * spt + rate
             let mem = alloc(int16, (usize) total_samples)!
-            let chip = opl2_init((float64) rate)
+            let opl = opl2.init((float64) rate)
             let mut sample_pos = 0
             for i in 0..num_entries
                 let reg = (int32) imf[i * 4]
                 let val = (int32) imf[i * 4 + 1]
                 let delay = read_u16(imf, i * 4 + 2)
                 if reg > 0 then
-                    opl2_write(chip, reg, val)
+                    opl2.write(opl, reg, val)
                 let delay_samples = delay * spt
                 for s in 0..delay_samples
                     if sample_pos < total_samples then
-                        mem[sample_pos] = opl2_sample(chip)
+                        mem[sample_pos] = opl2.sample(opl)
                         sample_pos = sample_pos + 1
             some(sound { data = (any*) mem, bytes = (uint32) (sample_pos * 2) })
 

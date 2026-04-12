@@ -1,0 +1,184 @@
+// Minimal OPL2 (YM3812) emulator for Wolf3D IMF music playback.
+// Written from scratch based on the publicly documented Yamaha YM3812 spec.
+// Simplified envelope and phase model — not bit-accurate but sounds recognizable.
+
+namespace opl2::
+
+module opl2 =
+    import math from std::
+
+    struct chip =
+        op_phase: float64[18]
+        op_env: float64[18]
+        op_stage: int32[18]
+        op_tl: int32[18]
+        op_mult: int32[18]
+        op_ar: int32[18]
+        op_dr: int32[18]
+        op_sl: int32[18]
+        op_rr: int32[18]
+        op_wf: int32[18]
+        ch_fnum: int32[9]
+        ch_block: int32[9]
+        ch_key: bool[9]
+        ch_fb: int32[9]
+        ch_add: bool[9]
+        ch_prev0: float64[9]
+        ch_prev1: float64[9]
+        rate: float64
+
+    let init = (sample_rate: float64) ->
+        let c = alloc(chip)!
+        c->rate = sample_rate
+        for i in 0..18
+            c->op_tl[i] = 63
+            c->op_mult[i] = 1
+        c
+
+    // Register offset -> operator index (channel*2 + op), or -1 if invalid
+    let op_idx = (offset: int32) ->
+        let group = offset / 8
+        let slot = offset % 8
+        if group > 2 || slot > 5 then -1
+        else
+            let ch = group * 3 + slot % 3
+            let op = slot / 3
+            ch * 2 + op
+
+    let write = (c: chip*, reg: int32, val: int32) ->
+        let base = reg & 240
+        let off = reg & 31
+        if base == 32 then
+            let idx = op_idx(off)
+            if idx >= 0 then c->op_mult[idx] = val & 15
+        if base == 64 then
+            let idx = op_idx(off)
+            if idx >= 0 then c->op_tl[idx] = val & 63
+        if base == 96 then
+            let idx = op_idx(off)
+            if idx >= 0 then
+                c->op_ar[idx] = (val >> 4) & 15
+                c->op_dr[idx] = val & 15
+        if base == 128 then
+            let idx = op_idx(off)
+            if idx >= 0 then
+                c->op_sl[idx] = (val >> 4) & 15
+                c->op_rr[idx] = val & 15
+        if base == 224 then
+            let idx = op_idx(off)
+            if idx >= 0 then c->op_wf[idx] = val & 3
+        let ci = reg & 15
+        if base == 160 && ci < 9 then
+            c->ch_fnum[ci] = (c->ch_fnum[ci] & 768) | (val & 255)
+        if base == 176 && ci < 9 then
+            c->ch_fnum[ci] = (c->ch_fnum[ci] & 255) | ((val & 3) << 8)
+            c->ch_block[ci] = (val >> 2) & 7
+            let new_key = (val & 32) != 0
+            if new_key && !c->ch_key[ci] then
+                c->op_stage[ci * 2] = 1
+                c->op_env[ci * 2] = 0.0
+                c->op_phase[ci * 2] = 0.0
+                c->op_stage[ci * 2 + 1] = 1
+                c->op_env[ci * 2 + 1] = 0.0
+                c->op_phase[ci * 2 + 1] = 0.0
+            if !new_key && c->ch_key[ci] then
+                if c->op_stage[ci * 2] > 0 then
+                    c->op_stage[ci * 2] = 4
+                if c->op_stage[ci * 2 + 1] > 0 then
+                    c->op_stage[ci * 2 + 1] = 4
+            c->ch_key[ci] = new_key
+        if base == 192 && ci < 9 then
+            c->ch_fb[ci] = (val >> 1) & 7
+            c->ch_add[ci] = (val & 1) != 0
+        return
+
+    let wave = (phase: float64, wf: int32) ->
+        let p = phase * 6.2831853071795864
+        let s = math.sin(p)
+        if wf == 0 then s
+        else if wf == 1 then if phase < 0.5 then s else 0.0
+        else if wf == 2 then math.abs(s)
+        else if phase < 0.25 then s else 0.0
+
+    let env_step = (c: chip*, idx: int32) ->
+        let stage = c->op_stage[idx]
+        if stage == 0 then return
+        let mut env = c->op_env[idx]
+        let rs = 1.0 / c->rate
+        if stage == 1 then
+            let ar = c->op_ar[idx]
+            if ar == 0 then return
+            env = env + (float64) ar * 320.0 * rs
+            if env >= 1.0 then
+                env = 1.0
+                c->op_stage[idx] = 2
+        if stage == 2 then
+            let dr = c->op_dr[idx]
+            let target = 1.0 - (float64) c->op_sl[idx] / 15.0
+            if dr == 0 then
+                c->op_stage[idx] = 3
+            else
+                env = env - (float64) dr * 80.0 * rs
+                if env <= target then
+                    env = target
+                    c->op_stage[idx] = 3
+        if stage == 4 then
+            let rr = c->op_rr[idx]
+            if rr == 0 then
+                env = 0.0
+                c->op_stage[idx] = 0
+            else
+                env = env - (float64) rr * 80.0 * rs
+                if env <= 0.0 then
+                    env = 0.0
+                    c->op_stage[idx] = 0
+        c->op_env[idx] = env
+        return
+
+    let mult_val = (m: int32) ->
+        if m == 0 then 0.5
+        else if m == 11 then 10.0
+        else if m == 13 then 12.0
+        else if m == 14 then 15.0
+        else (float64) m
+
+    let sample = (c: chip*) ->
+        let mut out = 0.0
+        for ch in 0..9
+            let fnum = c->ch_fnum[ch]
+            let block = c->ch_block[ch]
+            let base_freq = (float64) fnum * math.pow(2.0, (float64) (block - 1)) * 49716.0 / 1048576.0
+            let mi = ch * 2
+            let ci = ch * 2 + 1
+            env_step(c, mi)
+            env_step(c, ci)
+            let mf = base_freq * mult_val(c->op_mult[mi])
+            c->op_phase[mi] = c->op_phase[mi] + mf / c->rate
+            if c->op_phase[mi] >= 1.0 then
+                c->op_phase[mi] = c->op_phase[mi] - 1.0
+            let mtl = (float64) c->op_tl[mi] / 63.0
+            let mvol = c->op_env[mi] * (1.0 - mtl)
+            let fb = c->ch_fb[ch]
+            let mut fbv = 0.0
+            if fb > 0 then
+                fbv = (c->ch_prev0[ch] + c->ch_prev1[ch]) / 2.0 / math.pow(2.0, (float64) (8 - fb))
+            let mp = c->op_phase[mi] + fbv
+            let mout = wave(mp - math.floor(mp), c->op_wf[mi]) * mvol
+            c->ch_prev1[ch] = c->ch_prev0[ch]
+            c->ch_prev0[ch] = mout
+            let cf = base_freq * mult_val(c->op_mult[ci])
+            let ctl = (float64) c->op_tl[ci] / 63.0
+            let cvol = c->op_env[ci] * (1.0 - ctl)
+            c->op_phase[ci] = c->op_phase[ci] + cf / c->rate
+            if c->op_phase[ci] >= 1.0 then
+                c->op_phase[ci] = c->op_phase[ci] - 1.0
+            if c->ch_add[ch] then
+                let cout = wave(c->op_phase[ci], c->op_wf[ci]) * cvol
+                out = out + mout + cout
+            else
+                let fmp = c->op_phase[ci] + mout * 0.5
+                let cout = wave(fmp - math.floor(fmp), c->op_wf[ci]) * cvol
+                out = out + cout
+        if out > 1.0 then out = 1.0
+        if out < -1.0 then out = -1.0
+        (int16) (out * 16000.0)
