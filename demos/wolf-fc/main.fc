@@ -1,0 +1,696 @@
+// Wolfenstein FC — a Wolfenstein 3D engine written in FC using SDL2.
+// Software-rendered raycaster with textured walls and procedural audio.
+
+import sdl2 from sdl2::
+import rect from sdl2::sdl2
+import sdl_event from sdl2::sdl2
+import audio_spec from sdl2::sdl2
+import io from std::
+import text from std::
+import sys from std::
+import math from std::
+
+// ============================================================
+// Constants
+// ============================================================
+
+let screen_w = 640
+let screen_h = 400
+let tex_size = 64
+let tex_pixels = 4096
+let num_textures = 4
+let map_size = 24
+let move_speed = 0.05
+let rot_speed = 0.035
+let run_mult = 2.5
+
+// ============================================================
+// Types
+// ============================================================
+
+struct player =
+    x: float64
+    y: float64
+    dir_x: float64
+    dir_y: float64
+    plane_x: float64
+    plane_y: float64
+    health: int32
+    ammo: int32
+    score: int32
+
+struct input_state =
+    move_fwd: bool
+    move_back: bool
+    turn_left: bool
+    turn_right: bool
+    run_held: bool
+    fire_held: bool
+    alt_held: bool
+
+struct world =
+    p: player
+    input: input_state
+    map: int32[]
+
+// ============================================================
+// Color helpers
+// ============================================================
+
+let clamp255 = (v: int32) ->
+    if v < 0 then 0 else if v > 255 then 255 else v
+
+let pack_argb = (r: int32, g: int32, b: int32) ->
+    (255u32 << 24) | ((uint32) clamp255(r) << 16) | ((uint32) clamp255(g) << 8) | (uint32) clamp255(b)
+
+let darken = (c: uint32) ->
+    let r = (c >> 16) & 255u32
+    let g = (c >> 8) & 255u32
+    let b = c & 255u32
+    (c & (255u32 << 24)) | ((r >> 1) << 16) | ((g >> 1) << 8) | (b >> 1)
+
+// ============================================================
+// Procedural textures
+// ============================================================
+
+let gen_brick = (tex: uint32[], base: int32, r0: int32, g0: int32, b0: int32,
+                 bw: int32, bh: int32, do_offset: bool) ->
+    for x in 0..tex_size
+        for y in 0..tex_size
+            let row = y / bh
+            let off = if do_offset && row % 2 == 1 then bw / 2 else 0
+            let bx = (x + off) % bw
+            let by = y % bh
+            if bx == 0 || by == 0 then
+                tex[base + x * tex_size + y] = pack_argb(30, 30, 30)
+            else
+                let noise = ((x * 7 + y * 13) % 21) - 10
+                tex[base + x * tex_size + y] = pack_argb(r0 + noise, g0 + noise, b0 + noise)
+    return
+
+let gen_textures = () ->
+    let tex = alloc(uint32[num_textures * tex_pixels] {})!
+    // 0: red brick
+    gen_brick(tex, 0 * tex_pixels, 160, 50, 40, 16, 8, true)
+    // 1: grey stone
+    gen_brick(tex, 1 * tex_pixels, 130, 130, 130, 32, 16, true)
+    // 2: blue stone
+    gen_brick(tex, 2 * tex_pixels, 60, 60, 150, 16, 16, false)
+    // 3: wood planks
+    for x in 0..tex_size
+        for y in 0..tex_size
+            let edge = x % 8
+            if edge == 0 then
+                tex[3 * tex_pixels + x * tex_size + y] = pack_argb(40, 25, 10)
+            else
+                let noise = ((y * 3 + x * 7) % 15) - 7
+                let v = 130 + noise
+                tex[3 * tex_pixels + x * tex_size + y] = pack_argb(v, v * 3 / 4, v / 2)
+    tex
+
+// ============================================================
+// Map
+// ============================================================
+
+let set_row = (map: int32[], row: int32, data: const str) ->
+    for i in 0..map_size
+        if i < (int32) data.len then
+            let ch = data[i]
+            if ch >= '0' && ch <= '9' then
+                map[row * map_size + i] = (int32) (ch - '0')
+    return
+
+let init_map = () ->
+    let map = alloc(int32[map_size * map_size] {})!
+    set_row(map,  0, "111111111111111111111111")
+    set_row(map,  1, "100000100000000030000001")
+    set_row(map,  2, "100000000000000030000001")
+    set_row(map,  3, "100000100000000030000001")
+    set_row(map,  4, "111011100000000000000001")
+    set_row(map,  5, "100000000000000000022201")
+    set_row(map,  6, "100000000004440000020001")
+    set_row(map,  7, "100000000004040000020001")
+    set_row(map,  8, "100000000004040000022201")
+    set_row(map,  9, "100000000004440000000001")
+    set_row(map, 10, "100000000000000000000001")
+    set_row(map, 11, "100000000000000000000001")
+    set_row(map, 12, "100000000000000000000001")
+    set_row(map, 13, "100000000000000000000001")
+    set_row(map, 14, "133300000000000000000001")
+    set_row(map, 15, "100000000000000000044401")
+    set_row(map, 16, "100000000022200000040001")
+    set_row(map, 17, "100000000020200000040001")
+    set_row(map, 18, "100000000020200000044401")
+    set_row(map, 19, "100000000022200000000001")
+    set_row(map, 20, "100000000000000000000001")
+    set_row(map, 21, "100000000000000000000001")
+    set_row(map, 22, "100000000000000000000001")
+    set_row(map, 23, "111111111111111111111111")
+    map
+
+let is_wall = (map: int32[], mx: int32, my: int32) ->
+    if mx < 0 || mx >= map_size || my < 0 || my >= map_size then true
+    else map[my * map_size + mx] > 0
+
+// ============================================================
+// Raycasting
+// ============================================================
+
+let cast_rays = (w: world*, fb: uint32[], textures: uint32[]) ->
+    let px = w->p.x
+    let py = w->p.y
+    let dx = w->p.dir_x
+    let dy = w->p.dir_y
+    let plx = w->p.plane_x
+    let ply = w->p.plane_y
+
+    for col in 0..screen_w
+        let cam = 2.0 * (float64) col / (float64) screen_w - 1.0
+        let rdx = dx + plx * cam
+        let rdy = dy + ply * cam
+
+        let mut map_x = (int32) px
+        let mut map_y = (int32) py
+
+        let dd_x = math.abs(1.0 / rdx)
+        let dd_y = math.abs(1.0 / rdy)
+
+        let mut step_x = 0
+        let mut step_y = 0
+        let mut sd_x = 0.0
+        let mut sd_y = 0.0
+
+        if rdx < 0.0 then
+            step_x = -1
+            sd_x = (px - (float64) map_x) * dd_x
+        else
+            step_x = 1
+            sd_x = ((float64) map_x + 1.0 - px) * dd_x
+
+        if rdy < 0.0 then
+            step_y = -1
+            sd_y = (py - (float64) map_y) * dd_y
+        else
+            step_y = 1
+            sd_y = ((float64) map_y + 1.0 - py) * dd_y
+
+        let mut side = 0
+
+        // DDA traversal
+        loop
+            if sd_x < sd_y then
+                sd_x = sd_x + dd_x
+                map_x = map_x + step_x
+                side = 0
+            else
+                sd_y = sd_y + dd_y
+                map_y = map_y + step_y
+                side = 1
+            if map_x < 0 || map_x >= map_size || map_y < 0 || map_y >= map_size then
+                break
+            if w->map[map_y * map_size + map_x] > 0 then
+                break
+
+        // Perpendicular distance (avoids fisheye)
+        let perp = if side == 0 then sd_x - dd_x else sd_y - dd_y
+        let line_h = if perp > 0.001 then (int32) ((float64) screen_h / perp) else screen_h * 10
+        let mut ds = screen_h / 2 - line_h / 2
+        let mut de = screen_h / 2 + line_h / 2
+        if ds < 0 then ds = 0
+        if de >= screen_h then de = screen_h - 1
+
+        // Which texture
+        let in_bounds = map_x >= 0 && map_x < map_size && map_y >= 0 && map_y < map_size
+        let raw_tid = if in_bounds then w->map[map_y * map_size + map_x] - 1 else 0
+        let tid = if raw_tid >= 0 && raw_tid < num_textures then raw_tid else 0
+
+        // Texture X coordinate
+        let mut wall_x = if side == 0 then py + perp * rdy else px + perp * rdx
+        wall_x = wall_x - math.floor(wall_x)
+
+        let mut tx = (int32) (wall_x * (float64) tex_size)
+        if tx < 0 then tx = 0
+        if tx >= tex_size then tx = tex_size - 1
+
+        // Flip to avoid mirroring
+        if side == 0 && rdx > 0.0 then tx = tex_size - 1 - tx
+        if side == 1 && rdy < 0.0 then tx = tex_size - 1 - tx
+
+        // Draw the textured wall strip
+        let step_f = (float64) tex_size / (float64) line_h
+        let mut tex_pos = (float64) (ds - screen_h / 2 + line_h / 2) * step_f
+
+        for y in ds..(de + 1)
+            let mut ty = (int32) tex_pos
+            if ty < 0 then ty = 0
+            if ty >= tex_size then ty = tex_size - 1
+            tex_pos = tex_pos + step_f
+            let mut c = textures[tid * tex_pixels + tx * tex_size + ty]
+            if side == 1 then c = darken(c)
+            fb[y * screen_w + col] = c
+    return
+
+// ============================================================
+// Clear framebuffer (ceiling + floor gradient)
+// ============================================================
+
+let clear_fb = (fb: uint32[]) ->
+    let ceil_c = pack_argb(50, 50, 50)
+    let floor_c = pack_argb(90, 90, 90)
+    let half = screen_h / 2
+    for y in 0..half
+        for x in 0..screen_w
+            fb[y * screen_w + x] = ceil_c
+    for y in half..screen_h
+        for x in 0..screen_w
+            fb[y * screen_w + x] = floor_c
+    return
+
+// ============================================================
+// Minimap
+// ============================================================
+
+let draw_minimap = (w: world*, fb: uint32[], show: bool) ->
+    if !show then return
+    let s = 4
+    let ox = 8
+    let oy = 8
+
+    // Background
+    for my in 0..map_size
+        for mx in 0..map_size
+            let tile = w->map[my * map_size + mx]
+            let c = if tile == 1 then pack_argb(180, 60, 60)
+                    else if tile == 2 then pack_argb(140, 140, 140)
+                    else if tile == 3 then pack_argb(60, 60, 180)
+                    else if tile == 4 then pack_argb(140, 100, 50)
+                    else pack_argb(20, 20, 20)
+            for py in 0..s
+                for px in 0..s
+                    let fx = ox + mx * s + px
+                    let fy = oy + my * s + py
+                    if fx < screen_w && fy < screen_h then
+                        fb[fy * screen_w + fx] = c
+
+    // Player position
+    let ppx = ox + (int32) (w->p.x * (float64) s)
+    let ppy = oy + (int32) (w->p.y * (float64) s)
+    let pc = pack_argb(255, 255, 0)
+    for dy in 0..3
+        for ddx in 0..3
+            let fx = ppx - 1 + ddx
+            let fy = ppy - 1 + dy
+            if fx >= 0 && fx < screen_w && fy >= 0 && fy < screen_h then
+                fb[fy * screen_w + fx] = pc
+
+    // Direction indicator
+    let lx = ppx + (int32) (w->p.dir_x * 8.0)
+    let ly = ppy + (int32) (w->p.dir_y * 8.0)
+    if lx >= 0 && lx < screen_w && ly >= 0 && ly < screen_h then
+        fb[ly * screen_w + lx] = pc
+    return
+
+// ============================================================
+// 3x5 pixel font (framebuffer version)
+// ============================================================
+
+let glyph = (ch: uint8) ->
+    match ch with
+    | 'A' -> 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'B' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+    | 'C' -> 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+    | 'D' -> 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+    | 'E' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+    | 'F' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    | 'G' -> 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+    | 'H' -> 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'I' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    | 'J' -> 1 | (1 << 3) | (1 << 6) | (5 << 9) | (2 << 12)
+    | 'K' -> 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+    | 'L' -> 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+    | 'M' -> 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+    | 'N' -> 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'O' -> 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    | 'P' -> 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    | 'Q' -> 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+    | 'R' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+    | 'S' -> 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+    | 'T' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    | 'U' -> 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    | 'V' -> 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+    | 'W' -> 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+    | 'X' -> 5 | (5 << 3) | (2 << 6) | (5 << 9) | (5 << 12)
+    | 'Y' -> 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    | 'Z' -> 7 | (1 << 3) | (2 << 6) | (4 << 9) | (7 << 12)
+    | '0' -> 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+    | '1' -> 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    | '2' -> 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+    | '3' -> 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+    | '4' -> 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
+    | '5' -> 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+    | '6' -> 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    | '7' -> 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+    | '8' -> 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    | '9' -> 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
+    | ':' -> 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+    | '!' -> 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+    | '.' -> 0 | (0 << 3) | (0 << 6) | (0 << 9) | (2 << 12)
+    | '/' -> 1 | (1 << 3) | (2 << 6) | (4 << 9) | (4 << 12)
+    | _ -> 0
+
+let draw_char_fb = (fb: uint32[], ch: uint8, ox: int32, oy: int32, sc: int32,
+                    color: uint32) ->
+    let g = glyph(ch)
+    for row in 0..5
+        let bits = (g >> (row * 3)) & 7
+        for c in 0..3
+            if (bits >> (2 - c)) & 1 == 1 then
+                for sy in 0..sc
+                    for sx in 0..sc
+                        let fx = ox + c * sc + sx
+                        let fy = oy + row * sc + sy
+                        if fx >= 0 && fx < screen_w && fy >= 0 && fy < screen_h then
+                            fb[fy * screen_w + fx] = color
+    return
+
+let draw_text_fb = (fb: uint32[], s: const str, ox: int32, oy: int32, sc: int32,
+                    color: uint32) ->
+    let mut cx = ox
+    for ch in s
+        if ch != ' ' then
+            draw_char_fb(fb, ch, cx, oy, sc, color)
+        cx = cx + 4 * sc
+    return
+
+// ============================================================
+// HUD overlay
+// ============================================================
+
+let draw_hud = (w: world*, fb: uint32[], fps: int32) ->
+    let white = pack_argb(255, 255, 255)
+    let yellow = pack_argb(255, 255, 0)
+    let red = pack_argb(255, 80, 80)
+
+    // FPS counter (top right)
+    draw_text_fb(fb, "FPS:%d{fps}", screen_w - 120, 8, 2, white)
+
+    // Status bar background
+    let bar_y = screen_h - 24
+    let bar_c = pack_argb(30, 30, 30)
+    for y in bar_y..screen_h
+        for x in 0..screen_w
+            fb[y * screen_w + x] = bar_c
+
+    // Status text
+    draw_text_fb(fb, "HEALTH:%d{w->p.health}", 8, bar_y + 5, 2, red)
+    draw_text_fb(fb, "AMMO:%d{w->p.ammo}", 220, bar_y + 5, 2, yellow)
+    draw_text_fb(fb, "SCORE:%d{w->p.score}", 400, bar_y + 5, 2, white)
+    return
+
+// ============================================================
+// Player movement
+// ============================================================
+
+let rotate_player = (w: world*, angle: float64) ->
+    let cs = math.cos(angle)
+    let sn = math.sin(angle)
+    let old_dx = w->p.dir_x
+    w->p.dir_x = w->p.dir_x * cs - w->p.dir_y * sn
+    w->p.dir_y = old_dx * sn + w->p.dir_y * cs
+    let old_px = w->p.plane_x
+    w->p.plane_x = w->p.plane_x * cs - w->p.plane_y * sn
+    w->p.plane_y = old_px * sn + w->p.plane_y * cs
+    return
+
+let try_move = (w: world*, dx: float64, dy: float64) ->
+    let margin = 0.25
+    let cx = if dx > 0.0 then w->p.x + dx + margin else w->p.x + dx - margin
+    if !is_wall(w->map, (int32) cx, (int32) w->p.y) then
+        w->p.x = w->p.x + dx
+    let cy = if dy > 0.0 then w->p.y + dy + margin else w->p.y + dy - margin
+    if !is_wall(w->map, (int32) w->p.x, (int32) cy) then
+        w->p.y = w->p.y + dy
+    return
+
+let update_player = (w: world*) ->
+    let speed = if w->input.run_held then move_speed * run_mult else move_speed
+    if w->input.move_fwd then
+        try_move(w, w->p.dir_x * speed, w->p.dir_y * speed)
+    if w->input.move_back then
+        try_move(w, 0.0 - w->p.dir_x * speed, 0.0 - w->p.dir_y * speed)
+    if w->input.turn_left then
+        if w->input.alt_held then
+            // Strafe left: move perpendicular to direction
+            try_move(w, w->p.dir_y * speed, 0.0 - w->p.dir_x * speed)
+        else
+            rotate_player(w, 0.0 - rot_speed)
+    if w->input.turn_right then
+        if w->input.alt_held then
+            // Strafe right: move perpendicular to direction
+            try_move(w, 0.0 - w->p.dir_y * speed, w->p.dir_x * speed)
+        else
+            rotate_player(w, rot_speed)
+    return
+
+// ============================================================
+// Audio
+// ============================================================
+
+struct sound =
+    data: any*
+    bytes: uint32
+
+let samples_ms = (ms: int32) ->
+    44100 * ms / 1000
+
+let fill_tone = (buf: int16*, offset: int32, freq: int32, dur_ms: int32, amp: int32) ->
+    let n = samples_ms(dur_ms)
+    let period = if freq > 0 then 44100 / freq else 44100
+    let half = period / 2
+    for i in 0..n
+        let fade = if i < n / 4
+                   then (i * 4) * 256 / n
+                   else if i > n * 3 / 4
+                        then ((n - i) * 4) * 256 / n
+                        else 256
+        let v = amp * fade / 256
+        if (i % period) < half then
+            buf[offset + i] = (int16) v
+        else
+            buf[offset + i] = (int16) -v
+    offset + n
+
+let make_sound = (n: int32, buf: int16*) ->
+    sound { data = (any*) buf, bytes = (uint32) (n * 2) }
+
+let gen_footstep = () ->
+    let n = samples_ms(60)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 80, 60, 4000)
+    make_sound(n, mem)
+
+let gen_gunshot = () ->
+    let n = samples_ms(40) + samples_ms(80)
+    let mem = alloc(int16, (usize) n)!
+    let off = fill_tone(mem, 0, 1200, 40, 10000)
+    fill_tone(mem, off, 200, 80, 6000)
+    make_sound(n, mem)
+
+let gen_door = () ->
+    let n = samples_ms(200)
+    let mem = alloc(int16, (usize) n)!
+    fill_tone(mem, 0, 150, 200, 5000)
+    make_sound(n, mem)
+
+// ============================================================
+// Main
+// ============================================================
+
+let main = (args: str[]) ->
+    sdl2.init(sdl2.init_video | sdl2.init_audio)
+    sdl2.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"0")
+
+    let initial_w = 960
+    let initial_h = 600
+    let flags = sdl2.window_shown | sdl2.window_allow_highdpi | sdl2.window_resizable
+    let win = sdl2.create_window(c"Wolfenstein FC",
+                                sdl2.pos_centered, sdl2.pos_centered,
+                                initial_w, initial_h, flags)
+    sdl2.maximize_window(win)
+    let mut fullscreen = false
+
+    let ren = sdl2.create_renderer(win, -1,
+                                  sdl2.renderer_accel | sdl2.renderer_vsync)
+    sdl2.set_logical_size(ren, screen_w, screen_h)
+    sdl2.show_cursor(0)
+
+    // Streaming texture for the software framebuffer
+    let screen_tex = sdl2.create_texture(ren, sdl2.pixel_argb8888,
+                                         sdl2.tex_streaming, screen_w, screen_h)
+    let fb = alloc(uint32[screen_w * screen_h] {})!
+
+    // Generate procedural textures and map
+    let textures = gen_textures()
+    let map = init_map()
+
+    // World state
+    let w = alloc(world)!
+    w->p.x = 3.5
+    w->p.y = 2.5
+    w->p.dir_x = 1.0
+    w->p.dir_y = 0.0
+    w->p.plane_x = 0.0
+    w->p.plane_y = 0.66
+    w->p.health = 100
+    w->p.ammo = 8
+    w->p.score = 0
+    w->map = map
+
+    // Audio
+    let mut desired = default(audio_spec)
+    desired.freq = 44100
+    desired.format = sdl2.audio_s16sys
+    desired.channels = 1u8
+    desired.samples = 1024u16
+    desired.callback = (any*) 0u
+    desired.userdata = (any*) 0u
+    let mut obtained = default(audio_spec)
+    let audio_dev = sdl2.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    if audio_dev > 0u32 then
+        sdl2.pause_audio(audio_dev, 0)
+
+    let step_snd = gen_footstep()
+    let gun_snd = gen_gunshot()
+    let door_snd = gen_door()
+
+    // Game loop state
+    let mut event = default(sdl_event)
+    let mut running = true
+    let mut show_map = true
+    let mut fps = 0
+    let mut fps_count = 0
+    let mut fps_timer = sdl2.get_ticks()
+    let mut step_timer = 0
+
+    io.write("Wolfenstein FC started.\n", stdout)
+    io.write("  Arrows/WASD: move   Space: run/use   Shift: shoot   Tab: map   F11: fullscreen\n", stdout)
+
+    loop
+        if !running then break
+
+        // FPS counter
+        let now = sdl2.get_ticks()
+        fps_count = fps_count + 1
+        if now - fps_timer >= 1000u32 then
+            fps = fps_count
+            fps_count = 0
+            fps_timer = now
+
+        // --------- Input ---------
+        loop
+            let has = sdl2.poll_event(&event)
+            if has == 0 then break
+
+            if (int32) event.type == sdl2.quit_event then
+                running = false
+                break
+
+            if (int32) event.type == sdl2.keydown_event then
+                let k = event.key.keysym.sym
+
+                if k == sdl2.key_escape then
+                    running = false
+                    break
+
+                if k == sdl2.key_f11 then
+                    fullscreen = !fullscreen
+                    if fullscreen then
+                        let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
+                        sdl2.get_display_bounds(0, &db)
+                        sdl2.set_bordered(win, 0)
+                        sdl2.set_window_position(win, db.x, db.y)
+                        sdl2.set_window_size(win, db.w, db.h)
+                    else
+                        sdl2.set_bordered(win, 1)
+                        sdl2.restore_window(win)
+                        sdl2.maximize_window(win)
+                    sdl2.set_logical_size(ren, screen_w, screen_h)
+
+                if k == sdl2.key_up || k == sdl2.key_w then
+                    w->input.move_fwd = true
+                if k == sdl2.key_down || k == sdl2.key_s then
+                    w->input.move_back = true
+                if k == sdl2.key_left || k == sdl2.key_a then
+                    w->input.turn_left = true
+                if k == sdl2.key_right || k == sdl2.key_d then
+                    w->input.turn_right = true
+                if k == sdl2.key_space then
+                    w->input.run_held = true
+                    // Space also triggers door use on press
+                    if audio_dev > 0u32 then
+                        sdl2.clear_audio(audio_dev)
+                        sdl2.queue_audio(audio_dev, door_snd.data, door_snd.bytes)
+                if k == sdl2.key_lshift then
+                    w->input.fire_held = true
+                if k == sdl2.key_lalt then
+                    w->input.alt_held = true
+                if k == sdl2.key_tab then
+                    show_map = !show_map
+
+            if (int32) event.type == sdl2.keyup_event then
+                let k = event.key.keysym.sym
+                if k == sdl2.key_up || k == sdl2.key_w then
+                    w->input.move_fwd = false
+                if k == sdl2.key_down || k == sdl2.key_s then
+                    w->input.move_back = false
+                if k == sdl2.key_left || k == sdl2.key_a then
+                    w->input.turn_left = false
+                if k == sdl2.key_right || k == sdl2.key_d then
+                    w->input.turn_right = false
+                if k == sdl2.key_space then
+                    w->input.run_held = false
+                if k == sdl2.key_lshift then
+                    w->input.fire_held = false
+                if k == sdl2.key_lalt then
+                    w->input.alt_held = false
+
+        if !running then break
+
+        // --------- Audio feedback ---------
+        if w->input.move_fwd || w->input.move_back then
+            step_timer = step_timer + 1
+            if step_timer >= 12 && audio_dev > 0u32 then
+                step_timer = 0
+                sdl2.queue_audio(audio_dev, step_snd.data, step_snd.bytes)
+        else
+            step_timer = 0
+
+        if w->input.fire_held then
+            if audio_dev > 0u32 then
+                sdl2.clear_audio(audio_dev)
+                sdl2.queue_audio(audio_dev, gun_snd.data, gun_snd.bytes)
+
+        // --------- Update ---------
+        update_player(w)
+
+        // --------- Render ---------
+        clear_fb(fb)
+        cast_rays(w, fb, textures)
+        draw_minimap(w, fb, show_map)
+        draw_hud(w, fb, fps)
+
+        // Upload framebuffer to GPU and present
+        sdl2.update_texture(screen_tex, (any*) 0u, (any*) fb.ptr, screen_w * 4)
+        sdl2.clear(ren)
+        sdl2.render_copy(ren, screen_tex, (any*) 0u, (any*) 0u)
+        sdl2.present(ren)
+
+        sdl2.delay(1u32)
+
+    if audio_dev > 0u32 then
+        sdl2.close_audio(audio_dev)
+    sdl2.destroy_texture(screen_tex)
+    sdl2.destroy_renderer(ren)
+    sdl2.destroy_window(win)
+    sdl2.quit()
+    0

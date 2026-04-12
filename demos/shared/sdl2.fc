@@ -62,6 +62,15 @@ module sdl2 from "SDL2/SDL.h" =
     extern SDLK_c as key_c: int32
     extern SDLK_w as key_w: int32
     extern SDLK_F11 as key_f11: int32
+    extern SDLK_s as key_s: int32
+    extern SDLK_m as key_m: int32
+    extern SDLK_LSHIFT as key_lshift: int32
+    extern SDLK_TAB as key_tab: int32
+    extern SDLK_LALT as key_lalt: int32
+    extern SDLK_1 as key_1: int32
+    extern SDLK_2 as key_2: int32
+    extern SDLK_3 as key_3: int32
+    extern SDLK_4 as key_4: int32
 
     // --- Lifecycle ---
     extern SDL_Init as init: (uint32) -> int32
@@ -100,6 +109,14 @@ module sdl2 from "SDL2/SDL.h" =
     extern SDL_RenderDrawLine as draw_line: (any*, int32, int32, int32, int32) -> int32
     extern SDL_RenderDrawPoint as draw_point: (any*, int32, int32) -> int32
     extern SDL_RenderPresent as present: (any*) -> void
+
+    // --- Textures ---
+    extern SDL_PIXELFORMAT_ARGB8888 as pixel_argb8888: uint32
+    extern SDL_TEXTUREACCESS_STREAMING as tex_streaming: int32
+    extern SDL_CreateTexture as create_texture: (any*, uint32, int32, int32, int32) -> any*
+    extern SDL_DestroyTexture as destroy_texture: (any*) -> void
+    extern SDL_UpdateTexture as update_texture: (any*, any*, const any*, int32) -> int32
+    extern SDL_RenderCopy as render_copy: (any*, any*, any*, any*) -> int32
 
     // --- Timing ---
     extern SDL_Delay as delay: (uint32) -> void
