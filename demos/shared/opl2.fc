@@ -1,4 +1,4 @@
-// Minimal OPL2 (YM3812) emulator for Wolf3D IMF music playback.
+// Minimal OPL2 (YM3812) emulator for IMF music playback.
 // Written from scratch based on the publicly documented Yamaha YM3812 spec.
 // Simplified envelope and phase model — not bit-accurate but sounds recognizable.
 
