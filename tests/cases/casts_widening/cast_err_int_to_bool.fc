@@ -1,0 +1,7 @@
+// int → bool is rejected even as an explicit cast.
+// The reverse of bool → numeric is ambiguous (!=0 vs strict 0/1), so FC
+// requires explicit `x != 0` rather than guessing a mapping.
+let main = (args: str[]) ->
+    let x = 5
+    let b = (bool) x
+    if b then 0 else 1

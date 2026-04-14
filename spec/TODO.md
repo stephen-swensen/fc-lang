@@ -2,8 +2,6 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
-- **Explicit bool → int32 cast**: `(int32) some_bool` is currently rejected ("invalid cast from bool to int32"). Users have to write `if b then 1 else 0`, which is verbose and repetitive when formatting booleans for output (e.g. `%d{if g->has_gold_key then 1 else 0}`). Consider either: (a) allowing explicit `(int32) bool_val` → 0/1, or (b) adding a `%s{bool}` format specifier that prints `"true"`/`"false"`, or (c) both. Option (a) is probably the least surprising — it mirrors C, and the cast is already explicit so there's no implicit-widening risk.
-
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:
   - **Abort/signal handling** (core lang): `expressions/assert_fail`, `assert_message_fail`, `div_by_zero`, `div_by_zero_u32`, `mod_by_zero`, `options/unwrap_none`, `slices/slice_bounds`, `slices/subslice_bounds_abort`, `structs/fixed_array_overflow_err` — likely different exit codes from `abort()` on Windows vs Linux (Windows doesn't use POSIX signals).
   - **IO/stdio** (POSIX-dependent): all `io/*` and `stdlib/io_*` tests — likely need `--flag windows` for `io.mkdir`, and possibly other POSIX API differences (`unistd.h` access checks, file path handling).

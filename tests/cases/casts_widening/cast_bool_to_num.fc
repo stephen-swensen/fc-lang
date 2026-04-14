@@ -1,0 +1,50 @@
+// Explicit bool → numeric casts produce 0/1.
+// Covers all integer widths (signed/unsigned), isize/usize, and both floats.
+let main = (args: str[]) ->
+    let t = true
+    let f = false
+
+    // Signed integers
+    assert((int8) t == 1i8)
+    assert((int8) f == 0i8)
+    assert((int16) t == 1i16)
+    assert((int32) t == 1)
+    assert((int64) t == 1i64)
+    assert((int32) f == 0)
+
+    // Unsigned integers
+    assert((uint8) t == 1u8)
+    assert((uint16) t == 1u16)
+    assert((uint32) t == 1u32)
+    assert((uint64) t == 1u64)
+    assert((uint8) f == 0u8)
+
+    // Platform-width
+    assert((isize) t == 1i)
+    assert((usize) t == 1u)
+    assert((isize) f == 0i)
+
+    // Floats
+    assert((float32) t == 1.0f32)
+    assert((float64) t == 1.0)
+    assert((float32) f == 0.0f32)
+    assert((float64) f == 0.0)
+
+    // Use in arithmetic — bit-packing flags
+    let a = true
+    let b = false
+    let c = true
+    let bits = ((int32) a) | ((int32) b << 1) | ((int32) c << 2)
+    assert(bits == 0b101)
+
+    // Sum of bool flags
+    let count = (int32) a + (int32) b + (int32) c
+    assert(count == 2)
+
+    // In interpolation
+    let has_key = true
+    let s = "flag=%d{(int32) has_key}"
+    assert(s.len == 6)
+    assert(s[5] == 49u8)  // ASCII '1'
+
+    0

@@ -835,6 +835,16 @@ let y = (int32) 3.14        // float64 to int32, truncates toward zero
 let z = (uint8) some_int32  // narrowing cast, programmer responsible
 ```
 
+**Bool to numeric** — `bool` casts to any numeric type, producing `1` for `true` and `0` for `false`. Useful for bit-packing flags, summing boolean conditions, or formatting bools in string interpolation. The reverse direction (numeric to `bool`) is **not allowed**, even as an explicit cast — unlike bool-to-int, there's no unambiguously correct mapping (C-style `!= 0` vs strict 0/1 only), so FC requires the programmer to write the comparison explicitly (`x != 0`):
+
+```fc
+let a = true
+let b = false
+let bits = ((int32) a) | ((int32) b << 1)   // pack flags into bits
+let s = "flag=%d{(int32) a}"                // renders "flag=1"
+let c = (bool) 5                            // compile error — use `5 != 0`
+```
+
 **Pointer-to-pointer casts** — any pointer type to any other pointer type, including `any*`. Unsafe — the programmer is responsible for correctness:
 
 ```fc

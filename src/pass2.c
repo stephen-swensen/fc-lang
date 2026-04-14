@@ -2797,12 +2797,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR);
         bool from_int = type_is_integer(from);
         bool to_int = type_is_integer(to);
+        bool bool_to_num = (from->kind == TYPE_BOOL && to_num);
         bool str_to_cstr = (is_str_type(from) && is_cstr_type(to));
         bool cstr_to_str = (is_cstr_type(from) && is_str_type(to));
         bool const_change_slice = (from->kind == TYPE_SLICE && to->kind == TYPE_SLICE &&
             type_eq_ignore_const(from, to));
-        /* Allowed: numeric <-> numeric, pointer <-> pointer, pointer <-> integer, str <-> cstr, slice const cast */
-        if (!((from_num && to_num) || (from_ptr && to_ptr) ||
+        /* Allowed: numeric <-> numeric, bool -> numeric (0/1), pointer <-> pointer,
+         * pointer <-> integer, str <-> cstr, slice const cast.
+         * NOT allowed: numeric -> bool (ambiguous: !=0 vs strict 0/1?). */
+        if (!((from_num && to_num) || bool_to_num || (from_ptr && to_ptr) ||
               (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr || cstr_to_str || const_change_slice)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
             e->type = type_error();

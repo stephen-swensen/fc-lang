@@ -1,0 +1,5 @@
+// float → bool is also rejected. Same rationale as int → bool.
+let main = (args: str[]) ->
+    let x = 3.14
+    let b = (bool) x
+    if b then 0 else 1
