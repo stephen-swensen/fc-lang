@@ -344,6 +344,63 @@ static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
     return resolve_dotted_name_ex(ctx, dotted_name, NULL);
 }
 
+/* Walk a type tree and rewrite TYPE_STUB names to their canonical mangled
+ * form. For dotted names (e.g., "a.foo") resolve via the module chain; for
+ * bare names (e.g., "point" from a member import) resolve via the normal
+ * scope chain. Mutates in place. Codegen's resolve_struct_stub then finds
+ * the type via the global symtab.
+ *
+ * This is the field-type counterpart to the resolve_type path used for
+ * function parameters and expressions. We keep the node as a TYPE_STUB (not
+ * the full struct type) to avoid creating cycles for self-referential
+ * structs like `node { next: node*? }`. */
+static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_POINTER: canonicalize_field_stubs(ctx, t->pointer.pointee); return;
+    case TYPE_OPTION:  canonicalize_field_stubs(ctx, t->option.inner); return;
+    case TYPE_SLICE:   canonicalize_field_stubs(ctx, t->slice.elem); return;
+    case TYPE_FIXED_ARRAY: canonicalize_field_stubs(ctx, t->fixed_array.elem); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            canonicalize_field_stubs(ctx, t->func.param_types[i]);
+        canonicalize_field_stubs(ctx, t->func.return_type);
+        return;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            canonicalize_field_stubs(ctx, t->stub.type_args[i]);
+        if (t->stub.name) {
+            Symbol *sym = NULL;
+            if (strchr(t->stub.name, '.'))
+                sym = resolve_dotted_name(ctx, t->stub.name);
+            if (!sym)
+                sym = resolve_symbol_kind(ctx, t->stub.name, DECL_STRUCT);
+            if (!sym)
+                sym = resolve_symbol_kind(ctx, t->stub.name, DECL_UNION);
+            if (sym && sym->type) {
+                const char *canon = NULL;
+                if (sym->type->kind == TYPE_STRUCT) canon = sym->type->struc.name;
+                else if (sym->type->kind == TYPE_UNION) canon = sym->type->unio.name;
+                if (canon && canon != t->stub.name)
+                    t->stub.name = canon;
+            }
+        }
+        return;
+    default: return;
+    }
+}
+
+/* Canonicalize stub names in all field/payload types of a struct/union decl. */
+static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
+    if (d->kind == DECL_STRUCT) {
+        for (int i = 0; i < d->struc.field_count; i++)
+            canonicalize_field_stubs(ctx, d->struc.fields[i].type);
+    } else if (d->kind == DECL_UNION) {
+        for (int i = 0; i < d->unio.variant_count; i++)
+            canonicalize_field_stubs(ctx, d->unio.variants[i].payload);
+    }
+}
+
 /* Resolve a TYPE_STUB to the actual type from symtab */
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
@@ -5003,6 +5060,8 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                     "top-level initializer for '%s' must be a constant expression",
                     child->let.name);
             }
+        } else if (child->kind == DECL_STRUCT || child->kind == DECL_UNION) {
+            canonicalize_decl_field_stubs(ctx, child);
         } else if (child->kind == DECL_MODULE) {
             Symbol *sub_sym = symtab_lookup_kind(parent_members,
                 child->module.name, DECL_MODULE);
@@ -5134,7 +5193,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             ctx.current_ns = d->ns.name;
             continue;
         }
-        if (d->kind == DECL_LET) {
+        if (d->kind == DECL_LET || d->kind == DECL_STRUCT || d->kind == DECL_UNION) {
             /* Set up file-level import scope for this decl's file */
             const char *fn = d->loc.filename;
             ImportTable *file_tbl = NULL;
@@ -5149,13 +5208,17 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
             ctx.import_scope = file_tbl ? &file_import_scope : NULL;
 
-            check_decl_let(&ctx, d);
-            if (d->let.init && d->let.init->kind != EXPR_FUNC &&
-                !is_file_init_expr(d->let.init)) {
-                diag_error(d->loc,
-                    "file-level initializer for '%s' must not contain "
-                    "function calls or variable references",
-                    d->let.name);
+            if (d->kind == DECL_LET) {
+                check_decl_let(&ctx, d);
+                if (d->let.init && d->let.init->kind != EXPR_FUNC &&
+                    !is_file_init_expr(d->let.init)) {
+                    diag_error(d->loc,
+                        "file-level initializer for '%s' must not contain "
+                        "function calls or variable references",
+                        d->let.name);
+                }
+            } else {
+                canonicalize_decl_field_stubs(&ctx, d);
             }
             ctx.import_scope = NULL;
         }

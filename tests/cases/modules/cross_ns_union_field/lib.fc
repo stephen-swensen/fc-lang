@@ -1,0 +1,7 @@
+namespace acme::
+
+module color =
+    union rgb =
+        | red
+        | green
+        | blue

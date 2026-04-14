@@ -1,0 +1,13 @@
+// Cross-namespace union used by value as a struct field.
+import color from acme::
+
+struct pixel =
+    value: color.rgb
+
+let main = (args: str[]) ->
+    let p = pixel { value = color.rgb.green }
+    match p.value with
+    | red -> assert(false)
+    | green -> assert(true)
+    | blue -> assert(false)
+    0

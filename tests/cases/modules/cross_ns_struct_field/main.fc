@@ -1,0 +1,13 @@
+// Cross-namespace struct used by value as a struct field and via pointer.
+import shapes from acme::
+
+struct wrapper =
+    origin: shapes.point
+    ptr: shapes.point*?
+
+let main = (args: str[]) ->
+    let p = shapes.point { x = 3, y = 4 }
+    let w = wrapper { origin = p, ptr = default(shapes.point*?) }
+    assert(w.origin.x == 3)
+    assert(w.origin.y == 4)
+    0

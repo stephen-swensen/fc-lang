@@ -3873,6 +3873,60 @@ static void flatten_decls(Decl **decls, int decl_count, Decl ***out, int *count,
     }
 }
 
+/* Find a struct/union name referenced by value in a type (not through
+ * pointer/slice/option/func). Mirrors monomorph.c's find_by_value_dep but
+ * operates on decl-level types (which may still contain stubs). */
+static const char *find_by_value_dep_name(Type *type) {
+    if (!type) return NULL;
+    switch (type->kind) {
+    case TYPE_STRUCT: return type->struc.name;
+    case TYPE_UNION:  return type->unio.name;
+    case TYPE_STUB:   return type->stub.name;
+    case TYPE_FIXED_ARRAY: return find_by_value_dep_name(type->fixed_array.elem);
+    default: return NULL;
+    }
+}
+
+enum { DECL_TOPO_UNVISITED = 0, DECL_TOPO_VISITING = 1, DECL_TOPO_DONE = 2 };
+
+static const char *decl_su_name(Decl *d) {
+    if (d->kind == DECL_STRUCT) return d->struc.name;
+    if (d->kind == DECL_UNION)  return d->unio.name;
+    return NULL;
+}
+
+static void topo_visit_su_decl(Decl **su, int su_count, int idx,
+                                int *state, Decl **order, int *order_count) {
+    if (state[idx] != DECL_TOPO_UNVISITED) return;
+    state[idx] = DECL_TOPO_VISITING;
+    Decl *d = su[idx];
+    const char *deps[64];
+    int dep_count = 0;
+    if (d->kind == DECL_STRUCT && !d->struc.is_extern) {
+        for (int f = 0; f < d->struc.field_count && dep_count < 64; f++) {
+            const char *dep = find_by_value_dep_name(d->struc.fields[f].type);
+            if (dep) deps[dep_count++] = dep;
+        }
+    } else if (d->kind == DECL_UNION) {
+        for (int v = 0; v < d->unio.variant_count && dep_count < 64; v++) {
+            const char *dep = find_by_value_dep_name(d->unio.variants[v].payload);
+            if (dep) deps[dep_count++] = dep;
+        }
+    }
+    for (int di = 0; di < dep_count; di++) {
+        for (int j = 0; j < su_count; j++) {
+            if (j == idx) continue;
+            const char *jname = decl_su_name(su[j]);
+            if (jname && jname == deps[di]) {
+                topo_visit_su_decl(su, su_count, j, state, order, order_count);
+                break;
+            }
+        }
+    }
+    order[(*order_count)++] = d;
+    state[idx] = DECL_TOPO_DONE;
+}
+
 /* Recursively collect unique from_lib strings from module declarations */
 static void collect_from_libs(Decl *d, const char **seen, int *count, int cap) {
     if (d->kind != DECL_MODULE) return;
@@ -4325,12 +4379,30 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, ";\n");
     }
 
-    /* Emit full struct and union definitions (skip generics), interleaved with
-       option typedefs that wrap them. */
-    bool *opt_emitted = calloc(options.count, sizeof(bool));
+    /* Topologically sort struct/union decls so by-value dependencies come
+       before their dependents. This matters when a field references a
+       struct/union defined later in source order (or in another file/module). */
+    Decl **su_decls = NULL;
+    int su_count = 0, su_cap = 0;
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (is_generic_decl(d)) continue;
+        if (d->kind == DECL_STRUCT || d->kind == DECL_UNION)
+            DA_APPEND(su_decls, su_count, su_cap, d);
+    }
+    int *su_state = calloc((size_t)su_count, sizeof(int));
+    Decl **su_sorted = malloc(sizeof(Decl*) * (size_t)su_count);
+    int su_sorted_count = 0;
+    for (int i = 0; i < su_count; i++)
+        topo_visit_su_decl(su_decls, su_count, i, su_state, su_sorted, &su_sorted_count);
+    free(su_state);
+    free(su_decls);
+
+    /* Emit full struct and union definitions (skip generics), interleaved with
+       option typedefs that wrap them. */
+    bool *opt_emitted = calloc(options.count, sizeof(bool));
+    for (int i = 0; i < su_sorted_count; i++) {
+        Decl *d = su_sorted[i];
         const char *def_name = NULL;
         if (d->kind == DECL_STRUCT) {
             if (!d->struc.is_extern) emit_struct_def(d, out);
@@ -4360,6 +4432,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
     }
     free(opt_emitted);
+    free(su_sorted);
 
     /* Emit monomorphized struct/union definitions */
     for (int mi = 0; mi < mono->count; mi++) {

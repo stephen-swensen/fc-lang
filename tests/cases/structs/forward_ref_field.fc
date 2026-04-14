@@ -1,0 +1,14 @@
+// Struct `outer` references `inner` by value in a field, but `inner` is
+// declared later in source order. Codegen must emit `inner` first (topo-sort).
+struct outer =
+    i: inner
+    tag: int32
+
+struct inner =
+    x: int32
+
+let main = (args: str[]) ->
+    let o = outer { i = inner { x = 7 }, tag = 42 }
+    assert(o.i.x == 7)
+    assert(o.tag == 42)
+    0

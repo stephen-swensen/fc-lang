@@ -1,0 +1,12 @@
+// Member-imported cross-namespace struct used as a struct field.
+// The unqualified type name must still resolve to the correct (mangled) C type.
+import point from acme::shapes
+
+struct wrapper =
+    p: point
+
+let main = (args: str[]) ->
+    let w = wrapper { p = point { x = 10, y = 20 } }
+    assert(w.p.x == 10)
+    assert(w.p.y == 20)
+    0

@@ -6,18 +6,6 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 - **Investigate `!` boolean-not ambiguity in nested if/else chains**: while writing the wolf-fc push-wall code, `else if !pushwall_tiles[idx] then false` inside a deeply-nested if/else chain appeared to parse incorrectly — the condition seemed to not trigger as expected. Rewriting as `let is_pw = pushwall_tiles[idx]; if !is_pw then false` worked. Unclear whether this was a real parser issue (e.g. `!` being mis-parsed as postfix option-unwrap on the slice index expression, or precedence vs `else if`) or just a nesting/indentation mistake on my end. Worth writing a minimal repro test to confirm. If real, either fix the parse or document the precedence clearly.
 
-- **Qualified cross-namespace types are not mangled in struct field declarations**: A qualified type reference like `m.t` (where `t` is a struct declared in some other namespace's `module m`) resolves correctly in *expression contexts* — initializers such as `default(m.t*?)`, function parameter types, and inferred `let` bindings — and codegen emits the correctly mangled C type. But in a **struct field annotation**, codegen emits the FC-level identifier verbatim into the C struct, producing `struct wrapper { m.t* f; ... }` which fails to compile with `error: expected specifier-qualifier-list before 'm'`.
-  
-  Importing the inner name (`import t from other::m`) does not fix it: the struct then emits `t* f`, which fails with `error: unknown type name 't'` because the C file has no typedef for the unqualified `t`. The import brings the FC-level name into scope for the type-checker, but the codegen path for struct fields doesn't consult the same resolution table that function-parameter and expression sites do.
-  
-  Workarounds that work today:
-  1. Don't put the cross-namespace value in a struct field. Keep it as a file-level `let mut x = default(m.t*?)` (works because the initializer is an expression context) and reference it alongside the struct.
-  2. Use `any*` in the struct field and cast at every access site.
-  
-  Neither is ideal — both lose the natural ownership layout. The fix is presumably to route struct-field type names through the same mangling pipeline as function-parameter types.
-  
-  Minimal repro sketch: a two-file program where file A declares `namespace a::` with `module a = struct foo = x: int32`, and file B declares `struct wrapper = f: a.foo`. The generated C for `wrapper` will contain `a.foo f` rather than the mangled `a__a__foo f`.
-
 - **Explicit bool → int32 cast**: `(int32) some_bool` is currently rejected ("invalid cast from bool to int32"). Users have to write `if b then 1 else 0`, which is verbose and repetitive when formatting booleans for output (e.g. `%d{if g->has_gold_key then 1 else 0}`). Consider either: (a) allowing explicit `(int32) bool_val` → 0/1, or (b) adding a `%s{bool}` format specifier that prints `"true"`/`"false"`, or (c) both. Option (a) is probably the least surprising — it mirrors C, and the cast is already explicit so there's no implicit-widening risk.
 
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:
