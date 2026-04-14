@@ -149,3 +149,72 @@ module io =
     let can_write = (path: const str) ->
         u.access((cstr) path, 2) == 0
 
+    // list_dir: list the entries in a directory, excluding "." and "..".
+    // path: const str — directory path to list.
+    // returns: str[]? — some(names) on success, none if the directory cannot be
+    //   opened. The outer array and each name are heap-allocated; the caller
+    //   frees each name, then the array.
+#if os == "windows"
+    // TODO: Windows implementation via FindFirstFileA / FindNextFileA.
+    let list_dir = (path: const str) ->
+        let _ = path
+        default(str[]?)
+#else
+    // POSIX dirent layout (glibc Linux / musl / macOS; d_name must be the
+    // last named field and large enough to hold NAME_MAX+1 bytes). On some
+    // platforms d_name is a flexible array member, but declaring a fixed
+    // upper bound here is safe because we only read up to the first NUL.
+    private module dir from "dirent.h" =
+        extern struct dirent =
+            _d_ino: uint64
+            _d_off: int64
+            _d_reclen: uint16
+            _d_type: uint8
+            d_name: uint8[256]
+        extern opendir: (const cstr) -> any*?
+        extern readdir: (any*) -> dirent*?
+        extern closedir: (any*) -> int32
+
+    let list_dir = (path: const str) ->
+        match dir.opendir((cstr) path) with
+        | none -> default(str[]?)
+        | some(d) ->
+            defer dir.closedir(d)
+            let mut cap = 16i64
+            let mut count = 0i64
+            let mut names = alloc(str[cap] {})!
+            loop
+                match dir.readdir(d) with
+                | none -> break
+                | some(e) ->
+                    // Find string length (d_name is NUL-terminated).
+                    let mut nlen = 0i64
+                    loop
+                        if nlen >= 256 then break
+                        if e->d_name[nlen] == 0u8 then break
+                        nlen = nlen + 1
+                    // Skip "." and "..".
+                    let is_dot = nlen == 1 && e->d_name[0] == 46u8
+                    let is_dotdot = nlen == 2 &&
+                        e->d_name[0] == 46u8 && e->d_name[1] == 46u8
+                    if !is_dot && !is_dotdot then
+                        if count >= cap then
+                            let new_cap = cap * 2
+                            let new_names = alloc(str[new_cap] {})!
+                            for j in 0..count
+                                new_names[j] = names[j]
+                            free(names)
+                            names = new_names
+                            cap = new_cap
+                        let name_buf = alloc(uint8[nlen] {})!
+                        for j in 0..nlen
+                            name_buf[j] = e->d_name[j]
+                        names[count] = name_buf
+                        count = count + 1
+            let result = alloc(str[count] {})!
+            for j in 0..count
+                result[j] = names[j]
+            free(names)
+            some(result)
+#end
+
