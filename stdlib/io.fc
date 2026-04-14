@@ -155,9 +155,75 @@ module io =
     //   opened. The outer array and each name are heap-allocated; the caller
     //   frees each name, then the array.
 #if os == "windows"
-    // TODO: Windows implementation via FindFirstFileA / FindNextFileA.
+    // WIN32_FIND_DATAA layout (windows.h). We only read cFileName; the
+    // preceding fields are declared with their exact sizes to keep the
+    // struct layout correct for FindFirstFileA / FindNextFileA to populate.
+    private module win from "windows.h" define "WIN32_LEAN_AND_MEAN" "1" =
+        extern struct WIN32_FIND_DATAA =
+            _dwFileAttributes: uint32
+            _ftCreationTime: uint8[8]
+            _ftLastAccessTime: uint8[8]
+            _ftLastWriteTime: uint8[8]
+            _nFileSizeHigh: uint32
+            _nFileSizeLow: uint32
+            _dwReserved0: uint32
+            _dwReserved1: uint32
+            cFileName: uint8[260]
+            _cAlternateFileName: uint8[14]
+        extern FindFirstFileA as find_first: (const cstr, WIN32_FIND_DATAA*) -> any*
+        extern FindNextFileA as find_next: (any*, WIN32_FIND_DATAA*) -> int32
+        extern FindClose as find_close: (any*) -> int32
+
     let list_dir = (path: const str) ->
-        default(str[]?)
+        // FindFirstFileA wants a search pattern, not a directory path.
+        // Build "<path>\*" as a NUL-terminated buffer.
+        let plen = path.len
+        let pat = alloc(uint8[plen + 3] {})!
+        defer free(pat)
+        for j in 0..plen
+            pat[j] = path[j]
+        pat[plen] = '\\'
+        pat[plen + 1] = '*'
+        pat[plen + 2] = 0u8
+
+        let mut fd = default(win.WIN32_FIND_DATAA)
+        let h = win.find_first((cstr) pat.ptr, &fd)
+        // FindFirstFileA returns INVALID_HANDLE_VALUE (-1) on failure.
+        if (isize) h == -1i then default(str[]?)
+        else
+            defer win.find_close(h)
+            let mut cap = 16i64
+            let mut count = 0i64
+            let mut names = alloc(str[cap] {})!
+            loop
+                let mut nlen = 0i64
+                loop
+                    if nlen >= 260 then break
+                    if fd.cFileName[nlen] == 0u8 then break
+                    nlen = nlen + 1
+                let is_dot = nlen == 1 && fd.cFileName[0] == '.'
+                let is_dotdot = nlen == 2 &&
+                    fd.cFileName[0] == '.' && fd.cFileName[1] == '.'
+                if !is_dot && !is_dotdot then
+                    if count >= cap then
+                        let new_cap = cap * 2
+                        let new_names = alloc(str[new_cap] {})!
+                        for j in 0..count
+                            new_names[j] = names[j]
+                        free(names)
+                        names = new_names
+                        cap = new_cap
+                    let name_buf = alloc(uint8[nlen] {})!
+                    for j in 0..nlen
+                        name_buf[j] = fd.cFileName[j]
+                    names[count] = name_buf
+                    count = count + 1
+                if win.find_next(h, &fd) == 0 then break
+            let result = alloc(str[count] {})!
+            for j in 0..count
+                result[j] = names[j]
+            free(names)
+            some(result)
 #else
     // POSIX dirent layout (glibc Linux / musl / macOS; d_name must be the
     // last named field and large enough to hold NAME_MAX+1 bytes). On some
