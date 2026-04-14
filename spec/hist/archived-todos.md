@@ -4,6 +4,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## OR-patterns with bindings (retired 2026-04-14)
+
+Originally listed as a possible v2 extension: or-pattern alternatives are currently binding-free — `| some(x) | none -> x` is rejected. Lifting this would require the same-bindings-at-same-types rule that Rust/OCaml enforce, plus a different codegen strategy than the current `(a || b)` predicate (e.g. per-alternative if-branches that set bindings and `goto` a shared arm body).
+
+**Resolution:** not doing this. The binding-free form already covers the useful cases; the workaround (repeat the arm body, or bind in a single pattern and match further inside) is acceptable for the rare cases where it comes up.
+
+---
+
 ## SIMD / vector types (retired 2026-04-10)
 
 Originally listed as an evaluation item: investigate first-class vector types for SIMD operations (e.g., `float32x4`, `int32x8`), likely emitted as GCC/Clang `__attribute__((vector_size(N)))` typedefs that get arithmetic operators for free.
