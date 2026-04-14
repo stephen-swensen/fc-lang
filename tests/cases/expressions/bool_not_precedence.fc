@@ -1,0 +1,73 @@
+// Regression tests for prefix `!` precedence in various expression positions.
+// `!` is both prefix bool-not (PREC_PREFIX) and postfix option-unwrap
+// (PREC_POSTFIX). Postfix operators like `[i]`, `.f`, `->f`, and `()` bind
+// tighter than prefix, so `!x[i]` must parse as `!(x[i])`, not `(!x)[i]`.
+
+struct flags_holder =
+    flags: bool[]
+
+let main = (args: str[]) ->
+    let arr = bool[4] { true, false, true, false }
+
+    // `!arr[i]` — bang over slice index
+    assert(!arr[1])
+    assert(!arr[3])
+    assert(arr[0])
+
+    // In if condition
+    let r_direct = if !arr[1] then 1 else 0
+    assert(r_direct == 1)
+
+    // In else-if chain (single-level)
+    let r_single =
+        if false then 10
+        else if !arr[1] then 20
+        else 30
+    assert(r_single == 20)
+
+    // In deeply nested else-if chain — the case that motivated the TODO
+    let a = 0
+    let b = 0
+    let c = 0
+    let x = 1
+    let r_nested =
+        if a == 1 then 1
+        else if b == 1 then 2
+        else if c == 1 then 3
+        else if x >= 4 then 4
+        else if !arr[x] then 5
+        else 6
+    assert(r_nested == 5)
+
+    // `!obj.field` — bang over field access
+    let fh = flags_holder { flags = arr[0..4] }
+    assert(!fh.flags[1])
+
+    // `!ptr->field[i]` — bang over pointer-field-index chain
+    let mut fh2 = flags_holder { flags = arr[0..4] }
+    let p = &fh2
+    let r_ptr =
+        if false then 100
+        else if !p->flags[1] then 200
+        else 300
+    assert(r_ptr == 200)
+
+    // `!fn(x)` — bang over call
+    let get_flag = (i: int32) -> arr[i]
+    assert(!get_flag(1))
+    let r_call =
+        if false then 1
+        else if !get_flag(1) then 2
+        else 3
+    assert(r_call == 2)
+
+    // `!!x` — double negation
+    assert(!!arr[0])
+    assert(!(!arr[0]))
+
+    // `!(expr)` — parenthesized
+    let y = 5
+    let r_paren = if !(y > 100) then 1 else 0
+    assert(r_paren == 1)
+
+    0

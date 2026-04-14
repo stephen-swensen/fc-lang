@@ -2,8 +2,6 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
-- **Investigate `!` boolean-not ambiguity in nested if/else chains**: while writing the wolf-fc push-wall code, `else if !pushwall_tiles[idx] then false` inside a deeply-nested if/else chain appeared to parse incorrectly — the condition seemed to not trigger as expected. Rewriting as `let is_pw = pushwall_tiles[idx]; if !is_pw then false` worked. Unclear whether this was a real parser issue (e.g. `!` being mis-parsed as postfix option-unwrap on the slice index expression, or precedence vs `else if`) or just a nesting/indentation mistake on my end. Worth writing a minimal repro test to confirm. If real, either fix the parse or document the precedence clearly.
-
 - **Explicit bool → int32 cast**: `(int32) some_bool` is currently rejected ("invalid cast from bool to int32"). Users have to write `if b then 1 else 0`, which is verbose and repetitive when formatting booleans for output (e.g. `%d{if g->has_gold_key then 1 else 0}`). Consider either: (a) allowing explicit `(int32) bool_val` → 0/1, or (b) adding a `%s{bool}` format specifier that prints `"true"`/`"false"`, or (c) both. Option (a) is probably the least surprising — it mirrors C, and the cast is already explicit so there's no implicit-widening risk.
 
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:

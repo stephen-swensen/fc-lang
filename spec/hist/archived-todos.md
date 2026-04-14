@@ -4,6 +4,20 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## `!` boolean-not precedence in nested if/else chains (investigated 2026-04-14)
+
+Originally filed after writing the wolf-fc push-wall code: `else if !pushwall_tiles[idx] then false` inside a deeply-nested if/else chain appeared to parse incorrectly — the condition seemed to not trigger as expected. The speculation was that `!` might be mis-parsed as postfix option-unwrap on the slice-index expression, or that there was a precedence interaction with `else if`.
+
+**Resolution:** could not reproduce. The parser handles all the relevant forms correctly:
+
+- `!arr[i]` parses as `!(arr[i])` — postfix `[i]` binds tighter than prefix `!`, then prefix `!` applies to the indexed result. Works in assertions, if-conditions, and arbitrarily deep else-if chains.
+- `!obj.field`, `!ptr->field[i]`, `!fn(x)`, `!!x`, and `!(expr)` all parse as expected.
+- Deeply nested `if / else if / else if / ... / else if !arr[i] then ...` chains evaluate the `!arr[i]` branch correctly.
+
+The original symptom was most likely a local indentation or logic mistake in the surrounding push-wall code, not a parser bug. Regression test: `tests/cases/expressions/bool_not_precedence.fc` locks in the correct behavior for slice index, field access, pointer-field chain, call, double-negation, and nested else-if forms.
+
+---
+
 ## OR-patterns with bindings (retired 2026-04-14)
 
 Originally listed as a possible v2 extension: or-pattern alternatives are currently binding-free — `| some(x) | none -> x` is rejected. Lifting this would require the same-bindings-at-same-types rule that Rust/OCaml enforce, plus a different codegen strategy than the current `(a || b)` predicate (e.g. per-alternative if-branches that set bindings and `goto` a shared arm body).
