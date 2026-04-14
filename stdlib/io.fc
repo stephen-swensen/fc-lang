@@ -157,7 +157,6 @@ module io =
 #if os == "windows"
     // TODO: Windows implementation via FindFirstFileA / FindNextFileA.
     let list_dir = (path: const str) ->
-        let _ = path
         default(str[]?)
 #else
     // POSIX dirent layout (glibc Linux / musl / macOS; d_name must be the
@@ -194,9 +193,9 @@ module io =
                         if e->d_name[nlen] == 0u8 then break
                         nlen = nlen + 1
                     // Skip "." and "..".
-                    let is_dot = nlen == 1 && e->d_name[0] == 46u8
+                    let is_dot = nlen == 1 && e->d_name[0] == '.'
                     let is_dotdot = nlen == 2 &&
-                        e->d_name[0] == 46u8 && e->d_name[1] == 46u8
+                        e->d_name[0] == '.' && e->d_name[1] == '.'
                     if !is_dot && !is_dotdot then
                         if count >= cap then
                             let new_cap = cap * 2

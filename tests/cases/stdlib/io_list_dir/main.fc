@@ -1,0 +1,77 @@
+import io from std::
+
+// Compare two str values byte-for-byte.
+let str_eq = (a: const str, b: const str) ->
+    if a.len != b.len then false
+    else
+        let mut i = 0i64
+        let mut eq = true
+        loop
+            if i >= a.len then break
+            if a[i] != b[i] then
+                eq = false
+                break
+            i = i + 1
+        eq
+
+let main = (args: str[]) ->
+    let dir = "/tmp/fc_test_list_dir"
+
+    // Start fresh: remove any leftover files from a prior run and (re)create.
+    // If the directory doesn't exist yet, remove() calls are no-ops.
+    io.remove("/tmp/fc_test_list_dir/a.txt")
+    io.remove("/tmp/fc_test_list_dir/b.txt")
+    io.remove("/tmp/fc_test_list_dir/c.txt")
+    c.rmdir((cstr) dir)
+    assert(io.mkdir(dir))
+
+    // Listing an empty directory should return some([]).
+    match io.list_dir(dir) with
+    | none -> return 1
+    | some(names) ->
+        assert(names.len == 0)
+        free(names)
+
+    // Create three files.
+    let touch = (name: const str) ->
+        match io.open(name, "w") with
+        | some(f) ->
+            io.close(f)
+            true
+        | none -> false
+    if !touch("/tmp/fc_test_list_dir/a.txt") then return 2
+    if !touch("/tmp/fc_test_list_dir/b.txt") then return 2
+    if !touch("/tmp/fc_test_list_dir/c.txt") then return 2
+
+    // List and verify: expect exactly a.txt, b.txt, c.txt (no ".", "..").
+    match io.list_dir(dir) with
+    | none -> return 3
+    | some(names) ->
+        assert(names.len == 3)
+        let mut saw_a = false
+        let mut saw_b = false
+        let mut saw_c = false
+        for n in names
+            if str_eq(n, "a.txt") then saw_a = true
+            else if str_eq(n, "b.txt") then saw_b = true
+            else if str_eq(n, "c.txt") then saw_c = true
+            else return 4
+        assert(saw_a && saw_b && saw_c)
+        for n in names
+            free(n)
+        free(names)
+
+    // Listing a nonexistent directory should return none.
+    let nonexistent = io.list_dir("/tmp/fc_test_list_dir_does_not_exist")
+    assert(nonexistent.is_none)
+
+    // Cleanup.
+    io.remove("/tmp/fc_test_list_dir/a.txt")
+    io.remove("/tmp/fc_test_list_dir/b.txt")
+    io.remove("/tmp/fc_test_list_dir/c.txt")
+    c.rmdir((cstr) dir)
+
+    0
+
+module c from "unistd.h" =
+    extern rmdir: (const cstr) -> int32
