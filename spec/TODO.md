@@ -2,6 +2,8 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
+- **Scientific notation for float literals**: currently `1e9`, `1.5e-3`, `1E+18` etc. don't parse — the lexer rejects them with `expected 'then', got identifier` (the `e` gets tokenized as an identifier). Workaround is writing the value out (`1000000000.0`, `0.0015`), which is awkward for very large/small constants like ray-intersection epsilons and sentinel distances. Add `[eE][+-]?[0-9]+` exponent part to the float literal rule in the lexer and grammar.
+
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:
   - **Abort/signal handling** (core lang): `expressions/assert_fail`, `assert_message_fail`, `div_by_zero`, `div_by_zero_u32`, `mod_by_zero`, `options/unwrap_none`, `slices/slice_bounds`, `slices/subslice_bounds_abort`, `structs/fixed_array_overflow_err` — likely different exit codes from `abort()` on Windows vs Linux (Windows doesn't use POSIX signals).
   - **IO/stdio** (POSIX-dependent): all `io/*` and `stdlib/io_*` tests — likely need `--flag windows` for `io.mkdir`, and possibly other POSIX API differences (`unistd.h` access checks, file path handling).
