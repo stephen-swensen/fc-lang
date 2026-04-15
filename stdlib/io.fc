@@ -159,7 +159,7 @@ module io =
     // preceding fields are declared with their exact sizes to keep the
     // struct layout correct for FindFirstFileA / FindNextFileA to populate.
     private module win from "windows.h" define "WIN32_LEAN_AND_MEAN" "1" =
-        extern struct WIN32_FIND_DATAA =
+        extern struct _WIN32_FIND_DATAA as WIN32_FIND_DATAA =
             _dwFileAttributes: uint32
             _ftCreationTime: uint8[8]
             _ftLastAccessTime: uint8[8]
