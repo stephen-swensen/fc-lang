@@ -1,0 +1,36 @@
+// Regression: extern struct with a fixed-array field accessed by value.
+//
+// The field on the C side is `char[N]`; FC declares it as `uint8[N]`. When
+// the field is read via `val.field` (EXPR_FIELD), codegen must emit a cast
+// on the slice-view `.ptr` — otherwise gcc/clang reject the generated C
+// under `-Wall -Werror` (pointer-sign mismatch `char*` vs `uint8_t*`).
+//
+// The parallel pointer-access path (`p->field`, EXPR_DEREF_FIELD) already
+// emitted the cast, which is why this only surfaced when `list_dir`'s
+// Windows branch accessed `fd.cFileName` on a by-value `WIN32_FIND_DATAA`.
+//
+// The local `fixed_array_box.h` makes this cross-platform — no reliance on
+// system headers whose layouts differ between glibc/musl/macOS/Windows.
+module h from "fixed_array_box.h" =
+    extern struct fc_box =
+        name: uint8[32]
+        filled: int32
+    extern fc_box_fill: (fc_box*, const cstr) -> int32
+
+let main = (args: str[]) ->
+    let mut box = default(h.fc_box)
+    let written = h.fc_box_fill(&box, (cstr) "hello")
+    assert(written == 5)
+    assert(box.filled == 5)
+
+    // By-value fixed-array field access → slice view.
+    // Without the cast this line fails to compile under -Werror=pointer-sign.
+    let view = box.name
+    assert(view.len == 32)
+
+    // Indexing through that slice exercises the same path again
+    // (EXPR_FIELD inside the generated fc_str constructor).
+    assert(view[0] == 'h')
+    assert(view[4] == 'o')
+    assert(view[5] == 0u8)
+    0

@@ -2029,9 +2029,16 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Fixed-array field: create slice view */
         if (e->field.fixed_array_type) {
             Type *fat = e->field.fixed_array_type;
+            /* Strip const from emitted slice type — FC enforces const at type-check level */
+            Type *slice_type = e->type;
+            if (slice_type->is_const) {
+                slice_type = type_slice(g_arena, fat->fixed_array.elem);
+            }
             fprintf(out, "(");
-            emit_type(e->type, out);
-            fprintf(out, "){ .ptr = ");
+            emit_type(slice_type, out);
+            fprintf(out, "){ .ptr = (");
+            emit_type(fat->fixed_array.elem, out);
+            fprintf(out, "*)");
             emit_expr(e->field.object, out);
             fprintf(out, ".%s, .len = %lld }", e->field.name,
                     (long long)fat->fixed_array.size);
