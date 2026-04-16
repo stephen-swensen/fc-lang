@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <ctype.h>
 
 void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable *intern) {
@@ -190,7 +191,7 @@ static bool is_type_name(const char *s, int len) {
 
 /* type_from_name is now in types.c/h */
 
-static uint64_t parse_int_value(const char *start, int length);
+static uint64_t parse_int_value(const char *start, int length, bool *out_of_range);
 
 static Type *parse_type_suffix(Parser *p, Type *base) {
     /* T*, T[], T[N], T? — left to right */
@@ -209,8 +210,9 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_INT_LIT) {
             advance_p(p); /* consume [ */
             Token *size_tok = current(p);
-            int64_t size = parse_int_value(size_tok->start, size_tok->length);
-            if (size <= 0) {
+            bool size_oor = false;
+            int64_t size = parse_int_value(size_tok->start, size_tok->length, &size_oor);
+            if (size_oor || size <= 0) {
                 SrcLoc loc = loc_from_token(size_tok);
                 diag_fatal(loc, "fixed array size must be a positive integer, got %lld",
                            (long long)size);
@@ -402,50 +404,37 @@ static Pattern *parse_pattern(Parser *p);
 static Expr *parse_match_expr(Parser *p);
 static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc);
 
-static uint64_t parse_int_value(const char *start, int length) {
+static uint64_t parse_int_value(const char *start, int length, bool *out_of_range) {
     char buf[72];  /* 64 binary digits + null + margin */
     int num_len = 0;
+    if (out_of_range) *out_of_range = false;
 
-    /* Check for 0x, 0b, 0o prefixes */
+    int base = 10;
+    int prefix_len = 0;
     if (length >= 2 && start[0] == '0') {
-        if (start[1] == 'x' || start[1] == 'X') {
-            for (int i = 2; i < length && num_len < 71; i++) {
-                char c = start[i];
-                if (isxdigit((unsigned char)c)) buf[num_len++] = c;
-                else if (c == '_') continue;
-                else break;
-            }
-            buf[num_len] = '\0';
-            return strtoull(buf, NULL, 16);
-        }
-        if (start[1] == 'b' || start[1] == 'B') {
-            for (int i = 2; i < length && num_len < 71; i++) {
-                if (start[i] == '0' || start[i] == '1') buf[num_len++] = start[i];
-                else if (start[i] == '_') continue;
-                else break;
-            }
-            buf[num_len] = '\0';
-            return strtoull(buf, NULL, 2);
-        }
-        if (start[1] == 'o' || start[1] == 'O') {
-            for (int i = 2; i < length && num_len < 71; i++) {
-                if (start[i] >= '0' && start[i] <= '7') buf[num_len++] = start[i];
-                else if (start[i] == '_') continue;
-                else break;
-            }
-            buf[num_len] = '\0';
-            return strtoull(buf, NULL, 8);
-        }
+        if (start[1] == 'x' || start[1] == 'X')      { base = 16; prefix_len = 2; }
+        else if (start[1] == 'b' || start[1] == 'B') { base = 2;  prefix_len = 2; }
+        else if (start[1] == 'o' || start[1] == 'O') { base = 8;  prefix_len = 2; }
     }
 
-    for (int i = 0; i < length && num_len < 71; i++) {
-        if (start[i] >= '0' && start[i] <= '9') buf[num_len++] = start[i];
-        else if (start[i] == '_') continue;
+    for (int i = prefix_len; i < length && num_len < 71; i++) {
+        char c = start[i];
+        bool ok = false;
+        switch (base) {
+        case 16: ok = isxdigit((unsigned char)c); break;
+        case 10: ok = (c >= '0' && c <= '9'); break;
+        case 8:  ok = (c >= '0' && c <= '7'); break;
+        case 2:  ok = (c == '0' || c == '1'); break;
+        }
+        if (ok) buf[num_len++] = c;
+        else if (c == '_') continue;
         else break;
     }
     buf[num_len] = '\0';
     errno = 0;
-    return strtoull(buf, NULL, 10);
+    uint64_t v = strtoull(buf, NULL, base);
+    if (errno == ERANGE && out_of_range) *out_of_range = true;
+    return v;
 }
 
 /* Find where the numeric part ends (for suffix extraction) */
@@ -739,30 +728,55 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_INT_LIT: {
         advance_p(p);
         Expr *e = alloc_expr(p, EXPR_INT_LIT, loc);
-        e->int_lit.value = parse_int_value(t->start, t->length);
+        bool int_oor = false;
+        e->int_lit.value = parse_int_value(t->start, t->length, &int_oor);
         e->int_lit.lit_type = parse_int_type(t->start, t->length);
+        e->int_lit.out_of_range = int_oor;
         return e;
     }
 
     case TOK_FLOAT_LIT: {
         advance_p(p);
         Expr *e = alloc_expr(p, EXPR_FLOAT_LIT, loc);
-        char buf[64];
+        /* Determine suffix length first so the strtod buffer excludes it */
+        int suffix_len = 0;
+        if (t->length >= 3 && t->start[t->length - 3] == 'f'
+            && (t->start[t->length - 2] == '3' || t->start[t->length - 2] == '6')
+            && (t->start[t->length - 1] == '2' || t->start[t->length - 1] == '4')) {
+            suffix_len = 3;
+        }
+        int num_end = t->length - suffix_len;
+        char buf[128];
         int num_len = 0;
-        int scan_pos = 0;
-        for (scan_pos = 0; scan_pos < t->length && num_len < 71; scan_pos++) {
-            char c = t->start[scan_pos];
-            if ((c >= '0' && c <= '9') || c == '.') buf[num_len++] = c;
-            else if (c == '_') continue;
-            else break;
+        bool mantissa_nonzero = false;
+        bool past_mantissa = false;
+        for (int i = 0; i < num_end && num_len < (int)sizeof(buf) - 1; i++) {
+            char c = t->start[i];
+            if (c == '_') continue;
+            if (c == 'e' || c == 'E') past_mantissa = true;
+            if (!past_mantissa && c >= '1' && c <= '9') mantissa_nonzero = true;
+            buf[num_len++] = c;
         }
         buf[num_len] = '\0';
-        e->float_lit.value = strtod(buf, NULL);
-        if (scan_pos < t->length && t->start[scan_pos] == 'f'
-            && t->length - scan_pos >= 3 && t->start[scan_pos+1] == '3' && t->start[scan_pos+2] == '2')
-            e->float_lit.lit_type = type_float32();
-        else
-            e->float_lit.lit_type = type_float64();
+        errno = 0;
+        double v = strtod(buf, NULL);
+        bool oor = false, underflow = false;
+        /* strtod sets ERANGE on overflow (returns ±HUGE_VAL) and may also
+         * set it on underflow even for subnormal results. Distinguish by
+         * checking the result: only ±inf is overflow; only 0 from a nonzero
+         * source is underflow; subnormals are accepted silently. */
+        if (isinf(v)) oor = true;
+        else if (v == 0.0 && mantissa_nonzero) underflow = true;
+        bool is_f32 = (suffix_len == 3 && t->start[t->length - 2] == '3');
+        if (is_f32 && !oor && !underflow) {
+            float fv = (float)v;
+            if (isinf(fv)) oor = true;
+            else if (fv == 0.0f && mantissa_nonzero) underflow = true;
+        }
+        e->float_lit.value = v;
+        e->float_lit.lit_type = is_f32 ? type_float32() : type_float64();
+        e->float_lit.out_of_range = oor;
+        e->float_lit.underflow = underflow;
         return e;
     }
 
@@ -1723,16 +1737,20 @@ static Pattern *parse_pattern_atom(Parser *p) {
         if (type_is_unsigned(lt))
             diag_fatal(loc, "cannot negate unsigned integer literal");
         pat->kind = PAT_INT_LIT;
-        pat->int_lit.value = -parse_int_value(t->start, t->length);
+        bool pat_oor = false;
+        pat->int_lit.value = -parse_int_value(t->start, t->length, &pat_oor);
         pat->int_lit.lit_type = lt;
+        pat->int_lit.out_of_range = pat_oor;
         return pat;
     }
 
     if (check(p, TOK_INT_LIT)) {
         Token *t = advance_p(p);
         pat->kind = PAT_INT_LIT;
-        pat->int_lit.value = parse_int_value(t->start, t->length);
+        bool pat_oor = false;
+        pat->int_lit.value = parse_int_value(t->start, t->length, &pat_oor);
         pat->int_lit.lit_type = parse_int_type(t->start, t->length);
+        pat->int_lit.out_of_range = pat_oor;
         return pat;
     }
 

@@ -545,8 +545,14 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
  * The value is stored as uint64_t; for signed types we check the
  * bit pattern against the type's range. Negative literals are
  * represented as the two's-complement uint64_t (e.g. -1 → 0xFFFF...).
- * Unsigned negation is caught separately in negation folding. */
-static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc) {
+ * Unsigned negation is caught separately in negation folding.
+ * If the parser flagged the literal as out-of-range (strtoull saturated
+ * to ULLONG_MAX), report that first since the stored value is meaningless. */
+static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc, bool out_of_range) {
+    if (out_of_range) {
+        diag_error(loc, "integer literal exceeds 64-bit unsigned range (max 18446744073709551615)");
+        return;
+    }
     switch (type->kind) {
     case TYPE_INT8:
         if (value > 127 && value < (uint64_t)(int64_t)-128)
@@ -579,6 +585,25 @@ static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc) {
     case TYPE_UINT64:
         return; /* always fits in uint64_t storage */
     default: return;
+    }
+}
+
+/* Check a float literal for overflow/underflow detected by the parser.
+ * Overflow → ±inf in the target type; underflow → 0 from a nonzero source.
+ * Subnormals are accepted (C accepts them silently, so do we). */
+static void check_float_literal_range(Type *type, bool out_of_range, bool underflow, SrcLoc loc) {
+    if (out_of_range) {
+        if (type->kind == TYPE_FLOAT32)
+            diag_error(loc, "float literal out of range for float32 (max ~3.4e38)");
+        else
+            diag_error(loc, "float literal out of range for float64 (max ~1.8e308)");
+        return;
+    }
+    if (underflow) {
+        if (type->kind == TYPE_FLOAT32)
+            diag_error(loc, "float literal underflows to zero in float32");
+        else
+            diag_error(loc, "float literal underflows to zero in float64");
     }
 }
 
@@ -1455,11 +1480,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
-        check_int_literal_range(e->int_lit.value, e->type, e->loc);
+        check_int_literal_range(e->int_lit.value, e->type, e->loc, e->int_lit.out_of_range);
         return e->type;
 
     case EXPR_FLOAT_LIT:
         e->type = e->float_lit.lit_type;
+        check_float_literal_range(e->type, e->float_lit.out_of_range,
+                                  e->float_lit.underflow, e->loc);
         return e->type;
 
     case EXPR_BOOL_LIT:
@@ -2006,17 +2033,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
                 /* Negate via two's complement: -(uint64_t)v */
                 uint64_t val = -operand->int_lit.value;
+                bool oor = operand->int_lit.out_of_range;
                 e->kind = EXPR_INT_LIT;
                 e->int_lit.value = val;
                 e->int_lit.lit_type = lt;
+                e->int_lit.out_of_range = oor;
                 return check_expr(ctx, e);
             }
             if (operand->kind == EXPR_FLOAT_LIT) {
                 double val = -operand->float_lit.value;
                 Type *lt = operand->float_lit.lit_type;
+                bool oor = operand->float_lit.out_of_range;
+                bool uf  = operand->float_lit.underflow;
                 e->kind = EXPR_FLOAT_LIT;
                 e->float_lit.value = val;
                 e->float_lit.lit_type = lt;
+                e->float_lit.out_of_range = oor;
+                e->float_lit.underflow = uf;
                 return check_expr(ctx, e);
             }
         }
@@ -3985,7 +4018,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             diag_error(pat->loc, "integer pattern on non-integer type %s", type_name(type));
             return;
         }
-        check_int_literal_range(pat->int_lit.value, type, pat->loc);
+        check_int_literal_range(pat->int_lit.value, type, pat->loc, pat->int_lit.out_of_range);
         break;
     case PAT_BOOL_LIT:
         if (!type_eq(type, type_bool())) {

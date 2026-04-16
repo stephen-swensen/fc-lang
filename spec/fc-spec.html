@@ -704,6 +704,8 @@ Implicit widening conversions are allowed in binary expressions and comparisons 
 | 42i32 | int32 (explicit, same as default) |
 | 3.14 | float64 (default) |
 | 3.14f32, 3.14f64 | float32, float64 |
+| 1e9, 1.5e-3, 1E+18 | float64 (scientific notation) |
+| 2.5e10f32 | float32 (scientific notation, suffixed) |
 | true, false | bool |
 | 'a', '\\n', '\\x41' | char (alias for uint8) |
 | "hello" | str |
@@ -717,7 +719,11 @@ let bytes = 0xFF_FF            // hex with separator
 let bits = 0b1010_0101         // binary with separator
 let pi = 3.14_159              // float with separator
 let big = 1_000_000i64         // suffixed with separator
+let avo = 6.022_140_76e23      // separators in mantissa, scientific notation
+let huge = 1_000e1_0           // separators in exponent digits too
 ```
+
+Float literals support **scientific notation** with `e` or `E`, an optional sign, and at least one exponent digit. The mantissa may be an integer (`1e9`) or have a decimal point (`1.5e-3`), but if a `.` is present it still requires a digit on each side. Exponent digits may use `_` separators. The lexer commits to an exponent only when `e`/`E` is immediately followed by a digit (or `+`/`-` then digit) with no whitespace, so `1e3 - 2` parses as `1000.0 - 2.0`. Hex float literals (`0x1.8p+1`) are not supported.
 
 Suffixed integer literals are range-checked at compile time. A literal whose value does not fit in the specified type is a compile error:
 
@@ -727,6 +733,19 @@ let b = 256u8       // compile error — 256 exceeds uint8 range (0..255)
 let c = 127i8       // ok
 let d = 255u8       // ok
 ```
+
+Float literals are likewise range-checked. Overflow to ±infinity and underflow to zero from a nonzero source are FC compile errors — the FC compiler catches these directly so they never surface as confusing C-level errors:
+
+```fc
+let a = 1e400          // compile error — overflows float64 (max ~1.8e308)
+let b = 1e40f32        // compile error — overflows float32 (max ~3.4e38)
+let c = 1e-400         // compile error — underflows to zero in float64
+let d = -1e400         // compile error — overflow with signed value reported
+let e = 5e-324         // ok — rounds to a representable float64 subnormal
+let f = 0e500          // ok — mantissa is exactly zero
+```
+
+Integer literals that exceed 64-bit unsigned range (`> 18446744073709551615`) are also caught at compile time rather than silently truncating.
 
 The same rule applies to `char` literals, which are aliases for `uint8`.
 

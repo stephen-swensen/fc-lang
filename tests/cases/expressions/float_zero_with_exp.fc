@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let a = 0e500
+    let b = 0.0e-500
+    let c = 0e0
+    assert(a == 0.0)
+    assert(b == 0.0)
+    assert(c == 0.0)
+    0

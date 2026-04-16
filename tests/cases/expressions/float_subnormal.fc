@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let a = 5e-324
+    assert(a > 0.0)
+    assert(a < 1e-300)
+    0

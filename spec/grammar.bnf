@@ -148,7 +148,16 @@ INT_LIT       = digit , { [ '_' ] , digit } , [ int_suffix ] ;
 (* --- Float literals ---                                              *)
 
 float_suffix  = "f32" | "f64" ;
-FLOAT_LIT     = digit , { [ '_' ] , digit } , '.' , digit , { [ '_' ] , digit } , [ float_suffix ] ;
+exponent      = ( "e" | "E" ) , [ "+" | "-" ] , digit , { [ '_' ] , digit } ;
+FLOAT_LIT     = digit , { [ '_' ] , digit } ,
+                ( '.' , digit , { [ '_' ] , digit } , [ exponent ]
+                | exponent )
+              , [ float_suffix ] ;
+
+(* Examples: 3.14, 6.022_140_76e23, 1e9, 1.5e-3, 2.5e10f32.            *)
+(* Float literals are range-checked at compile time: overflow to ±inf  *)
+(* and underflow-from-nonzero-to-zero are FC errors, not C errors.     *)
+(* Hex float literals (0x1.8p+1) are not supported.                    *)
 
 (* --- Boolean literals ---                                            *)
 

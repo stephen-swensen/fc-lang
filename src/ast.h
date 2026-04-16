@@ -103,10 +103,10 @@ struct Expr {
     Provenance prov;    /* filled in by pass2: storage provenance for escape analysis */
     union {
         /* EXPR_INT_LIT */
-        struct { uint64_t value; Type *lit_type; } int_lit;
+        struct { uint64_t value; Type *lit_type; bool out_of_range; } int_lit;
 
         /* EXPR_FLOAT_LIT */
-        struct { double value; Type *lit_type; } float_lit;
+        struct { double value; Type *lit_type; bool out_of_range; bool underflow; } float_lit;
 
         /* EXPR_BOOL_LIT */
         struct { bool value; } bool_lit;
@@ -327,7 +327,7 @@ struct Pattern {
     SrcLoc loc;
     union {
         struct { const char *name; } binding;
-        struct { uint64_t value; Type *lit_type; } int_lit;
+        struct { uint64_t value; Type *lit_type; bool out_of_range; } int_lit;
         struct { uint8_t value; } char_lit;
         struct { bool value; } bool_lit;
         struct { const char *value; int length; } string_lit;

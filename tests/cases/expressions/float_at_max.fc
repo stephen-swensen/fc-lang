@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let a = 1.7e308
+    let b = 1e38f32
+    assert(a > 1e300)
+    assert(b > 1e30f32)
+    0

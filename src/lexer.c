@@ -25,6 +25,10 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern,
 
 static char peek(Lexer *l)      { return *l->current; }
 static char peek_next(Lexer *l) { return l->current[0] ? l->current[1] : '\0'; }
+static char peek_at(Lexer *l, int n) {
+    for (int i = 0; i < n; i++) if (l->current[i] == '\0') return '\0';
+    return l->current[n];
+}
 static bool at_end(Lexer *l)    { return *l->current == '\0'; }
 
 static char advance(Lexer *l) {
@@ -182,9 +186,28 @@ static Token scan_number(Lexer *l) {
         }
     }
     while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
+    bool is_float = false;
     if (peek(l) == '.' && isdigit((unsigned char)peek_next(l))) {
         advance(l);
         while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
+        is_float = true;
+    }
+    /* Optional exponent: [eE][+-]?digit{['_']digit}. Commit only if a digit
+     * (optionally preceded by sign) immediately follows e/E, with no whitespace.
+     * Rationale: keeps `1e3 - 2` parsing as subtraction, not `1.0e3-2`. */
+    if (peek(l) == 'e' || peek(l) == 'E') {
+        char c1 = peek_next(l);
+        bool committed = false;
+        if (isdigit((unsigned char)c1)) committed = true;
+        else if ((c1 == '+' || c1 == '-') && isdigit((unsigned char)peek_at(l, 2))) committed = true;
+        if (committed) {
+            advance(l); /* consume e/E */
+            if (peek(l) == '+' || peek(l) == '-') advance(l);
+            while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
+            is_float = true;
+        }
+    }
+    if (is_float) {
         if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
             advance(l); advance(l);
             if (peek(l) == '2' || peek(l) == '4') advance(l);

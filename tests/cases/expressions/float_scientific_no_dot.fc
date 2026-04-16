@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let a = 1e9
+    let b = 5e0
+    assert(a == 1000000000.0)
+    assert(b == 5.0)
+    0

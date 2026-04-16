@@ -1,0 +1,12 @@
+let main = (args: str[]) ->
+    let a = 1e9
+    let b = 1.5e-3
+    let c = 1E+18
+    let d = 1_000e1_0
+    let e = 2.5e10f32
+    assert(a == 1000000000.0)
+    assert(b > 0.0014 && b < 0.0016)
+    assert(c == 1.0e18)
+    assert(d == 1.0e13)
+    assert(e == 2.5e10f32)
+    0

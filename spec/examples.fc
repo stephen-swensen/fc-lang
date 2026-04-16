@@ -125,6 +125,12 @@ let main = (args: str[]) ->
     let bin = 0b1010_0101
     let oct = 0o77
 
+    // Scientific notation for floats (mantissa may omit '.')
+    let billion = 1e9                    // float64
+    let micro = 1.5e-6                   // float64
+    let avo = 6.022_140_76e23            // separators allowed everywhere
+    let mass = 9.109e-31f32              // float32 with exponent
+
     // --------------------------------------------------------
     // Bindings: let (immutable) and let mut (mutable)
     // --------------------------------------------------------

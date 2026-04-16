@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = 1.e9
+    0

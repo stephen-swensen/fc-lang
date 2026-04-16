@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let a = 1e3 - 2.0
+    assert(a == 998.0)
+    0
