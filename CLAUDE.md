@@ -16,7 +16,9 @@ This is a compiler project for **FC** (version 1.0-draft), a systems programming
 - **`./fc input.fc -o output.c`** — Compile a single FC file to C
 - **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
 
-The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g`. Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean.
+**Optimization (opt-in):** the compiler defaults to `-O0`; pass `OPT=-O2` for an optimized `./fc` (e.g., `make clean && make OPT=-O2`). Tests default to `-O0` for the transpiled C; `make test-gcc-O2` / `test-clang-O2` / `test-all-O2` re-run the suite at `-O2` to catch optimizer-surfaced UB. The two axes are independent. `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
+
+The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g` (plus `$(OPT)`). Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean.
 
 **Struct initialization**: Always declare stack-allocated structs with `= {0}` before calling their init function (e.g., `Parser parser = {0};`). This prevents uninitialized-field bugs when new fields are added but the init function isn't updated — the kind of bug that only manifests on some platforms. `arena_alloc` already zero-fills heap allocations.
 
