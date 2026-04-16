@@ -4,6 +4,12 @@ FC is a systems programming language that transpiles to C11. It aims to combine 
 
 https://fc-lang.dev
 
+## Development Transparency
+
+FC was developed with heavy AI assistance — primarily **Anthropic's Claude Opus 4.6** (and earlier Opus/Sonnet models) driven through **[Claude Code](https://claude.com/claude-code)**. The human author (Stephen Swensen) designed the language, authored the specification, set architectural direction, reviewed every change, drove design decisions, and took responsibility for correctness, style, and the licensing posture. The AI generated the bulk of the C compiler implementation, standard library, test suite, and specification prose under that direction.
+
+This is disclosed up front because FC is also intended as a demonstration of what a well-directed human/AI collaboration can produce on a non-trivial language-design and compiler-construction task, and because readers evaluating the compiler — or considering FC as a reference for their own language work — deserve to know how it was built.
+
 ## Key Features
 
 - **C11 target** — generates portable C using `<stdint.h>` types and `_Static_assert`
