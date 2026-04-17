@@ -61,7 +61,7 @@ run_one_test() {
     # Compile C -> binary (include source dir for local .h files)
     local src_dir
     src_dir="$(dirname "$(echo $fc_files | awk '{print $1}')")"
-    if ! "$CC" -std=c11 -Wall -Werror ${CC_OPT:-} -I "$src_dir" -o "$bin_file" "$c_file" -lm $EXTRA_LIBS 2>"$TMPDIR/${slug}.cc_stderr"; then
+    if ! "$CC" -std=c11 -Wall -Werror -Wno-unused-function ${CC_OPT:-} -I "$src_dir" -o "$bin_file" "$c_file" -lm $EXTRA_LIBS 2>"$TMPDIR/${slug}.cc_stderr"; then
         echo "FAIL  $test_display (C compilation failed)"
         cat "$TMPDIR/${slug}.cc_stderr" >&2
         return

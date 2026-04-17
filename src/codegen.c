@@ -3029,12 +3029,16 @@ static void emit_func_decl(Decl *d, FILE *out) {
     bool is_main = strcmp(d->let.name, "main") == 0;
 
     if (is_main) {
-        /* Emit the FC main body as fc_main(str[] args) */
-        fprintf(out, "int32_t fc_main(");
+        /* Emit the FC main body as fc_main(str[] args).  Static: only the
+         * int main(int, char**) wrapper (emitted below) calls it. */
+        fprintf(out, "static int32_t fc_main(");
         emit_type(fn->func.params[0].type, out);
         fprintf(out, " %s) {\n", fn->func.params[0].name);
     } else {
-        /* Emit return type */
+        /* Emit return type.  Static: FC emits a single translation unit, so
+         * nothing outside this TU calls these functions; static allows GCC
+         * to inline more aggressively and DCE unused helpers. */
+        fprintf(out, "static ");
         emit_type(ft->func.return_type, out);
         fprintf(out, " %s(", cname);
         for (int i = 0; i < fn->func.param_count; i++) {
@@ -4630,7 +4634,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Decl *d = all_decls[i];
         if (is_func_decl(d) && strcmp(d->let.name, "main") == 0 && !is_generic_decl(d)) {
             Expr *fn = d->let.init;
-            fprintf(out, "int32_t fc_main(");
+            fprintf(out, "static int32_t fc_main(");
             emit_type(fn->func.params[0].type, out);
             fprintf(out, " %s);\n", fn->func.params[0].name);
             continue;
@@ -4638,6 +4642,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (is_func_decl(d) && strcmp(d->let.name, "main") != 0 && !is_generic_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             Type *ft = d->let.resolved_type;
+            fprintf(out, "static ");
             emit_type(ft->func.return_type, out);
             fprintf(out, " %s(", cname);
             Expr *fn = d->let.init;
@@ -4660,6 +4665,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         /* Set up substitution context */
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
+        fprintf(out, "static ");
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
         for (int j = 0; j < fn->func.param_count; j++) {
@@ -4833,6 +4839,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Expr *fn = tmpl->let.init;
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
+        fprintf(out, "static ");
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
         for (int j = 0; j < fn->func.param_count; j++) {
@@ -4855,6 +4862,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Expr *fn = tmpl->let.init;
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
+        fprintf(out, "static ");
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
         for (int j = 0; j < fn->func.param_count; j++) {
