@@ -18,7 +18,7 @@ This is a compiler project for **FC** (version 1.0-draft), a systems programming
 
 **Optimization (opt-in):** the compiler defaults to `-O0`; pass `OPT=-O2` for an optimized `./fc` (e.g., `make clean && make OPT=-O2`). Tests default to `-O0` for the transpiled C; `make test-gcc-O2` / `test-clang-O2` / `test-all-O2` re-run the suite at `-O2` to catch optimizer-surfaced UB. The two axes are independent. `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
 
-The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g` (plus `$(OPT)`). Tests compile the generated C with `cc -std=c11 -Wall -Werror -Wno-unused-function`, so the emitted C must be warning-clean. `-Wno-unused-function` is used because FC emits all helpers (e.g. imported stdlib functions) as `static`, and many are unreferenced in any given program — GCC/clang DCE them at link time; we don't want `-Werror` to fire on that.
+The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g` (plus `$(OPT)`). Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean. FC emits all helpers (e.g. imported stdlib functions) as `static __attribute__((unused))`, so `-Wunused-function` stays quiet even though many helpers are unreferenced in any given program — GCC/clang still DCE them at link time.
 
 **Struct initialization**: Always declare stack-allocated structs with `= {0}` before calling their init function (e.g., `Parser parser = {0};`). This prevents uninitialized-field bugs when new fields are added but the init function isn't updated — the kind of bug that only manifests on some platforms. `arena_alloc` already zero-fills heap allocations.
 
@@ -172,7 +172,7 @@ Each **multi-file test** is a subdirectory containing:
 - `expected_exit` or `error` (no dot prefix) — the expected result
 - `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
 
-Run with `make test-all`. The test runner compiles FC→C with `./fc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror -Wno-unused-function`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
+Run with `make test-all`. The test runner compiles FC→C with `./fc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
 
 ### Multi-file tests
 
