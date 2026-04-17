@@ -4,6 +4,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Codegen: emit newlines inside large struct initializers (fixed 2026-04-16)
+
+Originally: `alloc(SomeStruct { field1 = alloc(...)!, field2 = alloc(...)!, ... })!` lowered to one massive C line — every nested `alloc(...)!` expanded to a GCC statement-expression and they concatenated inline into the struct literal. With ~10+ fields the line crossed gcc's column-tracking limit (~4096 cols), causing `note: '-Wmisleading-indentation' is disabled from this point onwards, since column-tracking was disabled due to the size of the code/headers`. Wolf-fc hit this in `build_level` (~17 fields) and silenced it with `-Wno-misleading-indentation`.
+
+**Resolution:** `EXPR_STRUCT_LIT` emission now breaks fields onto their own lines when the literal has 2+ fields, using the standard `indent_level` machinery. The `alloc(struct_lit)` and `alloc(union_variant)` lowerings also wrap the `if (_ap) *_ap = ...;` assignment in explicit braces so multi-line struct literals don't trip clang's `-Wmisleading-indentation` either. Reproducer (17-field struct alloc'd with nested `alloc(int32)!`) dropped from a 3723-col line to 635 cols; all 1134 tests pass on gcc and clang.
+
+---
+
 ## `!` boolean-not precedence in nested if/else chains (investigated 2026-04-14)
 
 Originally filed after writing the wolf-fc push-wall code: `else if !pushwall_tiles[idx] then false` inside a deeply-nested if/else chain appeared to parse incorrectly — the condition seemed to not trigger as expected. The speculation was that `!` might be mis-parsed as postfix option-unwrap on the slice-index expression, or that there was a precedence interaction with `else if`.

@@ -2314,18 +2314,40 @@ static void emit_expr(Expr *e, FILE *out) {
             }
             fprintf(out, "_sl%d; })", tid);
         } else {
+            /* Multi-line when 2+ fields: each field on its own line so nested
+             * statement-expressions (e.g. alloc(...)!) don't concatenate into
+             * one huge line that trips gcc's column-tracking limit. */
+            bool multiline = e->struct_lit.field_count >= 2;
             if (st && st->kind == TYPE_STRUCT && st->struc.c_name) {
-                fprintf(out, "(%s %s){ ", st->struc.is_c_union ? "union" : "struct",
+                fprintf(out, "(%s %s){", st->struc.is_c_union ? "union" : "struct",
                     st->struc.c_name);
             } else {
-                fprintf(out, "(%s){ ", sname);
+                fprintf(out, "(%s){", sname);
+            }
+            if (multiline) {
+                fprintf(out, "\n");
+                indent_level++;
+            } else {
+                fprintf(out, " ");
             }
             for (int i = 0; i < e->struct_lit.field_count; i++) {
-                if (i > 0) fprintf(out, ", ");
+                if (i > 0) {
+                    fprintf(out, ",");
+                    if (multiline) fprintf(out, "\n");
+                    else fprintf(out, " ");
+                }
+                if (multiline) emit_indent(out);
                 fprintf(out, ".%s = ", e->struct_lit.fields[i].name);
                 emit_expr(e->struct_lit.fields[i].value, out);
             }
-            fprintf(out, " }");
+            if (multiline) {
+                fprintf(out, "\n");
+                indent_level--;
+                emit_indent(out);
+                fprintf(out, "}");
+            } else {
+                fprintf(out, " }");
+            }
         }
         break;
     }
@@ -2811,7 +2833,9 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->type, out);
             fprintf(out, "){ .has_value = false }; })");
         } else if (e->alloc_expr.init_expr->kind == EXPR_STRUCT_LIT) {
-            /* alloc(struct_lit) → T*? (malloc + compound literal, null sentinel) */
+            /* alloc(struct_lit) → T*? (malloc + compound literal, null sentinel).
+             * Braces around the if body so multi-line struct literals don't
+             * trigger clang's -Wmisleading-indentation. */
             int tid = temp_counter++;
             Type *val_type = e->alloc_expr.init_expr->type;
             fprintf(out, "({ ");
@@ -2820,9 +2844,9 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(val_type, out);
             fprintf(out, "*)malloc(sizeof(");
             emit_type(val_type, out);
-            fprintf(out, ")); if (_ap%d) *_ap%d = ", tid, tid);
+            fprintf(out, ")); if (_ap%d) { *_ap%d = ", tid, tid);
             emit_expr(e->alloc_expr.init_expr, out);
-            fprintf(out, "; _ap%d; })", tid);
+            fprintf(out, "; } _ap%d; })", tid);
         } else if (e->alloc_expr.init_expr->type &&
                    e->alloc_expr.init_expr->type->kind == TYPE_UNION) {
             /* alloc(union_variant) → T*? (malloc + compound literal, null sentinel) */
@@ -2834,9 +2858,9 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(val_type, out);
             fprintf(out, "*)malloc(sizeof(");
             emit_type(val_type, out);
-            fprintf(out, ")); if (_ap%d) *_ap%d = ", tid, tid);
+            fprintf(out, ")); if (_ap%d) { *_ap%d = ", tid, tid);
             emit_expr(e->alloc_expr.init_expr, out);
-            fprintf(out, "; _ap%d; })", tid);
+            fprintf(out, "; } _ap%d; })", tid);
         } else if (e->alloc_expr.init_expr->type &&
                    e->alloc_expr.init_expr->type->kind == TYPE_SLICE) {
             /* alloc(slice_expr) → T[]? (deep-copy slice data to heap) */
