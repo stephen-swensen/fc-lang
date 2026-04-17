@@ -1632,11 +1632,17 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Integer division/modulo by zero check */
         if ((op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
             int tid = temp_counter++;
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int fn_len = (int)strlen(fn);
+            int line = e->loc.line;
             fprintf(out, "({ ");
             emit_type(rt, out);
             fprintf(out, " _dv%d = ", tid);
             emit_expr(e->binary.right, out);
-            fprintf(out, "; if (_dv%d == 0) abort(); (", tid);
+            fprintf(out, "; if (_dv%d == 0) { fprintf(stderr, \"", tid);
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, ":%d: %s by zero\\n\"); abort(); } (",
+                    line, op == TOK_SLASH ? "divide" : "modulo");
             emit_expr(e->binary.left, out);
             fprintf(out, ") %s _dv%d; })", op == TOK_SLASH ? "/" : "%", tid);
             break;
@@ -2104,14 +2110,22 @@ static void emit_expr(Expr *e, FILE *out) {
         Type *obj_type = e->index.object->type;
         if (obj_type && obj_type->kind == TYPE_SLICE) {
             int tid = temp_counter++;
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int fn_len = (int)strlen(fn);
+            int line = e->loc.line;
             fprintf(out, "(*({ ");
             emit_type(obj_type, out);
             fprintf(out, " _s%d = ", tid);
             emit_expr(e->index.object, out);
             fprintf(out, "; int64_t _i%d = (int64_t)", tid);
             emit_expr(e->index.index, out);
-            fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) abort(); _s%d.ptr + _i%d; }))",
-                tid, tid, tid, tid, tid);
+            fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) { fprintf(stderr, \"",
+                    tid, tid, tid);
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, ":%d: slice index out of range: index=%%lld len=%%lld\\n\", "
+                         "(long long)_i%d, (long long)_s%d.len); abort(); } "
+                         "_s%d.ptr + _i%d; }))",
+                    line, tid, tid, tid, tid);
         } else {
             /* Pointer indexing — no bounds check */
             emit_expr(e->index.object, out);
@@ -2126,6 +2140,9 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Subslice: s[lo..hi] */
         int tid = temp_counter++;
         Type *obj_type = e->slice.object->type;
+        const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+        int fn_len = (int)strlen(fn);
+        int line = e->loc.line;
         fprintf(out, "({ ");
         emit_type(obj_type, out);
         fprintf(out, " _s%d = ", tid);
@@ -2144,8 +2161,14 @@ static void emit_expr(Expr *e, FILE *out) {
         } else {
             fprintf(out, "_s%d.len", tid);
         }
-        fprintf(out, "; if (_lo%d < 0 || _hi%d > _s%d.len || _lo%d > _hi%d) abort(); ",
+        fprintf(out, "; if (_lo%d < 0 || _hi%d > _s%d.len || _lo%d > _hi%d) "
+                     "{ fprintf(stderr, \"",
             tid, tid, tid, tid, tid);
+        emit_c_escaped(fn, fn_len, out);
+        fprintf(out, ":%d: subslice out of range: lo=%%lld hi=%%lld len=%%lld\\n\", "
+                     "(long long)_lo%d, (long long)_hi%d, (long long)_s%d.len); "
+                     "abort(); } ",
+                line, tid, tid, tid);
         fprintf(out, "(");
         emit_type(obj_type, out);
         fprintf(out, "){ .ptr = _s%d.ptr + _lo%d, .len = _hi%d - _lo%d }; })",
@@ -2265,11 +2288,20 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
                 if (field_type && field_type->kind == TYPE_FIXED_ARRAY) {
                     int sid = temp_counter++;
+                    SrcLoc vloc = e->struct_lit.fields[i].value->loc;
+                    const char *vfn = vloc.filename ? vloc.filename : "<unknown>";
+                    int vfn_len = (int)strlen(vfn);
                     emit_type(e->struct_lit.fields[i].value->type, out);
                     fprintf(out, " _fas%d = ", sid);
                     emit_expr(e->struct_lit.fields[i].value, out);
-                    fprintf(out, "; if (_fas%d.len > %lld) abort(); ",
-                            sid, (long long)field_type->fixed_array.size);
+                    fprintf(out, "; if (_fas%d.len > %lld) { fprintf(stderr, \"", sid,
+                            (long long)field_type->fixed_array.size);
+                    emit_c_escaped(vfn, vfn_len, out);
+                    fprintf(out, ":%d: fixed-array field '%s' overflow: "
+                                 "len=%%lld capacity=%lld\\n\", "
+                                 "(long long)_fas%d.len); abort(); } ",
+                            vloc.line, fname, (long long)field_type->fixed_array.size,
+                            sid);
                     fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, (size_t)_fas%d.len * sizeof(",
                             tid, fname, sid, sid);
                     emit_type(field_type->fixed_array.elem, out);
@@ -2847,13 +2879,22 @@ static void emit_expr(Expr *e, FILE *out) {
             target->field.fixed_array_type) {
             Type *fat = target->field.fixed_array_type;
             int tid = temp_counter++;
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int fn_len = (int)strlen(fn);
+            int line = e->loc.line;
             fprintf(out, "({ ");
             /* Evaluate source slice */
             emit_type(e->assign.value->type, out);
             fprintf(out, " _fas%d = ", tid);
             emit_expr(e->assign.value, out);
-            fprintf(out, "; if (_fas%d.len > %lld) abort(); ",
-                    tid, (long long)fat->fixed_array.size);
+            fprintf(out, "; if (_fas%d.len > %lld) { fprintf(stderr, \"", tid,
+                    (long long)fat->fixed_array.size);
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, ":%d: fixed-array field '%s' overflow: "
+                         "len=%%lld capacity=%lld\\n\", "
+                         "(long long)_fas%d.len); abort(); } ",
+                    line, target->field.name,
+                    (long long)fat->fixed_array.size, tid);
             /* memcpy the data */
             fprintf(out, "memcpy(");
             if (target->kind == EXPR_DEREF_FIELD) {
@@ -4020,6 +4061,10 @@ static void detect_features_expr(Expr *e) {
         return;
 
     case EXPR_BINARY:
+        /* Integer div/mod emits a by-zero abort with stderr message */
+        if ((e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
+            e->type && type_is_integer(e->type))
+            g_needs_stdio = true;
         detect_features_expr(e->binary.left);
         detect_features_expr(e->binary.right);
         return;
@@ -4062,6 +4107,12 @@ static void detect_features_expr(Expr *e) {
         detect_features_expr(e->let_destruct.init);
         return;
     case EXPR_ASSIGN:
+        /* Assignment to fixed-array field emits an overflow abort with stderr */
+        if (e->assign.target &&
+            (e->assign.target->kind == EXPR_FIELD ||
+             e->assign.target->kind == EXPR_DEREF_FIELD) &&
+            e->assign.target->field.fixed_array_type)
+            g_needs_stdio = true;
         detect_features_expr(e->assign.target);
         detect_features_expr(e->assign.value);
         return;
@@ -4105,15 +4156,30 @@ static void detect_features_expr(Expr *e) {
         detect_features_expr(e->defer_expr.value);
         return;
     case EXPR_INDEX:
+        /* Slice indexing emits a bounds-check abort with stderr message */
+        if (e->index.object && e->index.object->type &&
+            e->index.object->type->kind == TYPE_SLICE)
+            g_needs_stdio = true;
         detect_features_expr(e->index.object);
         detect_features_expr(e->index.index);
         return;
     case EXPR_SLICE:
+        /* Subslice emits a bounds-check abort with stderr message */
+        g_needs_stdio = true;
         detect_features_expr(e->slice.object);
         detect_features_expr(e->slice.lo);
         detect_features_expr(e->slice.hi);
         return;
     case EXPR_STRUCT_LIT:
+        /* Struct literal with fixed-array field emits an overflow abort with stderr */
+        if (e->type && e->type->kind == TYPE_STRUCT) {
+            for (int f = 0; f < e->type->struc.field_count; f++) {
+                if (e->type->struc.fields[f].type->kind == TYPE_FIXED_ARRAY) {
+                    g_needs_stdio = true;
+                    break;
+                }
+            }
+        }
         for (int i = 0; i < e->struct_lit.field_count; i++)
             detect_features_expr(e->struct_lit.fields[i].value);
         return;
