@@ -2106,7 +2106,11 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_INDEX: {
-        /* Bounds check for slices — returns lvalue via pointer dereference */
+        /* Bounds check for slices — returns lvalue via pointer dereference.
+         * Unsigned-compare fusion: casting a negative signed index to uint64_t
+         * produces a huge value that compares greater than any valid len
+         * (slice lengths are non-negative by invariant), so one compare
+         * subsumes both the negative-index and past-end checks. */
         Type *obj_type = e->index.object->type;
         if (obj_type && obj_type->kind == TYPE_SLICE) {
             int tid = temp_counter++;
@@ -2119,11 +2123,10 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->index.object, out);
             fprintf(out, "; int64_t _i%d = (int64_t)", tid);
             emit_expr(e->index.index, out);
-            fprintf(out, "; if (_i%d < 0 || _i%d >= _s%d.len) { fprintf(stderr, \"",
-                    tid, tid, tid);
+            fprintf(out, "; if (__builtin_expect((uint64_t)_i%d >= (uint64_t)_s%d.len, 0)) "
+                         "fc_oob(\"", tid, tid);
             emit_c_escaped(fn, fn_len, out);
-            fprintf(out, ":%d: slice index out of range: index=%%lld len=%%lld\\n\", "
-                         "(long long)_i%d, (long long)_s%d.len); abort(); } "
+            fprintf(out, "\", %d, (long long)_i%d, (long long)_s%d.len); "
                          "_s%d.ptr + _i%d; }))",
                     line, tid, tid, tid, tid);
         } else {
@@ -2137,7 +2140,12 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_SLICE: {
-        /* Subslice: s[lo..hi] */
+        /* Subslice: s[lo..hi].  Unsigned-compare fusion covers negative lo/hi
+         * and reversed ranges in a single pair of compares:
+         *   (uint64_t)lo > (uint64_t)hi  catches lo>hi and (if both negative)
+         *     any case where |lo| < |hi|.
+         *   (uint64_t)hi > (uint64_t)s.len catches past-end and negative hi
+         *     (negative cast to unsigned is huge). */
         int tid = temp_counter++;
         Type *obj_type = e->slice.object->type;
         const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
@@ -2161,13 +2169,13 @@ static void emit_expr(Expr *e, FILE *out) {
         } else {
             fprintf(out, "_s%d.len", tid);
         }
-        fprintf(out, "; if (_lo%d < 0 || _hi%d > _s%d.len || _lo%d > _hi%d) "
-                     "{ fprintf(stderr, \"",
-            tid, tid, tid, tid, tid);
+        fprintf(out, "; if (__builtin_expect("
+                     "(uint64_t)_lo%d > (uint64_t)_hi%d || "
+                     "(uint64_t)_hi%d > (uint64_t)_s%d.len, 0)) "
+                     "fc_oob_sub(\"",
+            tid, tid, tid, tid);
         emit_c_escaped(fn, fn_len, out);
-        fprintf(out, ":%d: subslice out of range: lo=%%lld hi=%%lld len=%%lld\\n\", "
-                     "(long long)_lo%d, (long long)_hi%d, (long long)_s%d.len); "
-                     "abort(); } ",
+        fprintf(out, "\", %d, (long long)_lo%d, (long long)_hi%d, (long long)_s%d.len); ",
                 line, tid, tid, tid);
         fprintf(out, "(");
         emit_type(obj_type, out);
@@ -4342,6 +4350,26 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
     /* Always emit fc_str (alias for uint8 slice) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
+
+    /* Out-of-bounds failure helpers.  Cold+noreturn so the hot path stays
+     * clean: the compiler can schedule these out of line, skip keeping
+     * caller state live across the call, and is free to vectorize/reorder
+     * loads around checked accesses.  Static so unused copies get DCE'd. */
+    if (g_needs_stdio) {
+        fprintf(out,
+            "__attribute__((cold, noreturn))\n"
+            "static void fc_oob(const char *file, int line, long long idx, long long len) {\n"
+            "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%lld len=%%lld\\n\",\n"
+            "            file, line, idx, len);\n"
+            "    abort();\n"
+            "}\n"
+            "__attribute__((cold, noreturn))\n"
+            "static void fc_oob_sub(const char *file, int line, long long lo, long long hi, long long len) {\n"
+            "    fprintf(stderr, \"%%s:%%d: subslice out of range: lo=%%lld hi=%%lld len=%%lld\\n\",\n"
+            "            file, line, lo, hi, len);\n"
+            "    abort();\n"
+            "}\n");
+    }
 
     /* Collect all slice, option, function, and eq types used in the program */
     TypeSet slices = {0};

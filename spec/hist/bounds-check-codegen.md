@@ -1,5 +1,7 @@
 # Bounds-Check Codegen: Improvements
 
+> **Disposition (2026-04):** Proposal 1 **shipped**. Proposal 2 **deferred** — see _Proposal 2: deferral rationale_ at the bottom for empirical measurements and the decision. This doc is retained as a historical reference.
+
 Two proposals for improving the C code FC emits for slice bounds checks. Motivated by an audit of generated C from the wolf-fc project (a raycasting game with hot per-pixel loops), where bounds-check overhead was both the largest source of generated-source bloat and a real obstacle to autovectorization in tight loops.
 
 Both proposals are codegen-only (no language-surface change, no new syntax, no test-reachable semantics change beyond byte-identical stderr output on failure). Proposal 1 is a mechanical rewrite of the emission site. Proposal 2 is a new flow-analysis pass with a narrow, high-value scope.
@@ -229,3 +231,33 @@ Recommended order:
 3. Ship Proposal 2 Phase 1 behind a compiler flag initially (e.g., `--elide-safe-bounds`), default off. Let it bake for a release.
 4. Promote Phase 1 to default-on after wolf-fc and the full test suite demonstrate stability.
 5. Decide on Phase 2 based on measured gaps.
+
+---
+
+## Proposal 2: deferral rationale (2026-04)
+
+After shipping Proposal 1, we measured the vectorization story on a canonical shape — `for i in 0..xs.len: acc = acc + xs[i]` compiled with `-O2` and `-O3 -march=x86-64-v3` under both GCC 13 and Clang 18:
+
+| Compiler / flags                | P1-checked form                | Unchecked form (what P2 would emit) |
+|---------------------------------|--------------------------------|-------------------------------------|
+| Clang `-O2`                     | vectorized (SSE, 5× `paddd`)   | vectorized (5× `paddd`)             |
+| Clang `-O2 -march=x86-64-v3`    | vectorized (AVX2, 10× `vpaddd`)| vectorized (10× `vpaddd`)           |
+| Clang `-O3 -march=x86-64-v3`    | vectorized (AVX2, 10× `vpaddd`)| vectorized (10× `vpaddd`)           |
+| GCC `-O2` / `-O3`               | scalar                         | scalar                              |
+| GCC `-O3 -march=x86-64-v3`      | **scalar** (check blocks it)   | vectorized (AVX2, 4× `vpaddd`)      |
+
+**Clang already vectorizes P1-checked code identically to unchecked code.** The `cold+noreturn` pattern from Proposal 1 gives Clang's vectorizer everything it needs to prove the cold path is unreachable and emit a clean SIMD body. P2 would deliver zero value to Clang users.
+
+**GCC does not vectorize the P1-checked form** and does not accept any of the `__builtin_unreachable`-based hints we tested to fix that (precheck-hoisting, `if (!(i < n)) __builtin_unreachable()` before the access, etc. — all measured, all still scalar). GCC's vectorizer appears to bail at the presence of a conditional call, regardless of `noreturn` or `cold` or hints that would make the condition provably false. Fixing this would require actually removing the branch from the emitted source, i.e. P2 as originally specified — no cheap middle-ground codegen trick worked.
+
+Weighing that against P2's real cost — a correctness-critical AST pass with subtle edge cases around closures, defers, pointer aliasing, monomorphization, nested shadowed loops, and mutable slice reassignment, where any false-positive elision is a memory-safety hole — the value only shows up for a narrow audience: users who specifically care about autovectorized SIMD on hot slice loops, compile with GCC, and build at `-O3 -march=...`. For everyone else (Clang users, GCC users at `-O2`, users not on ISA-specific tunings), P1's VRP-based check elimination already reduces the runtime bounds check to effectively zero cost.
+
+### Decision
+
+**Defer P2 indefinitely.** Revisit only if one of these materializes:
+
+- A concrete FC program's profile shows a GCC-built hot loop measurably bottlenecked by non-vectorization, with no reasonable workaround (e.g., switching to Clang, hand-unrolling, or using `any*` to bypass bounds checking on a specific proven-safe path).
+- A future GCC release improves its vectorizer to see through cold+noreturn-guarded branches, at which point P2 becomes zero-value against that version too.
+- FC adopts an `--unsafe-no-bounds-checks` escape hatch for specific hot paths (a coarser, more conservative alternative: user-chosen per-function, not compiler-inferred).
+
+P2's AST machinery is not on the roadmap until one of the above forces the question.
