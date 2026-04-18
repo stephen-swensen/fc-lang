@@ -1,20 +1,21 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
-    // /dev/null is readable
-    assert(io.can_read("/dev/null"))
+    let tmp = sys.temp_dir()!
 
     // nonexistent path is not readable
-    assert(!io.can_read("/nonexistent/path/file.txt"))
+    assert(!io.can_read("nonexistent_xyz_should_not_exist"))
 
     // write a temp file and verify it's readable
-    match io.open("/tmp/fc_test_can_read.txt", "w") with
+    let path = "%s{tmp}/fc_test_can_read.txt"
+    match io.open(path, "w") with
     | some(wf) ->
         io.write("test", wf)
         io.close(wf)
     | none -> assert(false)
 
-    assert(io.can_read("/tmp/fc_test_can_read.txt"))
-    io.remove("/tmp/fc_test_can_read.txt")
+    assert(io.can_read(path))
+    io.remove(path)
 
     0

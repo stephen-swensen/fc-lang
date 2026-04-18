@@ -63,7 +63,8 @@ module sys =
 #end
 
     // temp_dir: returns the platform temp directory path.
-    // Checks TMPDIR, TMP, TEMP (in order).
+    // Checks TMPDIR, TMP, TEMP (in order). On POSIX falls back to "/tmp"
+    // since those env vars are often unset; Windows always sets TEMP/TMP.
     // returns: const str? — the temp directory path if found, none otherwise.
     let temp_dir = () ->
         match c.getenv((cstr) "TMPDIR") with
@@ -74,7 +75,11 @@ module sys =
             | none ->
                 match c.getenv((cstr) "TEMP") with
                 | some(cs) -> some((const str) cs)
+#if os == "windows"
                 | none -> default(const str?)
+#else
+                | none -> some((const str) "/tmp")
+#end
 
     // home_dir: returns the user's home directory path.
     // Checks HOME (Linux, macOS, MinGW), then USERPROFILE (Windows).

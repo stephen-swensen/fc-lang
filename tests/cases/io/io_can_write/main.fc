@@ -1,23 +1,24 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
-    // /dev/null is writable
-    assert(io.can_write("/dev/null"))
+    let tmp = sys.temp_dir()!
 
-    // /tmp is writable
-    assert(io.can_write("/tmp"))
+    // temp directory is writable
+    assert(io.can_write(tmp))
 
     // nonexistent path is not writable
-    assert(!io.can_write("/nonexistent/path/file.txt"))
+    assert(!io.can_write("nonexistent_xyz_should_not_exist"))
 
     // write a temp file and verify it's writable
-    match io.open("/tmp/fc_test_can_write.txt", "w") with
+    let path = "%s{tmp}/fc_test_can_write.txt"
+    match io.open(path, "w") with
     | some(wf) ->
         io.write("test", wf)
         io.close(wf)
     | none -> assert(false)
 
-    assert(io.can_write("/tmp/fc_test_can_write.txt"))
-    io.remove("/tmp/fc_test_can_write.txt")
+    assert(io.can_write(path))
+    io.remove(path)
 
     0

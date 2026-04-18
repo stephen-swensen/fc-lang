@@ -4417,6 +4417,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
     fprintf(out, "\n");
 
+    /* Windows: suppress the Watson/Windows-Error-Reporting dialog when
+     * abort() fires (bounds checks, option unwrap, div-by-zero, assert).
+     * Without this, CI and test runs on MinGW/UCRT hang on the error popup.
+     * GCC constructor runs before main; _set_abort_behavior is UCRT-only so
+     * the whole block is gated on _WIN32. */
+    fprintf(out,
+        "#ifdef _WIN32\n"
+        "__attribute__((unused, constructor))\n"
+        "static void fc_win_abort_init(void) {\n"
+        "    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);\n"
+        "}\n"
+        "#endif\n");
+
     /* Always emit fc_str (alias for uint8 slice) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
 

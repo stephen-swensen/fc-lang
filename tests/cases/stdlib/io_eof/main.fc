@@ -1,15 +1,19 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_eof.txt"
+
     // Write a small file
-    let f = io.open("/tmp/fc_test_eof.txt", "w")
+    let f = io.open(path, "w")
     match f with
     | some(wf) ->
         io.write("hi", wf)
         io.close(wf)
     | none -> return 1
 
-    let f2 = io.open("/tmp/fc_test_eof.txt", "r")
+    let f2 = io.open(path, "r")
     match f2 with
     | some(rf) ->
         // Not at EOF yet
@@ -25,5 +29,5 @@ let main = (args: str[]) ->
         io.close(rf)
     | none -> return 2
 
-    io.remove("/tmp/fc_test_eof.txt")
+    io.remove(path)
     0

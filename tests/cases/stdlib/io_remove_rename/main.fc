@@ -1,8 +1,13 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let src = "%s{tmp}/fc_test_rename_src.txt"
+    let dst = "%s{tmp}/fc_test_rename_dst.txt"
+
     // Create a file
-    let f = io.open("/tmp/fc_test_rename_src.txt", "w")
+    let f = io.open(src, "w")
     match f with
     | some(wf) ->
         io.write("data", wf)
@@ -10,10 +15,10 @@ let main = (args: str[]) ->
     | none -> return 1
 
     // Rename it
-    assert(io.rename("/tmp/fc_test_rename_src.txt", "/tmp/fc_test_rename_dst.txt") == true)
+    assert(io.rename(src, dst) == true)
 
     // Original should not be openable
-    let f2 = io.open("/tmp/fc_test_rename_src.txt", "r")
+    let f2 = io.open(src, "r")
     match f2 with
     | some(rf) ->
         io.close(rf)
@@ -21,7 +26,7 @@ let main = (args: str[]) ->
     | none -> return 0
 
     // New name should be readable
-    let f3 = io.open("/tmp/fc_test_rename_dst.txt", "r")
+    let f3 = io.open(dst, "r")
     match f3 with
     | some(rf) ->
         let mut buf = uint8[16] {}
@@ -31,9 +36,9 @@ let main = (args: str[]) ->
     | none -> return 3
 
     // Remove the file
-    assert(io.remove("/tmp/fc_test_rename_dst.txt") == true)
+    assert(io.remove(dst) == true)
 
     // Removing again should fail
-    assert(io.remove("/tmp/fc_test_rename_dst.txt") == false)
+    assert(io.remove(dst) == false)
 
     0

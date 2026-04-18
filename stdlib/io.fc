@@ -1,8 +1,16 @@
 namespace std::
 
 module io =
+#if os == "windows"
+    // Windows: _access lives in <io.h> under the MSVCRT/UCRT convention.
+    // Same mode flags (0=exists, 2=write, 4=read); execute-bit (X_OK) is
+    // not supported on Windows, but we don't expose it.
+    private module u from "io.h" =
+        extern _access as access: (const cstr, int32) -> int32
+#else
     private module u from "unistd.h" =
         extern access: (const cstr, int32) -> int32
+#end
 
     private module c from "stdio.h" =
         extern fwrite: (const any*, usize, usize, any*) -> usize

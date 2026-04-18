@@ -1,8 +1,12 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_seek_tell.txt"
+
     // Write a test file
-    let f = io.open("/tmp/fc_test_seek_tell.txt", "w")
+    let f = io.open(path, "w")
     match f with
     | some(wf) ->
         io.write("abcdefghij", wf)
@@ -10,7 +14,7 @@ let main = (args: str[]) ->
     | none -> return 1
 
     // Read it back with seek/tell
-    let f2 = io.open("/tmp/fc_test_seek_tell.txt", "r")
+    let f2 = io.open(path, "r")
     match f2 with
     | some(rf) ->
         // tell at start should be 0
@@ -37,5 +41,5 @@ let main = (args: str[]) ->
         io.close(rf)
     | none -> return 2
 
-    io.remove("/tmp/fc_test_seek_tell.txt")
+    io.remove(path)
     0

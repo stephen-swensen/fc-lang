@@ -1,14 +1,26 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
-    // /dev/null always exists
-    assert(io.exists("/dev/null"))
+    let tmp = sys.temp_dir()!
 
-    // /tmp always exists
-    assert(io.exists("/tmp"))
+    // temp directory always exists
+    assert(io.exists(tmp))
+
+    // current directory always exists
+    assert(io.exists("."))
+
+    // create a temp file, check it exists, remove it
+    let path = "%s{tmp}/fc_test_io_exists.txt"
+    match io.open(path, "w") with
+    | some(f) -> io.close(f)
+    | none -> assert(false)
+    assert(io.exists(path))
+    io.remove(path)
+    assert(!io.exists(path))
 
     // nonexistent path
-    assert(!io.exists("/nonexistent/path/file.txt"))
+    assert(!io.exists("nonexistent_xyz_should_not_exist"))
 
     // empty string
     assert(!io.exists(""))

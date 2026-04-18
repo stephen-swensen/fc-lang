@@ -11,9 +11,22 @@ trap "rm -rf $TMPDIR" EXIT
 # On Windows (MSYS2/MinGW), net.fc uses Winsock and needs -lws2_32. Adding it
 # unconditionally is harmless on tests that don't pull in winsock symbols.
 EXTRA_LIBS=""
+IS_WINDOWS=""
 case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) EXTRA_LIBS="-lws2_32" ;;
+    MINGW*|MSYS*|CYGWIN*) EXTRA_LIBS="-lws2_32"; IS_WINDOWS=1 ;;
 esac
+
+# UCRT's abort() exits with status 3 (it calls _exit(3) after raising SIGABRT),
+# whereas POSIX reports 128+SIGABRT=134. Existing .expected_exit files hardcode
+# the POSIX value; treat 3 as equivalent on Windows rather than duplicating
+# every exit file per platform.
+exit_matches() {
+    local expected="$1"
+    local actual="$2"
+    if [ "$expected" = "$actual" ]; then return 0; fi
+    if [ -n "$IS_WINDOWS" ] && [ "$expected" = "134" ] && [ "$actual" = "3" ]; then return 0; fi
+    return 1
+}
 
 start_time=$(date +%s%N)
 passed=0
@@ -83,7 +96,7 @@ run_test() {
         { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
         local actual_exit=$?
         set -e
-        if [ "$actual_exit" != "$expected_exit" ]; then
+        if ! exit_matches "$expected_exit" "$actual_exit"; then
             echo "  FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
             failed=$((failed + 1))
             errors="$errors  $test_display\n"

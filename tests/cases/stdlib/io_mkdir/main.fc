@@ -1,24 +1,34 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let dir = "%s{tmp}/fc_test_mkdir"
+    let file = "%s{tmp}/fc_test_mkdir/test.txt"
+
     // Create a directory
-    assert(io.mkdir("/tmp/fc_test_mkdir") == true)
+    assert(io.mkdir(dir) == true)
 
     // Creating again should fail (already exists)
-    assert(io.mkdir("/tmp/fc_test_mkdir") == false)
+    assert(io.mkdir(dir) == false)
 
     // Should be able to create a file inside it
-    match io.open("/tmp/fc_test_mkdir/test.txt", "w") with
+    match io.open(file, "w") with
     | some(f) ->
         io.write("hello", f)
         io.close(f)
     | none -> return 1
 
     // Clean up
-    io.remove("/tmp/fc_test_mkdir/test.txt")
-    c.rmdir((cstr) "/tmp/fc_test_mkdir")
+    io.remove(file)
+    c.rmdir((cstr) dir)
 
     0
 
+#if os == "windows"
+module c from "direct.h" =
+    extern _rmdir as rmdir: (const cstr) -> int32
+#else
 module c from "unistd.h" =
     extern rmdir: (const cstr) -> int32
+#end

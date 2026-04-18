@@ -1,15 +1,19 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_read_char.txt"
+
     // write a test file
-    match io.open("/tmp/fc_test_read_char.txt", "w") with
+    match io.open(path, "w") with
     | some(wf) ->
         io.write("AB", wf)
         io.close(wf)
     | none -> assert(false)
 
     // read chars back one at a time
-    match io.open("/tmp/fc_test_read_char.txt", "r") with
+    match io.open(path, "r") with
     | some(rf) ->
         // first char is 'A' (65)
         let c1 = io.read_char(rf)
@@ -28,5 +32,5 @@ let main = (args: str[]) ->
         io.close(rf)
     | none -> assert(false)
 
-    io.remove("/tmp/fc_test_read_char.txt")
+    io.remove(path)
     0

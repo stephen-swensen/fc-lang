@@ -1,13 +1,16 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_io_write_file.txt"
     let _result =
-        let f = io.open("/tmp/fc_test_io_write_file.txt", "w")
+        let f = io.open(path, "w")
         match f with
         | some(wf) ->
             io.write("hello\n", wf)
             io.close(wf)
-            let f2 = io.open("/tmp/fc_test_io_write_file.txt", "r")
+            let f2 = io.open(path, "r")
             match f2 with
             | some(rf) ->
                 let mut buf = uint8[256] {}
@@ -18,4 +21,5 @@ let main = (args: str[]) ->
             | none -> 2
         | none -> 1
     assert(_result == 42)
+    io.remove(path)
     0

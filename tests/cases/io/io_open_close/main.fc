@@ -1,8 +1,11 @@
 import io from std::
+import sys from std::
 
 let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_io_open_close.txt"
     let _result =
-        let f = io.open("/tmp/fc_test_io_open_close.txt", "w")
+        let f = io.open(path, "w")
         match f with
         | some(v) ->
             io.write("test\n", v)
@@ -10,4 +13,5 @@ let main = (args: str[]) ->
             42
         | none -> 1
     assert(_result == 42)
+    io.remove(path)
     0
