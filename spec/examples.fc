@@ -221,6 +221,20 @@ let main = (args: str[]) ->
 
     assert(get_x(point { x = 7, y = 0 }) == 7)
 
+    // `when` guards — boolean predicate on an arm, evaluated after the
+    // pattern matches. Pattern bindings are visible in the guard. Guarded
+    // arms do NOT count toward exhaustiveness, so an unguarded catch-all
+    // (or otherwise complete unguarded coverage) is still required.
+    let sign = (n: int32) ->
+        match n with
+        | 0            -> 0i8
+        | x when x < 0 -> -1i8
+        | _            -> 1i8
+
+    assert(sign(0) == 0i8)
+    assert(sign(-3) == -1i8)
+    assert(sign(7) == 1i8)
+
     // --------------------------------------------------------
     // Loops
     // --------------------------------------------------------

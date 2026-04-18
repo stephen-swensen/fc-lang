@@ -1,0 +1,16 @@
+struct point =
+    x: int32
+    y: int32
+
+// Pattern bindings from struct destructuring are visible in the guard.
+let kind = (p: point) ->
+    match p with
+    | { x = a, y = b } when a == b -> 0   // diagonal
+    | { x = a, y = b } when a + b == 0 -> 1 // anti-diagonal
+    | _ -> 2
+
+let main = (args: str[]) ->
+    assert(kind(point { x = 3, y = 3 }) == 0)
+    assert(kind(point { x = 5, y = -5 }) == 1)
+    assert(kind(point { x = 1, y = 2 }) == 2)
+    0

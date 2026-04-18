@@ -4789,11 +4789,17 @@ static void report_witness(CheckCtx *ctx, SrcLoc loc, MatPat *witness, Type *sub
 static void check_match_exhaustiveness(CheckCtx *ctx, Expr *e, Type *subj_type) {
     /* Build the pattern matrix. Each arm may contribute multiple rows if its
        pattern contains any PAT_OR — flatten_or_pattern produces the cartesian
-       product of or-free patterns. */
+       product of or-free patterns.
+
+       Arms with a `when` guard are NOT treated as covering their shape: the
+       guard may evaluate false at runtime, letting control fall through to
+       the next arm. Skipping guarded arms here forces the remaining unguarded
+       arms (or a wildcard) to be exhaustive on their own. */
     int arm_count = e->match_expr.arm_count;
     PatRow *tmp_rows = NULL;
     int row_count = 0, row_cap = 0;
     for (int i = 0; i < arm_count; i++) {
+        if (e->match_expr.arms[i].guard) continue;
         Pattern **flats;
         int fc = flatten_or_pattern(ctx, e->match_expr.arms[i].pattern, &flats, e->loc);
         if (fc < 0) { free(tmp_rows); return; }
@@ -4851,6 +4857,17 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 
         /* Check pattern and introduce bindings */
         check_match_pattern(ctx, pat, subj_type, /*reject_bindings=*/false);
+
+        /* Type-check the optional `when` guard in the arm scope, so
+           destructured pattern bindings are visible. Guard must be bool. */
+        if (arm->guard) {
+            Type *guard_type = check_expr(ctx, arm->guard);
+            if (!type_is_error(guard_type) && guard_type->kind != TYPE_BOOL) {
+                diag_error(arm->guard->loc,
+                    "'when' guard must be bool, got %s",
+                    type_name(guard_type));
+            }
+        }
 
         /* Type-check arm body */
         Type *arm_type = check_block(ctx, arm->body, arm->body_count);

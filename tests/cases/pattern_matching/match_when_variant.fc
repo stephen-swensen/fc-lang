@@ -1,0 +1,26 @@
+struct point =
+    x: int32
+    y: int32
+
+union shape =
+    | circle(int32)
+    | rect(point)
+    | empty
+
+let describe = (s: shape) ->
+    match s with
+    | circle(r) when r == 0 -> 0
+    | circle(r) when r < 5 -> 1
+    | circle(_) -> 2
+    | rect(p) when p.x == p.y -> 3
+    | rect(_) -> 4
+    | empty -> 5
+
+let main = (args: str[]) ->
+    assert(describe(shape.circle(0)) == 0)
+    assert(describe(shape.circle(3)) == 1)
+    assert(describe(shape.circle(10)) == 2)
+    assert(describe(shape.rect(point { x = 4, y = 4 })) == 3)
+    assert(describe(shape.rect(point { x = 1, y = 2 })) == 4)
+    assert(describe(shape.empty) == 5)
+    0

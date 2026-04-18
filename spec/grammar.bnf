@@ -110,7 +110,7 @@ TYPE_VAR      = "'" , ( letter | underscore ) , { ident_cont } ;
 (* Reserved words — may not be used as identifiers.                    *)
 keyword = "let" | "mut" | "struct" | "union" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
-        | "private" | "const" | "match" | "with" | "if" | "then" | "else"
+        | "private" | "const" | "match" | "with" | "when" | "if" | "then" | "else"
         | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
         | "some" | "true" | "false" | "none" | "void"
         | "any"         (* only valid as part of "any*" type syntax *) ;
@@ -608,7 +608,10 @@ match_expr       = "match" , expr , "with" , INDENT , match_arms , DEDENT ;
 
 match_arms       = match_arm , { NEWLINE , match_arm } ;
 
-match_arm        = "|" , pattern , "->" , expr_or_block ;
+(* A `when` guard is optional and attaches to the whole arm pattern (all
+   or-alternatives share the guard). The guard expression must have type
+   bool. Arms carrying a guard do not contribute to exhaustiveness. *)
+match_arm        = "|" , pattern , [ "when" , expr ] , "->" , expr_or_block ;
 
 loop_expr        = "loop" , INDENT , block , DEDENT ;
 

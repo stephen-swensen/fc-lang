@@ -4,6 +4,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## `when` guards on match arms (implemented 2026-04-18)
+
+Originally: allow a boolean predicate on a pattern, e.g. `| ek_dog when no_dogs -> continue`. The workaround was an outer `if` + separate `match`, or a dedicated arm with no predicate and a follow-up `if` inside the arm — both split logic that would read as a single guarded pattern. Came up in wolf-fc while gating dog spawns behind a CLI flag.
+
+**Resolution:** `when <bool-expr>` is now a legal clause between a match arm's pattern and its `->`. The guard evaluates in the arm's scope so any pattern bindings (including destructured struct fields and variant payloads) are visible. When attached to an or-pattern, the guard applies to the whole pattern (every alternative shares it). Arms with a guard do not contribute to exhaustiveness — the Maranget pattern matrix skips them — so a final wildcard (or otherwise complete unguarded coverage) is required. Because `->` serves double duty as pointer-field access and arm separator, the parser blocks `->` as a top-level infix within a guard expression; pointer-field access inside a guard must be parenthesised (`| p when (p->value) > 0 -> ...`). Codegen switches from the flat if/else chain to a done-flag + `abort()`-on-fallthrough structure whenever any arm has a guard, so a guard-false arm cleanly falls through to the next. `tests/cases/pattern_matching/match_when_*` covers basic guards, destructured bindings, or-pattern guards, fallthrough, option/variant/bool patterns, pointer-field access, non-bool error, body-less error, and exhaustiveness error.
+
+---
+
 ## Codegen: emit newlines inside large struct initializers (fixed 2026-04-16)
 
 Originally: `alloc(SomeStruct { field1 = alloc(...)!, field2 = alloc(...)!, ... })!` lowered to one massive C line — every nested `alloc(...)!` expanded to a GCC statement-expression and they concatenated inline into the struct literal. With ~10+ fields the line crossed gcc's column-tracking limit (~4096 cols), causing `note: '-Wmisleading-indentation' is disabled from this point onwards, since column-tracking was disabled due to the size of the code/headers`. Wolf-fc hit this in `build_level` (~17 fields) and silenced it with `-Wno-misleading-indentation`.

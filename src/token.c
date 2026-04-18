@@ -21,6 +21,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_PRIVATE]      = "'private'",
     [TOK_MATCH]        = "'match'",
     [TOK_WITH]         = "'with'",
+    [TOK_WHEN]         = "'when'",
     [TOK_IF]           = "'if'",
     [TOK_THEN]         = "'then'",
     [TOK_ELSE]         = "'else'",

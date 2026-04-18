@@ -1,0 +1,14 @@
+// `when` guard applies to the whole or-pattern (all alternatives share it).
+let f = (n: int32) ->
+    match n with
+    | 0
+    | 1
+    | 2 when n != 1 -> 100
+    | _ -> 200
+
+let main = (args: str[]) ->
+    assert(f(0) == 100)   // matches 0 | 1 | 2, guard n != 1 is true
+    assert(f(1) == 200)   // matches 0 | 1 | 2, guard false → falls to _
+    assert(f(2) == 100)   // matches 0 | 1 | 2, guard true
+    assert(f(3) == 200)   // wildcard
+    0

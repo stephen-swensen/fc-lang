@@ -26,6 +26,7 @@ typedef enum {
     TOK_PRIVATE,
     TOK_MATCH,
     TOK_WITH,
+    TOK_WHEN,
     TOK_IF,
     TOK_THEN,
     TOK_ELSE,

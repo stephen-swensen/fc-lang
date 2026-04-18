@@ -1,0 +1,19 @@
+struct node =
+    value: int32
+
+// Pointer-field access (p->x) in a guard requires parentheses because the
+// match-arm `->` would otherwise win tokenisation.
+let classify = (n: node*) ->
+    match n with
+    | p when (p->value) > 0 -> 1
+    | p when (p->value) < 0 -> -1
+    | _ -> 0
+
+let main = (args: str[]) ->
+    let mut a = node { value = 5 }
+    let mut b = node { value = 0 }
+    let mut c = node { value = -3 }
+    assert(classify(&a) == 1)
+    assert(classify(&b) == 0)
+    assert(classify(&c) == -1)
+    0

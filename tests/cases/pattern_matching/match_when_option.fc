@@ -1,0 +1,14 @@
+let process = (o: int32?) ->
+    match o with
+    | some(n) when n > 100 -> 3
+    | some(n) when n > 0 -> 2
+    | some(_) -> 1
+    | none -> 0
+
+let main = (args: str[]) ->
+    assert(process(default(int32?)) == 0)
+    assert(process(some(0)) == 1)
+    assert(process(some(-5)) == 1)
+    assert(process(some(50)) == 2)
+    assert(process(some(200)) == 3)
+    0

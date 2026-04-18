@@ -1507,6 +1507,62 @@ match x with
 
 Both forms produce the same AST. The fall-through form is preferred for readability when alternatives are short. A body-less arm at the end of the match (with nothing to fall through into) is a compile error.
 
+### When guards
+
+An arm may carry a boolean predicate using `when`, checked after the pattern has matched:
+
+```fc
+match n with
+| 0                 -> "zero"
+| x when x < 0      -> "negative"
+| _                 -> "positive"
+```
+
+The guard runs in the arm's scope, so any bindings introduced by the pattern — including destructured struct fields and variant payloads — are visible:
+
+```fc
+match shape with
+| circle(r)              when r == 0      -> "dot"
+| circle(r)              when r < 5       -> "small circle"
+| circle(_)                               -> "circle"
+| rect({ x = a, y = b }) when a == b      -> "square"
+| rect(_)                                 -> "rect"
+| empty                                   -> "empty"
+```
+
+If the guard evaluates to `false`, control falls through to the next arm (guarded or not) as if the pattern had failed. The guard expression must have type `bool`.
+
+`when` attaches to the *whole* arm pattern, including every alternative of an or-pattern:
+
+```fc
+match n with
+| 0 | 1 | 2 when n != 1 -> "small, not one"
+| _                     -> "other"
+```
+
+**Exhaustiveness ignores guarded arms.** Because a guard can evaluate false at runtime, a guarded arm is not treated as covering its pattern shape. The unguarded arms (or a final wildcard) must on their own be exhaustive over the subject type:
+
+```fc
+// ERROR: non-exhaustive — the guarded arm does not cover x > 0.
+match x with
+| 0            -> "zero"
+| x when x < 0 -> "negative"
+
+// OK — final wildcard covers the remainder.
+match x with
+| 0            -> "zero"
+| x when x < 0 -> "negative"
+| _            -> "positive"
+```
+
+**Pointer field access in a guard.** Because `->` is both the pointer-field operator and the match-arm separator, a guard that uses pointer-field access at the top level must be parenthesised so the `->` is recognised as part of the expression:
+
+```fc
+match node_ptr with
+| p when (p->value) > 0 -> "positive"
+| _                     -> "non-positive"
+```
+
 ### Struct destructuring in patterns
 
 Structs can be destructured in pattern position using `{ field = pattern }` syntax. Fields omitted from the pattern match anything:

@@ -100,6 +100,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"private",   7,  TOK_PRIVATE},
         {"match",     5,  TOK_MATCH},
         {"with",      4,  TOK_WITH},
+        {"when",      4,  TOK_WHEN},
         {"if",        2,  TOK_IF},
         {"then",      4,  TOK_THEN},
         {"else",      4,  TOK_ELSE},

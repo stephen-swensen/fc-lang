@@ -2453,8 +2453,17 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_MATCH: {
-        /* Emit as statement expression with if-else chain */
+        /* Emit as statement expression. When no arm has a `when` guard we use
+           the original if/else chain with an unconditional last arm (exhaustive
+           by pass2). When at least one arm has a guard we use a done-flag so
+           guard-false arms can fall through to subsequent arms. */
         bool match_is_void = (e->type && e->type->kind == TYPE_VOID);
+
+        bool has_any_guard = false;
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            if (e->match_expr.arms[i].guard) { has_any_guard = true; break; }
+        }
+
         fprintf(out, "({\n");
         indent_level++;
 
@@ -2477,31 +2486,65 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, " _match%d;\n", res_id);
         }
 
+        int done_id = -1;
+        if (has_any_guard) {
+            done_id = temp_counter++;
+            emit_indent(out);
+            fprintf(out, "int _matchdone%d = 0;\n", done_id);
+        }
+
         for (int i = 0; i < e->match_expr.arm_count; i++) {
             MatchArm *arm = &e->match_expr.arms[i];
             Pattern *pat = arm->pattern;
             char subj_expr[64];
             snprintf(subj_expr, sizeof(subj_expr), "_subj%d", subj_id);
-            emit_indent(out);
 
-            if (i > 0) fprintf(out, "else ");
-
-            /* Last arm of an exhaustive match: emit plain else / bare block
-             * (no condition) so the result variable is always provably
-             * initialized.  Single-arm matches (arm_count == 1) also skip
-             * the condition since there is only one possible case. */
             bool is_last_arm = (i == e->match_expr.arm_count - 1);
-            bool has_cond = false;
-            if (!is_last_arm) {
+
+            if (has_any_guard) {
+                /* if (!_matchdoneN) { [if (pat_cond)] { bindings; [if (guard)] { body; _matchdoneN = 1; } } } */
+                emit_indent(out);
+                fprintf(out, "if (!_matchdone%d) {\n", done_id);
+                indent_level++;
+
+                emit_indent(out);
+                bool has_cond = false;
                 emit_pat_conditions(pat, subj_expr, e->match_expr.subject->type, &has_cond, out);
+                if (has_cond) fprintf(out, ") {\n");
+                else fprintf(out, "{\n");
+                indent_level++;
+
+                emit_pat_bindings(pat, subj_expr, e->match_expr.subject->type, out);
+
+                bool has_guard = (arm->guard != NULL);
+                if (has_guard) {
+                    emit_indent(out);
+                    /* Avoid double-parens like if ((x == y)) which triggers
+                       clang's -Wparentheses-equality when the guard is a
+                       binary expression (emit_expr wraps binaries in parens). */
+                    if (arm->guard->kind == EXPR_BINARY) {
+                        fprintf(out, "if ");
+                        emit_expr(arm->guard, out);
+                        fprintf(out, " {\n");
+                    } else {
+                        fprintf(out, "if (");
+                        emit_expr(arm->guard, out);
+                        fprintf(out, ") {\n");
+                    }
+                    indent_level++;
+                }
+            } else {
+                emit_indent(out);
+                if (i > 0) fprintf(out, "else ");
+                bool has_cond = false;
+                if (!is_last_arm) {
+                    emit_pat_conditions(pat, subj_expr, e->match_expr.subject->type, &has_cond, out);
+                }
+                if (has_cond) fprintf(out, ") {\n");
+                else fprintf(out, "{\n");
+                indent_level++;
+                emit_pat_bindings(pat, subj_expr, e->match_expr.subject->type, out);
             }
-            if (has_cond) fprintf(out, ") {\n");
-            else fprintf(out, "{\n");
-
-            indent_level++;
-
-            /* Emit bindings */
-            emit_pat_bindings(pat, subj_expr, e->match_expr.subject->type, out);
 
             /* Emit arm body */
             if (match_is_void) {
@@ -2545,9 +2588,35 @@ static void emit_expr(Expr *e, FILE *out) {
                 defer_scope_pop();
             }
 
-            indent_level--;
+            if (has_any_guard) {
+                emit_indent(out);
+                fprintf(out, "_matchdone%d = 1;\n", done_id);
+                bool has_guard = (arm->guard != NULL);
+                if (has_guard) {
+                    indent_level--;
+                    emit_indent(out);
+                    fprintf(out, "}\n");
+                }
+                indent_level--;
+                emit_indent(out);
+                fprintf(out, "}\n");
+                indent_level--;
+                emit_indent(out);
+                fprintf(out, "}\n");
+            } else {
+                indent_level--;
+                emit_indent(out);
+                fprintf(out, "}\n");
+            }
+        }
+
+        if (has_any_guard) {
+            /* Unreachable if pass2 exhaustiveness holds: at least one unguarded
+               arm must have covered the value. Emitting abort() here both keeps
+               _matchN provably initialized for -Wuninitialized and fails loudly
+               if a bug ever produces an uncovered case at runtime. */
             emit_indent(out);
-            fprintf(out, "}\n");
+            fprintf(out, "if (!_matchdone%d) abort();\n", done_id);
         }
 
         if (!match_is_void) {

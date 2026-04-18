@@ -18,6 +18,7 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->pending_count = 0;
     p->pending_cap = 0;
     p->allow_fixed_array = false;
+    p->block_arm_arrow = false;
     p->expr_start_pos = 0;
 }
 
@@ -403,6 +404,17 @@ static Expr *parse_block_item(Parser *p);
 static Pattern *parse_pattern(Parser *p);
 static Expr *parse_match_expr(Parser *p);
 static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc);
+
+/* Parse a sub-expression inside matched brackets (parens, square, curly).
+   Clears `block_arm_arrow` for the duration so pointer-field access (`p->x`)
+   is unambiguous inside a bracketed guard sub-expression. */
+static Expr *parse_bracketed_expr(Parser *p, Prec min_prec) {
+    bool saved = p->block_arm_arrow;
+    p->block_arm_arrow = false;
+    Expr *e = parse_expr(p, min_prec);
+    p->block_arm_arrow = saved;
+    return e;
+}
 
 static uint64_t parse_int_value(const char *start, int length, bool *out_of_range) {
     char buf[72];  /* 64 binary digits + null + margin */
@@ -824,7 +836,7 @@ static Expr *parse_prefix(Parser *p) {
             fmt_seg.conversion = fmt->start[fmt->length - 1];
 
             /* Parse expression */
-            fmt_seg.expr = parse_expr(p, PREC_NONE + 1);
+            fmt_seg.expr = parse_bracketed_expr(p, PREC_NONE + 1);
 
             DA_APPEND(segs, seg_count, seg_cap, fmt_seg);
 
@@ -950,7 +962,7 @@ static Expr *parse_prefix(Parser *p) {
                     while (!check(p, TOK_RBRACE)) {
                         const char *fn = tok_intern(p, expect(p, TOK_IDENT));
                         expect(p, TOK_EQ);
-                        Expr *val = parse_expr(p, PREC_NONE + 1);
+                        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
                         if (strcmp(fn, "ptr") == 0) ptr_val = val;
                         else if (strcmp(fn, "len") == 0) len_val = val;
                         else {
@@ -970,7 +982,7 @@ static Expr *parse_prefix(Parser *p) {
                     return e;
                 }
 
-                Expr *size_expr = parse_expr(p, PREC_NONE + 1);
+                Expr *size_expr = parse_bracketed_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RBRACKET);
                 expect(p, TOK_LBRACE);
 
@@ -978,7 +990,7 @@ static Expr *parse_prefix(Parser *p) {
                 int elem_count = 0, elem_cap = 0;
                 if (!check(p, TOK_RBRACE)) {
                     do {
-                        Expr *elem = parse_expr(p, PREC_NONE + 1);
+                        Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
                         DA_APPEND(elems, elem_count, elem_cap, elem);
                         if (!check(p, TOK_COMMA)) break;
                         advance_p(p);
@@ -1019,7 +1031,7 @@ static Expr *parse_prefix(Parser *p) {
                     while (!check(p, TOK_RBRACE)) {
                         const char *fn = tok_intern(p, expect(p, TOK_IDENT));
                         expect(p, TOK_EQ);
-                        Expr *val = parse_expr(p, PREC_NONE + 1);
+                        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
                         if (strcmp(fn, "ptr") == 0) ptr_val = val;
                         else if (strcmp(fn, "len") == 0) len_val = val;
                         else diag_fatal(loc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
@@ -1137,7 +1149,7 @@ static Expr *parse_prefix(Parser *p) {
         } /* end try_cast block */
         /* Parenthesized expression */
         advance_p(p);
-        Expr *e = parse_expr(p, PREC_NONE + 1);
+        Expr *e = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
         return e;
     }
@@ -1151,7 +1163,7 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_SOME: {
         advance_p(p);
         expect(p, TOK_LPAREN);
-        Expr *val = parse_expr(p, PREC_NONE + 1);
+        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_SOME, loc);
         e->some_expr.value = val;
@@ -1251,7 +1263,7 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_FREE: {
         advance_p(p);
         expect(p, TOK_LPAREN);
-        Expr *operand = parse_expr(p, PREC_NONE + 1);
+        Expr *operand = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_FREE, loc);
         e->free_expr.operand = operand;
@@ -1263,7 +1275,7 @@ static Expr *parse_prefix(Parser *p) {
         expect(p, TOK_LPAREN);
         /* Capture source text of the condition expression */
         Token *cond_start = current(p);
-        Expr *condition = parse_expr(p, PREC_NONE + 1);
+        Expr *condition = parse_bracketed_expr(p, PREC_NONE + 1);
         /* Expression text: from cond_start to just before current token (, or )) */
         const char *text_start = cond_start->start;
         int text_len = (int)(current(p)->start - text_start);
@@ -1274,7 +1286,7 @@ static Expr *parse_prefix(Parser *p) {
         Expr *message = NULL;
         if (check(p, TOK_COMMA)) {
             advance_p(p);
-            message = parse_expr(p, PREC_NONE + 1);
+            message = parse_bracketed_expr(p, PREC_NONE + 1);
         }
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_ASSERT, loc);
@@ -1334,7 +1346,7 @@ static Expr *parse_prefix(Parser *p) {
             if (check(p, TOK_LBRACKET)) {
                 /* alloc(T[N] { elems }) — heap array allocation */
                 advance_p(p);
-                Expr *size = parse_expr(p, PREC_NONE + 1);
+                Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RBRACKET);
                 if (!check(p, TOK_LBRACE)) {
                     SrcLoc eloc = loc_from_token(current(p));
@@ -1345,7 +1357,7 @@ static Expr *parse_prefix(Parser *p) {
                 int elem_count = 0, elem_cap = 0;
                 if (!check(p, TOK_RBRACE)) {
                     do {
-                        Expr *el = parse_expr(p, PREC_NONE + 1);
+                        Expr *el = parse_bracketed_expr(p, PREC_NONE + 1);
                         DA_APPEND(elems, elem_count, elem_cap, el);
                     } while (check(p, TOK_COMMA) && advance_p(p));
                 }
@@ -1382,7 +1394,7 @@ static Expr *parse_prefix(Parser *p) {
             if (check(p, TOK_COMMA)) {
                 /* alloc(T, N) — raw buffer alloc */
                 advance_p(p);
-                Expr *size = parse_expr(p, PREC_NONE + 1);
+                Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RPAREN);
                 Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
                 e->alloc_expr.alloc_type = ty;
@@ -1400,7 +1412,7 @@ static Expr *parse_prefix(Parser *p) {
         }
 
         /* alloc(expr) — initialized alloc */
-        Expr *init = parse_expr(p, PREC_NONE + 1);
+        Expr *init = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
         e->alloc_expr.alloc_type = NULL;
@@ -1507,7 +1519,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
             /* s[..hi] */
             advance_p(p);
             Expr *hi = NULL;
-            if (!check(p, TOK_RBRACKET)) hi = parse_expr(p, PREC_NONE + 1);
+            if (!check(p, TOK_RBRACKET)) hi = parse_bracketed_expr(p, PREC_NONE + 1);
             expect(p, TOK_RBRACKET);
             Expr *e = alloc_expr(p, EXPR_SLICE, loc);
             e->slice.object = left;
@@ -1515,11 +1527,11 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
             e->slice.hi = hi;
             return e;
         }
-        Expr *index = parse_expr(p, PREC_NONE + 1);
+        Expr *index = parse_bracketed_expr(p, PREC_NONE + 1);
         if (check(p, TOK_DOTDOT)) {
             advance_p(p);
             Expr *hi = NULL;
-            if (!check(p, TOK_RBRACKET)) hi = parse_expr(p, PREC_NONE + 1);
+            if (!check(p, TOK_RBRACKET)) hi = parse_bracketed_expr(p, PREC_NONE + 1);
             expect(p, TOK_RBRACKET);
             Expr *e = alloc_expr(p, EXPR_SLICE, loc);
             e->slice.object = left;
@@ -1539,7 +1551,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         int arg_count = 0, arg_cap = 0;
         if (!check(p, TOK_RPAREN)) {
             do {
-                Expr *arg = parse_expr(p, PREC_NONE + 1);
+                Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
                 DA_APPEND(args, arg_count, arg_cap, arg);
                 if (!check(p, TOK_COMMA)) break;
                 advance_p(p);
@@ -1627,7 +1639,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                         int arg_count = 0, arg_cap = 0;
                         if (!check(p, TOK_RPAREN)) {
                             do {
-                                Expr *arg = parse_expr(p, PREC_NONE + 1);
+                                Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
                                 DA_APPEND(args, arg_count, arg_cap, arg);
                                 if (!check(p, TOK_COMMA)) break;
                                 advance_p(p);
@@ -1663,7 +1675,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                 int arg_count = 0, arg_cap = 0;
                 if (!check(p, TOK_RPAREN)) {
                     do {
-                        Expr *arg = parse_expr(p, PREC_NONE + 1);
+                        Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
                         DA_APPEND(args, arg_count, arg_cap, arg);
                         if (!check(p, TOK_COMMA)) break;
                         advance_p(p);
@@ -1711,6 +1723,10 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
     Expr *left = parse_prefix(p);
     for (;;) {
         Token *t = current(p);
+        /* Inside a `when` guard, treat top-level `->` as the arm-body separator
+           rather than as a pointer-field postfix. Bracketed sub-expressions
+           clear this flag so pointer-field access still works when wrapped. */
+        if (p->block_arm_arrow && t->kind == TOK_ARROW) break;
         Prec prec = infix_prec(t->kind);
         if (prec == PREC_NONE || prec < min_prec) break;
         Token *op_tok = advance_p(p);
@@ -1935,6 +1951,12 @@ static Expr *parse_match_expr(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     expect(p, TOK_MATCH);
 
+    /* Save the outer `block_arm_arrow` state: a match nested inside another
+       match's guard must still be able to parse its own subject / guards /
+       arm bodies without the outer guard's `->`-blocker interfering. */
+    bool saved_block = p->block_arm_arrow;
+    p->block_arm_arrow = false;
+
     Expr *subject = parse_expr(p, PREC_NONE + 1);
     expect(p, TOK_WITH);
 
@@ -1958,6 +1980,22 @@ static Expr *parse_match_expr(Parser *p) {
         MatchArm arm;
         arm.loc = loc_from_token(current(p));
         arm.pattern = parse_pattern(p);
+        arm.guard = NULL;
+
+        /* Optional `when <expr>` guard. The guard attaches to the full
+           or-pattern (any body-less arms buffered above plus this arm's
+           pattern), so it's only permitted on an arm that ends with `->`. */
+        if (check(p, TOK_WHEN)) {
+            SrcLoc when_loc = loc_from_token(current(p));
+            advance_p(p);
+            p->block_arm_arrow = true;
+            arm.guard = parse_expr(p, PREC_NONE + 1);
+            p->block_arm_arrow = false;
+            if (!check(p, TOK_ARROW)) {
+                diag_fatal(when_loc,
+                    "'when' guard requires an arm body: expected '->' after guard expression");
+            }
+        }
 
         if (!check(p, TOK_ARROW)) {
             /* Body-less arm — buffer as or-alternative for the next arm. */
@@ -1986,6 +2024,8 @@ static Expr *parse_match_expr(Parser *p) {
     free(buffered);
     expect(p, TOK_DEDENT);
 
+    p->block_arm_arrow = saved_block;
+
     Expr *e = alloc_expr(p, EXPR_MATCH, loc);
     e->match_expr.subject = subject;
     e->match_expr.arm_count = arm_count;
@@ -2008,7 +2048,7 @@ static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc) 
         do {
             const char *fname = tok_intern(p, expect(p, TOK_IDENT));
             expect(p, TOK_EQ);
-            Expr *val = parse_expr(p, PREC_NONE + 1);
+            Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
             FieldInit fi = { .name = fname, .value = val };
             DA_APPEND(fields, field_count, field_cap, fi);
             if (!check(p, TOK_COMMA)) break;

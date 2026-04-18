@@ -1,0 +1,18 @@
+// Multiple guarded arms with the same pattern shape: earlier guard false
+// must fall through to later arms (guarded or unguarded).
+let bucket = (n: int32) ->
+    match n with
+    | x when x < 0 -> 0
+    | x when x < 10 -> 1
+    | x when x < 100 -> 2
+    | _ -> 3
+
+let main = (args: str[]) ->
+    assert(bucket(-5) == 0)
+    assert(bucket(0) == 1)
+    assert(bucket(9) == 1)
+    assert(bucket(10) == 2)
+    assert(bucket(99) == 2)
+    assert(bucket(100) == 3)
+    assert(bucket(1000) == 3)
+    0

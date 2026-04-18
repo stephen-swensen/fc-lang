@@ -346,6 +346,7 @@ struct Pattern {
 
 struct MatchArm {
     Pattern *pattern;
+    Expr *guard;        /* optional `when` boolean guard; NULL if absent */
     Expr **body;
     int body_count;
     SrcLoc loc;

@@ -1,0 +1,11 @@
+let classify = (n: int32) ->
+    match n with
+    | 0 -> 0i8
+    | x when x < 0 -> -1i8
+    | _ -> 1i8
+
+let main = (args: str[]) ->
+    assert(classify(0) == 0i8)
+    assert(classify(-5) == -1i8)
+    assert(classify(5) == 1i8)
+    0

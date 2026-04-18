@@ -1,0 +1,7 @@
+let f = (n: int32) ->
+    match n with
+    | x when x -> 0
+    | _ -> 1
+
+let main = (args: str[]) ->
+    f(5)
