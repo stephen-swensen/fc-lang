@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    // zero mantissa — not an underflow even with tiny exponent
+    let a = 0x0p-2000
+    let b = 0x0.0p-2000
+    let c = 0x0p2000
+    assert(a == 0.0)
+    assert(b == 0.0)
+    assert(c == 0.0)
+    0

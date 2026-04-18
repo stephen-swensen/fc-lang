@@ -131,6 +131,14 @@ let main = (args: str[]) ->
     let avo = 6.022_140_76e23            // separators allowed everywhere
     let mass = 9.109e-31f32              // float32 with exponent
 
+    // Hex float literals — hex mantissa * 2^exponent (binary exponent in decimal).
+    // Because 'e' is a hex digit, the exponent uses 'p' and is mandatory.
+    let half = 0x1.0p-1                  // exactly 0.5 (bit-exact)
+    let three = 0x1.8p+1                 // 1.5 * 2 = 3.0
+    let max_f32 = 0x1.fffffep+127f32     // largest finite float32
+    assert(half == 0.5)
+    assert(three == 3.0)
+
     // --------------------------------------------------------
     // Bindings: let (immutable) and let mut (mutable)
     // --------------------------------------------------------

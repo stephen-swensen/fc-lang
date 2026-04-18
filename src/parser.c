@@ -762,11 +762,15 @@ static Expr *parse_prefix(Parser *p) {
         int num_len = 0;
         bool mantissa_nonzero = false;
         bool past_mantissa = false;
+        bool is_hex = t->length >= 2 && t->start[0] == '0' && (t->start[1] == 'x' || t->start[1] == 'X');
         for (int i = 0; i < num_end && num_len < (int)sizeof(buf) - 1; i++) {
             char c = t->start[i];
             if (c == '_') continue;
-            if (c == 'e' || c == 'E') past_mantissa = true;
-            if (!past_mantissa && c >= '1' && c <= '9') mantissa_nonzero = true;
+            if (is_hex ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E')) past_mantissa = true;
+            if (!past_mantissa) {
+                if (c >= '1' && c <= '9') mantissa_nonzero = true;
+                else if (is_hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) mantissa_nonzero = true;
+            }
             buf[num_len++] = c;
         }
         buf[num_len] = '\0';

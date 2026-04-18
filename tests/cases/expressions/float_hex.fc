@@ -1,0 +1,47 @@
+let main = (args: str[]) ->
+    // basic hex floats — mantissa * 2^exponent
+    let a = 0x1p0                  // 1.0
+    let b = 0x1.8p+1               // 1.5 * 2 = 3.0
+    let c = 0x1.4p2                // 1.25 * 4 = 5.0
+    let d = 0x1.0p-1               // 0.5
+    let e = 0xAp0                  // 10.0
+    let f = 0x0.8p0                // 0.5
+    assert(a == 1.0)
+    assert(b == 3.0)
+    assert(c == 5.0)
+    assert(d == 0.5)
+    assert(e == 10.0)
+    assert(f == 0.5)
+
+    // uppercase X, P, hex digits
+    let g = 0X1P0                  // 1.0
+    let h = 0x1.ABCp0              // same as 0x1.abcp0
+    let i = 0x1.abcP0
+    assert(g == 1.0)
+    assert(h == i)
+
+    // negative exponent via explicit sign
+    let j = 0x1p-3                 // 0.125
+    let k = 0x1p+3                 // 8.0
+    assert(j == 0.125)
+    assert(k == 8.0)
+
+    // f32 / f64 suffixes
+    let l = 0x1.8p1f32             // 3.0f32
+    let m = 0x1.8p1f64             // 3.0f64
+    assert((int32) l == 3)
+    assert(m == 3.0)
+
+    // digit separators in mantissa and exponent
+    let n = 0x1.8_0p+0_1           // same as 0x1.80p+01 = 3.0
+    assert(n == 3.0)
+
+    // zero mantissa with any exponent is 0.0
+    let z = 0x0.0p100              // 0.0 (mantissa zero, no underflow)
+    assert(z == 0.0)
+
+    // integer hex still lexes as int (not affected)
+    let q = 0xFFu8
+    assert(q == 255u8)
+
+    0

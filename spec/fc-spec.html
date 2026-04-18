@@ -706,6 +706,8 @@ Implicit widening conversions are allowed in binary expressions and comparisons 
 | 3.14f32, 3.14f64 | float32, float64 |
 | 1e9, 1.5e-3, 1E+18 | float64 (scientific notation) |
 | 2.5e10f32 | float32 (scientific notation, suffixed) |
+| 0x1.8p+1, 0x1p-3 | float64 (hex float — mantissa in hex, `p` exponent in decimal) |
+| 0x1.fffffep+127f32 | float32 (hex float, suffixed) |
 | true, false | bool |
 | 'a', '\\n', '\\x41' | char (alias for uint8) |
 | "hello" | str |
@@ -723,7 +725,15 @@ let avo = 6.022_140_76e23      // separators in mantissa, scientific notation
 let huge = 1_000e1_0           // separators in exponent digits too
 ```
 
-Float literals support **scientific notation** with `e` or `E`, an optional sign, and at least one exponent digit. The mantissa may be an integer (`1e9`) or have a decimal point (`1.5e-3`), but if a `.` is present it still requires a digit on each side. Exponent digits may use `_` separators. The lexer commits to an exponent only when `e`/`E` is immediately followed by a digit (or `+`/`-` then digit) with no whitespace, so `1e3 - 2` parses as `1000.0 - 2.0`. Hex float literals (`0x1.8p+1`) are not supported.
+Float literals support **scientific notation** with `e` or `E`, an optional sign, and at least one exponent digit. The mantissa may be an integer (`1e9`) or have a decimal point (`1.5e-3`), but if a `.` is present it still requires a digit on each side. Exponent digits may use `_` separators. The lexer commits to an exponent only when `e`/`E` is immediately followed by a digit (or `+`/`-` then digit) with no whitespace, so `1e3 - 2` parses as `1000.0 - 2.0`.
+
+Float literals may also use **hex float** form — a hex mantissa scaled by a power of two: `0x<hexdigits>[.<hexdigits>]p[+-]?<digits>`. Because `e` is a hex digit, the binary exponent uses `p` (or `P`) and is always in decimal. The `p<exp>` clause is mandatory: if a `.` appears in the mantissa, `p` is required (`0x1.5` alone is a compile error); if no `.` appears, `p` signals the float form (`0x1p0`). Mantissa hex digits and exponent decimal digits may both use `_` separators. The hex float form is useful for bit-exact IEEE 754 constants that don't round-trip cleanly through decimal:
+
+```fc
+let half = 0x1.0p-1               // exactly 0.5
+let pi_bits = 0x1.921fb54442d18p+1 // float64 representation of π
+let max_f32 = 0x1.fffffep+127f32   // largest finite float32
+```
 
 Suffixed integer literals are range-checked at compile time. A literal whose value does not fit in the specified type is a compile error:
 

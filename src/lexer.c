@@ -154,7 +154,50 @@ static Token scan_number(Lexer *l) {
     if (l->current[-1] == '0') {
         if (peek(l) == 'x' || peek(l) == 'X') {
             advance(l); /* consume x */
-            while (isxdigit((unsigned char)peek(l)) || (peek(l) == '_' && isxdigit((unsigned char)peek_next(l)))) advance(l);
+            bool has_hex_digit = false;
+            while (isxdigit((unsigned char)peek(l)) || (peek(l) == '_' && isxdigit((unsigned char)peek_next(l)))) {
+                if (peek(l) != '_') has_hex_digit = true;
+                advance(l);
+            }
+            /* Hex float: optional .hexdigits + required [pP][+-]?digits exponent.
+             * The 'p' exponent is mandatory in C99 hex floats because 'e' is a hex digit. */
+            bool has_hex_dot = false;
+            bool has_hex_exp = false;
+            if (peek(l) == '.' && isxdigit((unsigned char)peek_next(l))) {
+                advance(l); /* consume . */
+                while (isxdigit((unsigned char)peek(l)) || (peek(l) == '_' && isxdigit((unsigned char)peek_next(l)))) {
+                    if (peek(l) != '_') has_hex_digit = true;
+                    advance(l);
+                }
+                has_hex_dot = true;
+            }
+            if (peek(l) == 'p' || peek(l) == 'P') {
+                char c1 = peek_next(l);
+                bool committed = false;
+                if (isdigit((unsigned char)c1)) committed = true;
+                else if ((c1 == '+' || c1 == '-') && isdigit((unsigned char)peek_at(l, 2))) committed = true;
+                if (committed) {
+                    advance(l); /* consume p/P */
+                    if (peek(l) == '+' || peek(l) == '-') advance(l);
+                    while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
+                    has_hex_exp = true;
+                }
+            }
+            if (has_hex_dot && !has_hex_exp) {
+                SrcLoc loc = { .line = l->line, .col = l->start_col };
+                diag_fatal(loc, "hex float literal requires a binary exponent ('p' or 'P' followed by decimal digits)");
+            }
+            if (has_hex_dot || has_hex_exp) {
+                if (!has_hex_digit) {
+                    SrcLoc loc = { .line = l->line, .col = l->start_col };
+                    diag_fatal(loc, "hex float literal requires at least one mantissa digit");
+                }
+                if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
+                    advance(l); advance(l);
+                    if (peek(l) == '2' || peek(l) == '4') advance(l);
+                }
+                return make_token(l, TOK_FLOAT_LIT);
+            }
             if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
                 advance(l);
                 while (isdigit((unsigned char)peek(l))) advance(l);
