@@ -243,6 +243,23 @@ let main = (args: str[]) ->
     assert(sign(-3) == -1i8)
     assert(sign(7) == 1i8)
 
+    // A guard trailing an or-pattern applies to the whole set of alternatives.
+    // Pointer-field access `p->x` inside a guard must be parenthesised so
+    // the match-arm `->` doesn't win tokenisation.
+    let grade = (p: point*) ->
+        match p->x with
+        | 0                          -> 0    // zero
+        | 1 | 2 | 3 when (p->x) > 0  -> 1    // small (or-pattern + guard)
+        | _ when (p->x) < 0          -> -1   // negative (parens around deref)
+        | _                          -> 2    // other — unguarded catch-all
+    let pp = alloc(point { x = 2, y = 0 })!
+    defer free(pp)
+    assert(grade(pp) == 1)
+    pp->x = 50
+    assert(grade(pp) == 2)
+    pp->x = -1
+    assert(grade(pp) == -1)
+
     // --------------------------------------------------------
     // Loops
     // --------------------------------------------------------
