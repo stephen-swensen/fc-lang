@@ -4,6 +4,8 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 - **Hex float literals**: C99 supports `0x1.8p+1` style hex floats (binary exponent after `p`). Niche but occasionally useful for bit-exact constants. Not currently supported by FC.
 
+- **`when` guards on match arms**: allow a boolean predicate on a pattern, e.g. `| ek_dog when no_dogs -> continue`. Today the workaround is either an outer `if` + separate `match`, or a dedicated arm with no predicate and a follow-up `if` inside the arm — both split logic that would read naturally as a single guarded pattern. Came up in wolf-fc while gating dog spawns behind a CLI flag.
+
 - **`-Walloc-size-larger-than=` warning at `monomorph.c:532`** (visible under `-O2 -flto`): `calloc((size_t)t->count, sizeof(int))` — GCC's LTO-enabled range analysis can't prove `t->count >= 0`, and a negative `int` cast to `size_t` becomes a high-range value that trips the heuristic. Not a real bug (count is always non-negative in a well-formed program), but the fix is a one-liner: either change `count` to `size_t`/`uint32_t`, or insert `assert(t->count >= 0)` before the call so GCC picks up the invariant. Surfaced during wolf-fc's switch to building its local FC compiler copy with `-O2 -flto`.
 
 - **Windows/MSYS2 test failures (investigate)**: 37 of 987 tests fail on MSYS2 UCRT64 (gcc). Failures fall into several categories:

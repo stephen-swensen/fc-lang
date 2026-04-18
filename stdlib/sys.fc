@@ -5,6 +5,18 @@ module sys =
         extern getenv: (const cstr) -> const cstr?
         extern exit: (int32) -> void
 
+#if os == "windows"
+    // FILETIME is a 64-bit count of 100-nanosecond ticks since 1601-01-01 UTC,
+    // split across two DWORDs (little-endian). Sleep/GetCurrentProcessId take
+    // and return DWORDs (uint32).
+    private module w from "windows.h" define "WIN32_LEAN_AND_MEAN" "1" =
+        extern struct _FILETIME as FILETIME =
+            dwLowDateTime: uint32
+            dwHighDateTime: uint32
+        extern GetSystemTimeAsFileTime as get_system_time: (FILETIME*) -> void
+        extern Sleep as win_sleep: (uint32) -> void
+        extern GetCurrentProcessId as get_current_pid: () -> uint32
+#else
     private module u from "unistd.h" =
         extern getpid: () -> int32
 
@@ -14,6 +26,7 @@ module sys =
         extern struct timespec =
             tv_sec: int64
             tv_nsec: int64
+#end
 
     // env: looks up an environment variable by name.
     // name: const str — variable name; const because env only reads it.
@@ -31,12 +44,23 @@ module sys =
         c.exit(code)
 
     // time: returns the current wall-clock time as milliseconds since the Unix epoch.
-    // Uses C11 timespec_get (portable, no POSIX dependency).
     // returns: int64 — milliseconds since 1970-01-01 00:00:00 UTC.
+#if os == "windows"
+    // Win32 GetSystemTimeAsFileTime returns 100ns ticks since 1601-01-01 UTC.
+    // 116444736000000000 ticks separate 1601-01-01 from 1970-01-01.
+    let time = () ->
+        let mut ft = default(w.FILETIME)
+        w.get_system_time(&ft)
+        let hi = (int64) ft.dwHighDateTime << 32
+        let lo = (int64) ft.dwLowDateTime
+        ((hi | lo) - 116444736000000000i64) / 10000i64
+#else
+    // Uses C11 timespec_get (portable, no POSIX dependency).
     let time = () ->
         let mut ts = default(t.timespec)
         t.timespec_get(&ts, 1)
         ts.tv_sec * 1000 + ts.tv_nsec / 1000000
+#end
 
     // temp_dir: returns the platform temp directory path.
     // Checks TMPDIR, TMP, TEMP (in order).
@@ -64,16 +88,25 @@ module sys =
             | none -> default(const str?)
 
     // sleep: suspends the calling thread for at least ms milliseconds.
-    // Uses POSIX nanosleep — works on Linux, macOS, and Windows via MinGW.
     // ms: int64 — duration to sleep in milliseconds.
     // returns: void.
+#if os == "windows"
+    // Win32 Sleep takes a DWORD (uint32); ms above ~49.7 days wraps.
+    let sleep = (ms: int64) ->
+        w.win_sleep((uint32) ms)
+        return
+#else
     let sleep = (ms: int64) ->
         let mut req = t.timespec { tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
         t.nanosleep(&req, default(t.timespec*?))
         return
+#end
 
     // get_pid: returns the current process ID.
-    // Uses POSIX getpid — works on Linux, macOS, and Windows via MinGW.
     // returns: int32 — the process ID.
+#if os == "windows"
+    let get_pid = () -> (int32) w.get_current_pid()
+#else
     let get_pid = () -> u.getpid()
+#end
 
