@@ -1,0 +1,11 @@
+// interpolation inside a capturing closure body; promote to heap to return
+let main = (args: str[]) ->
+    let x = 5
+    let y = 7
+    let fmt = () -> alloc("val=%d{x * y}")!
+    let r = fmt()
+    let mut ok = 0
+    if r == "val=35" then ok = 1
+    free(r)
+    assert(ok == 1)
+    0

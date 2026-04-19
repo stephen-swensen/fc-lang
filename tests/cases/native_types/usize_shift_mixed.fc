@@ -1,0 +1,8 @@
+// shift amount widening: int32 literal widens into usize shift
+let main = (args: str[]) ->
+    let a = 4u
+    let b = a << 2       // RHS is int32 literal; widens for shift
+    let c = a >> 1
+    assert(b == 16u)
+    assert(c == 2u)
+    0

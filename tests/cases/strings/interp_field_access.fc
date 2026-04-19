@@ -1,0 +1,12 @@
+// interpolation of struct field-access expressions
+struct pt =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let p = pt { x = 3, y = 4 }
+    let s = "p=(%d{p.x}, %d{p.y})"
+    let mut ok = 0
+    if s == "p=(3, 4)" then ok = 1
+    assert(ok == 1)
+    0

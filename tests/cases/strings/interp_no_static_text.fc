@@ -1,0 +1,10 @@
+// interpolation with zero static text — entire string is one interpolated expr
+let main = (args: str[]) ->
+    let x = 42
+    let s1 = "%d{x}"
+    let s2 = "%d{x * 2}"
+    let mut ok = 0
+    if s1 == "42" then ok = ok + 1
+    if s2 == "84" then ok = ok + 2
+    assert(ok == 3)
+    0

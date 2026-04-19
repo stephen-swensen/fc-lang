@@ -1,0 +1,14 @@
+// interpolated expressions can contain nested function calls
+let double = (x: int32) -> x * 2
+let add = (a: int32, b: int32) -> a + b
+
+let main = (args: str[]) ->
+    let x = 3
+    let y = 4
+    let s1 = "result=%d{double(add(x, y))}"
+    let s2 = "deep=%d{double(double(add(x, y)))}"
+    let mut r = 0
+    if s1 == "result=14" then r = r + 1
+    if s2 == "deep=28" then r = r + 2
+    assert(r == 3)
+    0

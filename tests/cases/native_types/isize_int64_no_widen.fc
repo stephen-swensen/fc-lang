@@ -1,0 +1,6 @@
+// isize does not widen to int64 — explicit cast required
+let main = (args: str[]) ->
+    let a = 42i
+    let b = 10i64
+    let c = a + b
+    (int32) c

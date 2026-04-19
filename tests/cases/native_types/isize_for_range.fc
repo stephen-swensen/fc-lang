@@ -1,0 +1,7 @@
+// for-range with isize endpoints iterates correctly
+let main = (args: str[]) ->
+    let mut sum = 0i
+    for i in 0i..5i
+        sum = sum + i
+    assert(sum == 10i)
+    0

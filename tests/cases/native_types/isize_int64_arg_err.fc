@@ -1,0 +1,7 @@
+// isize cannot implicitly pass as int64 argument
+let take_i64 = (x: int64) -> x
+
+let main = (args: str[]) ->
+    let a = 42i
+    let r = take_i64(a)
+    (int32) r

@@ -1,0 +1,10 @@
+// bitwise NOT on platform-width integer types
+let main = (args: str[]) ->
+    let zu = 0u
+    let r1 = if ~zu == usize.max then 1 else 0
+    let zi = 0i
+    let r2 = if ~zi == -1i then 1 else 0
+    let maxu = usize.max
+    let r3 = if ~maxu == 0u then 1 else 0
+    assert(r1 + r2 + r3 == 3)
+    0

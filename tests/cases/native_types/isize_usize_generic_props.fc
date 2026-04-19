@@ -1,0 +1,20 @@
+// type properties work through generics for isize and usize
+let bits_of = (x: 'a) -> 'a.bits
+let min_of = (x: 'a) -> 'a.min
+let max_of = (x: 'a) -> 'a.max
+
+let main = (args: str[]) ->
+    let ibits = bits_of(0i)
+    let ubits = bits_of(0u)
+    let imin = min_of(0i)
+    let imax = max_of(0i)
+    let umin = min_of(0u)
+    let umax = max_of(0u)
+    let r1 = if ibits == ubits then 1 else 0
+    let r2 = if ibits == 32 || ibits == 64 then 1 else 0
+    let r3 = if imin < 0i then 1 else 0
+    let r4 = if imax > 0i then 1 else 0
+    let r5 = if umin == 0u then 1 else 0
+    let r6 = if umax > 0u then 1 else 0
+    assert(r1 + r2 + r3 + r4 + r5 + r6 == 6)
+    0
