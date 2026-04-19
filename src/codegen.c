@@ -1309,16 +1309,16 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
 
     /* Allocate buffer */
     if (use_heap)
-        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)malloc((size_t)(_flen%d + 1)); ", tid, tid);
+        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)malloc(fc_to_size(_flen%d + 1)); ", tid, tid);
     else
-        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)__builtin_alloca((size_t)(_flen%d + 1)); ", tid, tid);
+        fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)__builtin_alloca(fc_to_size(_flen%d + 1)); ", tid, tid);
 
     /* Build snprintf call */
     if (use_heap)
-        fprintf(out, "int _fw%d = _fbuf%d ? snprintf((char*)_fbuf%d, (size_t)(_flen%d + 1), \"",
+        fprintf(out, "int _fw%d = _fbuf%d ? snprintf((char*)_fbuf%d, fc_to_size(_flen%d + 1), \"",
             tid, tid, tid, tid);
     else
-        fprintf(out, "int _fw%d = snprintf((char*)_fbuf%d, (size_t)(_flen%d + 1), \"",
+        fprintf(out, "int _fw%d = snprintf((char*)_fbuf%d, fc_to_size(_flen%d + 1), \"",
             tid, tid, tid);
 
     /* Emit format string */
@@ -1392,10 +1392,13 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
             int prec_w = 0, prec_p = -1;
             parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
             if (prec_p >= 0) {
-                fprintf(out, "((int)_sa%d_%d.len < %d ? (int)_sa%d_%d.len : %d), _sa%d_%d.ptr",
+                /* Compare in int64 to avoid truncating before the min; the
+                 * fc_to_int branch is only taken when len < prec_p, so the
+                 * narrowing assert is trivially satisfied. */
+                fprintf(out, "(_sa%d_%d.len < (int64_t)%d ? fc_to_int(_sa%d_%d.len) : %d), _sa%d_%d.ptr",
                     tid, str_arg_idx, prec_p, tid, str_arg_idx, prec_p, tid, str_arg_idx);
             } else {
-                fprintf(out, "(int)_sa%d_%d.len, _sa%d_%d.ptr",
+                fprintf(out, "fc_to_int(_sa%d_%d.len), _sa%d_%d.ptr",
                     tid, str_arg_idx, tid, str_arg_idx);
             }
             str_arg_idx++;
@@ -1960,8 +1963,8 @@ static void emit_expr(Expr *e, FILE *out) {
             int tid = temp_counter++;
             fprintf(out, "({ fc_str _sc%d = ", tid);
             emit_expr(e->cast.operand, out);
-            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca((size_t)(_sc%d.len + 1))", tid, tid);
-            fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, (size_t)_sc%d.len)", tid, tid, tid);
+            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca(fc_to_size(_sc%d.len + 1))", tid, tid);
+            fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, fc_to_size(_sc%d.len))", tid, tid, tid);
             fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
         /* cstr -> str: wrap pointer with strlen-computed length */
         } else if (e->cast.operand->type && is_cstr_type(e->cast.operand->type) &&
@@ -2209,13 +2212,13 @@ static void emit_expr(Expr *e, FILE *out) {
         emit_type(e->array_lit.elem_type, out);
         fprintf(out, " *_arr%d = (", tid);
         emit_type(e->array_lit.elem_type, out);
-        fprintf(out, "*)__builtin_alloca((size_t)(");
+        fprintf(out, "*)__builtin_alloca(fc_to_size(");
         emit_expr(e->array_lit.size_expr, out);
         fprintf(out, ") * sizeof(");
         emit_type(e->array_lit.elem_type, out);
         fprintf(out, ")); ");
         if (e->array_lit.elem_count == 0) {
-            fprintf(out, "memset(_arr%d, 0, (size_t)(", tid);
+            fprintf(out, "memset(_arr%d, 0, fc_to_size(", tid);
             emit_expr(e->array_lit.size_expr, out);
             fprintf(out, ") * sizeof(");
             emit_type(e->array_lit.elem_type, out);
@@ -2310,7 +2313,7 @@ static void emit_expr(Expr *e, FILE *out) {
                                  "(long long)_fas%d.len); abort(); } ",
                             vloc.line, fname, (long long)field_type->fixed_array.size,
                             sid);
-                    fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, (size_t)_fas%d.len * sizeof(",
+                    fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
                             tid, fname, sid, sid);
                     emit_type(field_type->fixed_array.elem, out);
                     fprintf(out, ")); ");
@@ -2781,7 +2784,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_c_escaped(fn, fn_len, out);
             fprintf(out, ":%d: assertion failed: ", line);
             emit_c_escaped(e->assert_expr.expr_text, e->assert_expr.expr_text_len, out);
-            fprintf(out, ": %%.*s\\n\", (int)_am%d.len, (const char*)_am%d.ptr); ", tid, tid);
+            fprintf(out, ": %%.*s\\n\", fc_to_int(_am%d.len), (const char*)_am%d.ptr); ", tid, tid);
         } else {
             fprintf(out, "fprintf(stderr, \"");
             emit_c_escaped(fn, fn_len, out);
@@ -2798,9 +2801,9 @@ static void emit_expr(Expr *e, FILE *out) {
             /* alloc(T, N) → T*? (raw buffer, null sentinel) */
             fprintf(out, "(");
             emit_type(e->alloc_expr.alloc_type, out);
-            fprintf(out, "*)calloc((size_t)");
+            fprintf(out, "*)calloc(fc_to_size(");
             emit_expr(e->alloc_expr.size_expr, out);
-            fprintf(out, ", sizeof(");
+            fprintf(out, "), sizeof(");
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "))");
         } else if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
@@ -2812,7 +2815,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "* _aptr%d = (", tid);
             emit_type(e->alloc_expr.alloc_type, out);
-            fprintf(out, "*)calloc((size_t)_asz%d, sizeof(", tid);
+            fprintf(out, "*)calloc(fc_to_size(_asz%d), sizeof(", tid);
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, ")); _aptr%d ? (", tid);
             emit_type(e->type, out);
@@ -2952,10 +2955,10 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(elem_type, out);
             fprintf(out, " *_ap%d = (", tid);
             emit_type(elem_type, out);
-            fprintf(out, "*)malloc((size_t)_as%d.len * sizeof(", tid);
+            fprintf(out, "*)malloc(fc_to_size(_as%d.len) * sizeof(", tid);
             emit_type(elem_type, out);
             fprintf(out, ")); ");
-            fprintf(out, "_ap%d ? (memcpy(_ap%d, _as%d.ptr, (size_t)_as%d.len * sizeof(",
+            fprintf(out, "_ap%d ? (memcpy(_ap%d, _as%d.ptr, fc_to_size(_as%d.len) * sizeof(",
                 tid, tid, tid, tid);
             emit_type(elem_type, out);
             fprintf(out, ")), (");
@@ -3005,7 +3008,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_expr(target->field.object, out);
                 fprintf(out, ".%s", target->field.name);
             }
-            fprintf(out, ", _fas%d.ptr, (size_t)_fas%d.len * sizeof(",
+            fprintf(out, ", _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
                     tid, tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); ");
@@ -3019,7 +3022,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_expr(target->field.object, out);
                 fprintf(out, ".%s", target->field.name);
             }
-            fprintf(out, " + _fas%d.len, 0, (size_t)(%lld - _fas%d.len) * sizeof(",
+            fprintf(out, " + _fas%d.len, 0, fc_to_size(%lld - _fas%d.len) * sizeof(",
                     tid, (long long)fat->fixed_array.size, tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); })");
@@ -3977,7 +3980,7 @@ static void emit_eq_func(Type *t, FILE *out) {
         fprintf(out, "    if (a.len == 0) return true;\n");
         /* Use memcmp for non-float primitives that don't need eq funcs */
         if (!type_needs_eq_func(elem) && !type_is_float(elem)) {
-            fprintf(out, "    return memcmp(a.ptr, b.ptr, (size_t)a.len * sizeof(");
+            fprintf(out, "    return memcmp(a.ptr, b.ptr, fc_to_size(a.len) * sizeof(");
             emit_type(elem, out);
             fprintf(out, ")) == 0;\n");
         } else {
@@ -4395,6 +4398,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "#include <stdbool.h>\n");
     fprintf(out, "#include <stdlib.h>\n");
     fprintf(out, "#include <string.h>\n");
+    fprintf(out, "#include <assert.h>\n");
+    fprintf(out, "#include <limits.h>\n");
 
     /* Feature-gated headers — emitted only when needed */
     if (g_needs_stdio) fprintf(out, "#include <stdio.h>\n");
@@ -4432,6 +4437,24 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
     /* Always emit fc_str (alias for uint8 slice) */
     fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
+
+    /* Narrowing-conversion guards. FC uses int64 for all slice/string lengths
+     * and sizes; these helpers assert that a value fits in the target width
+     * before narrowing. On 64-bit hosts SIZE_MAX == UINT64_MAX so the size_t
+     * check is trivially true; on 32-bit (and smaller) hosts the assert fires
+     * if user-derived math overflows size_t. Under -DNDEBUG the assert
+     * compiles out and the helper reduces to a plain cast. */
+    fprintf(out,
+        "__attribute__((unused))\n"
+        "static inline size_t fc_to_size(int64_t n) {\n"
+        "    assert(n >= 0 && (uint64_t)n <= SIZE_MAX);\n"
+        "    return (size_t)n;\n"
+        "}\n"
+        "__attribute__((unused))\n"
+        "static inline int fc_to_int(int64_t n) {\n"
+        "    assert(n >= 0 && n <= INT_MAX);\n"
+        "    return (int)n;\n"
+        "}\n");
 
     /* Out-of-bounds failure helpers.  Cold+noreturn so the hot path stays
      * clean: the compiler can schedule these out of line, skip keeping

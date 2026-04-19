@@ -2403,6 +2403,8 @@ The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), whi
 
 The cost of `int64` on 32-bit and smaller targets is real but acceptable; programmers who need tight inner loops on constrained hardware can drop to raw pointer arithmetic, which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
 
+Where the generated C must narrow an `int64` length or size to a platform-width type (`size_t` for `malloc`/`memcpy`/etc., `int` for `printf` widths), the emitter routes the cast through `fc_to_size` / `fc_to_int` helpers rather than a plain C cast. The helpers assert that the value fits in the target type before narrowing. On 64-bit hosts the assert is trivially true and compiles to a no-op; on 32-bit and smaller hosts it catches the case where user-derived length math exceeds `SIZE_MAX` or `INT_MAX` before silent truncation corrupts memory. Under `-DNDEBUG` the assertions are elided and the helpers reduce to plain casts. This keeps the `int64`-everywhere policy sound on sub-64-bit targets without requiring explicit guards in user code.
+
 Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
 ### String literals and memory
