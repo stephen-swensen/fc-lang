@@ -1,0 +1,15 @@
+// stack array literal of option-of-struct elements: T?[N] { ... }
+struct p =
+    x: int32
+
+let main = (args: str[]) ->
+    let arr = p?[3] { some(p { x = 10 }), default(p?), some(p { x = 5 }) }
+    let mut sum = 0
+    let mut nones = 0
+    for o in arr
+        match o with
+        | some(v) -> sum = sum + v.x
+        | none    -> nones = nones + 1
+    assert(sum == 15)
+    assert(nones == 1)
+    0

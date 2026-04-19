@@ -916,6 +916,10 @@ static Expr *parse_prefix(Parser *p) {
         while (peek_at(p, arr_start)->kind == TOK_DOT &&
                peek_at(p, arr_start + 1)->kind == TOK_IDENT)
             arr_start += 2;
+        /* Scan past ? / * type suffixes on the element type: name?*[N]{...} */
+        while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
+               peek_at(p, arr_start)->kind == TOK_STAR)
+            arr_start += 1;
         if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
             /* Look ahead: type[expr] { — the { after ] means array literal */
             int save = p->pos;
@@ -954,6 +958,16 @@ static Expr *parse_prefix(Parser *p) {
                     elem_type->stub.qualified_name = NULL;
                     elem_type->stub.type_args = NULL;
                     elem_type->stub.type_arg_count = 0;
+                }
+                /* Apply ? (option) and * (pointer) suffixes to the element type */
+                while (check(p, TOK_QUESTION) || check(p, TOK_STAR)) {
+                    if (check(p, TOK_QUESTION)) {
+                        advance_p(p);
+                        elem_type = type_option(p->arena, elem_type);
+                    } else {
+                        advance_p(p);
+                        elem_type = type_pointer(p->arena, elem_type);
+                    }
                 }
                 expect(p, TOK_LBRACKET);
 

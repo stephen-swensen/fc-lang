@@ -1,0 +1,11 @@
+// stack array literal of pointer-typed elements: T*[N] { ... }
+struct p =
+    x: int32
+
+let main = (args: str[]) ->
+    let mut a = p { x = 1 }
+    let mut b = p { x = 2 }
+    let mut c = p { x = 4 }
+    let arr = p*[3] { &a, &b, &c }
+    assert(arr[0]->x + arr[1]->x + arr[2]->x == 7)
+    0

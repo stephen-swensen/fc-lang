@@ -4564,6 +4564,20 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, " } %s_tag;\n", inst->mangled_name);
     }
 
+    /* Forward-declare all option typedefs (as named struct tags). This lets slice
+       typedefs reference fc_option_T* without requiring the option body to be
+       emitted first, breaking the slice<option<T>> vs option<slice<T>> cycle. */
+    for (int i = 0; i < options.count; i++) {
+        Type *o = options.types[i];
+        fprintf(out, "typedef struct fc_option_");
+        if (o->option.inner) emit_type_ident(o->option.inner, out);
+        else fprintf(out, "void");
+        fprintf(out, " fc_option_");
+        if (o->option.inner) emit_type_ident(o->option.inner, out);
+        else fprintf(out, "void");
+        fprintf(out, ";\n");
+    }
+
     /* Emit slice typedefs — before struct defs since structs may contain slices */
     for (int i = 0; i < slices.count; i++) {
         Type *s = slices.types[i];
@@ -4578,20 +4592,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, ";\n");
     }
 
-    /* Emit option typedefs — before struct defs since structs may contain options.
-       For options wrapping structs, the struct is forward-declared above but the
-       option stores T by value, so emit those after struct defs. */
+    /* Emit scalar option bodies (primitives, pointers, slices). Options wrapping
+       structs/unions are deferred until after struct/union definitions. */
     for (int i = 0; i < options.count; i++) {
         Type *o = options.types[i];
         if (o->option.inner &&
             (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION ||
              o->option.inner->kind == TYPE_STUB))
             continue; /* defer until after struct/union defs */
-        fprintf(out, "typedef struct { ");
-        emit_type(o->option.inner, out);
-        fprintf(out, " value; bool has_value; } fc_option_");
+        fprintf(out, "struct fc_option_");
         emit_type_ident(o->option.inner, out);
-        fprintf(out, ";\n");
+        fprintf(out, " { ");
+        emit_type(o->option.inner, out);
+        fprintf(out, " value; bool has_value; };\n");
     }
 
     /* Phase 1: function typedefs that only use primitive/pointer/slice types.
@@ -4656,11 +4669,11 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             else if (o->option.inner->kind == TYPE_UNION) inner_name = o->option.inner->unio.name;
             else if (o->option.inner->kind == TYPE_STUB) inner_name = o->option.inner->stub.name;
             if (inner_name && inner_name == def_name) {
-                fprintf(out, "typedef struct { ");
-                emit_type(o->option.inner, out);
-                fprintf(out, " value; bool has_value; } fc_option_");
+                fprintf(out, "struct fc_option_");
                 emit_type_ident(o->option.inner, out);
-                fprintf(out, ";\n");
+                fprintf(out, " { ");
+                emit_type(o->option.inner, out);
+                fprintf(out, " value; bool has_value; };\n");
                 opt_emitted[j] = true;
             }
         }
