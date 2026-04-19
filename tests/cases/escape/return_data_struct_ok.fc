@@ -1,0 +1,11 @@
+// Positive: a plain data struct with no pointer fields can be returned freely
+struct point =
+    x: int32
+    y: int32
+
+let make = () -> point { x = 3, y = 4 }
+
+let main = (args: str[]) ->
+    let p = make()
+    assert(p.x + p.y == 7)
+    0

@@ -1,0 +1,16 @@
+// Positive: returning an option to a heap struct (non-escape)
+struct holder =
+    p: int32*
+
+let make = () ->
+    let p = alloc(int32)!
+    *p = 42
+    alloc(holder { p = p })
+
+let main = (args: str[]) ->
+    let h = make()!
+    let v = *h->p
+    free(h->p)
+    free(h)
+    assert(v == 42)
+    0

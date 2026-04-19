@@ -1,0 +1,12 @@
+// Error: reading a stack pointer field out of a stack struct bypasses the return check without propagation
+struct holder =
+    p: int32*
+
+let bad = () ->
+    let mut x = 42
+    let s = holder { p = &x }
+    s.p
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

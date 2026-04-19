@@ -1,0 +1,10 @@
+// Error: indexing into a stack slice of pointers propagates provenance
+let bad = () ->
+    let mut a = 1
+    let mut b = 2
+    let ptrs = int32*[2] { &a, &b }
+    ptrs[0]
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

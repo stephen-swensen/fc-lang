@@ -1,0 +1,10 @@
+// Positive: a stack struct with a stack-pointer field is fine for local use
+struct holder =
+    p: int32*
+
+let main = (args: str[]) ->
+    let mut x = 42
+    let s = holder { p = &x }
+    let v = *s.p
+    assert(v == 42)
+    0

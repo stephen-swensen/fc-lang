@@ -122,7 +122,10 @@ static Provenance merge_prov(Provenance a, Provenance b) {
     return PROV_UNKNOWN;
 }
 
-/* Does this type carry provenance (pointer-like, slice-like, or closure-like)? */
+/* Does this type carry provenance (pointer-like, slice-like, or closure-like)?
+ * A struct/union carries provenance if any of its fields/variants does — so that
+ * a stack-allocated struct with a stack-pointer field can be rejected at the
+ * same return/escape sites as a bare stack pointer. */
 static bool type_has_provenance(Type *t) {
     if (!t) return false;
     if (t->kind == TYPE_POINTER || t->kind == TYPE_SLICE ||
@@ -131,6 +134,21 @@ static bool type_has_provenance(Type *t) {
     if (t->kind == TYPE_FUNC) return true;
     /* Option wrapping a pointer/slice also carries provenance */
     if (t->kind == TYPE_OPTION) return type_has_provenance(t->option.inner);
+    if (t->kind == TYPE_STRUCT) {
+        for (int i = 0; i < t->struc.field_count; i++) {
+            if (type_has_provenance(t->struc.fields[i].type)) return true;
+        }
+        return false;
+    }
+    if (t->kind == TYPE_UNION) {
+        for (int i = 0; i < t->unio.variant_count; i++) {
+            if (t->unio.variants[i].payload &&
+                type_has_provenance(t->unio.variants[i].payload)) return true;
+        }
+        return false;
+    }
+    /* Conservative: unresolved stubs might refer to a struct with pointer fields */
+    if (t->kind == TYPE_STUB) return true;
     return false;
 }
 
@@ -2398,6 +2416,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         }
                     }
                     e->type = union_type;
+                    /* Propagate stack provenance so a variant carrying a stack
+                       pointer taints the union value. */
+                    if (e->call.args[0]->prov == PROV_STACK &&
+                        type_has_provenance(e->call.args[0]->type))
+                        e->prov = PROV_STACK;
                     return e->type;
                 }
             }
@@ -2815,6 +2838,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 diag_error(e->loc, "cannot assign to option .%s field", e->assign.target->field.name);
             }
         }
+        /* Escape check: storing stack-allocated values where they outlive the stack frame. */
+        if (e->assign.value->prov == PROV_STACK && type_has_provenance(vt)) {
+            /* Assignment to a global binding */
+            if (e->assign.target->kind == EXPR_IDENT && !e->assign.target->ident.is_local) {
+                diag_error(e->loc, "cannot store stack-allocated %s in global '%s'",
+                    type_name(vt), e->assign.target->ident.name);
+            }
+            /* Assignment through a heap pointer (h->field = ...) */
+            if (e->assign.target->kind == EXPR_DEREF_FIELD) {
+                Expr *obj = e->assign.target->field.object;
+                if (obj->prov == PROV_HEAP) {
+                    diag_error(e->loc,
+                        "cannot store stack-allocated %s in heap-allocated struct field",
+                        type_name(vt));
+                }
+            }
+        }
         e->type = type_void();
         return e->type;
     }
@@ -2982,10 +3022,28 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
             }
             e->type = concrete;
+            /* Propagate stack provenance from any stack-pointer field so that
+               returning/escaping the struct triggers the return-check rules. */
+            for (int i = 0; i < e->struct_lit.field_count; i++) {
+                FieldInit *fi = &e->struct_lit.fields[i];
+                if (fi->value->prov == PROV_STACK &&
+                    type_has_provenance(fi->value->type)) {
+                    e->prov = PROV_STACK;
+                    break;
+                }
+            }
             return e->type;
         }
 
         e->type = st;
+        for (int i = 0; i < e->struct_lit.field_count; i++) {
+            FieldInit *fi = &e->struct_lit.fields[i];
+            if (fi->value->prov == PROV_STACK &&
+                type_has_provenance(fi->value->type)) {
+                e->prov = PROV_STACK;
+                break;
+            }
+        }
         return e->type;
     }
 
@@ -3390,6 +3448,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         e->prov = PROV_STACK;
                 } else {
                     e->type = ft;
+                    /* Propagate provenance from the struct so reading a pointer
+                       field out of a stack-provenance struct stays tainted. */
+                    if (type_has_provenance(ft))
+                        e->prov = e->field.object->prov;
                 }
                 return e->type;
             }
@@ -3426,6 +3488,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 } else {
                     e->type = ft;
                     if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                    /* Propagate provenance from the pointed-to struct. */
+                    if (type_has_provenance(ft))
+                        e->prov = e->field.object->prov;
                 }
                 return e->type;
             }
@@ -3448,10 +3513,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
         if (obj_type->kind == TYPE_SLICE) {
             e->type = obj_type->slice.elem;
+            if (type_has_provenance(e->type))
+                e->prov = e->index.object->prov;
             return e->type;
         }
         if (obj_type->kind == TYPE_POINTER) {
             e->type = obj_type->pointer.pointee;
+            if (type_has_provenance(e->type))
+                e->prov = e->index.object->prov;
             return e->type;
         }
         diag_error(e->loc, "indexing requires slice or pointer, got %s", type_name(obj_type));

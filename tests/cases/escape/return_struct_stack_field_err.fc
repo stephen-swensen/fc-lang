@@ -1,0 +1,11 @@
+// Error: returning a stack struct literal whose field holds a stack pointer
+struct holder =
+    p: int32*
+
+let bad = () ->
+    let mut x = 42
+    holder { p = &x }
+
+let main = (args: str[]) ->
+    let _h = bad()
+    0

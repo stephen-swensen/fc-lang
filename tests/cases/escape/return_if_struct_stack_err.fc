@@ -1,0 +1,14 @@
+// Error: if-branch stack struct propagates through merge_prov
+struct holder =
+    p: int32*
+
+let bad = (flag: bool) ->
+    let mut x = 42
+    if flag then
+        holder { p = &x }
+    else
+        holder { p = default(int32*) }
+
+let main = (args: str[]) ->
+    let _h = bad(true)
+    0

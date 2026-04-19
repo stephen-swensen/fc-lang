@@ -1,0 +1,14 @@
+// Positive: assigning a heap pointer to a heap struct's field is fine
+struct holder =
+    p: int32*
+
+let main = (args: str[]) ->
+    let h = alloc(holder { p = default(int32*) })!
+    let p = alloc(int32)!
+    *p = 42
+    h->p = p
+    let v = *h->p
+    free(h->p)
+    free(h)
+    assert(v == 42)
+    0

@@ -1,0 +1,14 @@
+// Error: stack provenance propagates through nested struct literals
+struct inner =
+    p: int32*
+
+struct outer =
+    inr: inner
+
+let bad = () ->
+    let mut x = 42
+    outer { inr = inner { p = &x } }
+
+let main = (args: str[]) ->
+    let _o = bad()
+    0

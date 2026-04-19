@@ -1,0 +1,1 @@
+cannot store stack-allocated holder in global 'gh'

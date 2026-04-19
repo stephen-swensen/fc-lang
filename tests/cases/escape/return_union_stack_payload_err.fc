@@ -1,0 +1,12 @@
+// Error: union variant with a stack pointer payload cannot be returned
+union maybe =
+    | ptr(int32*)
+    | empty
+
+let bad = () ->
+    let mut x = 42
+    maybe.ptr(&x)
+
+let main = (args: str[]) ->
+    let _u = bad()
+    0

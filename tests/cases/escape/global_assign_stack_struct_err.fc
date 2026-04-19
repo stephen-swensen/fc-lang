@@ -1,0 +1,13 @@
+// Error: assigning a struct literal that contains a stack pointer to a global
+struct holder =
+    p: int32*
+
+let mut gh = holder { p = default(int32*) }
+
+let leak = () ->
+    let mut x = 42
+    gh = holder { p = &x }
+
+let main = (args: str[]) ->
+    leak()
+    0

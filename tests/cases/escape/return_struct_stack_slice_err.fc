@@ -1,0 +1,11 @@
+// Error: returning a stack struct literal whose field holds a stack slice
+struct box =
+    data: int32[]
+
+let bad = () ->
+    let arr = int32[3] { 1, 2, 3 }
+    box { data = arr }
+
+let main = (args: str[]) ->
+    let _b = bad()
+    0

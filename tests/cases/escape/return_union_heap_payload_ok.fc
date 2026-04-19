@@ -1,0 +1,19 @@
+// Positive: a union variant with a heap-pointer payload can be returned
+union maybe =
+    | ptr(int32*)
+    | empty
+
+let make = () ->
+    let p = alloc(int32)!
+    *p = 7
+    maybe.ptr(p)
+
+let main = (args: str[]) ->
+    let u = make()
+    match u with
+    | ptr(p) ->
+        let v = *p
+        free(p)
+        assert(v == 7)
+    | empty -> assert(false)
+    0

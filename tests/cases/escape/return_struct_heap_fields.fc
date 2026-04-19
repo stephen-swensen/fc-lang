@@ -1,0 +1,15 @@
+// Positive: struct with heap-pointer field can be returned (all fields are safe)
+struct holder =
+    p: int32*
+
+let make = () ->
+    let p = alloc(int32)!
+    *p = 42
+    holder { p = p }
+
+let main = (args: str[]) ->
+    let h = make()
+    let v = *h.p
+    free(h.p)
+    assert(v == 42)
+    0

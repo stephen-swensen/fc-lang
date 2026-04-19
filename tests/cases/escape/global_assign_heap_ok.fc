@@ -1,0 +1,11 @@
+// Positive: heap pointer can be assigned to a global pointer variable
+let mut gp = default(int32*)
+
+let main = (args: str[]) ->
+    let p = alloc(int32)!
+    *p = 99
+    gp = p
+    let v = *gp
+    free(gp)
+    assert(v == 99)
+    0

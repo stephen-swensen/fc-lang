@@ -2,13 +2,14 @@
 
 Open items for the FC compiler and specification. Resolved items archived in `spec/hist/archived-todos.md`.
 
-## Escape analysis soundness holes
+## Escape analysis — interprocedural gap
 
-Current checks only examine the top-level expression's provenance; they don't recurse into struct/slice field contents. Each of the following currently compiles cleanly but creates a dangling pointer at runtime:
+The intraprocedural escape analysis now catches: stack-ptr in struct/union construction, field/index access into stack-provenance aggregates, global assignment of stack-provenance values, and heap-struct field assignment (`h->f = &stack`). What remains is **interprocedural**: if a function receives a struct-with-pointer by value, the parameter is `PROV_UNKNOWN` inside the callee, so writing it to a global / heap field there isn't caught at the call site.
 
-1. **Return a stack struct literal with a stack-pointer field** — `return holder { p = &stack_local }` passes.
-2. **Assign a stack-struct-with-pointer to a global** — GCC's `-Wdangling-pointer` catches the obvious case but FC doesn't, and indirect/branching assignments slip past both.
-3. **Field access provenance not propagated** — `s.ptr_field` and `s->ptr_field` don't inherit `s`'s provenance; returning them bypasses the stack-ptr return check.
-4. **`&(heap_struct.field)` taking the address of a heap-struct field that holds a stack pointer** — not validated against the field's own provenance.
+Example that still slips through:
+```fc
+let stash = (h: holder) -> gh = h   // h is PROV_UNKNOWN inside stash
+let leak = () -> stash(holder { p = &local })
+```
 
-Fix direction: when a struct is constructed or returned, walk its field types and check the provenance of any pointer/slice fields; propagate provenance through field-access expressions.
+Fix direction: either (a) tag function parameters as "tainted by stack provenance" based on a summary pass, or (b) forbid passing provenance-carrying struct values by value to non-local functions unless the callee proves it doesn't escape them. (a) is closer to what Rust/C++ do; (b) is more conservative but simpler.

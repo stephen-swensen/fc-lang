@@ -1,0 +1,10 @@
+// Error: assigning a bare stack pointer to a global pointer variable
+let mut gp = default(int32*)
+
+let leak = () ->
+    let mut x = 42
+    gp = &x
+
+let main = (args: str[]) ->
+    leak()
+    0

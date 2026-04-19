@@ -1,0 +1,13 @@
+// Error: -> field access propagates stack provenance through a pointer
+struct holder =
+    p: int32*
+
+let bad = () ->
+    let mut x = 42
+    let mut s = holder { p = &x }
+    let sp = &s
+    sp->p
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

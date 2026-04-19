@@ -1,0 +1,12 @@
+// Error: stack provenance propagates through let binding to return
+struct holder =
+    p: int32*
+
+let bad = () ->
+    let mut x = 42
+    let s = holder { p = &x }
+    s
+
+let main = (args: str[]) ->
+    let _h = bad()
+    0

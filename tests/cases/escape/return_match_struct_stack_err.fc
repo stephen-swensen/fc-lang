@@ -1,0 +1,13 @@
+// Error: match arm producing a stack struct literal is rejected at return
+struct holder =
+    p: int32*
+
+let bad = (u: int32?) ->
+    let mut x = 42
+    match u with
+    | some(_) -> holder { p = &x }
+    | none    -> holder { p = default(int32*) }
+
+let main = (args: str[]) ->
+    let _h = bad(some(1))
+    0
