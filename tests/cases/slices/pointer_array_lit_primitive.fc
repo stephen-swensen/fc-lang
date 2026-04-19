@@ -1,0 +1,14 @@
+// stack array literal of primitive pointer elements, including chained * suffixes
+let main = (args: str[]) ->
+    let mut a = 1
+    let mut b = 2
+    let mut c = 4
+    let ptrs = int32*[3] { &a, &b, &c }
+    assert(*ptrs[0] + *ptrs[1] + *ptrs[2] == 7)
+
+    // double pointer: int32**[N]
+    let mut pa = &a
+    let mut pb = &b
+    let pps = int32**[2] { &pa, &pb }
+    assert(*(*pps[0]) + *(*pps[1]) == 3)
+    0
