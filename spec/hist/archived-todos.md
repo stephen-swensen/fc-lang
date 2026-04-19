@@ -4,6 +4,24 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Windows/MSYS2 test failures (resolved 2026-04-18)
+
+Originally: 37 of 987 tests failed on MSYS2 UCRT64 (gcc), grouped into abort/signal handling (different exit code from POSIX), POSIX-dependent IO/stdio, and POSIX-dependent networking. The failure list was captured on 2026-04-04, before Windows branches were added to `stdlib/sys` (sleep/time/pid) and `stdlib/io` (mkdir/list_dir); by the time the work landed, net.fc already had a full Winsock branch.
+
+**Resolution:** on UCRT64, all 987 tests now pass.
+
+- `stdlib/io.fc`: added a Windows branch routing `access()` through `_access` in `<io.h>` (MinGW's `<unistd.h>` wrapper was unreliable enough under UCRT64 that just going direct was simpler).
+- `stdlib/sys.fc`: `temp_dir()` now falls back to `/tmp` on POSIX when `TMPDIR`/`TMP`/`TEMP` are all unset (common on Linux; Windows always sets `TEMP`). This lets tests use `sys.temp_dir()!` unconditionally.
+- `src/codegen.c`: emit `#ifdef _WIN32` constructor calling `_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT)` before main. Without it, every abort-triggering test popped a Watson dialog and hung; with it, abort() exits cleanly with status 3.
+- `tests/run_tests*.sh`: on MSYS2/MinGW, treat exit code 3 as equivalent to 134 for tests whose `.expected_exit` hardcodes the POSIX abort value. Avoids duplicating every exit file per platform.
+- `tests/cases/io/*` and `tests/cases/stdlib/io_*`: replaced hardcoded `/tmp/...` and `/dev/null` paths with `sys.temp_dir()!` + `%s{tmp}/...` interpolation, dropped POSIX-only assertions (e.g. "/dev/null is readable"), and gave `io_mkdir` / `io_list_dir` a Windows branch for `_rmdir` from `<direct.h>`.
+
+Out of scope and left alone: the `SOCKET` (uint64 on x64) vs `int32` declared return type in `stdlib/net.fc`'s Winsock externs. It's technically ABI-incorrect for handles above 2^31 but Windows assigns small socket values in practice, and the tests pass. Noted as a latent issue, not a blocker.
+
+The net-test "C compilation failed" entries the user reported mid-investigation turned out to be environmental (likely AV interference with the linker); they cleared without touching `stdlib/net.fc`.
+
+---
+
 ## `when` guards on match arms (implemented 2026-04-18)
 
 Originally: allow a boolean predicate on a pattern, e.g. `| ek_dog when no_dogs -> continue`. The workaround was an outer `if` + separate `match`, or a dedicated arm with no predicate and a follow-up `if` inside the arm — both split logic that would read as a single guarded pattern. Came up in wolf-fc while gating dog spawns behind a CLI flag.
