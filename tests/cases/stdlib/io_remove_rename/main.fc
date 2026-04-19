@@ -6,6 +6,10 @@ let main = (args: str[]) ->
     let src = "%s{tmp}/fc_test_rename_src.txt"
     let dst = "%s{tmp}/fc_test_rename_dst.txt"
 
+    // Clean up any leftovers from a prior run (Windows rename() fails if dst exists)
+    io.remove(src)
+    io.remove(dst)
+
     // Create a file
     let f = io.open(src, "w")
     match f with
@@ -19,11 +23,12 @@ let main = (args: str[]) ->
 
     // Original should not be openable
     let f2 = io.open(src, "r")
-    match f2 with
+    let src_gone = match f2 with
     | some(rf) ->
         io.close(rf)
-        return 2
-    | none -> return 0
+        false
+    | none -> true
+    assert(src_gone)
 
     // New name should be readable
     let f3 = io.open(dst, "r")
