@@ -1,4 +1,5 @@
 import io from std::
+import sys from std::
 
 // Compare two str values byte-for-byte.
 let str_eq = (a: const str, b: const str) ->
@@ -15,13 +16,18 @@ let str_eq = (a: const str, b: const str) ->
         eq
 
 let main = (args: str[]) ->
-    let dir = "/tmp/fc_test_list_dir"
+    let tmp = sys.temp_dir()!
+    let dir = "%s{tmp}/fc_test_list_dir"
+    let path_a = "%s{tmp}/fc_test_list_dir/a.txt"
+    let path_b = "%s{tmp}/fc_test_list_dir/b.txt"
+    let path_c = "%s{tmp}/fc_test_list_dir/c.txt"
+    let missing = "%s{tmp}/fc_test_list_dir_does_not_exist"
 
     // Start fresh: remove any leftover files from a prior run and (re)create.
     // If the directory doesn't exist yet, remove() calls are no-ops.
-    io.remove("/tmp/fc_test_list_dir/a.txt")
-    io.remove("/tmp/fc_test_list_dir/b.txt")
-    io.remove("/tmp/fc_test_list_dir/c.txt")
+    io.remove(path_a)
+    io.remove(path_b)
+    io.remove(path_c)
     c.rmdir((cstr) dir)
     assert(io.mkdir(dir))
 
@@ -39,9 +45,9 @@ let main = (args: str[]) ->
             io.close(f)
             true
         | none -> false
-    if !touch("/tmp/fc_test_list_dir/a.txt") then return 2
-    if !touch("/tmp/fc_test_list_dir/b.txt") then return 2
-    if !touch("/tmp/fc_test_list_dir/c.txt") then return 2
+    if !touch(path_a) then return 2
+    if !touch(path_b) then return 2
+    if !touch(path_c) then return 2
 
     // List and verify: expect exactly a.txt, b.txt, c.txt (no ".", "..").
     match io.list_dir(dir) with
@@ -62,16 +68,21 @@ let main = (args: str[]) ->
         free(names)
 
     // Listing a nonexistent directory should return none.
-    let nonexistent = io.list_dir("/tmp/fc_test_list_dir_does_not_exist")
+    let nonexistent = io.list_dir(missing)
     assert(nonexistent.is_none)
 
     // Cleanup.
-    io.remove("/tmp/fc_test_list_dir/a.txt")
-    io.remove("/tmp/fc_test_list_dir/b.txt")
-    io.remove("/tmp/fc_test_list_dir/c.txt")
+    io.remove(path_a)
+    io.remove(path_b)
+    io.remove(path_c)
     c.rmdir((cstr) dir)
 
     0
 
+#if os == "windows"
+module c from "direct.h" =
+    extern _rmdir as rmdir: (const cstr) -> int32
+#else
 module c from "unistd.h" =
     extern rmdir: (const cstr) -> int32
+#end
