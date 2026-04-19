@@ -1,5 +1,6 @@
 #include "monomorph.h"
 #include "types.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -529,6 +530,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
 
     /* Topologically sort struct/union entries so by-value dependencies come first.
      * Function entries are left in their original order at the end. */
+    assert(t->count >= 0);  /* invariant: count only grows from 0 via DA_APPEND — tells GCC LTO the (size_t) cast below can't become a huge value */
     int *state = calloc((size_t)t->count, sizeof(int));
     int *order = malloc(sizeof(int) * (size_t)t->count);
     int order_count = 0;

@@ -4,6 +4,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## `-Walloc-size-larger-than=` warning at `monomorph.c:532` (resolved 2026-04-18)
+
+Originally: under `-O2 -flto`, GCC flagged `calloc((size_t)t->count, sizeof(int))` with `-Walloc-size-larger-than=`. LTO range analysis couldn't prove `t->count >= 0`, and a negative `int` cast to `size_t` becomes a high-range value that tripped the heuristic. Surfaced during wolf-fc's switch to building its local FC compiler copy with `-O2 -flto`. Not a real bug — `t->count` only grows from 0 via `DA_APPEND` — but worth documenting the invariant.
+
+**Resolution:** added `assert(t->count >= 0)` before the `calloc` at `monomorph.c:532` (plus `#include <assert.h>`). The assert gives GCC LTO the range information it needed, silences the warning at `-O2 -flto`, and makes the invariant explicit. Considered but rejected: changing `count` from `int` to `size_t`/`uint32_t` — would touch 17 call sites in `monomorph.c` for no functional gain. Build is clean at `-O0`, `-O2`, and `-O2 -flto`; all 1152 tests pass.
+
+---
+
 ## Windows/MSYS2 test failures (resolved 2026-04-18)
 
 Originally: 37 of 987 tests failed on MSYS2 UCRT64 (gcc), grouped into abort/signal handling (different exit code from POSIX), POSIX-dependent IO/stdio, and POSIX-dependent networking. The failure list was captured on 2026-04-04, before Windows branches were added to `stdlib/sys` (sleep/time/pid) and `stdlib/io` (mkdir/list_dir); by the time the work landed, net.fc already had a full Winsock branch.
