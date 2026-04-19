@@ -1,0 +1,13 @@
+// loop + match + break value: find the first even element in a slice
+let main = (args: str[]) ->
+    let xs = int32[5] { 1, 3, 5, 8, 9 }
+    let mut i = 0
+    let found = loop
+        if i == (int32) xs.len then break -1
+        let x = xs[i]
+        match x % 2 with
+        | 0 -> break x
+        | _ -> i = i + 1
+    assert(found == 8)
+    assert(i == 3)
+    0

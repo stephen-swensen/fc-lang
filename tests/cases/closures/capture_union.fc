@@ -1,0 +1,25 @@
+// closure captures a union value and matches on it
+union shape =
+    | circle(int32)
+    | square(int32)
+    | nothing
+
+let apply = (f: () -> int32) -> f()
+
+let main = (args: str[]) ->
+    let s = shape.circle(6)
+    let area = () ->
+        match s with
+        | circle(r)   -> r * r
+        | square(a)   -> a * a
+        | nothing     -> 0
+    assert(apply(area) == 36)
+
+    let e = shape.nothing
+    let area_none = () ->
+        match e with
+        | circle(r)   -> r * r
+        | square(a)   -> a * a
+        | nothing     -> 123
+    assert(apply(area_none) == 123)
+    0

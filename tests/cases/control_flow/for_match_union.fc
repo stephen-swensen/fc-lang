@@ -1,0 +1,18 @@
+// match inside a for-in loop body over a slice of union variants
+union entry =
+    | num(int32)
+    | skip
+
+let main = (args: str[]) ->
+    let xs = entry[4] { entry.num(10), entry.skip, entry.num(3), entry.num(9) }
+
+    let mut sum = 0
+    let mut skipped = 0
+    for e in xs
+        match e with
+        | num(v) -> sum = sum + v
+        | skip   -> skipped = skipped + 1
+
+    assert(sum == 22)
+    assert(skipped == 1)
+    0

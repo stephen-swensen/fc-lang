@@ -1,0 +1,23 @@
+// closure captures an option value and unwraps it
+let apply = (f: () -> int32) -> f()
+
+let main = (args: str[]) ->
+    let opt_some = some(42)
+    let get_some = () ->
+        match opt_some with
+        | some(v) -> v
+        | none    -> -1
+    assert(apply(get_some) == 42)
+
+    let opt_none = default(int32?)
+    let get_none = () ->
+        match opt_none with
+        | some(v) -> v
+        | none    -> 7
+    assert(apply(get_none) == 7)
+
+    // postfix unwrap on captured option
+    let opt_val = some(99)
+    let unwrap_it = () -> opt_val!
+    assert(apply(unwrap_it) == 99)
+    0

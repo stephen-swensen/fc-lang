@@ -1,0 +1,22 @@
+// zero-length subslice: .len and iteration
+let main = (args: str[]) ->
+    let buf = int32[5] { 10, 20, 30, 40, 50 }
+    let e1 = buf[0..0]
+    let e2 = buf[3..3]
+    let e3 = buf[5..5]
+    assert(e1.len == 0)
+    assert(e2.len == 0)
+    assert(e3.len == 0)
+
+    let mut touched = 0
+    for x in e1
+        touched = touched + x
+    assert(touched == 0)
+
+    let mut entered = false
+    for i, x in e2
+        entered = true
+        touched = touched + x + (int32) i
+    assert(!entered)
+    assert(touched == 0)
+    0
