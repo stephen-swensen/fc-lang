@@ -4678,10 +4678,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             }
         }
     }
-    free(opt_emitted);
     free(su_sorted);
 
-    /* Emit monomorphized struct/union definitions */
+    /* Emit monomorphized struct/union definitions, interleaved with any deferred
+       option typedefs whose inner type matches the mono instance's mangled name. */
     for (int mi = 0; mi < mono->count; mi++) {
         MonoInstance *inst = &mono->entries[mi];
         if (!inst->concrete_type) continue;
@@ -4710,7 +4710,26 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
                 fprintf(out, "struct %s { %s_tag tag; };\n", inst->mangled_name, inst->mangled_name);
             }
         }
+        /* Emit deferred option bodies whose inner type resolves to this mono instance */
+        for (int j = 0; j < options.count; j++) {
+            if (opt_emitted[j]) continue;
+            Type *o = options.types[j];
+            if (!o->option.inner) continue;
+            const char *inner_name = NULL;
+            if (o->option.inner->kind == TYPE_STRUCT) inner_name = o->option.inner->struc.name;
+            else if (o->option.inner->kind == TYPE_UNION) inner_name = o->option.inner->unio.name;
+            else if (o->option.inner->kind == TYPE_STUB) inner_name = o->option.inner->stub.name;
+            if (inner_name && inner_name == inst->mangled_name) {
+                fprintf(out, "struct fc_option_");
+                emit_type_ident(o->option.inner, out);
+                fprintf(out, " { ");
+                emit_type(o->option.inner, out);
+                fprintf(out, " value; bool has_value; };\n");
+                opt_emitted[j] = true;
+            }
+        }
     }
+    free(opt_emitted);
 
     /* Phase 2: deferred function typedefs that reference struct/union/option-of-struct.
        All struct defs and option-of-struct typedefs are now emitted above. */

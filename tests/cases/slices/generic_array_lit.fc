@@ -1,0 +1,11 @@
+// stack array literal with generic struct element type: box<int32>[N] { ... }
+struct box =
+    v: 'a
+
+let main = (args: str[]) ->
+    let a = box { v = 1 }
+    let b = box { v = 2 }
+    let c = box { v = 4 }
+    let arr = box<int32>[3] { a, b, c }
+    assert(arr[0].v + arr[1].v + arr[2].v == 7)
+    0

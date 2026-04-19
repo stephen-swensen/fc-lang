@@ -1,0 +1,13 @@
+// heap allocation of an option-typed array: alloc(T?[N] { ... })
+let main = (args: str[]) ->
+    let opts = alloc(int32?[4] { some(10), default(int32?), some(3), some(9) })!
+    let mut sum = 0
+    let mut nones = 0
+    for o in opts
+        match o with
+        | some(v) -> sum = sum + v
+        | none    -> nones = nones + 1
+    free(opts)
+    assert(sum == 22)
+    assert(nones == 1)
+    0

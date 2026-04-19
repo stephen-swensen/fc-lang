@@ -916,6 +916,18 @@ static Expr *parse_prefix(Parser *p) {
         while (peek_at(p, arr_start)->kind == TOK_DOT &&
                peek_at(p, arr_start + 1)->kind == TOK_IDENT)
             arr_start += 2;
+        /* Scan past optional generic type args: <T, T, ...>.
+           Only matches when every token inside <...> is valid in a type position. */
+        if (peek_at(p, arr_start)->kind == TOK_LT) {
+            int scan = arr_start + 1;
+            bool ok = true;
+            while (peek_at(p, scan)->kind != TOK_GT) {
+                TokenKind k = peek_at(p, scan)->kind;
+                if (k == TOK_EOF || !is_type_arg_token(k)) { ok = false; break; }
+                scan++;
+            }
+            if (ok) arr_start = scan + 1; /* consume trailing > */
+        }
         /* Scan past ? / * type suffixes on the element type: name?*[N]{...} */
         while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
                peek_at(p, arr_start)->kind == TOK_STAR)
@@ -958,6 +970,26 @@ static Expr *parse_prefix(Parser *p) {
                     elem_type->stub.qualified_name = NULL;
                     elem_type->stub.type_args = NULL;
                     elem_type->stub.type_arg_count = 0;
+                }
+                /* Parse optional generic type args: <T, T, ...>. Only attaches to
+                   stub (user-defined) element types; built-in types can't have args. */
+                if (check(p, TOK_LT) && elem_type->kind == TYPE_STUB) {
+                    advance_p(p); /* consume < */
+                    Type **targs = NULL;
+                    int ta_count = 0, ta_cap = 0;
+                    do {
+                        Type *ty = parse_type(p);
+                        DA_APPEND(targs, ta_count, ta_cap, ty);
+                        if (!check(p, TOK_COMMA)) break;
+                        advance_p(p);
+                    } while (1);
+                    expect(p, TOK_GT);
+                    elem_type->stub.type_args = arena_alloc(p->arena,
+                        sizeof(Type*) * (size_t)ta_count);
+                    memcpy(elem_type->stub.type_args, targs,
+                           sizeof(Type*) * (size_t)ta_count);
+                    elem_type->stub.type_arg_count = ta_count;
+                    free(targs);
                 }
                 /* Apply ? (option) and * (pointer) suffixes to the element type */
                 while (check(p, TOK_QUESTION) || check(p, TOK_STAR)) {
