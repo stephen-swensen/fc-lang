@@ -3710,7 +3710,25 @@ let n = alloc(node { data = &x })   // compile error: cannot store stack-allocat
 
 Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, and `.ptr` on slices. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
 
-The analysis is **intraprocedural** — function parameters and call return values have unknown provenance. A function that receives a pointer parameter is allowed to return it; the caller is responsible for ensuring the pointer is valid. `alloc(stack_data)` produces heap provenance — the deep-copy promotes stack data to the heap, which is the intended escape hatch:
+The analysis is **intraprocedural** — function parameters and call return values have unknown provenance. A function that receives a pointer (or a struct/union carrying one) may use it freely inside its body, including storing it in globals or heap-reachable structures; the compiler does not propagate stack-provenance across call boundaries. The caller is responsible for ensuring that any stack-derived value passed into a function does not outlive the frame that produced it. In particular, this pattern is accepted by the compiler but produces a dangling pointer:
+
+```fc
+struct holder =
+    p: int32*
+
+let mut gh = holder { p = default(int32*) }
+
+let stash = (h: holder) ->
+    gh = h                          // allowed: h has unknown provenance inside stash
+
+let leak = () ->
+    let mut local = 42
+    stash(holder { p = &local })    // accepted — &local escapes via stash, dangles after leak returns
+```
+
+The same limitation applies to indirect calls (function pointers, callbacks, closures) and to non-pointer escape sinks reached through a callee. When in doubt, promote stack data to the heap before handing it across a call boundary.
+
+`alloc(stack_data)` produces heap provenance — the deep-copy promotes stack data to the heap, which is the intended escape hatch:
 
 ```fc
 let make_slice = () ->

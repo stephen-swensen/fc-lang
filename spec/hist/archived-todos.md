@@ -4,6 +4,22 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Escape analysis — interprocedural gap (retired 2026-04-20)
+
+Originally: the intraprocedural escape analysis (commit `38e6461`) catches stack-ptr in struct/union construction, field/index access into stack-provenance aggregates, global assignment of stack-provenance values, and heap-struct field assignment (`h->f = &stack`). What remained was **interprocedural** — if a function receives a struct-with-pointer by value, the parameter is `PROV_UNKNOWN` inside the callee, so writing it to a global / heap field there isn't caught at the call site.
+
+Example that slips through:
+```fc
+let stash = (h: holder) -> g = h                   // h is PROV_UNKNOWN inside stash
+let leak  = () -> stash(holder { p = &local })
+```
+
+Two fix directions were considered: (a) a per-function escape summary pass propagating "parameter carries stack provenance and escapes" bits across the call graph via fixpoint; (b) forbid passing provenance-carrying aggregate values by value to non-local functions.
+
+**Resolution:** retired as won't-implement. The gap requires a specific three-step sequence (build aggregate carrying a stack pointer → pass it by value → callee escapes it) that is uncommon in practice. The intraprocedural pass already catches the common mistakes — direct `&local` return, storing into a heap struct, returning a struct with a stack-pointer field, freeing non-heap memory. Approach (a) would add roughly 400 LOC of fixpoint analysis for a narrow additional catch and complicates handling of indirect calls, generics, and closures. Approach (b) would reject legit code, most visibly any indirect call or callback receiving a pointer-in-struct argument. FC's design stance is manual memory management in C's tradition; escape analysis is a sanity net, not a safety proof, and extending it across call boundaries starts to conflict with that stance. Use-after-free and other lifetime-shape problems are already outside the analysis's remit. The spec's `§Pointers and References → Escape analysis` section now documents the interprocedural gap explicitly with an example so users know where the analysis stops.
+
+---
+
 ## `&fn` does not emit a raw C function pointer (resolved 2026-04-20)
 
 Originally: `&fn` on a non-capturing function was emitted as `&(fc_fn_..._..){.fn_ptr = fn, .ctx = NULL}` — the address of a fat-pointer compound literal instead of a raw C function pointer. Storing that into a C struct field (e.g. `SDL_AudioSpec.callback`) handed C code a pointer to a two-word struct, which it then tried to call as a function — segfault. The trampoline mechanism (`_ctramp_*`) only fired when a function was passed as an argument to an extern call with a `TYPE_FUNC` parameter; struct field assignments, casts to `any*`, and any other `&fn` context slipped through.
