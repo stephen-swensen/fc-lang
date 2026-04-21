@@ -2131,13 +2131,27 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     return e->type;
                 }
             }
+            /* &(inline lambda): reject if it captures */
+            if (operand->kind == EXPR_FUNC && operand->func.capture_count > 0) {
+                diag_error(e->loc, "cannot take address of capturing closure");
+                e->type = type_error();
+                return e->type;
+            }
             if (is_write_through_const(operand)) {
                 diag_error(e->loc, "cannot take mutable address through const pointer");
                 e->type = type_error();
                 return e->type;
             }
-            e->type = type_pointer(ctx->arena, ot);
-            e->prov = PROV_STACK;
+            /* &f on a function value yields a raw C function pointer — typed
+             * as any* (opaque) because it is strictly a C-interop handle,
+             * not an FC pointer that can be dereferenced or called. */
+            if (ot->kind == TYPE_FUNC) {
+                e->type = type_any_ptr();
+                e->prov = PROV_STATIC;
+            } else {
+                e->type = type_pointer(ctx->arena, ot);
+                e->prov = PROV_STACK;
+            }
         } else if (op == TOK_STAR) {
             /* Dereference: operand must be pointer */
             if (ot->kind != TYPE_POINTER) {

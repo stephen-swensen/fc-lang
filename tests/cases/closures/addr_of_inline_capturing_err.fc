@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let threshold = 10
+    // Inline (unbound) capturing lambda is also rejected for &.
+    let p = &((x: int32) -> x > threshold)
+    0

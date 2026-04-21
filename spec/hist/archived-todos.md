@@ -4,6 +4,20 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## `&fn` does not emit a raw C function pointer (resolved 2026-04-20)
+
+Originally: `&fn` on a non-capturing function was emitted as `&(fc_fn_..._..){.fn_ptr = fn, .ctx = NULL}` — the address of a fat-pointer compound literal instead of a raw C function pointer. Storing that into a C struct field (e.g. `SDL_AudioSpec.callback`) handed C code a pointer to a two-word struct, which it then tried to call as a function — segfault. The trampoline mechanism (`_ctramp_*`) only fired when a function was passed as an argument to an extern call with a `TYPE_FUNC` parameter; struct field assignments, casts to `any*`, and any other `&fn` context slipped through.
+
+**Resolution:** took fix direction 1 from the original TODO. Changes:
+
+- `codegen.c`: `collect_trampolines_expr` now registers a trampoline for `EXPR_UNARY_PREFIX(TOK_AMP, ...)` when the operand is a top-level function ident (non-local `EXPR_IDENT` with `TYPE_FUNC`), a module-qualified function field, or a non-capturing inline lambda (`EXPR_FUNC` with `capture_count == 0`). `emit_expr` for the same patterns now emits the raw `_ctramp_<name>` symbol instead of `&(fat-struct){...}`.
+- `pass2.c`: `&f` on a function-typed operand now yields `any*` with `PROV_STATIC` (was `TYPE_FUNC*` with `PROV_STACK`). This makes `&fn` an opaque C-interop handle — it can be passed through `any*` parameters and stored in `any*` struct fields, but FC-side dereference/call is a type error. Also added: `&(inline lambda)` rejected at compile time if the lambda captures.
+- Tests: rewrote `pointers/addr_of_func.fc` (its `let p = &double; (*p)(21)` pattern relied on the old buggy behavior), added `pointers/addr_of_func_c_invoke/` (multi-file — C helper invokes `&fn` through `void*` and through a struct field), `pointers/addr_of_func_deref_err.fc` (rejects `*p` on the `any*` result), `closures/addr_of_inline_capturing_err.fc` (rejects inline capturing lambda), and `escape/return_addr_of_func.fc` (confirms `&fn` has static provenance so it can be returned).
+
+All 1203 tests pass on gcc and clang.
+
+---
+
 ## `-Walloc-size-larger-than=` warning at `monomorph.c:532` (resolved 2026-04-18)
 
 Originally: under `-O2 -flto`, GCC flagged `calloc((size_t)t->count, sizeof(int))` with `-Walloc-size-larger-than=`. LTO range analysis couldn't prove `t->count >= 0`, and a negative `int` cast to `size_t` becomes a high-range value that tripped the heuristic. Surfaced during wolf-fc's switch to building its local FC compiler copy with `-O2 -flto`. Not a real bug — `t->count` only grows from 0 via `DA_APPEND` — but worth documenting the invariant.

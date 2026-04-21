@@ -1,0 +1,9 @@
+// &f on a top-level function has static provenance — returning it is fine.
+let inner = (x: int32) -> x + 1
+
+let get_callback = () -> &inner
+
+let main = (args: str[]) ->
+    let p = get_callback()
+    assert(p != default(any*))
+    0

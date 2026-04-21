@@ -1,7 +1,23 @@
+// &f on a non-capturing function yields a raw C function pointer
+// (typed as any* in FC — opaque, C-interop only).
 let double = (x: int32) -> x * 2
 
+let greet = () ->
+    0
+
 let main = (args: str[]) ->
+    // Top-level named function
     let p = &double
-    let result = (*p)(21)
-    assert(result == 42)
+    // Non-capturing inline lambda
+    let q = &((x: int32, y: int32) -> x + y)
+    // Zero-arg function
+    let r = &greet
+    // Function pointers must be non-null
+    assert(p != default(any*))
+    assert(q != default(any*))
+    assert(r != default(any*))
+    // Taking the address twice from the same top-level function yields
+    // the same pointer (trampoline is a single static).
+    let p2 = &double
+    assert(p == p2)
     0

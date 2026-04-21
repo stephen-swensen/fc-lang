@@ -1703,6 +1703,30 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "))");
             break;
         }
+        /* &f on a top-level function or non-capturing lambda: emit the raw
+         * C-boundary trampoline instead of the address of a fat-pointer literal.
+         * This is the C-interop escape hatch documented in the spec. */
+        if (e->unary_prefix.op == TOK_AMP) {
+            Expr *operand = e->unary_prefix.operand;
+            if (operand->kind == EXPR_IDENT && !operand->ident.is_local &&
+                operand->type && operand->type->kind == TYPE_FUNC) {
+                const char *name = operand->ident.codegen_name
+                    ? operand->ident.codegen_name : operand->ident.name;
+                fprintf(out, "_ctramp_%s", name);
+                break;
+            }
+            if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
+                operand->type && operand->type->kind == TYPE_FUNC) {
+                fprintf(out, "_ctramp_%s", operand->field.codegen_name);
+                break;
+            }
+            if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
+                operand->func.lifted_name && operand->type &&
+                operand->type->kind == TYPE_FUNC) {
+                fprintf(out, "_ctramp_%s", operand->func.lifted_name);
+                break;
+            }
+        }
         const char *op_str;
         switch (e->unary_prefix.op) {
         case TOK_MINUS: op_str = "-"; break;
@@ -3613,6 +3637,24 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
         collect_trampolines_expr(e->binary.right, ts);
         break;
     case EXPR_UNARY_PREFIX:
+        /* &f on a top-level function or non-capturing lambda yields a raw C
+         * function pointer — record it so the trampoline is emitted. */
+        if (e->unary_prefix.op == TOK_AMP) {
+            Expr *operand = e->unary_prefix.operand;
+            if (operand->kind == EXPR_IDENT && !operand->ident.is_local &&
+                operand->type && operand->type->kind == TYPE_FUNC) {
+                const char *name = operand->ident.codegen_name
+                    ? operand->ident.codegen_name : operand->ident.name;
+                trampolineset_add(ts, name, operand->type);
+            } else if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
+                       operand->type && operand->type->kind == TYPE_FUNC) {
+                trampolineset_add(ts, operand->field.codegen_name, operand->type);
+            } else if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
+                       operand->func.lifted_name && operand->type &&
+                       operand->type->kind == TYPE_FUNC) {
+                trampolineset_add(ts, operand->func.lifted_name, operand->type);
+            }
+        }
         collect_trampolines_expr(e->unary_prefix.operand, ts);
         break;
     case EXPR_UNARY_POSTFIX:

@@ -1,0 +1,7 @@
+let double = (x: int32) -> x * 2
+
+let main = (args: str[]) ->
+    let p = &double
+    // &f produces an opaque any* — dereference is a type error.
+    let y = *p
+    0

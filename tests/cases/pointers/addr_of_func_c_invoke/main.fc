@@ -1,0 +1,27 @@
+// Verify &f yields a raw C function pointer that C code can call directly.
+// Covers the canonical C-interop case: passing through void* / any* and
+// storing in a C struct field.
+module cb from "cb_invoke.h" =
+    extern struct cb_box =
+        tag: int32
+        fn: any*
+    extern cb_invoke: (any*, int32) -> int32
+    extern cb_box_invoke: (cb_box*, int32) -> int32
+
+let triple = (x: int32) -> x * 3
+
+let main = (args: str[]) ->
+    // Pass &fn through a plain any* parameter
+    let r1 = cb.cb_invoke(&triple, 14)
+    assert(r1 == 42)
+
+    // Store &fn into a C struct field of type void* and invoke via helper
+    let mut box = cb.cb_box { tag = 1, fn = &triple }
+    let r2 = cb.cb_box_invoke(&box, 7)
+    assert(r2 == 21)
+
+    // Reassign the struct field with a non-capturing inline lambda
+    box.fn = &((x: int32) -> x + 100)
+    let r3 = cb.cb_box_invoke(&box, 5)
+    assert(r3 == 105)
+    0
