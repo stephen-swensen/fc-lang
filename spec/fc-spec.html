@@ -433,7 +433,7 @@ The guiding principles are:
 
 - No null in the language — null is not expressible in FC code; option types replace all intentionally nullable values. Raw pointer fields in zero-initialized structs may physically contain null if the programmer does not initialize them — FC does not prevent this, but does not provide null as a value either.
 - No uninitialized bindings — all bindings must be initialized at declaration
-- No explicit type annotations on bindings — types are always inferred; the same principle extends to generics, where type variables are implicit and instantiation is always inferred at the call site
+- No explicit type annotations on bindings — types are always inferred; the same principle extends to generics, where type variables are implicit (any `'a` in a signature makes the declaration generic) and instantiation is inferred from arguments at the call site. Explicit type arguments (`f<int32>()`, `make_pair<int32, bool>()`) are available for the cases inference can't reach — see §Generic Functions.
 - Explicit numeric widths throughout — implicit widening conversions are allowed only where no information can be lost (see §Operators & Access)
 - Indentation-based lexical scoping
 - A clean statement / expression divide — top-level declarations are statements, everything inside an expression context is an expression with a type
@@ -4453,6 +4453,10 @@ Generic data structures and collection utilities. Lives in the `std::` namespace
 - **`slice`** — Functional operations on built-in `'a[]` slices: map, filter, fold, scan, reduce, find, sort, reverse, copy, and more. Read-only functions take `const 'a[]`; mutating functions (sort, reverse, retain, apply) take `'a[]`.
 
 All sequential collections (array_list, linked_list, slice) share a consistent functional API: `fold_left`, `fold_right`, `reduce`, `scan`, `map`, `mapi`, `filter`, `iter`, `iteri`, `any`, `all`, `find`, `count`. In-place mutating variants: `sort`, `reverse`, `retain`, `apply`, `applyi`. The `try_` prefix convention returns an option; the bare name force-unwraps (e.g., `try_find` vs `find`).
+
+## std::random
+
+Pseudo-random number generators with explicit state (no hidden globals). Two generators are provided: `lcg_random` (Knuth LCG, fast and compact) and `pcg_random` (PCG-XSH-RR, higher statistical quality). Both expose `next_uint32` / `next_uint64`, `next_float32` / `next_float64` in `[0.0, 1.0)`, and bounded-integer variants. `pcg_random` additionally supports multiple independent streams via `make_with_channel`. Callers own the generator state and thread it through explicitly.
 
 ---
 
