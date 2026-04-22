@@ -4,6 +4,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Cross-namespace nested-type identity leak through user modules (resolved 2026-04-22)
+
+Originally: a stdlib type at a nested module path (e.g. `std::random.pcg_random`, declared as `module random = struct pcg_random + module pcg_random = ...`) got a different internal name depending on where it was *referenced*. When a user module called a stdlib function whose signature mentioned the nested type, pass2 ran the callee's `check_decl_let` on-demand but only set `ctx.module_symtab`, leaving `parent_modules`, `import_scope`, and `current_ns` reflecting the caller's scope. Bare stub names in the callee's own signatures (like `pcg_random*` in `stdlib/random.fc :: next_uint32`) then failed to resolve, the parameter stayed as `TYPE_STUB`, and unification against the caller's fully-resolved `std::random.pcg_random*` argument produced `expected pcg_random*, got std::random.pcg_random*`. The workaround was to keep every function touching the type at entry-point file scope, which blocked module-boundary refactoring in wolf-fc.
+
+**Resolution:** added `struct Symbol *parent` to `Symbol` (set in a final pass1 phase after all symtab mutations, so pointers stay stable). Added `enter_module_scope_on_demand` / `restore_scope` helpers in pass2 that rebuild the full `ModuleScopeChain`, `ImportScope` stack, `module_symtab`, and `current_ns` from the callee module's parent chain, plus file-level imports from its declaring file. Wired into the on-demand field-access path at `pass2.c` around line 3291. `CheckCtx` now carries `file_scopes` so the rebuild can reach per-file import tables. Regression tests in `tests/cases/modules/`: `cross_ns_nested_type_via_user_module/` (mirrors the TODO reproducer), `cross_ns_nested_type_transitive/` (chains through three user-module peers so multiple on-demand resolutions happen in succession), and `cross_ns_nested_type_no_import_err/` (confirms missing import still surfaces as a clean "different namespace" error). All 1206 tests pass on gcc and clang.
+
+---
+
 ## Escape analysis — interprocedural gap (retired 2026-04-20)
 
 Originally: the intraprocedural escape analysis (commit `38e6461`) catches stack-ptr in struct/union construction, field/index access into stack-provenance aggregates, global assignment of stack-provenance values, and heap-struct field assignment (`h->f = &stack`). What remained was **interprocedural** — if a function receives a struct-with-pointer by value, the parameter is `PROV_UNKNOWN` inside the callee, so writing it to a global / heap field there isn't caught at the call site.

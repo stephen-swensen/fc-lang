@@ -1,0 +1,10 @@
+import rng from acme::
+
+struct holder =
+    r: rng.pcg
+
+let main = (args: str[]) ->
+    let h = alloc(holder { r = rng.pcg.make(7u64) })!
+    let v = client.outer(&h->r)
+    assert(v >= 2)
+    0i32

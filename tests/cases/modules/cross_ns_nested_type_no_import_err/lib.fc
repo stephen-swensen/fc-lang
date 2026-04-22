@@ -1,0 +1,14 @@
+namespace acme::
+
+module rng =
+
+    struct pcg =
+        state: uint64
+
+    module pcg =
+        let make = (seed: uint64) ->
+            pcg { state = seed }
+
+        let next = (r: pcg*) ->
+            r->state = r->state + 1u64
+            (uint32) r->state

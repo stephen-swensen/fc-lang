@@ -1,0 +1,16 @@
+module client =
+    import rng from acme::
+
+    // A chain: outer -> middle -> inner. Each takes the nested type by pointer.
+    // This exercises the on-demand resolution path through multiple module
+    // members: when `client.outer` is type-checked, none of client's peers
+    // are resolved yet — each peer call triggers on-demand.
+
+    let inner = (r: rng.pcg*) ->
+        (int32) (rng.pcg.next(r) & 0xFFu32)
+
+    let middle = (r: rng.pcg*) ->
+        client.inner(r) + 1i32
+
+    let outer = (r: rng.pcg*) ->
+        client.middle(r) + 1i32

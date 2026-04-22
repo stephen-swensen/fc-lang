@@ -84,7 +84,8 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
 
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
     Symbol sym = { .name = name, .ns_prefix = NULL, .kind = kind, .decl = decl,
-                   .type = NULL, .members = NULL, .imports = NULL, .is_private = false,
+                   .type = NULL, .members = NULL, .imports = NULL, .parent = NULL,
+                   .is_private = false,
                    .is_generic = false, .type_params = NULL, .type_param_count = 0 };
     DA_APPEND(t->symbols, t->count, t->capacity, sym);
 }
@@ -779,6 +780,17 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
     }
 }
 
+/* Walk modules and set parent pointers. Called at end of pass1 after all
+ * symtab mutations are complete, so Symbol pointers are stable. */
+static void set_module_parents(SymbolTable *tab, Symbol *parent) {
+    for (int i = 0; i < tab->count; i++) {
+        Symbol *s = &tab->symbols[i];
+        if (s->kind != DECL_MODULE || !s->members) continue;
+        s->parent = parent;
+        set_module_parents(s->members, s);
+    }
+}
+
 /* Process imports for all top-level modules in global symtab */
 static void resolve_module_imports(SymbolTable *symtab, InternTable *intern) {
     for (int i = 0; i < symtab->count; i++) {
@@ -1252,4 +1264,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         free(deps);
         free(color);
     }
+
+    /* Final phase: set parent pointers on all nested modules. Must run after
+     * all symtab mutations are complete so Symbol pointers are stable. */
+    set_module_parents(symtab, NULL);
 }

@@ -189,10 +189,103 @@ typedef struct {
     InternTable *intern;         /* for name mangling */
     ImportScope *import_scope;   /* lexically scoped import chain */
     OnDemandVisited *on_demand_visited;  /* cycle detection for on-demand type checking */
+    FileImportScopes *file_scopes;  /* per-file import tables — needed to rebuild scope on on-demand checks */
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
 static void check_decl_let(CheckCtx *ctx, Decl *d);
+
+/* Saved CheckCtx fields for save/restore around on-demand scope switches. */
+typedef struct {
+    SymbolTable *module_symtab;
+    ModuleScopeChain *parent_modules;
+    ImportScope *import_scope;
+    const char *current_ns;
+    Scope *scope;
+} SavedCtxScope;
+
+/* Reconstruct ctx.module_symtab, parent_modules, import_scope, and current_ns
+ * from a module Symbol's parent chain (set by pass1). Used when on-demand
+ * type-checking must enter a module's scope outside the natural
+ * check_module_members walk — e.g., when a user module calls into a function
+ * declared in a stdlib module before the stdlib module has been checked.
+ * Without this reconstruction, bare stub names in the target module's
+ * signatures (like `pcg_random*` inside `std::random.pcg_random.next_uint32`)
+ * would fail to resolve, leaving the parameter types as unresolved stubs. */
+static void enter_module_scope_on_demand(CheckCtx *ctx, Symbol *mod_sym,
+                                          SavedCtxScope *saved) {
+    saved->module_symtab = ctx->module_symtab;
+    saved->parent_modules = ctx->parent_modules;
+    saved->import_scope = ctx->import_scope;
+    saved->current_ns = ctx->current_ns;
+    saved->scope = ctx->scope;
+
+    enum { MAX_DEPTH = 64 };
+    Symbol *chain[MAX_DEPTH];
+    int depth = 0;
+    for (Symbol *s = mod_sym; s && depth < MAX_DEPTH; s = s->parent) {
+        chain[depth++] = s;
+    }
+    /* chain[0] = mod_sym (innermost); chain[depth-1] = outermost ancestor */
+
+    ImportTable *file_tbl = NULL;
+    const char *fn = mod_sym->decl ? mod_sym->decl->loc.filename : NULL;
+    if (ctx->file_scopes && fn) {
+        for (int fi = 0; fi < ctx->file_scopes->count; fi++) {
+            if (ctx->file_scopes->scopes[fi].filename == fn) {
+                file_tbl = &ctx->file_scopes->scopes[fi].imports;
+                break;
+            }
+        }
+    }
+
+    ImportScope *scope = NULL;
+    if (file_tbl) {
+        ImportScope *fs = arena_alloc(ctx->arena, sizeof(ImportScope));
+        fs->table = file_tbl;
+        fs->parent = NULL;
+        scope = fs;
+    }
+
+    /* Build import scope bottom-up (outermost ancestor first). After the
+     * i-th iteration, scope = imports visible while checking chain[i]. */
+    ImportScope *scope_at_level[MAX_DEPTH];
+    for (int i = depth - 1; i >= 0; i--) {
+        if (chain[i]->imports) {
+            ImportScope *is = arena_alloc(ctx->arena, sizeof(ImportScope));
+            is->table = chain[i]->imports;
+            is->parent = scope;
+            scope = is;
+        }
+        scope_at_level[i] = scope;
+    }
+
+    /* Build parent_modules chain: innermost parent first. chain[0] is the
+     * current module, so parents are chain[1..depth-1]. */
+    ModuleScopeChain *pc = NULL;
+    for (int i = depth - 1; i >= 1; i--) {
+        ModuleScopeChain *pcn = arena_alloc(ctx->arena, sizeof(ModuleScopeChain));
+        pcn->members = chain[i]->members;
+        pcn->import_scope = scope_at_level[i];
+        pcn->parent = pc;
+        pc = pcn;
+    }
+
+    ctx->module_symtab = mod_sym->members;
+    ctx->parent_modules = pc;
+    ctx->import_scope = scope_at_level[0];
+    ctx->current_ns = mod_sym->ns_prefix;
+    ctx->scope = scope_new(ctx->arena, NULL);
+    ctx->scope->is_global = true;
+}
+
+static void restore_scope(CheckCtx *ctx, SavedCtxScope *saved) {
+    ctx->module_symtab = saved->module_symtab;
+    ctx->parent_modules = saved->parent_modules;
+    ctx->import_scope = saved->import_scope;
+    ctx->current_ns = saved->current_ns;
+    ctx->scope = saved->scope;
+}
 
 /* Look up a name in the import scope chain (innermost first = shadowing).
  * Searches from `scope` up to (but not including) `stop`.
@@ -3286,13 +3379,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
                 OnDemandVisited vis = { .decl = member->decl, .next = ctx->on_demand_visited };
                 ctx->on_demand_visited = &vis;
-                SymbolTable *saved_mod = ctx->module_symtab;
-                Scope *saved_scope = ctx->scope;
-                ctx->module_symtab = mod_sym->members;
-                ctx->scope = scope_new(ctx->arena, NULL);
+                /* Reconstruct the full module scope chain so stub names in the
+                 * callee's signature (e.g. `pcg_random*` inside
+                 * std::random.pcg_random.next_uint32) resolve against the
+                 * callee's declaration context, not the caller's. */
+                SavedCtxScope saved;
+                enter_module_scope_on_demand(ctx, mod_sym, &saved);
                 check_decl_let(ctx, member->decl);
-                ctx->scope = saved_scope;
-                ctx->module_symtab = saved_mod;
+                restore_scope(ctx, &saved);
                 ctx->on_demand_visited = vis.next;
             }
             if (!member->type) {
@@ -5251,6 +5345,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         .intern = intern_tbl,
         .import_scope = NULL,
         .on_demand_visited = NULL,
+        .file_scopes = file_scopes,
     };
 
     /* First pass: type-check all module member decls (including nested submodules) */

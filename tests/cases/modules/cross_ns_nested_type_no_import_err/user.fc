@@ -1,0 +1,6 @@
+module client =
+    // Missing `import rng from acme::` — the reference below should fail
+    // with a namespace-access error, not leak through as an unresolved stub
+    // or type-mismatch cascade.
+    let roll = (r: rng.pcg*) ->
+        (int32) (rng.pcg.next(r) & 0xFFu32)

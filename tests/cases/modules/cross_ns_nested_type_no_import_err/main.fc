@@ -1,0 +1,4 @@
+import rng from acme::
+
+let main = (args: str[]) ->
+    0i32

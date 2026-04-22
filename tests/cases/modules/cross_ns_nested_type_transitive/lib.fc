@@ -1,0 +1,17 @@
+namespace acme::
+
+module rng =
+
+    struct pcg =
+        state: uint64
+
+    module pcg =
+        let make = (seed: uint64) ->
+            pcg { state = seed }
+
+        let step = (r: pcg*) ->
+            r->state = r->state * 6364136223846793005u64 + 1u64
+
+        let next = (r: pcg*) ->
+            pcg.step(r)
+            (uint32) (r->state >> 32)

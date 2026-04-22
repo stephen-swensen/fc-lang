@@ -13,6 +13,7 @@ typedef struct Symbol {
     Type *type;             /* NULL until pass2 resolves it */
     SymbolTable *members;   /* non-NULL for DECL_MODULE */
     struct ImportTable *imports; /* non-NULL for modules with internal imports */
+    struct Symbol *parent;  /* enclosing module's Symbol (DECL_MODULE only); NULL for top-level. Set after pass1. */
     bool is_private;
     bool is_generic;
     const char **type_params;    /* ["'a", "'b"] — explicit vars first, then implicit */
