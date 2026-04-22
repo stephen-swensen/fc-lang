@@ -1,0 +1,18 @@
+// Struct with a fixed-array field initialized from an array literal at module scope
+module bufs =
+    struct buf4 =
+        data: int32[4]
+        len: int32
+
+    let header = buf4 {
+        data = int32[4] { 1, 2, 3, 4 },
+        len = 4
+    }
+
+let main = (args: str[]) ->
+    assert(bufs.header.len == 4)
+    assert(bufs.header.data[0] == 1)
+    assert(bufs.header.data[1] == 2)
+    assert(bufs.header.data[2] == 3)
+    assert(bufs.header.data[3] == 4)
+    0

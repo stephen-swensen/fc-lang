@@ -1,0 +1,20 @@
+// Module-level no-payload variant constructors — emit bare tagged literals
+module colors =
+    union color =
+        | red
+        | green
+        | blue
+
+    let primary = color.red
+    let neutral = color.green
+
+let main = (args: str[]) ->
+    match colors.primary with
+    | red -> assert(true)
+    | green -> assert(false)
+    | blue -> assert(false)
+    match colors.neutral with
+    | red -> assert(false)
+    | green -> assert(true)
+    | blue -> assert(false)
+    0

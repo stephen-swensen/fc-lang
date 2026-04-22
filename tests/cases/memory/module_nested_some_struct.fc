@@ -1,0 +1,15 @@
+// some() wrapping a struct literal at module scope
+module cache =
+    struct entry =
+        key: int32
+        value: int32
+
+    let hit = some(entry { key = 1, value = 100 })
+    let miss = default(entry?)
+
+let main = (args: str[]) ->
+    assert(cache.hit.is_some)
+    assert(cache.hit!.key == 1)
+    assert(cache.hit!.value == 100)
+    assert(cache.miss.is_none)
+    0

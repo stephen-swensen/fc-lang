@@ -1051,21 +1051,24 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
 
-**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, and struct literals with constant fields. Variable references and function calls are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions.
+**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, struct literals with constant fields, array and slice literals with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. Variable references, function calls, `alloc`, option unwrap (`!`), and string interpolation are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions; array literals are lifted to a `static` backing array at file scope.
 
-**File-level** non-function `let` bindings (in the entry-point file) are more permissive: in addition to constant expressions, they may use `alloc`, `some`, option unwrap (`!`), array and slice literals, and union variant constructors. Variable references and function calls are still not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
+**File-level** non-function `let` bindings (in the entry-point file) are more permissive: in addition to everything allowed at module level, they may use `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. Variable references and function calls are still not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
 
 ```fc
 // constant expressions — allowed at both file and module level
 let max_size = 1024             // ok — integer literal
 let mask = 0xFF & 0x0F          // ok — constant arithmetic
 let scale = 2 * 3 + 1           // ok — constant arithmetic
+let origin = point { x = 0, y = 0 }       // ok — struct literal with constant fields
+let primes = int32[3] { 2, 3, 5 }         // ok — array literal with constant elements
+let answer = some(42)                     // ok — some wrapping a constant
+let flag = color.green                    // ok — no-payload variant constructor
+let tagged = shape.circle(5)              // ok — variant with constant payload
 
 // file-level only — not allowed in modules
 let buf = alloc(int32[100] { })!  // ok — alloc + unwrap
-let p = alloc(point2d)!          // ok — alloc + unwrap
-let opt = some(42)               // ok — some constructor
-let c = color.green              // ok — union variant
+let p = alloc(point2d)!           // ok — alloc + unwrap
 
 let x = 10
 let y = x + 5                   // ERROR — references variable x

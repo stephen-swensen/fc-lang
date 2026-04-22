@@ -28,6 +28,22 @@ static int temp_counter = 0;
 static Decl **g_file_globals = NULL;
 static int g_file_global_count = 0;
 
+/* True while emitting a module-member initializer at C file scope.  Flips
+ * EXPR_ARRAY_LIT and EXPR_STRUCT_LIT-with-fixed-array-fields onto an
+ * aggregate-initializer emission path instead of the default statement-
+ * expression path, which C11 rejects at file scope. */
+static bool g_const_context = false;
+
+/* Backing arrays for file-scope slice-typed array literals.  Collected by
+ * a pre-pass over module-member inits (including nested array lits), emitted
+ * as `static T _fc_const_backing_N[] = {...};` ahead of the module-member
+ * definitions.  Each entry's AST node carries the backing name; the slice
+ * header emitted at the use site references it. */
+static Expr **g_const_backings = NULL;
+static int g_const_backing_count = 0;
+static int g_const_backing_cap = 0;
+static int g_const_backing_counter = 0;
+
 /* Hoisted let-mut declarations: emitted at function top, assignments at original site */
 typedef struct {
     const char *codegen_name;
@@ -2226,6 +2242,25 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_ARRAY_LIT: {
+        /* Module-scope const context: emit a slice header referencing the
+         * static backing array that the pre-pass lifted to file scope.
+         * Empty arrays have no backing (C rejects zero-length initializers);
+         * emit a NULL/0 slice instead. */
+        if (g_const_context) {
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            if (e->array_lit.elem_count == 0 || !e->array_lit.codegen_backing_name) {
+                fprintf(out, "){ .ptr = 0, .len = ");
+                emit_expr(e->array_lit.size_expr, out);
+                fprintf(out, " }");
+            } else {
+                fprintf(out, "){ .ptr = %s, .len = ",
+                        e->array_lit.codegen_backing_name);
+                emit_expr(e->array_lit.size_expr, out);
+                fprintf(out, " }");
+            }
+            break;
+        }
         /* Stack array literal → alloca + slice struct.
          * Uses __builtin_alloca for function-frame lifetime — the backing memory
          * survives until the function returns, unlike a block-scope VLA which
@@ -2300,6 +2335,52 @@ static void emit_expr(Expr *e, FILE *out) {
                     break;
                 }
             }
+        }
+        if (has_fixed_array && g_const_context) {
+            /* File-scope aggregate initializer: emit each field inline.  For
+             * a fixed-array field we expect the value to be an EXPR_ARRAY_LIT
+             * and we unwrap it to a bare { e0, e1, ... } C array initializer
+             * — the fat-slice header form is invalid for initializing a raw
+             * C array.  len overflow is checked at compile time here. */
+            if (st->struc.c_name) {
+                fprintf(out, "(%s %s){",
+                    st->struc.is_c_union ? "union" : "struct", st->struc.c_name);
+            } else {
+                fprintf(out, "(%s){", sname);
+            }
+            bool first = true;
+            for (int i = 0; i < e->struct_lit.field_count; i++) {
+                const char *fname = e->struct_lit.fields[i].name;
+                Type *field_type = NULL;
+                for (int f = 0; f < st->struc.field_count; f++) {
+                    if (st->struc.fields[f].name == fname) {
+                        field_type = st->struc.fields[f].type;
+                        break;
+                    }
+                }
+                if (!first) fprintf(out, ", ");
+                first = false;
+                fprintf(out, ".%s = ", fname);
+                Expr *v = e->struct_lit.fields[i].value;
+                if (field_type && field_type->kind == TYPE_FIXED_ARRAY &&
+                    v && v->kind == EXPR_ARRAY_LIT) {
+                    /* Bare aggregate — no slice header, no backing */
+                    fprintf(out, "{");
+                    if (v->array_lit.elem_count == 0) {
+                        fprintf(out, "0");
+                    } else {
+                        for (int j = 0; j < v->array_lit.elem_count; j++) {
+                            if (j > 0) fprintf(out, ", ");
+                            emit_expr(v->array_lit.elems[j], out);
+                        }
+                    }
+                    fprintf(out, "}");
+                } else {
+                    emit_expr(v, out);
+                }
+            }
+            fprintf(out, "}");
+            break;
         }
         if (has_fixed_array) {
             int tid = temp_counter++;
@@ -3601,6 +3682,93 @@ static void trampolineset_add(TrampolineSet *ts, const char *name, Type *type) {
 }
 
 static void collect_trampolines_expr(Expr *e, TrampolineSet *ts);
+
+/* Pre-pass for module-member initializers: assigns a unique backing-array
+ * name to every EXPR_ARRAY_LIT inside a const-safe init tree, and appends
+ * the node to g_const_backings so the file-scope emission pass can emit
+ * `static T _fc_const_backing_N[] = {...};` before the module-member defs.
+ *
+ * Recurses only through expression kinds that is_const_expr accepts — other
+ * kinds cannot appear here because pass2 has already gated the init.  A
+ * special case: EXPR_STRUCT_LIT fields whose type is a fixed array take an
+ * inline aggregate initializer at the use site rather than a backing array,
+ * so we skip backing assignment for those specific children.
+ */
+static void collect_const_backings(Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_ARRAY_LIT: {
+        /* Empty arrays don't need a backing — we emit a NULL/0 slice at
+         * the use site.  C11 rejects zero-length aggregate initializers. */
+        if (e->array_lit.elem_count > 0) {
+            char buf[32];
+            int n = snprintf(buf, sizeof buf, "_fc_const_backing_%d",
+                             g_const_backing_counter++);
+            e->array_lit.codegen_backing_name = arena_strdup(g_arena, buf, n);
+            DA_APPEND(g_const_backings, g_const_backing_count,
+                      g_const_backing_cap, e);
+        }
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            collect_const_backings(e->array_lit.elems[i]);
+        break;
+    }
+    case EXPR_SLICE_LIT:
+        collect_const_backings(e->slice_lit.ptr_expr);
+        collect_const_backings(e->slice_lit.len_expr);
+        break;
+    case EXPR_STRUCT_LIT: {
+        Type *st = e->type;
+        for (int i = 0; i < e->struct_lit.field_count; i++) {
+            /* Fixed-array fields take an inline aggregate — the inner
+             * array-lit is emitted raw, no backing needed.  Identify by
+             * looking up the field type in the resolved struct. */
+            bool is_fixed_field = false;
+            if (st && st->kind == TYPE_STRUCT) {
+                const char *fname = e->struct_lit.fields[i].name;
+                for (int f = 0; f < st->struc.field_count; f++) {
+                    if (st->struc.fields[f].name == fname) {
+                        is_fixed_field = st->struc.fields[f].type->kind == TYPE_FIXED_ARRAY;
+                        break;
+                    }
+                }
+            }
+            Expr *v = e->struct_lit.fields[i].value;
+            if (is_fixed_field && v && v->kind == EXPR_ARRAY_LIT) {
+                /* Recurse into elements but do not lift the outer array */
+                for (int j = 0; j < v->array_lit.elem_count; j++)
+                    collect_const_backings(v->array_lit.elems[j]);
+            } else {
+                collect_const_backings(v);
+            }
+        }
+        break;
+    }
+    case EXPR_SOME:
+        collect_const_backings(e->some_expr.value);
+        break;
+    case EXPR_CALL:
+        if (e->call.func->kind == EXPR_FIELD &&
+            e->call.func->field.is_variant_constructor) {
+            for (int i = 0; i < e->call.arg_count; i++)
+                collect_const_backings(e->call.args[i]);
+        }
+        break;
+    case EXPR_UNARY_PREFIX:
+        collect_const_backings(e->unary_prefix.operand);
+        break;
+    case EXPR_BINARY:
+        collect_const_backings(e->binary.left);
+        collect_const_backings(e->binary.right);
+        break;
+    case EXPR_CAST:
+        collect_const_backings(e->cast.operand);
+        break;
+    default:
+        /* Leaves: literals, extern-const/no-payload variant EXPR_FIELD, type
+         * operators.  Nothing to lift. */
+        break;
+    }
+}
 
 static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
     if (!e) return;
@@ -4917,6 +5085,40 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         g_subst = NULL;
     }
 
+    /* Pre-pass: walk module-member inits and lift every EXPR_ARRAY_LIT into a
+     * static backing array.  Nested array lits inside struct/variant/some
+     * initializers are all collected; the use sites then emit slice headers
+     * referencing these backings.  Only walks module members (codegen_name
+     * set) — file-level lets are hoisted to main and can use the normal
+     * alloca-based emission. */
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
+        if (d->kind == DECL_LET && !is_func_decl(d) && d->let.codegen_name &&
+            d->let.init && d->let.init->kind != EXPR_FUNC) {
+            collect_const_backings(d->let.init);
+        }
+    }
+
+    /* Emit the static backing arrays themselves.  Each is `static T name[] =
+     * { e0, e1, ... };` — elements are emitted in const context so nested
+     * struct/variant/some stay on the aggregate-initializer path. */
+    if (g_const_backing_count > 0) {
+        g_const_context = true;
+        for (int i = 0; i < g_const_backing_count; i++) {
+            Expr *al = g_const_backings[i];
+            fprintf(out, "static ");
+            emit_type(al->array_lit.elem_type, out);
+            fprintf(out, " %s[] = {", al->array_lit.codegen_backing_name);
+            for (int j = 0; j < al->array_lit.elem_count; j++) {
+                if (j > 0) fprintf(out, ", ");
+                emit_expr(al->array_lit.elems[j], out);
+            }
+            fprintf(out, "};\n");
+        }
+        g_const_context = false;
+        fprintf(out, "\n");
+    }
+
     /* Emit non-function global variable definitions.
      * Must come before lifted lambdas so they can reference globals.
      * Module members (with codegen_name) are emitted with const-expr initializers
@@ -4929,9 +5131,13 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             emit_type(d->let.resolved_type, out);
             if (d->let.codegen_name) {
-                /* Module member: emit with initializer (must be const expr) */
+                /* Module member: emit with initializer (must be const expr).
+                 * Flip const context so array/struct-with-fixed-array/etc.
+                 * take the aggregate-initializer path. */
                 fprintf(out, " %s = ", cname);
+                g_const_context = true;
                 emit_expr(d->let.init, out);
+                g_const_context = false;
                 fprintf(out, ";\n");
             } else {
                 /* File-level global: declare only, init hoisted into C main */

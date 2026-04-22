@@ -1,0 +1,17 @@
+// Module-level variant of a generic union — monomorphized in pass2
+union maybe =
+    | yes('a)
+    | no
+
+module choices =
+    let a = maybe<int32>.yes(42)
+    let b = maybe<int32>.no
+
+let main = (args: str[]) ->
+    match choices.a with
+    | yes(n) -> assert(n == 42)
+    | no -> assert(false)
+    match choices.b with
+    | yes(_) -> assert(false)
+    | no -> assert(true)
+    0

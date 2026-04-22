@@ -5139,14 +5139,39 @@ static bool is_const_expr(Expr *e) {
              (is_cstr_type(e->cast.operand->type) && is_str_type(e->cast.target))))
             return false;
         return is_const_expr(e->cast.operand);
-    /* Extern constants — C macros/enums are compile-time constants */
+    /* Extern constants — C macros/enums are compile-time constants.
+     * No-payload variant constructors also emit plain compound literals. */
     case EXPR_FIELD:
-        return e->field.is_extern_const;
+        return e->field.is_extern_const || e->field.is_variant_constructor;
     /* Struct literal — valid if all field values are const */
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
             if (!is_const_expr(e->struct_lit.fields[i].value)) return false;
         return true;
+    /* Array literal — valid if all elements and size are const.  Codegen
+     * lifts the backing array to file scope in const context. */
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            if (!is_const_expr(e->array_lit.elems[i])) return false;
+        return is_const_expr(e->array_lit.size_expr);
+    /* Slice literal — valid if both ptr and len are const.  In practice
+     * ptr_expr is always an EXPR_ARRAY_LIT at module scope, which is handled
+     * above; other ptr forms (ident/&expr) are rejected by their own cases. */
+    case EXPR_SLICE_LIT:
+        return is_const_expr(e->slice_lit.ptr_expr) &&
+               is_const_expr(e->slice_lit.len_expr);
+    /* some(x) — valid if payload is const.  Emits a plain compound literal. */
+    case EXPR_SOME:
+        return is_const_expr(e->some_expr.value);
+    /* Union variant constructor with payload — valid if all args are const. */
+    case EXPR_CALL:
+        if (e->call.func->kind == EXPR_FIELD &&
+            e->call.func->field.is_variant_constructor) {
+            for (int i = 0; i < e->call.arg_count; i++)
+                if (!is_const_expr(e->call.args[i])) return false;
+            return true;
+        }
+        return false;
     /* Everything else is rejected by default */
     default:
         return false;

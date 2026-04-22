@@ -1,0 +1,25 @@
+// Module-level variant constructor with payload
+module shapes =
+    union shape =
+        | circle(int32)
+        | square(int32)
+        | nothing
+
+    let c = shape.circle(5)
+    let s = shape.square(10)
+    let n = shape.nothing
+
+let main = (args: str[]) ->
+    match shapes.c with
+    | circle(r) -> assert(r == 5)
+    | square(_) -> assert(false)
+    | nothing -> assert(false)
+    match shapes.s with
+    | circle(_) -> assert(false)
+    | square(side) -> assert(side == 10)
+    | nothing -> assert(false)
+    match shapes.n with
+    | circle(_) -> assert(false)
+    | square(_) -> assert(false)
+    | nothing -> assert(true)
+    0

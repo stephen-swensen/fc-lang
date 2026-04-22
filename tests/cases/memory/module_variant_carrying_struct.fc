@@ -1,0 +1,21 @@
+// Variant constructor whose payload is a struct literal
+module g =
+    struct point =
+        x: int32
+        y: int32
+
+    union shape =
+        | circle(int32)
+        | rect(point)
+        | nothing
+
+    let r = shape.rect(point { x = 3, y = 4 })
+
+let main = (args: str[]) ->
+    match g.r with
+    | circle(_) -> assert(false)
+    | rect(p) ->
+        assert(p.x == 3)
+        assert(p.y == 4)
+    | nothing -> assert(false)
+    0

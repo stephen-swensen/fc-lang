@@ -1,0 +1,19 @@
+// Array/slice of user struct values at module scope — backing uses struct type
+module grid =
+    struct point =
+        x: int32
+        y: int32
+
+    let origins = point[3] {
+        point { x = 0, y = 0 },
+        point { x = 10, y = 20 },
+        point { x = -5, y = 5 }
+    }
+
+let main = (args: str[]) ->
+    assert(grid.origins.len == 3)
+    assert(grid.origins[0].x == 0)
+    assert(grid.origins[1].x == 10)
+    assert(grid.origins[1].y == 20)
+    assert(grid.origins[2].x == -5)
+    0

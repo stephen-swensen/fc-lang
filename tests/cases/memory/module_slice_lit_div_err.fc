@@ -1,0 +1,6 @@
+// Array literal element containing integer division is not const
+module bad =
+    let arr = int32[1] { 10 / 3 }
+
+let main = (args: str[]) ->
+    0

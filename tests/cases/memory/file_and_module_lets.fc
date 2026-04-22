@@ -1,0 +1,19 @@
+// File-level alloc-init and module-level const-init coexist in one file.
+// File-level init hoists to the C main wrapper; module-level is emitted
+// as a file-scope definition with a static backing array.
+module table =
+    let lookup = int32[4] { 10, 20, 30, 40 }
+    let origin = some(0)
+
+let heap = alloc(int32, 3)!
+
+let main = (args: str[]) ->
+    heap[0] = 100
+    heap[1] = 200
+    heap[2] = 300
+    assert(table.lookup.len == 4)
+    assert(table.lookup[2] == 30)
+    assert(table.origin! == 0)
+    assert(heap[0] == 100)
+    assert(heap[2] == 300)
+    0

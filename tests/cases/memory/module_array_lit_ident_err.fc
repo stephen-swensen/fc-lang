@@ -1,0 +1,8 @@
+// Array literal with an ident element is not const
+let outside = 7
+
+module bad =
+    let arr = int32[1] { outside }
+
+let main = (args: str[]) ->
+    0

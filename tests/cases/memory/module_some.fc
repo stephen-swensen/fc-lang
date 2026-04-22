@@ -1,0 +1,12 @@
+// Module-level some(x) — emits a plain compound literal at file scope
+module flags =
+    let answer = some(42)
+    let none_int = default(int32?)
+    let nested = some(some(7))
+
+let main = (args: str[]) ->
+    assert(flags.answer.is_some)
+    assert(flags.answer! == 42)
+    assert(flags.none_int.is_none)
+    assert(flags.nested!! == 7)
+    0

@@ -1,0 +1,15 @@
+// Array of a monomorphized generic struct at module scope
+struct box =
+    value: 'a
+
+module inventory =
+    let ints = box<int32>[2] {
+        box { value = 1 },
+        box { value = 2 }
+    }
+
+let main = (args: str[]) ->
+    assert(inventory.ints.len == 2)
+    assert(inventory.ints[0].value == 1)
+    assert(inventory.ints[1].value == 2)
+    0

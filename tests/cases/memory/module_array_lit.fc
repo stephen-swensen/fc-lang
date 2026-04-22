@@ -1,0 +1,12 @@
+// Module-level array literal — lifted to a static backing array in C
+module nums =
+    let triples = int32[3] { 10, 20, 30 }
+    let empty = int32[0] {}
+
+let main = (args: str[]) ->
+    assert(nums.triples.len == 3)
+    assert(nums.triples[0] == 10)
+    assert(nums.triples[1] == 20)
+    assert(nums.triples[2] == 30)
+    assert(nums.empty.len == 0)
+    0

@@ -1,0 +1,8 @@
+// Array literal containing a function call is not const
+let pick = (x: int32) -> x + 1
+
+module bad =
+    let arr = int32[1] { pick(5) }
+
+let main = (args: str[]) ->
+    0

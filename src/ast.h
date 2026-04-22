@@ -223,6 +223,8 @@ struct Expr {
             Expr *size_expr;    /* NULL for unsized */
             Expr **elems;
             int elem_count;
+            const char *codegen_backing_name; /* non-NULL when lifted to a static
+                                                 backing array at file scope */
         } array_lit;
 
         /* EXPR_SLICE_LIT — T[] { ptr = expr, len = expr } */

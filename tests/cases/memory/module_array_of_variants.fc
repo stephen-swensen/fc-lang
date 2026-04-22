@@ -1,0 +1,29 @@
+// Array of variant values — mix of payload and no-payload variants
+module events =
+    union event =
+        | tick(int32)
+        | pause
+        | resume(int32)
+
+    let queue = event[4] {
+        event.tick(1),
+        event.pause,
+        event.tick(2),
+        event.resume(5)
+    }
+
+let main = (args: str[]) ->
+    assert(events.queue.len == 4)
+    match events.queue[0] with
+    | tick(n) -> assert(n == 1)
+    | pause -> assert(false)
+    | resume(_) -> assert(false)
+    match events.queue[1] with
+    | tick(_) -> assert(false)
+    | pause -> assert(true)
+    | resume(_) -> assert(false)
+    match events.queue[3] with
+    | tick(_) -> assert(false)
+    | pause -> assert(false)
+    | resume(n) -> assert(n == 5)
+    0
