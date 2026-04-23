@@ -1,1 +1,1 @@
-unknown module 'math' in namespace 'nonexistent'
+unknown symbol 'math' in namespace 'nonexistent'

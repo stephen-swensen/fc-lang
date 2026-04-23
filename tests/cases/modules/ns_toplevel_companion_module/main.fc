@@ -1,0 +1,9 @@
+import point from mylib::
+
+let main = (args: str[]) ->
+    let z = point.zero()
+    assert(z.x == 0 && z.y == 0)
+    let p1 = point.zero()
+    let p2 = point.add(p1, point { x = 3, y = 4 })
+    assert(point.length_sq(p2) == 25)
+    0

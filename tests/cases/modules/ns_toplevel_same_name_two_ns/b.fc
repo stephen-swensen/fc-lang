@@ -1,0 +1,9 @@
+namespace beta::
+
+struct box =
+    weight: int32
+    count: int32
+
+module api =
+    let make = (w: int32, c: int32) -> box { weight = w, count = c }
+    let total = (b: box) -> b.weight * b.count

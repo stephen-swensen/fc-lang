@@ -1931,7 +1931,7 @@ let main = (args: str[]) ->
     0
 ```
 
-`main` at the top level is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `int32`. Every program must have exactly one `let main`. The file containing `let main` is the **entry-point file** — it is the only file that may have non-module top-level declarations (see §Module System & Visibility).
+`main` at the top level is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `int32`. Every program must have exactly one `let main`, and it must live in `global::`. The file containing `let main` is the **entry-point file** — it is the only file that may have top-level `let` bindings (see §Module System & Visibility).
 
 > **Transpilation**
 > The compiler generates a C `main` wrapper that converts `argc`/`argv` into a `str[]` slice:
@@ -3066,26 +3066,40 @@ Namespaces are purely a compile-time disambiguation mechanism. They have no pres
 
 ### Top-level declarations and the entry-point file
 
-Non-module top-level declarations (`let`, `struct`, `union`) are only allowed in the **entry-point file** — the file containing `let main`. Every program must have exactly one `let main`. All other files may only contain `module` declarations (and file-level imports). Files in non-global namespaces may only contain modules.
+`module`, `struct`, and `union` may be declared at the top level of any file under any namespace — including the implicit `global::`. Top-level `let` bindings are more restricted: they are only allowed in the **entry-point file** — the file containing `let main`. Every program must have exactly one `let main`, and it must live in `global::` (not inside any explicit namespace).
 
 ```fc
 // main.fc — the entry-point file
 module utils =
     let double = (x: int32) -> x * 2
 
-struct config =                           // OK — this is the entry-point file
+struct config =                           // OK — struct at global:: top level
     width: int32
     height: int32
 
-let main = (args: str[]) ->
+let main = (args: str[]) ->               // entry-point 'let' — must be in global::
     utils.double(21)
 ```
 
-This restriction ensures that file ordering never affects compilation — all cross-file code is in modules, which the compiler resolves regardless of order.
+```fc
+// shapes.fc — any file under any namespace can declare top-level types
+namespace geometry::
+
+struct point =                            // OK — struct at namespace top level
+    x: int32
+    y: int32
+
+module geom =                             // modules coexist with types
+    let origin = () -> point { x = 0, y = 0 }
+```
+
+The rule boils down to: *the entry-point file is the only place top-level `let` bindings may live; everything else — modules, structs, unions — is permitted in any file.* A non-entry-point file in `global::` is therefore functionally identical to a file under an explicit namespace: both may contain modules and top-level types, but not `let` bindings. The sole distinguishing feature of `global::` is that it hosts the entry-point file.
+
+Top-level types in an explicit namespace are mangled with their namespace prefix in generated C (e.g. `struct point` in `namespace geometry::` becomes `geometry__point`), so the same bare name may be declared in multiple namespaces without collision. A duplicate declaration *within* a single namespace is a compile error.
 
 ### Global scope and implicit visibility
 
-Types (`struct`, `union`), bindings (`let`, `let mut`), and modules declared at file level in the entry-point file reside in the **global scope**. These global declarations are implicitly visible to all modules in the `global::` namespace — no import is required:
+Types and modules declared at the top level of a file reside in that file's **namespace scope** — `global::` for files with no `namespace` declaration, or the declared namespace otherwise. Top-level declarations are implicitly visible to all code in the same namespace, across all files in that namespace, with no import required. The entry-point file's top-level `let` bindings follow the same rule: they're visible to all modules in `global::`.
 
 ```fc
 // main.fc — entry-point file
@@ -3111,13 +3125,13 @@ module helper =
 
 This works because the [name resolution order](#name-resolution-order) falls through from module members and imports to the global scope. The global scope acts as an implicit outermost layer visible to all `global::` code across all files.
 
-**Namespace boundary.** Modules in a non-global namespace (e.g., `namespace acme::`) do *not* see global declarations implicitly. They must use `import` to access them:
+**Namespace boundary.** Code in one namespace does *not* see another namespace's top-level declarations implicitly. Cross-namespace access requires `import`:
 
 ```fc
 // vendor.fc
 namespace acme::
 module vendor =
-    // point is NOT visible here — different namespace
+    // a 'point' declared in global:: is NOT visible here — different namespace
     // must import explicitly if needed
 ```
 
@@ -3135,7 +3149,7 @@ module shapes =
     let make = () -> point { x = 1.0, y = 2.0 }   // uses shapes.point
 ```
 
-**Design rationale.** Restricting file-level declarations to the entry-point file means there is exactly one source of global types and state. This avoids the ordering and visibility problems that arise when multiple files can inject globals, while still providing a lightweight mechanism for shared types and state in application code. Libraries should define types in modules rather than relying on global scope.
+**Design rationale.** Restricting top-level `let` bindings to the entry-point file means there is exactly one source of mutable global state in a program. This avoids the ordering and visibility problems that arise when multiple files can inject globals, while still giving application code a lightweight mechanism for program-wide state. Top-level types face no such hazard — they have no initializer to order — and so may be declared freely in any file under any namespace, giving libraries the same structural flexibility as applications.
 
 ### Visibility
 
@@ -3167,15 +3181,18 @@ import func_a from module_a                           // named member
 import func_a as f, func_b from module_a              // multiple with alias
 import * from module_a                                // all public members
 
-// Cross-namespace whole-module import
+// Cross-namespace top-level imports (module, struct, or union)
 import module_a from acme::graphics::                 // brings module into scope
+import point    from acme::graphics::                 // brings a top-level struct
+import shape    from acme::graphics::                 // brings a top-level union
 ```
 
 **Rules:**
 - `::` terminates namespace paths; `.` navigates into modules/submodules
 - `import *` works on modules only — not bare namespaces
-- `import T from M` brings both the type `T` (struct or union) and its type-associated module `T` (if any) into scope
-- Bare `import MODULE` (without `from`) is not supported — same-namespace modules are already visible by name; cross-namespace modules use `import MODULE from ns::`
+- `import T from M` (member import) brings both the type `T` (struct or union) and its type-associated module `T` (if any) into scope
+- `import T from ns::` (namespace import) works the same way: it brings a top-level `module`, `struct`, or `union` named `T` from the namespace, pulling in a same-named companion module automatically
+- Bare `import MODULE` (without `from`) is not supported — same-namespace declarations are already visible by name; cross-namespace use requires `import MODULE from ns::`
 - `import ... from global::` is not allowed — the global namespace is implicit and not importable
 
 **Aliases** do not create new types. The same type can be imported under multiple aliases, and values of any alias are interchangeable:

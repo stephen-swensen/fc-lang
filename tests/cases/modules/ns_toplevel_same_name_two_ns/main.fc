@@ -1,0 +1,9 @@
+import api as alpha_api from alpha::
+import api as beta_api from beta::
+
+let main = (args: str[]) ->
+    let ab = alpha_api.make(7)
+    let bb = beta_api.make(3, 4)
+    assert(alpha_api.get(ab) == 7)
+    assert(beta_api.total(bb) == 12)
+    0

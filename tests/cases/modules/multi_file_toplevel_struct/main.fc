@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let p = point { x = 5, y = 7 }
+    assert(p.x + p.y == 12)
+    0

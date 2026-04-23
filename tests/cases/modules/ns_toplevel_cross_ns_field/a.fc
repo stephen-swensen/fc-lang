@@ -1,0 +1,5 @@
+namespace geo::
+
+struct point =
+    x: int32
+    y: int32

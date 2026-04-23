@@ -1,0 +1,2 @@
+struct shared =
+    n: int32

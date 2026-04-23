@@ -1,0 +1,11 @@
+namespace containers::
+
+struct pair =
+    first: 'a
+    second: 'b
+
+module make =
+    let of = (a: 'a, b: 'b) ->
+        pair { first = a, second = b }
+    let swap = (p: pair<'a, 'b>) ->
+        pair { first = p.second, second = p.first }

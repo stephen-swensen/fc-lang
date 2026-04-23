@@ -1,0 +1,4 @@
+namespace mylib::
+
+struct point =
+    a: int32

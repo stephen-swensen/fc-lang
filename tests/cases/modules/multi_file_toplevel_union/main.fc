@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let c = color.blue
+    let n = match c with
+    | red -> 1
+    | green -> 2
+    | blue -> 3
+    assert(n == 3)
+    0

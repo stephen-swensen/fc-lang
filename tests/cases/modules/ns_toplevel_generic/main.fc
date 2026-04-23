@@ -1,0 +1,10 @@
+import make from containers::
+
+let main = (args: str[]) ->
+    let p = make.of(3, 4i64)
+    let s = make.swap(p)
+    assert(p.first == 3)
+    assert(p.second == 4i64)
+    assert(s.first == 4i64)
+    assert(s.second == 3)
+    0

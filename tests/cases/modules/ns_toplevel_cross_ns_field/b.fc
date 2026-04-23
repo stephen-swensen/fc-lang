@@ -1,0 +1,16 @@
+namespace shapes::
+
+import point from geo::
+
+struct segment =
+    start: point
+    end: point
+
+module segment =
+    let make = (sx: int32, sy: int32, ex: int32, ey: int32) ->
+        segment {
+            start = point { x = sx, y = sy },
+            end   = point { x = ex, y = ey },
+        }
+    let dx = (s: segment) -> s.end.x - s.start.x
+    let dy = (s: segment) -> s.end.y - s.start.y

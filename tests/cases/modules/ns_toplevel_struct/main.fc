@@ -1,0 +1,8 @@
+import geom from mylib::
+
+let main = (args: str[]) ->
+    let o = geom.origin()
+    assert(o.x == 0 && o.y == 0)
+    let p = geom.make(3, -4)
+    assert(geom.manhattan(p) == 7)
+    0

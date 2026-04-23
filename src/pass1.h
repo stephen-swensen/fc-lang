@@ -62,6 +62,8 @@ typedef struct FileImportScopes {
 void symtab_init(SymbolTable *t);
 Symbol *symtab_lookup(SymbolTable *t, const char *name);
 Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind);
+Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
+                               const char *ns_prefix);
 Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix);
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
 

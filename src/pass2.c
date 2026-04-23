@@ -344,20 +344,25 @@ static ImportRef *import_scope_find_ref_until(ImportScope *scope, const char *na
 
 
 /* Namespace-aware global symtab lookup for non-module symbols.
- * Top-level structs/unions/lets (ns_prefix=NULL) are only visible to global:: code.
- * Module-scoped types registered with mangled names are always accessible
- * (they're found by mangled name, not user-facing name). */
+ * Top-level declarations are registered with ns_prefix set to their enclosing
+ * namespace (or NULL for global::); lookup filters to only return entries
+ * whose ns_prefix matches current_ns. Multiple top-level declarations with
+ * the same name may coexist across different namespaces, so the scan must
+ * walk all entries rather than stopping at the first name match.
+ *
+ * Module-scoped types are registered under mangled names (e.g. "m__entry"),
+ * so they don't collide with top-level user-visible names. */
 static Symbol *global_lookup(SymbolTable *symtab, const char *name, const char *current_ns) {
-    Symbol *sym = symtab_lookup(symtab, name);
-    if (sym && sym->ns_prefix != current_ns) return NULL;
-    return sym;
+    for (int i = 0; i < symtab->count; i++) {
+        Symbol *s = &symtab->symbols[i];
+        if (s->name == name && s->ns_prefix == current_ns) return s;
+    }
+    return NULL;
 }
 
 static Symbol *global_lookup_kind(SymbolTable *symtab, const char *name, DeclKind kind,
                                   const char *current_ns) {
-    Symbol *sym = symtab_lookup_kind(symtab, name, kind);
-    if (sym && sym->ns_prefix != current_ns) return NULL;
-    return sym;
+    return symtab_lookup_kind_ns(symtab, name, kind, current_ns);
 }
 
 /* Interleaved symbol resolution: at each module level, check members then

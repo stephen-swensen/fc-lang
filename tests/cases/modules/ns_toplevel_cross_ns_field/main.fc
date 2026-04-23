@@ -1,0 +1,9 @@
+import segment from shapes::
+
+let main = (args: str[]) ->
+    let s = segment.make(1, 2, 4, 6)
+    assert(segment.dx(s) == 3)
+    assert(segment.dy(s) == 4)
+    assert(s.start.x == 1)
+    assert(s.end.y == 6)
+    0

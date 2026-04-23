@@ -1,0 +1,8 @@
+namespace alpha::
+
+struct box =
+    size: int32
+
+module api =
+    let make = (n: int32) -> box { size = n }
+    let get = (b: box) -> b.size

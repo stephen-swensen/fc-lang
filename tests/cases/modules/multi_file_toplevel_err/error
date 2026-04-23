@@ -1,1 +1,1 @@
-non-module top-level declarations are only allowed in the entry-point file
+top-level 'let' bindings are only allowed in the entry-point file

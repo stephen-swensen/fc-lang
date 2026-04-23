@@ -1,0 +1,8 @@
+import m from test::
+
+let main = (args: str[]) ->
+    let u1 = m.make_a(42)
+    let u2 = m.make_b()
+    assert(m.describe(u1) == 42)
+    assert(m.describe(u2) == -1)
+    0

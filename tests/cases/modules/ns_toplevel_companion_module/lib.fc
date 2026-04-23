@@ -1,0 +1,10 @@
+namespace mylib::
+
+struct point =
+    x: int32
+    y: int32
+
+module point =
+    let zero = () -> point { x = 0, y = 0 }
+    let add = (a: point, b: point) -> point { x = a.x + b.x, y = a.y + b.y }
+    let length_sq = (p: point) -> p.x * p.x + p.y * p.y

@@ -1,0 +1,13 @@
+namespace test::
+
+union my_union =
+    | a(int32)
+    | b
+
+module m =
+    let make_a = (v: int32) -> my_union.a(v)
+    let make_b = () -> my_union.b
+    let describe = (u: my_union) ->
+        match u with
+        | a(v) -> v
+        | b -> -1

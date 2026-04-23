@@ -1,0 +1,6 @@
+namespace mylib::
+
+union color =
+    | red
+    | green
+    | blue

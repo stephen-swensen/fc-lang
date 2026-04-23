@@ -82,6 +82,21 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
     return NULL;
 }
 
+/* Namespace-filtered lookup by name and kind. Returns the entry whose
+ * ns_prefix pointer matches (both NULL or same interned ptr). Needed for
+ * global symtab where top-level types may be registered under the same name
+ * across multiple namespaces. */
+Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
+                               const char *ns_prefix) {
+    for (int i = 0; i < t->count; i++) {
+        Symbol *s = &t->symbols[i];
+        if (s->name == name && s->kind == kind && s->ns_prefix == ns_prefix) {
+            return s;
+        }
+    }
+    return NULL;
+}
+
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
     Symbol sym = { .name = name, .ns_prefix = NULL, .kind = kind, .decl = decl,
                    .type = NULL, .members = NULL, .imports = NULL, .parent = NULL,
@@ -927,13 +942,15 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
     /* Phase 2: Register top-level (non-module) decls.
      *
      * Restrictions:
-     * - Non-global namespaces: only modules allowed at top level.
-     * - Global namespace: non-module top-level decls (let, struct, union)
-     *   must all be in a single file (the entry-point file with let main).
-     *   This prevents cross-file ordering dependencies. */
+     * - Top-level 'let' bindings are entry-point-file-only (the file with
+     *   'let main'), and thus implicitly global::-only since 'let main'
+     *   must live in global::.
+     * - Top-level struct/union are permitted in any file under any namespace
+     *   (following the same rules as top-level modules). They are mangled
+     *   with their namespace prefix to avoid C identifier collisions across
+     *   namespaces. */
 
-    /* Pre-scan: find the entry-point file (the one containing let main).
-     * Only that file may have non-module top-level declarations. */
+    /* Pre-scan: find the entry-point file (the one containing let main). */
     const char *entry_file = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
@@ -950,16 +967,14 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         Decl *d = prog->decls[i];
         if (d->kind == DECL_NAMESPACE) { current_ns = d->ns.name; continue; }
         if (current_ns) continue; /* non-global namespace — checked below */
-        if (d->kind == DECL_LET || d->kind == DECL_STRUCT || d->kind == DECL_UNION) {
+        /* Only top-level 'let' is restricted to the entry-point file. */
+        if (d->kind == DECL_LET) {
             if (d->loc.filename != entry_file) {
                 diag_error(d->loc,
-                    "top-level %s '%s' not allowed here — "
-                    "non-module top-level declarations are only allowed "
-                    "in the entry-point file (the file containing let main)",
-                    d->kind == DECL_LET ? "let" :
-                    d->kind == DECL_STRUCT ? "struct" : "union",
-                    d->kind == DECL_LET ? d->let.name :
-                    d->kind == DECL_STRUCT ? d->struc.name : d->unio.name);
+                    "top-level let '%s' not allowed here — "
+                    "top-level 'let' bindings are only allowed in the "
+                    "entry-point file (the file containing 'let main')",
+                    d->let.name);
             }
         }
     }
@@ -971,13 +986,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             current_ns = d->ns.name;
             continue;
         }
-        /* Non-global namespaces may only contain module declarations at top level */
-        if (current_ns && (d->kind == DECL_LET || d->kind == DECL_STRUCT || d->kind == DECL_UNION)) {
+        /* Non-global namespaces may not contain top-level 'let' bindings. */
+        if (current_ns && d->kind == DECL_LET) {
             diag_error(d->loc,
-                "top-level %s not allowed in namespace '%s::' — "
+                "top-level let not allowed in namespace '%s::' — "
                 "wrap it in a module or move it to a global:: file",
-                d->kind == DECL_LET ? "let" :
-                d->kind == DECL_STRUCT ? "struct" : "union",
                 current_ns);
             continue;
         }
@@ -1004,20 +1017,119 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     d->struc.is_c_union ? "union" : "struct");
                 break;
             }
-            Symbol *existing = symtab_lookup(symtab, d->struc.name);
-            if (existing && existing->kind != DECL_MODULE) {
-                diag_error(d->loc, "redefinition of '%s'", d->struc.name);
+            if (current_ns) {
+                /* Namespace-scoped top-level struct: check for duplicates
+                 * within the same namespace only; register with ns_prefix set
+                 * and mangle the C name with the namespace prefix. */
+                Symbol *existing = symtab_lookup_kind_ns(symtab, d->struc.name,
+                    DECL_STRUCT, current_ns);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->struc.name,
+                        DECL_UNION, current_ns);
+                if (existing) {
+                    diag_error(d->loc, "redefinition of '%s'", d->struc.name);
+                    break;
+                }
+                const char *src_name = d->struc.name;
+                const char *mangled = make_mangled(intern, current_ns, src_name);
+                d->struc.name = mangled;
+                symtab_add(symtab, src_name, DECL_STRUCT, d);
+                Symbol *sym = &symtab->symbols[symtab->count - 1];
+                sym->ns_prefix = current_ns;
+                Type *st = malloc(sizeof(Type));
+                memset(st, 0, sizeof(Type));
+                st->kind = TYPE_STRUCT;
+                st->struc.name = mangled;
+                {
+                    int needed = snprintf(NULL, 0, "%s::%s", current_ns, src_name) + 1;
+                    char *buf = malloc((size_t)needed);
+                    snprintf(buf, (size_t)needed, "%s::%s", current_ns, src_name);
+                    st->struc.qualified_name = intern_cstr(intern, buf);
+                    free(buf);
+                }
+                st->struc.c_name = d->struc.c_name;
+                st->struc.is_c_union = d->struc.is_c_union;
+                st->struc.fields = d->struc.fields;
+                st->struc.field_count = d->struc.field_count;
+                st->struc.type_args = NULL;
+                st->struc.type_arg_count = 0;
+                sym->type = st;
+                st->struc.resolved_sym = sym;
+                detect_generic_struct(d, sym);
+                /* Also register under the mangled name so canonicalized type
+                 * stubs resolve in the global symtab directly. The mangled
+                 * alias carries ns_prefix=NULL (matching module-scoped types'
+                 * global-symtab entries): the mangled name is self-identifying
+                 * and should be findable from any namespace. */
+                symtab_add(symtab, mangled, DECL_STRUCT, d);
+                Symbol *sym2 = &symtab->symbols[symtab->count - 1];
+                sym2->type = st;
+                detect_generic_struct(d, sym2);
             } else {
-                register_struct_sym(symtab, d);
+                Symbol *existing = symtab_lookup_kind_ns(symtab, d->struc.name,
+                    DECL_STRUCT, NULL);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->struc.name,
+                        DECL_UNION, NULL);
+                if (existing) {
+                    diag_error(d->loc, "redefinition of '%s'", d->struc.name);
+                } else {
+                    register_struct_sym(symtab, d);
+                }
             }
             break;
         }
         case DECL_UNION: {
-            Symbol *existing = symtab_lookup(symtab, d->unio.name);
-            if (existing && existing->kind != DECL_MODULE) {
-                diag_error(d->loc, "redefinition of '%s'", d->unio.name);
+            if (current_ns) {
+                Symbol *existing = symtab_lookup_kind_ns(symtab, d->unio.name,
+                    DECL_UNION, current_ns);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->unio.name,
+                        DECL_STRUCT, current_ns);
+                if (existing) {
+                    diag_error(d->loc, "redefinition of '%s'", d->unio.name);
+                    break;
+                }
+                const char *src_name = d->unio.name;
+                const char *mangled = make_mangled(intern, current_ns, src_name);
+                d->unio.name = mangled;
+                symtab_add(symtab, src_name, DECL_UNION, d);
+                Symbol *sym = &symtab->symbols[symtab->count - 1];
+                sym->ns_prefix = current_ns;
+                Type *ut = malloc(sizeof(Type));
+                memset(ut, 0, sizeof(Type));
+                ut->kind = TYPE_UNION;
+                ut->unio.name = mangled;
+                {
+                    int needed = snprintf(NULL, 0, "%s::%s", current_ns, src_name) + 1;
+                    char *buf = malloc((size_t)needed);
+                    snprintf(buf, (size_t)needed, "%s::%s", current_ns, src_name);
+                    ut->unio.qualified_name = intern_cstr(intern, buf);
+                    free(buf);
+                }
+                ut->unio.variants = d->unio.variants;
+                ut->unio.variant_count = d->unio.variant_count;
+                ut->unio.type_args = NULL;
+                ut->unio.type_arg_count = 0;
+                sym->type = ut;
+                ut->unio.resolved_sym = sym;
+                detect_generic_union(d, sym);
+                /* Also register under the mangled name (see struct case). */
+                symtab_add(symtab, mangled, DECL_UNION, d);
+                Symbol *sym2 = &symtab->symbols[symtab->count - 1];
+                sym2->type = ut;
+                detect_generic_union(d, sym2);
             } else {
-                register_union_sym(symtab, d);
+                Symbol *existing = symtab_lookup_kind_ns(symtab, d->unio.name,
+                    DECL_UNION, NULL);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->unio.name,
+                        DECL_STRUCT, NULL);
+                if (existing) {
+                    diag_error(d->loc, "redefinition of '%s'", d->unio.name);
+                } else {
+                    register_union_sym(symtab, d);
+                }
             }
             break;
         }
@@ -1078,15 +1190,24 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 diag_error(d->loc, "cannot import from 'global::'; global-namespace modules are already visible by name");
                 continue;
             }
-            /* import MODULE from namespace:: — cross-namespace whole module import */
+            /* import NAME from namespace:: — cross-namespace import of a
+             * top-level symbol (module, struct, or union). Companion pairs
+             * (same-named struct/union + module) import both entries. */
             const char *name = d->import.name;
-            Symbol *sym = symtab_lookup_module(symtab, name, from_ns);
-            if (!sym || sym->kind != DECL_MODULE) {
-                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, from_ns);
+            const char *import_name = d->import.alias ? d->import.alias : name;
+            Symbol *mod = symtab_lookup_module(symtab, name, from_ns);
+            Symbol *type_sym = symtab_lookup_kind_ns(symtab, name, DECL_STRUCT, from_ns);
+            if (!type_sym)
+                type_sym = symtab_lookup_kind_ns(symtab, name, DECL_UNION, from_ns);
+            if (!mod && !type_sym) {
+                diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, from_ns);
                 continue;
             }
-            const char *import_name = d->import.alias ? d->import.alias : name;
-            import_table_add_module(file_tbl, import_name, sym, symtab);
+            if (mod) import_table_add_module(file_tbl, import_name, mod, symtab);
+            if (type_sym) {
+                import_table_add(file_tbl, import_name, name, type_sym->kind,
+                                 symtab, type_sym);
+            }
             continue;
         }
 
