@@ -4,6 +4,22 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Typed enum-indexed arrays (retired 2026-04-22)
+
+Originally: in wolf-fc, several 60-entry tables are semantically `music`-valued, `palette-index`-valued, or `par-seconds`-valued, but their type is bare `int32[60]` (e.g. `let songs = int32[60] { 3, 11, 9, 12, ... }`). Proposed that if `music` were a real int-tagged enum, `music[60]` could be a first-class type: every literal element checked against the variant set, and the table index itself (`songs[level_num]`) yielding a `music`, not a raw `int32` needing a cast. A range-typed index (`level_index` guaranteed `0..59`) would let the lookup be total and eliminate the runtime `if level_num >= 0 && level_num < 60` guards consumers write today.
+
+**Resolution:** retired as won't-implement for 1.0. This wants three things FC doesn't have: (1) int-tagged enums as a distinct kind — today zero-payload unions fill the "named constants" role but aren't designed to be int-indexed or interchangeable with `int32`; (2) `enum[N]` as a first-class array type with element-wise variant-set checking; (3) range-typed indices (`0..59` proved at the construction site), which is dependent-types-lite and would reshape the type system. Legitimate feature, but it's a 2.0-scale design conversation, not a 1.0 paper cut. The existing workaround (`int32[60]` plus one runtime bounds guard at the read site) is ugly but not broken and doesn't block any real code. Revisit if/when FC takes on a broader "refinement types" direction.
+
+---
+
+## Extended filesystem — stat/symlinks/mmap (retired 2026-04-22)
+
+Originally: listed under stdlib gaps as future work — `stat`/metadata, symlink handling, memory mapping. Already flagged "Explicitly out of scope today; worth naming as future stdlib work."
+
+**Resolution:** retired as won't-implement for 1.0. Each of these is a non-trivial cross-platform surface (POSIX vs. Windows `GetFileAttributesEx`/`CreateFileMapping`/reparse points) that adds substantial stdlib API without solving a currently-hit problem in FC code. The existing `std::io` primitives (open, read, write, exists, mkdir, list_dir) cover the everyday filesystem needs; programs that need stat/mmap today can reach through `extern` to the C APIs. Keep as a known gap; not a tracked item.
+
+---
+
 ## Cross-namespace nested-type identity leak through user modules (resolved 2026-04-22)
 
 Originally: a stdlib type at a nested module path (e.g. `std::random.pcg_random`, declared as `module random = struct pcg_random + module pcg_random = ...`) got a different internal name depending on where it was *referenced*. When a user module called a stdlib function whose signature mentioned the nested type, pass2 ran the callee's `check_decl_let` on-demand but only set `ctx.module_symtab`, leaving `parent_modules`, `import_scope`, and `current_ns` reflecting the caller's scope. Bare stub names in the callee's own signatures (like `pcg_random*` in `stdlib/random.fc :: next_uint32`) then failed to resolve, the parameter stayed as `TYPE_STUB`, and unification against the caller's fully-resolved `std::random.pcg_random*` argument produced `expected pcg_random*, got std::random.pcg_random*`. The workaround was to keep every function touching the type at entry-point file scope, which blocked module-boundary refactoring in wolf-fc.
