@@ -1,0 +1,12 @@
+// Forward reference: the array is declared before the lets it references.
+module m =
+    let arr = int32[3] { a, b, c }
+    let a = 1
+    let b = 2
+    let c = 3
+
+let main = (args: str[]) ->
+    assert(m.arr[0] == 1)
+    assert(m.arr[1] == 2)
+    assert(m.arr[2] == 3)
+    0

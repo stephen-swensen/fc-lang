@@ -1,0 +1,22 @@
+// Ident ref inside a variant constructor payload at module scope.
+module m =
+    union color =
+        | rgb(int32)
+        | black
+        | named(int32)
+
+    let r = 200
+    let tag = 7
+    let red = color.rgb(r)
+    let named_seven = color.named(tag)
+
+let main = (args: str[]) ->
+    match m.red with
+    | rgb(v) -> assert(v == 200)
+    | black -> assert(false)
+    | named(_) -> assert(false)
+    match m.named_seven with
+    | rgb(_) -> assert(false)
+    | black -> assert(false)
+    | named(v) -> assert(v == 7)
+    0

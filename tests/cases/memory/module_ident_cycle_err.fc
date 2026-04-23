@@ -1,0 +1,7 @@
+// Two-let cycle: a and b reference each other.
+module m =
+    let a = b
+    let b = a
+
+let main = (args: str[]) ->
+    0

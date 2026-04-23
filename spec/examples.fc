@@ -63,10 +63,13 @@ module point =
     // Module-level constant-expression lets: struct literals, array literals,
     // some(...), and union variant constructors are all allowed as long as
     // their contents are recursively constant.  Array literals are lifted to
-    // a static backing array at C file scope.
+    // a static backing array at C file scope.  Const-expr lets may reference
+    // other const-expr lets by name (order-independent, including imports).
     let zero = point { x = 0, y = 0 }
     let steps = int32[4] { 1, 2, 4, 8 }
     let first = some(0)
+    let base = 10
+    let offsets = int32[3] { base, base + 1, base + 2 }     // refs `base`
 
 // ============================================================
 // Higher-order functions

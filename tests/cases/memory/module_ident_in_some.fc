@@ -1,0 +1,9 @@
+// Ident ref inside a some(...) constructor at module scope.
+module m =
+    let n = 42
+    let boxed = some(n)
+
+let main = (args: str[]) ->
+    assert(m.boxed.is_some)
+    assert(m.boxed! == 42)
+    0

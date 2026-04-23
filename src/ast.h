@@ -378,8 +378,13 @@ struct Decl {
             const char *name;
             const char *codegen_name;   /* mangled C name for module members */
             bool is_mut;
+            bool is_module_member;      /* true if declared inside a module body */
             Expr *init;
             Type *resolved_type;    /* filled by pass2 */
+            /* Const-fold cache for module-member lets. Lazily populated during
+             * the const-expr gate in pass2; zero-init (UNVISITED) is correct. */
+            int const_fold_state;       /* 0=unvisited, 1=visiting, 2=done, 3=failed */
+            Expr *const_fold_value;     /* folded literal tree (may be == init) */
         } let;
 
         /* DECL_STRUCT */

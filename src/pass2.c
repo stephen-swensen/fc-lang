@@ -5086,6 +5086,328 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     return e->type;
 }
 
+/* ---- Const-expr fold for module-level let initializers ----
+ *
+ * When a module-level let's init contains EXPR_IDENT references to other
+ * module-level const-expr lets, fold substitutes the referenced values so
+ * codegen sees only literal forms.  On success the caller overwrites
+ * d->let.init with the folded tree.
+ *
+ * The per-decl state machine is UNVISITED -> (VISITING ->) DONE | FAILED:
+ * DONE caches the folded value for later refs; FAILED short-circuits
+ * retries when the target's init isn't a const-expr.  VISITING exists
+ * only as an infinite-recursion guard — any actual cycle in FC source
+ * is caught earlier by pass2's on-demand type-check cycle detector
+ * (`circular dependency: 'X' depends on itself`), which type-checks the
+ * same ident paths fold would walk.  If fold ever observes VISITING in
+ * practice we've hit an internal inconsistency. */
+
+enum {
+    CONST_FOLD_UNVISITED = 0,
+    CONST_FOLD_VISITING  = 1,
+    CONST_FOLD_DONE      = 2,
+    CONST_FOLD_FAILED    = 3,
+};
+
+static bool is_const_expr(Expr *e);
+static Expr *const_fold_expr(CheckCtx *ctx, Expr *e);
+
+/* Clone an Expr subtree for const-expr substitution.  Aggregate nodes are
+ * freshly allocated so mutable per-node codegen state (EXPR_ARRAY_LIT's
+ * codegen_backing_name) is not aliased across substitution sites. */
+static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
+    if (!src) return NULL;
+    switch (src->kind) {
+    case EXPR_INT_LIT:
+    case EXPR_FLOAT_LIT:
+    case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT:
+    case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT:
+    case EXPR_SIZEOF:
+    case EXPR_ALIGNOF:
+    case EXPR_DEFAULT:
+    case EXPR_FIELD:  /* extern-const or no-payload variant ctor */
+        return src;
+    case EXPR_UNARY_PREFIX: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->unary_prefix.operand = const_clone_expr(ctx, src->unary_prefix.operand);
+        return n;
+    }
+    case EXPR_BINARY: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->binary.left  = const_clone_expr(ctx, src->binary.left);
+        n->binary.right = const_clone_expr(ctx, src->binary.right);
+        return n;
+    }
+    case EXPR_CAST: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->cast.operand = const_clone_expr(ctx, src->cast.operand);
+        return n;
+    }
+    case EXPR_STRUCT_LIT: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        int fc = src->struct_lit.field_count;
+        if (fc > 0) {
+            FieldInit *fields = arena_alloc(ctx->arena, sizeof(FieldInit) * (size_t)fc);
+            for (int i = 0; i < fc; i++) {
+                fields[i] = src->struct_lit.fields[i];
+                fields[i].value = const_clone_expr(ctx, src->struct_lit.fields[i].value);
+            }
+            n->struct_lit.fields = fields;
+        }
+        return n;
+    }
+    case EXPR_ARRAY_LIT: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->array_lit.codegen_backing_name = NULL;  /* fresh backing per clone */
+        int ec = src->array_lit.elem_count;
+        if (ec > 0) {
+            Expr **elems = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)ec);
+            for (int i = 0; i < ec; i++)
+                elems[i] = const_clone_expr(ctx, src->array_lit.elems[i]);
+            n->array_lit.elems = elems;
+        }
+        n->array_lit.size_expr = const_clone_expr(ctx, src->array_lit.size_expr);
+        return n;
+    }
+    case EXPR_SLICE_LIT: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->slice_lit.ptr_expr = const_clone_expr(ctx, src->slice_lit.ptr_expr);
+        n->slice_lit.len_expr = const_clone_expr(ctx, src->slice_lit.len_expr);
+        return n;
+    }
+    case EXPR_SOME: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->some_expr.value = const_clone_expr(ctx, src->some_expr.value);
+        return n;
+    }
+    case EXPR_CALL: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        int ac = src->call.arg_count;
+        if (ac > 0) {
+            Expr **args = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)ac);
+            for (int i = 0; i < ac; i++)
+                args[i] = const_clone_expr(ctx, src->call.args[i]);
+            n->call.args = args;
+        }
+        return n;
+    }
+    default:
+        return src;
+    }
+}
+
+/* Recursively fold an Expr in const-expr position.  Returns the folded tree
+ * (same pointer if no substitution) or NULL on failure.  NULL is silent for
+ * most kinds (the outer gate emits the generic "must be a constant
+ * expression"); a specific diagnostic is emitted only for the mut-ref case. */
+static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
+    if (!e) return e;
+    switch (e->kind) {
+    case EXPR_INT_LIT:
+    case EXPR_FLOAT_LIT:
+    case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT:
+    case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT:
+    case EXPR_SIZEOF:
+    case EXPR_ALIGNOF:
+    case EXPR_DEFAULT:
+        return e;
+    case EXPR_IDENT: {
+        Symbol *s = e->ident.resolved_sym;
+        if (!s || !s->decl || s->decl->kind != DECL_LET)
+            return NULL;
+        if (!s->decl->let.is_module_member)
+            return NULL;
+        if (s->decl->let.is_mut) {
+            diag_error(e->loc,
+                "cannot reference mutable binding '%s' in constant expression",
+                e->ident.name);
+            return NULL;
+        }
+        Decl *d = s->decl;
+        if (d->let.const_fold_state == CONST_FOLD_DONE)
+            return const_clone_expr(ctx, d->let.const_fold_value);
+        if (d->let.const_fold_state == CONST_FOLD_VISITING) {
+            /* Unreachable in valid pipelines — any cycle would have been
+             * caught earlier by on-demand type-check cycle detection. */
+            diag_fatal(e->loc,
+                "internal: const-fold reentered let '%s' (missed type-level cycle)",
+                d->let.name);
+        }
+        if (d->let.const_fold_state == CONST_FOLD_FAILED)
+            return NULL;
+        /* UNVISITED — recurse into the target's init */
+        d->let.const_fold_state = CONST_FOLD_VISITING;
+        Expr *folded = const_fold_expr(ctx, d->let.init);
+        if (!folded || !is_const_expr(folded)) {
+            d->let.const_fold_state = CONST_FOLD_FAILED;
+            return NULL;
+        }
+        d->let.init = folded;
+        d->let.const_fold_value = folded;
+        d->let.const_fold_state = CONST_FOLD_DONE;
+        return const_clone_expr(ctx, folded);
+    }
+    case EXPR_UNARY_PREFIX: {
+        Expr *op = const_fold_expr(ctx, e->unary_prefix.operand);
+        if (!op) return NULL;
+        if (op == e->unary_prefix.operand) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->unary_prefix.operand = op;
+        return n;
+    }
+    case EXPR_BINARY: {
+        Expr *l = const_fold_expr(ctx, e->binary.left);
+        Expr *r = const_fold_expr(ctx, e->binary.right);
+        if (!l || !r) return NULL;
+        if (l == e->binary.left && r == e->binary.right) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->binary.left = l;
+        n->binary.right = r;
+        return n;
+    }
+    case EXPR_CAST: {
+        Expr *op = const_fold_expr(ctx, e->cast.operand);
+        if (!op) return NULL;
+        if (op == e->cast.operand) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->cast.operand = op;
+        return n;
+    }
+    case EXPR_FIELD:
+        if (e->field.is_extern_const || e->field.is_variant_constructor)
+            return e;
+        return NULL;
+    case EXPR_STRUCT_LIT: {
+        bool changed = false;
+        int fc = e->struct_lit.field_count;
+        Expr **new_vals = NULL;
+        for (int i = 0; i < fc; i++) {
+            Expr *nv = const_fold_expr(ctx, e->struct_lit.fields[i].value);
+            if (!nv) return NULL;
+            if (nv != e->struct_lit.fields[i].value) {
+                if (!new_vals) {
+                    new_vals = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)fc);
+                    for (int k = 0; k < i; k++)
+                        new_vals[k] = e->struct_lit.fields[k].value;
+                }
+                new_vals[i] = nv;
+                changed = true;
+            } else if (new_vals) {
+                new_vals[i] = nv;
+            }
+        }
+        if (!changed) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        FieldInit *fields = arena_alloc(ctx->arena, sizeof(FieldInit) * (size_t)fc);
+        for (int i = 0; i < fc; i++) {
+            fields[i] = e->struct_lit.fields[i];
+            fields[i].value = new_vals[i];
+        }
+        n->struct_lit.fields = fields;
+        return n;
+    }
+    case EXPR_ARRAY_LIT: {
+        bool changed = false;
+        int ec = e->array_lit.elem_count;
+        Expr **new_elems = NULL;
+        for (int i = 0; i < ec; i++) {
+            Expr *ne = const_fold_expr(ctx, e->array_lit.elems[i]);
+            if (!ne) return NULL;
+            if (ne != e->array_lit.elems[i]) {
+                if (!new_elems) {
+                    new_elems = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)ec);
+                    for (int k = 0; k < i; k++)
+                        new_elems[k] = e->array_lit.elems[k];
+                }
+                new_elems[i] = ne;
+                changed = true;
+            } else if (new_elems) {
+                new_elems[i] = ne;
+            }
+        }
+        Expr *new_size = e->array_lit.size_expr
+            ? const_fold_expr(ctx, e->array_lit.size_expr)
+            : NULL;
+        if (e->array_lit.size_expr && !new_size) return NULL;
+        if (!changed && new_size == e->array_lit.size_expr) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->array_lit.codegen_backing_name = NULL;
+        if (new_elems) n->array_lit.elems = new_elems;
+        n->array_lit.size_expr = new_size;
+        return n;
+    }
+    case EXPR_SLICE_LIT: {
+        Expr *p = const_fold_expr(ctx, e->slice_lit.ptr_expr);
+        Expr *l = const_fold_expr(ctx, e->slice_lit.len_expr);
+        if (!p || !l) return NULL;
+        if (p == e->slice_lit.ptr_expr && l == e->slice_lit.len_expr) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->slice_lit.ptr_expr = p;
+        n->slice_lit.len_expr = l;
+        return n;
+    }
+    case EXPR_SOME: {
+        Expr *v = const_fold_expr(ctx, e->some_expr.value);
+        if (!v) return NULL;
+        if (v == e->some_expr.value) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->some_expr.value = v;
+        return n;
+    }
+    case EXPR_CALL: {
+        if (e->call.func->kind != EXPR_FIELD ||
+            !e->call.func->field.is_variant_constructor)
+            return NULL;
+        bool changed = false;
+        int ac = e->call.arg_count;
+        Expr **new_args = NULL;
+        for (int i = 0; i < ac; i++) {
+            Expr *na = const_fold_expr(ctx, e->call.args[i]);
+            if (!na) return NULL;
+            if (na != e->call.args[i]) {
+                if (!new_args) {
+                    new_args = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)ac);
+                    for (int k = 0; k < i; k++)
+                        new_args[k] = e->call.args[k];
+                }
+                new_args[i] = na;
+                changed = true;
+            } else if (new_args) {
+                new_args[i] = na;
+            }
+        }
+        if (!changed) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->call.args = new_args;
+        return n;
+    }
+    default:
+        return NULL;
+    }
+}
+
 /* Check if an expression is a compile-time constant (no variable refs or calls) */
 static bool is_const_expr(Expr *e) {
     if (!e) return true;
@@ -5314,11 +5636,31 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
         Decl *child = mod_decl->module.decls[i];
         if (child->kind == DECL_LET) {
             check_decl_let(ctx, child);
-            if (child->let.init && child->let.init->kind != EXPR_FUNC &&
-                !is_const_expr(child->let.init)) {
-                diag_error(child->loc,
-                    "top-level initializer for '%s' must be a constant expression",
-                    child->let.name);
+            /* Skip the const-expr gate if type-checking already errored
+             * (e.g. type-level cycle, undefined name); otherwise fold would
+             * emit a second, redundant diagnostic. */
+            bool type_ok = child->let.resolved_type &&
+                           child->let.resolved_type->kind != TYPE_ERROR;
+            if (type_ok &&
+                child->let.init && child->let.init->kind != EXPR_FUNC &&
+                child->let.const_fold_state != CONST_FOLD_DONE &&
+                child->let.const_fold_state != CONST_FOLD_FAILED) {
+                child->let.const_fold_state = CONST_FOLD_VISITING;
+                int errs_before = diag_error_count();
+                Expr *folded = const_fold_expr(ctx, child->let.init);
+                int new_errs = diag_error_count() - errs_before;
+                if (folded && is_const_expr(folded)) {
+                    child->let.init = folded;
+                    child->let.const_fold_value = folded;
+                    child->let.const_fold_state = CONST_FOLD_DONE;
+                } else {
+                    child->let.const_fold_state = CONST_FOLD_FAILED;
+                    if (new_errs == 0) {
+                        diag_error(child->loc,
+                            "top-level initializer for '%s' must be a constant expression",
+                            child->let.name);
+                    }
+                }
             }
         } else if (child->kind == DECL_STRUCT || child->kind == DECL_UNION) {
             canonicalize_decl_field_stubs(ctx, child);

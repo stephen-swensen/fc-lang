@@ -1,0 +1,14 @@
+// Ident ref inside a struct literal at module scope.
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+    let default_x = 10
+    let default_y = 20
+    let origin = point { x = default_x, y = default_y }
+
+let main = (args: str[]) ->
+    assert(m.origin.x == 10)
+    assert(m.origin.y == 20)
+    0

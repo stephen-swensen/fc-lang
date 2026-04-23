@@ -504,6 +504,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             const char *src_name = child->let.name;
             const char *mangled = make_mangled(intern, mangle_prefix, src_name);
             child->let.codegen_name = mangled;
+            child->let.is_module_member = true;
             if (symtab_lookup(members, src_name)) {
                 diag_error(child->loc, "redefinition of '%s' in module '%s'",
                     src_name, mod_name);

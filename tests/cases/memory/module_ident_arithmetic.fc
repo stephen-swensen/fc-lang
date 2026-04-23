@@ -1,0 +1,16 @@
+// Arithmetic on folded idents works for free via existing const-expr
+// binary-op support once idents themselves fold.
+module m =
+    let base = 10
+    let offset = 5
+    let sum = base + offset
+    let doubled = base + base
+    let arr = int32[3] { base + 1, base + offset, doubled }
+
+let main = (args: str[]) ->
+    assert(m.sum == 15)
+    assert(m.doubled == 20)
+    assert(m.arr[0] == 11)
+    assert(m.arr[1] == 15)
+    assert(m.arr[2] == 20)
+    0

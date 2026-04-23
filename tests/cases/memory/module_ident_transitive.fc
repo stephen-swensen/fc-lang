@@ -1,0 +1,15 @@
+// Transitive chain: c references b references a.
+module m =
+    let a = 10
+    let b = a
+    let c = b
+    let arr = int32[3] { a, b, c }
+
+let main = (args: str[]) ->
+    assert(m.a == 10)
+    assert(m.b == 10)
+    assert(m.c == 10)
+    assert(m.arr[0] == 10)
+    assert(m.arr[1] == 10)
+    assert(m.arr[2] == 10)
+    0

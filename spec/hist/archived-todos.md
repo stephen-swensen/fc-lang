@@ -4,6 +4,21 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Const-expr propagation through module-level name references (resolved 2026-04-23)
+
+Originally: module-level `let` initializers required pure literals for element expressions. The 2026-04 loosening (commit `a8c1221`) accepted array literals, `some(...)`, and variant constructors as initializers, but elements still had to be literals. Named constants like
+```fc
+module music =
+    let getthem = 3
+    let searchn = 11
+    let songs = int32[60] { getthem, searchn, getthem, ..., pacman }
+```
+were rejected with "must be a constant expression," forcing wolf-fc to inline raw integers with apology comments.
+
+**Resolution:** extended the module-level const-expr gate in `check_module_members` to fold identifier references through `const_fold_expr`. Folded values substitute into the init tree at pass2 time, so codegen sees only literal forms; no changes to `codegen.c`. Uses the `resolved_sym` already stored on `EXPR_IDENT` for lookup (the single-resolution invariant CLAUDE.md calls out), and a four-state (UNVISITED/VISITING/DONE/FAILED) marker on `Decl.let` for memoization plus an internal reentry guard. `let mut` targets and file-level lets are rejected; scope follows FC's normal lookup (same module, imports, parent modules), so forward and cross-module references are both fine. Arithmetic over folded idents (`let n = base + 1`) composes for free via the existing `EXPR_BINARY` const-expr path. Value cycles are caught by pass2's existing on-demand type-check cycle detector (`circular dependency: 'X' depends on itself`), which type-checks the same ident paths fold would walk — the VISITING state exists only as an internal-invariant reentry guard (fires `diag_fatal` if ever observed). Regression and feature tests under `tests/cases/memory/module_ident_*` (backward, forward, transitive, in-some/variant/struct/slice, arithmetic, cross-module, cycle, mut-ref).
+
+---
+
 ## Typed enum-indexed arrays (retired 2026-04-22)
 
 Originally: in wolf-fc, several 60-entry tables are semantically `music`-valued, `palette-index`-valued, or `par-seconds`-valued, but their type is bare `int32[60]` (e.g. `let songs = int32[60] { 3, 11, 9, 12, ... }`). Proposed that if `music` were a real int-tagged enum, `music[60]` could be a first-class type: every literal element checked against the variant set, and the table index itself (`songs[level_num]`) yielding a `music`, not a raw `int32` needing a cast. A range-typed index (`level_index` guaranteed `0..59`) would let the lookup be total and eliminate the runtime `if level_num >= 0 && level_num < 60` guards consumers write today.

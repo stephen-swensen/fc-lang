@@ -1,0 +1,7 @@
+// Mutable let cannot be referenced in a const-expr initializer.
+module m =
+    let mut counter = 5
+    let arr = int32[1] { counter }
+
+let main = (args: str[]) ->
+    0

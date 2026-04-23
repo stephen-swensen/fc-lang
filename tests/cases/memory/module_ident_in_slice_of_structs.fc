@@ -1,0 +1,19 @@
+// Slice of structs where each struct lit references prior const-expr lets.
+module m =
+    struct pair =
+        a: int32
+        b: int32
+
+    let one = 1
+    let two = 2
+    let three = 3
+    let four = 4
+    let pairs = pair[2] { pair { a = one, b = two }, pair { a = three, b = four } }
+
+let main = (args: str[]) ->
+    assert(m.pairs.len == 2)
+    assert(m.pairs[0].a == 1)
+    assert(m.pairs[0].b == 2)
+    assert(m.pairs[1].a == 3)
+    assert(m.pairs[1].b == 4)
+    0

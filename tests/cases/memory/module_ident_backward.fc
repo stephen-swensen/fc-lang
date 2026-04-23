@@ -1,0 +1,15 @@
+// Module-level const-expr initializer references a prior let in the same scope.
+module music =
+    let getthem = 3
+    let searchn = 11
+    let pacman  = 26
+    let songs = int32[5] { getthem, searchn, getthem, searchn, pacman }
+
+let main = (args: str[]) ->
+    assert(music.songs.len == 5)
+    assert(music.songs[0] == 3)
+    assert(music.songs[1] == 11)
+    assert(music.songs[2] == 3)
+    assert(music.songs[3] == 11)
+    assert(music.songs[4] == 26)
+    0

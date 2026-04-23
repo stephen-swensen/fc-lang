@@ -1051,7 +1051,7 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
 
-**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, struct literals with constant fields, array and slice literals with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. Variable references, function calls, `alloc`, option unwrap (`!`), and string interpolation are not allowed. This matches C's requirement that file-scope variable initializers be constant expressions; array literals are lifted to a `static` backing array at file scope.
+**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, struct literals with constant fields, array and slice literals with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; array literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
 
 **File-level** non-function `let` bindings (in the entry-point file) are more permissive: in addition to everything allowed at module level, they may use `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. Variable references and function calls are still not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
 
@@ -1071,8 +1071,14 @@ let buf = alloc(int32[100] { })!  // ok — alloc + unwrap
 let p = alloc(point2d)!           // ok — alloc + unwrap
 
 let x = 10
-let y = x + 5                   // ERROR — references variable x
 let z = compute()               // ERROR — function call
+
+// module-level const-expr lets can reference each other by name
+module music =
+    let getthem = 3
+    let searchn = 11
+    let pacman  = 26
+    let songs = int32[5] { getthem, searchn, getthem, searchn, pacman }
 ```
 
 Inside any expression context, `let` and `let mut` introduce bindings within a block. The binding is visible to all subsequent expressions in the same block — scoping and sequencing both follow directly from the block model:

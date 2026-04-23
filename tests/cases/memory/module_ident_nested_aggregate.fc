@@ -1,0 +1,21 @@
+// Nested aggregate: an ident inside a struct inside an array lit.
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+    let x1 = 1
+    let y1 = 2
+    let x2 = 3
+    let y2 = 4
+    let pts = point[2] {
+        point { x = x1, y = y1 },
+        point { x = x2, y = y2 }
+    }
+
+let main = (args: str[]) ->
+    assert(m.pts[0].x == 1)
+    assert(m.pts[0].y == 2)
+    assert(m.pts[1].x == 3)
+    assert(m.pts[1].y == 4)
+    0

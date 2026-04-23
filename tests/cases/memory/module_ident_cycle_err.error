@@ -1,0 +1,1 @@
+circular dependency: 'b' depends on itself

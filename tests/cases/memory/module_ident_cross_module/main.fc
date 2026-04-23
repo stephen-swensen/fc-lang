@@ -1,0 +1,9 @@
+import width, height from acme::consts
+
+module screen =
+    let size = int32[2] { width, height }
+
+let main = (args: str[]) ->
+    assert(screen.size[0] == 80)
+    assert(screen.size[1] == 24)
+    0

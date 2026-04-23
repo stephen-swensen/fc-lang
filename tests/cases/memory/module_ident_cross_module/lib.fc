@@ -1,0 +1,5 @@
+namespace acme::
+
+module consts =
+    let width = 80
+    let height = 24
