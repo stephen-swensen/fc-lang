@@ -46,7 +46,7 @@ static char *change_extension(const char *path, const char *new_ext) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: fc <input.fc> [input2.fc ...] [-o output.c]\n");
+        fprintf(stderr, "usage: fcc <input.fc> [input2.fc ...] [-o output.c]\n");
         return 1;
     }
 
@@ -82,11 +82,11 @@ int main(int argc, char **argv) {
             Flag f = {0};
             if (eq) {
                 if (eq == arg) {
-                    fprintf(stderr, "fc: --flag requires a name before '='\n");
+                    fprintf(stderr, "fcc: --flag requires a name before '='\n");
                     return 1;
                 }
                 if (*(eq + 1) == '\0') {
-                    fprintf(stderr, "fc: --flag '%s' has empty value after '='\n", arg);
+                    fprintf(stderr, "fcc: --flag '%s' has empty value after '='\n", arg);
                     return 1;
                 }
                 f.name = arg;
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
                 f.value = eq + 1;
             } else {
                 if (*arg == '\0') {
-                    fprintf(stderr, "fc: --flag requires a name\n");
+                    fprintf(stderr, "fcc: --flag requires a name\n");
                     return 1;
                 }
                 f.name = arg;
@@ -119,13 +119,13 @@ int main(int argc, char **argv) {
         } else if (argv[i][0] != '-') {
             DA_APPEND(input_paths, input_count, input_cap, argv[i]);
         } else {
-            fprintf(stderr, "fc: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "fcc: unknown option '%s'\n", argv[i]);
             return 1;
         }
     }
 
     if (input_count == 0) {
-        fprintf(stderr, "fc: no input file\n");
+        fprintf(stderr, "fcc: no input file\n");
         return 1;
     }
 

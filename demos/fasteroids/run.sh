@@ -6,7 +6,7 @@
 #          MSYS2 MINGW64: pacman -S mingw-w64-x86_64-SDL2
 set -e
 cd "$(dirname "$0")/../.."
-make -s fc
+make -s
 
 SRCS="demos/shared/sdl2.fc demos/fasteroids/main.fc \
       stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/math.fc stdlib/random.fc"
@@ -14,14 +14,14 @@ SRCS="demos/shared/sdl2.fc demos/fasteroids/main.fc \
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        ./fc $SRCS -o "$OUTDIR/fasteroids.c"
+        ./fcc $SRCS -o "$OUTDIR/fasteroids.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fasteroids.exe" "$OUTDIR/fasteroids.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fasteroids..."
         "$OUTDIR/fasteroids.exe"
         echo "[exit: $?]"
         ;;
     *)
-        ./fc $SRCS -o /tmp/fasteroids.c
+        ./fcc $SRCS -o /tmp/fasteroids.c
         cc -std=c11 -Wall -Werror -o /tmp/fasteroids-bin /tmp/fasteroids.c -lSDL2 -lm
         echo "Running Fasteroids..."
         /tmp/fasteroids-bin

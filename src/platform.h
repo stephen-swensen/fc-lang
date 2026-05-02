@@ -3,11 +3,11 @@
 
 #include "lexer.h"
 
-/* Populate built-in os/arch/env flags for the host that built the fc binary.
+/* Populate built-in os/arch/env flags for the host that built the fcc binary.
  *
- * Detection happens at fc compile time via #ifdef checks against the C
+ * Detection happens at fcc compile time via #ifdef checks against the C
  * compiler's predefined macros — there is no runtime subprocess. The values
- * are baked into fc itself when it is built, which is fast (~no overhead per
+ * are baked into fcc itself when it is built, which is fast (~no overhead per
  * invocation) and matches what zig, rust, and gcc do for their host triple.
  *
  * Canonical taxonomy:

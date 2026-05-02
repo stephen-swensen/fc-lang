@@ -7,19 +7,19 @@
 #   MINGW64:  pacman -S mingw-w64-x86_64-SDL2
 set -e
 cd "$(dirname "$0")/../.."
-make -s fc
+make -s
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        ./fc demos/shared/sdl2.fc demos/fibbles/main.fc stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/random.fc -o "$OUTDIR/fibbles.c"
+        ./fcc demos/shared/sdl2.fc demos/fibbles/main.fc stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/random.fc -o "$OUTDIR/fibbles.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fibbles.exe" "$OUTDIR/fibbles.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fibbles..."
         "$OUTDIR/fibbles.exe"
         echo "[exit: $?]"
         ;;
     *)
-        ./fc demos/shared/sdl2.fc demos/fibbles/main.fc stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/random.fc -o /tmp/fibbles.c
+        ./fcc demos/shared/sdl2.fc demos/fibbles/main.fc stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/random.fc -o /tmp/fibbles.c
         cc -std=c11 -Wall -Werror -o /tmp/fibbles-bin /tmp/fibbles.c -lSDL2 -lm
         echo "Running Fibbles..."
         /tmp/fibbles-bin

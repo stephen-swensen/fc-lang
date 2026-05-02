@@ -29,23 +29,45 @@ The compiler implements all features described in the language specification (v1
 Requires a C11 compiler (GCC, Clang, etc.).
 
 ```sh
-make          # build the fc compiler
-make clean    # remove build artifacts
+make              # build the fcc compiler (release, -O2)
+make dev          # clean rebuild at -O0 for clearer diagnostics during development
+make clean        # remove build artifacts
 ```
 
-This produces the `fc` binary in the project root.
+This produces the `fcc` binary in the project root (`fcc.exe` on Windows). `make` defaults to `-O2`; override with `OPT=` (e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`). `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
+
+## Installing
+
+`fcc` follows the GNU coding-standards install conventions:
+
+```sh
+sudo make install                       # installs to /usr/local by default
+make install PREFIX=$HOME/.local        # user-local install (no sudo)
+make uninstall                          # remove
+```
+
+The default install layout (with `PREFIX=/usr/local`):
+
+```
+/usr/local/bin/fcc                      # the compiler
+/usr/local/share/fcc/stdlib/*.fc        # the standard library
+```
+
+`PREFIX`, `DESTDIR`, `bindir`, and `datadir` are all overridable per the GNU conventions, so distro/package builds (`PREFIX=/usr DESTDIR=/build/staging make install`) work out of the box.
+
+> **Caveat:** until `fcc` grows automatic stdlib path resolution, you currently need to pass stdlib files explicitly on the command line (e.g. `fcc /usr/local/share/fcc/stdlib/*.fc your-program.fc`).
 
 ## Usage
 
 ```sh
-./fc input.fc                # compile to input.c
-./fc input.fc -o output.c    # compile to a specific output file
+./fcc input.fc                # compile to input.c
+./fcc input.fc -o output.c    # compile to a specific output file
 ```
 
 The compiler transpiles `.fc` source to a `.c` file. To build and run the result:
 
 ```sh
-./fc hello.fc -o hello.c
+./fcc hello.fc -o hello.c
 cc -std=c11 -o hello hello.c
 ./hello
 ```
@@ -63,6 +85,7 @@ cc -std=c11 -o hello hello.c
 ## Testing
 
 ```sh
+make check                          # run full test suite (alias of test-all)
 make test-all                       # run all tests with both gcc and clang
 make test-gcc                       # run all tests with gcc
 make test-clang                     # run all tests with clang

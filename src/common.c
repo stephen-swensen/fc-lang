@@ -8,7 +8,7 @@ static ArenaPage *arena_new_page(size_t min_size) {
     if (min_size > size) size = min_size;
     ArenaPage *page = malloc(sizeof(ArenaPage) + size);
     if (!page) {
-        fprintf(stderr, "fc: out of memory\n");
+        fprintf(stderr, "fcc: out of memory\n");
         exit(1);
     }
     page->next = NULL;

@@ -4,19 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This is a compiler project for **FC** (version 1.0-draft), a systems programming language that transpiles to C11. The compiler (`./fc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`. For a quick reference of FC syntax and semantics, see `spec/examples.fc` — a runnable, commented program that demonstrates all core language features.
+This is a compiler project for **FC** (version 1.0-draft), a systems programming language that transpiles to C11. The compiler (`./fcc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`. For a quick reference of FC syntax and semantics, see `spec/examples.fc` — a runnable, commented program that demonstrates all core language features.
 
 ## Build & Run
 
-- **`make`** — Build the compiler (produces `./fc` in the project root)
-- **`make test-all`** — Build and run all tests with both gcc and clang
-- **`make test-gcc`** / **`make test-clang`** — Test with a single compiler
-- **`make test-gcc FILTER=pattern`** — Run only tests matching a pattern (e.g., `FILTER=stdlib/data`, `FILTER=closures`)
-- **`make clean`** — Remove build artifacts
-- **`./fc input.fc -o output.c`** — Compile a single FC file to C
+- **`make`** — Release build (`-O2`). Produces `./fcc` in the project root (`fcc.exe` on Windows).
+- **`make dev`** — Clean rebuild at `-O0` for clearer diagnostics during dev iteration. Use this when assertion failures, debugger sessions, or sanitizer output need to be readable; `-O2` builds optimize in ways that can muddle line attribution.
+- **`make check`** / **`make test-all`** — Run all tests with both gcc and clang. `check` is the GNU-canonical alias.
+- **`make test-gcc`** / **`make test-clang`** — Test with a single compiler.
+- **`make test-gcc FILTER=pattern`** — Run only tests matching a pattern (e.g., `FILTER=stdlib/data`, `FILTER=closures`).
+- **`make install`** / **`make uninstall`** — Install `fcc` to `$(bindir)` and stdlib to `$(datadir)/fcc/stdlib/` per GNU conventions. Defaults to `PREFIX=/usr/local`; override `PREFIX`, `DESTDIR`, `bindir`, or `datadir` as needed.
+- **`make clean`** — Remove build artifacts.
+- **`make help`** — Print the full target reference.
+- **`./fcc input.fc -o output.c`** — Compile a single FC file to C.
 - **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
 
-**Optimization (opt-in):** the compiler defaults to `-O0`; pass `OPT=-O2` for an optimized `./fc` (e.g., `make clean && make OPT=-O2`). Tests default to `-O0` for the transpiled C; `make test-gcc-O2` / `test-clang-O2` / `test-all-O2` re-run the suite at `-O2` to catch optimizer-surfaced UB. The two axes are independent. `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
+**Optimization (default = `-O2`):** plain `make` produces a release-optimized binary. Use `make dev` for the dev-iteration loop (`-O0`, clearer diagnostics), or override with e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`. Tests default to `-O0` for the transpiled C; `make test-gcc-O2` / `test-clang-O2` / `test-all-O2` re-run the suite at `-O2` to catch optimizer-surfaced UB. The compiler-build OPT and the test-C OPT are independent axes. `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes — `make dev` takes care of this for you.
 
 The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g` (plus `$(OPT)`). Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean. FC emits all helpers (e.g. imported stdlib functions) as `static __attribute__((unused))`, so `-Wunused-function` stays quiet even though many helpers are unreferenced in any given program — GCC/clang still DCE them at link time.
 
@@ -172,7 +175,7 @@ Each **multi-file test** is a subdirectory containing:
 - `expected_exit` or `error` (no dot prefix) — the expected result
 - `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
 
-Run with `make test-all`. The test runner compiles FC→C with `./fc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
+Run with `make check` (or `make test-all`). The test runner compiles FC→C with `./fcc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
 
 ### Multi-file tests
 

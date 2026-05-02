@@ -33,7 +33,7 @@ _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...) {
 }
 
 _Noreturn void diag_fatal_simple(const char *fmt, ...) {
-    fprintf(stderr, "fc: error: ");
+    fprintf(stderr, "fcc: error: ");
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);

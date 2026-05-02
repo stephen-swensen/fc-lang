@@ -2,7 +2,7 @@
 set -e
 ulimit -c 0
 
-FC="./fc"
+FCC="./fcc"
 CC="${CC:-cc}"
 TESTDIR="tests/cases"
 TMPDIR=$(mktemp -d)
@@ -46,7 +46,7 @@ run_test() {
     local bin_file="$TMPDIR/${slug}"
 
     # Compile FC -> C
-    if ! $FC $fc_files $fc_flags -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
+    if ! $FCC $fc_files $fc_flags -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
         if [ -n "$error_file" ] && [ -f "$error_file" ]; then
             local expected_error=$(cat "$error_file")
             local actual_error=$(cat "$TMPDIR/${slug}.stderr")

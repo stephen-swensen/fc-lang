@@ -2974,20 +2974,20 @@ The following are **not** supported on type variables:
 
 ## The FC Compiler
 
-FC programs are compiled by the `fc` command-line tool, which transpiles FC source files into a single C source file. The generated C requires a GCC-compatible C11 compiler (GCC, Clang, or a GCC-based cross-compiler — see §Why C as a target for details).
+FC programs are compiled by the `fcc` command-line tool, which transpiles FC source files into a single C source file. The generated C requires a GCC-compatible C11 compiler (GCC, Clang, or a GCC-based cross-compiler — see §Why C as a target for details).
 
 ### Usage
 
 ```
-fc <input.fc> [input2.fc ...] [-o output.c]
+fcc <input.fc> [input2.fc ...] [-o output.c]
 ```
 
 One or more `.fc` source files are passed as arguments. If `-o` is not specified, the output filename is derived from the first input file by replacing its extension with `.c`.
 
 ```
-fc main.fc                              // produces main.c
-fc main.fc -o build/app.c               // explicit output path
-fc src/main.fc src/math.fc src/util.fc   // produces src/main.c
+fcc main.fc                              // produces main.c
+fcc main.fc -o build/app.c               // explicit output path
+fcc src/main.fc src/math.fc src/util.fc   // produces src/main.c
 ```
 
 All source files are compiled together as a single translation unit — there is no separate compilation or linking step on the FC side. The resulting C file is self-contained and can be compiled with:
@@ -3353,8 +3353,8 @@ The format is `[namespace::]module.name`. Top-level types (outside any module) d
 All `.fc` files are passed to the compiler together:
 
 ```
-fc main.fc lib.fc
-fc src/*.fc vendor/acme/*.fc
+fcc main.fc lib.fc
+fcc src/*.fc vendor/acme/*.fc
 ```
 
 The first pass scans all files and builds a global module map before type-checking. Modules can reference each other regardless of file order. File ordering never affects correctness.
@@ -3366,7 +3366,7 @@ The first pass scans all files and builds a global module map before type-checki
 **Vendor libraries** are source `.fc` files with a namespace declaration, included in the build like any other file:
 
 ```
-fc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
+fcc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
 ```
 
 ### Transpilation
@@ -3408,16 +3408,16 @@ A flag has two independent attributes:
 Flags can be set on the command line with `--flag`:
 
 ```
-fc --flag debug main.fc              # bare: debug is set, no value
-fc --flag os=windows main.fc         # valued: os is set to "windows"
-fc --flag debug --flag os=linux main.fc
+fcc --flag debug main.fc              # bare: debug is set, no value
+fcc --flag os=windows main.fc         # valued: os is set to "windows"
+fcc --flag debug --flag os=linux main.fc
 ```
 
 An empty value after `=` (e.g., `--flag os=`) is a command-line error.
 
 ### Built-in flags
 
-FC auto-detects its host platform at the time the `fc` binary itself is built, using `#ifdef` checks against the C compiler's predefined macros. The values are baked into the binary as static constants — there is no runtime subprocess and detection costs nothing per `fc` invocation. This is the same approach zig, rust, and gcc use to record their host triple. Detection sets the following built-in flags, which may then be used in any `#if` expression:
+FC auto-detects its host platform at the time the `fcc` binary itself is built, using `#ifdef` checks against the C compiler's predefined macros. The values are baked into the binary as static constants — there is no runtime subprocess and detection costs nothing per `fcc` invocation. This is the same approach zig, rust, and gcc use to record their host triple. Detection sets the following built-in flags, which may then be used in any `#if` expression:
 
 | Flag | Typical values |
 |---|---|
@@ -3441,7 +3441,7 @@ Any axis whose value cannot be determined is left unset rather than guessed — 
 **User override:** passing `--flag` on the command line with the same name as a built-in replaces the auto-detected value. This is the mechanism used for cross-compilation:
 
 ```
-fc --flag os=windows --flag env=gnu src.fc    # target MinGW Windows from any host
+fcc --flag os=windows --flag env=gnu src.fc    # target MinGW Windows from any host
 ```
 
 **Disabling auto-detection:** pass `--no-auto-detect` to suppress the compiler probe entirely. With this flag, only explicitly-passed `--flag` arguments are visible to `#if`.

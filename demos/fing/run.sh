@@ -5,17 +5,17 @@
 # and exits 1.
 set -e
 cd "$(dirname "$0")/../.."
-make -s fc
+make -s
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        ./fc demos/fing/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc -o "$OUTDIR/fing.c"
+        ./fcc demos/fing/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc -o "$OUTDIR/fing.c"
         gcc -std=c11 -Wall -Werror -o "$OUTDIR/fing.exe" "$OUTDIR/fing.c" -lws2_32
         "$OUTDIR/fing.exe" "$@"
         ;;
     *)
-        ./fc demos/fing/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc -o /tmp/fing.c
+        ./fcc demos/fing/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc -o /tmp/fing.c
         cc -std=c11 -Wall -Werror -o /tmp/fing-bin /tmp/fing.c
 
         # ICMP sockets need cap_net_raw (same as /usr/bin/ping)

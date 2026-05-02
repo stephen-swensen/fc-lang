@@ -23,12 +23,12 @@ if [ ${#fc_files[@]} -eq 0 ]; then
 fi
 
 # Build compiler if needed
-make -s fc
+make -s
 
 tmpdir=$(mktemp -d /tmp/fc-run.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
 
-./fc "${fc_files[@]}" stdlib/* "${fc_flags[@]}" -o "$tmpdir/out.c"
+./fcc "${fc_files[@]}" stdlib/* "${fc_flags[@]}" -o "$tmpdir/out.c"
 src_dir=$(dirname "${fc_files[0]}")
 cc -std=c11 -Wall -Werror -I "$src_dir" -o "$tmpdir/out" "$tmpdir/out.c" -lm
 set +e

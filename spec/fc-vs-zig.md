@@ -92,7 +92,7 @@ Zig includes:
 - Cross-compilation to dozens of targets out of the box
 - Bundled C/C++ compiler (can compile C code too)
 
-FC has: a Makefile, `./fc input.fc -o output.c`, and `./run.sh`. No package manager, no build system, no cross-compilation support (beyond "use a different C compiler").
+FC has: a Makefile, `./fcc input.fc -o output.c`, and `./run.sh`. No package manager, no build system, no cross-compilation support (beyond "use a different C compiler").
 
 ### 6. Safety Features
 Zig provides:
