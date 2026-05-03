@@ -3026,6 +3026,8 @@ The compiler writes all diagnostic messages to stderr. Each message includes the
 filename.fc:line:col: error: description
 ```
 
+**No warnings.** FC's diagnostic surface has exactly one severity: error. Every diagnostic either fails the build or is not emitted at all. There is no `-W…` family, no opt-in advisory pass, no "unused binding" or "shadowed name" complaint from the compiler. The stance is that warnings either (a) don't fail the build, in which case they accumulate as noise that trains people to stop reading compiler output, or (b) do fail the build, in which case they are errors wearing a different label. Style and code-hygiene questions — unused locals, unused imports, dead module members — are the programmer's call. Future editor / LSP integrations may surface that information advisorily and contextually, but the compiler itself stays out of it.
+
 **Error accumulation** — the compiler reports as many errors as it can in a single invocation rather than stopping at the first error. When the type checker encounters an error, it marks the erroneous expression with a poison type and continues checking the rest of the program. The poison type propagates silently through subsequent operations, suppressing cascading false positives. For example, if `let a = 1 + true` produces a type error, later uses of `a` in arithmetic, function calls, or assignments will not generate additional spurious errors.
 
 Syntax errors (lexer and parser) remain fatal — they prevent the compiler from building a well-formed AST, so compilation stops immediately on the first syntax error.

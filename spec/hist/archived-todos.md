@@ -4,6 +4,22 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Unused-binding warning (retired 2026-05-03)
+
+Originally proposed: an opt-in `-Wunused` for file-scope / module-scope `let` bindings that are declared but never referenced. Surfaced during the wolf-fc subsystem-extraction refactor (2026-04), where hand-rolled shell scripts turned up `tile_area`, `tex_size`, `alt_elevator_tile`, and `hud.draw_vsep` — dead code that survived the original file split. The same check would naturally extend to same-scope shadowing.
+
+**Resolution:** retired as won't-implement, and codified into a broader stance: **FC's diagnostics surface has no warnings — every diagnostic is either an error or it isn't emitted at all.** An unused binding is not wrong in the strict sense; it's a style call that belongs to the programmer. A warning that doesn't fail the build adds noise and trains people to ignore output, and a warning that *does* fail the build is just an error wearing a hat. If we ever want to surface this kind of advisory information, the right channel is an LSP/editor integration where it can be presented contextually without coupling to compilation success. Spec's §Diagnostics and `CLAUDE.md` now document the no-warnings stance.
+
+---
+
+## Cycle diagnostics — shortest call-graph path (retired 2026-05-03)
+
+Originally proposed: when an import or module reference cycle is detected, print the shortest symbol-to-symbol path that forms the cycle, not just the file/module pair at the endpoints. Surfaced during a wolf-fc refactor that accidentally introduced a transitive cycle through `overlay → save → intermission → overlay`; the error named the modules but not the specific edges, and tracing by hand took a few minutes.
+
+**Resolution:** retired. The pain has not recurred since, and the user no longer recalls the specific case as load-bearing. Not worth holding 1.0 for. Revisit if the same shape of confusion shows up again under real use.
+
+---
+
 ## Const-expr propagation through module-level name references (resolved 2026-04-23)
 
 Originally: module-level `let` initializers required pure literals for element expressions. The 2026-04 loosening (commit `a8c1221`) accepted array literals, `some(...)`, and variant constructors as initializers, but elements still had to be literals. Named constants like
