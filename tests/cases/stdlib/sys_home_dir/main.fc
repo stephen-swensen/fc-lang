@@ -1,0 +1,12 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    // HOME is set on POSIX shells, USERPROFILE on Windows; sys.home_dir checks
+    // both. CI environments occasionally clear HOME — if that becomes a real
+    // problem we'd swap to a soft check, but every environment we ship to has
+    // it set.
+    match sys.home_dir() with
+    | none -> return 1
+    | some(h) -> assert(h.len > 0)
+
+    0

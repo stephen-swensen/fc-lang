@@ -1,0 +1,10 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    let pid = sys.get_pid()
+    assert(pid > 0)
+
+    // Same process must report the same pid on repeat calls.
+    assert(sys.get_pid() == pid)
+
+    0

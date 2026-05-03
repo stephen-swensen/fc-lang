@@ -1,0 +1,19 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    let t0 = sys.time()
+    // Time should be a positive ms-since-epoch value (well past 1970).
+    assert(t0 > 0i64)
+
+    // Sleep at least 50ms, then re-check the clock.
+    sys.sleep(50i64)
+    let t1 = sys.time()
+
+    let delta = t1 - t0
+    // Clock granularity differs by platform (Win32 Sleep is ~15.6ms by default,
+    // POSIX nanosleep is ms-accurate). 30ms is the floor that won't false-fail;
+    // 10s is a generous ceiling that catches a hung sleep.
+    assert(delta >= 30i64)
+    assert(delta < 10000i64)
+
+    0

@@ -4,6 +4,41 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Stdlib test coverage — std::sys and std::io gaps (resolved 2026-05-03)
+
+Originally: from the 2026-04-20 stdlib audit, `std::sys` had zero automated test coverage (`env`, `time`, `sleep`, `get_pid`, `temp_dir`, `home_dir`, `exit`) and `std::io` was missing tests for `read_all`, `read_char`, `exists`, `can_read`, `can_write`. The code existed and was being used by real programs (wolf-fc, demos), but nothing in the suite asserted against it.
+
+**Resolution:** added nine multi-file tests under `tests/cases/stdlib/`:
+
+- `sys_env` — happy path on `PATH`; negative path on a name guaranteed-unset.
+- `sys_time_sleep` — covers `time` and `sleep` together: snapshot clock, sleep 50ms, snapshot again, assert delta is in `[30ms, 10s)` (range tuned for Win32 Sleep's ~15.6ms granularity floor).
+- `sys_get_pid` — pid > 0 and stable across calls within the same process.
+- `sys_temp_dir` — returns some, path is non-empty, and is actually a writable directory (round-trips a probe file).
+- `sys_home_dir` — returns some with non-empty path.
+- `sys_exit` — calls `sys.exit(42)`, expected exit code 42; an `assert(false)` guards the unreachable path so a no-op `exit` would fail loudly instead of silently returning 0.
+- `io_read_all` — round-trip a known payload, byte-compare, free; missing path returns none.
+- `io_read_char` — read two bytes one at a time, then EOF returns none.
+- `io_exists_access` — missing path: all three predicates false; existing file: all true; existing directory: `exists` true.
+
+All run on gcc and clang; full suite 1250 tests passing (was 1241). No stdlib code changes were needed — the audit was right that the code worked, just unverified. Both `TODO.md` bullets are now closed and the file is empty of stdlib items.
+
+---
+
+## Stdlib expansion bullets — sprintf, io_error, bit utils, encodings (deferred past 1.0, 2026-05-03)
+
+The 2026-04-20 stdlib audit produced four "candidate work" bullets that lived on `TODO.md`: (1) `sprintf`-style formatted output beyond string interpolation; (2) an `io_error` union or thread-local `last_errno` so `io`/`sys`/`net` failures don't lose `errno`; (3) bit utilities (`popcount`, `leading_zeros`, `trailing_zeros`, `rotl`/`rotr`, `byteswap`); (4) encoding helpers (`base64`, `hex`, URL).
+
+**Resolution:** deferred past 1.0. None of these block a release; all are feature growth dressed up as gaps.
+
+- **`sprintf`-style formatted output** — string interpolation already covers the everyday case and is type-checked at compile time, which `snprintf` will never be. Code that needs raw `snprintf` can `extern` it directly today. Pure feature growth.
+- **`io_error` / `last_errno`** — this is API design, not a missing feature. The current `bool` / `option` return shape works for everyday use; swapping it in later is a breaking change either way. Doing the redesign under release pressure to "make 1.0 feel complete" is the wrong reason. Ship the simple model; revisit when a real consumer demands actionable errno.
+- **Bit utilities** — half a dozen tiny wrappers around `__builtin_popcount` etc. Trivial to add at any point post-1.0; nobody is currently blocked on them.
+- **Encoding helpers** — application-level conveniences, not part of the language-runtime contract. Belong in user libraries or a 1.x stdlib expansion.
+
+The two stdlib items kept on `TODO.md` are pure test-debt against code that already exists and ships (`std::sys` and the `std::io` gaps from the same audit) — those are real release-confidence blockers; these four are not.
+
+---
+
 ## Unused-binding warning (retired 2026-05-03)
 
 Originally proposed: an opt-in `-Wunused` for file-scope / module-scope `let` bindings that are declared but never referenced. Surfaced during the wolf-fc subsystem-extraction refactor (2026-04), where hand-rolled shell scripts turned up `tile_area`, `tex_size`, `alt_elevator_tile`, and `hud.draw_vsep` — dead code that survived the original file split. The same check would naturally extend to same-scope shadowing.

@@ -1,0 +1,34 @@
+import io from std::
+import sys from std::
+
+let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_exists_access.txt"
+    let missing = "%s{tmp}/fc_test_exists_access_does_not_exist.txt"
+
+    // Clean up any leftover from a prior run.
+    io.remove(path)
+
+    // Missing path: every predicate returns false.
+    assert(io.exists(missing) == false)
+    assert(io.can_read(missing) == false)
+    assert(io.can_write(missing) == false)
+
+    // Create a regular file.
+    match io.open(path, "w") with
+    | none -> return 1
+    | some(f) ->
+        io.write("x", f)
+        io.close(f)
+
+    // Existing file: exists / can_read / can_write all true. Newly created
+    // files are owned by the caller, so write permission is implied.
+    assert(io.exists(path))
+    assert(io.can_read(path))
+    assert(io.can_write(path))
+
+    // exists also covers directories, not just regular files.
+    assert(io.exists(tmp))
+
+    io.remove(path)
+    0

@@ -1,0 +1,8 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    sys.exit(42)
+    // Unreachable: exit terminates the process. If control returns here the
+    // 0 return would mask the bug, so abort instead.
+    assert(false)
+    0

@@ -1,0 +1,12 @@
+import sys from std::
+
+let main = (args: str[]) ->
+    // PATH is set by virtually every shell on POSIX and Windows.
+    match sys.env("PATH") with
+    | none -> return 1
+    | some(v) -> assert(v.len > 0)
+
+    // A name extremely unlikely to exist must return none.
+    assert(sys.env("FC_TEST_DEFINITELY_NOT_SET_xyzzy_42").is_none)
+
+    0

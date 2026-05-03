@@ -1,0 +1,33 @@
+import io from std::
+import sys from std::
+
+let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = "%s{tmp}/fc_test_read_char.txt"
+
+    // Write a tiny known payload.
+    match io.open(path, "w") with
+    | none -> return 1
+    | some(wf) ->
+        io.write("ab", wf)
+        io.close(wf)
+
+    match io.open(path, "r") with
+    | none -> return 2
+    | some(rf) ->
+        // Two bytes available, then EOF.
+        match io.read_char(rf) with
+        | none -> return 3
+        | some(c) -> assert(c == 'a')
+
+        match io.read_char(rf) with
+        | none -> return 4
+        | some(c) -> assert(c == 'b')
+
+        // Past end → none.
+        assert(io.read_char(rf).is_none)
+
+        io.close(rf)
+
+    io.remove(path)
+    0
