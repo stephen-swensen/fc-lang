@@ -22,13 +22,17 @@ if [ ${#fc_files[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Build compiler if needed
+# Build compiler if needed. The binary path is per-OS (build/linux/, build/
+# windows/, ...), so we ask Make for it instead of hard-coding it — that
+# keeps a shared source tree across e.g. WSL + MSYS2 from cross-execing
+# each other's binaries.
 make -s
+FCC="$(make -s print-bin)"
 
 tmpdir=$(mktemp -d /tmp/fc-run.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
 
-./fcc "${fc_files[@]}" stdlib/* "${fc_flags[@]}" -o "$tmpdir/out.c"
+"$FCC" "${fc_files[@]}" stdlib/* "${fc_flags[@]}" -o "$tmpdir/out.c"
 src_dir=$(dirname "${fc_files[0]}")
 cc -std=c11 -Wall -Werror -I "$src_dir" -o "$tmpdir/out" "$tmpdir/out.c" -lm
 set +e

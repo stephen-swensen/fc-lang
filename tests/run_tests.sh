@@ -2,7 +2,9 @@
 set -e
 ulimit -c 0
 
-FCC="./fcc"
+# Per-OS build subdirectory: build/linux/, build/windows/, ... — ask Make
+# rather than replicate the OS-detection logic here.
+FCC="$(make -s print-bin)"
 CC="${CC:-cc}"
 TESTDIR="tests/cases"
 TMPDIR=$(mktemp -d)

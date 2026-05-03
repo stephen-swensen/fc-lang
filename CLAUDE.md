@@ -8,15 +8,15 @@ This is a compiler project for **FC** (version 1.0-draft), a systems programming
 
 ## Build & Run
 
-- **`make`** — Release build (`-O2`). Produces `./fcc` in the project root (`fcc.exe` on Windows).
+- **`make`** — Release build (`-O2`). Produces `fcc` at `./build/<os>/fcc` (where `<os>` is `linux`/`windows`/`macos`; `.exe` suffix on Windows). The per-OS subdirectory keeps a shared source tree across two operating systems (e.g. WSL + MSYS2) from cross-execing each other's binaries.
+- **`make print-bin`** — Echo the per-OS binary path. `run.sh`, `tests/run_tests*.sh`, and `demos/*/run.sh` use this instead of replicating OS detection.
 - **`make dev`** — Clean rebuild at `-O0` for clearer diagnostics during dev iteration. Use this when assertion failures, debugger sessions, or sanitizer output need to be readable; `-O2` builds optimize in ways that can muddle line attribution.
 - **`make check`** / **`make test-all`** — Run all tests with both gcc and clang. `check` is the GNU-canonical alias.
 - **`make test-gcc`** / **`make test-clang`** — Test with a single compiler.
 - **`make test-gcc FILTER=pattern`** — Run only tests matching a pattern (e.g., `FILTER=stdlib/data`, `FILTER=closures`).
 - **`make install`** / **`make uninstall`** — Install `fcc` to `$(bindir)` and stdlib to `$(datadir)/fcc/stdlib/` per GNU conventions. Defaults to `PREFIX=/usr/local`; override `PREFIX`, `DESTDIR`, `bindir`, or `datadir` as needed.
-- **`make clean`** — Remove build artifacts.
+- **`make clean`** — Remove `build/` (every OS subdirectory).
 - **`make help`** — Print the full target reference.
-- **`./fcc input.fc -o output.c`** — Compile a single FC file to C.
 - **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
 
 **Optimization (default = `-O2`):** plain `make` produces a release-optimized binary. Use `make dev` for the dev-iteration loop (`-O0`, clearer diagnostics), or override with e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`. Tests default to `-O0` for the transpiled C; `make test-gcc-O2` / `test-clang-O2` / `test-all-O2` re-run the suite at `-O2` to catch optimizer-surfaced UB. The compiler-build OPT and the test-C OPT are independent axes. `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes — `make dev` takes care of this for you.

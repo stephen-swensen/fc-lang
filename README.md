@@ -34,7 +34,9 @@ make dev          # clean rebuild at -O0 for clearer diagnostics during developm
 make clean        # remove build artifacts
 ```
 
-This produces the `fcc` binary in the project root (`fcc.exe` on Windows). `make` defaults to `-O2`; override with `OPT=` (e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`). `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
+This produces the `fcc` binary at `./build/<os>/fcc` (where `<os>` is `linux`, `windows`, or `macos`; `fcc.exe` on Windows). The per-OS subdirectory lets a shared source tree across two operating systems — e.g. WSL Linux + MSYS2 on the same Windows box accessing the WSL filesystem via `\\wsl.localhost\...` — hold both binaries without one stomping the other. `make print-bin` echoes the path for scripts.
+
+`make` defaults to `-O2`; override with `OPT=` (e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`). `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
 
 ## Installing
 
@@ -59,18 +61,22 @@ The default install layout (with `PREFIX=/usr/local`):
 
 ## Usage
 
+After `make install`, `fcc` is on `$PATH`:
+
 ```sh
-./fcc input.fc                # compile to input.c
-./fcc input.fc -o output.c    # compile to a specific output file
+fcc input.fc                # compile to input.c
+fcc input.fc -o output.c    # compile to a specific output file
 ```
 
 The compiler transpiles `.fc` source to a `.c` file. To build and run the result:
 
 ```sh
-./fcc hello.fc -o hello.c
+fcc hello.fc -o hello.c
 cc -std=c11 -o hello hello.c
 ./hello
 ```
+
+From the source tree before installing, run the just-built binary with `$(make -s print-bin) input.fc`, or use `./run.sh` to compile and execute in one shot (see Quick Run below).
 
 ## Quick Run
 

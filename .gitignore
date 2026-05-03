@@ -1,9 +1,9 @@
-# Compiler binary
-fcc
-*.exe
+# Build output (binary, object files, all OS subdirectories)
+/build/
 
-# Object files
+# Stale in-tree artifacts (older builds put these alongside sources)
 *.o
+*.exe
 
 # Default C compiler output
 a.out

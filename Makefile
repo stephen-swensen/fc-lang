@@ -13,31 +13,64 @@ datadir     = $(PREFIX)/share
 # changes.
 OPT ?= -O2
 
-# Platform-specific binary suffix. On Windows (incl. MSYS2/UCRT64), $(OS) is
-# set to "Windows_NT" and we want the .exe extension.
-ifeq ($(OS),Windows_NT)
+# Platform detection. Detect Windows two ways: $(OS) is "Windows_NT" in most
+# shells, but some MSYS2/MINGW/UCRT setups don't propagate it to make — fall
+# back to looking for "_NT" anywhere in `uname -s` (which on every MSYS2-
+# flavour shell returns something like MSYS_NT / MINGW64_NT / UCRT64_NT and
+# never matches Linux/Darwin/*BSD). Either match flips on the .exe suffix.
+UNAME_S    := $(shell uname -s 2>/dev/null)
+IS_WINDOWS := $(if $(filter Windows_NT,$(OS)),1,)$(if $(findstring _NT,$(UNAME_S)),1,)
+
+ifneq ($(IS_WINDOWS),)
     EXE := .exe
 else
     EXE :=
 endif
 
+# Per-OS build subdirectory. Lets a single source tree shared across two
+# operating systems (e.g. WSL Linux + MSYS2 on the same Windows box,
+# accessing the WSL filesystem via //wsl.localhost/...) hold both binaries
+# without one stomping the other's mtimes — without this, `make` on the
+# second OS sees an "up-to-date" binary built for the first OS and refuses
+# to rebuild, then the wrong-arch ./fcc dies with "Exec format error".
+ifneq ($(IS_WINDOWS),)
+    BUILD_OS := windows
+else ifeq ($(UNAME_S),Darwin)
+    BUILD_OS := macos
+else ifeq ($(UNAME_S),Linux)
+    BUILD_OS := linux
+else
+    BUILD_OS := $(UNAME_S)
+endif
+BUILD_DIR := build/$(BUILD_OS)
+
 CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT)
 
-SRCS = $(wildcard src/*.c)
-HDRS = $(wildcard src/*.h)
-OBJS = $(SRCS:.c=.o)
-BIN  = fcc$(EXE)
+SRCS     := $(wildcard src/*.c)
+HDRS     := $(wildcard src/*.h)
+OBJS     := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRCS))
+BIN_NAME := fcc$(EXE)
+BIN      := $(BUILD_DIR)/$(BIN_NAME)
 
 
 # === Build ===
 
 all: $(BIN)
 
+# Echo the binary path. run.sh, demos/*/run.sh, and tests/run_tests*.sh use
+# this so they don't have to replicate the OS-detection logic — `make
+# print-bin` returns build/<os>/fcc[.exe] for whichever OS Make ran on.
+print-bin:
+	@echo $(BIN)
+
 $(BIN): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-src/%.o: src/%.c $(HDRS)
+$(BUILD_DIR)/%.o: src/%.c $(HDRS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR):
+	@mkdir -p $@
 
 # Dev build: clean rebuild at -O0. Clean is required because Make doesn't track
 # CFLAGS changes, so a stale -O2 .o file would otherwise be reused.
@@ -45,20 +78,23 @@ dev:
 	@$(MAKE) clean
 	@$(MAKE) OPT=-O0
 
+# Removes every OS subdirectory under build/. Also sweeps any stale src/*.o
+# from older in-tree builds (pre per-OS subdirectory layout).
 clean:
-	rm -f src/*.o $(BIN)
+	rm -rf build
+	rm -f src/*.o
 
 
 # === Install / Uninstall (GNU coding standards) ===
 
 install: $(BIN)
 	install -d $(DESTDIR)$(bindir)
-	install -m 755 $(BIN) $(DESTDIR)$(bindir)/$(BIN)
+	install -m 755 $(BIN) $(DESTDIR)$(bindir)/$(BIN_NAME)
 	install -d $(DESTDIR)$(datadir)/fcc/stdlib
 	install -m 644 stdlib/*.fc $(DESTDIR)$(datadir)/fcc/stdlib/
 
 uninstall:
-	rm -f $(DESTDIR)$(bindir)/$(BIN)
+	rm -f $(DESTDIR)$(bindir)/$(BIN_NAME)
 	rm -rf $(DESTDIR)$(datadir)/fcc
 
 
@@ -133,10 +169,11 @@ help:
 	@echo "  make              Build $(BIN) (release, OPT=-O2)"
 	@echo "  make dev          Clean rebuild at -O0 for clearer diagnostics"
 	@echo "  make OPT=-O3      Build at a specific opt level (also: -O0, -O1, etc.)"
-	@echo "  make clean        Remove build artifacts"
+	@echo "  make print-bin    Echo the per-OS binary path (for run.sh / scripts)"
+	@echo "  make clean        Remove build/ (every OS subdirectory)"
 	@echo ""
 	@echo "Install (PREFIX=$(PREFIX) by default):"
-	@echo "  make install      Install $(BIN) to \$$bindir and stdlib to \$$datadir/fcc/stdlib"
+	@echo "  make install      Install $(BIN_NAME) to \$$bindir and stdlib to \$$datadir/fcc/stdlib"
 	@echo "  make uninstall    Remove installed binary and stdlib"
 	@echo "  Override PREFIX, DESTDIR, bindir, or datadir to customize install paths."
 	@echo ""
@@ -151,4 +188,4 @@ help:
 
 .PHONY: all dev clean install uninstall check test test-parallel \
         test-gcc test-clang test-gcc-O2 test-clang-O2 \
-        test-all test-all-O2 help
+        test-all test-all-O2 help print-bin

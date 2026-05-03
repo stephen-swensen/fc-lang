@@ -7,6 +7,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 make -s
+FCC="$(make -s print-bin)"
 
 SRCS="demos/shared/sdl2.fc demos/fasteroids/main.fc \
       stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/math.fc stdlib/random.fc"
@@ -14,14 +15,14 @@ SRCS="demos/shared/sdl2.fc demos/fasteroids/main.fc \
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        ./fcc $SRCS -o "$OUTDIR/fasteroids.c"
+        "$FCC" $SRCS -o "$OUTDIR/fasteroids.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fasteroids.exe" "$OUTDIR/fasteroids.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fasteroids..."
         "$OUTDIR/fasteroids.exe"
         echo "[exit: $?]"
         ;;
     *)
-        ./fcc $SRCS -o /tmp/fasteroids.c
+        "$FCC" $SRCS -o /tmp/fasteroids.c
         cc -std=c11 -Wall -Werror -o /tmp/fasteroids-bin /tmp/fasteroids.c -lSDL2 -lm
         echo "Running Fasteroids..."
         /tmp/fasteroids-bin
