@@ -2,7 +2,7 @@
 
 ## Feature Completeness Overview
 
-**Zig is substantially more feature-complete as a production language.** FC is a well-designed 1.0-draft with clear opinions and a focused scope, but it covers less surface area. That said, FC has some genuine design wins over Zig in specific areas.
+**Zig is substantially more feature-complete as a production language.** FC is a well-designed 1.0 with clear opinions and a focused scope, but it covers less surface area. That said, FC has some genuine design wins over Zig in specific areas.
 
 ---
 
@@ -117,7 +117,7 @@ Zig has `packed struct` for exact bit layout, `@bitCast`, `@alignCast`, and cont
 Zig has `test "name" { ... }` blocks in the source, run with `zig test`. Tests live alongside code and have access to the testing allocator for leak checking. FC tests are separate `.fc` files that rely on `assert` + exit codes.
 
 ### 11. Ecosystem & Community
-Zig has a substantial package ecosystem, corporate backing (Zig Software Foundation), real-world production users (Uber, Tigerbeetle), and thousands of contributors. FC is a solo project in draft stage.
+Zig has a substantial package ecosystem, corporate backing (Zig Software Foundation), real-world production users (Uber, Tigerbeetle), and thousands of contributors. FC is a solo project at its 1.0 release.
 
 ---
 

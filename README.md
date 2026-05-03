@@ -22,7 +22,19 @@ This is disclosed up front because FC is also intended as a demonstration of wha
 
 ## Status
 
-The compiler implements all features described in the language specification (v1.0-draft). The spec and implementation are validated by a comprehensive test suite.
+**FC 1.0.0.** The compiler implements all features described in the language specification, validated by 1250+ tests passing on both gcc and clang across Linux and Windows (MSYS2/UCRT64).
+
+The strongest evidence that the language is real, not just self-tested, is **[wolf-fc](https://github.com/stephen-swensen/wolf-fc)** — a ~14,000-line port of id Software's *Wolfenstein 3D* written entirely in FC. It exercises a meaningful slice of the language end-to-end: a real game loop, SDL bindings via `extern`, manual `alloc`/`free` with `defer`, modules and namespaces, structs and unions, slices, options, string interpolation, closures, and five of the seven stdlib modules (`io`, `sys`, `math`, `random`, `text`). If FC could not handle a non-trivial program, wolf-fc would not run; it does, on both Linux and Windows.
+
+Smaller standalone programs in [`demos/`](demos/) cover the rest of the surface:
+
+- **`fasteroids`** (~1300 lines) — vector-style Asteroids clone, SDL2.
+- **`face-invaders`** (~1500 lines) — Space Invaders clone, SDL2.
+- **`fibbles`** (~640 lines) — Snake/Nibbles clone, SDL2 graphics + audio.
+- **`fing`** (~160 lines) — `ping` clone, exercises `std::net` (raw ICMP).
+- **`furl`** (~220 lines) — `curl`-style HTTP client, exercises `std::net` (TCP).
+
+`fing` and `furl` cover `std::net`, which wolf-fc doesn't touch. The only stdlib module not exercised by a demo or shipping program is `std::data`, which has its own coverage in `tests/cases/stdlib/`.
 
 ## Building
 
@@ -84,12 +96,12 @@ From the source tree before installing, run the just-built binary with `$(make -
 `fcc --version` (and the short form `fcc -V`) prints three lines: a SemVer-prefixed identifier with the commit hash and commit date, the auto-detected target triple, and the build environment.
 
 ```
-fcc 1.0.0-draft (abcdef012345 26.05.02)
+fcc 1.0.0 (abcdef012345 26.05.03)
 Target: linux x86_64 gnu
 Built: 2026-05-03 with -O2 (cc 13.3.0)
 ```
 
-The `1.0.0-draft` prefix is hand-maintained in the `VERSION` file at the repo root. Everything in the parentheses is derived at build time from `git`: a 12-character commit hash, the commit date in UTC `yy.mm.dd` form, and a `-dirty` suffix when the working tree has uncommitted changes (the resulting binary is intentionally not commit-stable in that case). Outside a git checkout (tarball builds) the parenthetical falls back to `(nogit unknown)`.
+The `1.0.0` prefix is hand-maintained in the `VERSION` file at the repo root. Everything in the parentheses is derived at build time from `git`: a 12-character commit hash, the commit date in UTC `yy.mm.dd` form, and a `-dirty` suffix when the working tree has uncommitted changes (the resulting binary is intentionally not commit-stable in that case). Outside a git checkout (tarball builds) the parenthetical falls back to `(nogit unknown)`.
 
 ## Quick Run
 
