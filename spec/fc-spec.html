@@ -2996,6 +2996,28 @@ All source files are compiled together as a single translation unit — there is
 cc -std=c11 -o myapp main.c
 ```
 
+### Version
+
+`fcc --version` (or the short form `fcc -V`) prints a three-line block: a SemVer-prefixed identifier with the source commit, the auto-detected target triple, and the build environment. Either flag short-circuits all other arg processing — `fcc --version foo.fc` prints version and exits without attempting to compile.
+
+```
+fcc 1.0.0-draft (abcdef012345 26.05.02)
+Target: linux x86_64 gnu
+Built: 2026-05-03 with -O2 (cc 13.3.0)
+```
+
+The first line is the canonical version string. Its components:
+
+- **SemVer prefix** (`1.0.0-draft`) — hand-maintained in the project's `VERSION` file. Bumped on intentional releases.
+- **Commit hash** — first 12 characters of the source commit's SHA. Long enough to be collision-resistant in practice while remaining quotable in bug reports.
+- **Commit date** — `yy.mm.dd` form in UTC, derived from the commit's authored timestamp. UTC-normalisation means two builds of the same commit on different timezones produce identical version strings.
+- **`-dirty` suffix** (when present) — appended to the date when the working tree had uncommitted changes at build time, indicating the resulting binary is not commit-stable.
+- **Tarball fallback** — outside a git checkout the parenthetical degrades to `(nogit unknown)` rather than producing a half-broken hash.
+
+The `Target:` line shows the same `os` / `arch` / `env` values that platform auto-detection bakes into the binary as built-in `#flag` values. Unset axes (e.g. `env` on macOS) are omitted.
+
+The `Built:` line records the local build date (UTC), the optimisation level (`OPT` Makefile variable), and the host C compiler with its version.
+
 ### Diagnostics
 
 The compiler writes all diagnostic messages to stderr. Each message includes the source location and a description:

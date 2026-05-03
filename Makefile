@@ -44,13 +44,32 @@ else
 endif
 BUILD_DIR := build/$(BUILD_OS)
 
-CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT)
+# === Version components ===
+# Hand-maintained SemVer prefix. Bump on intentional releases.
+FCC_VERSION_BASE := $(shell cat VERSION 2>/dev/null || echo "0.0.0-unknown")
+
+# Git metadata in UTC. Each falls back independently so a partial git env
+# (shallow clone, missing tags) still produces a sensible version. The
+# dirty check first verifies we're in a checkout, otherwise tarball builds
+# would falsely flag dirty when `git diff` errors out.
+FCC_GIT_HASH  := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)
+FCC_GIT_DATE  := $(shell TZ=UTC git log -1 --format=%cd --date=format:%y.%m.%d 2>/dev/null || echo unknown)
+FCC_GIT_DIRTY := $(shell (git rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git diff --quiet HEAD 2>/dev/null) && echo "-dirty")
+
+# Build environment.
+FCC_BUILD_DATE := $(shell date -u +%Y-%m-%d)
+FCC_BUILD_CC   := $(CC) $(shell $(CC) -dumpfullversion 2>/dev/null || $(CC) -dumpversion 2>/dev/null || echo unknown)
+
+# -I$(BUILD_DIR) so generated fcc_version.h is on the include path.
+CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT) -I$(BUILD_DIR)
 
 SRCS     := $(wildcard src/*.c)
 HDRS     := $(wildcard src/*.h)
 OBJS     := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 BIN_NAME := fcc$(EXE)
 BIN      := $(BUILD_DIR)/$(BIN_NAME)
+
+GEN_VERSION_H := $(BUILD_DIR)/fcc_version.h
 
 
 # === Build ===
@@ -68,6 +87,27 @@ $(BIN): $(OBJS)
 
 $(BUILD_DIR)/%.o: src/%.c $(HDRS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Generated version header — depends on FORCE so it re-evaluates every
+# `make` invocation, but cmp-and-replace means we only mv it into place
+# when contents actually change. version.o is the only object that
+# depends on it, so a version-only churn is a one-file rebuild.
+.PHONY: FORCE
+FORCE:
+
+$(GEN_VERSION_H): FORCE | $(BUILD_DIR)
+	@{ \
+	    printf '#define FCC_VERSION_BASE "%s"\n' "$(FCC_VERSION_BASE)"; \
+	    printf '#define FCC_GIT_HASH "%s"\n'     "$(FCC_GIT_HASH)"; \
+	    printf '#define FCC_GIT_DATE "%s"\n'     "$(FCC_GIT_DATE)"; \
+	    printf '#define FCC_GIT_DIRTY "%s"\n'    "$(FCC_GIT_DIRTY)"; \
+	    printf '#define FCC_BUILD_DATE "%s"\n'   "$(FCC_BUILD_DATE)"; \
+	    printf '#define FCC_BUILD_CC "%s"\n'     "$(FCC_BUILD_CC)"; \
+	    printf '#define FCC_BUILD_OPT "%s"\n'    "$(OPT)"; \
+	} > $@.tmp
+	@if cmp -s $@.tmp $@ 2>/dev/null; then rm $@.tmp; else mv $@.tmp $@; fi
+
+$(BUILD_DIR)/version.o: $(GEN_VERSION_H)
 
 $(BUILD_DIR):
 	@mkdir -p $@

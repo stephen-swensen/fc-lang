@@ -7,6 +7,7 @@
 #include "monomorph.h"
 #include "diag.h"
 #include "platform.h"
+#include "version.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,15 @@ static char *change_extension(const char *path, const char *new_ext) {
 }
 
 int main(int argc, char **argv) {
+    /* Scan for --version / -V before any other processing so it short-
+     * circuits cleanly and works regardless of other arg ordering. */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            print_version();
+            return 0;
+        }
+    }
+
     if (argc < 2) {
         fprintf(stderr, "usage: fcc <input.fc> [input2.fc ...] [-o output.c]\n");
         return 1;

@@ -59,3 +59,43 @@ void platform_detect_flags(Flag **flags, int *count, int *cap) {
     add_static(flags, count, cap, "env", "gnu");
 #endif
 }
+
+const char *platform_get_os(void) {
+#if defined(__linux__)
+    return "linux";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__FreeBSD__)
+    return "freebsd";
+#elif defined(_WIN32)
+    return "windows";
+#else
+    return NULL;
+#endif
+}
+
+const char *platform_get_arch(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return "aarch64";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "arm";
+#elif defined(__riscv)
+    return "riscv64";
+#elif defined(__wasm32__)
+    return "wasm32";
+#else
+    return NULL;
+#endif
+}
+
+const char *platform_get_env(void) {
+#if defined(__linux__)
+    return "gnu";
+#elif defined(_WIN32) && (defined(__MINGW32__) || defined(__MINGW64__))
+    return "gnu";
+#else
+    return NULL;
+#endif
+}

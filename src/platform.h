@@ -26,4 +26,10 @@
  */
 void platform_detect_flags(Flag **flags, int *count, int *cap);
 
+/* Same #ifdef-derived values exposed individually, for `fcc --version` and
+ * other introspection. NULL when an axis is not determinable on the host. */
+const char *platform_get_os(void);
+const char *platform_get_arch(void);
+const char *platform_get_env(void);
+
 #endif

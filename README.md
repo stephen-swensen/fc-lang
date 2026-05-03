@@ -66,6 +66,7 @@ After `make install`, `fcc` is on `$PATH`:
 ```sh
 fcc input.fc                # compile to input.c
 fcc input.fc -o output.c    # compile to a specific output file
+fcc --version               # or -V — print version and build info
 ```
 
 The compiler transpiles `.fc` source to a `.c` file. To build and run the result:
@@ -77,6 +78,18 @@ cc -std=c11 -o hello hello.c
 ```
 
 From the source tree before installing, run the just-built binary with `$(make -s print-bin) input.fc`, or use `./run.sh` to compile and execute in one shot (see Quick Run below).
+
+### Version output
+
+`fcc --version` (and the short form `fcc -V`) prints three lines: a SemVer-prefixed identifier with the commit hash and commit date, the auto-detected target triple, and the build environment.
+
+```
+fcc 1.0.0-draft (abcdef012345 26.05.02)
+Target: linux x86_64 gnu
+Built: 2026-05-03 with -O2 (cc 13.3.0)
+```
+
+The `1.0.0-draft` prefix is hand-maintained in the `VERSION` file at the repo root. Everything in the parentheses is derived at build time from `git`: a 12-character commit hash, the commit date in UTC `yy.mm.dd` form, and a `-dirty` suffix when the working tree has uncommitted changes (the resulting binary is intentionally not commit-stable in that case). Outside a git checkout (tarball builds) the parenthetical falls back to `(nogit unknown)`.
 
 ## Quick Run
 
