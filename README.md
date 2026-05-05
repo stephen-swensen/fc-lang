@@ -22,7 +22,7 @@ This is disclosed up front because FC is also intended as a demonstration of wha
 
 ## Status
 
-FC is at version 1.0.0-rc1. The compiler implements the features in the language specification, with 1250+ tests passing on gcc and clang across Linux and Windows (MSYS2/UCRT64). Breaking changes are still possible during the release-candidate phase as the surface settles.
+FC is at version 1.0.0-rc.1. The compiler implements the features in the language specification, with 1250+ tests passing on gcc and clang across Linux and Windows (MSYS2/UCRT64). Breaking changes are still possible during the release-candidate phase as the surface settles.
 
 Beyond the test suite, a few real programs exercise the language and stdlib in practice. The largest is **[wolf-fc](https://github.com/stephen-swensen/wolf-fc)**, a ~14,000-line port of id Software's *Wolfenstein 3D* written in FC. It uses a game loop, SDL bindings via `extern`, manual `alloc`/`free` with `defer`, modules and namespaces, structs and unions, slices, options, string interpolation, closures, and five of the seven stdlib modules (`io`, `sys`, `math`, `random`, `text`). It runs on Linux and Windows.
 
@@ -96,12 +96,12 @@ From the source tree before installing, run the just-built binary with `$(make -
 `fcc --version` (and the short form `fcc -V`) prints three lines: a SemVer-prefixed identifier with the commit hash and commit date, the auto-detected target triple, and the build environment.
 
 ```
-fcc 1.0.0-rc1 (abcdef012345 26.05.03)
+fcc 1.0.0-rc.1 (abcdef012345 26.05.03)
 Target: linux x86_64 gnu
 Built: 2026-05-03 with -O2 (cc 13.3.0)
 ```
 
-The `1.0.0-rc1` prefix is hand-maintained in the `VERSION` file at the repo root. Everything in the parentheses is derived at build time from `git`: a 12-character commit hash, the commit date in UTC `yy.mm.dd` form, and a `-dirty` suffix when the working tree has uncommitted changes (the resulting binary is intentionally not commit-stable in that case). Outside a git checkout (tarball builds) the parenthetical falls back to `(nogit unknown)`.
+The `1.0.0-rc.1` prefix is hand-maintained in the `VERSION` file at the repo root. Everything in the parentheses is derived at build time from `git`: a 12-character commit hash, the commit date in UTC `yy.mm.dd` form, and a `-dirty` suffix when the working tree has uncommitted changes (the resulting binary is intentionally not commit-stable in that case). Outside a git checkout (tarball builds) the parenthetical falls back to `(nogit unknown)`.
 
 ## Quick Run
 
