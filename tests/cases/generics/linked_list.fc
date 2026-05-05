@@ -21,7 +21,7 @@ module node =
             n->next = node.map(ptr->next, f)
             some(n)
 
-    let drop = (head: node<'a>*?) ->
+    let destroy = (head: node<'a>*?) ->
         let mut current = head
         loop
             match current with
@@ -50,8 +50,8 @@ let main = (args: str[]) ->
     let dv = doubled!->value    // 6
 
     // clean up
-    node.drop(list)
-    node.drop(doubled)
+    node.destroy(list)
+    node.destroy(doubled)
 
     // 3 + 2 + 1 + 6 = 12
     assert(v3 + v2 + v1 + dv == 12)

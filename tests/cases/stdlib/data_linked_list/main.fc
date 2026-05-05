@@ -48,20 +48,20 @@ let main = (args: str[]) ->
     assert(r == 10)
     let empty = linked_list.make<int32>()
     assert(linked_list.try_reduce(empty, (a: int32, b: int32) -> a + b).is_none)
-    linked_list.drop(empty)
+    linked_list.destroy(empty)
 
     // map
     let doubled = linked_list.map(l, (x: int32) -> x * 2)
     assert(linked_list.first(doubled) == 2)
     assert(linked_list.last(doubled) == 8)
     assert(linked_list.len(doubled) == 4)
-    linked_list.drop(doubled)
+    linked_list.destroy(doubled)
 
     // filter
     let big = linked_list.filter(l, (x: int32) -> x > 2)
     assert(linked_list.len(big) == 2)
     assert(linked_list.first(big) == 3)
-    linked_list.drop(big)
+    linked_list.destroy(big)
 
     // any / all
     assert(linked_list.any(l, (x: int32) -> x == 3))
@@ -95,7 +95,7 @@ let main = (args: str[]) ->
     let l2 = linked_list.copy(l)
     assert(linked_list.len(l2) == 2)
     assert(linked_list.first(l2) == 2)
-    linked_list.drop(l2)
+    linked_list.destroy(l2)
 
     // to_slice
     let sl = linked_list.to_slice(l)
@@ -162,5 +162,5 @@ let main = (args: str[]) ->
     assert(ai_s[1] == 9) // 8 + 1
     free(ai_s)
 
-    linked_list.drop(l)
+    linked_list.destroy(l)
     0

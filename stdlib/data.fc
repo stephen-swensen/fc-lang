@@ -20,20 +20,20 @@ module data =
             free(l->data)
             l->data = new_data
 
-        // make: creates an empty array_list with default capacity 8. Caller must drop.
+        // make: creates an empty array_list with default capacity 8. Caller must destroy.
         let make = <'a>() ->
             array_list { data = alloc('a[8] { })!, len = 0 }
 
-        // make_with_capacity: creates an empty array_list with given capacity. Caller must drop.
+        // make_with_capacity: creates an empty array_list with given capacity. Caller must destroy.
         let make_with_capacity = <'a>(cap: int64) ->
             let actual = if cap < 1i64 then 1i64 else cap
             array_list { data = alloc('a[actual] { })!, len = 0 }
 
-        // drop: frees backing storage. Does not free element values.
-        let drop = (l: array_list<'a>) ->
+        // destroy: frees backing storage. Does not free element values.
+        let destroy = (l: array_list<'a>) ->
             free(l.data)
 
-        // copy: returns a deep copy. Caller must drop.
+        // copy: returns a deep copy. Caller must destroy.
         let copy = (l: array_list<'a>) ->
             let new_data = alloc('a[l.data.len] { })!
             for i, e in l.data[0..l.len]
@@ -147,7 +147,7 @@ module data =
             array_list.try_reduce(l, f)!
 
         // scan: like fold, returns all intermediate accumulator values.
-        // Result has length(l) + 1 elements. Caller must drop.
+        // Result has length(l) + 1 elements. Caller must destroy.
         let scan = (l: array_list<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
             let mut result = array_list.make_with_capacity<'b>(l.len + 1)
             let mut acc = init
@@ -157,21 +157,21 @@ module data =
                 array_list.add(&result, acc)
             result
 
-        // map: transforms each element. Returns new array_list. Caller must drop.
+        // map: transforms each element. Returns new array_list. Caller must destroy.
         let map = (l: array_list<'a>, f: ('a) -> 'b) ->
             let mut result = array_list.make_with_capacity<'b>(l.len)
             for e in l.data[0..l.len]
                 array_list.add(&result, f(e))
             result
 
-        // mapi: transforms each element with index. Caller must drop.
+        // mapi: transforms each element with index. Caller must destroy.
         let mapi = (l: array_list<'a>, f: (int64, 'a) -> 'b) ->
             let mut result = array_list.make_with_capacity<'b>(l.len)
             for i, e in l.data[0..l.len]
                 array_list.add(&result, f(i, e))
             result
 
-        // filter: returns new array_list with matching elements. Caller must drop.
+        // filter: returns new array_list with matching elements. Caller must destroy.
         let filter = (l: array_list<'a>, pred: ('a) -> bool) ->
             let mut result = array_list.make<'a>()
             for e in l.data[0..l.len]
@@ -461,8 +461,8 @@ module data =
         let make = <'a>() ->
             linked_list { head = default(dl_node<'a>*?), tail = default(dl_node<'a>*?), len = 0 }
 
-        // drop: frees all nodes. Does not free element values.
-        let drop = (l: linked_list<'a>) ->
+        // destroy: frees all nodes. Does not free element values.
+        let destroy = (l: linked_list<'a>) ->
             let mut cur = l.head
             loop
                 match cur with
@@ -547,7 +547,7 @@ module data =
                         i = i + 1
                         cur = at->next
 
-        // copy: returns a deep copy. Caller must drop.
+        // copy: returns a deep copy. Caller must destroy.
         let copy = (l: linked_list<'a>) ->
             let mut result = linked_list.make<'a>()
             let mut cur = l.head
@@ -656,7 +656,7 @@ module data =
                     j = j + 1
                     cur = ptr->next
 
-        // map: transforms each element. Returns new linked_list. Caller must drop.
+        // map: transforms each element. Returns new linked_list. Caller must destroy.
         let map = (l: linked_list<'a>, f: ('a) -> 'b) ->
             let mut result = linked_list.make<'b>()
             let mut cur = l.head
@@ -667,7 +667,7 @@ module data =
                     linked_list.append(&result, f(ptr->value))
                     cur = ptr->next
 
-        // mapi: transforms each element with index. Returns new linked_list. Caller must drop.
+        // mapi: transforms each element with index. Returns new linked_list. Caller must destroy.
         let mapi = (l: linked_list<'a>, f: (int64, 'a) -> 'b) ->
             let mut result = linked_list.make<'b>()
             let mut cur = l.head
@@ -680,7 +680,7 @@ module data =
                     idx = idx + 1
                     cur = ptr->next
 
-        // filter: returns new linked_list with matching elements. Caller must drop.
+        // filter: returns new linked_list with matching elements. Caller must destroy.
         let filter = (l: linked_list<'a>, pred: ('a) -> bool) ->
             let mut result = linked_list.make<'a>()
             let mut cur = l.head
@@ -863,18 +863,18 @@ module data =
 
     module hash_dict =
 
-        // make: creates empty hash_dict with default capacity 16. Caller must drop.
+        // make: creates empty hash_dict with default capacity 16. Caller must destroy.
         // 'b must be explicitly provided; 'a is inferred from hash/eq.
         let make = <'b>(hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
             hash_dict { buckets = alloc(hd_entry<'a, 'b>[16] { })!, len = 0, hash = hash, eq = eq }
 
-        // make_with_capacity: creates empty hash_dict with given capacity. Caller must drop.
+        // make_with_capacity: creates empty hash_dict with given capacity. Caller must destroy.
         let make_with_capacity = <'b>(cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
             let actual = if cap < 4i64 then 4i64 else cap
             hash_dict { buckets = alloc(hd_entry<'a, 'b>[actual] { })!, len = 0, hash = hash, eq = eq }
 
-        // drop: frees bucket storage. Does not free key/value heap data.
-        let drop = (d: hash_dict<'a, 'b>) ->
+        // destroy: frees bucket storage. Does not free key/value heap data.
+        let destroy = (d: hash_dict<'a, 'b>) ->
             free(d.buckets)
 
         private let rehash = (d: hash_dict<'a, 'b>*) ->
@@ -1052,17 +1052,17 @@ module data =
 
     module hash_set =
 
-        // make: creates empty hash_set with default capacity 16. Caller must drop.
+        // make: creates empty hash_set with default capacity 16. Caller must destroy.
         let make = (hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
             hash_set { buckets = alloc(hs_entry<'a>[16] { })!, len = 0, hash = hash, eq = eq }
 
-        // make_with_capacity: creates empty hash_set with given capacity. Caller must drop.
+        // make_with_capacity: creates empty hash_set with given capacity. Caller must destroy.
         let make_with_capacity = (cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
             let actual = if cap < 4i64 then 4i64 else cap
             hash_set { buckets = alloc(hs_entry<'a>[actual] { })!, len = 0, hash = hash, eq = eq }
 
-        // drop: frees bucket storage.
-        let drop = (s: hash_set<'a>) ->
+        // destroy: frees bucket storage.
+        let destroy = (s: hash_set<'a>) ->
             free(s.buckets)
 
         private let rehash = (s: hash_set<'a>*) ->
@@ -1165,7 +1165,7 @@ module data =
                 if entry.state == 1 then
                     f(entry.key)
 
-        // filter: returns new hash_set with matching elements. Caller must drop.
+        // filter: returns new hash_set with matching elements. Caller must destroy.
         let filter = (s: hash_set<'a>, pred: ('a) -> bool) ->
             let mut result = hash_set.make(s.hash, s.eq)
             for i in 0..s.buckets.len

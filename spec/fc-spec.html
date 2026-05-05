@@ -3616,7 +3616,7 @@ These are not functions — they cannot be stored in bindings or passed as argum
 
 `alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
 
-The idiomatic name for a type's cleanup function is `drop` — a convention borrowed from Rust. `T.drop` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
+The idiomatic name for a type's cleanup function is `destroy`, mirroring the C ecosystem's convention for releasing compound resources (`pthread_mutex_destroy`, `SDL_DestroyWindow`, and so on). `T.destroy` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
 
 **Best practice:** Use `defer` (see §Defer) to pair allocation with cleanup at the point of acquisition. This ensures cleanup runs regardless of which exit path the function takes:
 

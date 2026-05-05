@@ -50,7 +50,7 @@ let main = (args: str[]) ->
     let l2 = array_list.copy(l)
     assert(array_list.len(l2) == 2)
     assert(array_list.get(l2, 0i64) == 10)
-    array_list.drop(l2)
+    array_list.destroy(l2)
 
     // grow past initial capacity
     let mut big = array_list.make<int32>()
@@ -75,26 +75,26 @@ let main = (args: str[]) ->
     // try_reduce on empty
     let empty = array_list.make<int32>()
     assert(array_list.try_reduce(empty, (a: int32, b: int32) -> a + b).is_none)
-    array_list.drop(empty)
+    array_list.destroy(empty)
 
     // map
     let doubled = array_list.map(l, (x: int32) -> x * 2)
     assert(array_list.get(doubled, 0i64) == 20)
     assert(array_list.get(doubled, 1i64) == 50)
     assert(array_list.get(doubled, 2i64) == 10)
-    array_list.drop(doubled)
+    array_list.destroy(doubled)
 
     // mapi
     let indexed = array_list.mapi(l, (i: int64, x: int32) -> (int32) i + x)
     assert(array_list.get(indexed, 0i64) == 10)
     assert(array_list.get(indexed, 1i64) == 26)
     assert(array_list.get(indexed, 2i64) == 7)
-    array_list.drop(indexed)
+    array_list.destroy(indexed)
 
     // filter
     let big_ones = array_list.filter(l, (x: int32) -> x > 8)
     assert(array_list.len(big_ones) == 2)
-    array_list.drop(big_ones)
+    array_list.destroy(big_ones)
 
     // any / all
     assert(array_list.any(l, (x: int32) -> x == 25))
@@ -116,7 +116,7 @@ let main = (args: str[]) ->
     assert(array_list.get(scanned, 1i64) == 10)
     assert(array_list.get(scanned, 2i64) == 35)
     assert(array_list.get(scanned, 3i64) == 40)
-    array_list.drop(scanned)
+    array_list.destroy(scanned)
 
     // sort
     let mut sl = array_list.make<int32>()
@@ -135,7 +135,7 @@ let main = (args: str[]) ->
     array_list.sort(&sl, (a: int32, b: int32) -> b - a)
     assert(array_list.get(sl, 0i64) == 5)
     assert(array_list.get(sl, 4i64) == 1)
-    array_list.drop(sl)
+    array_list.destroy(sl)
 
     // reverse
     let mut rv = array_list.make<int32>()
@@ -162,13 +162,13 @@ let main = (args: str[]) ->
     array_list.applyi(&rv, (i: int64, x: int32) -> x + (int32) i)
     assert(array_list.get(rv, 0i64) == 30) // 30 + 0
     assert(array_list.get(rv, 1i64) == 21) // 20 + 1
-    array_list.drop(rv)
+    array_list.destroy(rv)
 
     // clear
     array_list.clear(&l)
     assert(array_list.is_empty(l))
 
     // cleanup
-    array_list.drop(l)
-    array_list.drop(big)
+    array_list.destroy(l)
+    array_list.destroy(big)
     0

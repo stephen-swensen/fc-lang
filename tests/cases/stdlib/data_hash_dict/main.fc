@@ -58,5 +58,5 @@ let main = (args: str[]) ->
     assert(hash_dict.get(d, 15) == 1500)
     assert(hash_dict.get(d, 1) == 10) // original still there
 
-    hash_dict.drop(d)
+    hash_dict.destroy(d)
     0

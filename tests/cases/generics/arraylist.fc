@@ -18,7 +18,7 @@ module arraylist =
     let make = <'a>() ->
         arraylist { data = alloc('a[4] { })!, len = 0 }
 
-    let drop = (l: arraylist<'a>) ->
+    let destroy = (l: arraylist<'a>) ->
         free(l.data)
 
     let add = (l: arraylist<'a>*, value: 'a) ->
@@ -78,8 +78,8 @@ let main = (args: str[]) ->
     let dv = arraylist.get(doubled, 0)
     // dv = 30
 
-    arraylist.drop(nums)
-    arraylist.drop(doubled)
+    arraylist.destroy(nums)
+    arraylist.destroy(doubled)
 
     // 254 - 30 = 224
     assert(sum - dv == 224)
