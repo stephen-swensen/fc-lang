@@ -550,10 +550,16 @@ let main = (args: str[]) ->
     // *cp = 10                   // would be a compile error
 
     // String literals are already const str
-    // let mut bindings of slices are non-const
-    let mut mbuf = int32[2] { 1, 2 }
+    // Slice bindings are non-const by default — element writes work
+    // on plain `let` (let mut is only needed to rebind the variable).
+    // Const-ness is a type-level property (const T[]), independent
+    // of the let / let mut binding distinction.
+    let mbuf = int32[2] { 1, 2 }
     mbuf[0] = 99
     assert(mbuf[0] == 99)
+    let cmbuf = (const int32[]) mbuf
+    // cmbuf[0] = 7              // would be a compile error
+    assert(cmbuf[0] == 99)
 
     // --------------------------------------------------------
     // Escape analysis — the compiler rejects dangling pointers
