@@ -24,7 +24,7 @@ This is disclosed up front because FC is also intended as a demonstration of wha
 
 FC is at version 1.0.0. The compiler implements the features in the language specification, with 1250+ tests passing on gcc and clang across Linux and Windows (MSYS2/UCRT64).
 
-Beyond the test suite, a few real programs exercise the language and stdlib in practice. The largest is **[wolf-fc](https://github.com/stephen-swensen/wolf-fc)**, a ~14,000-line port of id Software's *Wolfenstein 3D* written in FC. It uses a game loop, SDL bindings via `extern`, manual `alloc`/`free` with `defer`, modules and namespaces, structs and unions, slices, options, string interpolation, closures, and five of the seven stdlib modules (`io`, `sys`, `math`, `random`, `text`). It runs on Linux and Windows.
+Beyond the test suite, a few real programs exercise the language and stdlib in practice. The largest is **[wolf-fc](https://github.com/stephen-swensen/wolf-fc)**, a ~10,000-line port of id Software's *Wolfenstein 3D* written in FC. It uses a game loop, SDL bindings via `extern`, manual `alloc`/`free` with `defer`, modules and namespaces, structs and unions, slices, options, string interpolation, closures, and five of the seven stdlib modules (`io`, `sys`, `math`, `random`, `text`). It runs on Linux and Windows.
 
 Smaller programs in [`demos/`](demos/) round out the surface:
 

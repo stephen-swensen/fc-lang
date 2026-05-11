@@ -2,6 +2,10 @@
 // This file compiles and runs: ./run.sh spec/examples.fc
 // Every section exercises a language feature and asserts correctness.
 
+/* Comments come in two forms: `//` line comments (used throughout this
+   file) and `/* ... */` block comments — like this one — which span
+   multiple lines and /* may be nested */ to any depth. */
+
 // ============================================================
 // Structs — named product types with ordered fields
 // ============================================================
