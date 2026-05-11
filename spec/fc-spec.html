@@ -4640,7 +4640,7 @@ The FC compiler and all supporting materials are developed in a single repositor
 
 ## Repository Guide
 
-**`spec/`** — This specification (`fc-spec.html`), a BNF grammar (`grammar.bnf`), and a runnable quick-reference program (`examples.fc`) that demonstrates all core language features in commented, compilable FC code. Read `examples.fc` first for a fast overview of the language.
+**`spec/`** — This specification (`fc-spec.html`), a BNF grammar (`grammar.bnf`), and a runnable quick-reference program (`examples.fc`) that demonstrates core language features in commented, compilable FC code. Read `examples.fc` first for a fast overview of the language.
 
 **`src/`** — The compiler implementation. A single-pass C11 program that reads `.fc` source files and emits a self-contained `.c` file. The pipeline is: lexer → parser → pass 1 (declaration collection) → pass 2 (type checking) → monomorphization → C code emission.
 
