@@ -4602,6 +4602,14 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < define_count; i++)
         fprintf(out, "#define %s %s\n", defines[i].macro, defines[i].value);
 
+    /* On Windows, FC programs must link against UCRT — msvcrt lacks symbols
+     * the emitted code relies on (e.g. _set_abort_behavior). Fail loudly here
+     * rather than letting users discover the gap via confusing link errors. */
+    fprintf(out,
+        "#if defined(_WIN32) && !defined(_UCRT)\n"
+        "#error \"FC on Windows requires the UCRT runtime; msvcrt is not supported.\"\n"
+        "#endif\n");
+
     /* Core headers — always emitted (FC's platform contract) */
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stddef.h>\n");
@@ -4634,9 +4642,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
     /* Windows: suppress the Watson/Windows-Error-Reporting dialog when
      * abort() fires (bounds checks, option unwrap, div-by-zero, assert).
-     * Without this, CI and test runs on MinGW/UCRT hang on the error popup.
-     * GCC constructor runs before main; _set_abort_behavior is UCRT-only so
-     * the whole block is gated on _WIN32. */
+     * Without this, CI and test runs on Windows hang on the error popup.
+     * GCC constructor runs before main. UCRT is guaranteed by the prelude
+     * #error above, so _set_abort_behavior is always available here. */
     fprintf(out,
         "#ifdef _WIN32\n"
         "__attribute__((unused, constructor))\n"
