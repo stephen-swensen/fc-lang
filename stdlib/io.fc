@@ -102,8 +102,16 @@ module io =
     // read_all: reads an entire file into a heap-allocated string.
     // path: const str — file path to read.
     // returns: str? — some(contents) on success, none if the file cannot be opened. Caller must free.
+    //
+    // Opens in binary mode: text mode on Windows translates CRLF→LF during
+    // read, so the buffer (sized to the on-disk byte count from tell()) is
+    // larger than the number of bytes actually written by read(). The tail
+    // stays at its zero-init value and callers see trailing NULs that the
+    // standard whitespace trim (space/tab/LF/CR) won't strip. Binary mode
+    // keeps the buffer length and read length aligned; callers that care
+    // about line endings can normalise CR/LF themselves.
     let read_all = (path: const str) ->
-        match open(path, "r") with
+        match open(path, "rb") with
         | none -> default(str?)
         | some(handle) ->
             defer close(handle)
