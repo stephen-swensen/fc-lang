@@ -1,18 +1,19 @@
 #pragma once
-
-/* On Windows, fcc must link against UCRT — same policy as the emitted FC
- * programs (see prelude guard in codegen.c). Fail at compiler build time
- * rather than letting users discover the gap later when their first FC
- * program hits the matching guard. */
-#if defined(_WIN32) && !defined(_UCRT)
-#error "FC on Windows requires the UCRT runtime; msvcrt is not supported."
-#endif
-
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* On Windows, fcc must link against UCRT — same policy as the emitted FC
+ * programs (see prelude guard in codegen.c). Fail at compiler build time
+ * rather than letting users discover the gap later when their first FC
+ * program hits the matching guard. The check sits *after* the standard
+ * headers because _UCRT is defined in MinGW-w64's <_mingw.h> (pulled in
+ * transitively by <stdint.h> et al.), not by the compiler itself. */
+#if defined(_WIN32) && !defined(_UCRT)
+#error "FC on Windows requires the UCRT runtime; msvcrt is not supported."
+#endif
 
 /* ---- Arena allocator ---- */
 

@@ -4602,14 +4602,6 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < define_count; i++)
         fprintf(out, "#define %s %s\n", defines[i].macro, defines[i].value);
 
-    /* On Windows, FC programs must link against UCRT — msvcrt lacks symbols
-     * the emitted code relies on (e.g. _set_abort_behavior). Fail loudly here
-     * rather than letting users discover the gap via confusing link errors. */
-    fprintf(out,
-        "#if defined(_WIN32) && !defined(_UCRT)\n"
-        "#error \"FC on Windows requires the UCRT runtime; msvcrt is not supported.\"\n"
-        "#endif\n");
-
     /* Core headers — always emitted (FC's platform contract) */
     fprintf(out, "#include <stdint.h>\n");
     fprintf(out, "#include <stddef.h>\n");
@@ -4618,6 +4610,17 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "#include <string.h>\n");
     fprintf(out, "#include <assert.h>\n");
     fprintf(out, "#include <limits.h>\n");
+
+    /* On Windows, FC programs must link against UCRT — msvcrt lacks symbols
+     * the emitted code relies on (e.g. _set_abort_behavior). Fail loudly here
+     * rather than letting users discover the gap via confusing link errors.
+     * The check sits *after* the core headers because _UCRT is defined in
+     * MinGW-w64's <_mingw.h> (pulled in transitively by <stdint.h> et al.),
+     * not by the compiler itself. */
+    fprintf(out,
+        "#if defined(_WIN32) && !defined(_UCRT)\n"
+        "#error \"FC on Windows requires the UCRT runtime; msvcrt is not supported.\"\n"
+        "#endif\n");
 
     /* Feature-gated headers — emitted only when needed */
     if (g_needs_stdio) fprintf(out, "#include <stdio.h>\n");
