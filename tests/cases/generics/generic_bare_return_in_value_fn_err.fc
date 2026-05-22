@@ -1,0 +1,9 @@
+// Bare `return` in a generic value-returning function. The tail returns 'a, so a
+// bare `return` (void) cannot satisfy the inferred return type.
+let identity_or_default = (cond: bool, x: 'a) ->
+    if cond then return
+    x
+
+let main = (args: str[]) ->
+    let _ = identity_or_default(true, 42)
+    0

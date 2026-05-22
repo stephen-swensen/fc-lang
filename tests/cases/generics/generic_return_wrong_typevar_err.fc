@@ -1,0 +1,10 @@
+// A generic function over two type variables. The tail expression types the function
+// return as 'b, but `return a` (typed 'a) is a different type variable and must be
+// rejected — type variables are not implicitly interchangeable.
+let second = (a: 'a, b: 'b) ->
+    if true then return a
+    b
+
+let main = (args: str[]) ->
+    let _ = second(1, true)
+    0

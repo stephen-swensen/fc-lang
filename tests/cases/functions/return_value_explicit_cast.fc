@@ -1,0 +1,10 @@
+// To return a narrower value from a function whose inferred return type is wider,
+// the user must write an explicit cast — same as match arms and if/else branches.
+let f = (flag: bool) ->
+    if flag then return (int64) 7i32
+    100i64
+
+let main = (args: str[]) ->
+    assert(f(true) == 7i64)
+    assert(f(false) == 100i64)
+    0

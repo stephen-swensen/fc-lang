@@ -1,0 +1,10 @@
+// `return` does not implicitly widen against the inferred return type — the rule
+// matches if/else, match, and break. A narrower return value is a type mismatch;
+// the user must write an explicit cast.
+let f = (flag: bool) ->
+    if flag then return 7i32
+    100i64
+
+let main = (args: str[]) ->
+    let _ = f(true)
+    0

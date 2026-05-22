@@ -31,6 +31,13 @@ struct LambdaCtx {
     Capture *entries;
     int count;
     int cap;
+    /* Return statements collected during this function's body check, so they can
+       be validated against the inferred return type once the body's tail type is
+       known. Only the innermost lambda collects its own returns — nested EXPR_FUNC
+       pushes its own ctx, so returns inside a nested lambda go to that lambda. */
+    struct Expr **returns;
+    int return_count;
+    int return_cap;
 };
 
 static Scope *scope_new(Arena *a, Scope *parent) {
@@ -2348,6 +2355,36 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *ret = check_block(ctx, e->func.body, e->func.body_count);
         ctx->scope = saved;
 
+        /* Validate every explicit `return [value]` against the inferred return type.
+           A bare `return` requires a void-returning function; `return value` requires
+           strict type equality with the function's inferred return type. No widening
+           here — `return` joins the body's tail expression as a symmetric contributor
+           to the inferred return type, matching the rule used for `if`/`else` branches,
+           `match` arms, and `loop break` values (see spec §Implicit Widening). Users
+           who need to widen write an explicit cast: `return (int64) x`. Skip when the
+           inferred return type is poisoned to avoid cascading false positives. */
+        if (!type_is_error(ret)) {
+            for (int i = 0; i < lctx.return_count; i++) {
+                Expr *re = lctx.returns[i];
+                if (re->return_expr.value) {
+                    Type *vt = re->return_expr.value->type;
+                    if (!vt || type_is_error(vt)) continue;
+                    if (!type_eq(vt, ret)) {
+                        diag_error(re->loc,
+                            "return type mismatch: expected %s, got %s",
+                            type_name(ret), type_name(vt));
+                    }
+                } else {
+                    /* bare `return` */
+                    if (ret->kind != TYPE_VOID) {
+                        diag_error(re->loc,
+                            "return type mismatch: expected %s, got void",
+                            type_name(ret));
+                    }
+                }
+            }
+        }
+
         /* Pop lambda context */
         ctx->lambda_ctx = saved_lambda;
 
@@ -2903,6 +2940,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     diag_error(e->loc, "cannot return stack-allocated %s from function",
                         type_name(e->return_expr.value->type));
             }
+        }
+        /* Register with the enclosing function so its value can be checked against
+           the inferred return type once the body's tail type is known. */
+        if (ctx->lambda_ctx) {
+            LambdaCtx *lc = ctx->lambda_ctx;
+            DA_APPEND(lc->returns, lc->return_count, lc->return_cap, e);
         }
         e->type = type_void();
         return e->type;

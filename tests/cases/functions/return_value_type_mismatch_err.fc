@@ -1,0 +1,7 @@
+let pick = (a: int32, b: bool) ->
+    if b then return true
+    a
+
+let main = (args: str[]) ->
+    let _ = pick(1, false)
+    0

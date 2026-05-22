@@ -1,0 +1,14 @@
+// `return value` where value's type is the function's type variable. The body's
+// tail expression is also of that type variable, so all return sites agree.
+// Verifies generic functions monomorphize correctly across multiple concrete types.
+let pick = (cond: bool, a: 'a, b: 'a) ->
+    if cond then return a
+    b
+
+let main = (args: str[]) ->
+    assert(pick(true, 1, 2) == 1)
+    assert(pick(false, 1, 2) == 2)
+    assert(pick(true, 100i64, 200i64) == 100i64)
+    assert(pick(true, true, false))
+    assert(!pick(false, true, false))
+    0

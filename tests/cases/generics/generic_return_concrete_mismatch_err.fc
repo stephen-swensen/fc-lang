@@ -1,0 +1,10 @@
+// `return value` with a concrete type that doesn't match the type-variable return
+// of a generic function is rejected at generic-check time, before monomorphization.
+// Tail expression types the function as 'a; `return 0i32` is a concrete int32.
+let weird = (cond: bool, x: 'a) ->
+    if cond then return 0i32
+    x
+
+let main = (args: str[]) ->
+    let _ = weird(true, 5)
+    0

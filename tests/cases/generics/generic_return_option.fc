@@ -1,0 +1,20 @@
+// Idiomatic find pattern: generic function returns option of type variable,
+// with early `return some(x)` on hit and `default('a?)` as the fallthrough tail.
+let first_match = (xs: 'a[], target: 'a) ->
+    for x in xs
+        if x == target then return some(x)
+    default('a?)
+
+let main = (args: str[]) ->
+    let ints = int32[4] { 10, 20, 30, 40 }
+    let hit = first_match(ints, 30)
+    assert(hit.is_some)
+    assert(hit! == 30)
+
+    let miss = first_match(ints, 99)
+    assert(miss.is_none)
+
+    let bools = bool[4] { false, false, true, false }
+    let found_true = first_match(bools, true)
+    assert(found_true!)
+    0

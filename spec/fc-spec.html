@@ -1328,6 +1328,15 @@ let q = 3.14f64
 let r = p + q           // compile error — explicit cast required
 ```
 
+Widening applies only where there is a single anchor type that other values are conformed to: binary expressions and comparisons, function call arguments (the parameter type is the anchor), slice indices, and `for`-range endpoints. In positions where multiple value-producing sites symmetrically determine a result type, no widening occurs and all sites must have identical types:
+
+- `if`/`else` branches must have the same type
+- `match` arms must have the same type
+- `loop` `break value` expressions must all have the same type
+- `return value` expressions must match the function's inferred return type exactly (the function return type is itself inferred from the body's tail expression, so explicit `return`s are symmetric contributors, not values being passed to a declared slot)
+
+In these positions an explicit cast is required to bridge types: `if cond then (int64) x else y`, `return (int64) x`, etc.
+
 ### Overloaded Tokens
 
 Several tokens have multiple meanings distinguished by context:
@@ -1926,6 +1935,8 @@ let validate = (data: uint8[]) ->      // void — early exit on error
 ```
 
 In all cases `return` is only needed for early exits — the normal return value of a value-returning function is the final expression of the body. A void function with no early exit needs no `return` at all; the body just ends.
+
+Every `return` in a function body must agree with the function's inferred return type — exactly, with no implicit widening. A bare `return` requires a void-returning function (return type inferred from a void tail expression). A `return expr` requires `expr`'s type to equal the function's return type. This matches the rule for `if`/`else` branches, `match` arms, and `loop` `break` values (see §Implicit Widening). To bridge types use an explicit cast: `return (int64) x`.
 
 ### Entry point
 
