@@ -1,0 +1,15 @@
+// Signed division/modulo: C truncation toward zero, plus the INT_MIN/-1 and
+// x%-1 edge cases that would be UB at runtime but are defined here.
+module m =
+    let imin = -2147483648
+    let q_overflow = imin / -1      // wraps to INT32_MIN (no UB)
+    let r_neg1 = 12345 % -1         // always 0
+    let q_trunc = -7 / 2            // -3 (toward zero)
+    let r_trunc = -7 % 2            // -1
+
+let main = (args: str[]) ->
+    assert(m.q_overflow == m.imin)
+    assert(m.r_neg1 == 0)
+    assert(m.q_trunc == -3)
+    assert(m.r_trunc == -1)
+    0

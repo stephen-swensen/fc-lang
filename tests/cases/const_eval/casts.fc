@@ -1,0 +1,15 @@
+// int->int casts fold with C truncation / sign-extension semantics.
+module m =
+    let narrow = (int8) 300          // 300 & 0xFF => 44
+    let narrow_neg = (int8) 200      // 200 => -56 as int8
+    let to_unsigned = (uint8) -1     // 255
+    let widen = (int64) 5i32         // 5
+    let widen_neg = (int64) -5i32    // -5
+
+let main = (args: str[]) ->
+    assert(m.narrow == 44i8)
+    assert(m.narrow_neg == -56i8)
+    assert(m.to_unsigned == 255u8)
+    assert(m.widen == 5i64)
+    assert(m.widen_neg == -5i64)
+    0

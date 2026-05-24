@@ -1,0 +1,6 @@
+// Modulo by zero is a compile-time error, same as division.
+module m =
+    let y = 40 % 0
+
+let main = (args: str[]) ->
+    m.y

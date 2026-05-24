@@ -1,0 +1,15 @@
+// Bitwise and/or/xor/not on signed and unsigned widths.
+module m =
+    let band = 0xF0i32 & 0x0Fi32    // 0
+    let bor = 0xF0i32 | 0x0Fi32     // 0xFF
+    let bxor = 0xFFi32 ^ 0x0Fi32    // 0xF0
+    let bnot = ~0i32                 // -1
+    let bnot_u = ~0u8                // 255
+
+let main = (args: str[]) ->
+    assert(m.band == 0)
+    assert(m.bor == 0xFF)
+    assert(m.bxor == 0xF0)
+    assert(m.bnot == -1)
+    assert(m.bnot_u == 255u8)
+    0

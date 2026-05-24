@@ -1,0 +1,7 @@
+// Division by a divisor that folds to zero is a compile-time error.
+module m =
+    let z = 0
+    let y = 40 / z
+
+let main = (args: str[]) ->
+    m.y

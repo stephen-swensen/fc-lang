@@ -1,0 +1,8 @@
+// isize div/mod is NOT host-evaluated (width is target-defined), so it remains
+// disallowed in a module-member initializer.
+module m =
+    let x = 20i
+    let y = 40i / x
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,8 @@
+// Integer modulo in a module-level const-expr is evaluated at compile time
+// to a literal, so it is a valid C file-scope initializer.
+module m =
+    let x = 10 % 3
+
+let main = (args: str[]) ->
+    assert(m.x == 1)
+    0

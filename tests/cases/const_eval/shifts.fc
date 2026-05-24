@@ -1,0 +1,16 @@
+// Shifts: amount masking, arithmetic vs. logical right shift, 64-bit edge.
+module m =
+    let basic = 1i32 << 5           // 32
+    let over = 1i32 << 33           // amount masked to 1 => 2
+    let sar = -16i32 >> 2           // arithmetic => -4
+    let lsr = 0xFFFFFFFFu32 >> 28   // logical => 15
+    let wide = 1i64 << 63           // INT64_MIN
+
+let main = (args: str[]) ->
+    assert(m.basic == 32)
+    assert(m.over == 2)
+    assert(m.sar == -4)
+    assert(m.lsr == 15u32)
+    assert(m.wide < 0i64)
+    assert((m.wide - 1i64) > 0i64)  // INT64_MIN - 1 wraps to INT64_MAX
+    0

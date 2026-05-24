@@ -1,0 +1,6 @@
+// Division by a literal zero is a compile-time error.
+module m =
+    let y = 40 / 0
+
+let main = (args: str[]) ->
+    m.y

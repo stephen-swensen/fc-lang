@@ -1,0 +1,8 @@
+// Integer division inside an array-literal element is evaluated to a literal
+// at compile time, so the array literal is a valid const initializer.
+module m =
+    let arr = int32[1] { 10 / 3 }
+
+let main = (args: str[]) ->
+    assert(m.arr[0] == 3)
+    0

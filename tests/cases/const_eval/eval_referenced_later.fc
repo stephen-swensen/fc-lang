@@ -1,0 +1,12 @@
+// An evaluated module-let can be referenced (and further evaluated) by a
+// later module-let, in any order.
+module m =
+    let c = b + a / 5    // forward refs; 50 + 5 = 55
+    let b = a * 2        // 50
+    let a = 100 / 4      // 25
+
+let main = (args: str[]) ->
+    assert(m.a == 25)
+    assert(m.b == 50)
+    assert(m.c == 55)
+    0

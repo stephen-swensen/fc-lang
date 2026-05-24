@@ -1,0 +1,8 @@
+// usize div/mod is likewise deferred to the target compiler, so it stays
+// disallowed in a module-member initializer.
+module m =
+    let x = 20u
+    let y = 40u % x
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,11 @@
+// Unsigned division/modulo, including values above the signed range.
+module m =
+    let q = 200u8 / 7u8             // 28
+    let r = 200u8 % 7u8             // 4
+    let big = 4000000000u32 / 2u32  // 2000000000 (> INT32_MAX input)
+
+let main = (args: str[]) ->
+    assert(m.q == 28u8)
+    assert(m.r == 4u8)
+    assert(m.big == 2000000000u32)
+    0

@@ -1,0 +1,23 @@
+// Comparisons and logical operators fold to bool literals.
+module m =
+    let a = 5
+    let b = 10
+    let lt = a < b
+    let gt = a > b
+    let eq = a == 5
+    let ne = a != b
+    let ge = b >= a
+    let both = (a < b) && (b == 10)
+    let either = (a > b) || (a == 5)
+    let negated = !(a > b)
+
+let main = (args: str[]) ->
+    assert(m.lt)
+    assert(!m.gt)
+    assert(m.eq)
+    assert(m.ne)
+    assert(m.ge)
+    assert(m.both)
+    assert(m.either)
+    assert(m.negated)
+    0

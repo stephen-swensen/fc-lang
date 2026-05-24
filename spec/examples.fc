@@ -74,6 +74,11 @@ module point =
     let first = some(0)
     let base = 10
     let offsets = int32[3] { base, base + 1, base + 2 }     // refs `base`
+    // Fixed-width integer arithmetic is evaluated at compile time, so integer
+    // division/modulo/shift fold to literals (div-by-zero is a compile error).
+    let half = base / 2                                     // folds to 5
+    let rem = base % 3                                      // folds to 1
+    let shifted = base << 2                                 // folds to 40
 
 // ============================================================
 // Higher-order functions

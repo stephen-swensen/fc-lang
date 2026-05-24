@@ -1491,8 +1491,14 @@ static void emit_c_escaped(const char *text, int len, FILE *out) {
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
-        if (e->int_lit.lit_type->kind == TYPE_INT64)
-            fprintf(out, "INT64_C(%" PRId64 ")", (int64_t)e->int_lit.value);
+        if (e->int_lit.lit_type->kind == TYPE_INT64) {
+            /* INT64_MIN cannot be written as a single literal (its magnitude
+             * exceeds INT64_MAX); emit the portable (-MAX - 1) idiom. */
+            if ((int64_t)e->int_lit.value == INT64_MIN)
+                fprintf(out, "(-9223372036854775807LL - 1)");
+            else
+                fprintf(out, "INT64_C(%" PRId64 ")", (int64_t)e->int_lit.value);
+        }
         else if (e->int_lit.lit_type->kind == TYPE_UINT64)
             fprintf(out, "UINT64_C(%" PRIu64 ")", e->int_lit.value);
         else if (e->int_lit.lit_type->kind == TYPE_ISIZE)

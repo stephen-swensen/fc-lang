@@ -1,0 +1,13 @@
+// Arithmetic overflow wraps with 2's-complement semantics.
+module m =
+    let s8 = 100i8 + 100i8          // 200 wraps to -56
+    let u8w = 200u8 + 100u8         // 300 wraps to 44
+    let mul = 65536i32 * 65536i32   // 2^32 wraps to 0
+    let neg = -(-128i8)             // negate INT8_MIN wraps to itself
+
+let main = (args: str[]) ->
+    assert(m.s8 == -56i8)
+    assert(m.u8w == 44u8)
+    assert(m.mul == 0)
+    assert(m.neg == -128i8)
+    0

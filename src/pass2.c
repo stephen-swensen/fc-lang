@@ -5250,10 +5250,216 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
     }
 }
 
+/* ---- Compile-time evaluation of fixed-width scalar const expressions ----
+ *
+ * Evaluates a folded integer/bool subexpression to a single literal node so
+ * module-member initializers (which must be valid C file-scope constants) can
+ * use operations that would otherwise emit runtime checks — notably integer
+ * division/modulo, whose codegen is a by-zero abort statement-expression that
+ * is not a constant initializer.  Only fixed-width types (int8..uint64, bool)
+ * are evaluated: isize/usize widths are target-defined and float folding is
+ * left to the C compiler, so those are deferred (return NULL → tree unchanged).
+ * Semantics mirror codegen exactly: 2's-complement wrap, shift-amount masking,
+ * arithmetic vs. logical right shift, and the signed INT_MIN/-1 case. */
+
+/* Bit width of a fixed-width integer type, or 0 for isize/usize/non-integer. */
+static int const_int_width(Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_INT8:  case TYPE_UINT8:  return 8;
+    case TYPE_INT16: case TYPE_UINT16: return 16;
+    case TYPE_INT32: case TYPE_UINT32: return 32;
+    case TYPE_INT64: case TYPE_UINT64: return 64;
+    default: return 0;  /* isize/usize (target-defined) and non-integers */
+    }
+}
+
+/* Mask a 64-bit value to `width` bits, sign-extending back to 64 if signed. */
+static uint64_t const_mask_extend(uint64_t v, int width, bool is_signed) {
+    if (width >= 64) return v;
+    uint64_t mask = ((uint64_t)1 << width) - 1;
+    v &= mask;
+    if (is_signed && (v & ((uint64_t)1 << (width - 1))))
+        v |= ~mask;
+    return v;
+}
+
+/* A scalar integer value read from a literal, normalized to 64 bits. */
+typedef struct { uint64_t val; int width; bool is_signed; } ConstScalar;
+
+/* Read a folded expr as a fixed-width int/bool/char literal value, or fail
+ * (isize/usize, float, or non-literal operands are not host-evaluable). */
+static bool const_read_scalar(Expr *e, ConstScalar *out) {
+    switch (e->kind) {
+    case EXPR_INT_LIT: {
+        int w = const_int_width(e->int_lit.lit_type);
+        if (w == 0) return false;  /* isize/usize: defer to target compiler */
+        bool s = type_is_signed(e->int_lit.lit_type);
+        out->val = const_mask_extend(e->int_lit.value, w, s);
+        out->width = w;
+        out->is_signed = s;
+        return true;
+    }
+    case EXPR_BOOL_LIT:
+        out->val = e->bool_lit.value ? 1 : 0;
+        out->width = 8;
+        out->is_signed = false;
+        return true;
+    case EXPR_CHAR_LIT:
+        out->val = e->char_lit.value;
+        out->width = 8;
+        out->is_signed = false;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static Expr *const_make_int(CheckCtx *ctx, Type *t, uint64_t v, SrcLoc loc) {
+    Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+    n->kind = EXPR_INT_LIT;
+    n->loc = loc;
+    n->type = t;
+    n->int_lit.value = v;
+    n->int_lit.lit_type = t;
+    n->int_lit.out_of_range = false;
+    return n;
+}
+
+static Expr *const_make_bool(CheckCtx *ctx, Type *t, bool v, SrcLoc loc) {
+    Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+    n->kind = EXPR_BOOL_LIT;
+    n->loc = loc;
+    n->type = t;
+    n->bool_lit.value = v;
+    return n;
+}
+
+/* Try to evaluate a node whose children have already been const-folded to a
+ * single literal.  Returns the literal, or NULL if the node is not evaluable
+ * (caller keeps the folded tree).  Emits a diagnostic for compile-time
+ * division by zero. */
+static Expr *try_eval_const(CheckCtx *ctx, Expr *e) {
+    if (!e || !e->type) return NULL;
+    switch (e->kind) {
+    case EXPR_UNARY_PREFIX: {
+        TokenKind op = e->unary_prefix.op;
+        ConstScalar a;
+        if (!const_read_scalar(e->unary_prefix.operand, &a)) return NULL;
+        if (op == TOK_BANG) {
+            if (e->type->kind != TYPE_BOOL) return NULL;
+            return const_make_bool(ctx, e->type, a.val == 0, e->loc);
+        }
+        int w = const_int_width(e->type);
+        if (w == 0) return NULL;
+        bool s = type_is_signed(e->type);
+        uint64_t r;
+        if (op == TOK_MINUS)      r = (uint64_t)0 - a.val;
+        else if (op == TOK_TILDE) r = ~a.val;
+        else return NULL;
+        return const_make_int(ctx, e->type, const_mask_extend(r, w, s), e->loc);
+    }
+    case EXPR_CAST: {
+        Type *tgt = e->cast.target;
+        int w = const_int_width(tgt);
+        if (w == 0) return NULL;  /* non-fixed-int target: bool/char/float/isize/usize */
+        ConstScalar a;
+        if (!const_read_scalar(e->cast.operand, &a)) return NULL;
+        bool s = type_is_signed(tgt);
+        return const_make_int(ctx, tgt, const_mask_extend(a.val, w, s), e->loc);
+    }
+    case EXPR_BINARY: {
+        TokenKind op = e->binary.op;
+        ConstScalar a, b;
+        if (!const_read_scalar(e->binary.left, &a)) return NULL;
+        if (!const_read_scalar(e->binary.right, &b)) return NULL;
+
+        switch (op) {
+        case TOK_EQEQ: case TOK_BANGEQ:
+        case TOK_LT: case TOK_GT: case TOK_LTEQ: case TOK_GTEQ: {
+            if (e->type->kind != TYPE_BOOL) return NULL;
+            /* Operands share a common type post-widening; use left's signedness. */
+            bool res;
+            if (a.is_signed) {
+                int64_t la = (int64_t)a.val, lb = (int64_t)b.val;
+                switch (op) {
+                case TOK_EQEQ:  res = la == lb; break;
+                case TOK_BANGEQ:res = la != lb; break;
+                case TOK_LT:    res = la <  lb; break;
+                case TOK_GT:    res = la >  lb; break;
+                case TOK_LTEQ:  res = la <= lb; break;
+                default:        res = la >= lb; break;
+                }
+            } else {
+                uint64_t la = a.val, lb = b.val;
+                switch (op) {
+                case TOK_EQEQ:  res = la == lb; break;
+                case TOK_BANGEQ:res = la != lb; break;
+                case TOK_LT:    res = la <  lb; break;
+                case TOK_GT:    res = la >  lb; break;
+                case TOK_LTEQ:  res = la <= lb; break;
+                default:        res = la >= lb; break;
+                }
+            }
+            return const_make_bool(ctx, e->type, res, e->loc);
+        }
+        case TOK_AMPAMP:
+            return const_make_bool(ctx, e->type, (a.val != 0) && (b.val != 0), e->loc);
+        case TOK_PIPEPIPE:
+            return const_make_bool(ctx, e->type, (a.val != 0) || (b.val != 0), e->loc);
+        default: break;
+        }
+
+        int w = const_int_width(e->type);
+        if (w == 0) return NULL;
+        bool s = type_is_signed(e->type);
+        uint64_t lv = const_mask_extend(a.val, w, s);
+        uint64_t rv = const_mask_extend(b.val, w, s);
+        uint64_t shamt = (uint64_t)(w - 1);
+        uint64_t r;
+        switch (op) {
+        case TOK_PLUS:  r = lv + rv; break;
+        case TOK_MINUS: r = lv - rv; break;
+        case TOK_STAR:  r = lv * rv; break;
+        case TOK_AMP:   r = lv & rv; break;
+        case TOK_PIPE:  r = lv | rv; break;
+        case TOK_CARET: r = lv ^ rv; break;
+        case TOK_LTLT:  r = lv << (rv & shamt); break;
+        case TOK_GTGT:
+            if (s) r = (uint64_t)((int64_t)lv >> (rv & shamt));
+            else   r = lv >> (rv & shamt);
+            break;
+        case TOK_SLASH:
+        case TOK_PERCENT:
+            if (rv == 0) {
+                diag_error(e->loc, "division by zero in constant expression");
+                return NULL;
+            }
+            if (s) {
+                int64_t la = (int64_t)lv, ra = (int64_t)rv;
+                if (ra == -1)  /* INT_MIN/-1 and x%-1: avoid UB in fcc itself */
+                    r = (op == TOK_SLASH) ? ((uint64_t)0 - lv) : 0;
+                else
+                    r = (op == TOK_SLASH) ? (uint64_t)(la / ra) : (uint64_t)(la % ra);
+            } else {
+                r = (op == TOK_SLASH) ? (lv / rv) : (lv % rv);
+            }
+            break;
+        default:
+            return NULL;
+        }
+        return const_make_int(ctx, e->type, const_mask_extend(r, w, s), e->loc);
+    }
+    default:
+        return NULL;
+    }
+}
+
 /* Recursively fold an Expr in const-expr position.  Returns the folded tree
  * (same pointer if no substitution) or NULL on failure.  NULL is silent for
  * most kinds (the outer gate emits the generic "must be a constant
- * expression"); a specific diagnostic is emitted only for the mut-ref case. */
+ * expression"); a specific diagnostic is emitted only for the mut-ref and
+ * division-by-zero cases. */
 static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     if (!e) return e;
     switch (e->kind) {
@@ -5307,31 +5513,46 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_UNARY_PREFIX: {
         Expr *op = const_fold_expr(ctx, e->unary_prefix.operand);
         if (!op) return NULL;
-        if (op == e->unary_prefix.operand) return e;
-        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
-        *n = *e;
-        n->unary_prefix.operand = op;
-        return n;
+        Expr *node;
+        if (op == e->unary_prefix.operand) {
+            node = e;
+        } else {
+            node = arena_alloc(ctx->arena, sizeof(Expr));
+            *node = *e;
+            node->unary_prefix.operand = op;
+        }
+        Expr *v = try_eval_const(ctx, node);
+        return v ? v : node;
     }
     case EXPR_BINARY: {
         Expr *l = const_fold_expr(ctx, e->binary.left);
         Expr *r = const_fold_expr(ctx, e->binary.right);
         if (!l || !r) return NULL;
-        if (l == e->binary.left && r == e->binary.right) return e;
-        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
-        *n = *e;
-        n->binary.left = l;
-        n->binary.right = r;
-        return n;
+        Expr *node;
+        if (l == e->binary.left && r == e->binary.right) {
+            node = e;
+        } else {
+            node = arena_alloc(ctx->arena, sizeof(Expr));
+            *node = *e;
+            node->binary.left = l;
+            node->binary.right = r;
+        }
+        Expr *v = try_eval_const(ctx, node);
+        return v ? v : node;
     }
     case EXPR_CAST: {
         Expr *op = const_fold_expr(ctx, e->cast.operand);
         if (!op) return NULL;
-        if (op == e->cast.operand) return e;
-        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
-        *n = *e;
-        n->cast.operand = op;
-        return n;
+        Expr *node;
+        if (op == e->cast.operand) {
+            node = e;
+        } else {
+            node = arena_alloc(ctx->arena, sizeof(Expr));
+            *node = *e;
+            node->cast.operand = op;
+        }
+        Expr *v = try_eval_const(ctx, node);
+        return v ? v : node;
     }
     case EXPR_FIELD:
         if (e->field.is_extern_const || e->field.is_variant_constructor)

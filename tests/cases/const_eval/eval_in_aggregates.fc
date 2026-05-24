@@ -1,0 +1,26 @@
+// Evaluated values compose inside struct literals, array literals, array
+// sizes, some(), and union variant payloads.
+module m =
+    struct point =
+        x: int32
+        y: int32
+
+    union box =
+        | val(int32)
+        | empty
+
+    let p = point { x = 100 / 4, y = 50 % 7 }   // { 25, 1 }
+    let arr = int32[2] { 12 / 3, 17 % 5 }         // { 4, 2 }
+    let boxed = some(81 / 9)                        // some(9)
+    let v = box.val(64 >> 2)                        // val(16)
+
+let main = (args: str[]) ->
+    assert(m.p.x == 25)
+    assert(m.p.y == 1)
+    assert(m.arr[0] == 4)
+    assert(m.arr[1] == 2)
+    assert(m.boxed! == 9)
+    match m.v with
+    | val(n) -> assert(n == 16)
+    | empty -> assert(false)
+    0

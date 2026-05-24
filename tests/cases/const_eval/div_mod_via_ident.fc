@@ -1,0 +1,10 @@
+// Integer division/modulo with a module-let divisor folds to a literal.
+module m =
+    let x = 20
+    let y = 40 / x
+    let z = 41 % x
+
+let main = (args: str[]) ->
+    assert(m.y == 2)
+    assert(m.z == 1)
+    0
