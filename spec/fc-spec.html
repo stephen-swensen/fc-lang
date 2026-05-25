@@ -2087,6 +2087,8 @@ Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. T
 > The compiler may elide the fat-pointer wrapping when it can prove a function value is never used in a first-class manner — never stored, never passed as a `() -> T` parameter. This is an implementation quality optimization, not a language guarantee. Correct code is always generated without it.
 >
 > To obtain a raw C function pointer for direct use (e.g. storing in a C struct field), use `&f` on a non-capturing `let mut` binding — see §Address-of.
+>
+> **Tail-call optimization** — FC does not perform tail-call optimization itself, but the generated C does not close the door on it. A tail-recursive function — whether a top-level function or a self-recursive local lambda (see §Blocks) — compiles to C whose recursive call sits in tail position, and a standard C compiler (e.g. gcc or clang at `-O2`) will turn it into a loop with no stack growth. This is notable for local lambdas specifically: a self-recursive call is emitted in the uniform fat-pointer call form `closure.fn_ptr(arg, closure.ctx)`, an *indirect* call through a function pointer. Because the function value is a compile-time-constant local, the optimizer devirtualizes the call and applies the same tail-call optimization it would to a direct one — so the fat-pointer representation imposes no penalty here. As with the elision above, this is the C compiler's optimization rather than an FC guarantee; FC's contribution is to keep the recursive call in tail position so the optimization remains available.
 
 # PART 4 — Type System
 
