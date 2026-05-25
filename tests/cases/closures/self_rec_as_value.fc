@@ -1,0 +1,11 @@
+// A self-recursive nested function used as a value (passed to a higher-order
+// function). The materialized self fat pointer is an ordinary local, so passing it
+// works like any other closure value.
+let apply = (f: (int32) -> int32, x: int32) -> f(x)
+
+let main = (args: str[]) ->
+    let fib = (n: int32) ->
+        if n < 2 then n
+        else fib(n - 1) + fib(n - 2)
+    assert(apply(fib, 10) == 55)
+    0

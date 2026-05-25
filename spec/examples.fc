@@ -327,6 +327,13 @@ let main = (args: str[]) ->
     let double = (n: int32) -> n * 2
     assert(double(21) == 42)
 
+    // A nested function is in scope within its own body, so it can be self-recursive
+    // (mutual recursion of locals is not supported — only the function itself)
+    let fac = (n: int32) ->
+        if n <= 1 then 1
+        else n * fac(n - 1)
+    assert(fac(5) == 120)
+
     // Multi-line body — last expression is the return value
     let clamp = (val: int32, lo: int32, hi: int32) ->
         if val < lo then lo

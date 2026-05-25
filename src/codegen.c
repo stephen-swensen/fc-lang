@@ -5243,6 +5243,18 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             fprintf(out, "(void)_ctx;\n");
         }
 
+        /* Self-recursion: materialize the binding as a local fat pointer so the body
+           can call/use itself by name. Non-capturing passes a NULL context; capturing
+           threads the same _ctx through recursive calls. Emitted only when the name was
+           actually referenced, so non-recursive lambdas stay -Werror-clean. */
+        if (lam->func.self_codegen_name && lam->func.self_referenced) {
+            emit_indent(out);
+            emit_type(lam->type, out);
+            fprintf(out, " %s = { .fn_ptr = %s, .ctx = %s };\n",
+                lam->func.self_codegen_name, lam->func.lifted_name,
+                lam->func.capture_count > 0 ? "_ctx" : "NULL");
+        }
+
         begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
         defer_scope_push(false);
         emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);

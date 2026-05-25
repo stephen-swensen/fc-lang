@@ -1,0 +1,7 @@
+// `let mut` lambdas are NOT self-recursive: a mutable binding is excluded from the
+// self-binding mechanism, so the name is not visible inside its own body.
+let main = (args: str[]) ->
+    let mut f = (n: int32) ->
+        if n <= 0 then 0
+        else f(n - 1)
+    f(3)

@@ -527,7 +527,7 @@ A **block** is a sequence of peer expressions at the same column, introduced aft
 
 - Expressions in a block are evaluated top to bottom.
 - The value of the block is its last expression. All preceding expressions are evaluated for their side effects — non-void values may be discarded without warning. FC is a systems language where side effects are not discouraged.
-- A `let` binding is visible to all subsequent expressions in the same block and in any nested blocks within those expressions. It is not visible before its declaration or outside the enclosing block.
+- A `let` binding is visible to all subsequent expressions in the same block and in any nested blocks within those expressions. It is not visible before its declaration or outside the enclosing block. **Exception:** when the binding's value is a lambda (`let f = (…) -> …`), the binding *is* visible inside that lambda's own body, so a nested function may call itself recursively. This applies only to immutable `let` bindings whose initializer is written directly as a lambda; `let mut` bindings and lambdas produced by other expressions do not get this self-visibility.
 
 These three rules replace the need for any explicit sequencing or scoping syntax. There is no `;` sequencing operator and no `in` scoping keyword (as found in ML-style languages) — both concepts fall out directly from the block model.
 
@@ -1157,7 +1157,7 @@ let x = some(42)                     // inferred as int32?
 
 The two compiler passes correspond directly to the statement / expression divide. The first pass processes all top-level statements — collecting names, types, struct layouts, and module structure — without evaluating any expressions. The second pass type-checks all expressions with the full top-level environment available.
 
-This means top-level bindings can reference each other regardless of declaration order, and mutual recursion requires no special syntax. Inner bindings inside function bodies do not benefit from this — they are resolved left-to-right in the second pass, so a local binding can only reference bindings that appear before it in the same block.
+This means top-level bindings can reference each other regardless of declaration order, and mutual recursion requires no special syntax. Inner bindings inside function bodies do not benefit from this — they are resolved left-to-right in the second pass, so a local binding can only reference bindings that appear before it in the same block. The one exception is *self*-reference: a `let`-bound lambda is in scope within its own body, so a nested function can be self-recursive (see Blocks). This does not extend to mutual or forward recursion of local bindings — two nested functions that call each other still require one to be defined before the other, which is impossible, so local mutual recursion is not supported.
 
 ---
 
@@ -1992,6 +1992,8 @@ The compiler performs **escape analysis** on pointer and slice expressions, trac
 Lambdas may capture immutable `let` bindings from the enclosing *local* scope by copy. `let mut` bindings cannot be captured.
 
 **Top-level bindings are not captures.** When a lambda references a top-level `let` or `let mut` binding, it accesses the global directly — no copy is made and no capture occurs. This means the function sees mutations to the global, and the function is *not* a closure for C interop purposes (it can be passed to `extern` function pointer parameters). Only references that cross a local lambda boundary produce captures.
+
+**A self-recursive call is not a capture.** When a `let`-bound lambda calls itself by name, that name is treated as a local of the function's own body, not a captured value, so self-recursion adds nothing to the closure's context. A self-recursive lambda that captures *other* local bindings is still a capturing closure subject to the usual lifetime rules (it cannot be returned or stored beyond its creator's frame). If a *nested* lambda refers to an enclosing self-recursive function, that reference is an ordinary capture of the enclosing function's value.
 
 ```fc
 let threshold = 10

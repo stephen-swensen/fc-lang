@@ -38,6 +38,13 @@ struct LambdaCtx {
     struct Expr **returns;
     int return_count;
     int return_cap;
+    /* Self-recursion: when this lambda is the init of a `let f = <lambda>` binding,
+       self_name/self_codegen_name identify the binding visible within the body, and
+       self_referenced records whether it was actually used (gates codegen of the
+       materialized self fat pointer so unused locals don't trip -Werror). */
+    const char *self_name;
+    const char *self_codegen_name;
+    bool self_referenced;
 };
 
 static Scope *scope_new(Arena *a, Scope *parent) {
@@ -190,6 +197,13 @@ typedef struct {
     ModuleScopeChain *parent_modules;  /* chain of ancestor module symtabs (nearest first) */
     const char *current_ns;      /* current namespace for namespace isolation */
     Type *recursive_ret;         /* non-NULL placeholder when resolving a recursive function */
+    /* One-shot channel from EXPR_LET to the EXPR_FUNC it wraps, so a `let f = <lambda>`
+       binding becomes visible inside its own body (self-recursion). Set by EXPR_LET,
+       consumed and cleared by EXPR_FUNC before checking the body so nested lambdas
+       don't inherit it. */
+    const char *pending_self_name;
+    const char *pending_self_codegen;
+    Type *pending_self_type;     /* partial function type with mutable placeholder return */
     LambdaCtx *lambda_ctx;       /* capture tracking for lambdas, NULL outside lambdas */
     bool is_top_level_init;      /* true when checking the init of a top-level DECL_LET */
     MonoTable *mono_table;       /* global instantiation registry */
@@ -1669,6 +1683,18 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                     lc = lc->parent;
                 }
             }
+            /* Self-recursion: if this resolves to the self-binding of one of the
+               enclosing lambdas (the one at depth boundary_crossings), record that the
+               name was used so codegen materializes the self fat pointer. Covers a
+               direct self-call (bc == 0) and a self-reference from a nested lambda
+               (bc > 0, which is also a normal capture handled above). */
+            {
+                LambdaCtx *owner = ctx->lambda_ctx;
+                for (int bc = 0; bc < boundary_crossings && owner; bc++)
+                    owner = owner->parent;
+                if (owner && owner->self_codegen_name == cg_name)
+                    owner->self_referenced = true;
+            }
             e->ident.codegen_name = cg_name;
             e->ident.is_local = !is_global_binding;
             e->ident.is_mut = is_mut;
@@ -2344,8 +2370,26 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             scope_add(inner, e->func.params[i].name, e->func.params[i].name, ptypes[i], false);
         }
 
+        /* Consume the pending-self channel set by an enclosing EXPR_LET so this
+           lambda's own binding name is visible within its body (self-recursion).
+           Added to the body's own inner scope (not the enclosing scope) so references
+           resolve as a local — not a capture. Cleared immediately so a nested lambda
+           defined inside this body does not inherit it. */
+        const char *self_name = ctx->pending_self_name;
+        const char *self_cg = ctx->pending_self_codegen;
+        Type *self_type = ctx->pending_self_type;
+        ctx->pending_self_name = NULL;
+        ctx->pending_self_codegen = NULL;
+        ctx->pending_self_type = NULL;
+        if (self_name)
+            scope_add(inner, self_name, self_cg, self_type, false);
+
         /* Push lambda context for capture tracking */
         LambdaCtx lctx = { .parent = ctx->lambda_ctx };
+        if (self_name) {
+            lctx.self_name = self_name;
+            lctx.self_codegen_name = self_cg;
+        }
         LambdaCtx *saved_lambda = ctx->lambda_ctx;
         ctx->lambda_ctx = &lctx;
 
@@ -2391,6 +2435,13 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* Transfer captures to AST node */
         e->func.captures = lctx.entries;
         e->func.capture_count = lctx.count;
+
+        /* Record self-recursion result for codegen: materialize the self fat pointer
+           only when the name was actually referenced, keeping generated C -Werror-clean. */
+        if (self_name) {
+            e->func.self_codegen_name = self_cg;
+            e->func.self_referenced = lctx.self_referenced;
+        }
 
         /* Capturing closures have stack-allocated context (compound literal) */
         if (lctx.count > 0)
@@ -2860,12 +2911,63 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 
     case EXPR_LET: {
         if (e->type) return e->type;
+
+        /* Assign the codegen name up front. A `let f = <lambda>` binding must have its
+           name fixed before the init is checked so the lambda body can refer to it for
+           self-recursion. */
+        int id = local_id_counter++;
+        const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
+        e->let_expr.codegen_name = cg;
+
+        /* Self-recursion setup: when the init is a direct lambda and the binding is
+           immutable, pre-register a partial function type (params known, return type a
+           mutable placeholder cell) and hand it to the wrapped EXPR_FUNC via the
+           pending-self channel so the body can call itself. The placeholder is patched
+           in place after the body is checked, mirroring top-level recursion in
+           check_decl_let. `let mut` lambdas are excluded — a mutable binding is neither
+           capturable nor stable enough to refer to itself. */
+        Type *self_placeholder = NULL;
+        const char *saved_psn = ctx->pending_self_name;
+        const char *saved_psc = ctx->pending_self_codegen;
+        Type *saved_pst = ctx->pending_self_type;
+        Type *saved_rec = ctx->recursive_ret;
+        if (e->let_expr.let_init->kind == EXPR_FUNC && !e->let_expr.let_is_mut) {
+            Expr *fn = e->let_expr.let_init;
+            int pc = fn->func.param_count;
+            Type **ptypes = NULL;
+            if (pc > 0) ptypes = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)pc);
+            for (int i = 0; i < pc; i++)
+                ptypes[i] = resolve_type(ctx, fn->func.params[i].type);
+
+            self_placeholder = malloc(sizeof(Type));
+            memset(self_placeholder, 0, sizeof(Type));
+            self_placeholder->kind = TYPE_VOID;  /* patched after body check */
+
+            Type *ft = arena_alloc(ctx->arena, sizeof(Type));
+            ft->kind = TYPE_FUNC;
+            ft->func.param_types = ptypes;
+            ft->func.param_count = pc;
+            ft->func.return_type = self_placeholder;
+            ft->func.type_params = fn->func.explicit_type_vars;
+            ft->func.type_param_count = fn->func.explicit_type_var_count;
+
+            ctx->pending_self_name = e->let_expr.let_name;
+            ctx->pending_self_codegen = cg;
+            ctx->pending_self_type = ft;
+            ctx->recursive_ret = self_placeholder;
+        }
+
         Type *t = check_expr(ctx, e->let_expr.let_init);
+
+        /* Restore the channel. EXPR_FUNC clears pending_self_* on consumption, but
+           restore unconditionally so error paths and non-lambda inits leave it clean. */
+        ctx->pending_self_name = saved_psn;
+        ctx->pending_self_codegen = saved_psc;
+        ctx->pending_self_type = saved_pst;
+        ctx->recursive_ret = saved_rec;
+
         if (type_is_error(t)) {
             /* Add binding with error type so subsequent uses don't cascade "undefined" */
-            int id = local_id_counter++;
-            const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
-            e->let_expr.codegen_name = cg;
             e->let_expr.let_type = type_error();
             scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
             e->type = type_void();
@@ -2873,18 +2975,20 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         }
         if (t->kind == TYPE_VOID) {
             diag_error(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
-            int id = local_id_counter++;
-            const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
-            e->let_expr.codegen_name = cg;
             e->let_expr.let_type = type_error();
             scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
             e->type = type_void();
             return e->type;
         }
+
+        /* Patch the placeholder return type in place so all recursive call sites (which
+           captured the placeholder cell) observe the final inferred return type. */
+        if (self_placeholder) {
+            Type *actual_ret = t->kind == TYPE_FUNC ? t->func.return_type : t;
+            *self_placeholder = *actual_ret;
+        }
+
         e->let_expr.let_type = t;
-        int id = local_id_counter++;
-        const char *cg = make_local_name(ctx->arena, "_l_", e->let_expr.let_name, id);
-        e->let_expr.codegen_name = cg;
         scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
                         e->let_expr.let_init->prov);
         /* Mark binding as capturing if init is a lambda with captures */

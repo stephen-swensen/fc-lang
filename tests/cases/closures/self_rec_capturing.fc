@@ -1,0 +1,11 @@
+// Capturing self-recursion: the closure closes over `step` and threads the same
+// context pointer through every recursive call.
+let main = (args: str[]) ->
+    let step = 2
+    let sum = (n: int32) ->
+        if n <= 0 then 0
+        else step + sum(n - 1)
+    assert(sum(0) == 0)
+    assert(sum(5) == 10)   // step added 5 times
+    assert(sum(100) == 200)
+    0

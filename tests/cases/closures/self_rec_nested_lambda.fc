@@ -1,0 +1,11 @@
+// A nested lambda references the enclosing self-recursive function. The outer
+// function's self binding is captured by the inner lambda like any other value.
+let main = (args: str[]) ->
+    let outer = (n: int32) ->
+        let g = (m: int32) -> outer(m - 1)   // g captures `outer` (its self binding)
+        if n <= 0 then 100
+        else g(n)
+    // outer(3) -> g(3) -> outer(2) -> g(2) -> outer(1) -> g(1) -> outer(0) -> 100
+    assert(outer(0) == 100)
+    assert(outer(3) == 100)
+    0

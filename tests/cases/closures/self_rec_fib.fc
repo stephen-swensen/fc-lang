@@ -1,0 +1,10 @@
+// Self-recursion with two recursive calls per invocation.
+let main = (args: str[]) ->
+    let fib = (n: int32) ->
+        if n < 2 then n
+        else fib(n - 1) + fib(n - 2)
+    assert(fib(0) == 0)
+    assert(fib(1) == 1)
+    assert(fib(10) == 55)
+    assert(fib(15) == 610)
+    0

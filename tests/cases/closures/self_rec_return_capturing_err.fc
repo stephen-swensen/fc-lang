@@ -1,0 +1,11 @@
+// Returning a capturing self-recursive closure is still rejected by escape analysis:
+// the context pointer would dangle. Self-recursion does not relax this rule.
+let make = (base: int32) ->
+    let rec = (n: int32) ->
+        if n <= 0 then base
+        else rec(n - 1)
+    rec
+
+let main = (args: str[]) ->
+    let f = make(5)
+    f(3)
