@@ -1,0 +1,7 @@
+let get = (xs: int32[], i: int32) ->
+    xs[i]
+
+let main = (args: str[]) ->
+    let nums = int32[3] { 1, 2, 3 }
+    let _r = get(nums, 99)
+    0

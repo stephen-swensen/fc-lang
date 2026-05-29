@@ -1,0 +1,7 @@
+let check = (x: 'a, ok: bool) ->
+    assert(ok)
+    x
+
+let main = (args: str[]) ->
+    let _r = check(42, false)
+    0

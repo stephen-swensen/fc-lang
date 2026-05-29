@@ -1,0 +1,7 @@
+let helper = (n: int32) ->
+    assert(n > 0)
+    n
+
+let main = (args: str[]) ->
+    let _r = helper(0)
+    0

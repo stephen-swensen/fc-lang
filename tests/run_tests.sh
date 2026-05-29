@@ -42,6 +42,7 @@ run_test() {
     local expected_exit_file="$4"
     local expected_file="$5"
     local fc_flags="$6"
+    local stderr_contains_file="$7"
 
     local slug="${test_display//\//_}"
     local c_file="$TMPDIR/${slug}.c"
@@ -91,13 +92,27 @@ run_test() {
         return
     fi
 
+    # Run once, capturing stdout and stderr separately so we can match against
+    # both .expected (stdout+stderr combined, exact diff) and
+    # .expected_stderr_contains (stderr only, substring lines).
+    local stdout_file="$TMPDIR/${slug}.stdout"
+    local stderr_file="$TMPDIR/${slug}.run_stderr"
+    local combined_file="$TMPDIR/${slug}.combined"
+    local actual_exit
+    local ran=0
+    run_bin() {
+        set +e
+        "$bin_file" > "$stdout_file" 2>"$stderr_file"
+        actual_exit=$?
+        set -e
+        cat "$stdout_file" "$stderr_file" > "$combined_file" 2>/dev/null || true
+        ran=1
+    }
+
     # Check expected exit code
     if [ -n "$expected_exit_file" ] && [ -f "$expected_exit_file" ]; then
         local expected_exit=$(cat "$expected_exit_file" | tr -d '[:space:]')
-        set +e
-        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
-        local actual_exit=$?
-        set -e
+        run_bin
         if ! exit_matches "$expected_exit" "$actual_exit"; then
             echo "  FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
             failed=$((failed + 1))
@@ -106,12 +121,10 @@ run_test() {
         fi
     fi
 
-    # Check expected stdout
+    # Check expected stdout (matches combined stdout+stderr for back-compat)
     if [ -n "$expected_file" ] && [ -f "$expected_file" ]; then
-        set +e
-        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
-        set -e
-        if ! diff -u "$expected_file" "$TMPDIR/${slug}.stdout" > "$TMPDIR/${slug}.diff" 2>&1; then
+        [ "$ran" = "1" ] || run_bin
+        if ! diff -u "$expected_file" "$combined_file" > "$TMPDIR/${slug}.diff" 2>&1; then
             echo "  FAIL  $test_display (output mismatch)"
             cat "$TMPDIR/${slug}.diff"
             failed=$((failed + 1))
@@ -123,13 +136,35 @@ run_test() {
     # If no expected_exit and no expected stdout, run and expect exit code 0
     if { [ -z "$expected_exit_file" ] || [ ! -f "$expected_exit_file" ]; } && \
        { [ -z "$expected_file" ] || [ ! -f "$expected_file" ]; }; then
-        set +e
-        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>"$TMPDIR/${slug}.run_stderr"; } 2>/dev/null
-        local actual_exit=$?
-        set -e
+        [ "$ran" = "1" ] || run_bin
         if [ "$actual_exit" != "0" ]; then
             echo "  FAIL  $test_display (exit code: expected 0, got $actual_exit)"
-            cat "$TMPDIR/${slug}.run_stderr"
+            cat "$stderr_file"
+            failed=$((failed + 1))
+            errors="$errors  $test_display\n"
+            return
+        fi
+    fi
+
+    # Check substring assertions against stderr.  Each non-empty, non-comment
+    # line of expected_stderr_contains must appear (as a fixed-string substring)
+    # somewhere in the run's stderr.  Used by --debug-trace tests where the
+    # exact frame layout is variable but key tokens are stable.
+    if [ -n "$stderr_contains_file" ] && [ -f "$stderr_contains_file" ]; then
+        [ "$ran" = "1" ] || run_bin
+        local missing=""
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "$line" in \#*) continue ;; esac
+            if ! grep -qF -- "$line" "$stderr_file"; then
+                missing="${missing}    missing: ${line}\n"
+            fi
+        done < "$stderr_contains_file"
+        if [ -n "$missing" ]; then
+            echo "  FAIL  $test_display (stderr missing expected substrings)"
+            printf "$missing"
+            echo "  ---- actual stderr ----"
+            cat "$stderr_file"
             failed=$((failed + 1))
             errors="$errors  $test_display\n"
             return
@@ -189,12 +224,23 @@ for milestone_dir in "$TESTDIR"/*/; do
             done < "${test_subdir}flags"
         fi
 
+        # Literal extra fcc args (one per line) — used for codegen flags like
+        # --debug-trace.  Distinct from `flags` which prepends --flag to each.
+        if [ -f "${test_subdir}fcc_args" ]; then
+            while IFS= read -r arg; do
+                [ -n "$arg" ] || continue
+                case "$arg" in \#*) continue ;; esac
+                fc_flags="$fc_flags $arg"
+            done < "${test_subdir}fcc_args"
+        fi
+
         run_test "$test_display" \
             "$fc_files" \
             "${test_subdir}error" \
             "${test_subdir}expected_exit" \
             "${test_subdir}expected" \
-            "$fc_flags"
+            "$fc_flags" \
+            "${test_subdir}expected_stderr_contains"
     done
 done
 

@@ -65,6 +65,15 @@ struct DeferScope {
 };
 static DeferScope *g_defer_scope = NULL;
 
+/* Storage-class prefix for emitted FC functions, monomorphs, lambdas, and
+ * trampolines.  Normally `static` so the C compiler can DCE/inline freely.
+ * With --debug-trace we add `noinline` so every call appears as a distinct
+ * frame in the backtrace — without it, inlined calls would silently vanish
+ * from the trace.  Functions stay `static`: address resolution happens via
+ * an FC-emitted symbol table keyed by `&fn` addresses, not the dynamic
+ * symbol table, so `-rdynamic` is not required.  Set in codegen_emit(). */
+static const char *g_fn_attr = "static __attribute__((unused)) ";
+
 static void emit_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
@@ -1666,7 +1675,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->binary.right, out);
             fprintf(out, "; if (_dv%d == 0) { fprintf(stderr, \"", tid);
             emit_c_escaped(fn, fn_len, out);
-            fprintf(out, ":%d: %s by zero\\n\"); abort(); } (",
+            fprintf(out, ":%d: %s by zero\\n\"); FC_ABORT(); } (",
                     line, op == TOK_SLASH ? "divide" : "modulo");
             emit_expr(e->binary.left, out);
             fprintf(out, ") %s _dv%d; })", op == TOK_SLASH ? "/" : "%", tid);
@@ -1784,7 +1793,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (e->unary_postfix.expr_text)
                     emit_c_escaped(e->unary_postfix.expr_text,
                                    e->unary_postfix.expr_text_len, out);
-                fprintf(out, "\\n\"); abort(); } _uw%d; })", tid);
+                fprintf(out, "\\n\"); FC_ABORT(); } _uw%d; })", tid);
             } else {
                 /* Non-pointer option: check .has_value */
                 fprintf(out, "({ ");
@@ -1798,7 +1807,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (e->unary_postfix.expr_text)
                     emit_c_escaped(e->unary_postfix.expr_text,
                                    e->unary_postfix.expr_text_len, out);
-                fprintf(out, "\\n\"); abort(); } _uw%d.value; })", tid);
+                fprintf(out, "\\n\"); FC_ABORT(); } _uw%d.value; })", tid);
             }
         }
         break;
@@ -2421,7 +2430,7 @@ static void emit_expr(Expr *e, FILE *out) {
                     emit_c_escaped(vfn, vfn_len, out);
                     fprintf(out, ":%d: fixed-array field '%s' overflow: "
                                  "len=%%lld capacity=%lld\\n\", "
-                                 "(long long)_fas%d.len); abort(); } ",
+                                 "(long long)_fas%d.len); FC_ABORT(); } ",
                             vloc.line, fname, (long long)field_type->fixed_array.size,
                             sid);
                     fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
@@ -2730,7 +2739,7 @@ static void emit_expr(Expr *e, FILE *out) {
                _matchN provably initialized for -Wuninitialized and fails loudly
                if a bug ever produces an uncovered case at runtime. */
             emit_indent(out);
-            fprintf(out, "if (!_matchdone%d) abort();\n", done_id);
+            fprintf(out, "if (!_matchdone%d) FC_ABORT();\n", done_id);
         }
 
         if (!match_is_void) {
@@ -2903,7 +2912,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_c_escaped(e->assert_expr.expr_text, e->assert_expr.expr_text_len, out);
             fprintf(out, "\\n\"); ");
         }
-        fprintf(out, "abort(); } })");
+        fprintf(out, "FC_ABORT(); } })");
         break;
     }
 
@@ -3222,14 +3231,14 @@ static void emit_func_decl(Decl *d, FILE *out) {
     if (is_main) {
         /* Emit the FC main body as fc_main(str[] args).  Static: only the
          * int main(int, char**) wrapper (emitted below) calls it. */
-        fprintf(out, "static __attribute__((unused)) int32_t fc_main(");
+        fprintf(out, "%sint32_t fc_main(", g_fn_attr);
         emit_type(fn->func.params[0].type, out);
         fprintf(out, " %s) {\n", fn->func.params[0].name);
     } else {
         /* Emit return type.  Static: FC emits a single translation unit, so
          * nothing outside this TU calls these functions; static allows GCC
          * to inline more aggressively and DCE unused helpers. */
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
         fprintf(out, " %s(", cname);
         for (int i = 0; i < fn->func.param_count; i++) {
@@ -4347,6 +4356,67 @@ static void collect_defines(Decl *d, CDefine *defs, int *count, int cap) {
 static bool g_needs_stdio;
 static bool g_needs_math;
 static bool g_needs_float;
+static bool g_debug_trace;
+
+/* Symbol map populated during codegen when g_debug_trace is set; emitted as
+ * _fc_symtab[] in the preamble so fc_dump_trace() can render FC-level names. */
+typedef struct {
+    const char *c_name;   /* mangled C identifier as emitted */
+    const char *fc_name;  /* display name (e.g. "foo<int32>", "<lambda at f.fc:N>") */
+    const char *file;     /* FC source file of the definition */
+    int line;             /* FC source line of the definition */
+} FcSymEntry;
+static FcSymEntry *g_symmap = NULL;
+static int g_symmap_count = 0;
+static int g_symmap_cap = 0;
+
+static void symmap_reset(void) {
+    free(g_symmap);
+    g_symmap = NULL;
+    g_symmap_count = 0;
+    g_symmap_cap = 0;
+}
+
+/* Add a function to the symbol table for --debug-trace.  Pass fc_name=NULL to
+ * mark an internal helper (fc_oob, fc_oob_sub) whose stack-trace frames should
+ * be skipped from the printed trace.  Otherwise fc_name is the FC display
+ * name (e.g. "foo<int32>", "<lambda at f.fc:N>"). */
+static void symmap_add(const char *c_name, const char *fc_name,
+                       const char *file, int line) {
+    if (!g_debug_trace || !c_name) return;
+    /* Dedup: a function can be emitted in multiple walks; skip if seen. */
+    for (int i = 0; i < g_symmap_count; i++) {
+        if (g_symmap[i].c_name && strcmp(g_symmap[i].c_name, c_name) == 0)
+            return;
+    }
+    FcSymEntry e = { c_name, fc_name,
+                     file ? file : "<unknown>", line };
+    DA_APPEND(g_symmap, g_symmap_count, g_symmap_cap, e);
+}
+
+/* Build "template<T1, T2>" for a monomorphized instance into an arena
+ * allocation. Returns a stable pointer suitable for storing in the symmap. */
+static const char *fmt_mono_display(Arena *arena, const char *template_name,
+                                    Type **type_args, int type_arg_count) {
+    char buf[512];
+    int off = snprintf(buf, sizeof buf, "%s<", template_name);
+    for (int i = 0; i < type_arg_count && off < (int)sizeof buf; i++) {
+        const char *tn = type_name(type_args[i]);
+        off += snprintf(buf + off, sizeof buf - (size_t)off, "%s%s",
+                        i == 0 ? "" : ", ", tn ? tn : "?");
+    }
+    if (off < (int)sizeof buf) off += snprintf(buf + off, sizeof buf - (size_t)off, ">");
+    if (off >= (int)sizeof buf) off = (int)sizeof buf - 1;
+    return arena_strdup(arena, buf, off);
+}
+
+/* Lambda display name.  The location is rendered separately as
+ * "defined at file:line" by fc_dump_trace, so the name itself just reads
+ * "<lambda>" — duplicating the location in the name would be redundant. */
+static const char *fmt_lambda_display(Arena *arena, const char *file, int line) {
+    (void)arena; (void)file; (void)line;
+    return "<lambda>";
+}
 
 static void detect_features_expr(Expr *e) {
     if (!e) return;
@@ -4571,11 +4641,16 @@ static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) 
 }
 
 void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
-                  Arena *arena, InternTable *intern_tbl, SymbolTable *symtab) {
+                  Arena *arena, InternTable *intern_tbl, SymbolTable *symtab,
+                  const CodegenOptions *opts) {
     g_mono = mono;
     g_arena = arena;
     g_intern = intern_tbl;
     g_symtab = symtab;
+    g_debug_trace = opts && opts->debug_trace;
+    g_fn_attr = g_debug_trace ? "static __attribute__((unused, noinline)) "
+                              : "static __attribute__((unused)) ";
+    symmap_reset();
 
     /* Collect from_libs and defines from extern module declarations */
     const char *from_libs[64];
@@ -4628,8 +4703,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "#error \"FC on Windows requires the UCRT runtime; msvcrt is not supported.\"\n"
         "#endif\n");
 
-    /* Feature-gated headers — emitted only when needed */
-    if (g_needs_stdio) fprintf(out, "#include <stdio.h>\n");
+    /* Feature-gated headers — emitted only when needed.  --debug-trace forces
+     * <stdio.h> because the emitted fc_dump_trace helper uses fprintf/stderr
+     * regardless of whether user code does any I/O. */
+    if (g_needs_stdio || g_debug_trace) fprintf(out, "#include <stdio.h>\n");
     if (g_needs_math)  fprintf(out, "#include <math.h>\n");
     if (g_needs_float) fprintf(out, "#include <float.h>\n");
 
@@ -4683,6 +4760,17 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "    return (int)n;\n"
         "}\n");
 
+    /* Abort macro.  When --debug-trace is on, every abort site dumps a stack
+     * trace before bailing.  Forward-declare fc_dump_trace here so callers can
+     * see it; body and the FC-symbol mapping table are emitted at the end of
+     * the TU once all emitted function names are known. */
+    if (g_debug_trace) {
+        fprintf(out, "__attribute__((cold, unused)) static void fc_dump_trace(void);\n");
+        fprintf(out, "#define FC_ABORT() ({ fc_dump_trace(); abort(); })\n");
+    } else {
+        fprintf(out, "#define FC_ABORT() abort()\n");
+    }
+
     /* Out-of-bounds failure helpers.  Cold+noreturn so the hot path stays
      * clean: the compiler can schedule these out of line, skip keeping
      * caller state live across the call, and is free to vectorize/reorder
@@ -4693,14 +4781,18 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "static void fc_oob(const char *file, int line, long long idx, long long len) {\n"
             "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%lld len=%%lld\\n\",\n"
             "            file, line, idx, len);\n"
-            "    abort();\n"
+            "    FC_ABORT();\n"
             "}\n"
             "__attribute__((cold, noreturn, unused))\n"
             "static void fc_oob_sub(const char *file, int line, long long lo, long long hi, long long len) {\n"
             "    fprintf(stderr, \"%%s:%%d: subslice out of range: lo=%%lld hi=%%lld len=%%lld\\n\",\n"
             "            file, line, lo, hi, len);\n"
-            "    abort();\n"
+            "    FC_ABORT();\n"
             "}\n");
+        /* Register the helpers as skip-entries so their frames don't pollute
+         * the user-visible trace when a bounds check fires. */
+        symmap_add("fc_oob", NULL, "<runtime>", 0);
+        symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
     }
 
     /* Collect all slice, option, function, and eq types used in the program */
@@ -5026,15 +5118,16 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Decl *d = all_decls[i];
         if (is_func_decl(d) && strcmp(d->let.name, "main") == 0 && !is_generic_decl(d)) {
             Expr *fn = d->let.init;
-            fprintf(out, "static __attribute__((unused)) int32_t fc_main(");
+            fprintf(out, "%sint32_t fc_main(", g_fn_attr);
             emit_type(fn->func.params[0].type, out);
             fprintf(out, " %s);\n", fn->func.params[0].name);
+            symmap_add("fc_main", "main", d->loc.filename, d->loc.line);
             continue;
         }
         if (is_func_decl(d) && strcmp(d->let.name, "main") != 0 && !is_generic_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             Type *ft = d->let.resolved_type;
-            fprintf(out, "static __attribute__((unused)) ");
+            fprintf(out, "%s", g_fn_attr);
             emit_type(ft->func.return_type, out);
             fprintf(out, " %s(", cname);
             Expr *fn = d->let.init;
@@ -5045,6 +5138,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             }
             if (fn->func.param_count > 0) fprintf(out, ", ");
             fprintf(out, "void* _ctx);\n");
+            symmap_add(cname, d->let.name, d->loc.filename, d->loc.line);
         }
     }
     /* Forward declarations for monomorphized functions */
@@ -5057,7 +5151,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         /* Set up substitution context */
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
         for (int j = 0; j < fn->func.param_count; j++) {
@@ -5068,6 +5162,11 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
         g_subst = NULL;
+        if (g_debug_trace) {
+            const char *disp = fmt_mono_display(g_arena, tmpl->let.name,
+                                                inst->type_args, inst->type_param_count);
+            symmap_add(inst->mangled_name, disp, tmpl->loc.filename, tmpl->loc.line);
+        }
     }
     fprintf(out, "\n");
 
@@ -5076,6 +5175,15 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < all_count; i++) {
         if (all_decls[i]->kind == DECL_LET && all_decls[i]->let.init) {
             collect_lambdas_expr(all_decls[i]->let.init, &lambdas);
+        }
+    }
+    /* Record lambdas in symmap (for --debug-trace stack frames) */
+    if (g_debug_trace) {
+        for (int i = 0; i < lambdas.count; i++) {
+            Expr *lam = lambdas.exprs[i];
+            if (!lam->func.lifted_name) continue;
+            const char *disp = fmt_lambda_display(g_arena, lam->loc.filename, lam->loc.line);
+            symmap_add(lam->func.lifted_name, disp, lam->loc.filename, lam->loc.line);
         }
     }
 
@@ -5182,7 +5290,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < lambdas.count; i++) {
         Expr *lam = lambdas.exprs[i];
         Type *ft = lam->type;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
         fprintf(out, " %s(", lam->func.lifted_name);
         for (int j = 0; j < lam->func.param_count; j++) {
@@ -5197,7 +5305,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < trampolines.count; i++) {
         TrampolineEntry *te = &trampolines.entries[i];
         Type *ft = te->type;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
         fprintf(out, " _ctramp_%s(", te->name);
         for (int j = 0; j < ft->func.param_count; j++) {
@@ -5214,7 +5322,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < lambdas.count; i++) {
         Expr *lam = lambdas.exprs[i];
         Type *ft = lam->type;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
         fprintf(out, " %s(", lam->func.lifted_name);
         for (int j = 0; j < lam->func.param_count; j++) {
@@ -5281,7 +5389,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Expr *fn = tmpl->let.init;
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
         for (int j = 0; j < fn->func.param_count; j++) {
@@ -5304,7 +5412,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Expr *fn = tmpl->let.init;
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
         for (int j = 0; j < fn->func.param_count; j++) {
@@ -5330,7 +5438,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < trampolines.count; i++) {
         TrampolineEntry *te = &trampolines.entries[i];
         Type *ft = te->type;
-        fprintf(out, "static __attribute__((unused)) ");
+        fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
         fprintf(out, " _ctramp_%s(", te->name);
         for (int j = 0; j < ft->func.param_count; j++) {
@@ -5389,6 +5497,89 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "}\n");
     }
 
+    /* Stack-trace helper body + FC-symbol mapping table.
+     * Emitted at the end of the TU so all collected names (top-level functions,
+     * monomorphized instances, lifted lambdas) are present in g_symmap.
+     *
+     * The table is keyed by function address (taken with &name).  At program
+     * startup a constructor sorts it by address; lookup is a binary search
+     * for the largest entry with fn_addr <= return_addr.  No dependency on
+     * the dynamic symbol table — `-rdynamic` is not required.  Entries with
+     * fc_name == NULL mark internal helpers (fc_oob, fc_oob_sub) whose
+     * frames are skipped from the printed trace.
+     *
+     * The body is gated on __linux__/__APPLE__ via #if; on other platforms
+     * the helper is a no-op stub and abort() still fires.  The forward
+     * declaration is in the preamble. */
+    if (g_debug_trace) {
+        fprintf(out, "\n#if defined(__linux__) || defined(__APPLE__)\n");
+        fprintf(out, "#include <execinfo.h>\n");
+        fprintf(out, "#endif\n");
+        fprintf(out, "typedef struct { void *fn_addr; const char *fc_name; const char *file; int line; } fc_sym_entry;\n");
+        fprintf(out, "static fc_sym_entry _fc_symtab[] = {\n");
+        for (int i = 0; i < g_symmap_count; i++) {
+            FcSymEntry *e = &g_symmap[i];
+            fprintf(out, "    { (void*)&%s, ", e->c_name);
+            if (e->fc_name) {
+                fprintf(out, "\"");
+                emit_c_escaped(e->fc_name, (int)strlen(e->fc_name), out);
+                fprintf(out, "\"");
+            } else {
+                fprintf(out, "(void*)0");
+            }
+            fprintf(out, ", \"");
+            emit_c_escaped(e->file, (int)strlen(e->file), out);
+            fprintf(out, "\", %d },\n", e->line);
+        }
+        fprintf(out, "};\n");
+        fprintf(out, "static const int _fc_symtab_count = %d;\n", g_symmap_count);
+        fprintf(out,
+            "static int _fc_sym_cmp(const void *a, const void *b) {\n"
+            "    void *pa = ((const fc_sym_entry*)a)->fn_addr;\n"
+            "    void *pb = ((const fc_sym_entry*)b)->fn_addr;\n"
+            "    if ((uintptr_t)pa < (uintptr_t)pb) return -1;\n"
+            "    if ((uintptr_t)pa > (uintptr_t)pb) return  1;\n"
+            "    return 0;\n"
+            "}\n"
+            "__attribute__((constructor)) static void _fc_symtab_init(void) {\n"
+            "    qsort(_fc_symtab, (size_t)_fc_symtab_count, sizeof _fc_symtab[0], _fc_sym_cmp);\n"
+            "}\n");
+        fprintf(out,
+            "__attribute__((cold, unused))\n"
+            "static void fc_dump_trace(void) {\n"
+            "#if defined(__linux__) || defined(__APPLE__)\n"
+            "    void *_frames[64];\n"
+            "    int _n = backtrace(_frames, 64);\n"
+            "    if (_n < 2) return;\n"
+            "    fprintf(stderr, \"stack trace:\\n\");\n"
+            "    int _printed = 0;\n"
+            "    for (int _i = 1; _i < _n; _i++) {\n"
+            "        /* Binary search: largest entry with fn_addr <= frame addr. */\n"
+            "        uintptr_t _a = (uintptr_t)_frames[_i];\n"
+            "        int _lo = 0, _hi = _fc_symtab_count;\n"
+            "        while (_lo < _hi) {\n"
+            "            int _mid = _lo + (_hi - _lo) / 2;\n"
+            "            if ((uintptr_t)_fc_symtab[_mid].fn_addr <= _a) _lo = _mid + 1;\n"
+            "            else _hi = _mid;\n"
+            "        }\n"
+            "        if (_lo == 0) {\n"
+            "            fprintf(stderr, \"  #%%d %%p\\n\", _printed++, _frames[_i]);\n"
+            "            continue;\n"
+            "        }\n"
+            "        const fc_sym_entry *_e = &_fc_symtab[_lo - 1];\n"
+            "        if (!_e->fc_name) continue;  /* internal helper: skip */\n"
+            "        fprintf(stderr, \"  #%%d %%-24s defined at %%s:%%d\\n\",\n"
+            "                _printed++, _e->fc_name, _e->file, _e->line);\n"
+            "        if (strcmp(_e->fc_name, \"main\") == 0) break;\n"
+            "    }\n"
+            "#else\n"
+            "    (void)_fc_symtab;\n"
+            "    (void)_fc_symtab_count;\n"
+            "#endif\n"
+            "}\n");
+    }
+
+    symmap_reset();
     free(g_file_globals);
     g_file_globals = NULL;
     g_file_global_count = 0;

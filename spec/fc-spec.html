@@ -1379,6 +1379,43 @@ There is no exception handling and no recoverable failure path for these operati
 > **Transpilation**
 > Bounds checks emit an unsigned-compare (`(uint64_t)idx >= (uint64_t)len`, which fuses the negative-index and past-end cases into one branch since slice lengths are non-negative by invariant), wrapped in `__builtin_expect(..., 0)` so the fast path is fall-through. On failure the check calls a shared out-of-line helper — `fc_oob` for indexing, `fc_oob_sub` for subslicing — emitted once per translation unit and marked `static __attribute__((cold, noreturn, unused))`; the helper prints the diagnostic and calls `abort()`. Keeping the failure path out of line lets the C compiler schedule it after the function body, avoid keeping state live across a (statically-unreachable) call, and autovectorize loops containing slice accesses. Subslice checks use the same pattern with a two-compare form (`(uint64_t)lo > (uint64_t)hi` and `(uint64_t)hi > (uint64_t)s.len`) that covers all four failure modes including negative operands. Option unwrap emits a tag check before the value read; on failure, it prints a diagnostic to stderr (`file:line: unwrap failed: expr`) before calling `abort()`. Division by zero emits a divisor check before the division. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).
 
+### Stack Traces (`--debug-trace`)
+
+By default, a hard failure prints one line — file, line, kind — then aborts. Passing `--debug-trace` to `fcc` emits an additional stack trace immediately before the abort, walking the C call stack and rendering each frame with the FC-level name and definition site.
+
+```
+prog.fc:2: assertion failed: xs.len > 0
+stack trace:
+  #0 helper                   defined at prog.fc:1
+  #1 do_thing                 defined at prog.fc:5
+  #2 main                     defined at prog.fc:8
+```
+
+The flag is **off by default**: programs compiled without it pay no extra cost and emit no extra code. The "zero overhead" claim applies in two layers: (1) when the flag is off, no helper or symbol table is emitted at all; (2) when the flag is on, stack walking only runs at the moment of an abort, so the failure path is the only place the work happens.
+
+**The flag does, however, cost inlining.** To ensure every call appears as a distinct frame in the trace, `--debug-trace` adds `__attribute__((noinline))` to every emitted FC function (top-level functions, monomorphized instances, lifted lambdas, trampolines). Without this, the C compiler would inline some calls and the corresponding frames would silently vanish from the trace — confusing when reading a stack walk. The cost is that no FC function gets inlined in a `--debug-trace` build, regardless of `-O` level. In practice a `--debug-trace` build at `-O2` will not match a non-traced `-O2` build for code size or call-boundary throughput. The trade-off is intentional and confined to the diagnostic build: production builds should not use `--debug-trace`.
+
+The categories of optimization this forfeits are those that depend on the callee's body being available at the call site: full inlining, cross-call constant propagation (GCC's `.constprop` clones), and interprocedural dead-store elimination. Each FC call becomes a real call/return pair, with arguments and return values flowing through registers per the C ABI rather than being folded into the caller's surrounding computation.
+
+**Direct TCO is preserved in practice.** Tail call optimization is structurally compatible with `noinline`: `noinline` controls whether a callee's body is *copied into* its callers, while TCO rewrites a `call+ret` into a `jmp` that reuses the existing frame. No body copy is involved, so the attribute and the optimization don't conflict. In observed builds (gcc/clang at `-O2`) the following all retain TCO under `--debug-trace`: direct self-recursion → backward jump within the same function; mutual recursion between named functions → `jmp` sibcalls between them; cross-function tail calls (`return helper(args)`) → `jmp` sibcalls; and closure-mediated self-recursion where GCC can devirtualize the indirect call. Recursion-heavy FC code remains stack-safe.
+
+This is "observed under the configurations we test" rather than a hard guarantee — TCO is the C compiler's call and depends on factors unrelated to `noinline` (frame escapes, varargs, ABI mismatches, address-taken locals that outlive the tail call). The same constraints apply with or without `--debug-trace`. If you're relying on TCO for correctness (e.g. deep recursion that would otherwise overflow), verify it holds in the C output for your target compiler, just as you would in a non-traced build.
+
+**Platform support.** The trace uses `backtrace()` from `<execinfo.h>`, available on Linux and macOS. On other platforms the same `.c` file still compiles (the helper body is gated with `#if defined(__linux__) || defined(__APPLE__)`) but the trace silently degrades to just the existing one-line diagnostic. Generated code remains portable.
+
+**No linker flags required.** Address-to-name resolution is done entirely through an FC-emitted lookup table, keyed by function addresses taken with `&fn` at codegen time. The table is sorted at program startup via a `__attribute__((constructor))` that calls `qsort`; lookup is a binary search for the largest entry whose address is `≤` the return address. The dynamic symbol table is not consulted, so `-rdynamic` is unnecessary. Internal helpers (`fc_oob`, `fc_oob_sub`) are registered in the table with a sentinel marker so their frames are skipped from the printed trace.
+
+**What's in a frame.** The **top frame** (`#0`) shows the exact FC `file:line` of the failure — the same location as the existing one-line diagnostic. Subsequent frames show where each function in the call chain was **defined**, not where the call was made. FC's stack trace does not parse DWARF, so per-frame call sites are not recovered; that requires a richer backend (e.g. `libbacktrace`). The trade-off keeps the dependency surface to just `<execinfo.h>`.
+
+**Names rendered in frames.**
+
+- Top-level functions: the FC short name, e.g. `helper`.
+- Monomorphized generics: `name<T1, T2>`, e.g. `check<int32>`.
+- Lifted lambdas: `<lambda>`. The trailing `defined at file:line` column carries the location.
+- Frames the compiler did not emit (libc, the C runtime entry point, etc.) appear with their raw symbol name; the walk halts at `main` or `fc_main` to avoid runtime noise.
+
+**Optimization.** Because every FC function is marked `noinline` in this build, every call appears as a distinct frame at every `-O` level. The trace shape is therefore stable across `-O0` and `-O2`; only the surrounding non-traced helpers and the C runtime may differ. The cost is the loss of inlining noted above.
+
 ---
 
 # PART 2 — Control Flow

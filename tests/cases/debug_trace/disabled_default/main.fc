@@ -1,0 +1,10 @@
+// Verifies the default-off behavior of --debug-trace: the existing single-line
+// diagnostic still fires (exit 134), but no stack trace is emitted.  This is
+// the assert from basic_assert/ without the --debug-trace flag.
+let helper = (n: int32) ->
+    assert(n > 0)
+    n
+
+let main = (args: str[]) ->
+    let _r = helper(0)
+    0
