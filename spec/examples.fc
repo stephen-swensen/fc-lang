@@ -429,6 +429,10 @@ let main = (args: str[]) ->
 
     // Unwrap with ! (aborts on none)
     assert(some_val! == 42)
+    // Hard failures (failed unwrap, bounds check, assert) print a one-line
+    // diagnostic then abort. Compile with `fcc --backtraces` to also print a
+    // backtrace of FC-level frames before the abort (off by default; costs
+    // inlining, so use it only for diagnostic builds).
 
     // Pattern matching on options
     let unwrap_or = (opt: int32?, fallback: int32) ->
