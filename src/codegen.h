@@ -6,7 +6,7 @@
 #include <stdio.h>
 
 typedef struct {
-    bool debug_trace;
+    bool backtraces;
 } CodegenOptions;
 
 /* Emit C11 code for the program to the given file handle */

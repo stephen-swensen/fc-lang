@@ -1,5 +1,5 @@
 assertion failed
-stack trace:
+backtrace:
 <lambda>
 apply
 main

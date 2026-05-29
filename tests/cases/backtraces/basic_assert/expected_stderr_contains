@@ -1,7 +1,7 @@
 # Existing one-line diagnostic remains present
 assertion failed: n > 0
-# Trace header
-stack trace:
+# Backtrace header
+backtrace:
 # Frames render with FC names and definition sites (looked up via the
 # FC-emitted address table; no linker flags required)
 helper

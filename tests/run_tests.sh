@@ -148,7 +148,7 @@ run_test() {
 
     # Check substring assertions against stderr.  Each non-empty, non-comment
     # line of expected_stderr_contains must appear (as a fixed-string substring)
-    # somewhere in the run's stderr.  Used by --debug-trace tests where the
+    # somewhere in the run's stderr.  Used by --backtraces tests where the
     # exact frame layout is variable but key tokens are stable.
     if [ -n "$stderr_contains_file" ] && [ -f "$stderr_contains_file" ]; then
         [ "$ran" = "1" ] || run_bin
@@ -225,7 +225,7 @@ for milestone_dir in "$TESTDIR"/*/; do
         fi
 
         # Literal extra fcc args (one per line) — used for codegen flags like
-        # --debug-trace.  Distinct from `flags` which prepends --flag to each.
+        # --backtraces.  Distinct from `flags` which prepends --flag to each.
         if [ -f "${test_subdir}fcc_args" ]; then
             while IFS= read -r arg; do
                 [ -n "$arg" ] || continue

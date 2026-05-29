@@ -1,4 +1,4 @@
 assertion failed
-stack trace:
+backtrace:
 check<int32>
 main

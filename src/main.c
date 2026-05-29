@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
                 "usage: fcc <input.fc> [input2.fc ...] [-o output.c]\n"
-                "       [--flag <name[=value]>] [--no-auto-detect] [--debug-trace]\n");
+                "       [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n");
         return 1;
     }
 
@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     const char *output_path = NULL;
     Flag *flags = NULL;
     int flag_count = 0, flag_cap = 0;
-    bool debug_trace = false;
+    bool backtraces = false;
 
     /* Auto-detect host platform from compile-time #ifdefs in platform.c,
      * unless --no-auto-detect is passed. Detection writes os/arch/env
@@ -89,8 +89,8 @@ int main(int argc, char **argv) {
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--no-auto-detect") == 0) {
             /* Already handled above. */
-        } else if (strcmp(argv[i], "--debug-trace") == 0) {
-            debug_trace = true;
+        } else if (strcmp(argv[i], "--backtraces") == 0) {
+            backtraces = true;
         } else if (strcmp(argv[i], "--flag") == 0 && i + 1 < argc) {
             const char *arg = argv[++i];
             const char *eq = strchr(arg, '=');
@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
         diag_fatal_simple("cannot open output '%s'", output_path);
     }
 
-    CodegenOptions cg_opts = { .debug_trace = debug_trace };
+    CodegenOptions cg_opts = { .backtraces = backtraces };
     codegen_emit(prog, out, &mono, &arena, &intern_table, &symtab, &cg_opts);
     fclose(out);
 

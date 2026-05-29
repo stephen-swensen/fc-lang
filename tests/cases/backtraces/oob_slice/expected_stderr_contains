@@ -1,4 +1,4 @@
 slice index out of range
-stack trace:
+backtrace:
 get
 main

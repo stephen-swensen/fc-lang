@@ -10,8 +10,8 @@ while [ $# -gt 0 ]; do
             fc_flags+=("--flag" "$2")
             shift 2
             ;;
-        --debug-trace)
-            fc_flags+=("--debug-trace")
+        --backtraces)
+            fc_flags+=("--backtraces")
             shift
             ;;
         *)
@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ${#fc_files[@]} -eq 0 ]; then
-    echo "usage: ./run.sh [--flag name ...] [--debug-trace] file.fc [file2.fc ...]"
+    echo "usage: ./run.sh [--flag name ...] [--backtraces] file.fc [file2.fc ...]"
     exit 1
 fi
 

@@ -67,9 +67,9 @@ static DeferScope *g_defer_scope = NULL;
 
 /* Storage-class prefix for emitted FC functions, monomorphs, lambdas, and
  * trampolines.  Normally `static` so the C compiler can DCE/inline freely.
- * With --debug-trace we add `noinline` so every call appears as a distinct
+ * With --backtraces we add `noinline` so every call appears as a distinct
  * frame in the backtrace — without it, inlined calls would silently vanish
- * from the trace.  Functions stay `static`: address resolution happens via
+ * from the backtrace.  Functions stay `static`: address resolution happens via
  * an FC-emitted symbol table keyed by `&fn` addresses, not the dynamic
  * symbol table, so `-rdynamic` is not required.  Set in codegen_emit(). */
 static const char *g_fn_attr = "static __attribute__((unused)) ";
@@ -4356,10 +4356,10 @@ static void collect_defines(Decl *d, CDefine *defs, int *count, int cap) {
 static bool g_needs_stdio;
 static bool g_needs_math;
 static bool g_needs_float;
-static bool g_debug_trace;
+static bool g_backtraces;
 
-/* Symbol map populated during codegen when g_debug_trace is set; emitted as
- * _fc_symtab[] in the preamble so fc_dump_trace() can render FC-level names. */
+/* Symbol map populated during codegen when g_backtraces is set; emitted as
+ * _fc_symtab[] in the preamble so fc_dump_backtrace() can render FC-level names. */
 typedef struct {
     const char *c_name;   /* mangled C identifier as emitted */
     const char *fc_name;  /* display name (e.g. "foo<int32>", "<lambda at f.fc:N>") */
@@ -4377,13 +4377,13 @@ static void symmap_reset(void) {
     g_symmap_cap = 0;
 }
 
-/* Add a function to the symbol table for --debug-trace.  Pass fc_name=NULL to
- * mark an internal helper (fc_oob, fc_oob_sub) whose stack-trace frames should
- * be skipped from the printed trace.  Otherwise fc_name is the FC display
+/* Add a function to the symbol table for --backtraces.  Pass fc_name=NULL to
+ * mark an internal helper (fc_oob, fc_oob_sub) whose backtrace frames should
+ * be skipped from the printed backtrace.  Otherwise fc_name is the FC display
  * name (e.g. "foo<int32>", "<lambda at f.fc:N>"). */
 static void symmap_add(const char *c_name, const char *fc_name,
                        const char *file, int line) {
-    if (!g_debug_trace || !c_name) return;
+    if (!g_backtraces || !c_name) return;
     /* Dedup: a function can be emitted in multiple walks; skip if seen. */
     for (int i = 0; i < g_symmap_count; i++) {
         if (g_symmap[i].c_name && strcmp(g_symmap[i].c_name, c_name) == 0)
@@ -4411,7 +4411,7 @@ static const char *fmt_mono_display(Arena *arena, const char *template_name,
 }
 
 /* Lambda display name.  The location is rendered separately as
- * "defined at file:line" by fc_dump_trace, so the name itself just reads
+ * "defined at file:line" by fc_dump_backtrace, so the name itself just reads
  * "<lambda>" — duplicating the location in the name would be redundant. */
 static const char *fmt_lambda_display(Arena *arena, const char *file, int line) {
     (void)arena; (void)file; (void)line;
@@ -4647,9 +4647,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_arena = arena;
     g_intern = intern_tbl;
     g_symtab = symtab;
-    g_debug_trace = opts && opts->debug_trace;
-    g_fn_attr = g_debug_trace ? "static __attribute__((unused, noinline)) "
-                              : "static __attribute__((unused)) ";
+    g_backtraces = opts && opts->backtraces;
+    g_fn_attr = g_backtraces ? "static __attribute__((unused, noinline)) "
+                             : "static __attribute__((unused)) ";
     symmap_reset();
 
     /* Collect from_libs and defines from extern module declarations */
@@ -4703,10 +4703,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "#error \"FC on Windows requires the UCRT runtime; msvcrt is not supported.\"\n"
         "#endif\n");
 
-    /* Feature-gated headers — emitted only when needed.  --debug-trace forces
-     * <stdio.h> because the emitted fc_dump_trace helper uses fprintf/stderr
+    /* Feature-gated headers — emitted only when needed.  --backtraces forces
+     * <stdio.h> because the emitted fc_dump_backtrace helper uses fprintf/stderr
      * regardless of whether user code does any I/O. */
-    if (g_needs_stdio || g_debug_trace) fprintf(out, "#include <stdio.h>\n");
+    if (g_needs_stdio || g_backtraces) fprintf(out, "#include <stdio.h>\n");
     if (g_needs_math)  fprintf(out, "#include <math.h>\n");
     if (g_needs_float) fprintf(out, "#include <float.h>\n");
 
@@ -4760,13 +4760,13 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "    return (int)n;\n"
         "}\n");
 
-    /* Abort macro.  When --debug-trace is on, every abort site dumps a stack
-     * trace before bailing.  Forward-declare fc_dump_trace here so callers can
-     * see it; body and the FC-symbol mapping table are emitted at the end of
-     * the TU once all emitted function names are known. */
-    if (g_debug_trace) {
-        fprintf(out, "__attribute__((cold, unused)) static void fc_dump_trace(void);\n");
-        fprintf(out, "#define FC_ABORT() ({ fc_dump_trace(); abort(); })\n");
+    /* Abort macro.  When --backtraces is on, every abort site dumps a
+     * backtrace before bailing.  Forward-declare fc_dump_backtrace here so
+     * callers can see it; body and the FC-symbol mapping table are emitted at
+     * the end of the TU once all emitted function names are known. */
+    if (g_backtraces) {
+        fprintf(out, "__attribute__((cold, unused)) static void fc_dump_backtrace(void);\n");
+        fprintf(out, "#define FC_ABORT() ({ fc_dump_backtrace(); abort(); })\n");
     } else {
         fprintf(out, "#define FC_ABORT() abort()\n");
     }
@@ -4790,7 +4790,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "    FC_ABORT();\n"
             "}\n");
         /* Register the helpers as skip-entries so their frames don't pollute
-         * the user-visible trace when a bounds check fires. */
+         * the user-visible backtrace when a bounds check fires. */
         symmap_add("fc_oob", NULL, "<runtime>", 0);
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
     }
@@ -5162,7 +5162,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
         g_subst = NULL;
-        if (g_debug_trace) {
+        if (g_backtraces) {
             const char *disp = fmt_mono_display(g_arena, tmpl->let.name,
                                                 inst->type_args, inst->type_param_count);
             symmap_add(inst->mangled_name, disp, tmpl->loc.filename, tmpl->loc.line);
@@ -5177,8 +5177,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             collect_lambdas_expr(all_decls[i]->let.init, &lambdas);
         }
     }
-    /* Record lambdas in symmap (for --debug-trace stack frames) */
-    if (g_debug_trace) {
+    /* Record lambdas in symmap (for --backtraces frames) */
+    if (g_backtraces) {
         for (int i = 0; i < lambdas.count; i++) {
             Expr *lam = lambdas.exprs[i];
             if (!lam->func.lifted_name) continue;
@@ -5497,7 +5497,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "}\n");
     }
 
-    /* Stack-trace helper body + FC-symbol mapping table.
+    /* Backtrace helper body + FC-symbol mapping table.
      * Emitted at the end of the TU so all collected names (top-level functions,
      * monomorphized instances, lifted lambdas) are present in g_symmap.
      *
@@ -5506,12 +5506,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
      * for the largest entry with fn_addr <= return_addr.  No dependency on
      * the dynamic symbol table — `-rdynamic` is not required.  Entries with
      * fc_name == NULL mark internal helpers (fc_oob, fc_oob_sub) whose
-     * frames are skipped from the printed trace.
+     * frames are skipped from the printed backtrace.
      *
      * The body is gated on __linux__/__APPLE__ via #if; on other platforms
      * the helper is a no-op stub and abort() still fires.  The forward
      * declaration is in the preamble. */
-    if (g_debug_trace) {
+    if (g_backtraces) {
         fprintf(out, "\n#if defined(__linux__) || defined(__APPLE__)\n");
         fprintf(out, "#include <execinfo.h>\n");
         fprintf(out, "#endif\n");
@@ -5546,12 +5546,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "}\n");
         fprintf(out,
             "__attribute__((cold, unused))\n"
-            "static void fc_dump_trace(void) {\n"
+            "static void fc_dump_backtrace(void) {\n"
             "#if defined(__linux__) || defined(__APPLE__)\n"
             "    void *_frames[64];\n"
             "    int _n = backtrace(_frames, 64);\n"
             "    if (_n < 2) return;\n"
-            "    fprintf(stderr, \"stack trace:\\n\");\n"
+            "    fprintf(stderr, \"backtrace:\\n\");\n"
             "    int _printed = 0;\n"
             "    for (int _i = 1; _i < _n; _i++) {\n"
             "        /* Binary search: largest entry with fn_addr <= frame addr. */\n"

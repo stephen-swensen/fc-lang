@@ -1,0 +1,10 @@
+// Verifies the default-off behavior of --backtraces: the existing single-line
+// diagnostic still fires (exit 134), but no backtrace is emitted.  This is
+// the assert from basic_assert/ without the --backtraces flag.
+let helper = (n: int32) ->
+    assert(n > 0)
+    n
+
+let main = (args: str[]) ->
+    let _r = helper(0)
+    0
