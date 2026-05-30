@@ -1,0 +1,11 @@
+// Regression test: in a multi-file compile, a type error whose location
+// comes from a match arm must report the real filename ("main.fc"), not the
+// synthetic "<merged>" placeholder the diagnostic system falls back to when
+// a source location carries no filename of its own.
+let main = (args: str[]) ->
+    let mut total = 0
+    let r = match args.len > 0 with
+    | true -> 1
+    | false ->
+        total = 5
+    assert(r == 1 && total >= 0)

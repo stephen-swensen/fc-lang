@@ -1,0 +1,4 @@
+// Second file with no declarations of its own: its only purpose is to make
+// this a multi-file compile, so the diagnostic fallback filename becomes the
+// synthetic "<merged>" placeholder. The real type error lives in main.fc and
+// must still be reported against "main.fc", not "<merged>".

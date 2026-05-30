@@ -557,6 +557,7 @@ static Expr *parse_func_literal(Parser *p) {
     if (!check(p, TOK_RPAREN)) {
         do {
             SrcLoc ploc = loc_from_token(current(p));
+            ploc.filename = p->filename;
             const char *name = tok_intern(p, expect(p, TOK_IDENT));
             expect(p, TOK_COLON);
             Type *type = parse_type(p);
@@ -1793,6 +1794,7 @@ static Pattern *parse_pattern(Parser *p);
 static Pattern *parse_pattern_atom(Parser *p) {
     Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
     pat->loc = loc_from_token(current(p));
+    pat->loc.filename = p->filename;
 
     /* Negative integer pattern: -42 */
     if (check(p, TOK_MINUS) && peek_at(p, 1)->kind == TOK_INT_LIT) {
@@ -2029,6 +2031,7 @@ static Expr *parse_match_expr(Parser *p) {
         expect(p, TOK_PIPE);
         MatchArm arm;
         arm.loc = loc_from_token(current(p));
+        arm.loc.filename = p->filename;
         arm.pattern = parse_pattern(p);
         arm.guard = NULL;
 
