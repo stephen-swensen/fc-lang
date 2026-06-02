@@ -1422,36 +1422,56 @@ This is "observed under the configurations we test" rather than a hard guarantee
 
 ## Control Flow Expressions
 
-All control flow transfer mechanisms in FC — `return`, `return expr`, `break`, `break expr`, and `continue` — are expressions of type `void`. This is true even for `return expr` and `break expr`, which carry a value: the carried value determines the type of the *outer* construct they transfer control to (the enclosing function or loop), but the transfer expression itself is void within the block where it appears, because it never produces a local value — it exits.
+All control flow transfer mechanisms in FC — `return`, `return expr`, `break`, `break expr`, and `continue` — are **diverging expressions**: they transfer control out of the current block instead of producing a value in it. Because they never yield a local value, they carry a *bottom type* (internally `never`) that is compatible with every other type. When a diverging expression appears as one branch of an `if`/`else` or one arm of a `match`, it is absorbed by its sibling: the construct takes the type of the value-producing branch(es), and the diverging branch imposes no constraint.
 
-This principle is what allows control flow transfers to appear in expression positions without disrupting the type system:
+This is what lets control-flow transfers appear in expression positions — including alongside a value-producing branch — without disrupting the type system. The idiomatic "unwrap-or-bail" relies on it:
+
+```fc
+let win =
+    match create_window() with    // window?
+    | some(w) -> w                // value branch — type window
+    | none -> return error_code   // diverges — absorbed, no constraint
+// `win` has type `window`
+```
+
+For `return expr` and `break expr`, which carry a value, the carried value determines the type of the *outer* construct they transfer control to (the enclosing function or loop), not the type at the point where they appear:
 
 ```fc
 let f = (x: int32) ->
-    if x > 0 then return "early exit"    // no else required — return is void
+    if x > 0 then return "early exit"    // no else required — the branch diverges
     do_something(x)
     "normal exit"
 ```
 
-Here `return "early exit"` is void-typed within the `then` branch. Since void branches do not require `else`, the `if` expression is valid without one. The string `"early exit"` determines the return type of `f`, not the type of the `if` expression.
+Here the `then` branch diverges, so it produces no value and the `if` needs no `else` (it is a void statement). The string `"early exit"` determines the return type of `f`. A function body may also end directly in `return expr`; the return type is taken from the `return`, since the tail itself yields no value:
 
-The same principle applies to `break value` in loops:
+```fc
+let g = (x: int32) ->
+    if x > 0 then return 1
+    return 2          // body ends in a return; g returns int32
+```
+
+The same principle applies to `break value` in loops — the carried value types the `loop` expression, while the `break` itself diverges within the body:
 
 ```fc
 let result = loop
-    if done() then break 42    // break 42 is void-typed here
+    if done() then break 42    // diverges here; 42 types the `loop`
     do_work()                   // void — side effect
 ```
 
-`break 42` is void within the loop body — it does not produce a value in the local block. The `42` determines the type of the `loop` expression at the call site.
+Because a diverging expression carries no value, binding one directly is an error — there is nothing to bind:
 
-| Expression | Type within enclosing block | Determines type of |
+```fc
+let x = if c then return 1 else return 2   // error: every path returns
+```
+
+| Expression | Value in enclosing block | Determines type of |
 |------------|---------------------------|-------------------|
-| `return` | `void` | — |
-| `return expr` | `void` | enclosing function |
-| `break` | `void` | — |
-| `break expr` | `void` | enclosing `loop` expression |
-| `continue` | `void` | — |
+| `return` | none (diverges) | — |
+| `return expr` | none (diverges) | enclosing function |
+| `break` | none (diverges) | — |
+| `break expr` | none (diverges) | enclosing `loop` expression |
+| `continue` | none (diverges) | — |
 | `defer expr` | `void` | — (schedules `expr` to run at block scope exit) |
 | `void()` | `void` | — (explicit void value) |
 
@@ -1977,7 +1997,7 @@ let validate = (data: uint8[]) ->      // void — early exit on error
 
 In all cases `return` is only needed for early exits — the normal return value of a value-returning function is the final expression of the body. A void function with no early exit needs no `return` at all; the body just ends.
 
-Every `return` in a function body must agree with the function's inferred return type — exactly, with no implicit widening. A bare `return` requires a void-returning function (return type inferred from a void tail expression). A `return expr` requires `expr`'s type to equal the function's return type. This matches the rule for `if`/`else` branches, `match` arms, and `loop` `break` values (see §Implicit Widening). To bridge types use an explicit cast: `return (int64) x`.
+Every `return` in a function body must agree with the function's inferred return type — exactly, with no implicit widening. A `return expr` requires `expr`'s type to equal the function's return type; a bare `return` requires a void-returning function. The return type is inferred from the body's tail expression, or — when the tail itself diverges (e.g. the body ends in `return expr`, or in a `match` whose every arm returns) — from the `return` statements themselves. This matches the rule for `if`/`else` branches, `match` arms, and `loop` `break` values (see §Implicit Widening). To bridge types use an explicit cast: `return (int64) x`.
 
 ### Entry point
 

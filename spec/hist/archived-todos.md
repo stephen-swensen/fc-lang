@@ -4,6 +4,36 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Diverging expressions lack a bottom type in match-arm / if-branch unification (resolved 2026-06-02)
+
+Originally: `return`/`break`/`continue` were typed `void` inside a match arm or if branch
+rather than a bottom type, so they wouldn't unify with a sibling that yields a value. This
+blocked the idiomatic "unwrap-or-bail" form (`| none -> return 1` alongside `| some(w) -> w`
+errored `match arms have different types: any* vs void`), as well as `let x = if c then v
+else return`. Tracing also turned up a related gap: a function body ending in `return value`
+was rejected, because the tail's type was `void`.
+
+**Resolution:** added a bottom type `TYPE_NEVER` (`types.c`) and typed `return`/`break`/
+`continue` as `never` (`pass2.c`). A `unify_branch` helper absorbs `never` into its sibling
+at the `if` and `match` unification sites; the loop's `break` *value* still flows through the
+separate `loop_break_type` channel, unchanged. When a function body's tail diverges, the
+return type is derived from the `return` statements instead of the (valueless) tail — so a
+body ending in `return expr` (or in a `match` whose every arm returns) now type-checks.
+Codegen emits a diverging branch/arm as statements rather than assigning a result temp (no
+ternary; `if`/`match` value forms use a statement-expression with a result temp that only the
+value branch writes). Binding a fully-diverging expression is rejected with `cannot bind 'x':
+every path through this expression returns, so it has no value`.
+
+Scope decisions (with the user): all three keywords (`return`/`break`/`continue`) were
+included, since they share the identical bug and the loop-value channel is separate. The
+bottom type is internal — not surfaced to users by name. `noreturn` *functions* (`sys.exit`,
+`abort`) and treating an infinite `loop` as `never` were left out of scope. 11 regression
+tests added under `tests/cases/control_flow/never_*`; full suite green on gcc and clang at
+`-O0` and `-O2`. Spec updated (Part 2 Control Flow Expressions; Early-return rule). Surfaced
+while adding SDL handle null-checks in wolf-fc.
+
+---
+
 ## Stdlib test coverage — std::sys and std::io gaps (resolved 2026-05-03)
 
 Originally: from the 2026-04-20 stdlib audit, `std::sys` had zero automated test coverage (`env`, `time`, `sleep`, `get_pid`, `temp_dir`, `home_dir`, `exit`) and `std::io` was missing tests for `read_all`, `read_char`, `exists`, `can_read`, `can_write`. The code existed and was being used by real programs (wolf-fc, demos), but nothing in the suite asserted against it.

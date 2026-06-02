@@ -41,6 +41,7 @@ PRIM(void,    TYPE_VOID)
 Type *type_char(void) { return type_uint8(); }
 PRIM(any_ptr, TYPE_ANY_PTR)
 PRIM(error,   TYPE_ERROR)
+PRIM(never,   TYPE_NEVER)
 
 #undef PRIM
 
@@ -131,6 +132,10 @@ bool is_cstr_type(Type *t) {
 
 bool type_is_error(Type *t) {
     return t && t->kind == TYPE_ERROR;
+}
+
+bool type_is_never(Type *t) {
+    return t && t->kind == TYPE_NEVER;
 }
 
 Type *type_pointer(Arena *a, Type *pointee) {
@@ -272,6 +277,7 @@ static const char *primitive_names[] = {
     [TYPE_ANY_PTR] = "any*",
     [TYPE_FIXED_ARRAY] = NULL,   /* compound — handled in type_name() */
     [TYPE_ERROR]   = "<error>",
+    [TYPE_NEVER]   = "never",
 };
 
 const char *type_name(Type *t) {
@@ -399,6 +405,7 @@ const char *type_name(Type *t) {
     case TYPE_ANY_PTR:   return "any*";
     case TYPE_TYPE_VAR:  return t->type_var.name;
     case TYPE_ERROR:     return "<error>";
+    case TYPE_NEVER:     return "never";
     default:             return "?";
     }
 }
@@ -768,6 +775,7 @@ char *mangle_type_name(Type *t) {
     case TYPE_FLOAT64: return str_dup("f64");
     case TYPE_BOOL:    return str_dup("bool");
     case TYPE_VOID:    return str_dup("void");
+    case TYPE_NEVER:   return str_dup("never"); /* defensive: never monomorphized */
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
     case TYPE_STUB:    return str_dup(t->stub.name);

@@ -1,0 +1,11 @@
+// A `return` in an if-branch carries the bottom type and is absorbed by the value
+// produced by the sibling branch, so the `if` is typed by that value. Exercises
+// both the value path and the diverging path.
+let clamp_or_bail = (x: int32) ->
+    let y = if x >= 0 then x else return -1
+    y + 100
+
+let main = (args: str[]) ->
+    assert(clamp_or_bail(5) == 105)   // value branch taken
+    assert(clamp_or_bail(-9) == -1)   // diverging branch returns -1
+    0

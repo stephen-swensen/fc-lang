@@ -1,0 +1,5 @@
+// Allowing a `return value` tail does not relax return-type agreement: the two
+// returns disagree (int32 vs bool), which is still an error.
+let main = (args: str[]) ->
+    if 1 > 0 then return 5
+    return true

@@ -28,6 +28,7 @@ typedef enum {
     TYPE_FIXED_ARRAY, /* fixed-size inline array: T[N] */
     TYPE_STUB,       /* unresolved type reference: name only, resolved by pass1/pass2 */
     TYPE_ERROR,      /* poison type for error recovery */
+    TYPE_NEVER,      /* bottom type: return/break/continue — absorbed by any branch sibling */
 
     TYPE_COUNT
 } TypeKind;
@@ -117,7 +118,9 @@ Type *type_const_cstr(void);
 Type *type_char(void);
 Type *type_any_ptr(void);
 Type *type_error(void);
+Type *type_never(void);
 bool type_is_error(Type *t);
+bool type_is_never(Type *t);
 bool type_is_const(Type *t);
 
 /* Type construction */

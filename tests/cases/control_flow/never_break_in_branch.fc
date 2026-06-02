@@ -1,0 +1,11 @@
+// `break` carries the bottom type in an if-branch (absorbed by the sibling value),
+// while its value still flows to the loop through the separate break channel.
+let main = (args: str[]) ->
+    let mut i = 0
+    let r = loop
+        // once i reaches 3, take the diverging branch (break 99); else use i
+        let x = if i >= 3 then break 99 else i
+        i = x + 1
+    assert(r == 99)
+    assert(i == 3)
+    0

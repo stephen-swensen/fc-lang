@@ -1,0 +1,5 @@
+// Binding an expression whose every path diverges is nonsensical: the `if` has no
+// value to bind because both branches return.
+let main = (args: str[]) ->
+    let x = if 1 > 0 then return 1 else return 2
+    x

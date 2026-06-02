@@ -1,0 +1,7 @@
+// Same as the if case, but every match arm diverges: there is no value to bind.
+let main = (args: str[]) ->
+    let o = some(1)
+    let x = match o with
+    | some(w) -> return w
+    | none -> return 0
+    x

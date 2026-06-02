@@ -1,0 +1,22 @@
+// A function body may end in `return value`: the return type is derived from the
+// `return`s rather than the (valueless) tail. Covers a sole `return`, an
+// early-return-then-return tail, and an exhaustive match where every arm returns.
+let sole = (x: int32) ->
+    return x * 3
+
+let both_paths = (x: int32) ->
+    if x > 0 then return 1
+    return 2
+
+let all_arms_return = (o: int32?) ->
+    match o with
+    | some(w) -> return w
+    | none -> return 0
+
+let main = (args: str[]) ->
+    assert(sole(4) == 12)
+    assert(both_paths(5) == 1)
+    assert(both_paths(-5) == 2)
+    assert(all_arms_return(some(8)) == 8)
+    assert(all_arms_return(default(int32?)) == 0)
+    0

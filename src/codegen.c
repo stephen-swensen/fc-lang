@@ -458,6 +458,7 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_VOID:    fprintf(out, "void");      break;
+    case TYPE_NEVER:   fprintf(out, "void");      break; /* defensive: never materialized */
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_POINTER:
         if (t->is_const) fprintf(out, "const ");
@@ -907,6 +908,13 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     }
 }
 
+/* A type that materializes no C value: void, or never (return/break/continue).
+   Used to decide whether an if/match needs a result temp and whether a tail
+   expression should be wrapped in an implicit return. */
+static bool type_valueless(Type *t) {
+    return !t || t->kind == TYPE_VOID || t->kind == TYPE_NEVER;
+}
+
 static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return, bool discard_value) {
     /* Find last non-defer statement index (needed for block-value handling) */
     int last_real_idx = -1;
@@ -999,17 +1007,17 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return,
             if (has_pending_defers()) emit_defers_to_loop(out);
             emit_indent(out);
             fprintf(out, "continue;\n");
-        } else if (s->kind == EXPR_IF && (!s->type || s->type->kind == TYPE_VOID)) {
-            /* void-typed if → emit as C if statement */
+        } else if (s->kind == EXPR_IF && type_valueless(s->type)) {
+            /* void- or never-typed if → emit as C if statement */
             emit_expr(s, out);
             fprintf(out, "\n");
         } else if (s->kind == EXPR_FOR) {
             emit_expr(s, out);
             fprintf(out, "\n");
-        } else if (s->kind == EXPR_LOOP && (!s->type || s->type->kind == TYPE_VOID)) {
+        } else if (s->kind == EXPR_LOOP && type_valueless(s->type)) {
             emit_expr(s, out);
             fprintf(out, "\n");
-        } else if (is_last && as_return && s->type && s->type->kind != TYPE_VOID) {
+        } else if (is_last && as_return && s->type && !type_valueless(s->type)) {
             /* Implicit return — emit defers before returning */
             if (has_pending_defers()) {
                 emit_type(s->type, out);
@@ -1109,7 +1117,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
     fprintf(out, "}");
     if (e->if_expr.else_body) {
         if (e->if_expr.else_body->kind == EXPR_IF &&
-            (!e->if_expr.else_body->type || e->if_expr.else_body->type->kind == TYPE_VOID)) {
+            type_valueless(e->if_expr.else_body->type)) {
             fprintf(out, " else ");
             emit_if_stmt(e->if_expr.else_body, out);
         } else {
@@ -1129,6 +1137,31 @@ static void emit_if_stmt(Expr *e, FILE *out) {
             emit_indent(out);
             fprintf(out, "}");
         }
+    }
+}
+
+/* Emit one if-branch (a single expression, possibly an EXPR_BLOCK) inside a
+   statement-expression. When the branch diverges (`never`: its tail is
+   return/break/continue or an all-diverging if/match) it is emitted as plain
+   statements — the control-flow exit fires and nothing is assigned. Otherwise the
+   branch's value is assigned to res_var. Mirrors emit_if_stmt's block/non-block
+   handling and emit_expr's value handling. */
+static void emit_branch_into(Expr *branch, const char *res_var, FILE *out) {
+    if (type_is_never(branch->type)) {
+        if (branch->kind == EXPR_BLOCK) {
+            defer_scope_push(false);
+            emit_block_stmts(branch->block.stmts, branch->block.count, out, false, true);
+            defer_scope_pop();
+        } else {
+            emit_indent(out);
+            emit_expr(branch, out);
+            fprintf(out, ";\n");
+        }
+    } else {
+        emit_indent(out);
+        fprintf(out, "%s = ", res_var);
+        emit_expr(branch, out);
+        fprintf(out, ";\n");
     }
 }
 
@@ -1932,11 +1965,14 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_IF: {
-        if (e->type && e->type->kind == TYPE_VOID) {
-            /* Void-typed if → C if statement */
+        bool then_div = type_is_never(e->if_expr.then_body->type);
+        bool else_div = e->if_expr.else_body && type_is_never(e->if_expr.else_body->type);
+        if (type_valueless(e->type)) {
+            /* Void- or never-typed if → C if statement. Any control-flow exits in
+               the branches fire inside; nothing is produced as a value. */
             emit_if_stmt(e, out);
-        } else if (e->if_expr.else_body && e->type && e->type->kind != TYPE_VOID) {
-            /* Expression if/then/else → ternary */
+        } else if (e->if_expr.else_body && !then_div && !else_div) {
+            /* Value if/then/else, both branches produce values → ternary */
             fprintf(out, "(");
             emit_expr(e->if_expr.cond, out);
             fprintf(out, " ? ");
@@ -1945,10 +1981,18 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->if_expr.else_body, out);
             fprintf(out, ")");
         } else {
-            /* Fallback: statement expression */
-            fprintf(out, "({");
+            /* Value if where one branch diverges (return/break/continue): a ternary
+               can't hold a statement, so use a statement-expression with a result
+               temp. The value branch assigns it; the diverging branch emits as
+               statements (its exit fires before the temp is read). */
+            int res_id = temp_counter++;
+            char res_var[32];
+            snprintf(res_var, sizeof(res_var), "_ifres%d", res_id);
+            fprintf(out, "({\n");
             indent_level++;
-            fprintf(out, "\n");
+            emit_indent(out);
+            emit_type(e->type, out);
+            fprintf(out, " %s;\n", res_var);
             emit_indent(out);
             if (e->if_expr.cond->kind == EXPR_BINARY) {
                 fprintf(out, "if ");
@@ -1960,37 +2004,17 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, ") {\n");
             }
             indent_level++;
-            if (e->if_expr.then_body->kind == EXPR_BLOCK) {
-                defer_scope_push(false);
-                emit_block_stmts(e->if_expr.then_body->block.stmts,
-                    e->if_expr.then_body->block.count, out, false, true);
-                defer_scope_pop();
-            } else {
-                emit_indent(out);
-                emit_expr(e->if_expr.then_body, out);
-                fprintf(out, ";\n");
-            }
+            emit_branch_into(e->if_expr.then_body, res_var, out);
             indent_level--;
             emit_indent(out);
-            fprintf(out, "}");
-            if (e->if_expr.else_body) {
-                fprintf(out, " else {\n");
-                indent_level++;
-                if (e->if_expr.else_body->kind == EXPR_BLOCK) {
-                    defer_scope_push(false);
-                    emit_block_stmts(e->if_expr.else_body->block.stmts,
-                        e->if_expr.else_body->block.count, out, false, true);
-                    defer_scope_pop();
-                } else {
-                    emit_indent(out);
-                    emit_expr(e->if_expr.else_body, out);
-                    fprintf(out, ";\n");
-                }
-                indent_level--;
-                emit_indent(out);
-                fprintf(out, "}");
-            }
-            fprintf(out, "\n");
+            fprintf(out, "} else {\n");
+            indent_level++;
+            emit_branch_into(e->if_expr.else_body, res_var, out);
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "}\n");
+            emit_indent(out);
+            fprintf(out, "%s;\n", res_var);
             indent_level--;
             emit_indent(out);
             fprintf(out, "})");
@@ -2580,7 +2604,9 @@ static void emit_expr(Expr *e, FILE *out) {
            the original if/else chain with an unconditional last arm (exhaustive
            by pass2). When at least one arm has a guard we use a done-flag so
            guard-false arms can fall through to subsequent arms. */
-        bool match_is_void = (e->type && e->type->kind == TYPE_VOID);
+        /* No result temp when the match yields no value: void, or never (every arm
+           diverges via return/break/continue). */
+        bool match_is_void = type_valueless(e->type);
 
         bool has_any_guard = false;
         for (int i = 0; i < e->match_expr.arm_count; i++) {
@@ -2676,8 +2702,14 @@ static void emit_expr(Expr *e, FILE *out) {
                 defer_scope_pop();
             } else if (arm->body_count == 1) {
                 emit_indent(out);
-                fprintf(out, "_match%d = ", res_id);
-                emit_expr(arm->body[0], out);
+                if (type_is_never(arm->body[0]->type)) {
+                    /* Diverging arm (return/break/continue): emit as a statement,
+                       no assignment — its exit fires before the temp is read. */
+                    emit_expr(arm->body[0], out);
+                } else {
+                    fprintf(out, "_match%d = ", res_id);
+                    emit_expr(arm->body[0], out);
+                }
                 fprintf(out, ";\n");
             } else {
                 /* Multiple statements — emit all, last is the value */
@@ -2689,7 +2721,12 @@ static void emit_expr(Expr *e, FILE *out) {
                     }
                     emit_indent(out);
                     if (s == arm->body_count - 1) {
-                        if (has_pending_defers()) {
+                        if (type_is_never(arm->body[s]->type)) {
+                            /* Diverging tail: emit as a statement, no assignment.
+                               emit_expr handles its own defers (return/break). */
+                            emit_expr(arm->body[s], out);
+                            fprintf(out, ";\n");
+                        } else if (has_pending_defers()) {
                             emit_type(arm->body[s]->type, out);
                             int tid = temp_counter++;
                             fprintf(out, " _mret%d = ", tid);

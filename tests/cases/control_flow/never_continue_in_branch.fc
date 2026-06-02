@@ -1,0 +1,10 @@
+// `continue` carries the bottom type in an if-branch and is absorbed by the
+// sibling value, so the binding takes that value's type on the non-diverging path.
+let main = (args: str[]) ->
+    let mut total = 0
+    for i in 0..6
+        // skip odd indices via the diverging branch; even ones contribute i
+        let x = if i % 2 == 1 then continue else i
+        total = total + x
+    assert(total == 6)   // 0 + 2 + 4
+    0

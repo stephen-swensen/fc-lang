@@ -136,6 +136,18 @@ static Provenance merge_prov(Provenance a, Provenance b) {
     return PROV_UNKNOWN;
 }
 
+/* Unify two if-branch / match-arm result types. A `never` (return/break/continue)
+   branch carries no value, so it is absorbed by its sibling — the result is the
+   other branch's type. When both diverge, the result is `never`. Returns the
+   unified type, or NULL if the two concrete types are incompatible (the caller
+   emits the appropriate "different types" diagnostic). */
+static Type *unify_branch(Type *a, Type *b) {
+    if (type_is_never(a)) return b;
+    if (type_is_never(b)) return a;
+    if (type_eq(a, b)) return a;
+    return NULL;
+}
+
 /* Does this type carry provenance (pointer-like, slice-like, or closure-like)?
  * A struct/union carries provenance if any of its fields/variants does — so that
  * a stack-allocated struct with a stack-pointer field can be rejected at the
@@ -2399,6 +2411,26 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         Type *ret = check_block(ctx, e->func.body, e->func.body_count);
         ctx->scope = saved;
 
+        /* If the body's tail diverges (`never` — e.g. a trailing `return value`, or an
+           exhaustive `match` whose every arm returns), the tail yields no value, so the
+           function's return type is derived from its `return` statements instead. A
+           `never` tail at function scope can only arise from returns (top-level
+           break/continue already errored "outside of loop"). Pick the first valued
+           return as the inferred type; all-bare returns => void. The validation loop
+           below then enforces agreement across all returns. */
+        if (ret->kind == TYPE_NEVER) {
+            Type *derived = type_void();
+            for (int i = 0; i < lctx.return_count; i++) {
+                Expr *re = lctx.returns[i];
+                if (re->return_expr.value && re->return_expr.value->type &&
+                    !type_is_error(re->return_expr.value->type)) {
+                    derived = re->return_expr.value->type;
+                    break;
+                }
+            }
+            ret = derived;
+        }
+
         /* Validate every explicit `return [value]` against the inferred return type.
            A bare `return` requires a void-returning function; `return value` requires
            strict type equality with the function's inferred return type. No widening
@@ -2872,7 +2904,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         /* If resolving a recursive function, fill in the return type from the
          * base case (then-branch) before checking the recursive branch (else). */
         if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
-            tt->kind != TYPE_VOID && !type_is_error(tt)) {
+            tt->kind != TYPE_VOID && tt->kind != TYPE_NEVER && !type_is_error(tt)) {
             *ctx->recursive_ret = *tt;
         }
         if (e->if_expr.else_body) {
@@ -2883,14 +2915,22 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 if (type_is_error(e->type)) e->type = type_error();
                 return e->type;
             }
-            if (!type_eq(tt, et)) {
+            Type *unified = unify_branch(tt, et);
+            if (!unified) {
                 diag_error(e->loc, "if branches have different types: %s vs %s",
                     type_name(tt), type_name(et));
                 e->type = type_error();
                 return e->type;
             }
-            e->type = tt;
-            e->prov = merge_prov(e->if_expr.then_body->prov, e->if_expr.else_body->prov);
+            e->type = unified;
+            /* Provenance comes from the value-producing branch(es); a diverging
+               (never) branch yields no value and contributes none. */
+            if (type_is_never(tt))
+                e->prov = e->if_expr.else_body->prov;
+            else if (type_is_never(et))
+                e->prov = e->if_expr.then_body->prov;
+            else
+                e->prov = merge_prov(e->if_expr.then_body->prov, e->if_expr.else_body->prov);
         } else {
             /* No else → void */
             e->type = type_void();
@@ -2980,6 +3020,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = type_void();
             return e->type;
         }
+        if (t->kind == TYPE_NEVER) {
+            diag_error(e->loc, "cannot bind '%s': every path through this expression "
+                "returns, so it has no value", e->let_expr.let_name);
+            e->let_expr.let_type = type_error();
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            e->type = type_void();
+            return e->type;
+        }
 
         /* Patch the placeholder return type in place so all recursive call sites (which
            captured the placeholder cell) observe the final inferred return type. */
@@ -3009,6 +3057,12 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_LET_DESTRUCT: {
         Type *t = check_expr(ctx, e->let_destruct.init);
         if (type_is_error(t)) {
+            e->type = type_void();
+            return e->type;
+        }
+        if (t->kind == TYPE_NEVER) {
+            diag_error(e->loc, "cannot destructure: every path through this "
+                "expression returns, so it has no value");
             e->type = type_void();
             return e->type;
         }
@@ -3051,7 +3105,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             LambdaCtx *lc = ctx->lambda_ctx;
             DA_APPEND(lc->returns, lc->return_count, lc->return_cap, e);
         }
-        e->type = type_void();
+        e->type = type_never();
         return e->type;
     }
 
@@ -4007,7 +4061,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                 }
             }
         }
-        e->type = type_void();
+        e->type = type_never();
         return e->type;
     }
 
@@ -4015,7 +4069,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         if (!ctx->loop_break_type) {
             diag_error(e->loc, "continue outside of loop");
         }
-        e->type = type_void();
+        e->type = type_never();
         return e->type;
     }
 
@@ -5208,18 +5262,31 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         if (type_is_error(arm_type)) continue;
 
         if (!result_type || type_is_error(result_type)) {
+            /* First arm (may be `never` if it diverges; a concrete arm overtakes
+               it on a later iteration via unify_branch). */
             result_type = arm_type;
             result_prov = arm_prov;
-            /* Fill recursive return type from first concrete arm (base case) */
-            if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
-                arm_type->kind != TYPE_VOID) {
-                *ctx->recursive_ret = *arm_type;
-            }
-        } else if (!type_eq(result_type, arm_type)) {
-            diag_error(arm->loc, "match arms have different types: %s vs %s",
-                type_name(result_type), type_name(arm_type));
         } else {
-            result_prov = merge_prov(result_prov, arm_prov);
+            Type *unified = unify_branch(result_type, arm_type);
+            if (!unified) {
+                diag_error(arm->loc, "match arms have different types: %s vs %s",
+                    type_name(result_type), type_name(arm_type));
+            } else {
+                /* A diverging (never) arm carries no value: when it overtakes a
+                   prior never result, adopt its provenance; otherwise merge only
+                   value-producing arms. */
+                if (type_is_never(result_type) && !type_is_never(arm_type))
+                    result_prov = arm_prov;
+                else if (!type_is_never(arm_type))
+                    result_prov = merge_prov(result_prov, arm_prov);
+                result_type = unified;
+            }
+        }
+        /* Fill recursive return type from the first concrete arm (base case). */
+        if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
+            result_type && result_type->kind != TYPE_VOID &&
+            result_type->kind != TYPE_NEVER && !type_is_error(result_type)) {
+            *ctx->recursive_ret = *result_type;
         }
     }
 

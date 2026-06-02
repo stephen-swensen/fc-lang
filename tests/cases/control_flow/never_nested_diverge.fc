@@ -1,0 +1,14 @@
+// A nested `if` whose both branches diverge is itself bottom-typed, so it is
+// absorbed by the value-producing sibling arm of the enclosing match.
+let pick = (o: int32?, flag: bool) ->
+    let v = match o with
+    | some(w) -> w
+    | none ->
+        if flag then return 1 else return 2
+    v * 10
+
+let main = (args: str[]) ->
+    assert(pick(some(3), true) == 30)
+    assert(pick(default(int32?), true) == 1)
+    assert(pick(default(int32?), false) == 2)
+    0
