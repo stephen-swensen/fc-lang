@@ -35,4 +35,25 @@ let main = (args: str[]) ->
     assert(text.parse_float32("bad") == default(float32?))
     assert(text.parse_float32("") == default(float32?))
 
+    // over-length input returns none rather than overflowing the stack.
+    // build a 600-byte run of '0' digits — a "valid" number far past the
+    // max_parse_len cap, so every parse_* must reject it.
+    let big = alloc(uint8[600] {})!
+    defer free(big)
+    let mut i = 0i64
+    loop
+        if i >= big.len then break
+        big[i] = 48u8   // '0'
+        i = i + 1i64
+    assert(text.parse_int32(big) == default(int32?))
+    assert(text.parse_int64(big) == default(int64?))
+    assert(text.parse_float32(big) == default(float32?))
+    assert(text.parse_float64(big) == default(float64?))
+
+    // the cap is inclusive: a 512-byte run still parses, 513 does not.
+    assert(text.parse_int32(big[0..512]) == some(0))
+    assert(text.parse_int64(big[0..512]) == some(0i64))
+    assert(text.parse_int32(big[0..513]) == default(int32?))
+    assert(text.parse_int64(big[0..513]) == default(int64?))
+
     0

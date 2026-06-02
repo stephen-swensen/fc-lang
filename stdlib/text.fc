@@ -6,41 +6,61 @@ module text =
         extern strtod: (const cstr, cstr*) -> float64
         extern strtof: (const cstr, cstr*) -> float32
 
+    // Numeric parsing converts s to a null-terminated cstr, which copies it
+    // onto the stack (an alloca of s.len + 1). An unbounded length would risk a
+    // stack overflow — undefined behavior, not a clean failure — so inputs
+    // longer than this cap parse as none. 512 bytes comfortably holds any real
+    // numeric token (int64 is at most 20 digits; even full-decimal float64
+    // extremes fit), so only pathological/corrupt input is ever rejected.
+    private let max_parse_len = 512i64
+
     // parse_int32: parses a string as a 32-bit signed integer (base 10).
-    // returns: int32? — some(value) on success, none if the string is not a valid integer.
+    // returns: int32? — some(value) on success, none if the string is not a
+    // valid integer or is longer than max_parse_len.
     let parse_int32 = (s: const str) ->
-        let cs = (cstr) s
-        let mut endptr = default(cstr)
-        let val = c.strtoll(cs, &endptr, 10)
-        if endptr == cs then default(int32?)
-        else some((int32) val)
+        if s.len > max_parse_len then default(int32?)
+        else
+            let cs = (cstr) s
+            let mut endptr = default(cstr)
+            let val = c.strtoll(cs, &endptr, 10)
+            if endptr == cs then default(int32?)
+            else some((int32) val)
 
     // parse_int64: parses a string as a 64-bit signed integer (base 10).
-    // returns: int64? — some(value) on success, none if the string is not a valid integer.
+    // returns: int64? — some(value) on success, none if the string is not a
+    // valid integer or is longer than max_parse_len.
     let parse_int64 = (s: const str) ->
-        let cs = (cstr) s
-        let mut endptr = default(cstr)
-        let val = c.strtoll(cs, &endptr, 10)
-        if endptr == cs then default(int64?)
-        else some(val)
+        if s.len > max_parse_len then default(int64?)
+        else
+            let cs = (cstr) s
+            let mut endptr = default(cstr)
+            let val = c.strtoll(cs, &endptr, 10)
+            if endptr == cs then default(int64?)
+            else some(val)
 
     // parse_float32: parses a string as a 32-bit float.
-    // returns: float32? — some(value) on success, none if the string is not a valid number.
+    // returns: float32? — some(value) on success, none if the string is not a
+    // valid number or is longer than max_parse_len.
     let parse_float32 = (s: const str) ->
-        let cs = (cstr) s
-        let mut endptr = default(cstr)
-        let val = c.strtof(cs, &endptr)
-        if endptr == cs then default(float32?)
-        else some(val)
+        if s.len > max_parse_len then default(float32?)
+        else
+            let cs = (cstr) s
+            let mut endptr = default(cstr)
+            let val = c.strtof(cs, &endptr)
+            if endptr == cs then default(float32?)
+            else some(val)
 
     // parse_float64: parses a string as a 64-bit float.
-    // returns: float64? — some(value) on success, none if the string is not a valid number.
+    // returns: float64? — some(value) on success, none if the string is not a
+    // valid number or is longer than max_parse_len.
     let parse_float64 = (s: const str) ->
-        let cs = (cstr) s
-        let mut endptr = default(cstr)
-        let val = c.strtod(cs, &endptr)
-        if endptr == cs then default(float64?)
-        else some(val)
+        if s.len > max_parse_len then default(float64?)
+        else
+            let cs = (cstr) s
+            let mut endptr = default(cstr)
+            let val = c.strtod(cs, &endptr)
+            if endptr == cs then default(float64?)
+            else some(val)
 
     // copy: returns a heap-allocated copy of a string. Caller must free.
     let copy = (s: const str) ->
