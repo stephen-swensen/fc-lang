@@ -1,0 +1,1286 @@
+// Folitaire — Klondike Solitaire clone styled like the 1990s Windows version.
+// Pure FC implementation. SDL2 for window/render/audio/mouse input.
+
+import sdl2 from sdl2::
+import rect from sdl2::sdl2
+import sdl_event from sdl2::sdl2
+import audio_spec from sdl2::sdl2
+import io from std::
+import text from std::
+import sys from std::
+import pcg_random from std::random
+
+// ============================================================
+// Constants
+// ============================================================
+
+let logical_w = 1024
+let logical_h = 720
+
+let card_w = 90
+let card_h = 125
+let col_gap = 20
+let col_step = 110             // card_w + col_gap
+let left_margin = 137          // (logical_w - 7*card_w - 6*col_gap) / 2
+let top_margin = 30
+let tab_y = 185                // top_margin + card_h + 30
+
+let fan_up = 25
+let fan_down = 12
+
+let max_pile = 24
+
+// Suits
+let suit_clubs = 0
+let suit_diamonds = 1
+let suit_hearts = 2
+let suit_spades = 3
+
+// Pile kinds (used for drag source bookkeeping)
+let pk_waste = 0
+let pk_tableau = 1
+let pk_foundation = 2
+
+// ============================================================
+// Data
+// ============================================================
+
+struct card =
+    rank: int32                // 1=A ... 13=K
+    suit: int32                // 0=clubs 1=diamonds 2=hearts 3=spades
+    face_up: bool
+
+struct pile =
+    cards: card[]
+    count: int32
+
+union phase =
+    | splash
+    | playing
+    | won
+
+struct game =
+    stock: pile
+    waste: pile
+    foundations: pile[]        // 4
+    tableau: pile[]            // 7
+    state: phase
+
+    moves: int32
+    score: int32
+    auto_finishing: bool
+
+    drag_active: bool
+    drag_kind: int32           // pk_waste / pk_tableau / pk_foundation
+    drag_idx: int32            // column or foundation index
+    drag_start_at: int32       // index within source pile where drag began
+    drag_count: int32
+    drag_cards: card[]
+    drag_mx: int32
+    drag_my: int32
+    drag_ox: int32             // mouse-x minus card top-left at click
+    drag_oy: int32
+
+    last_click_ms: uint32
+    last_click_kind: int32
+    last_click_idx: int32
+
+// ============================================================
+// Geometry helpers
+// ============================================================
+
+let col_x = (i: int32) ->
+    left_margin + i * col_step
+
+let stock_x = (g: game*) ->
+    col_x(0)
+
+let waste_x = (g: game*) ->
+    col_x(1)
+
+let foundation_x = (i: int32) ->
+    col_x(3 + i)
+
+let is_red = (suit: int32) ->
+    suit == suit_hearts || suit == suit_diamonds
+
+// ============================================================
+// Drawing primitives
+// ============================================================
+
+let fill = (r: any*, x: int32, y: int32, w: int32, h: int32, cr: uint8, cg: uint8, cb: uint8) ->
+    let mut rc = rect { x = x, y = y, w = w, h = h }
+    sdl2.set_color(r, cr, cg, cb, 255u8)
+    sdl2.fill_rect(r, &rc)
+    return
+
+let outline = (r: any*, x: int32, y: int32, w: int32, h: int32, cr: uint8, cg: uint8, cb: uint8) ->
+    let mut rc = rect { x = x, y = y, w = w, h = h }
+    sdl2.set_color(r, cr, cg, cb, 255u8)
+    sdl2.draw_rect(r, &rc)
+    return
+
+let line = (r: any*, x1: int32, y1: int32, x2: int32, y2: int32, cr: uint8, cg: uint8, cb: uint8) ->
+    sdl2.set_color(r, cr, cg, cb, 255u8)
+    sdl2.draw_line(r, x1, y1, x2, y2)
+    return
+
+let pixel = (r: any*, x: int32, y: int32, cr: uint8, cg: uint8, cb: uint8) ->
+    sdl2.set_color(r, cr, cg, cb, 255u8)
+    sdl2.draw_point(r, x, y)
+    return
+
+// ============================================================
+// 3x5 bitmap font (lifted/adapted from fibbles)
+// ============================================================
+
+let glyph = (ch: uint8) ->
+    match ch with
+    | 'A' -> 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'B' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+    | 'C' -> 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+    | 'D' -> 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+    | 'E' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+    | 'F' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    | 'G' -> 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+    | 'H' -> 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'I' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    | 'J' -> 1 | (1 << 3) | (1 << 6) | (5 << 9) | (2 << 12)
+    | 'K' -> 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+    | 'L' -> 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+    | 'M' -> 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+    | 'N' -> 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+    | 'O' -> 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    | 'P' -> 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+    | 'Q' -> 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+    | 'R' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+    | 'S' -> 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+    | 'T' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    | 'U' -> 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+    | 'V' -> 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+    | 'W' -> 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+    | 'X' -> 5 | (5 << 3) | (2 << 6) | (5 << 9) | (5 << 12)
+    | 'Y' -> 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+    | 'Z' -> 7 | (1 << 3) | (2 << 6) | (4 << 9) | (7 << 12)
+    | '0' -> 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+    | '1' -> 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+    | '2' -> 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+    | '3' -> 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+    | '4' -> 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
+    | '5' -> 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+    | '6' -> 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    | '7' -> 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+    | '8' -> 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+    | '9' -> 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
+    | ':' -> 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+    | '!' -> 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+    | '-' -> 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
+    | _ -> 0
+
+let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, scale: int32,
+                  cr: uint8, cg: uint8, cb: uint8) ->
+    let g = glyph(ch)
+    for row in 0..5
+        let bits = (g >> (row * 3)) & 7
+        for col in 0..3
+            if (bits >> (2 - col)) & 1 == 1 then
+                fill(r, ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb)
+
+let text_width = (s: const str, scale: int32) ->
+    (int32) s.len * 4 * scale - scale
+
+let draw_text = (r: any*, s: const str, ox: int32, oy: int32, scale: int32,
+                  cr: uint8, cg: uint8, cb: uint8) ->
+    let mut x = ox
+    for ch in s
+        if ch != ' ' then
+            draw_char(r, ch, x, oy, scale, cr, cg, cb)
+        x = x + 4 * scale
+
+// ============================================================
+// Suit pip pixel art (7 rows x 7 cols, bit 6 = leftmost pixel)
+// ============================================================
+
+let pip_row = (suit: int32, row: int32) ->
+    if suit == suit_clubs then
+        match row with
+        | 0 -> 0b0011100
+        | 1 -> 0b0011100
+        | 2 -> 0b0011100
+        | 3 -> 0b1110111
+        | 4 -> 0b1111111
+        | 5 -> 0b0011100
+        | 6 -> 0b0111110
+        | _ -> 0
+    else if suit == suit_diamonds then
+        match row with
+        | 0 -> 0b0001000
+        | 1 -> 0b0011100
+        | 2 -> 0b0111110
+        | 3 -> 0b1111111
+        | 4 -> 0b0111110
+        | 5 -> 0b0011100
+        | 6 -> 0b0001000
+        | _ -> 0
+    else if suit == suit_hearts then
+        match row with
+        | 0 -> 0b0110110
+        | 1 -> 0b1111111
+        | 2 -> 0b1111111
+        | 3 -> 0b1111111
+        | 4 -> 0b0111110
+        | 5 -> 0b0011100
+        | 6 -> 0b0001000
+        | _ -> 0
+    else
+        match row with
+        | 0 -> 0b0001000
+        | 1 -> 0b0011100
+        | 2 -> 0b0111110
+        | 3 -> 0b1111111
+        | 4 -> 0b1111111
+        | 5 -> 0b0011100
+        | 6 -> 0b0111110
+        | _ -> 0
+
+let suit_color_r = (suit: int32) ->
+    if is_red(suit) then 200u8 else 20u8
+
+let suit_color_g = (suit: int32) ->
+    if is_red(suit) then 30u8 else 20u8
+
+let suit_color_b = (suit: int32) ->
+    if is_red(suit) then 30u8 else 20u8
+
+let draw_pip = (r: any*, suit: int32, x: int32, y: int32, scale: int32) ->
+    let cr = suit_color_r(suit)
+    let cg = suit_color_g(suit)
+    let cb = suit_color_b(suit)
+    for row in 0..7
+        let bits = pip_row(suit, row)
+        for col in 0..7
+            if (bits >> (6 - col)) & 1 == 1 then
+                fill(r, x + col * scale, y + row * scale, scale, scale, cr, cg, cb)
+
+// rank → character to show in corners
+let rank_char_a = (rank: int32) ->
+    match rank with
+    | 1  -> 'A'
+    | 2  -> '2'
+    | 3  -> '3'
+    | 4  -> '4'
+    | 5  -> '5'
+    | 6  -> '6'
+    | 7  -> '7'
+    | 8  -> '8'
+    | 9  -> '9'
+    | 10 -> '1'
+    | 11 -> 'J'
+    | 12 -> 'Q'
+    | 13 -> 'K'
+    | _  -> '?'
+
+let rank_char_b = (rank: int32) ->
+    if rank == 10 then '0' else ' '
+
+// ============================================================
+// Card front rendering
+// ============================================================
+
+// Pip layout for ranks 2..10 — a 4-column wide x 5-row tall grid of slots.
+// Each slot is (col, row) with col in {0,1,2,3} and row in {0,1,2,3,4}.
+// Col 1 = "left", col 2 = "right", col 0,3 unused (kept for centering math).
+//   row 0 = top
+//   row 1 = upper-middle
+//   row 2 = center
+//   row 3 = lower-middle
+//   row 4 = bottom
+// Layouts are mirror-symmetric about the vertical and (almost) horizontal axes.
+
+let draw_card_back = (r: any*, x: int32, y: int32) ->
+    // White paper around colored back
+    fill(r, x, y, card_w, card_h, 255u8, 255u8, 255u8)
+    outline(r, x, y, card_w, card_h, 0u8, 0u8, 0u8)
+    // Inset blue back panel
+    fill(r, x + 4, y + 4, card_w - 8, card_h - 8, 40u8, 70u8, 180u8)
+    // Diagonal cross-hatch — light blue lines spaced every 8 px
+    sdl2.set_color(r, 200u8, 220u8, 255u8, 255u8)
+    let mut k = -card_h
+    loop
+        if k >= card_w then break
+        // top-left → bottom-right diagonals
+        let x1 = x + 4 + k
+        let y1 = y + 4
+        let x2 = x + 4 + k + (card_h - 8)
+        let y2 = y + card_h - 4
+        // Clip into the inset rect by clamping endpoints
+        let mut xa = x1
+        let mut ya = y1
+        let mut xb = x2
+        let mut yb = y2
+        if xa < x + 4 then
+            ya = ya + (x + 4 - xa)
+            xa = x + 4
+        if xb > x + card_w - 4 then
+            yb = yb - (xb - (x + card_w - 4))
+            xb = x + card_w - 4
+        if xa <= xb && ya <= y + card_h - 4 && yb >= y + 4 then
+            sdl2.draw_line(r, xa, ya, xb, yb)
+        k = k + 8
+    // bottom-left → top-right diagonals
+    let mut k2 = 0
+    loop
+        if k2 >= card_w + card_h then break
+        let x1 = x + 4 + k2
+        let y1 = y + card_h - 4
+        let x2 = x + 4 + k2 - (card_h - 8)
+        let y2 = y + 4
+        let mut xa = x1
+        let mut ya = y1
+        let mut xb = x2
+        let mut yb = y2
+        if xa > x + card_w - 4 then
+            ya = ya - (xa - (x + card_w - 4))
+            xa = x + card_w - 4
+        if xb < x + 4 then
+            yb = yb + (x + 4 - xb)
+            xb = x + 4
+        if xa >= xb && ya >= y + 4 && yb <= y + card_h - 4 then
+            sdl2.draw_line(r, xa, ya, xb, yb)
+        k2 = k2 + 8
+    // White inset border
+    outline(r, x + 3, y + 3, card_w - 6, card_h - 6, 255u8, 255u8, 255u8)
+    return
+
+let draw_corner = (r: any*, c: card, x: int32, y: int32) ->
+    let cr = suit_color_r(c.suit)
+    let cg = suit_color_g(c.suit)
+    let cb = suit_color_b(c.suit)
+    let ca = rank_char_a(c.rank)
+    let cb_ch = rank_char_b(c.rank)
+    if c.rank == 10 then
+        // Two-character rank "10"
+        draw_char(r, ca, x, y, 2, cr, cg, cb)
+        draw_char(r, cb_ch, x + 8, y, 2, cr, cg, cb)
+    else
+        draw_char(r, ca, x + 2, y, 2, cr, cg, cb)
+    // Small suit pip below the rank
+    draw_pip(r, c.suit, x + 2, y + 12, 1)
+
+let draw_pip_at = (r: any*, suit: int32, cx: int32, cy: int32, scale: int32) ->
+    draw_pip(r, suit, cx - 3 * scale, cy - 3 * scale, scale)
+
+// Compute layout slot positions inside the card body (returns center point).
+let slot_x = (card_x: int32, col: int32) ->
+    // col: 0=left, 1=center, 2=right
+    if col == 0 then card_x + 22
+    else if col == 1 then card_x + card_w / 2
+    else card_x + card_w - 22
+
+let slot_y = (card_y: int32, row: int32) ->
+    // row 0..4
+    match row with
+    | 0 -> card_y + 28
+    | 1 -> card_y + 50
+    | 2 -> card_y + card_h / 2
+    | 3 -> card_y + card_h - 50
+    | _ -> card_y + card_h - 28
+
+// Draw the standard pip arrangement for ranks 2..10.
+let draw_pip_layout = (r: any*, suit: int32, rank: int32, x: int32, y: int32) ->
+    let sc = 2
+    // For each rank, list pip slot positions as (col, row).
+    // We just enumerate cases.
+    if rank == 2 then
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 4), sc)
+    else if rank == 3 then
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 4), sc)
+    else if rank == 4 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+    else if rank == 5 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+    else if rank == 6 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+    else if rank == 7 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 1), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+    else if rank == 8 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 1), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 3), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+    else if rank == 9 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 1), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 1), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 2), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 3), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 3), sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+    else if rank == 10 then
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 0), sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 0) + 14, sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 1) + 8, sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 1) + 8, sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 3) - 8, sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 3) - 8, sc)
+        draw_pip_at(r, suit, slot_x(x, 1), slot_y(y, 4) - 14, sc)
+        draw_pip_at(r, suit, slot_x(x, 0), slot_y(y, 4), sc)
+        draw_pip_at(r, suit, slot_x(x, 2), slot_y(y, 4), sc)
+
+let draw_face_card = (r: any*, c: card, x: int32, y: int32) ->
+    // Face card: colored frame inside the body, big rank letter, suit pip overlay.
+    let frame_color_r = if is_red(c.suit) then 220u8 else 80u8
+    let frame_color_g = if is_red(c.suit) then 200u8 else 80u8
+    let frame_color_b = if is_red(c.suit) then 200u8 else 200u8
+    // Decorative frame
+    fill(r, x + 14, y + 28, card_w - 28, card_h - 56,
+         frame_color_r, frame_color_g, frame_color_b)
+    outline(r, x + 14, y + 28, card_w - 28, card_h - 56, 0u8, 0u8, 0u8)
+    // Inner cream center
+    fill(r, x + 18, y + 32, card_w - 36, card_h - 64, 255u8, 245u8, 220u8)
+    // Big rank letter (J/Q/K) — scale 4 → 12x20 char
+    let lcr = suit_color_r(c.suit)
+    let lcg = suit_color_g(c.suit)
+    let lcb = suit_color_b(c.suit)
+    let ch = rank_char_a(c.rank)
+    draw_char(r, ch, x + (card_w / 2) - 6, y + (card_h / 2) - 18, 4, lcr, lcg, lcb)
+    // Two suit pip accents
+    draw_pip(r, c.suit, x + 18, y + card_h - 50, 2)
+    draw_pip(r, c.suit, x + card_w - 32, y + 30, 2)
+
+let draw_card_face = (r: any*, c: card, x: int32, y: int32) ->
+    // White body with rounded-look (we approximate by drawing the corners white over a black 1-px outline)
+    fill(r, x, y, card_w, card_h, 255u8, 255u8, 255u8)
+    outline(r, x, y, card_w, card_h, 0u8, 0u8, 0u8)
+    // Knock out the four corners to fake rounded edges
+    pixel(r, x, y, 0u8, 130u8, 30u8)
+    pixel(r, x + card_w - 1, y, 0u8, 130u8, 30u8)
+    pixel(r, x, y + card_h - 1, 0u8, 130u8, 30u8)
+    pixel(r, x + card_w - 1, y + card_h - 1, 0u8, 130u8, 30u8)
+    // Corners (top-left rank+pip, bottom-right rank+pip)
+    draw_corner(r, c, x + 4, y + 4)
+    draw_corner(r, c, x + card_w - 18, y + card_h - 24)
+    // Body decoration
+    if c.rank == 1 then
+        // Ace — one big centered pip (scale 4)
+        draw_pip(r, c.suit, x + (card_w / 2) - 14, y + (card_h / 2) - 14, 4)
+    else if c.rank >= 2 && c.rank <= 10 then
+        draw_pip_layout(r, c.suit, c.rank, x, y)
+    else
+        draw_face_card(r, c, x, y)
+    return
+
+// ============================================================
+// Empty pile slots (when a pile is empty we draw the outline)
+// ============================================================
+
+let draw_empty_slot = (r: any*, x: int32, y: int32, marker: uint8) ->
+    // Faint border on the green felt with optional center marker
+    outline(r, x, y, card_w, card_h, 0u8, 90u8, 0u8)
+    outline(r, x + 1, y + 1, card_w - 2, card_h - 2, 0u8, 90u8, 0u8)
+    if marker != 0u8 then
+        draw_char(r, marker, x + card_w / 2 - 6, y + card_h / 2 - 10,
+                  4, 0u8, 90u8, 0u8)
+    return
+
+let draw_foundation_slot = (r: any*, suit: int32, x: int32, y: int32) ->
+    outline(r, x, y, card_w, card_h, 0u8, 90u8, 0u8)
+    outline(r, x + 1, y + 1, card_w - 2, card_h - 2, 0u8, 90u8, 0u8)
+    // Ghost suit silhouette in dark green (7x7 pip at scale 3 = 21x21 px)
+    let sc = 3
+    let pip_x = x + card_w / 2 - 11
+    let pip_y = y + card_h / 2 - 11
+    for row in 0..7
+        let bits = pip_row(suit, row)
+        for col in 0..7
+            if (bits >> (6 - col)) & 1 == 1 then
+                fill(r, pip_x + col * sc, pip_y + row * sc,
+                     sc, sc, 0u8, 90u8, 0u8)
+    return
+
+// ============================================================
+// Pile geometry / hit testing
+// ============================================================
+
+let tableau_card_y = (g: game*, col: int32, idx: int32) ->
+    let mut y = tab_y
+    for i in 0..idx
+        if g->tableau[col].cards[i].face_up then
+            y = y + fan_up
+        else
+            y = y + fan_down
+    y
+
+// Top-of-pile draw position for the *next* card (or for the topmost card).
+let tableau_top_y = (g: game*, col: int32) ->
+    let n = g->tableau[col].count
+    if n == 0 then tab_y else tableau_card_y(g, col, n - 1)
+
+let point_in_rect = (mx: int32, my: int32, x: int32, y: int32, w: int32, h: int32) ->
+    mx >= x && mx < x + w && my >= y && my < y + h
+
+// ============================================================
+// Game setup (shuffle + deal)
+// ============================================================
+
+let deal_game = (g: game*, rng: pcg_random*, deck: card[]) ->
+    // Reset state
+    g->stock.count = 0
+    g->waste.count = 0
+    for i in 0..4
+        g->foundations[i].count = 0
+    for i in 0..7
+        g->tableau[i].count = 0
+    g->moves = 0
+    g->score = 0
+    g->auto_finishing = false
+    g->drag_active = false
+
+    // Build the 52-card deck in order, then Fisher-Yates shuffle in place.
+    let mut k = 0
+    for s in 0..4
+        for rk in 1..14
+            deck[k] = card { rank = rk, suit = s, face_up = false }
+            k = k + 1
+    let mut j = 51
+    loop
+        if j <= 0 then break
+        let pick = (int32) pcg_random.next_bounded_uint32(rng, (uint32) (j + 1))
+        let tmp = deck[j]
+        deck[j] = deck[pick]
+        deck[pick] = tmp
+        j = j - 1
+
+    let mut idx = 0
+    // Tableau: column i gets i+1 cards. Last one face-up, rest face-down.
+    for col in 0..7
+        for row in 0..col + 1
+            let mut c = deck[idx]
+            c.face_up = row == col
+            g->tableau[col].cards[row] = c
+            g->tableau[col].count = row + 1
+            idx = idx + 1
+    // Remaining cards go to stock face-down
+    let mut sidx = 0
+    loop
+        if idx >= 52 then break
+        let mut c = deck[idx]
+        c.face_up = false
+        g->stock.cards[sidx] = c
+        g->stock.count = sidx + 1
+        sidx = sidx + 1
+        idx = idx + 1
+    return
+
+// ============================================================
+// Rule checks
+// ============================================================
+
+let can_tableau_place = (mover: card, target: pile*) ->
+    if target->count == 0 then
+        mover.rank == 13
+    else
+        let top = target->cards[target->count - 1]
+        top.face_up
+            && (is_red(mover.suit) != is_red(top.suit))
+            && mover.rank == top.rank - 1
+
+let can_foundation_place = (mover: card, target: pile*) ->
+    if target->count == 0 then
+        mover.rank == 1
+    else
+        let top = target->cards[target->count - 1]
+        top.suit == mover.suit && mover.rank == top.rank + 1
+
+// ============================================================
+// Pile slot rectangles (for hit testing on empty piles too)
+// ============================================================
+
+let waste_top_pos = (g: game*) ->
+    // top card position on waste pile
+    waste_x(g)
+
+let pile_rect_top = (g: game*, kind: int32, idx: int32) ->
+    // Returns (x, y) of the "top draw" of the named pile.
+    // kind: 0=stock, 1=waste, 2=foundation[idx], 3=tableau-empty-slot
+    if kind == 0 then
+        col_x(0)
+    else if kind == 1 then
+        col_x(1)
+    else if kind == 2 then
+        foundation_x(idx)
+    else
+        col_x(idx)
+
+// ============================================================
+// Move primitives
+// ============================================================
+
+let push_card = (p: pile*, c: card) ->
+    p->cards[p->count] = c
+    p->count = p->count + 1
+    return
+
+let pop_card = (p: pile*) ->
+    p->count = p->count - 1
+    p->cards[p->count]
+
+let flip_revealed_tableau_top = (g: game*, col: int32) ->
+    let p = &g->tableau[col]
+    if p->count > 0 && !p->cards[p->count - 1].face_up then
+        p->cards[p->count - 1].face_up = true
+        g->score = g->score + 5
+    return
+
+let move_to_foundation = (g: game*, c: card) ->
+    let target = &g->foundations[c.suit]
+    push_card(target, c)
+    g->score = g->score + 10
+    return
+
+// Attempt to auto-send a single card from a pile top to any foundation.
+// Returns true on success.
+let try_auto_to_foundation = (g: game*, src_kind: int32, src_idx: int32) ->
+    let src = if src_kind == pk_waste then &g->waste
+              else if src_kind == pk_tableau then &g->tableau[src_idx]
+              else &g->foundations[src_idx]
+    if src->count == 0 then
+        false
+    else
+        let top = src->cards[src->count - 1]
+        if !top.face_up then
+            false
+        else
+            let target = &g->foundations[top.suit]
+            if can_foundation_place(top, target) then
+                src->count = src->count - 1
+                push_card(target, top)
+                g->score = g->score + 10
+                g->moves = g->moves + 1
+                if src_kind == pk_tableau then
+                    flip_revealed_tableau_top(g, src_idx)
+                true
+            else
+                false
+
+// ============================================================
+// Stock interaction
+// ============================================================
+
+let stock_click = (g: game*) ->
+    if g->stock.count > 0 then
+        let mut c = pop_card(&g->stock)
+        c.face_up = true
+        push_card(&g->waste, c)
+        g->moves = g->moves + 1
+    else if g->waste.count > 0 then
+        // Recycle waste back to stock face-down (reversed order)
+        loop
+            if g->waste.count == 0 then break
+            let mut c = pop_card(&g->waste)
+            c.face_up = false
+            push_card(&g->stock, c)
+        g->moves = g->moves + 1
+    return
+
+// ============================================================
+// Drag / drop
+// ============================================================
+
+let start_drag_from_waste = (g: game*, mx: int32, my: int32) ->
+    if g->waste.count == 0 then
+        return
+    let c = g->waste.cards[g->waste.count - 1]
+    g->drag_active = true
+    g->drag_kind = pk_waste
+    g->drag_idx = 0
+    g->drag_start_at = g->waste.count - 1
+    g->drag_count = 1
+    g->drag_cards[0] = c
+    g->drag_ox = mx - waste_x(g)
+    g->drag_oy = my - top_margin
+    g->drag_mx = mx
+    g->drag_my = my
+    // Hide the card from the waste pile while dragging
+    g->waste.count = g->waste.count - 1
+    return
+
+let start_drag_from_foundation = (g: game*, fi: int32, mx: int32, my: int32) ->
+    if g->foundations[fi].count == 0 then
+        return
+    let c = g->foundations[fi].cards[g->foundations[fi].count - 1]
+    g->drag_active = true
+    g->drag_kind = pk_foundation
+    g->drag_idx = fi
+    g->drag_start_at = g->foundations[fi].count - 1
+    g->drag_count = 1
+    g->drag_cards[0] = c
+    g->drag_ox = mx - foundation_x(fi)
+    g->drag_oy = my - top_margin
+    g->drag_mx = mx
+    g->drag_my = my
+    g->foundations[fi].count = g->foundations[fi].count - 1
+    return
+
+let start_drag_from_tableau = (g: game*, col: int32, at: int32, mx: int32, my: int32) ->
+    let p = &g->tableau[col]
+    if at < 0 || at >= p->count then
+        return
+    if !p->cards[at].face_up then
+        return
+    let take = p->count - at
+    g->drag_active = true
+    g->drag_kind = pk_tableau
+    g->drag_idx = col
+    g->drag_start_at = at
+    g->drag_count = take
+    for i in 0..take
+        g->drag_cards[i] = p->cards[at + i]
+    g->drag_ox = mx - col_x(col)
+    g->drag_oy = my - tableau_card_y(g, col, at)
+    g->drag_mx = mx
+    g->drag_my = my
+    p->count = at
+    return
+
+let cancel_drag = (g: game*) ->
+    // Put the cards back where they came from.
+    if g->drag_kind == pk_waste then
+        for i in 0..g->drag_count
+            push_card(&g->waste, g->drag_cards[i])
+    else if g->drag_kind == pk_foundation then
+        for i in 0..g->drag_count
+            push_card(&g->foundations[g->drag_idx], g->drag_cards[i])
+    else
+        for i in 0..g->drag_count
+            push_card(&g->tableau[g->drag_idx], g->drag_cards[i])
+    g->drag_active = false
+    g->drag_count = 0
+    return
+
+let commit_drop_tableau = (g: game*, col: int32) ->
+    let target = &g->tableau[col]
+    if !can_tableau_place(g->drag_cards[0], target) then
+        false
+    else
+        for i in 0..g->drag_count
+            push_card(target, g->drag_cards[i])
+        // If we vacated a tableau pile, flip its new top
+        if g->drag_kind == pk_tableau then
+            flip_revealed_tableau_top(g, g->drag_idx)
+        g->moves = g->moves + 1
+        g->drag_active = false
+        g->drag_count = 0
+        true
+
+let commit_drop_foundation = (g: game*, fi: int32) ->
+    if g->drag_count != 1 then
+        false
+    else
+        let target = &g->foundations[fi]
+        if !can_foundation_place(g->drag_cards[0], target) then
+            false
+        else
+            push_card(target, g->drag_cards[0])
+            if g->drag_kind == pk_tableau then
+                flip_revealed_tableau_top(g, g->drag_idx)
+            g->score = g->score + 10
+            g->moves = g->moves + 1
+            g->drag_active = false
+            g->drag_count = 0
+            true
+
+// ============================================================
+// Hit testing during drop
+// ============================================================
+
+let try_drop_at = (g: game*, mx: int32, my: int32) ->
+    // Foundations
+    for fi in 0..4
+        if point_in_rect(mx, my, foundation_x(fi), top_margin, card_w, card_h) then
+            if commit_drop_foundation(g, fi) then
+                return true
+    // Tableau columns
+    for col in 0..7
+        let p = &g->tableau[col]
+        let top_y = if p->count == 0 then tab_y else tableau_card_y(g, col, p->count - 1)
+        let bot_y = top_y + card_h
+        if mx >= col_x(col) && mx < col_x(col) + card_w
+                && my >= tab_y && my < bot_y then
+            if commit_drop_tableau(g, col) then
+                return true
+    false
+
+// ============================================================
+// Hit testing during click (mouse down)
+// ============================================================
+
+// Returns -1 if click missed, else index of clicked card in column.
+let tableau_hit_index = (g: game*, col: int32, mx: int32, my: int32) ->
+    let p = &g->tableau[col]
+    if p->count == 0 || mx < col_x(col) || mx >= col_x(col) + card_w then
+        -1
+    else
+        let mut hit = -1
+        for i in 0..p->count
+            let y = tableau_card_y(g, col, i)
+            let face_up = p->cards[i].face_up
+            let h = if i == p->count - 1 then card_h
+                    else if face_up then fan_up
+                    else fan_down
+            if my >= y && my < y + h then
+                hit = i
+        hit
+
+// ============================================================
+// Win detection
+// ============================================================
+
+let is_won = (g: game*) ->
+    let mut total = 0
+    for i in 0..4
+        total = total + g->foundations[i].count
+    total == 52
+
+let all_tableau_face_up = (g: game*) ->
+    let mut ok = true
+    for col in 0..7
+        let p = &g->tableau[col]
+        for i in 0..p->count
+            if !p->cards[i].face_up then
+                ok = false
+    ok
+
+// Try to auto-finish: send one card from any face-up pile top to foundations.
+// Returns true if a move was made.
+let auto_finish_step = (g: game*) ->
+    if try_auto_to_foundation(g, pk_waste, 0) then
+        true
+    else
+        let mut moved = false
+        for col in 0..7
+            if !moved then
+                if try_auto_to_foundation(g, pk_tableau, col) then
+                    moved = true
+        moved
+
+// ============================================================
+// Rendering
+// ============================================================
+
+let clear_felt = (r: any*) ->
+    sdl2.set_color(r, 0u8, 130u8, 30u8, 255u8)
+    sdl2.clear(r)
+    return
+
+let draw_pile_fanned = (r: any*, p: pile*, x: int32, y0: int32) ->
+    // Draws a tableau-style fanned pile starting at (x, y0).
+    let mut y = y0
+    for i in 0..p->count
+        let c = p->cards[i]
+        if c.face_up then
+            draw_card_face(r, c, x, y)
+            y = y + fan_up
+        else
+            draw_card_back(r, x, y)
+            y = y + fan_down
+    return
+
+let draw_stock = (r: any*, g: game*) ->
+    let x = stock_x(g)
+    let y = top_margin
+    if g->stock.count == 0 then
+        draw_empty_slot(r, x, y, 'O')   // "O" = recycle marker
+    else
+        draw_card_back(r, x, y)
+
+let draw_waste = (r: any*, g: game*) ->
+    let x = waste_x(g)
+    let y = top_margin
+    if g->waste.count == 0 then
+        draw_empty_slot(r, x, y, 0u8)
+    else
+        draw_card_face(r, g->waste.cards[g->waste.count - 1], x, y)
+
+let draw_foundations = (r: any*, g: game*) ->
+    for fi in 0..4
+        let x = foundation_x(fi)
+        let y = top_margin
+        let p = &g->foundations[fi]
+        if p->count == 0 then
+            draw_foundation_slot(r, fi, x, y)
+        else
+            draw_card_face(r, p->cards[p->count - 1], x, y)
+
+let draw_tableau = (r: any*, g: game*) ->
+    for col in 0..7
+        let p = &g->tableau[col]
+        let x = col_x(col)
+        if p->count == 0 then
+            draw_empty_slot(r, x, tab_y, 0u8)
+        else
+            draw_pile_fanned(r, p, x, tab_y)
+
+let draw_drag = (r: any*, g: game*) ->
+    if !g->drag_active then
+        return
+    let tx = g->drag_mx - g->drag_ox
+    let ty = g->drag_my - g->drag_oy
+    for i in 0..g->drag_count
+        draw_card_face(r, g->drag_cards[i], tx, ty + i * fan_up)
+    return
+
+let draw_hud = (r: any*, g: game*) ->
+    // Top-bar style HUD: score and moves in the upper-right edge of the felt.
+    let txt_score = "SCORE: %d{g->score}"
+    let txt_moves = "MOVES: %d{g->moves}"
+    draw_text(r, txt_score, logical_w - 250, 5, 2, 240u8, 240u8, 200u8)
+    draw_text(r, txt_moves, logical_w - 120, 5, 2, 240u8, 240u8, 200u8)
+    return
+
+let draw_won_overlay = (r: any*) ->
+    // Semi-transparent black box (we don't have alpha here; use a flat dim color)
+    fill(r, logical_w / 2 - 220, logical_h / 2 - 80, 440, 160, 0u8, 70u8, 10u8)
+    outline(r, logical_w / 2 - 220, logical_h / 2 - 80, 440, 160, 255u8, 220u8, 0u8)
+    outline(r, logical_w / 2 - 222, logical_h / 2 - 82, 444, 164, 255u8, 220u8, 0u8)
+    let title = "YOU WIN"
+    let tw = text_width(title, 6)
+    draw_text(r, title, logical_w / 2 - tw / 2, logical_h / 2 - 50, 6,
+              255u8, 220u8, 0u8)
+    let hint = "PRESS SPACE TO DEAL AGAIN"
+    let hw = text_width(hint, 2)
+    draw_text(r, hint, logical_w / 2 - hw / 2, logical_h / 2 + 30, 2,
+              255u8, 255u8, 255u8)
+    return
+
+let draw_splash = (r: any*) ->
+    clear_felt(r)
+    let title = "FOLITAIRE"
+    let tw = text_width(title, 8)
+    draw_text(r, title, logical_w / 2 - tw / 2, 120, 8, 255u8, 240u8, 200u8)
+    let sub = "A KLONDIKE CLONE IN THE WINDOWS STYLE"
+    let sw = text_width(sub, 2)
+    draw_text(r, sub, logical_w / 2 - sw / 2, 230, 2, 220u8, 220u8, 180u8)
+
+    // Decorative sample cards
+    let demo_y = 320
+    let s1 = card { rank = 1,  suit = suit_spades,   face_up = true }
+    let s2 = card { rank = 13, suit = suit_hearts,   face_up = true }
+    let s3 = card { rank = 7,  suit = suit_clubs,    face_up = true }
+    let s4 = card { rank = 11, suit = suit_diamonds, face_up = true }
+    draw_card_face(r, s1, logical_w / 2 - 200, demo_y)
+    draw_card_face(r, s2, logical_w / 2 - 100, demo_y)
+    draw_card_face(r, s3, logical_w / 2,        demo_y)
+    draw_card_face(r, s4, logical_w / 2 + 100,  demo_y)
+
+    let hint = "PRESS SPACE TO DEAL"
+    let hw = text_width(hint, 3)
+    draw_text(r, hint, logical_w / 2 - hw / 2, 510, 3, 255u8, 255u8, 255u8)
+    let hint2 = "CLICK STOCK   DRAG CARDS   DOUBLE-CLICK TO AUTO-PLAY"
+    let hw2 = text_width(hint2, 2)
+    draw_text(r, hint2, logical_w / 2 - hw2 / 2, 570, 2, 200u8, 200u8, 180u8)
+    let hint3 = "ESC QUITS"
+    let hw3 = text_width(hint3, 2)
+    draw_text(r, hint3, logical_w / 2 - hw3 / 2, 620, 2, 200u8, 200u8, 180u8)
+    sdl2.present(r)
+
+let render_game = (r: any*, g: game*) ->
+    clear_felt(r)
+    draw_stock(r, g)
+    draw_waste(r, g)
+    draw_foundations(r, g)
+    draw_tableau(r, g)
+    draw_drag(r, g)
+    draw_hud(r, g)
+    match g->state with
+    | won -> draw_won_overlay(r)
+    | _ -> return
+    return
+
+// ============================================================
+// Audio (square-wave blips for card actions)
+// ============================================================
+
+struct sound =
+    data: any*
+    bytes: uint32
+
+let samples_ms = (ms: int32) ->
+    44100 * ms / 1000
+
+let gen_tone = (freq: int32, duration_ms: int32) ->
+    let num_samples = samples_ms(duration_ms)
+    let buf = alloc(int16, (usize) num_samples)!
+    let period = 44100 / freq
+    let half = period / 2
+    for i in 0..num_samples
+        if (i % period) < half then
+            buf[i] = 5500i16
+        else
+            buf[i] = -5500i16
+    sound { data = (any*) buf, bytes = (uint32) (num_samples * 2) }
+
+let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
+    let num_samples = samples_ms(duration_ms)
+    let period = 44100 / freq
+    let half = period / 2
+    for i in 0..num_samples
+        if (i % period) < half then
+            buf[offset + i] = 5500i16
+        else
+            buf[offset + i] = -5500i16
+    offset + num_samples
+
+let play_sound = (dev: uint32, s: sound) ->
+    sdl2.clear_audio(dev)
+    sdl2.queue_audio(dev, s.data, s.bytes)
+    return
+
+// ============================================================
+// Main
+// ============================================================
+
+let main = (args: str[]) ->
+    io.write("=== FOLITAIRE ===\n", stdout)
+    io.write("Klondike Solitaire in the style of Windows 3.1/95 Solitaire\n\n", stdout)
+    io.write("Controls:\n", stdout)
+    io.write("  LEFT CLICK stock      Draw a card to the waste\n", stdout)
+    io.write("  LEFT CLICK empty stock  Recycle waste back\n", stdout)
+    io.write("  DRAG cards            Move between piles\n", stdout)
+    io.write("  DOUBLE-CLICK card     Auto-send top card to foundation\n", stdout)
+    io.write("  SPACE                 Deal / new game\n", stdout)
+    io.write("  A                     Auto-finish (when safe)\n", stdout)
+    io.write("  ESC                   Quit\n\n", stdout)
+    io.write("Rules: build foundations Ace->King by suit;\n", stdout)
+    io.write("       build tableau down by alternating colors;\n", stdout)
+    io.write("       only Kings may fill an empty tableau column.\n\n", stdout)
+
+    sdl2.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"linear")
+    sdl2.init(sdl2.init_video | sdl2.init_audio)
+
+    let flags = sdl2.window_shown
+    let win = sdl2.create_window(c"Folitaire",
+                                  sdl2.pos_centered, sdl2.pos_centered,
+                                  logical_w, logical_h, flags)
+    sdl2.set_resizable(win, 0)
+
+    let ren = sdl2.create_renderer(win, -1, sdl2.renderer_accel | sdl2.renderer_vsync)
+    sdl2.set_logical_size(ren, logical_w, logical_h)
+
+    let mut rng = pcg_random.make((uint64) sys.time())
+
+    let g = alloc(game)!
+    g->foundations = alloc(pile[4] { })!
+    g->tableau = alloc(pile[7] { })!
+    g->stock.cards = alloc(card[24] { })!
+    g->waste.cards = alloc(card[24] { })!
+    for i in 0..4
+        g->foundations[i].cards = alloc(card[24] { })!
+    for i in 0..7
+        g->tableau[i].cards = alloc(card[24] { })!
+    g->drag_cards = alloc(card[24] { })!
+    g->state = phase.splash
+
+    // Reusable deck buffer for shuffling/dealing.
+    let deck_buf = alloc(card[52] { })!
+
+    // --- Audio ---
+    let mut desired = default(audio_spec)
+    desired.freq = 44100
+    desired.format = sdl2.audio_s16sys
+    desired.channels = 1u8
+    desired.samples = 1024u16
+    desired.callback = (any*) 0u
+    desired.userdata = (any*) 0u
+    let mut obtained = default(audio_spec)
+    let audio_dev = sdl2.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    if audio_dev > 0u32 then
+        sdl2.pause_audio(audio_dev, 0)
+
+    let flip_snd = gen_tone(660, 35)
+    let place_snd = gen_tone(440, 40)
+    let bad_snd = gen_tone(120, 90)
+
+    let fanfare_n = samples_ms(120) + samples_ms(120) + samples_ms(120) + samples_ms(240)
+    let fanfare_mem = alloc(int16, (usize) fanfare_n)!
+    let mut foff = fill_tone(fanfare_mem, 0,    523, 120)
+    foff = fill_tone(fanfare_mem, foff,        659, 120)
+    foff = fill_tone(fanfare_mem, foff,        784, 120)
+    fill_tone(fanfare_mem, foff,               1047, 240)
+    let win_snd = sound { data = (any*) fanfare_mem,
+                          bytes = (uint32) (fanfare_n * 2) }
+
+    let mut event = default(sdl_event)
+    let mut running = true
+    let mut announced_win = false
+
+    loop
+        if !running then break
+
+        // --------- Input ---------
+        loop
+            let has = sdl2.poll_event(&event)
+            if has == 0 then break
+
+            if (int32) event.type == sdl2.quit_event then
+                running = false
+                break
+
+            if (int32) event.type == sdl2.keydown_event then
+                let k = event.key.keysym.sym
+                if k == sdl2.key_escape then
+                    running = false
+                    break
+                if k == sdl2.key_space then
+                    deal_game(g, &rng, deck_buf)
+                    g->state = phase.playing
+                    announced_win = false
+                if k == sdl2.key_a then
+                    // Manual auto-finish trigger (only kicks in if all face-down cards revealed)
+                    if g->state == phase.playing && all_tableau_face_up(g) then
+                        g->auto_finishing = true
+
+            if (int32) event.type == sdl2.mousemotion_event then
+                if g->drag_active then
+                    g->drag_mx = event.motion.x
+                    g->drag_my = event.motion.y
+
+            if (int32) event.type == sdl2.mousedown_event then
+                if g->state == phase.splash then
+                    // Click on splash → start game
+                    deal_game(g, &rng, deck_buf)
+                    g->state = phase.playing
+                else if g->state == phase.playing
+                        && event.button.button == sdl2.button_left then
+                    let mx = event.button.x
+                    let my = event.button.y
+                    let now = sdl2.get_ticks()
+
+                    // Detect double-click on the same target as the previous click
+                    let mut is_dbl = false
+                    if event.button.clicks >= 2u8 then
+                        is_dbl = true
+
+                    // Stock area
+                    if point_in_rect(mx, my, col_x(0), top_margin, card_w, card_h)
+                            && !g->drag_active then
+                        stock_click(g)
+                        if audio_dev > 0u32 then play_sound(audio_dev, flip_snd)
+                    else if point_in_rect(mx, my, col_x(1), top_margin, card_w, card_h)
+                            && !g->drag_active && g->waste.count > 0 then
+                        if is_dbl then
+                            if try_auto_to_foundation(g, pk_waste, 0) then
+                                if audio_dev > 0u32 then play_sound(audio_dev, place_snd)
+                        else
+                            g->last_click_kind = pk_waste
+                            g->last_click_idx = 0
+                            g->last_click_ms = now
+                            start_drag_from_waste(g, mx, my)
+                    else
+                        // Foundation piles
+                        let mut handled = false
+                        for fi in 0..4
+                            if !handled
+                               && point_in_rect(mx, my, foundation_x(fi), top_margin,
+                                               card_w, card_h)
+                               && !g->drag_active
+                               && g->foundations[fi].count > 0 then
+                                if !is_dbl then
+                                    start_drag_from_foundation(g, fi, mx, my)
+                                handled = true
+                        if !handled && !g->drag_active then
+                            // Tableau
+                            for col in 0..7
+                                if !handled then
+                                    let hit = tableau_hit_index(g, col, mx, my)
+                                    if hit >= 0 then
+                                        let p = &g->tableau[col]
+                                        let top = p->cards[hit]
+                                        if top.face_up then
+                                            if is_dbl then
+                                                if try_auto_to_foundation(g, pk_tableau, col) then
+                                                    if audio_dev > 0u32 then
+                                                        play_sound(audio_dev, place_snd)
+                                                    handled = true
+                                            if !handled then
+                                                start_drag_from_tableau(g, col, hit, mx, my)
+                                                handled = true
+                                        else
+                                            // Face-down: flip only if it's the topmost card
+                                            if hit == p->count - 1 then
+                                                p->cards[hit].face_up = true
+                                                g->score = g->score + 5
+                                                g->moves = g->moves + 1
+                                                if audio_dev > 0u32 then
+                                                    play_sound(audio_dev, flip_snd)
+                                                handled = true
+
+            if (int32) event.type == sdl2.mouseup_event then
+                if g->drag_active && event.button.button == sdl2.button_left then
+                    g->drag_mx = event.button.x
+                    g->drag_my = event.button.y
+                    if try_drop_at(g, event.button.x, event.button.y) then
+                        if audio_dev > 0u32 then play_sound(audio_dev, place_snd)
+                    else
+                        cancel_drag(g)
+
+        if !running then break
+
+        // --------- Update ---------
+        if g->state == phase.playing then
+            // Auto-finish flow: send one card per frame to the foundations.
+            if g->auto_finishing && !g->drag_active then
+                if !auto_finish_step(g) then
+                    g->auto_finishing = false
+                else
+                    if audio_dev > 0u32 then play_sound(audio_dev, place_snd)
+            if is_won(g) then
+                g->state = phase.won
+                if !announced_win then
+                    announced_win = true
+                    if audio_dev > 0u32 then play_sound(audio_dev, win_snd)
+                    io.write("Solved in %d{g->moves} moves! Score: %d{g->score}\n", stdout)
+
+        // --------- Render ---------
+        if g->state == phase.splash then
+            draw_splash(ren)
+        else
+            render_game(ren, g)
+            sdl2.present(ren)
+
+        sdl2.delay(16u32)
+
+    if audio_dev > 0u32 then
+        sdl2.close_audio(audio_dev)
+    sdl2.destroy_renderer(ren)
+    sdl2.destroy_window(win)
+    sdl2.quit()
+    0

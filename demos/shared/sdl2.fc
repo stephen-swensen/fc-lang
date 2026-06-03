@@ -44,6 +44,14 @@ module sdl2 from "SDL2/SDL.h" =
     extern SDL_QUIT as quit_event: int32
     extern SDL_KEYDOWN as keydown_event: int32
     extern SDL_KEYUP as keyup_event: int32
+    extern SDL_MOUSEMOTION as mousemotion_event: int32
+    extern SDL_MOUSEBUTTONDOWN as mousedown_event: int32
+    extern SDL_MOUSEBUTTONUP as mouseup_event: int32
+
+    // --- Mouse buttons ---
+    extern SDL_BUTTON_LEFT as button_left: uint8
+    extern SDL_BUTTON_RIGHT as button_right: uint8
+    extern SDL_BUTTON_MIDDLE as button_middle: uint8
 
     // --- Keys ---
     extern SDLK_UP as key_up: int32
@@ -154,7 +162,33 @@ module sdl2 from "SDL2/SDL.h" =
     extern struct SDL_KeyboardEvent as keyboard_event =
         type: uint32
         keysym: sdl_keysym
+    extern struct SDL_MouseMotionEvent as mouse_motion_event =
+        type: uint32
+        timestamp: uint32
+        windowID: uint32
+        which: uint32
+        state: uint32
+        x: int32
+        y: int32
+        xrel: int32
+        yrel: int32
+    extern struct SDL_MouseButtonEvent as mouse_button_event =
+        type: uint32
+        timestamp: uint32
+        windowID: uint32
+        which: uint32
+        button: uint8
+        state: uint8
+        clicks: uint8
+        padding1: uint8
+        x: int32
+        y: int32
     extern union SDL_Event as sdl_event =
         type: uint32
         key: keyboard_event
+        motion: mouse_motion_event
+        button: mouse_button_event
     extern SDL_PollEvent as poll_event: (sdl_event*) -> int32
+
+    // --- Mouse state polling ---
+    extern SDL_GetMouseState as get_mouse_state: (int32*, int32*) -> uint32
