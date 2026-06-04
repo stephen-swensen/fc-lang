@@ -1,0 +1,4 @@
+// '\xN' char literal requires exactly two hex digits; one digit is an error.
+let main = (args: str[]) ->
+    let c = '\x4'
+    0

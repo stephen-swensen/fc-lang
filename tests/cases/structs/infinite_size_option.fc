@@ -1,0 +1,7 @@
+// An option of a value type still embeds it by value (tagged struct), so a
+// self-referential option field is infinite-size.
+struct rec =
+    next: rec?
+
+let main = (args: str[]) ->
+    0

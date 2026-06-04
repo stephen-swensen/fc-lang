@@ -431,7 +431,7 @@ Every feature in FC should transpile to clean, readable C. This is a core design
 
 The guiding principles are:
 
-- No null in the language — null is not expressible in FC code; option types replace all intentionally nullable values. Raw pointer fields in zero-initialized structs may physically contain null if the programmer does not initialize them — FC does not prevent this, but does not provide null as a value either.
+- No null keyword in the language — there is no `null` literal; option types replace all intentionally nullable values. Raw pointer fields in zero-initialized structs may physically contain null if the programmer does not initialize them, and `default(T*)` yields a null raw pointer — FC does not prevent this; it simply omits a dedicated `null` keyword.
 - No uninitialized bindings — all bindings must be initialized at declaration
 - No explicit type annotations on bindings — types are always inferred; the same principle extends to generics, where type variables are implicit (any `'a` in a signature makes the declaration generic) and instantiation is inferred from arguments at the call site. Explicit type arguments (`f<int32>()`, `make_pair<int32, bool>()`) are available for the cases inference can't reach — see §Generic Functions.
 - Explicit numeric widths throughout — implicit widening conversions are allowed only where no information can be lost (see §Operators & Access)
@@ -466,16 +466,18 @@ The one nuance is mutually recursive top-level functions: since the first compil
 
 Targeting C is a deliberate strength of the design, not a limitation. Every platform that matters already has a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets. By targeting C, FC inherits all of these backends for free, including niche embedded toolchains that have no LLVM backend. The generated C is also human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
 
-FC targets **C11** specifically, plus two GNU extensions supported by GCC and Clang. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output), `_Static_assert` (compiler-generated sanity checks), compound literals, and designated initializers.
+FC targets **C11** specifically, plus a small set of GNU extensions supported by GCC and Clang. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output), compound literals, and designated initializers. (`_Static_assert` is *not* emitted by the compiler; it appears only in programmer-authored extern C headers — see §C Interop.)
 
 #### GNU extensions required
 
-The generated C uses two extensions beyond the C11 standard:
+The generated C uses the following extensions beyond the C11 standard:
 
 - **GNU statement expressions** (`({ ... })`) — used pervasively for bounds-checked slice access, option unwrap, `alloc` expressions, match-as-expression, loop-as-expression, and other constructs that must evaluate a sequence of statements and produce a value. This is the primary GNU dependency.
 - **`__builtin_alloca`** — used for stack-dynamic allocation of temporaries: string interpolation buffers, array literal backing storage, and the `argc`/`argv` conversion in the generated `main` wrapper. Avoids any `<alloca.h>` dependency.
+- **`__attribute__`** — every emitted helper is marked `static __attribute__((unused))` (so unreferenced helpers stay warning-clean); the runtime also uses `((constructor))`, `((cold))`, `((noinline))`, and `((noreturn))` on a few internal functions.
+- **`__builtin_expect`** — emitted in slice/option bounds checks to hint the failure branch as cold.
 
-Both extensions are supported by GCC (all versions supporting C11) and Clang (all versions). They are also supported by all GCC-based cross-compilation toolchains.
+All of these are supported by GCC (all versions supporting C11) and Clang (all versions). They are also supported by all GCC-based cross-compilation toolchains.
 
 ### Platform contract
 
@@ -600,7 +602,7 @@ Bracket pairs nest correctly — `depth` is tracked, so brackets inside brackets
 
 ### Spaces Only
 
-Tabs are not permitted in indentation. Using a tab character at the start of a line is a compile error. This avoids the class of bugs where mixed tab/space indentation causes layout to differ between editors and compilers.
+Tabs are not permitted in source. A tab character anywhere outside of a string literal or comment — in leading indentation or in any inter-token whitespace — is a compile error. This avoids the class of bugs where mixed tab/space indentation causes layout to differ between editors and compilers.
 
 ### Block Contexts
 
@@ -643,11 +645,11 @@ Nesting is useful for commenting out regions of code that already contain block 
 
 An identifier begins with a letter (`a`–`z`, `A`–`Z`) or underscore (`_`), followed by zero or more letters, digits (`0`–`9`), or underscores. Identifiers are ASCII-only — non-ASCII characters are not permitted in identifier positions. Double underscores (`__`) are **not permitted** within identifiers — they are reserved for the compiler's internal name mangling of namespace and module hierarchies.
 
-Type variable names begin with an apostrophe (`'`) followed by one or more letters, digits, or underscores. The apostrophe is a dedicated sigil — concrete type names never begin with `'`.
+Type variable names begin with an apostrophe (`'`) followed by a letter, then zero or more letters, digits, or underscores. The apostrophe is a dedicated sigil — concrete type names never begin with `'`.
 
 The following are **reserved words** and may not be used as identifiers:
 
-`let`, `mut`, `struct`, `union`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `some`, `true`, `false`, `none`, `void`
+`let`, `mut`, `const`, `struct`, `union`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `defer`, `some`, `true`, `false`, `none`, `void`
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
@@ -657,7 +659,7 @@ The following are **built-in globals** — predefined identifiers typed `any*` t
 
 `stdin`, `stdout`, `stderr`
 
-The following are **built-in type names** and may not be used as user-defined type names or binding names:
+The following are **built-in type names**. Unlike reserved identifiers, they are not enforced keywords — the compiler permits shadowing them as binding or user-defined type names — but doing so is strongly discouraged and unsupported, since it obscures the built-in type and (for some names, such as `str` and `char`) interacts badly with code generation:
 
 `int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `any`, `str`, `cstr`
 
@@ -809,7 +811,7 @@ The compiler validates that each format specifier is compatible with the express
 
 The `%T` format emits the compile-time type name of the expression as a string literal. The expression is type-checked but **not evaluated** at runtime — only its static type is used. This is useful for debugging inferred types. For example, `"%T{x}"` where `x` is an `int32` produces `"int32"`. Since the type name is a compile-time constant, `%T` segments always contribute a fixed number of bytes to the buffer size.
 
-Width, precision, and flag modifiers are allowed: `%04d{x}`, `%.2f{pi}`, `%20s{name}`.
+Width, precision, and flag modifiers are allowed: `%04d{x}`, `%8.2f{pi}`, `%20s{name}`.
 
 The `%f` format requires an explicit width (e.g., `%8.2f`) because fixed-point float output can be arbitrarily long. Other float formats (`%e`, `%g`) are bounded by type and do not require explicit width.
 
@@ -1299,7 +1301,7 @@ let p = alloc(shape.circle(3.14))!
 | Bitwise not | `~x` | integer types | same type |
 | Address-of | `&x` | `let mut` bindings only | `T*` |
 | Dereference | `*x` | `T*` | `T` |
-| Cast | `(T)x` | numeric types | `T` |
+| Cast | `(T)x` | numeric, `bool`→numeric, pointer, slice — see §Casting | `T` |
 | Unwrap | `x!` | `T?` | `T` — crashes at runtime if `none` |
 
 ### Implicit Widening
@@ -2053,14 +2055,15 @@ Lambdas may capture immutable `let` bindings from the enclosing *local* scope by
 **A self-recursive call is not a capture.** When a `let`-bound lambda calls itself by name, that name is treated as a local of the function's own body, not a captured value, so self-recursion adds nothing to the closure's context. A self-recursive lambda that captures *other* local bindings is still a capturing closure subject to the usual lifetime rules (it cannot be returned or stored beyond its creator's frame). If a *nested* lambda refers to an enclosing self-recursive function, that reference is an ordinary capture of the enclosing function's value.
 
 ```fc
-let threshold = 10
-let above = (x: int32) -> x > threshold    // captures threshold by copy
-
-let mut counter = 0
-let f = () -> counter + 1                  // compile error — cannot capture mutable let binding
+let demo = () ->
+    let threshold = 10
+    let above = (x: int32) -> x > threshold    // captures threshold by copy (threshold is local)
+    let mut counter = 0
+    let f = () -> counter + 1                  // compile error — cannot capture mutable let binding
+    above(20)
 ```
 
-In contrast, a top-level mutable binding can be freely referenced:
+Capture only happens across a *local* lambda boundary, as above. In contrast, a top-level mutable binding can be freely referenced — it is a global access, not a capture:
 
 ```fc
 let mut total = 0
@@ -2134,7 +2137,7 @@ Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. T
 >
 > - Passing a capturing closure as an argument to a function call: safe — the callee returns before the creator's frame is popped.
 > - Returning a capturing closure from the function that created it: **compile error** — the context pointer would dangle.
-> - Storing a capturing closure into heap memory that outlives the creating function: **undefined behavior** — not currently detected.
+> - Storing a capturing closure into heap memory that outlives the creating function: **compile error** — escape analysis detects the stack-provenance context and rejects it, both for `alloc(struct { f = capturing })` and for `heap_ptr->field = capturing`.
 > - Non-capturing closures have no lifetime restriction — the null context pointer is always valid.
 >
 > The safe rule: a capturing closure must not outlive the function that created it. If captured state must outlive the creating function, heap-allocate the data explicitly and capture the pointer — a `let` binding holding a pointer has no lifetime restriction on the closure itself, only the usual programmer responsibility to keep the pointed-to memory live.
@@ -2323,9 +2326,9 @@ For safe unwrapping, use a `match` expression.
 
 ## Pointers
 
-Pointers in FC are intended to always be valid — a value of type `T*` should always point to a live `T`. There is no null literal and no null comparison in FC — null is not expressible in FC code. If a pointer may legitimately be absent, use the option type `T*?`.
+Pointers in FC are intended to always be valid — a value of type `T*` should always point to a live `T`. There is no null *literal* keyword in FC: `null` is not a valid expression. If a pointer may legitimately be absent, use the option type `T*?`. (Note: a physically null raw pointer is still obtainable as `default(T*)`, and raw pointers may be compared by address with `==`/`!=`; the language merely removes a dedicated `null` keyword, it does not forbid null pointer values at the memory level.)
 
-This is a convention enforced by the language surface, not a hard guarantee at the memory level. A struct with a raw `T*` field that is zero-initialized will physically contain a zero pointer. Dereferencing it will crash. FC trusts the programmer to initialize raw pointer fields before use — the same responsibility as in C, but with null removed as an expressible value so it can never appear through normal code paths.
+This is a convention enforced by the language surface, not a hard guarantee at the memory level. A struct with a raw `T*` field that is zero-initialized will physically contain a zero pointer. Dereferencing it will crash. FC trusts the programmer to initialize raw pointer fields before use — the same responsibility as in C, but with the `null` keyword removed so an accidental null is harder to introduce through normal code paths.
 
 ```fc
 int32*       // pointer to int32, always valid
@@ -2450,7 +2453,7 @@ Slices can be stack-allocated using literal initialization syntax, or heap-alloc
 
 ```fc
 let mut buf = int32[128] { }          // stack slice — zero-initialized
-let rgb = uint8[3] { 255, 0, 128 }   // stack slice — exhaustive element list
+let rgb = uint8[3] { 255u8, 0u8, 128u8 }   // stack slice — exhaustive element list (element literals must already be uint8)
 let buf = alloc(int32[128] { })       // heap slice — returns int32[]?
 let buf = alloc(int32[128] { })!     // heap slice — unwrap, crash on failure
 ```
@@ -2518,7 +2521,7 @@ free(buf)                // ok — heap-allocated
 When interoperating with C, a slice can be constructed from a raw pointer and a known length using struct literal syntax:
 
 ```fc
-let s = str { ptr = cs, len = libc.strlen(cs) }
+let s = str { ptr = cs, len = (int64) libc.strlen(cs) }   // strlen returns usize; str.len is int64, so cast explicitly
 let buf = uint8[] { ptr = some_ptr, len = 128 }
 ```
 
@@ -2749,6 +2752,7 @@ Available only on the types where they make sense — using them on other types 
 |-------|--------|--------|---------|--------|--------|------------|------------|
 | int8–int64 | yes | yes | yes | — | — | — | — |
 | uint8–uint64 | yes | yes | yes | — | — | — | — |
+| isize, usize | yes | yes | yes | — | — | — | — |
 | float32, float64 | yes | yes | yes | yes | yes | yes | yes |
 
 ```fc
@@ -2772,7 +2776,7 @@ float64.bits    // 64
 - **Float `.epsilon`**: smallest x such that 1.0 + x ≠ 1.0 (`FLT_EPSILON`/`DBL_EPSILON`)
 - **Float `.inf`/`.neg_inf`**: positive/negative infinity
 - **Float `.nan`**: not-a-number
-- **`.bits`**: bit width of the type as `int32` (8, 16, 32, or 64)
+- **`.bits`**: bit width of the type as `int32` (8, 16, 32, or 64; for `isize`/`usize`, the platform pointer width — 64 on a 64-bit target, 32 on a 32-bit target)
 
 > **Transpilation**
 > Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `int32.max` becomes `INT32_MAX`, `float64.nan` becomes `((double) NAN)`.
@@ -3131,7 +3135,7 @@ The compiler processes source in five stages:
 4. **Monomorphization** — transitive generic instantiations are discovered (generic functions calling other generic functions), concrete types are built for all instantiations, and type dependencies are topologically sorted so by-value struct/union dependencies are emitted before their dependents.
 5. **Code generation** — the typed AST is emitted as C11 source containing only concrete, fully-typed code. No type variables or generic machinery appear in the output. Because the whole program is a single translation unit, every emitted function is marked `static __attribute__((unused))` with only the program entry point as the exception — this gives the C compiler freedom to inline and dead-code-eliminate unreferenced helpers (common with imported-but-partially-used library modules), keeps generated symbol tables clean, and suppresses `-Wunused-function` when `-Wall -Werror` is in effect without disabling the warning globally.
 
-If any errors are accumulated during passes 1 or 2, later stages are skipped and the compiler exits with code 1.
+If any errors are accumulated during passes 1 or 2, later stages are skipped and the compiler exits with code 1. A few diagnostics also surface during code generation — for example, a type property requested on a concrete type that does not support it (reached only through a monomorphized instantiation) or a conflicting C `#define` across two modules sharing a header. If any errors are accumulated during code generation, the partially-written output file is removed and the compiler likewise exits with code 1.
 
 ---
 
@@ -3347,11 +3351,11 @@ If a child module imports a name that shadows a parent's import, the child's imp
 `import * from M` exports only M's own declarations — never names that M imported for internal use. A module's public API is exactly its declared members:
 
 ```fc
+import * from outer                     // file-level import (must precede declarations); brings get — does NOT bring secret
+
 module outer =
     import secret from inner            // internal use only
     let get = () -> secret              // own declaration — exported
-
-import * from outer                     // brings get — does NOT bring secret
 ```
 
 ### Shadowing
@@ -3359,13 +3363,13 @@ import * from outer                     // brings get — does NOT bring secret
 Later imports shadow earlier ones in the same scope. Inner scopes shadow outer scopes. Members (declarations) always take priority over imports at the same level — a module's own `let` beats an import with the same name, and a top-level `let` beats a file-level import. A child module's import can shadow a parent module's member.
 
 ```fc
+import value from mod_a                 // file-level imports must precede declarations
+import value from mod_b                 // shadows — value is now 20
+
 module mod_a =
     let value = 10
 module mod_b =
     let value = 20
-
-import value from mod_a
-import value from mod_b                 // shadows — value is now 20
 ```
 
 ### Name resolution order
@@ -3581,7 +3585,7 @@ Note that `#if os != "windows"` is true when `os` is unset — inequality means 
 
 ### Usage
 
-`#if` works at both top-level scope and inside expression blocks. Conditional compilation is resolved at the token level — inactive branch tokens are stripped before parsing begins. Inactive branches receive no checking of any kind.
+`#if` works at both top-level scope and inside expression blocks. Conditional compilation is resolved at the token level — inactive branch tokens are stripped before parsing begins, so inactive branches receive no syntactic or semantic checking (undefined names, type errors, and even syntactic garbage in an inactive branch are ignored). They must, however, still be **lexically** well-formed: tokenization runs before branch stripping, so tabs in indentation, unexpected characters, and unterminated strings or comments are still errors even inside an inactive branch.
 
 Top-level usage — conditionally including declarations, imports, and definitions:
 
@@ -3653,18 +3657,20 @@ The compiler emits a small set of C headers in the generated output. These are o
 | `<stdbool.h>` | `bool` |
 | `<stdlib.h>` | `malloc`, `free`, `abort` |
 | `<string.h>` | `memcmp`, `strlen` |
+| `<assert.h>` | `assert` (used by generated bounds/range-check helpers) |
+| `<limits.h>` | `INT_MAX`, `SIZE_MAX`, and other integer limits used by generated helpers |
 
 **Feature-gated headers** — emitted only when the program uses the corresponding feature:
 
 | Header | Triggered by |
 |--------|-------------|
-| `<stdio.h>` | String interpolation (`"\{expr}"`), or `stdin`/`stdout`/`stderr` globals |
+| `<stdio.h>` | String interpolation (`"%spec{expr}"`, e.g. `"%d{x}"`), or `stdin`/`stdout`/`stderr` globals |
 | `<math.h>` | Float type properties using `NAN`/`INFINITY` (`.nan`, `.inf`, `.neg_inf`) |
 | `<float.h>` | Float type properties using `FLT_*`/`DBL_*` (`.min`, `.max`, `.epsilon`) |
 
 **Extern-driven headers** — emitted from `module ... from "header.h"` declarations in user code or the standard library. See §C Interop.
 
-A pure-integer program with no string interpolation and no floats gets a 5-header preamble. Stack-dynamic allocation uses `__builtin_alloca` (see §GNU extensions required), avoiding any `<alloca.h>` dependency.
+A pure-integer program with no string interpolation and no floats gets a 7-header preamble (the seven core headers above). Stack-dynamic allocation uses `__builtin_alloca` (see §GNU extensions required), avoiding any `<alloca.h>` dependency.
 
 # PART 7 — Memory Management
 
@@ -3789,7 +3795,7 @@ let x = 42                           // stack int32, initialized to 42
 let p = point { x = 1.0, y = 2.0 }  // stack struct, explicitly initialized
 let p = default(point)               // stack struct, zero-initialized
 let buf = int32[128] { }             // stack slice, zero-initialized
-let rgb = uint8[3] { 255, 0, 128 }  // stack slice, exhaustive element list
+let rgb = uint8[3] { 255u8, 0u8, 128u8 }  // stack slice, exhaustive element list
 ```
 
 Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
@@ -3917,7 +3923,7 @@ let c = alloc(c"hello")!        // cstr? — heap copy with null terminator
 
 #### Direct-to-heap optimization
 
-When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or array literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `calloc`'d buffer. This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
+When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or array literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `malloc`'d buffer (no `calloc`, since `snprintf` overwrites every byte). This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
 
 #### Raw buffer allocation
 
@@ -3953,13 +3959,13 @@ let r = alloc(parse_outcome.success(42))!
 
 ```fc
 let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
-let buf = alloc(int32[4] { })!               // heap slice, all zeros — same as alloc(int32[4])
+let buf = alloc(int32[4] { })!               // heap slice, all zeros (the `{ }` is required)
 ```
 
 In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
-> `alloc(point3d { x = 2, z = 4 })` transpiles to `calloc(1, sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `calloc(4, sizeof(int32_t))` followed by element assignments. Both are conditional on the allocation succeeding.
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(int32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the empty array-literal form `alloc(int32[4] { })` use `calloc` instead.) All are conditional on the allocation succeeding.
 
 ### Initialization after alloc
 
@@ -4314,7 +4320,7 @@ For C functions that signal failure via a sentinel integer value (such as `-1`),
 
 ```fc
 module posix from "fcntl.h" =
-    extern open: (cstr, int32) -> int32    // returns -1 on failure, not null
+    extern open: (const cstr, int32) -> int32    // returns -1 on failure, not null; const cstr accepts c"..." literals
 
 let fd = posix.open(c"file.txt", 0)
 if fd == -1 then handle_error()
@@ -4539,7 +4545,7 @@ The cast emits an `alloca`+`memcpy` to create a null-terminated copy on the stac
 `cstr` to `str` — construct a slice from the raw pointer and length:
 
 ```fc
-let s = str { ptr = cs, len = libc.strlen(cs) }
+let s = str { ptr = cs, len = (int64) libc.strlen(cs) }   // strlen returns usize; str.len is int64, so cast explicitly
 ```
 
 The resulting `str` shares memory with the original C string — no allocation occurs. The programmer is responsible for ensuring the C string remains live for the lifetime of the FC slice.
@@ -4570,7 +4576,7 @@ POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `ne
 
 ## std::data
 
-Generic data structures and collection utilities. Lives in the `std::` namespace under `module data`; import individual modules with `import data from std::` then `import <module> from data` (or access directly as `std::data.array_list.make()`). Each data structure uses the companion pattern — the struct sits alongside its same-named module within `module data`. Contains:
+Generic data structures and collection utilities. Lives in the `std::` namespace under `module data`; import individual modules with `import data from std::` then `import <module> from data` (or `import data from std::` and access via the imported module, e.g. `data.array_list.make()`). Each data structure uses the companion pattern — the struct sits alongside its same-named module within `module data`. Contains:
 
 - **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
 - **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.

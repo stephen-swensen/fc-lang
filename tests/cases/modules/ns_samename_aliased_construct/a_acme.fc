@@ -1,0 +1,9 @@
+// Regression: when two namespaces declare a top-level type with the same bare
+// name, importing one BY ALIAS and constructing it directly must resolve to the
+// aliased namespace's type — not whichever same-named type appears first in
+// compilation order. (a_acme.fc sorts before b_widget.fc, so acme's `point`
+// registers first; the alias below targets widget's `point`.)
+namespace acme::
+
+struct point =
+    x: int32

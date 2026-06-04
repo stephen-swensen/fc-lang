@@ -1,0 +1,5 @@
+// \xNN requires exactly two hex digits; a single digit is a compile error
+// (downstream byte-count/decode logic assumes exactly two).
+let main = (args: str[]) ->
+    let s = "\x4"
+    0

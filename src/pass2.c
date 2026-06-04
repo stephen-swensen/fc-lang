@@ -223,9 +223,20 @@ typedef struct {
     ImportScope *import_scope;   /* lexically scoped import chain */
     OnDemandVisited *on_demand_visited;  /* cycle detection for on-demand type checking */
     FileImportScopes *file_scopes;  /* per-file import tables — needed to rebuild scope on on-demand checks */
+    /* One-shot flag: set true by EXPR_CALL only while checking its direct callee,
+       so EXPR_IDENT can allow a generic function in call position but reject it in
+       value position (a generic function has no single concrete type until
+       instantiated). Consumed (cleared) the moment an EXPR_IDENT reads it. */
+    bool in_callee_position;
+    /* One-shot flag: set true while checking a `%T` interpolation segment. `%T`
+       is compile-time type reflection — it prints the expression's type and
+       never emits it as a runtime value, so a generic function is permitted here
+       even though it is rejected in ordinary value position. */
+    bool in_reflection_position;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
+static Type *check_expr_inner(CheckCtx *ctx, Expr *e);
 static void check_decl_let(CheckCtx *ctx, Decl *d);
 
 /* Saved CheckCtx fields for save/restore around on-demand scope switches. */
@@ -352,7 +363,11 @@ static Symbol *import_scope_lookup_kind_until(ImportScope *scope, const char *na
                 if (ref->local_name == name && ref->kind == kind) {
                     if (kind == DECL_MODULE)
                         return symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix);
-                    return symtab_lookup_kind(ref->source_members, ref->source_name, kind);
+                    /* Namespace-aware: a struct/union imported by alias must
+                     * resolve to the type in ITS source namespace, not the
+                     * first same-named type in compilation order. ref->ns_prefix
+                     * mirrors the imported symbol's namespace. */
+                    return symtab_lookup_kind_ns(ref->source_members, ref->source_name, kind, ref->ns_prefix);
                 }
             }
         }
@@ -1303,6 +1318,38 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
     return buf;
 }
 
+/* Bounds transitive (cross-function-body) generic validation so a pathological
+ * type-growing recursion can't loop forever. Deeper than any real call chain;
+ * the instantiation memo below is the primary bound. */
+#define GEN_XBODY_DEPTH_MAX 64
+static int g_gen_xbody_depth = 0;
+
+/* Memo of generic instantiations already validated in the current top-level
+ * pass. A self- or mutually-recursive generic (or a diamond of generic calls)
+ * resolves to a finite set of distinct instantiations; validating each once
+ * bounds the total work. Without it, a body with two self-calls re-descends
+ * 2^depth times and exhausts memory (a single such test OOM-kills the process).
+ * Keyed on (callee symbol, concrete signature) so same-named generics in
+ * different modules never alias. fmt_generic_inst() returns a shared static
+ * buffer, so descriptors are stored as strcmp-comparable arena copies. The memo
+ * is reset at each independent top-level entry. */
+typedef struct { const Symbol *sym; const char *desc; } GenSeen;
+static GenSeen *g_gen_seen = NULL;
+static int g_gen_seen_n = 0, g_gen_seen_cap = 0;
+
+static void gen_seen_reset(void) { g_gen_seen_n = 0; }
+
+/* Record (sym, desc) as validated. Returns true if newly added (caller should
+ * descend), false if this instantiation was already validated this pass. */
+static bool gen_seen_add(Arena *arena, const Symbol *sym, const char *desc) {
+    for (int i = 0; i < g_gen_seen_n; i++)
+        if (g_gen_seen[i].sym == sym && strcmp(g_gen_seen[i].desc, desc) == 0)
+            return false;
+    GenSeen ent = { sym, arena_strdup(arena, desc, (int) strlen(desc)) };
+    DA_APPEND(g_gen_seen, g_gen_seen_n, g_gen_seen_cap, ent);
+    return true;
+}
+
 /* Walk a generic function body with concrete type bindings and validate
  * operations that were deferred during template type-checking (i.e. binary
  * operations on type variables and type property access).
@@ -1424,8 +1471,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         if (ot_raw && type_contains_type_var(ot_raw)) {
             Type *ot = type_substitute(arena, ot_raw, type_params, bindings, ntp);
             if (e->unary_prefix.op == TOK_MINUS) {
-                if (!type_is_numeric(ot)) {
-                    diag_error(call_loc, "in %s at %d:%d: unary minus requires numeric operand, got %s",
+                /* Same rule as the concrete path: signed/float only, never unsigned. */
+                if (!type_is_signed(ot) && !type_is_float(ot)) {
+                    diag_error(call_loc, "in %s at %d:%d: unary minus requires a signed integer or float operand, got %s",
                         inst_desc, e->loc.line, e->loc.col, type_name(ot));
                     ok = false;
                 }
@@ -1442,11 +1490,61 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_UNARY_POSTFIX:
         ok &= validate_generic_body(e->unary_postfix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
-    case EXPR_CALL:
+    case EXPR_CALL: {
         ok &= validate_generic_body(e->call.func, arena, type_params, bindings, ntp, call_loc, inst_desc);
         for (int i = 0; i < e->call.arg_count; i++)
             ok &= validate_generic_body(e->call.args[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        /* Transitive validation: if this call targets another generic function,
+         * propagate the concrete bindings into the callee's body so that an
+         * unsupported operation on the instantiated type is reported here at the
+         * originating call site — not leaked to the C compiler. (Without this,
+         * a generic that only fails for some types would type-check at its own
+         * definition but emit invalid C when reached through a wrapper.) */
+        Symbol *callee = e->call.resolved_callee;
+        Type *cft = e->call.func ? e->call.func->type : NULL;
+        if (callee && callee->is_generic && callee->type_param_count > 0 &&
+            callee->decl && callee->decl->kind == DECL_LET && callee->decl->let.init &&
+            callee->decl->let.init->kind == EXPR_FUNC &&
+            cft && cft->kind == TYPE_FUNC && cft->func.param_count == e->call.arg_count &&
+            g_gen_xbody_depth < GEN_XBODY_DEPTH_MAX) {
+            int cntp = callee->type_param_count;
+            Type **cbind = arena_alloc(arena, sizeof(Type*) * (size_t) cntp);
+            memset(cbind, 0, sizeof(Type*) * (size_t) cntp);
+            bool unified = true;
+            for (int i = 0; i < e->call.arg_count && unified; i++) {
+                Type *araw = e->call.args[i]->type;
+                if (!araw) { unified = false; break; }
+                /* Resolve the argument's type under the CURRENT instantiation. */
+                Type *aconc = type_substitute(arena, araw, type_params, bindings, ntp);
+                if (type_contains_type_var(aconc) ||
+                    !unify(cft->func.param_types[i], aconc, callee->type_params, cbind, cntp))
+                    unified = false;
+            }
+            if (unified) {
+                for (int i = 0; i < cntp; i++)
+                    if (!cbind[i] || type_contains_type_var(cbind[i])) { unified = false; break; }
+            }
+            if (unified) {
+                /* fmt_generic_inst returns a shared static buffer; copy into the
+                 * arena so the descriptor stays valid across the recursive
+                 * descent (which calls fmt_generic_inst again) and can be
+                 * memoized. Validate each distinct instantiation once — recursive
+                 * or diamond generic calls otherwise re-descend exponentially. */
+                const char *tmp = fmt_generic_inst(callee->name, arena, cft,
+                    callee->type_params, cbind, cntp);
+                const char *cdesc = arena_strdup(arena, tmp, (int) strlen(tmp));
+                if (gen_seen_add(arena, callee, cdesc)) {
+                    Expr *cfn = callee->decl->let.init;
+                    g_gen_xbody_depth++;
+                    for (int i = 0; i < cfn->func.body_count; i++)
+                        ok &= validate_generic_body(cfn->func.body[i], arena,
+                            callee->type_params, cbind, cntp, call_loc, cdesc);
+                    g_gen_xbody_depth--;
+                }
+            }
+        }
         break;
+    }
     case EXPR_INDEX:
         ok &= validate_generic_body(e->index.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
         ok &= validate_generic_body(e->index.index, arena, type_params, bindings, ntp, call_loc, inst_desc);
@@ -1625,7 +1723,36 @@ static bool expr_contains_control_flow(Expr *e) {
     }
 }
 
+/* Wrapper around the per-kind type checker. Consumes the one-shot
+ * `in_callee_position` / `in_reflection_position` flags and rejects a generic
+ * function used as a value (anywhere other than directly in call position or a
+ * `%T` reflection slot): a generic function has no single concrete type until
+ * instantiated, so passing/returning/binding it would otherwise emit
+ * uncompilable C. The idiomatic pattern is a wrapper lambda that instantiates
+ * it at the required type. */
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
+    bool allow_generic = ctx->in_callee_position || ctx->in_reflection_position;
+    ctx->in_callee_position = false;
+    ctx->in_reflection_position = false;
+    Type *t = check_expr_inner(ctx, e);
+    /* Reject a *generic function declaration* used as a value. The signal is the
+     * resolved symbol's is_generic flag (set only on generic top-level/module
+     * function and type declarations) plus a function type — NOT merely a type
+     * that mentions type variables, since a function-typed parameter like
+     * `f: ('a) -> 'b` legitimately carries the enclosing generic's type vars and
+     * is concrete at each instantiation. */
+    if (!allow_generic && t && t->kind == TYPE_FUNC && e->kind == EXPR_IDENT &&
+        e->ident.resolved_sym && e->ident.resolved_sym->is_generic) {
+        diag_error(e->loc,
+            "generic function '%s' cannot be used as a value; wrap it in a lambda "
+            "that instantiates it, e.g. (x) -> %s(x)", e->ident.name, e->ident.name);
+        e->type = type_error();
+        return e->type;
+    }
+    return t;
+}
+
+static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
@@ -2223,8 +2350,11 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         if (op == TOK_MINUS) {
-            if (!type_is_numeric(ot)) {
-                diag_error(e->loc, "unary minus requires numeric operand, got %s", type_name(ot));
+            /* Negation is defined only for signed integers and floats; an
+             * unsigned operand has no representable negative and would silently
+             * wrap (the literal path already rejects `-5u32`). */
+            if (!type_is_signed(ot) && !type_is_float(ot)) {
+                diag_error(e->loc, "unary minus requires a signed integer or float operand, got %s", type_name(ot));
                 e->type = type_error();
                 return e->type;
             }
@@ -2519,7 +2649,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
          * inferred type_args from the first check are misinterpreted as explicit
          * type args on the second check, causing spurious errors. */
         if (e->type) return e->type;
+        ctx->in_callee_position = true;
         Type *ft = check_expr(ctx, e->call.func);
+        ctx->in_callee_position = false;
         if (type_is_error(ft)) { e->type = type_error(); return e->type; }
 
         /* Check if this is a union variant constructor: union_name.variant(payload) */
@@ -2768,8 +2900,14 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
                         tmpl_has_errors = last->type && type_is_error(last->type);
                     }
                     if (!tmpl_has_errors) {
-                        const char *inst_desc = fmt_generic_inst(callee_sym->name, ctx->arena,
+                        const char *tmp = fmt_generic_inst(callee_sym->name, ctx->arena,
                             ft, callee_sym->type_params, bindings, ntp);
+                        const char *inst_desc = arena_strdup(ctx->arena, tmp, (int) strlen(tmp));
+                        /* Fresh memo for this top-level validation; seed it with
+                         * the entry instantiation so its own self-calls don't
+                         * re-descend into an identical body. */
+                        gen_seen_reset();
+                        gen_seen_add(ctx->arena, callee_sym, inst_desc);
                         for (int i = 0; i < func_expr->func.body_count; i++) {
                             if (!validate_generic_body(func_expr->func.body[i], ctx->arena,
                                     callee_sym->type_params, bindings, ntp,
@@ -3887,6 +4025,23 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
+        /* Element count must match the declared size exactly. The empty
+         * form `{ }` (elem_count == 0) zero-initializes all elements and is
+         * always allowed; an explicit element list must be exhaustive. Without
+         * this check, a short list leaves elements uninitialized and an
+         * over-long list writes past the alloca/malloc backing buffer. */
+        uint64_t declared_size = e->array_lit.size_expr->int_lit.value;
+        if (e->array_lit.elem_count > 0 &&
+            (uint64_t) e->array_lit.elem_count != declared_size) {
+            diag_error(e->loc,
+                "array literal has %d element%s but declared length is %" PRIu64
+                "; the element list must be exhaustive (or use `{ }` to zero-initialize)",
+                e->array_lit.elem_count,
+                e->array_lit.elem_count == 1 ? "" : "s",
+                declared_size);
+            e->type = type_error();
+            return e->type;
+        }
         /* Type-check elements */
         Type *elem_type = resolve_type(ctx, e->array_lit.elem_type);
         e->array_lit.elem_type = elem_type;
@@ -4290,6 +4445,9 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             InterpSegment *seg = &e->interp_string.segments[i];
             if (seg->is_literal) continue;
 
+            /* `%T` reflects the expression's type at compile time and never emits
+             * it as a value, so allow a generic function name here. */
+            if (seg->conversion == 'T') ctx->in_reflection_position = true;
             Type *et = check_expr(ctx, seg->expr);
             if (type_is_error(et)) continue;
             et = resolve_type(ctx, et);
@@ -6129,6 +6287,101 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
     }
 }
 
+/* ---- Infinite-size (by-value recursive type) detection ----
+ *
+ * A struct or union that contains itself by value — directly or through a chain
+ * of other by-value types — has no finite size and cannot be emitted as valid C.
+ * The spec mandates a compile error for this. We build the by-value containment
+ * graph over all (non-extern) struct/union declarations and report a cycle.
+ *
+ * Pointers and slices break the cycle (they are fixed-size indirections), so the
+ * common `next: node*?` / `children: node[]` recursive patterns are fine. Fixed
+ * inline arrays and options of a value type DO propagate by-value containment. */
+
+/* Name of the struct/union a type embeds BY VALUE, or NULL (pointers, slices,
+ * primitives, functions, and options-of-pointer carry no by-value UDT). */
+static const char *a5_byval_name(Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+    case TYPE_STUB:        return t->stub.name;
+    case TYPE_STRUCT:      return t->struc.name;
+    case TYPE_UNION:       return t->unio.name;
+    case TYPE_FIXED_ARRAY: return a5_byval_name(t->fixed_array.elem);
+    case TYPE_OPTION:      return a5_byval_name(t->option.inner);
+    default:               return NULL;  /* pointer, slice, func, primitives */
+    }
+}
+
+static void a5_collect(Decl **decls, int count, Decl ***list, int *n, int *cap) {
+    for (int i = 0; i < count; i++) {
+        Decl *d = decls[i];
+        if (d->kind == DECL_STRUCT) { if (!d->struc.is_extern) DA_APPEND(*list, *n, *cap, d); }
+        else if (d->kind == DECL_UNION) DA_APPEND(*list, *n, *cap, d);
+        else if (d->kind == DECL_MODULE) a5_collect(d->module.decls, d->module.decl_count, list, n, cap);
+    }
+}
+
+/* Resolve a by-value reference name to a unique UDT index. Returns -1 if the
+ * name matches no UDT or more than one (ambiguous across modules/namespaces —
+ * skipped conservatively so we never reject a valid program). */
+static int a5_find(Decl **udts, int n, const char *name) {
+    int found = -1;
+    for (int i = 0; i < n; i++) {
+        const char *un = udts[i]->kind == DECL_STRUCT ? udts[i]->struc.name : udts[i]->unio.name;
+        if (un == name) { if (found >= 0) return -1; found = i; }
+    }
+    return found;
+}
+
+/* DFS over by-value edges; on a back-edge to a node on the current stack, report
+ * an infinite-size cycle. state: 0=unvisited, 1=on-stack, 2=done. */
+static void a5_visit(Decl **udts, int n, int *state, int idx) {
+    state[idx] = 1;
+    Decl *d = udts[idx];
+    if (d->kind == DECL_STRUCT) {
+        for (int f = 0; f < d->struc.field_count; f++) {
+            const char *tn = a5_byval_name(d->struc.fields[f].type);
+            if (!tn) continue;
+            int j = a5_find(udts, n, tn);
+            if (j < 0) continue;
+            if (state[j] == 1) {
+                diag_error(d->loc, "type '%s' has infinite size: field '%s' contains "
+                    "'%s' by value, forming a cycle; use a pointer or slice to break it",
+                    d->struc.name, d->struc.fields[f].name, tn);
+            } else if (state[j] == 0) {
+                a5_visit(udts, n, state, j);
+            }
+        }
+    } else { /* DECL_UNION */
+        for (int v = 0; v < d->unio.variant_count; v++) {
+            const char *tn = a5_byval_name(d->unio.variants[v].payload);
+            if (!tn) continue;
+            int j = a5_find(udts, n, tn);
+            if (j < 0) continue;
+            if (state[j] == 1) {
+                diag_error(d->loc, "type '%s' has infinite size: variant '%s' contains "
+                    "'%s' by value, forming a cycle; use a pointer or slice to break it",
+                    d->unio.name, d->unio.variants[v].name, tn);
+            } else if (state[j] == 0) {
+                a5_visit(udts, n, state, j);
+            }
+        }
+    }
+    state[idx] = 2;
+}
+
+static void check_infinite_size(Program *prog) {
+    Decl **udts = NULL;
+    int n = 0, cap = 0;
+    a5_collect(prog->decls, prog->decl_count, &udts, &n, &cap);
+    if (n == 0) { free(udts); return; }
+    int *state = calloc((size_t) n, sizeof(int));
+    for (int i = 0; i < n; i++)
+        if (state[i] == 0) a5_visit(udts, n, state, i);
+    free(state);
+    free(udts);
+}
+
 void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, MonoTable *mono,
                  FileImportScopes *file_scopes) {
     Arena arena;
@@ -6291,6 +6544,8 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         }
         break;
     }
+
+    check_infinite_size(prog);
 
     /* Don't free arena — types are referenced from AST */
 }

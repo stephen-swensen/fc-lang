@@ -1,0 +1,5 @@
+// Test: array literal with more elements than declared length is rejected
+// (would otherwise write past the alloca backing buffer)
+let main = (args: str[]) ->
+    let buf = int32[3] { 1, 2, 3, 4 }
+    (int32) buf.len

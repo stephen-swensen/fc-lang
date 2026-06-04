@@ -99,8 +99,8 @@ IDENT         = ident_start , { ident_cont } ;
 (* Constraint not expressible in BNF: IDENT must not contain "__"         *)
 (* (double underscore). Reserved for compiler name mangling.              *)
 
-(* Type variable names begin with an apostrophe.                       *)
-TYPE_VAR      = "'" , ( letter | underscore ) , { ident_cont } ;
+(* Type variable names begin with an apostrophe, then a letter.        *)
+TYPE_VAR      = "'" , letter , { ident_cont } ;
 
 
 (* ------------------------------------------------------------------ *)
@@ -112,8 +112,9 @@ keyword = "let" | "mut" | "struct" | "union" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
         | "private" | "const" | "match" | "with" | "when" | "if" | "then" | "else"
         | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
-        | "some" | "true" | "false" | "none" | "void"
-        | "any"         (* only valid as part of "any*" type syntax *) ;
+        | "some" | "true" | "false" | "none" | "void" ;
+(* Note: "any" is NOT a reserved word — it lexes as a plain identifier *)
+(* and is only meaningful in the "any*" type form (see type rules).    *)
 
 (* Reserved identifiers — built-in compile-time operators.             *)
 (* These may not be shadowed by user-defined bindings.                 *)

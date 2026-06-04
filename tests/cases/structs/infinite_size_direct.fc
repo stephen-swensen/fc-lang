@@ -1,0 +1,7 @@
+// A struct that contains itself by value has no finite size — compile error.
+struct foo =
+    value: foo
+
+let main = (args: str[]) ->
+    let f = foo { }
+    0

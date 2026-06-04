@@ -1,0 +1,7 @@
+// Test: array literal whose element count exactly matches the declared length
+let main = (args: str[]) ->
+    let buf = int32[3] { 10, 20, 30 }
+    let sum = buf[0] + buf[1] + buf[2]
+    assert(sum == 60)
+    assert(buf.len == 3)
+    0

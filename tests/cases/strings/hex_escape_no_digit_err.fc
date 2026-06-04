@@ -1,0 +1,4 @@
+// \xNN with no hex digit following is a compile error.
+let main = (args: str[]) ->
+    let s = "\xz"
+    0

@@ -78,6 +78,7 @@ static void emit_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
+static bool type_valueless(Type *t);
 
 static bool is_hoisted(const char *codegen_name) {
     for (int i = 0; i < g_hoisted_count; i++)
@@ -106,13 +107,34 @@ static void defer_scope_add(Expr *e) {
     DA_APPEND(ds->defers, ds->count, ds->cap, e);
 }
 
+/* True if a deferred expression lowers to a C *statement* (bare `for`/`while`/
+ * `if`) rather than an expression, so it must be emitted bare instead of wrapped
+ * in `(void)(…)`. Mirrors the statement-position handling in emit_block_stmts.
+ * Blocks and matches always emit as statement-expressions `({…})`, so they are
+ * safe to wrap and need no special-casing here. */
+static bool defer_emits_statement(Expr *e) {
+    switch (e->kind) {
+    case EXPR_FOR:  return true;
+    case EXPR_LOOP:
+    case EXPR_IF:   return type_valueless(e->type);
+    default:        return false;
+    }
+}
+
 /* Emit defers for a single scope in LIFO order */
 static void emit_scope_defers(DeferScope *ds, FILE *out) {
     for (int i = ds->count - 1; i >= 0; i--) {
         emit_indent(out);
-        fprintf(out, "(void)(");
-        emit_expr(ds->defers[i], out);
-        fprintf(out, ");\n");
+        Expr *d = ds->defers[i];
+        if (defer_emits_statement(d)) {
+            /* Statement-emitting form: `(void)(while(1){…})` would be invalid C. */
+            emit_expr(d, out);
+            fprintf(out, "\n");
+        } else {
+            fprintf(out, "(void)(");
+            emit_expr(d, out);
+            fprintf(out, ");\n");
+        }
     }
 }
 
@@ -631,6 +653,13 @@ static void emit_fn_type_suffix(Type *t, FILE *out) {
         fprintf(out, "void");
     } else {
         emit_type_ident(t->func.return_type, out);
+    }
+    /* Variadic and non-variadic function types are distinct (type_eq compares
+     * is_variadic), so their typedef names must differ too — otherwise e.g.
+     * `(const cstr, ...) -> int32` (printf) and `(const cstr) -> int32`
+     * (stdlib's remove) mangle to the same name and emit a duplicate typedef. */
+    if (t->func.is_variadic) {
+        fprintf(out, "_vararg");
     }
 }
 
@@ -2074,8 +2103,10 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
                     e->field.codegen_name);
             } else if (is_cstr_type(e->type)) {
-                /* C string #defines are char*; FC cstr is uint8_t* — cast at boundary */
-                fprintf(out, "(%s uint8_t*)(%s)",
+                /* C string #defines are char*; FC cstr is uint8_t* — cast at boundary.
+                 * Outer parens are required so a following postfix (e.g. `c.s[0]`)
+                 * binds to the cast result, not the raw #define literal. */
+                fprintf(out, "((%s uint8_t*)(%s))",
                     (e->type->is_const ? "const" : ""), e->field.codegen_name);
             } else {
                 fprintf(out, "%s", e->field.codegen_name);

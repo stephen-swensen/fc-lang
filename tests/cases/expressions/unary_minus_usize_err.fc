@@ -1,0 +1,5 @@
+// Unary minus on usize is rejected (usize is unsigned).
+let main = (args: str[]) ->
+    let a = 5u
+    let b = -a
+    0

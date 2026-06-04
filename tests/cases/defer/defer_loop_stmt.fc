@@ -1,0 +1,17 @@
+// defer of a valueless `loop` — a statement-emitting expression (emits as
+// `while (1) {...}`). Must be emitted bare, not wrapped in `(void)(...)`.
+let mut trace = 0
+let mut n = 0
+
+let main = (args: str[]) ->
+    let x = 5
+    if x > 3 then
+        defer loop
+            n = n + 1
+            trace = trace + n
+            if n >= 3 then break
+        trace = trace + 100
+    // The deferred loop runs at if-block exit: 100 +1 +2 +3 = 106 (n reaches 3).
+    assert(trace == 106)
+    assert(n == 3)
+    0

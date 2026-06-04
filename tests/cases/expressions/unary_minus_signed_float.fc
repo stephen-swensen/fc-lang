@@ -1,0 +1,9 @@
+// Unary minus is valid on signed-integer and float variables (not just literals).
+let main = (args: str[]) ->
+    let a = 5i32
+    let f = 2.5
+    let mut r = 0
+    if -a == -5 then r = r + 1
+    if -f < 0.0 then r = r + 1
+    assert(r == 2)
+    0

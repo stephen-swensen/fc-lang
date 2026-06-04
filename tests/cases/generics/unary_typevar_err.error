@@ -1,1 +1,1 @@
-unary minus requires numeric operand
+unary minus requires a signed integer or float operand

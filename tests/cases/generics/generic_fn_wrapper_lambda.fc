@@ -1,0 +1,10 @@
+// The idiomatic instantiation pattern: wrap the generic function in a lambda.
+let identity = (x: 'a) -> x
+let apply_it = (f: (int32) -> int32, n: int32) -> f(n)
+
+let main = (args: str[]) ->
+    let direct = identity(42)            // generic call is fine
+    assert(direct == 42)
+    let viaWrap = apply_it((x: int32) -> identity(x), 9)
+    assert(viaWrap == 9)
+    0

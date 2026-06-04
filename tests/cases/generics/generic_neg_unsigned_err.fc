@@ -1,0 +1,6 @@
+// A generic that negates its argument, instantiated with an unsigned type, is
+// rejected at the call site (transitive validation of the deferred unary minus).
+let neg = (x: 'a) -> -x
+let main = (args: str[]) ->
+    let r = neg(5u32)
+    0

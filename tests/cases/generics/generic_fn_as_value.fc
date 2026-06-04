@@ -1,0 +1,7 @@
+// A generic function cannot be used as a value (it has no single concrete type
+// until instantiated); doing so must be an FC error, not uncompilable C.
+let identity = (x: 'a) -> x
+
+let main = (args: str[]) ->
+    let g = identity
+    0

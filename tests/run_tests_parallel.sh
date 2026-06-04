@@ -49,6 +49,16 @@ run_one_test() {
     local c_file="$TMPDIR/${slug}.c"
     local bin_file="$TMPDIR/${slug}"
 
+    # Cap each compile's virtual memory so a runaway fcc/cc (e.g. an exponential
+    # monomorphization) dies as a single failed test instead of exhausting RAM
+    # and letting the OOM killer take down the whole session/VM. Normal compiles
+    # use a few MB, so the default 3 GiB is generous. Override via
+    # FC_TEST_MEM_CAP_KB (0 disables). Not applied on Windows (ulimit -v is a
+    # no-op under MSYS2/UCRT).
+    if [ -z "$IS_WINDOWS" ]; then
+        ulimit -v "${FC_TEST_MEM_CAP_KB:-3145728}" 2>/dev/null || true
+    fi
+
     # Compile FC -> C
     if ! $FCC $fc_files $fc_flags -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
         if [ -n "$error_file" ] && [ -f "$error_file" ]; then

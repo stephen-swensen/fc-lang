@@ -1,0 +1,13 @@
+// defer of a `for` loop — a statement-emitting expression. Codegen must emit it
+// bare, not as `(void)(for(...){...})` which is invalid C.
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x = 5
+    if x > 3 then
+        defer for i in 0..5
+            trace = trace + i
+        trace = trace + 100
+    // The deferred `for` runs at if-block exit: 100 + (0+1+2+3+4) = 110.
+    assert(trace == 110)
+    0

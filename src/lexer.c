@@ -313,8 +313,14 @@ static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
                 advance(l);
             } else if (esc == 'x') {
                 advance(l); /* skip 'x' */
-                if (!at_end(l) && isxdigit((unsigned char)peek(l))) advance(l);
-                if (!at_end(l) && isxdigit((unsigned char)peek(l))) advance(l);
+                /* \xNN requires exactly two hex digits (spec). Fewer leaves the
+                 * downstream byte-count/decode logic — which assumes two — wrong. */
+                if (!isxdigit((unsigned char)peek(l)))
+                    return error_token(l, "\\x escape requires exactly two hex digits");
+                advance(l);
+                if (!isxdigit((unsigned char)peek(l)))
+                    return error_token(l, "\\x escape requires exactly two hex digits");
+                advance(l);
             } else {
                 return error_token(l, "unrecognized escape sequence");
             }
@@ -404,8 +410,13 @@ static Token scan_char_lit(Lexer *l) {
             advance(l);
         } else if (esc == 'x') {
             advance(l); /* skip 'x' */
-            if (isxdigit((unsigned char)peek(l))) advance(l);
-            if (isxdigit((unsigned char)peek(l))) advance(l);
+            /* \xNN requires exactly two hex digits (spec); see scan_string_body. */
+            if (!isxdigit((unsigned char)peek(l)))
+                return error_token(l, "\\x escape requires exactly two hex digits");
+            advance(l);
+            if (!isxdigit((unsigned char)peek(l)))
+                return error_token(l, "\\x escape requires exactly two hex digits");
+            advance(l);
         } else {
             return error_token(l, "unrecognized escape sequence");
         }

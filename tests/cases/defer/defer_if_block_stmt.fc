@@ -1,0 +1,13 @@
+// defer of a block-form (void) `if` — a statement-emitting expression (emits as
+// a C `if` statement). Must be emitted bare, not wrapped in `(void)(...)`.
+let mut trace = 0
+
+let main = (args: str[]) ->
+    let x = 5
+    if x > 3 then
+        defer if trace > 0 then
+            trace = trace + 50
+        trace = trace + 10
+    // The deferred `if` runs at if-block exit and sees trace == 10 (> 0): +50 = 60.
+    assert(trace == 60)
+    0

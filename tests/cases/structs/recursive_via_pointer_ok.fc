@@ -1,0 +1,17 @@
+// Recursion through a pointer (or slice) is finite and must compile: the
+// classic linked-list / tree shapes.
+struct node =
+    value: int32
+    next: node*?
+
+struct tree =
+    label: int32
+    children: tree[]
+
+let main = (args: str[]) ->
+    let mut b = node { value = 2 }
+    let a = node { value = 1, next = some(&b) }
+    assert(a.next!->value == 2)
+    let t = tree { label = 7 }
+    assert(t.label == 7)
+    0

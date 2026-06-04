@@ -1,0 +1,11 @@
+// A union variant that embeds (by value) a struct that cycles back to the union
+// is infinite-size.
+struct pair =
+    left: expr
+    right: expr
+union expr =
+    | num(int32)
+    | add(pair)
+
+let main = (args: str[]) ->
+    0

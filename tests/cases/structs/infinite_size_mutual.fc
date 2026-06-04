@@ -1,0 +1,8 @@
+// Mutually recursive structs, both by value, form an infinite-size cycle.
+struct ma =
+    b: mb
+struct mb =
+    a: ma
+
+let main = (args: str[]) ->
+    0

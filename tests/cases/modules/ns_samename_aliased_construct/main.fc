@@ -1,0 +1,17 @@
+import point as wp from widget::
+import shape as ws from widget::
+
+let use_param = (p: wp) -> p.y
+
+let main = (args: str[]) ->
+    // Construct an aliased namespaced struct directly.
+    let pt = wp { y = 99 }
+    assert(pt.y == 99)
+    assert(use_param(pt) == 99)
+    // Construct an aliased namespaced union variant directly.
+    let s = ws.b(7)
+    let n = match s with
+    | a(v) -> v
+    | b(v) -> v
+    assert(n == 7)
+    0
