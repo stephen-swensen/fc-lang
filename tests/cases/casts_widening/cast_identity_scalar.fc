@@ -1,0 +1,9 @@
+// Identity casts are allowed uniformly for scalar types (C3). Previously
+// `(bool) bool` was rejected while numeric identity casts were allowed.
+let main = (args: str[]) ->
+    let b = true
+    let b2 = (bool) b
+    assert(b2)
+    let n = (int32) 5i32
+    assert(n == 5)
+    0

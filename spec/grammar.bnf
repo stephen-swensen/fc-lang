@@ -101,6 +101,8 @@ IDENT         = ident_start , { ident_cont } ;
 
 (* Type variable names begin with an apostrophe, then a letter.        *)
 TYPE_VAR      = "'" , letter , { ident_cont } ;
+(* Constraint not expressible in BNF: TYPE_VAR must not contain "__"       *)
+(* (double underscore) either — same name-mangling reservation as IDENT.  *)
 
 
 (* ------------------------------------------------------------------ *)

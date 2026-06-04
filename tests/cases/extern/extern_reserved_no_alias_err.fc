@@ -1,0 +1,6 @@
+// C8: a reserved-identifier extern name without an alias is unreferenceable
+// (the bare name is an FC keyword) and is rejected — an alias is required.
+module m from "stdlib.h" =
+    extern free: (any*) -> void
+let main = (args: str[]) ->
+    0

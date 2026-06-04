@@ -2570,11 +2570,19 @@ static Decl *parse_extern_decl(Parser *p) {
     }
 
     /* extern function declaration */
-    const char *name = tok_intern(p, expect_extern_c_name(p));
+    Token *name_tok = expect_extern_c_name(p);
+    const char *name = tok_intern(p, name_tok);
     const char *alias = NULL;
     if (check(p, TOK_AS)) {
         advance_p(p);
         alias = tok_intern(p, expect(p, TOK_IDENT));
+    }
+    /* A reserved-identifier C name (free, default, sizeof, ...) is accepted only
+     * with an alias: the bare name is a keyword in FC and would be unreferenceable.
+     * Require `extern <name> as <ident>: ...` in that case. */
+    if (!alias && name_tok->kind != TOK_IDENT) {
+        diag_fatal(loc, "extern declaration uses reserved name '%s', which would be "
+            "unreferenceable; give it an alias: `extern %s as <name>: ...`", name, name);
     }
     expect(p, TOK_COLON);
     Type *type = parse_type(p);

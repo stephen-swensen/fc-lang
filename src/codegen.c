@@ -1679,6 +1679,21 @@ static void emit_expr(Expr *e, FILE *out) {
         int op = e->binary.op;
         Type *rt = e->type;
 
+        /* Pointer difference (ptr - ptr) → ptrdiff_t element count. Must emit a
+         * plain subtraction: the signed-wrap path below would cast the pointers
+         * to unsigned and compute a byte difference instead. */
+        if (op == TOK_MINUS && e->binary.left->type &&
+            e->binary.left->type->kind == TYPE_POINTER &&
+            e->binary.right->type &&
+            e->binary.right->type->kind == TYPE_POINTER) {
+            fprintf(out, "(");
+            emit_expr(e->binary.left, out);
+            fprintf(out, " - ");
+            emit_expr(e->binary.right, out);
+            fprintf(out, ")");
+            break;
+        }
+
         /* Signed overflow wrapping: (int32_t)((uint32_t)a + (uint32_t)b) */
         if ((op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR) &&
             rt && type_is_signed(rt)) {

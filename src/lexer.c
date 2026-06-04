@@ -486,6 +486,16 @@ static Token scan_token(Lexer *l) {
             }
             l->current = saved; l->col = saved_col;
             while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
+            /* Reject '__' in type variable names too — same name-mangling
+             * reservation as identifiers (the leading apostrophe never matches). */
+            int tvlen = (int)(l->current - l->start);
+            for (int i = 0; i + 1 < tvlen; i++) {
+                if (l->start[i] == '_' && l->start[i + 1] == '_') {
+                    SrcLoc loc = { .line = l->line, .col = l->start_col };
+                    diag_fatal(loc, "type variable '%.*s' contains '__' (double underscore), "
+                        "which is reserved", tvlen, l->start);
+                }
+            }
             return make_token(l, TOK_TYPE_VAR);
         }
         l->current = l->start; l->col = l->start_col;

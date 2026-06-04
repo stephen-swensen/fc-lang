@@ -1,0 +1,4 @@
+// C7: a bare unknown type name (no type args) is also rejected cleanly.
+let f = (x: widget) -> x
+let main = (args: str[]) ->
+    0

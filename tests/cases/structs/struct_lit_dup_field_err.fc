@@ -1,0 +1,8 @@
+// A duplicate field in a struct literal is rejected (C5) — was silently
+// last-wins and emitted override-init C that fails -Wextra.
+struct point =
+    x: int32
+    y: int32
+let main = (args: str[]) ->
+    let p = point { x = 1, x = 2, y = 3 }
+    0

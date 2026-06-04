@@ -895,12 +895,20 @@ let cs = (cstr) s   // stack copy with null terminator
 
 The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. The compiler's escape analysis tracks the result as stack-allocated — returning a `(cstr) str` cast from a function is a compile error. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
 
+**cstr to str** — `(str)` constructs a `str` slice from a `cstr` by computing its length with `strlen` and **sharing** the original backing memory — no copy or allocation occurs. The result is valid only as long as the underlying C string stays live, and assumes it is null-terminated:
+
+```fc
+let s = (str) c"hello"   // shares backing; len computed via strlen → 5
+```
+
 **Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
 
 ```fc
 let addr = (uint64) some_ptr          // pointer to integer — raw address value
 let reg = (uint32*) 0x40001000u64     // integer to pointer — memory-mapped register
 ```
+
+**Identity casts** — casting a scalar value to its own type (e.g. `(int32) x` where `x` is already `int32`, or `(bool) b`) is a permitted no-op for any numeric, `bool`, `char`, or pointer type. Aggregate types (structs, unions, slices) cannot be cast at all, so they have no identity-cast form.
 
 Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `float32` as `uint32`) is not supported via cast syntax — use explicit pointer casts through a temporary if needed.
 
@@ -922,6 +930,8 @@ let mut y = 42
 y = y + 1           // ok — reassigning a mutable let binding
 x = x + 1           // compile error — x is a let binding, cannot be reassigned
 ```
+
+Assigning a binding to itself — `x = x` — is a compile error, since it is always a no-op. This is detected for a **bare-identifier** target only; an assignment through a field or index (`p.x = p.x`, `buf[i] = buf[i]`) is not flagged, because the target path may involve a side-effecting subexpression and is not necessarily a no-op.
 
 ### Binding reassignment vs. content mutation
 
@@ -2413,9 +2423,16 @@ px->field = 1   // write through pointer to struct field
 ### Pointer arithmetic
 
 ```fc
-let next = px + 1      // advance pointer by one element
-let val = *(px + 1)    // dereference at offset
+let next = px + 1      // ptr + int → advance by one element (T*)
+let prev = px - 1      // ptr - int → T*
+let same = 1 + px      // int + ptr → T* (commutative)
+let n    = qx - px     // ptr - ptr → isize element count (same pointer type)
+let val  = *(px + 1)   // dereference at offset
 ```
+
+The legal forms are `ptr + int`, `int + ptr`, and `ptr - int` — each yields the same pointer type, offsetting by *N elements* (scaled by the element size) — and `ptr - ptr` between two pointers **of the same type**, which yields an `isize` count of the elements between them (C `ptrdiff_t` semantics). `ptr + ptr` and `int - ptr` are rejected as meaningless. Pointers may also be compared by address with `==`, `!=`, `<`, `>`, `<=`, and `>=`.
+
+All pointer arithmetic is **unchecked** — there are no bounds, and it is the programmer's responsibility to keep pointers within the same allocation (the same contract as C). For safe, bounds-checked indexed access, use a slice (`T[]`) instead.
 
 > **Note**
 > `*ptr` in a field access context does not copy the struct. A copy only occurs when `*ptr` is used in a value position, such as `let x = *ptr` where the binding type is a struct.
@@ -4291,7 +4308,7 @@ module libc from "stdlib.h" =
     extern free as c_free: (any*) -> void   // C's free, available as libc.c_free
 ```
 
-The string after `as` becomes the FC-visible name. The original C symbol name is used in the generated C output. This follows the same `as` aliasing convention already used in import statements.
+The string after `as` becomes the FC-visible name. The original C symbol name is used in the generated C output. This follows the same `as` aliasing convention already used in import statements. The alias is **required** in this case: an `extern` declaration whose FC-facing name would be a reserved identifier — e.g. a bare `extern free: ...` with no `as` clause — is a compile error, because the name would be unreferenceable.
 
 In practice, `extern free as c_free` is essentially never needed. FC's built-in `free` operator emits C's `free()` in the generated output and works on any heap pointer regardless of whether it was allocated via FC's `alloc` or `libc.malloc` — at the C level it is the same allocator. If a C API requires `free` as a function pointer value, a wrapper lambda suffices:
 

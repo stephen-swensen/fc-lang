@@ -233,6 +233,10 @@ typedef struct {
        never emits it as a runtime value, so a generic function is permitted here
        even though it is rejected in ordinary value position. */
     bool in_reflection_position;
+    /* Best-effort source location for type-resolution diagnostics (resolve_type
+       has no loc of its own). Set broadly at each expression and precisely at
+       function-parameter resolution; used to attribute "unknown type name". */
+    SrcLoc type_loc;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -700,6 +704,15 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 return concrete;
             }
             return sym->type;
+        }
+        /* Stub matched no struct, union, or other symbol — genuinely unknown.
+         * A concrete unknown name (no type variables) would otherwise leak
+         * verbatim into the generated C and fail the C compile; report a clean
+         * FC diagnostic instead. Stubs that still contain type variables are
+         * generic templates resolved later at monomorphization, so leave them. */
+        if (!type_contains_type_var(t)) {
+            diag_error(ctx->type_loc, "unknown type name '%s'", t->stub.name);
+            return type_error();
         }
     }
     return t;
@@ -1753,6 +1766,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 }
 
 static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
+    ctx->type_loc = e->loc;  /* best-effort loc for any type resolution in this expr */
     switch (e->kind) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
@@ -2147,10 +2161,28 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
 
         if (op == TOK_PLUS || op == TOK_MINUS) {
-            /* Allow pointer arithmetic: ptr + int, ptr - int */
+            /* Pointer arithmetic: ptr ± int → same pointer type (offset by N elements). */
             if (lt->kind == TYPE_POINTER && type_is_integer(rt)) {
                 e->type = lt;
                 e->prov = e->binary.left->prov;
+                return e->type;
+            }
+            /* Commutative int + ptr → pointer type (addition only). */
+            if (op == TOK_PLUS && type_is_integer(lt) && rt->kind == TYPE_POINTER) {
+                e->type = rt;
+                e->prov = e->binary.right->prov;
+                return e->type;
+            }
+            /* Pointer difference: ptr - ptr (matching types) → isize element count
+             * (C ptrdiff_t semantics). Unchecked — same-buffer is the programmer's. */
+            if (op == TOK_MINUS && lt->kind == TYPE_POINTER && rt->kind == TYPE_POINTER) {
+                if (!type_eq(lt, rt)) {
+                    diag_error(e->loc, "pointer difference requires matching pointer types, got %s and %s",
+                        type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
+                e->type = type_isize();
                 return e->type;
             }
             if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
@@ -2502,6 +2534,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         inner->is_lambda_boundary = true;
         for (int i = 0; i < pc; i++) {
+            ctx->type_loc = e->func.params[i].loc;  /* precise loc for unknown-type errors */
             ptypes[i] = resolve_type(ctx, e->func.params[i].type);
             if (ptypes[i]->kind == TYPE_FIXED_ARRAY) {
                 diag_error(e->func.params[i].loc,
@@ -3326,10 +3359,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         bool cstr_to_str = (is_cstr_type(from) && is_str_type(to));
         bool const_change_slice = (from->kind == TYPE_SLICE && to->kind == TYPE_SLICE &&
             type_eq_ignore_const(from, to));
-        /* Allowed: numeric <-> numeric, bool -> numeric (0/1), pointer <-> pointer,
-         * pointer <-> integer, str <-> cstr, slice const cast.
+        /* Identity cast (same type) is a no-op. Allow it uniformly for the scalar
+         * types C can actually cast to (numeric, pointer, bool, char), matching
+         * numeric identity casts like (int32) int32. Aggregate types
+         * (struct/union/slice) cannot be cast in C, so they stay rejected. */
+        bool same_type = type_eq(from, to) &&
+            (from_num || from_ptr || from->kind == TYPE_BOOL || from->kind == TYPE_CHAR);
+        /* Allowed: identity, numeric <-> numeric, bool -> numeric (0/1),
+         * pointer <-> pointer, pointer <-> integer, str <-> cstr, slice const cast.
          * NOT allowed: numeric -> bool (ambiguous: !=0 vs strict 0/1?). */
-        if (!((from_num && to_num) || bool_to_num || (from_ptr && to_ptr) ||
+        if (!(same_type || (from_num && to_num) || bool_to_num || (from_ptr && to_ptr) ||
               (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr || cstr_to_str || const_change_slice)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
             e->type = type_error();
@@ -3384,6 +3423,19 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         Type *st = sym->type;
+
+        /* Reject duplicate field names. Silent last-wins emits override-init C
+         * that fails -Wextra and almost always indicates a typo. */
+        for (int i = 0; i < e->struct_lit.field_count; i++) {
+            for (int j = 0; j < i; j++) {
+                if (e->struct_lit.fields[i].name == e->struct_lit.fields[j].name) {
+                    diag_error(e->loc, "duplicate field '%s' in struct literal '%s'",
+                        e->struct_lit.fields[i].name, e->struct_lit.type_name);
+                    e->type = type_error();
+                    return e->type;
+                }
+            }
+        }
 
         /* Type-check each field init */
         bool field_error = false;

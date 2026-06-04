@@ -1,0 +1,5 @@
+// Type variable names may not contain '__' (reserved for name mangling),
+// the same rule as identifiers (C1).
+let f = (x: 'a__b) -> x
+let main = (args: str[]) ->
+    0
