@@ -1,6 +1,6 @@
 // heap allocation of an option-typed array: alloc(T?[N] { ... })
 let main = (args: str[]) ->
-    let opts = alloc(int32?[4] { some(10), default(int32?), some(3), some(9) })!
+    let opts = alloc(int32?[4] { some(10), none(int32), some(3), some(9) })!
     let mut sum = 0
     let mut nones = 0
     for o in opts

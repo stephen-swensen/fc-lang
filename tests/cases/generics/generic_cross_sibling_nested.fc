@@ -6,7 +6,7 @@ module parent =
         let identity = (x: 'a) -> x
 
         let try_first = (s: const 'a[]) ->
-            if s.len == 0 then default('a?)
+            if s.len == 0 then none('a)
             else some(s[0])
 
         let fold = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->

@@ -17,7 +17,7 @@ let unwrap_multiline = (o: int32?) ->
 
 let main = (args: str[]) ->
     assert(first_or_bail(some(21)) == 42)
-    assert(first_or_bail(default(int32?)) == -1)
+    assert(first_or_bail(none(int32)) == -1)
     assert(unwrap_multiline(some(10)) == 11)
-    assert(unwrap_multiline(default(int32?)) == 7)
+    assert(unwrap_multiline(none(int32)) == 7)
     0

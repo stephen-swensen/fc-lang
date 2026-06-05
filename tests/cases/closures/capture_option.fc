@@ -9,7 +9,7 @@ let main = (args: str[]) ->
         | none    -> -1
     assert(apply(get_some) == 42)
 
-    let opt_none = default(int32?)
+    let opt_none = none(int32)
     let get_none = () ->
         match opt_none with
         | some(v) -> v

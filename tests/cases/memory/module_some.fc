@@ -1,7 +1,7 @@
 // Module-level some(x) — emits a plain compound literal at file scope
 module flags =
     let answer = some(42)
-    let none_int = default(int32?)
+    let none_int = none(int32)
     let nested = some(some(7))
 
 let main = (args: str[]) ->

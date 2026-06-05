@@ -18,5 +18,5 @@ let main = (args: str[]) ->
     assert(both_paths(5) == 1)
     assert(both_paths(-5) == 2)
     assert(all_arms_return(some(8)) == 8)
-    assert(all_arms_return(default(int32?)) == 0)
+    assert(all_arms_return(none(int32)) == 0)
     0

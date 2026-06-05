@@ -1,6 +1,6 @@
 // slice-literal construction with an option element type: T?[] { ptr, len }
 let main = (args: str[]) ->
-    let mut buf = int32?[3] { some(1), default(int32?), some(3) }
+    let mut buf = int32?[3] { some(1), none(int32), some(3) }
     let s = int32?[] { ptr = buf.ptr, len = 3i64 }
     assert(s.len == 3i64)
     let mut sum = 0

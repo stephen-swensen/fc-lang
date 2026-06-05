@@ -12,5 +12,5 @@ let f = (o: int32?) ->
 
 let main = (args: str[]) ->
     assert(f(some(10)) == 15)          // v = 10, defer sets bonus = 5
-    assert(f(default(int32?)) == -1)   // diverging arm returns -1
+    assert(f(none(int32)) == -1)   // diverging arm returns -1
     0

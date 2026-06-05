@@ -11,14 +11,14 @@ module a =
                 acc
 
             let try_reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
-                if s.len == 0 then default('a?)
+                if s.len == 0 then none('a)
                 else some(c.fold(s[1..s.len], s[0], f))
 
             let reduce = (s: const 'a[], f: ('a, 'a) -> 'a) ->
                 c.try_reduce(s, f)!
 
             let try_first = (s: const 'a[]) ->
-                if s.len == 0 then default('a?)
+                if s.len == 0 then none('a)
                 else some(s[0])
 
             let first = (s: const 'a[]) ->

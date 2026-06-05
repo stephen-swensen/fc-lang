@@ -6,6 +6,6 @@ let check = (x: int32[]?) ->
 let main = (args: str[]) ->
     let arr = int32[3] { 50, 60, 70 }
     let a = some(arr)
-    let b = default(int32[]?)
+    let b = none(int32[])
     assert(check(a) + check(b) == 49)
     0

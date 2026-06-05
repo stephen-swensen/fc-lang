@@ -2,7 +2,7 @@ let main = (args: str[]) ->
     // pointer options use null-sentinel representation
     let mut v = 10
     let x = some(&v)
-    let y = default(int32*?)
+    let y = none(int32*)
     assert(x.is_some)
     assert(!x.is_none)
     assert(y.is_none)

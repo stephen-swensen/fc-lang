@@ -4,7 +4,7 @@ struct item =
 
 let main = (args: str[]) ->
     let _result =
-        let i = item { name = 42, count = default(int32?) }
+        let i = item { name = 42, count = none(int32) }
         match i with
         | { count = some(c) } -> c
         | { name = n, count = none } -> n

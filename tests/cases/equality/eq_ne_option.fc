@@ -2,7 +2,7 @@ let main = (args: str[]) ->
     let _result =
         let a = some(42)
         let b = some(42)
-        let c = default(int32?)
+        let c = none(int32)
         let mut r = 0
         if a == b then r = r + 1
         if !(a != b) then r = r + 2

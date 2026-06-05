@@ -7,7 +7,7 @@ let main = (args: str[]) ->
         let a = some(point { x = 1, y = 2 })
         let b = some(point { x = 1, y = 2 })
         let c = some(point { x = 9, y = 9 })
-        let d = default(point?)
+        let d = none(point)
         let mut r = 0
         if a == b then r = r + 1
         if a != c then r = r + 2

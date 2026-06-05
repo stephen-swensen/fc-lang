@@ -6,7 +6,7 @@ let describe = (x: int32?) ->
 
 let main = (args: str[]) ->
     let a = describe(some(42))
-    let b = describe(default(int32?))
+    let b = describe(none(int32))
     let mut ok = 0
     if a == "got=42" then ok = ok + 1
     if b == "empty=0" then ok = ok + 2

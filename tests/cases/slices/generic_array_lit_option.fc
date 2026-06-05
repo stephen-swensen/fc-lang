@@ -5,7 +5,7 @@ struct box =
 let main = (args: str[]) ->
     let b1 = box { v = 10 }
     let b3 = box { v = 5 }
-    let arr = box<int32>?[3] { some(b1), default(box<int32>?), some(b3) }
+    let arr = box<int32>?[3] { some(b1), none(box<int32>), some(b3) }
     let mut sum = 0
     let mut nones = 0
     for o in arr

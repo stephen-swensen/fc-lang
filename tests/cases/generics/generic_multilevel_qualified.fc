@@ -5,7 +5,7 @@
 module outer =
     module inner =
         let try_first = (s: const 'a[]) ->
-            if s.len == 0 then default('a?)
+            if s.len == 0 then none('a)
             else some(s[0])
 
         let first = (s: const 'a[]) ->

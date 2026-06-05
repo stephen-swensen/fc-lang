@@ -6,7 +6,7 @@ let main = (args: str[]) ->
     let _result =
         let a = maybe_val { tag = 1, val = some(42) }
         let b = maybe_val { tag = 1, val = some(42) }
-        let c = maybe_val { tag = 1, val = default(int32?) }
+        let c = maybe_val { tag = 1, val = none(int32) }
         let mut r = 0
         if a == b then r = r + 1
         if a != c then r = r + 2

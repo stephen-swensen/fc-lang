@@ -5,11 +5,11 @@ let main = (args: str[]) ->
     assert(!x.is_none)
 
     // outer is some, inner is none
-    let y = some(default(int32?))
+    let y = some(none(int32))
     assert(y.is_some)
 
     // outer is none
-    let z = default(int32??)
+    let z = none(int32?)
     assert(z.is_none)
     assert(!z.is_some)
 

@@ -3,7 +3,7 @@ struct p =
     x: int32
 
 let main = (args: str[]) ->
-    let arr = p?[3] { some(p { x = 10 }), default(p?), some(p { x = 5 }) }
+    let arr = p?[3] { some(p { x = 10 }), none(p), some(p { x = 5 }) }
     let mut sum = 0
     let mut nones = 0
     for o in arr

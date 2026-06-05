@@ -6,7 +6,7 @@ let process = (o: int32?) ->
     | none -> 0
 
 let main = (args: str[]) ->
-    assert(process(default(int32?)) == 0)
+    assert(process(none(int32)) == 0)
     assert(process(some(0)) == 1)
     assert(process(some(-5)) == 1)
     assert(process(some(50)) == 2)

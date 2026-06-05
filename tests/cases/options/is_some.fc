@@ -4,7 +4,7 @@ let get_value = (x: int32?) ->
 let main = (args: str[]) ->
     // basic is_some / is_none on value options
     let x = some(42)
-    let y = default(int32?)
+    let y = none(int32)
     assert(x.is_some)
     assert(!x.is_none)
     assert(y.is_none)
@@ -12,12 +12,12 @@ let main = (args: str[]) ->
 
     // use in if condition
     assert(get_value(some(10)) == 10)
-    assert(get_value(default(int32?)) == 0)
+    assert(get_value(none(int32)) == 0)
 
     // is_some on string option
     let s = some("hello")
     assert(s.is_some)
-    let s2 = default(str?)
+    let s2 = none(str)
     assert(s2.is_none)
 
     // is_some on bool option

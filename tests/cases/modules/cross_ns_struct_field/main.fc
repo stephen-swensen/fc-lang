@@ -7,7 +7,7 @@ struct wrapper =
 
 let main = (args: str[]) ->
     let p = shapes.point { x = 3, y = 4 }
-    let w = wrapper { origin = p, ptr = default(shapes.point*?) }
+    let w = wrapper { origin = p, ptr = none(shapes.point*) }
     assert(w.origin.x == 3)
     assert(w.origin.y == 4)
     0

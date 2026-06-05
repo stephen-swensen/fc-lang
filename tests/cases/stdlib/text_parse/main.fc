@@ -7,33 +7,33 @@ let main = (args: str[]) ->
     assert(text.parse_int32("0") == some(0))
 
     // parse_int32 — failure
-    assert(text.parse_int32("abc") == default(int32?))
-    assert(text.parse_int32("") == default(int32?))
+    assert(text.parse_int32("abc") == none(int32))
+    assert(text.parse_int32("") == none(int32))
 
     // parse_int64 — success
     assert(text.parse_int64("1000000000000") == some(1000000000000i64))
     assert(text.parse_int64("-999") == some(-999i64))
 
     // parse_int64 — failure
-    assert(text.parse_int64("xyz") == default(int64?))
-    assert(text.parse_int64("") == default(int64?))
+    assert(text.parse_int64("xyz") == none(int64))
+    assert(text.parse_int64("") == none(int64))
 
     // parse_float64 — success
-    assert(text.parse_float64("3.14") != default(float64?))
+    assert(text.parse_float64("3.14") != none(float64))
     assert(text.parse_float64("0.0") == some(0.0))
     assert(text.parse_float64("-1.5") == some(-1.5))
 
     // parse_float64 — failure
-    assert(text.parse_float64("bad") == default(float64?))
-    assert(text.parse_float64("") == default(float64?))
+    assert(text.parse_float64("bad") == none(float64))
+    assert(text.parse_float64("") == none(float64))
 
     // parse_float32 — success
     assert(text.parse_float32("2.5") == some(2.5f32))
     assert(text.parse_float32("0.0") == some(0.0f32))
 
     // parse_float32 — failure
-    assert(text.parse_float32("bad") == default(float32?))
-    assert(text.parse_float32("") == default(float32?))
+    assert(text.parse_float32("bad") == none(float32))
+    assert(text.parse_float32("") == none(float32))
 
     // over-length input returns none rather than overflowing the stack.
     // build a 600-byte run of '0' digits — a "valid" number far past the
@@ -45,15 +45,15 @@ let main = (args: str[]) ->
         if i >= big.len then break
         big[i] = 48u8   // '0'
         i = i + 1i64
-    assert(text.parse_int32(big) == default(int32?))
-    assert(text.parse_int64(big) == default(int64?))
-    assert(text.parse_float32(big) == default(float32?))
-    assert(text.parse_float64(big) == default(float64?))
+    assert(text.parse_int32(big) == none(int32))
+    assert(text.parse_int64(big) == none(int64))
+    assert(text.parse_float32(big) == none(float32))
+    assert(text.parse_float64(big) == none(float64))
 
     // the cap is inclusive: a 512-byte run still parses, 513 does not.
     assert(text.parse_int32(big[0..512]) == some(0))
     assert(text.parse_int64(big[0..512]) == some(0i64))
-    assert(text.parse_int32(big[0..513]) == default(int32?))
-    assert(text.parse_int64(big[0..513]) == default(int64?))
+    assert(text.parse_int32(big[0..513]) == none(int32))
+    assert(text.parse_int64(big[0..513]) == none(int64))
 
     0

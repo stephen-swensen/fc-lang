@@ -6,7 +6,7 @@ module m =
 
     let make = (v: 'a) ->
         let n = alloc(node { value = v })!
-        n->next = default(node<'a>*?)
+        n->next = none(node<'a>*)
         n
 
     let prepend = (head: node<'a>*, v: 'a) ->

@@ -5,7 +5,7 @@ module cache =
         value: int32
 
     let hit = some(entry { key = 1, value = 100 })
-    let miss = default(entry?)
+    let miss = none(entry)
 
 let main = (args: str[]) ->
     assert(cache.hit.is_some)

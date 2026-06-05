@@ -5,7 +5,7 @@ let classify = (o: int32?) ->
     | none -> 0
 
 let main = (args: str[]) ->
-    let n = default(int32?)
+    let n = none(int32)
     assert(classify(some(1)) == 10)
     assert(classify(some(2)) == 10)
     assert(classify(some(3)) == 10)

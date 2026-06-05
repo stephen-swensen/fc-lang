@@ -29,7 +29,7 @@ let free_list = (head: node*?) ->
             free(n)
 
 let main = (args: str[]) ->
-    let mut list = default(node*?)
+    let mut list = none(node*)
     list = push(list, 1)
     list = push(list, 2)
     list = push(list, 3)

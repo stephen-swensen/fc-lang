@@ -5,6 +5,6 @@ let outer = (x: int32?) ->
     inner(x)
 
 let main = (args: str[]) ->
-    let none_val = default(int32?)
+    let none_val = none(int32)
     let _r = outer(none_val)
     0

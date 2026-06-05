@@ -1,4 +1,4 @@
-// Test: default(m.type?) and some(m.type { ... }) with qualified types
+// Test: none(m.type) and some(m.type { ... }) with qualified types
 module m =
     struct point =
         x: int32
@@ -6,7 +6,7 @@ module m =
 
 let main = (args: str[]) ->
     let _result =
-        let a = default(m.point?)
+        let a = none(m.point)
         let b = some(m.point { x = 1, y = 2 })
         match b with
         | some(p) -> p.x + p.y
