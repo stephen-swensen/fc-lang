@@ -568,6 +568,7 @@ primary_expr     = INT_LIT
                  | default_expr
                  | assert_expr
                  | some_expr
+                 | none_expr
                  | struct_literal
                  | slice_literal
                  | variant_construction
@@ -670,6 +671,9 @@ default_expr     = "default" , "(" , type_expr , ")" ;
 assert_expr      = "assert" , "(" , expr , [ "," , expr ] , ")" ;
 
 some_expr        = "some" , "(" , expr , ")" ;
+
+(* none(T) constructs an empty option with inner type T; sugar for default(T?) *)
+none_expr        = "none" , "(" , type_expr , ")" ;
 
 
 (* ------------------------------------------------------------------ *)

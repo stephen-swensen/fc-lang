@@ -1221,6 +1221,28 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_NONE: {
+        /* `none(T)` is sugar for `default(T?)`: it constructs an empty option
+         * whose inner type is the parsed type.  We desugar at parse time by
+         * wrapping the type in an option and emitting an EXPR_DEFAULT node, so
+         * the two spellings produce identical ASTs and share all downstream
+         * handling (type-checking, codegen, monomorphization, escape analysis).
+         * The general `default(T?)` mechanism is retained unchanged.  A bare
+         * `none` (e.g. `x == none`) carries no type and is rejected here with a
+         * targeted message, mirroring the `void`/`void()` handling above. */
+        advance_p(p);
+        if (!check(p, TOK_LPAREN)) {
+            diag_fatal(loc, "'none' needs a type argument; write none(T) "
+                "(or test an option with .is_none / a 'none' match arm)");
+        }
+        advance_p(p); /* ( */
+        Type *ty = parse_type(p);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_DEFAULT, loc);
+        e->default_expr.target = type_option(p->arena, ty);
+        return e;
+    }
+
     case TOK_LOOP: {
         advance_p(p);
         int body_count;

@@ -429,11 +429,15 @@ let main = (args: str[]) ->
     // --------------------------------------------------------
 
     let some_val = some(42)           // int32?
-    let no_val = default(int32?)      // none
+    let no_val = none(int32)          // int32? with no value
+    // none(T) is sugar for default(T?) — the symmetric partner to some(v).
+    // default(T?) still works and generalizes to any default value.
+    let no_val2 = default(int32?)     // identical to none(int32)
 
     // Check via .is_some / .is_none
     assert(some_val.is_some)
     assert(no_val.is_none)
+    assert(no_val2.is_none)
 
     // Unwrap with ! (aborts on none)
     assert(some_val! == 42)

@@ -2285,11 +2285,12 @@ node*?      // optional pointer to node
 
 ```fc
 some(x)            // wrap a value — type inferred from x
-default(int32?)    // int32? with no value
-default(node*?)    // node*? with no value
+none(int32)        // int32? with no value
+none(node*)        // node*? with no value
+default(int32?)    // int32? with no value — identical to none(int32)
 ```
 
-`some` is a built-in operator that infers the option type from its argument expression. To create a none value, use `default(T?)` — conceptually, `none` is the first variant of the option type, so its default value is none (see §Default Values).
+`some` is a built-in operator that infers the option type from its argument expression. The symmetric partner `none(T)` constructs an empty option whose **inner** type is `T` (so `none(int32)` has type `int32?`, mirroring how `some(v)` of an `int32` has type `int32?`). It is exact sugar for `default(T?)` — the two produce identical code — and exists because `none(int32)` reads more naturally alongside `some(3)` than `default(int32?)` does. `none` requires the type argument and the parentheses; a bare `none` in expression position is rejected (use `.is_none` or a `none` match arm to test an option). The general `default(T?)` form is retained and generalizes to any default value — conceptually, `none` is the first variant of the option type, so its default value is none (see §Default Values).
 
 ### Checking options
 

@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let x = none()
+    assert(x.is_none)
+    0
