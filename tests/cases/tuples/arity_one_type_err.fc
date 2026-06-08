@@ -1,0 +1,3 @@
+let first = (p: {int32}) -> p[0]
+let main = (args: str[]) ->
+    first({ 1, 2 })

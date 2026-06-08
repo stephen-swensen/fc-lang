@@ -416,8 +416,14 @@ type_atom        = builtin_type                  (* int32, str, cstr, ... *)
                  | "any" , "*"                   (* any*  — opaque pointer *)
                  | IDENT , [ "<" , type_arg_list , ">" ]   (* user-defined, possibly generic *)
                  | TYPE_VAR                       (* 'a, 'b, 'elem, ...   *)
+                 | tuple_type                     (* {int32, str}  — anonymous tuple *)
                  | "(" , type_param_list , ")"   (* tuple-like param list for function types *)
                  ;
+
+(* Tuple type: positional, no field names. At least two element types.        *)
+(* A tuple is a synthesized anonymous struct; {A, B} and {A, B, C} are the     *)
+(* arity-2 and arity-3 instances. May contain type variables (generic).        *)
+tuple_type       = "{" , type_expr , "," , type_expr , { "," , type_expr } , "}" ;
 
 type_arg_list    = type_expr , { "," , type_expr } ;
 
@@ -570,12 +576,17 @@ primary_expr     = INT_LIT
                  | some_expr
                  | none_expr
                  | struct_literal
+                 | tuple_literal
                  | slice_literal
                  | variant_construction
                  | type_property_access
                  | IDENT
                  | "(" , expr , ")"             (* parenthesized expression *)
                  ;
+
+(* Tuple literal: positional, no type prefix, no field names. >= 2 elements.   *)
+(* Element i is read back with the postfix index t[i] (i a literal, 0-based).   *)
+tuple_literal    = "{" , expr , "," , expr , { "," , expr } , "}" ;
 
 
 (* ------------------------------------------------------------------ *)
@@ -729,16 +740,22 @@ pattern          = "_"                                   (* wildcard           *
                  | "some" , "(" , pattern , ")"          (* some(pattern)      *)
                  | IDENT , "(" , pattern , ")"           (* variant(pattern)   *)
                  | struct_destruct_pattern               (* { field = pat }    *)
+                 | tuple_destruct_pattern                (* { pat, pat, ... }  *)
                  | IDENT                                 (* binding name       *)
                  ;
 
-(* Struct destructuring pattern: { field = pat, ... }                  *)
-(* An empty {} matches any struct, binds nothing.                      *)
+(* Struct destructuring pattern: { field = pat, ... } — binds by field name.   *)
+(* An empty {} matches any struct, binds nothing.                              *)
+(* The "=" after the first IDENT distinguishes this from a tuple pattern.       *)
 struct_destruct_pattern = "{" , [ field_pattern_list ] , "}" ;
 
 field_pattern_list      = field_pattern , { "," , field_pattern } ;
 
 field_pattern           = IDENT , "=" , pattern ;
+
+(* Tuple destructuring pattern: { pat, pat, ... } — binds by position. Valid    *)
+(* only in let-bindings (not match arms). Arity must equal the tuple's.         *)
+tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}" ;
 
 
 (* ================================================================== *)

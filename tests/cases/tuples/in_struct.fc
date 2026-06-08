@@ -1,0 +1,10 @@
+struct box =
+    pair: {int32, int32}
+    tag: int32
+
+let main = (args: str[]) ->
+    let b = box { pair = { 3, 4 }, tag = 1 }
+    assert(b.pair[0] == 3)
+    assert(b.pair[1] == 4)
+    assert(b.tag == 1)
+    0

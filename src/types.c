@@ -214,7 +214,17 @@ bool type_eq(Type *a, Type *b) {
     case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
                                   type_eq(a->fixed_array.elem, b->fixed_array.elem);
     case TYPE_ANY_PTR: return a->is_const == b->is_const;
-    case TYPE_STRUCT:  return a->struc.name == b->struc.name;
+    case TYPE_STRUCT:
+        /* Tuples compare structurally (arity + element types), independent of when
+         * their canonical name gets interned. Named structs compare by interned name. */
+        if (a->struc.is_tuple || b->struc.is_tuple) {
+            if (!a->struc.is_tuple || !b->struc.is_tuple) return false;
+            if (a->struc.field_count != b->struc.field_count) return false;
+            for (int i = 0; i < a->struc.field_count; i++)
+                if (!type_eq(a->struc.fields[i].type, b->struc.fields[i].type)) return false;
+            return true;
+        }
+        return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
     case TYPE_STUB:    return a->stub.name == b->stub.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
@@ -244,7 +254,15 @@ bool type_eq_ignore_const(Type *a, Type *b) {
     case TYPE_OPTION:  return type_eq_ignore_const(a->option.inner, b->option.inner);
     case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
                                   type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
-    case TYPE_STRUCT:  return a->struc.name == b->struc.name;
+    case TYPE_STRUCT:
+        if (a->struc.is_tuple || b->struc.is_tuple) {
+            if (!a->struc.is_tuple || !b->struc.is_tuple) return false;
+            if (a->struc.field_count != b->struc.field_count) return false;
+            for (int i = 0; i < a->struc.field_count; i++)
+                if (!type_eq_ignore_const(a->struc.fields[i].type, b->struc.fields[i].type)) return false;
+            return true;
+        }
+        return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
     case TYPE_STUB:    return a->stub.name == b->stub.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
@@ -363,6 +381,20 @@ const char *type_name(Type *t) {
         return buf;
     }
     case TYPE_STRUCT: {
+        if (t->struc.is_tuple) {
+            static char ttbufs[4][512];
+            static int ttidx = 0;
+            char *buf = ttbufs[ttidx & 3]; ttidx++;
+            int pos = 0;
+            pos += snprintf(buf + pos, 512 - (size_t)pos, "{");
+            for (int i = 0; i < t->struc.field_count; i++) {
+                if (i > 0) pos += snprintf(buf + pos, 512 - (size_t)pos, ", ");
+                pos += snprintf(buf + pos, 512 - (size_t)pos, "%s",
+                                type_name(t->struc.fields[i].type));
+            }
+            snprintf(buf + pos, 512 - (size_t)pos, "}");
+            return buf;
+        }
         if (t->struc.type_arg_count > 0 && t->struc.qualified_name) {
             static char stbufs[4][256];
             static int stidx = 0;
@@ -682,11 +714,16 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         ns->struc.name = t->struc.name;
         ns->struc.qualified_name = t->struc.qualified_name;
         ns->struc.c_name = t->struc.c_name;
+        ns->struc.is_c_union = t->struc.is_c_union;
+        ns->struc.is_tuple = t->struc.is_tuple;
         ns->struc.fields = fields;
         ns->struc.field_count = t->struc.field_count;
         ns->struc.type_args = new_targs;
         ns->struc.type_arg_count = new_targ_count;
         ns->struc.resolved_sym = t->struc.resolved_sym;
+        /* For a substituted tuple, the canonical name is re-derived later by
+         * mono_resolve_type_names / register_concrete_tuple (which hold the
+         * intern table). type_eq compares tuples structurally in the meantime. */
         return ns;
     }
     case TYPE_UNION: {
@@ -830,4 +867,45 @@ const char *mangle_generic_name(Arena *a, InternTable *intern_tbl,
     const char *result = intern_cstr(intern_tbl, buf);
     free(buf);
     return result;
+}
+
+const char *tuple_canonical_name(Arena *a, InternTable *intern_tbl,
+                                 StructField *fields, int n) {
+    (void)a;
+    char base[24];
+    snprintf(base, sizeof(base), "fc_tuple%d", n);
+    char **names = malloc(sizeof(char*) * (size_t)(n > 0 ? n : 1));
+    int needed = (int)strlen(base);
+    for (int i = 0; i < n; i++) {
+        names[i] = mangle_type_name(fields[i].type);
+        needed += 1 + (int)strlen(names[i]); /* "_" + name */
+    }
+    char *buf = malloc((size_t)(needed + 1));
+    int pos = 0;
+    pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "%s", base);
+    for (int i = 0; i < n; i++) {
+        pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "_%s", names[i]);
+        free(names[i]);
+    }
+    free(names);
+    const char *result = intern_cstr(intern_tbl, buf);
+    free(buf);
+    return result;
+}
+
+Type *type_tuple(Arena *a, Type **elems, int n) {
+    Type *t = arena_alloc(a, sizeof(Type));
+    t->kind = TYPE_STRUCT;
+    t->struc.is_tuple = true;
+    t->struc.fields = arena_alloc(a, sizeof(StructField) * (size_t)(n > 0 ? n : 1));
+    t->struc.field_count = n;
+    for (int i = 0; i < n; i++) {
+        char nm[16];
+        int len = snprintf(nm, sizeof(nm), "e%d", i);
+        char *fn = arena_alloc(a, (size_t)len + 1);
+        memcpy(fn, nm, (size_t)len + 1);
+        t->struc.fields[i].name = fn;
+        t->struc.fields[i].type = elems[i];
+    }
+    return t;
 }

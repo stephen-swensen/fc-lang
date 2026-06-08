@@ -1,0 +1,10 @@
+struct holder =
+    item: 'a
+    count: int32
+
+let main = (args: str[]) ->
+    let h = holder { item = { 1, 2 }, count = 5 }
+    assert(h.item[0] == 1)
+    assert(h.item[1] == 2)
+    assert(h.count == 5)
+    0

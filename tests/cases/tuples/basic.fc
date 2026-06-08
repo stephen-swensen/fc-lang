@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    let t = { 4, "hello" }
+    assert(t[0] == 4)
+    assert(t[1].len == 5i64)
+
+    let three = { 1, true, 9 }
+    assert(three[0] == 1)
+    assert(three[1])
+    assert(three[2] == 9)
+    0

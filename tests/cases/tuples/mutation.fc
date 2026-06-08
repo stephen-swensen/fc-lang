@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let mut m = { 1, 2 }
+    m[0] = 100
+    assert(m[0] == 100)
+    assert(m[1] == 2)
+    // whole-tuple reassignment
+    m = { 7, 8 }
+    assert(m[0] == 7)
+    0

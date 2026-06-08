@@ -41,6 +41,7 @@ typedef enum {
     EXPR_BLOCK,
     EXPR_FUNC,
     EXPR_STRUCT_LIT,
+    EXPR_TUPLE_LIT,     /* { expr, expr, ... } — positional anonymous tuple */
     EXPR_ARRAY_LIT,
     EXPR_SLICE_LIT,     /* T[] { ptr = expr, len = expr } */
     EXPR_ALLOC,
@@ -219,6 +220,12 @@ struct Expr {
             struct Symbol *resolved_sym; /* resolved in pass2, used by mono discovery */
         } struct_lit;
 
+        /* EXPR_TUPLE_LIT — { e0, e1, ... } positional anonymous tuple */
+        struct {
+            Expr **elems;
+            int elem_count;
+        } tuple_lit;
+
         /* EXPR_ARRAY_LIT */
         struct {
             Type *elem_type;
@@ -287,7 +294,7 @@ struct Expr {
 
         /* EXPR_LET_DESTRUCT */
         struct {
-            Pattern *pattern;       /* PAT_STRUCT pattern */
+            Pattern *pattern;       /* PAT_STRUCT (named) or PAT_TUPLE (positional) */
             bool is_mut;
             Expr *init;
             Type *init_type;        /* filled by pass2 */
@@ -323,6 +330,7 @@ typedef enum {
     PAT_SOME,
     PAT_VARIANT,
     PAT_STRUCT,
+    PAT_TUPLE, /* { a, b, ... } — positional tuple destructuring (let-bindings only) */
     PAT_OR,    /* p1 | p2 | ... — disjunction; alternatives must be binding-free */
 } PatternKind;
 
@@ -344,6 +352,11 @@ struct Pattern {
             FieldPattern *fields;
             int field_count;
         } struc;
+        struct {
+            Pattern **patterns;     /* positional element patterns */
+            int pattern_count;
+            Type **resolved_types;  /* filled by pass2: element type for each position */
+        } tuple_pat;
         struct { Pattern **alts; int alt_count; } or_pat;
     };
 };

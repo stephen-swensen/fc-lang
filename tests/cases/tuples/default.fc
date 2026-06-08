@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let d = default({int32, int32})
+    assert(d[0] == 0)
+    assert(d[1] == 0)
+    let d2 = default({bool, int64})
+    assert(!d2[0])
+    assert(d2[1] == 0i64)
+    0

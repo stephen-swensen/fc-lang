@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let t = { 1, 2, 3, 4, 5 }
+    assert(t[0] == 1)
+    assert(t[4] == 5)
+    let { a, b, c, d, e } = t
+    assert(a + b + c + d + e == 15)
+    0

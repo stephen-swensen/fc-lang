@@ -68,6 +68,7 @@ struct Type {
             const char *qualified_name;  /* fully qualified FC path (e.g. "std::types.tuple2") */
             const char *c_name;         /* C struct/union tag name for extern types, NULL for normal */
             bool is_c_union;            /* true for extern union (untagged C union layout) */
+            bool is_tuple;              /* true for synthesized tuple structs (fields e0..eN-1, display "{...}") */
             StructField *fields;
             int field_count;
             Type **type_args;
@@ -181,3 +182,13 @@ char *mangle_type_name(Type *t);
 /* Build mangled name for a generic instantiation, e.g. "fc_identity_int32" */
 const char *mangle_generic_name(Arena *a, InternTable *intern,
                                 const char *base, Type **type_args, int count);
+
+/* Build the canonical interned name for a tuple struct from its element fields,
+ * e.g. "fc_tuple2_int32_str". Two structurally identical tuples share this name,
+ * so type_eq (which compares struc.name) yields structural identity. */
+const char *tuple_canonical_name(Arena *a, InternTable *intern,
+                                 StructField *fields, int n);
+
+/* Construct a synthesized tuple struct type from element types (fields e0..eN-1).
+ * Sets is_tuple=true; name/qualified_name are left for the canonicalizer/resolve_type. */
+Type *type_tuple(Arena *a, Type **elems, int n);

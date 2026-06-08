@@ -1,0 +1,8 @@
+let divmod = (a: int32, b: int32) ->
+    { a / b, a % b }
+
+let main = (args: str[]) ->
+    let { q, r } = divmod(17, 5)
+    assert(q == 3)
+    assert(r == 2)
+    0

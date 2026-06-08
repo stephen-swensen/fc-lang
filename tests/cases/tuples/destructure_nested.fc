@@ -1,0 +1,17 @@
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    // nested tuple destructuring
+    let { { a, b }, c } = { { 1, 2 }, 3 }
+    assert(a == 1)
+    assert(b == 2)
+    assert(c == 3)
+
+    // tuple element that is a named struct, destructured by name
+    let { { x = px, y = py }, tag } = { point { x = 4, y = 5 }, 6 }
+    assert(px == 4)
+    assert(py == 5)
+    assert(tag == 6)
+    0

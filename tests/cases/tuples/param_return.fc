@@ -1,0 +1,9 @@
+let first = (p: {int32, int32}) -> p[0]
+let make = (x: int32) -> { x, x * 2 }
+
+let main = (args: str[]) ->
+    assert(first({ 7, 8 }) == 7)
+    let m = make(5)
+    assert(m[0] == 5)
+    assert(m[1] == 10)
+    0

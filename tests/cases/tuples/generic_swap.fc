@@ -1,0 +1,11 @@
+let swap = (p: {'a, 'b}) -> { p[1], p[0] }
+
+let main = (args: str[]) ->
+    let s = swap({ 7, "world" })
+    assert(s[0].len == 5i64)
+    assert(s[1] == 7)
+    // a second, differently-typed instantiation
+    let s2 = swap({ true, 3i64 })
+    assert(s2[0] == 3i64)
+    assert(s2[1])
+    0

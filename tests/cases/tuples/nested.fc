@@ -1,0 +1,10 @@
+let main = (args: str[]) ->
+    let n = { { 1, 2 }, 3 }
+    assert(n[0][0] == 1)
+    assert(n[0][1] == 2)
+    assert(n[1] == 3)
+
+    let { inner, tag } = n
+    assert(inner[0] == 1)
+    assert(tag == 3)
+    0

@@ -303,6 +303,10 @@ static void collect_hoisted_pat(Pattern *pat, Type *type) {
         for (int i = 0; i < pat->struc.field_count; i++)
             collect_hoisted_pat(pat->struc.fields[i].pattern, pat->struc.fields[i].resolved_type);
         break;
+    case PAT_TUPLE:
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++)
+            collect_hoisted_pat(pat->tuple_pat.patterns[i], pat->tuple_pat.resolved_types[i]);
+        break;
     case PAT_SOME:
         if (pat->some_pat.inner && type->kind == TYPE_OPTION)
             collect_hoisted_pat(pat->some_pat.inner, type->option.inner);
@@ -386,6 +390,17 @@ static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
         base_name, concrete_args, vc);
     free(vars);
     return mangled;
+}
+
+/* Canonical C name for a tuple type whose element types contain type variables,
+ * resolved under the active g_subst. Substitutes the elements, then runs
+ * mono_resolve_type_names (which re-derives tuple names and mangles any nested
+ * generic struct/union instances) so the result matches the registered name. */
+static const char *tuple_name_under_subst(Type *t) {
+    Type *sub = type_substitute(g_arena, t, g_subst->var_names,
+                                g_subst->concrete, g_subst->count);
+    mono_resolve_type_names(g_mono, g_arena, g_intern, sub);
+    return sub->struc.name;
 }
 
 /* Resolve a concrete type + property name to a C constant string.
@@ -507,6 +522,14 @@ static void emit_type(Type *t, FILE *out) {
         }
         break;
     case TYPE_STRUCT:
+        if (t->struc.is_tuple) {
+            if (g_subst && type_contains_type_var(t))
+                fprintf(out, "%s", tuple_name_under_subst(t));
+            else
+                fprintf(out, "%s", t->struc.name ? t->struc.name
+                    : tuple_canonical_name(g_arena, g_intern, t->struc.fields, t->struc.field_count));
+            break;
+        }
         if (g_subst && type_contains_type_var(t)) {
             fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
             return;
@@ -583,7 +606,14 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_ANY_PTR: fprintf(out, "void_ptr");  break;
     case TYPE_STRUCT:
-        if (g_subst && type_contains_type_var(t))
+        if (t->struc.is_tuple) {
+            if (g_subst && type_contains_type_var(t))
+                fprintf(out, "%s", tuple_name_under_subst(t));
+            else
+                fprintf(out, "%s", t->struc.name ? t->struc.name
+                    : tuple_canonical_name(g_arena, g_intern, t->struc.fields, t->struc.field_count));
+        }
+        else if (g_subst && type_contains_type_var(t))
             fprintf(out, "%s", mangle_generic_with_subst(t->struc.name, t));
         else if (t->struc.c_name)
             fprintf(out, "%s", t->struc.c_name);
@@ -839,6 +869,9 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         fprintf(out, ")");
         break;
     }
+    case PAT_TUPLE:
+        /* Unreachable: tuple patterns are rejected outside let-bindings in pass2. */
+        break;
     }
 }
 
@@ -929,6 +962,13 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
             char path[256];
             snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
             emit_pat_bindings(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, out);
+        }
+        break;
+    case PAT_TUPLE:
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s.e%d", expr, i);
+            emit_pat_bindings(pat->tuple_pat.patterns[i], path, pat->tuple_pat.resolved_types[i], out);
         }
         break;
     case PAT_OR:
@@ -2240,6 +2280,13 @@ static void emit_expr(Expr *e, FILE *out) {
          * (slice lengths are non-negative by invariant), so one compare
          * subsumes both the negative-index and past-end checks. */
         Type *obj_type = e->index.object->type;
+        /* Tuple element access: object.e<const>. The index was proven to be a
+         * literal in range during pass2, so no runtime bounds check is needed. */
+        if (obj_type && obj_type->kind == TYPE_STRUCT && obj_type->struc.is_tuple) {
+            emit_expr(e->index.object, out);
+            fprintf(out, ".e%llu", (unsigned long long)e->index.index->int_lit.value);
+            break;
+        }
         if (obj_type && obj_type->kind == TYPE_SLICE) {
             int tid = temp_counter++;
             const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
@@ -2549,6 +2596,38 @@ static void emit_expr(Expr *e, FILE *out) {
             } else {
                 fprintf(out, " }");
             }
+        }
+        break;
+    }
+
+    case EXPR_TUPLE_LIT: {
+        /* Anonymous tuple → C compound literal of the synthesized struct, with
+         * positional fields e0, e1, ... Multi-line (always >= 2 elements) so
+         * nested statement-expressions (alloc(...)!, interpolated strings) don't
+         * collapse into one over-long line that trips gcc's column tracking. */
+        bool multiline = e->tuple_lit.elem_count >= 2;
+        fprintf(out, "(");
+        emit_type(e->type, out);
+        fprintf(out, "){");
+        if (multiline) { fprintf(out, "\n"); indent_level++; }
+        else fprintf(out, " ");
+        for (int i = 0; i < e->tuple_lit.elem_count; i++) {
+            if (i > 0) {
+                fprintf(out, ",");
+                if (multiline) fprintf(out, "\n");
+                else fprintf(out, " ");
+            }
+            if (multiline) emit_indent(out);
+            fprintf(out, ".e%d = ", i);
+            emit_expr(e->tuple_lit.elems[i], out);
+        }
+        if (multiline) {
+            fprintf(out, "\n");
+            indent_level--;
+            emit_indent(out);
+            fprintf(out, "}");
+        } else {
+            fprintf(out, " }");
         }
         break;
     }
@@ -4359,35 +4438,59 @@ static const char *decl_su_name(Decl *d) {
     return NULL;
 }
 
-static void topo_visit_su_decl(Decl **su, int su_count, int idx,
-                                int *state, Decl **order, int *order_count) {
+/* A struct/union definition to emit: either a top-level decl or a monomorphized
+ * instance (which includes synthesized tuples). Both kinds participate in one
+ * topological sort so by-value dependencies emit before dependents in EITHER
+ * direction (a top-level struct holding a tuple, or a generic instance holding a
+ * top-level struct). */
+typedef struct {
+    const char *name;
+    Decl *decl;          /* non-NULL: top-level struct/union decl */
+    MonoInstance *mi;    /* non-NULL: monomorphized struct/union/tuple instance */
+} SuDef;
+
+static void sudef_deps(SuDef *s, const char **deps, int *dep_count, int max) {
+    *dep_count = 0;
+    StructField *fields = NULL; int field_count = 0;
+    UnionVariant *variants = NULL; int variant_count = 0;
+    if (s->decl) {
+        Decl *d = s->decl;
+        if (d->kind == DECL_STRUCT && !d->struc.is_extern) {
+            fields = d->struc.fields; field_count = d->struc.field_count;
+        } else if (d->kind == DECL_UNION) {
+            variants = d->unio.variants; variant_count = d->unio.variant_count;
+        }
+    } else if (s->mi && s->mi->concrete_type) {
+        Type *ct = s->mi->concrete_type;
+        if (ct->kind == TYPE_STRUCT) { fields = ct->struc.fields; field_count = ct->struc.field_count; }
+        else if (ct->kind == TYPE_UNION) { variants = ct->unio.variants; variant_count = ct->unio.variant_count; }
+    }
+    for (int f = 0; f < field_count && *dep_count < max; f++) {
+        const char *dep = find_by_value_dep_name(fields[f].type);
+        if (dep) deps[(*dep_count)++] = dep;
+    }
+    for (int v = 0; v < variant_count && *dep_count < max; v++) {
+        const char *dep = find_by_value_dep_name(variants[v].payload);
+        if (dep) deps[(*dep_count)++] = dep;
+    }
+}
+
+static void topo_visit_sudef(SuDef *items, int n, int idx, int *state,
+                             int *order, int *order_count) {
     if (state[idx] != DECL_TOPO_UNVISITED) return;
     state[idx] = DECL_TOPO_VISITING;
-    Decl *d = su[idx];
     const char *deps[64];
     int dep_count = 0;
-    if (d->kind == DECL_STRUCT && !d->struc.is_extern) {
-        for (int f = 0; f < d->struc.field_count && dep_count < 64; f++) {
-            const char *dep = find_by_value_dep_name(d->struc.fields[f].type);
-            if (dep) deps[dep_count++] = dep;
-        }
-    } else if (d->kind == DECL_UNION) {
-        for (int v = 0; v < d->unio.variant_count && dep_count < 64; v++) {
-            const char *dep = find_by_value_dep_name(d->unio.variants[v].payload);
-            if (dep) deps[dep_count++] = dep;
-        }
-    }
+    sudef_deps(&items[idx], deps, &dep_count, 64);
     for (int di = 0; di < dep_count; di++) {
-        for (int j = 0; j < su_count; j++) {
-            if (j == idx) continue;
-            const char *jname = decl_su_name(su[j]);
-            if (jname && jname == deps[di]) {
-                topo_visit_su_decl(su, su_count, j, state, order, order_count);
+        for (int j = 0; j < n; j++) {
+            if (j != idx && items[j].name == deps[di]) {
+                topo_visit_sudef(items, n, j, state, order, order_count);
                 break;
             }
         }
     }
-    order[(*order_count)++] = d;
+    order[(*order_count)++] = idx;
     state[idx] = DECL_TOPO_DONE;
 }
 
@@ -4663,6 +4766,10 @@ static void detect_features_expr(Expr *e) {
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             detect_features_expr(e->array_lit.elems[i]);
+        return;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            detect_features_expr(e->tuple_lit.elems[i]);
         return;
     case EXPR_SLICE_LIT:
         detect_features_expr(e->slice_lit.ptr_expr);
@@ -5028,40 +5135,77 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, ";\n");
     }
 
-    /* Topologically sort struct/union decls so by-value dependencies come
-       before their dependents. This matters when a field references a
-       struct/union defined later in source order (or in another file/module). */
-    Decl **su_decls = NULL;
-    int su_count = 0, su_cap = 0;
+    /* Combined topological sort of ALL struct/union definitions — top-level
+       (non-generic) decls and monomorphized instances (including synthesized
+       tuples) together — so by-value dependencies emit before their dependents
+       no matter which kind references which (a top-level struct holding a tuple
+       by value, or a generic instance holding a top-level struct by value). */
+    SuDef *defs = NULL;
+    int def_count = 0, def_cap = 0;
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (is_generic_decl(d)) continue;
-        if (d->kind == DECL_STRUCT || d->kind == DECL_UNION)
-            DA_APPEND(su_decls, su_count, su_cap, d);
+        if (d->kind == DECL_STRUCT || d->kind == DECL_UNION) {
+            SuDef s = { decl_su_name(d), d, NULL };
+            DA_APPEND(defs, def_count, def_cap, s);
+        }
     }
-    int *su_state = calloc((size_t)su_count, sizeof(int));
-    Decl **su_sorted = malloc(sizeof(Decl*) * (size_t)su_count);
-    int su_sorted_count = 0;
-    for (int i = 0; i < su_count; i++)
-        topo_visit_su_decl(su_decls, su_count, i, su_state, su_sorted, &su_sorted_count);
-    free(su_state);
-    free(su_decls);
+    for (int m = 0; m < mono->count; m++) {
+        MonoInstance *inst = &mono->entries[m];
+        if (!inst->concrete_type) continue;
+        if (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION) {
+            SuDef s = { inst->mangled_name, NULL, inst };
+            DA_APPEND(defs, def_count, def_cap, s);
+        }
+    }
+    int *def_state = calloc((size_t)(def_count > 0 ? def_count : 1), sizeof(int));
+    int *def_order = malloc(sizeof(int) * (size_t)(def_count > 0 ? def_count : 1));
+    int def_order_count = 0;
+    for (int i = 0; i < def_count; i++)
+        topo_visit_sudef(defs, def_count, i, def_state, def_order, &def_order_count);
+    free(def_state);
 
-    /* Emit full struct and union definitions (skip generics), interleaved with
-       option typedefs that wrap them. */
-    bool *opt_emitted = calloc(options.count, sizeof(bool));
-    for (int i = 0; i < su_sorted_count; i++) {
-        Decl *d = su_sorted[i];
-        const char *def_name = NULL;
-        if (d->kind == DECL_STRUCT) {
-            if (!d->struc.is_extern) emit_struct_def(d, out);
-            def_name = d->struc.name;
-        } else if (d->kind == DECL_UNION) {
-            emit_union_def(d, out);
-            def_name = d->unio.name;
+    /* Emit definitions in dependency order, interleaving option typedefs that
+       wrap each newly-defined struct/union/tuple. */
+    bool *opt_emitted = calloc(options.count > 0 ? (size_t)options.count : 1, sizeof(bool));
+    for (int oi = 0; oi < def_order_count; oi++) {
+        SuDef *s = &defs[def_order[oi]];
+        const char *def_name = s->name;
+        if (s->decl) {
+            Decl *d = s->decl;
+            if (d->kind == DECL_STRUCT) {
+                if (!d->struc.is_extern) emit_struct_def(d, out);
+            } else if (d->kind == DECL_UNION) {
+                emit_union_def(d, out);
+            }
+        } else if (s->mi) {
+            MonoInstance *inst = s->mi;
+            Type *ct = inst->concrete_type;
+            if (inst->decl_kind == DECL_STRUCT) {
+                fprintf(out, "struct %s {", inst->mangled_name);
+                for (int f = 0; f < ct->struc.field_count; f++)
+                    emit_struct_field(ct->struc.fields[f].type, ct->struc.fields[f].name, out);
+                fprintf(out, " };\n");
+            } else if (inst->decl_kind == DECL_UNION) {
+                bool has_payload = false;
+                for (int v = 0; v < ct->unio.variant_count; v++)
+                    if (ct->unio.variants[v].payload) { has_payload = true; break; }
+                if (has_payload) {
+                    fprintf(out, "struct %s { %s_tag tag; union {", inst->mangled_name, inst->mangled_name);
+                    for (int v = 0; v < ct->unio.variant_count; v++) {
+                        if (ct->unio.variants[v].payload) {
+                            fprintf(out, " ");
+                            emit_type(ct->unio.variants[v].payload, out);
+                            fprintf(out, " %s;", ct->unio.variants[v].name);
+                        }
+                    }
+                    fprintf(out, " }; };\n");
+                } else {
+                    fprintf(out, "struct %s { %s_tag tag; };\n", inst->mangled_name, inst->mangled_name);
+                }
+            }
         }
         if (!def_name) continue;
-        /* Emit any deferred option typedefs whose inner type matches this name */
         for (int j = 0; j < options.count; j++) {
             if (opt_emitted[j]) continue;
             Type *o = options.types[j];
@@ -5080,57 +5224,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             }
         }
     }
-    free(su_sorted);
-
-    /* Emit monomorphized struct/union definitions, interleaved with any deferred
-       option typedefs whose inner type matches the mono instance's mangled name. */
-    for (int mi = 0; mi < mono->count; mi++) {
-        MonoInstance *inst = &mono->entries[mi];
-        if (!inst->concrete_type) continue;
-        Type *ct = inst->concrete_type;
-        if (inst->decl_kind == DECL_STRUCT) {
-            fprintf(out, "struct %s {", inst->mangled_name);
-            for (int f = 0; f < ct->struc.field_count; f++) {
-                emit_struct_field(ct->struc.fields[f].type, ct->struc.fields[f].name, out);
-            }
-            fprintf(out, " };\n");
-        } else if (inst->decl_kind == DECL_UNION) {
-            bool has_payload = false;
-            for (int v = 0; v < ct->unio.variant_count; v++)
-                if (ct->unio.variants[v].payload) { has_payload = true; break; }
-            if (has_payload) {
-                fprintf(out, "struct %s { %s_tag tag; union {", inst->mangled_name, inst->mangled_name);
-                for (int v = 0; v < ct->unio.variant_count; v++) {
-                    if (ct->unio.variants[v].payload) {
-                        fprintf(out, " ");
-                        emit_type(ct->unio.variants[v].payload, out);
-                        fprintf(out, " %s;", ct->unio.variants[v].name);
-                    }
-                }
-                fprintf(out, " }; };\n");
-            } else {
-                fprintf(out, "struct %s { %s_tag tag; };\n", inst->mangled_name, inst->mangled_name);
-            }
-        }
-        /* Emit deferred option bodies whose inner type resolves to this mono instance */
-        for (int j = 0; j < options.count; j++) {
-            if (opt_emitted[j]) continue;
-            Type *o = options.types[j];
-            if (!o->option.inner) continue;
-            const char *inner_name = NULL;
-            if (o->option.inner->kind == TYPE_STRUCT) inner_name = o->option.inner->struc.name;
-            else if (o->option.inner->kind == TYPE_UNION) inner_name = o->option.inner->unio.name;
-            else if (o->option.inner->kind == TYPE_STUB) inner_name = o->option.inner->stub.name;
-            if (inner_name && inner_name == inst->mangled_name) {
-                fprintf(out, "struct fc_option_");
-                emit_type_ident(o->option.inner, out);
-                fprintf(out, " { ");
-                emit_type(o->option.inner, out);
-                fprintf(out, " value; bool has_value; };\n");
-                opt_emitted[j] = true;
-            }
-        }
-    }
+    free(def_order);
+    free(defs);
     free(opt_emitted);
 
     /* Phase 2: deferred function typedefs that reference struct/union/option-of-struct.

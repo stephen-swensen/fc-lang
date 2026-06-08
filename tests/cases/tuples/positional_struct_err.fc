@@ -1,0 +1,6 @@
+struct point =
+    x: int32
+    y: int32
+let main = (args: str[]) ->
+    let { a, b } = point { x = 1, y = 2 }
+    a + b

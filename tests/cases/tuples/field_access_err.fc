@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let t = { 1, 2 }
+    t.e0

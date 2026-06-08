@@ -156,6 +156,7 @@ static bool is_type_arg_token(TokenKind k) {
     case TOK_QUESTION: case TOK_STAR:
     case TOK_LBRACKET: case TOK_RBRACKET:
     case TOK_LPAREN: case TOK_RPAREN:
+    case TOK_LBRACE: case TOK_RBRACE:   /* tuple type {T1, T2} as a generic arg */
     case TOK_ARROW:
     case TOK_CONST:
         return true;
@@ -325,7 +326,7 @@ static Type *parse_type(Parser *p) {
                 Token *tt = current(p);
                 if (tt->kind == TOK_IDENT || tt->kind == TOK_TYPE_VAR ||
                     tt->kind == TOK_LPAREN || tt->kind == TOK_VOID ||
-                    tt->kind == TOK_CONST) {
+                    tt->kind == TOK_CONST || tt->kind == TOK_LBRACE) {
                     Type *ty = parse_type(p);
                     DA_APPEND(targs, ta_count, ta_cap, ty);
                 } else {
@@ -348,6 +349,28 @@ static Type *parse_type(Parser *p) {
             }
         }
         return parse_type_suffix(p, udt);
+    }
+
+    /* Tuple type: { T1, T2, ... } — anonymous positional product (>= 2 elements) */
+    if (t->kind == TOK_LBRACE) {
+        SrcLoc loc = loc_from_token(t);
+        advance_p(p); /* consume { */
+        Type **elems = NULL;
+        int ecount = 0, ecap = 0;
+        if (!check(p, TOK_RBRACE)) {
+            do {
+                Type *et = parse_type(p);
+                DA_APPEND(elems, ecount, ecap, et);
+                if (!check(p, TOK_COMMA)) break;
+                advance_p(p);
+            } while (!check(p, TOK_RBRACE));
+        }
+        expect(p, TOK_RBRACE);
+        if (ecount < 2)
+            diag_fatal(loc, "tuple type requires at least 2 element types, got %d", ecount);
+        Type *tup = type_tuple(p->arena, elems, ecount);
+        free(elems);
+        return parse_type_suffix(p, tup);
     }
 
     /* Function type: (T1, T2) -> T  or  (T1, ...) -> T */
@@ -1205,6 +1228,31 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_LBRACE: {
+        /* Bare positional braces — anonymous tuple literal { e0, e1, ... } (>= 2 elements).
+         * Struct and array literals always carry a type prefix, so a leading { is
+         * unambiguously a tuple; blocks are indentation-based, never brace-delimited. */
+        advance_p(p); /* consume { */
+        Expr **elems = NULL;
+        int elem_count = 0, elem_cap = 0;
+        if (!check(p, TOK_RBRACE)) {
+            do {
+                Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
+                DA_APPEND(elems, elem_count, elem_cap, elem);
+                if (!check(p, TOK_COMMA)) break;
+                advance_p(p);
+            } while (!check(p, TOK_RBRACE));
+        }
+        expect(p, TOK_RBRACE);
+        if (elem_count < 2)
+            diag_fatal(loc, "tuple literal requires at least 2 elements, got %d", elem_count);
+        Expr *e = alloc_expr(p, EXPR_TUPLE_LIT, loc);
+        e->tuple_lit.elems = arena_copy_exprs(p, elems, elem_count);
+        e->tuple_lit.elem_count = elem_count;
+        free(elems);
+        return e;
+    }
+
     case TOK_IF:
         return parse_if_expr(p);
 
@@ -1889,30 +1937,58 @@ static Pattern *parse_pattern_atom(Parser *p) {
     }
 
     if (check(p, TOK_LBRACE)) {
+        /* Named struct destructuring `{ f = p, ... }` vs positional tuple
+         * destructuring `{ a, b, ... }`. Named requires `IDENT =` as the first
+         * element; the empty `{}` stays a 0-field struct pattern. Anything else
+         * (a leading binding/wildcard/literal/nested pattern not followed by `=`)
+         * is positional. */
+        bool is_named = peek_at(p, 1)->kind == TOK_RBRACE ||
+                        (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_EQ);
         advance_p(p); /* consume { */
-        pat->kind = PAT_STRUCT;
-        FieldPattern *fields = NULL;
-        int count = 0, cap = 0;
-        if (!check(p, TOK_RBRACE)) {
-            do {
-                skip_newlines(p);
-                const char *fname = tok_intern(p, expect(p, TOK_IDENT));
-                expect(p, TOK_EQ);
-                Pattern *inner = parse_pattern(p);
-                FieldPattern fp;
-                fp.name = fname;
-                fp.pattern = inner;
-                DA_APPEND(fields, count, cap, fp);
-                if (!check(p, TOK_COMMA)) break;
-                advance_p(p);
-            } while (!check(p, TOK_RBRACE));
+        if (is_named) {
+            pat->kind = PAT_STRUCT;
+            FieldPattern *fields = NULL;
+            int count = 0, cap = 0;
+            if (!check(p, TOK_RBRACE)) {
+                do {
+                    skip_newlines(p);
+                    const char *fname = tok_intern(p, expect(p, TOK_IDENT));
+                    expect(p, TOK_EQ);
+                    Pattern *inner = parse_pattern(p);
+                    FieldPattern fp;
+                    fp.name = fname;
+                    fp.pattern = inner;
+                    DA_APPEND(fields, count, cap, fp);
+                    if (!check(p, TOK_COMMA)) break;
+                    advance_p(p);
+                } while (!check(p, TOK_RBRACE));
+            }
+            skip_newlines(p);
+            expect(p, TOK_RBRACE);
+            pat->struc.fields = arena_alloc(p->arena, sizeof(FieldPattern) * (count > 0 ? (size_t)count : 1));
+            memcpy(pat->struc.fields, fields, sizeof(FieldPattern) * (size_t)count);
+            pat->struc.field_count = count;
+            free(fields);
+            return pat;
         }
+        /* Positional tuple pattern */
+        pat->kind = PAT_TUPLE;
+        Pattern **pats = NULL;
+        int count = 0, cap = 0;
+        do {
+            skip_newlines(p);
+            Pattern *inner = parse_pattern(p);
+            DA_APPEND(pats, count, cap, inner);
+            if (!check(p, TOK_COMMA)) break;
+            advance_p(p);
+        } while (!check(p, TOK_RBRACE));
         skip_newlines(p);
         expect(p, TOK_RBRACE);
-        pat->struc.fields = arena_alloc(p->arena, sizeof(FieldPattern) * (count > 0 ? (size_t)count : 1));
-        memcpy(pat->struc.fields, fields, sizeof(FieldPattern) * (size_t)count);
-        pat->struc.field_count = count;
-        free(fields);
+        pat->tuple_pat.patterns = arena_alloc(p->arena, sizeof(Pattern*) * (count > 0 ? (size_t)count : 1));
+        memcpy(pat->tuple_pat.patterns, pats, sizeof(Pattern*) * (size_t)count);
+        pat->tuple_pat.pattern_count = count;
+        pat->tuple_pat.resolved_types = NULL;
+        free(pats);
         return pat;
     }
 

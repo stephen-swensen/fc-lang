@@ -570,8 +570,53 @@ static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
 }
 
 /* Resolve a TYPE_STUB to the actual type from symtab */
+/* Register a fully-concrete tuple struct so codegen emits its typedef, generated
+ * == function, and default. Idempotent via the mono table's dedup-by-name. Sets
+ * the tuple's canonical interned name. Element types must already be resolved and
+ * fully concrete (no type variables). */
+static void register_concrete_tuple(CheckCtx *ctx, Type *tup) {
+    const char *name = tuple_canonical_name(ctx->arena, ctx->intern,
+                                            tup->struc.fields, tup->struc.field_count);
+    tup->struc.name = name;
+    tup->struc.qualified_name = name;
+    Type *noargs[1] = {0};   /* non-NULL placeholder; count 0 means it's never read */
+    const char *mangled = mono_register(ctx->mono_table, ctx->arena, ctx->intern,
+                                        name, NULL, noargs, 0, NULL, DECL_STRUCT,
+                                        NULL, 0);
+    MonoInstance *mi = mono_find(ctx->mono_table, mangled);
+    if (mi && !mi->concrete_type) {
+        Type *ct = type_copy(ctx->arena, tup);
+        mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
+        mi->concrete_type = ct;
+    }
+}
+
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
+
+    /* Tuple type: resolve each element, then either register it as a concrete
+     * synthesized struct (for codegen) or, if any element is a type variable,
+     * leave it for monomorphization. type_eq compares tuples structurally, so a
+     * not-yet-named generic tuple still unifies correctly. */
+    if (t->kind == TYPE_STRUCT && t->struc.is_tuple) {
+        int n = t->struc.field_count;
+        bool changed = false, generic = false;
+        Type **elems = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)(n > 0 ? n : 1));
+        for (int i = 0; i < n; i++) {
+            elems[i] = resolve_type(ctx, t->struc.fields[i].type);
+            if (elems[i] != t->struc.fields[i].type) changed = true;
+            if (type_contains_type_var(elems[i])) generic = true;
+        }
+        Type *tup = changed ? type_tuple(ctx->arena, elems, n) : t;
+        if (generic) {
+            tup->struc.name = tuple_canonical_name(ctx->arena, ctx->intern,
+                                                   tup->struc.fields, n);
+            tup->struc.qualified_name = tup->struc.name;
+            return tup;
+        }
+        register_concrete_tuple(ctx, tup);
+        return tup;
+    }
 
     /* Recurse into compound types */
     if (t->kind == TYPE_POINTER) {
@@ -1040,6 +1085,22 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
     }
     case TYPE_STRUCT:
     case TYPE_UNION: {
+        /* A tuple in the return type carries its instantiation in fields, not in a
+         * symtab template — re-canonicalize and register it directly. */
+        if (t->kind == TYPE_STRUCT && t->struc.is_tuple) {
+            int n = t->struc.field_count;
+            bool changed = false, generic = false;
+            Type **elems = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)(n > 0 ? n : 1));
+            for (int i = 0; i < n; i++) {
+                elems[i] = resolve_generic_types_in_ret(ctx, t->struc.fields[i].type);
+                if (elems[i] != t->struc.fields[i].type) changed = true;
+                if (type_contains_type_var(elems[i])) generic = true;
+            }
+            Type *tup = changed ? type_tuple(ctx->arena, elems, n) : t;
+            if (generic) return tup;
+            register_concrete_tuple(ctx, tup);
+            return tup;
+        }
         const char *type_base_name = (t->kind == TYPE_STRUCT) ? t->struc.name : t->unio.name;
         /* Look up the original type symbol */
         Symbol *type_sym = symtab_lookup_kind(ctx->symtab, type_base_name,
@@ -1133,6 +1194,8 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
     }
 }
 
+static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is_mut, SrcLoc loc);
+
 /* Recursively check a struct destructuring pattern, adding bindings to scope */
 static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_type, bool is_mut, SrcLoc loc) {
     if (type_is_error(struct_type)) return;
@@ -1142,6 +1205,11 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
     }
     if (struct_type->kind != TYPE_STRUCT) {
         diag_error(loc, "cannot destructure non-struct type %s", type_name(struct_type));
+        return;
+    }
+    if (struct_type->struc.is_tuple) {
+        diag_error(loc, "use positional destructuring '{ a, b }' for tuple type %s",
+            type_name(struct_type));
         return;
     }
     if (struct_type->struc.is_c_union) {
@@ -1179,6 +1247,57 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
             /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
             check_destruct_pattern(ctx, inner, field_type, is_mut, loc);
+        } else if (inner->kind == PAT_TUPLE) {
+            check_tuple_destruct(ctx, inner, field_type, is_mut, loc);
+        } else if (inner->kind == PAT_OR) {
+            diag_error(inner->loc, "or-patterns are not allowed in let destructuring");
+            return;
+        } else {
+            diag_error(inner->loc, "unsupported pattern in let destructuring");
+            return;
+        }
+    }
+}
+
+/* Recursively check a positional tuple destructuring pattern, binding each
+ * element in order. Mirrors check_destruct_pattern but matches by position
+ * against the tuple's element types rather than by field name. */
+static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is_mut, SrcLoc loc) {
+    if (type_is_error(tup)) return;
+    if (pat->kind != PAT_TUPLE) {
+        diag_error(pat->loc, "expected tuple destructuring pattern");
+        return;
+    }
+    if (tup->kind != TYPE_STRUCT || !tup->struc.is_tuple) {
+        diag_error(loc, "positional destructuring '{ a, b }' requires a tuple, got %s",
+            type_name(tup));
+        return;
+    }
+    if (pat->tuple_pat.pattern_count != tup->struc.field_count) {
+        diag_error(loc, "tuple %s has %d elements but the pattern binds %d",
+            type_name(tup), tup->struc.field_count, pat->tuple_pat.pattern_count);
+        return;
+    }
+    pat->tuple_pat.resolved_types = arena_alloc(ctx->arena,
+        sizeof(Type*) * (size_t)(pat->tuple_pat.pattern_count > 0 ? pat->tuple_pat.pattern_count : 1));
+
+    for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
+        Type *elem_type = resolve_type(ctx, tup->struc.fields[i].type);
+        pat->tuple_pat.resolved_types[i] = elem_type;
+        Pattern *inner = pat->tuple_pat.patterns[i];
+
+        if (inner->kind == PAT_BINDING) {
+            const char *orig_name = inner->binding.name;
+            int id = local_id_counter++;
+            const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
+            inner->binding.name = cg;  /* overwrite with codegen name */
+            scope_add(ctx->scope, orig_name, cg, elem_type, is_mut);
+        } else if (inner->kind == PAT_WILDCARD) {
+            /* skip this element */
+        } else if (inner->kind == PAT_STRUCT) {
+            check_destruct_pattern(ctx, inner, elem_type, is_mut, loc);
+        } else if (inner->kind == PAT_TUPLE) {
+            check_tuple_destruct(ctx, inner, elem_type, is_mut, loc);
         } else if (inner->kind == PAT_OR) {
             diag_error(inner->loc, "or-patterns are not allowed in let destructuring");
             return;
@@ -1635,6 +1754,10 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         for (int i = 0; i < e->array_lit.elem_count; i++)
             ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            ok &= validate_generic_body(e->tuple_lit.elems[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
     case EXPR_SLICE_LIT:
         ok &= validate_generic_body(e->slice_lit.ptr_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
         ok &= validate_generic_body(e->slice_lit.len_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
@@ -1731,6 +1854,10 @@ static bool expr_contains_control_flow(Expr *e) {
         return expr_contains_control_flow(e->some_expr.value);
     case EXPR_DEFER:
         return expr_contains_control_flow(e->defer_expr.value);
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            if (expr_contains_control_flow(e->tuple_lit.elems[i])) return true;
+        return false;
     default:
         return false;
     }
@@ -3251,7 +3378,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         snprintf(tmp_name, (size_t)ds_len, "_ds_%d", tmp_id);
         e->let_destruct.tmp_name = tmp_name;
 
-        check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
+        if (e->let_destruct.pattern->kind == PAT_TUPLE)
+            check_tuple_destruct(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
+        else
+            check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
 
         e->type = type_void();
         return e->type;
@@ -3543,6 +3673,42 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             FieldInit *fi = &e->struct_lit.fields[i];
             if (fi->value->prov == PROV_STACK &&
                 type_has_provenance(fi->value->type)) {
+                e->prov = PROV_STACK;
+                break;
+            }
+        }
+        return e->type;
+    }
+
+    case EXPR_TUPLE_LIT: {
+        if (e->type) return e->type;
+        int n = e->tuple_lit.elem_count;
+        Type **elems = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)(n > 0 ? n : 1));
+        bool err = false;
+        for (int i = 0; i < n; i++) {
+            Type *et = check_expr(ctx, e->tuple_lit.elems[i]);
+            if (type_is_error(et)) {
+                err = true;
+            } else if (et->kind == TYPE_VOID || et->kind == TYPE_NEVER) {
+                diag_error(e->tuple_lit.elems[i]->loc,
+                    "tuple element %d has no value (type %s)", i, type_name(et));
+                err = true;
+            }
+            elems[i] = et;
+        }
+        if (err) { e->type = type_error(); return e->type; }
+
+        /* Build the synthesized tuple struct and canonicalize/register it.
+         * resolve_type handles both concrete tuples (registered for codegen) and
+         * generic tuples inside a generic body (registered later by monomorph). */
+        Type *tup = type_tuple(ctx->arena, elems, n);
+        tup = resolve_type(ctx, tup);
+        e->type = tup;
+        /* Propagate stack provenance from any stack-pointer element, mirroring
+         * struct literals, so a tuple holding a stack pointer can't escape. */
+        for (int i = 0; i < n; i++) {
+            if (e->tuple_lit.elems[i]->prov == PROV_STACK &&
+                type_has_provenance(e->tuple_lit.elems[i]->type)) {
                 e->prov = PROV_STACK;
                 break;
             }
@@ -3931,6 +4097,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
+        if (obj_type->struc.is_tuple) {
+            diag_error(e->loc, "tuple elements are accessed by index (e.g. t[0]), "
+                "not by field name");
+            e->type = type_error();
+            return e->type;
+        }
         for (int i = 0; i < obj_type->struc.field_count; i++) {
             if (obj_type->struc.fields[i].name == e->field.name) {
                 Type *ft = resolve_type(ctx, obj_type->struc.fields[i].type);
@@ -4009,6 +4181,31 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         Type *obj_type = check_expr(ctx, e->index.object);
         Type *idx_type = check_expr(ctx, e->index.index);
         if (type_is_error(obj_type) || type_is_error(idx_type)) { e->type = type_error(); return e->type; }
+
+        /* Tuple indexing: the index must be a non-negative integer literal in
+         * [0, N). The element type is selected at compile time — heterogeneous
+         * elements mean a runtime index has no single type — so there is no
+         * bounds check emitted (the bound is proven here). */
+        if (obj_type->kind == TYPE_STRUCT && obj_type->struc.is_tuple) {
+            if (e->index.index->kind != EXPR_INT_LIT) {
+                diag_error(e->loc, "tuple index must be a non-negative integer literal");
+                e->type = type_error();
+                return e->type;
+            }
+            uint64_t idx = e->index.index->int_lit.value;
+            if (e->index.index->int_lit.out_of_range ||
+                idx >= (uint64_t)obj_type->struc.field_count) {
+                diag_error(e->loc, "tuple index %llu is out of range for %s (has %d elements)",
+                    (unsigned long long)idx, type_name(obj_type), obj_type->struc.field_count);
+                e->type = type_error();
+                return e->type;
+            }
+            e->type = obj_type->struc.fields[(int)idx].type;
+            if (type_has_provenance(e->type))
+                e->prov = e->index.object->prov;
+            return e->type;
+        }
+
         if (!type_is_integer(idx_type)) {
             diag_error(e->loc, "index must be integer, got %s", type_name(idx_type));
             e->type = type_error();
@@ -4668,9 +4865,18 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
         }
         break;
     }
+    case PAT_TUPLE:
+        diag_error(pat->loc, "tuple patterns are only allowed in let-bindings, "
+            "not in match arms");
+        return;
     case PAT_STRUCT: {
         if (type->kind != TYPE_STRUCT) {
             diag_error(pat->loc, "struct pattern on non-struct type %s", type_name(type));
+            return;
+        }
+        if (type->struc.is_tuple) {
+            diag_error(pat->loc, "cannot match on tuple type %s; "
+                "destructure it with a let-binding instead", type_name(type));
             return;
         }
         if (type->struc.is_c_union) {
@@ -4848,6 +5054,10 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
            fall through to wildcard as a safe default. */
         m.is_wildcard = true;
         return m;
+    case PAT_TUPLE:
+        /* Unreachable: rejected in check_match_pattern. Treat as wildcard. */
+        m.is_wildcard = true;
+        return m;
     }
     m.is_wildcard = true;
     return m;
@@ -5001,6 +5211,9 @@ static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLo
         *out = result;
         return (int)total;
     }
+    case PAT_TUPLE:
+        /* Unreachable in match position (rejected earlier); no or-expansion. */
+        break;
     }
     *out = arena_alloc(a, sizeof(Pattern *));
     (*out)[0] = pat;

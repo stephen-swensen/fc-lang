@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let t = { 10, 32 }
+    let { a, b } = t
+    assert(a + b == 42)
+
+    // wildcard element
+    let { _, y } = { 1, 99 }
+    assert(y == 99)
+    0

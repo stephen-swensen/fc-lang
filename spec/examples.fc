@@ -47,6 +47,10 @@ let identity = (x: 'a) -> x
 let swap = (p: pair<'a, 'b>) ->
     pair { first = p.second, second = p.first }
 
+// A tuple type may contain type variables — monomorphized per instantiation,
+// exactly like a generic struct. (Generics apply to top-level functions.)
+let tuple_flip = (p: {'a, 'b}) -> { p[1], p[0] }
+
 // Explicit type args — <'a> declares type vars not inferrable from params
 let make_pair = <'a, 'b>() ->
     pair { first = default('a), second = default('b) }
@@ -410,6 +414,38 @@ let main = (args: str[]) ->
     // Type-associated module — point.origin() uses the module
     assert(point.origin() == origin)
     assert(point.manhattan(point { x = -3, y = 4 }) == 7)
+
+    // --------------------------------------------------------
+    // Tuples — anonymous positional structs
+    // --------------------------------------------------------
+
+    // A tuple is a synthesized struct: bare braces, no type name, >= 2 elements.
+    // Type and value share the same shape: value { 4, "hi" } has type {int32, str}.
+    let t = { 4, "hello" }
+    assert(t[0] == 4)              // 0-based indexing; the index must be a literal
+    assert(t[1].len == 5i64)
+
+    // Positional destructuring (binds by position, not by field name)
+    let { n, s } = t
+    assert(n == 4)
+    assert(s.len == 5i64)
+
+    // The headline use case: return several values without declaring a struct
+    let divmod = (a: int32, b: int32) -> { a / b, a % b }
+    let { q, r } = divmod(17, 5)
+    assert(q == 3 && r == 2)
+
+    // Tuples are values: structural equality, default, copy, and nesting all
+    // fall out of the struct machinery.
+    assert({ 1, 2 } == { 1, 2 })
+    assert(default({int32, int32})[0] == 0)
+    let nested = { { 1, 2 }, 3 }
+    assert(nested[0][1] == 2)     // chained indexing
+
+    // Tuple types compose and may contain type variables — see tuple_flip above,
+    // a top-level generic function monomorphized for each tuple shape.
+    assert(tuple_flip({ 7, "world" })[1] == 7)
+    assert(tuple_flip({ true, 9 })[0] == 9)
 
     // --------------------------------------------------------
     // Unions (tagged unions)

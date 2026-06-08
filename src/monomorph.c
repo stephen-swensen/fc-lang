@@ -73,6 +73,21 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         mono_resolve_type_names(t, a, intern, type->func.return_type);
         return;
     case TYPE_STRUCT:
+        /* Tuples carry their instantiation in fields (type_args is empty), so the
+         * generic "base + type_args" rename doesn't apply — re-derive the canonical
+         * name from the (now resolved) element types instead. Recurse fields first
+         * so nested tuples/structs are named before this one. */
+        if (type->struc.is_tuple) {
+            for (int i = 0; i < type->struc.field_count; i++)
+                mono_resolve_type_names(t, a, intern, type->struc.fields[i].type);
+            if (!type_contains_type_var(type)) {
+                const char *cn = tuple_canonical_name(a, intern,
+                    type->struc.fields, type->struc.field_count);
+                type->struc.name = cn;
+                type->struc.qualified_name = cn;
+            }
+            return;
+        }
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
             /* Canonicalize name via resolved_sym from pass1/pass2 */
             if (!mono_find(t, type->struc.name)) {
@@ -213,6 +228,27 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                     }
                 }
                 free(vars);
+            }
+        }
+        return;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            discover_in_expr(e->tuple_lit.elems[i], t, a, intern, var_names, concrete, var_count);
+        /* Register the concrete tuple instance produced under this substitution.
+         * Concrete tuples were already registered in pass2; only generic ones
+         * (type vars in the element types) need handling here. */
+        if (e->type && e->type->kind == TYPE_STRUCT && e->type->struc.is_tuple &&
+            type_contains_type_var(e->type)) {
+            Type *ct = type_substitute(a, e->type, var_names, concrete, var_count);
+            if (!type_contains_type_var(ct)) {
+                if (ct == e->type) ct = type_copy(a, ct);
+                mono_resolve_type_names(t, a, intern, ct);  /* sets ct->struc.name canonically */
+                Type *noargs[1] = {0};
+                const char *mangled = mono_register(t, a, intern, ct->struc.name, NULL,
+                    noargs, 0, NULL, DECL_STRUCT, NULL, 0);
+                MonoInstance *mi = mono_find(t, mangled);
+                if (mi && !mi->concrete_type)
+                    mi->concrete_type = ct;
             }
         }
         return;
@@ -391,6 +427,27 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
         discover_nested_types(type->func.return_type, t, a, intern, symtab);
         return;
     case TYPE_STRUCT:
+        /* Tuple appearing only as a field type of another mono entry: register it
+         * so its typedef/eq/default emit. type_args is empty, so it bypasses the
+         * generic-struct path below. Recurse fields first to name nested elements. */
+        if (type->struc.is_tuple) {
+            for (int i = 0; i < type->struc.field_count; i++)
+                discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+            if (!type_contains_type_var(type)) {
+                const char *cn = tuple_canonical_name(a, intern,
+                    type->struc.fields, type->struc.field_count);
+                type->struc.name = cn;
+                type->struc.qualified_name = cn;
+                if (!mono_find(t, cn)) {
+                    Type *noargs[1] = {0};
+                    mono_register(t, a, intern, cn, NULL, noargs, 0, NULL, DECL_STRUCT, NULL, 0);
+                    MonoInstance *mi = mono_find(t, cn);
+                    if (mi && !mi->concrete_type)
+                        mi->concrete_type = type_copy(a, type);
+                }
+            }
+            return;
+        }
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (mono_find(t, type->struc.name)) {
                 for (int i = 0; i < type->struc.field_count; i++)

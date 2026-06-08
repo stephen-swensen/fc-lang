@@ -1,0 +1,13 @@
+union shape =
+    | dot({int32, int32})
+    | empty
+
+let area = (s: shape) ->
+    match s with
+    | dot(d) -> d[0] + d[1]
+    | empty -> 0
+
+let main = (args: str[]) ->
+    assert(area(shape.dot({ 7, 8 })) == 15)
+    assert(area(shape.empty) == 0)
+    0

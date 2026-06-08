@@ -1,0 +1,9 @@
+let main = (args: str[]) ->
+    let o = some({ 9, 10 })
+    assert(o.is_some)
+    assert(o![0] == 9)
+    assert(o![1] == 10)
+
+    let n = none({int32, int32})
+    assert(n.is_none)
+    0

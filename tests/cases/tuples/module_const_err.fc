@@ -1,0 +1,3 @@
+let g = { 1, 2 }
+let main = (args: str[]) ->
+    g[0]

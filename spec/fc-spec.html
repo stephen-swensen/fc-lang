@@ -2271,6 +2271,100 @@ let r = parse_outcome.success(42)
 
 ---
 
+## Tuples
+
+A **tuple** is an anonymous, positional product type — a lightweight way to group or return several values without declaring a named struct for the occasion. Tuples are *synthesized structs*: semantically and at runtime they behave exactly like a `struct`, and they inherit structural equality, `default`, by-value copy, and nesting from the struct machinery. They are not a distinct kind of type — `{int32, str}` is just a struct the compiler writes for you.
+
+### Tuple values
+
+A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and array literals always carry a type prefix (`point { … }`, `int32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
+
+```fc
+let t = { 4, "hello" }     // type {int32, str}
+let p = { 1, 2, 3 }        // type {int32, int32, int32}
+```
+
+A tuple has **at least two elements**. `{}` and `{ x }` are compile errors — a one-element tuple is pointless, and FC has no unit type.
+
+### Tuple types
+
+A tuple type mirrors the value: `{T1, T2, …}`. It can appear anywhere a type can, and composes with the usual suffixes:
+
+```fc
+let f = (x: {int32, str}) -> x[0]   // tuple parameter
+let g = () -> { 1, "a" }            // tuple return (inferred)
+
+{int32, str}[]      // slice of tuples
+{int32, str}?       // optional tuple
+{int32, str}*       // pointer to tuple
+```
+
+Errors and inferred signatures display tuples in this same `{…}` form — never an internal mangled name.
+
+### Indexing
+
+Tuple elements are read with a postfix index, **0-based**, where the index must be an **integer literal** (the element type is fixed per position, so a runtime index has no single type). The bound is checked at compile time; no runtime bounds check is emitted.
+
+```fc
+let t = { 4, "hello" }
+t[0]          // 4        (int32)
+t[1]          // "hello"  (str)
+t[1].len      // 5
+```
+
+There is no `.field` access on a tuple — `t[0]`, not `t.e0`. Indexing is the only accessor.
+
+### Destructuring
+
+Tuples destructure **positionally** in `let`/`let mut` bindings — bare names (or `_`), no `=`:
+
+```fc
+let { a, b } = { 10, 32 }    // a = 10, b = 32
+let { _, y } = pair          // ignore the first element
+```
+
+This is distinct from struct destructuring, which binds **by field name** with `=` (`let { x = px } = point`). The presence of `=` after the first name is what tells them apart. The asymmetry is intentional: tuples have no field names to bind, named structs have no positional contract to rely on. Using a named pattern on a tuple, or a positional pattern on a named struct, is an error. Positional patterns are allowed only in `let`-bindings, not in `match` arms; the arity must match the tuple's.
+
+Destructuring nests, and tuple/struct patterns can be mixed:
+
+```fc
+let { { a, b }, c } = { { 1, 2 }, 3 }
+let { { x = px, y = py }, tag } = { point { x = 4, y = 5 }, 6 }
+```
+
+### Generics
+
+A tuple element may be a type variable. Such a tuple is generic and is monomorphized per instantiation, exactly like a generic struct — including dedup, so two call sites that produce the same tuple shape share one type:
+
+```fc
+let flip = (p: {'a, 'b}) -> { p[1], p[0] }
+
+flip({ 7, "world" })   // {str, int32}
+flip({ true, 9 })      // {int32, bool}
+```
+
+### Inherited behavior
+
+Because a tuple is a struct, the following all work without anything tuple-specific:
+
+```fc
+{ 1, 2 } == { 1, 2 }              // structural equality (recurses into nested tuples)
+default({int32, int32})           // zero-initialized: {0, 0}
+let a = { 1, 2 }; let mut b = a   // b is an independent copy
+b[0] = 99                         // element mutation on a let mut binding
+```
+
+### v1 limitations
+
+- The index must be an integer **literal**; a `let`-bound constant index is not yet accepted.
+- A tuple may not (yet) be used in a **module-level constant** initializer; construct it inside a function body.
+- There is no inline **array-of-tuples literal** syntax (`{T,T}[N] { … }`); use a slice/option of tuples or a tuple of tuples.
+
+> **Transpilation**
+> Each distinct tuple type is emitted as an ordinary C struct with positional fields `e0, e1, …`. `{int32, str}` becomes roughly `typedef struct { int32_t e0; fc_str e1; } fc_tuple2_int32_str;`, indexing becomes `.e0`/`.e1`, and the generated structural `==` and zero-`default` are shared with every other struct.
+
+---
+
 ## Option Types
 
 Option is a built-in generic type (see §Generics). Null is not expressible in FC — option is the only way to intentionally express the absence of a value. The `?` suffix creates an option type.
