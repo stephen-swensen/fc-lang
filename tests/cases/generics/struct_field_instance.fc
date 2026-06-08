@@ -1,0 +1,33 @@
+// Monomorphized generic struct/union instances used as by-value fields of a
+// top-level (non-generic) struct. The codegen must emit and order the instance
+// definitions (box_int32, box_point, opt_int32) before the holder that embeds
+// them by value, and resolve the field types to those instances (not the
+// never-defined generic templates).
+struct point =
+    x: int32
+    y: int32
+struct box =
+    value: 'a
+union opt =
+    | present('a)
+    | absent
+struct holder =
+    bi: box<int32>
+    bp: box<point>
+    o: opt<int32>
+
+let unwrap = (o: opt<int32>) ->
+    match o with
+    | present(v) -> v
+    | absent -> -1
+
+let main = (args: str[]) ->
+    let h = holder {
+        bi = box { value = 7 },
+        bp = box { value = point { x = 1, y = 2 } },
+        o = opt<int32>.present(5)
+    }
+    assert(h.bi.value == 7)
+    assert(h.bp.value.x == 1 && h.bp.value.y == 2)
+    assert(unwrap(h.o) == 5)
+    0

@@ -3593,6 +3593,22 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
 static Type *resolve_struct_stub(Type *t) {
     if (!g_symtab) return t;
     if (t->kind == TYPE_STUB) {
+        /* A concrete generic instance (e.g. box<int32>) used as a by-value field
+         * resolves to its monomorphized instance, not the generic template — the
+         * template is never emitted as a complete type. The field stub keeps its
+         * base name (the pass2 type is shared with the symbol table, so it must
+         * not be mutated); the mangled name is computed here for the lookup. */
+        if (t->stub.type_arg_count > 0 && !type_contains_type_var(t)) {
+            const char *mangled = mangle_generic_name(g_arena, g_intern,
+                t->stub.name, t->stub.type_args, t->stub.type_arg_count);
+            if (g_mono) {
+                for (int i = 0; i < g_mono->count; i++) {
+                    if (g_mono->entries[i].mangled_name == mangled &&
+                        g_mono->entries[i].concrete_type)
+                        return g_mono->entries[i].concrete_type;
+                }
+            }
+        }
         Symbol *sym = symtab_lookup(g_symtab, t->stub.name);
         if (sym && sym->type) {
             if ((sym->type->kind == TYPE_STRUCT && sym->type->struc.field_count > 0) ||
@@ -4437,7 +4453,13 @@ static const char *find_by_value_dep_name(Type *type) {
     switch (type->kind) {
     case TYPE_STRUCT: return type->struc.name;
     case TYPE_UNION:  return type->unio.name;
-    case TYPE_STUB:   return type->stub.name;
+    case TYPE_STUB:
+        /* A concrete generic-instance field depends on its monomorphized
+         * instance (box<int32> → box_int32), so emit it after that instance. */
+        if (type->stub.type_arg_count > 0 && !type_contains_type_var(type))
+            return mangle_generic_name(g_arena, g_intern, type->stub.name,
+                                       type->stub.type_args, type->stub.type_arg_count);
+        return type->stub.name;
     case TYPE_FIXED_ARRAY: return find_by_value_dep_name(type->fixed_array.elem);
     default: return NULL;
     }

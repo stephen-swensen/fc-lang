@@ -1,0 +1,16 @@
+// Top-level struct -> tuple{point, int32} -> top-level struct point.
+// Requires the codegen topo-sort to emit point, then the tuple, then holder
+// (the tuple is a monomorphized def, the structs are top-level defs).
+struct point =
+    x: int32
+    y: int32
+struct holder =
+    pair: {point, int32}
+    tag: int32
+let main = (args: str[]) ->
+    let h = holder { pair = { point { x = 3, y = 4 }, 9 }, tag = 1 }
+    assert(h.pair[0].x == 3)
+    assert(h.pair[0].y == 4)
+    assert(h.pair[1] == 9)
+    assert(h.tag == 1)
+    0

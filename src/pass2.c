@@ -522,6 +522,8 @@ static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
  * function parameters and expressions. We keep the node as a TYPE_STUB (not
  * the full struct type) to avoid creating cycles for self-referential
  * structs like `node { next: node*? }`. */
+static void register_concrete_tuple(CheckCtx *ctx, Type *tup);
+
 static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     if (!t) return;
     switch (t->kind) {
@@ -529,6 +531,19 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     case TYPE_OPTION:  canonicalize_field_stubs(ctx, t->option.inner); return;
     case TYPE_SLICE:   canonicalize_field_stubs(ctx, t->slice.elem); return;
     case TYPE_FIXED_ARRAY: canonicalize_field_stubs(ctx, t->fixed_array.elem); return;
+    case TYPE_STRUCT:
+        /* A tuple field type: canonicalize element stub names, then name+register
+         * this tuple *in place* so the struct decl's own field-type object carries
+         * the mangled name. Codegen's by-value dependency sort reads that name to
+         * order the tuple's typedef before this struct. (Named struct field types
+         * are kept as stubs, so a real TYPE_STRUCT here is always a tuple.) */
+        if (t->struc.is_tuple) {
+            for (int i = 0; i < t->struc.field_count; i++)
+                canonicalize_field_stubs(ctx, t->struc.fields[i].type);
+            if (!type_contains_type_var(t))
+                register_concrete_tuple(ctx, t);
+        }
+        return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
             canonicalize_field_stubs(ctx, t->func.param_types[i]);

@@ -1,0 +1,15 @@
+// Top-level union with a tuple-of-structs payload.
+struct point =
+    x: int32
+    y: int32
+union shape =
+    | seg({point, point})
+    | empty
+let dx = (s: shape) ->
+    match s with
+    | seg(p) -> p[1].x - p[0].x
+    | empty -> 0
+let main = (args: str[]) ->
+    assert(dx(shape.seg({ point { x = 1, y = 0 }, point { x = 5, y = 0 } })) == 4)
+    assert(dx(shape.empty) == 0)
+    0
