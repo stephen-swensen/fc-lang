@@ -323,6 +323,13 @@ let main = (args: str[]) ->
         index_sum = index_sum + (int32) i + v * 0
     assert(index_sum == 3)     // 0 + 1 + 2
 
+    // for — destructuring the element (tuples or structs, same patterns as let)
+    let coords = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }
+    let mut coord_sum = 0
+    for { cx, cy } in coords
+        coord_sum = coord_sum + cx + cy
+    assert(coord_sum == 10)
+
     // --------------------------------------------------------
     // Functions and closures
     // --------------------------------------------------------

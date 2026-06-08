@@ -180,7 +180,9 @@ struct Expr {
 
         /* EXPR_FOR */
         struct {
-            const char *var;
+            const char *var;        /* NULL when var_pattern is set */
+            struct Pattern *var_pattern; /* non-NULL: destructure the element (PAT_TUPLE/PAT_STRUCT) */
+            const char *elem_tmp;   /* codegen temp holding the element when destructuring */
             const char *index_var;  /* NULL if not i,x form */
             Expr *iter;             /* collection expr, or range start */
             Expr *range_end;        /* non-NULL for range iteration (lo..hi) */

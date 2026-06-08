@@ -1323,6 +1323,47 @@ static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is
     }
 }
 
+/* Bind every name in a for-loop element pattern with the error type, so the
+ * loop body still type-checks (avoiding cascading "undefined name" errors)
+ * when the element type couldn't be determined. */
+static void for_pattern_bind_error(CheckCtx *ctx, Pattern *pat) {
+    switch (pat->kind) {
+    case PAT_BINDING:
+        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type_error(), false);
+        break;
+    case PAT_TUPLE:
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++)
+            for_pattern_bind_error(ctx, pat->tuple_pat.patterns[i]);
+        break;
+    case PAT_STRUCT:
+        for (int i = 0; i < pat->struc.field_count; i++)
+            for_pattern_bind_error(ctx, pat->struc.fields[i].pattern);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Bind a for-loop's element to the loop scope. With a destructure pattern,
+ * generate the element temp name and check the pattern against elem_type
+ * (reusing the let-destructuring checkers); otherwise bind the plain name.
+ * For-loop element bindings are always immutable (a fresh copy per iteration). */
+static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
+    if (e->for_expr.var_pattern) {
+        int tmp_id = local_id_counter++;
+        int n = snprintf(NULL, 0, "_fe_%d", tmp_id) + 1;
+        char *tmp = arena_alloc(ctx->arena, (size_t)n);
+        snprintf(tmp, (size_t)n, "_fe_%d", tmp_id);
+        e->for_expr.elem_tmp = tmp;
+        if (e->for_expr.var_pattern->kind == PAT_TUPLE)
+            check_tuple_destruct(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
+        else
+            check_destruct_pattern(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
+    } else {
+        scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, elem_type, false);
+    }
+}
+
 /* Returns the result type if type_name.prop is a valid static type property,
  * NULL if type_name is not a primitive type name (fall through to normal resolution).
  * Returns (Type*)-1 sentinel if it IS a type name but the property is invalid.
@@ -4420,14 +4461,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->scope = inner;
 
         if (type_is_error(iter_type)) {
-            /* Add loop var with error type so body can still be checked */
-            scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+            /* Add loop binding(s) with error type so body can still be checked */
+            if (e->for_expr.var_pattern)
+                for_pattern_bind_error(ctx, e->for_expr.var_pattern);
+            else
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
             if (e->for_expr.index_var)
                 scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
         } else if (e->for_expr.range_end) {
             /* Range iteration: for i in lo..hi */
             Type *end_type = check_expr(ctx, e->for_expr.range_end);
-            if (type_is_error(end_type)) {
+            if (e->for_expr.var_pattern) {
+                /* A range produces integers; there is nothing to destructure. */
+                diag_error(e->loc, "cannot destructure a range element — ranges produce integers");
+                for_pattern_bind_error(ctx, e->for_expr.var_pattern);
+            } else if (type_is_error(end_type)) {
                 scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
             } else if (!type_is_integer(iter_type) || !type_is_integer(end_type)) {
                 diag_error(e->loc, "range bounds must be integer types");
@@ -4445,13 +4493,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         } else {
             /* Collection iteration: for x in slice */
             if (iter_type->kind == TYPE_SLICE) {
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, iter_type->slice.elem, false);
+                bind_for_element(ctx, e, iter_type->slice.elem);
                 if (e->for_expr.index_var) {
                     scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
                 }
             } else {
                 diag_error(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+                if (e->for_expr.var_pattern)
+                    for_pattern_bind_error(ctx, e->for_expr.var_pattern);
+                else
+                    scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
             }
         }
 

@@ -2698,13 +2698,20 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ".len; _fi%d++) {\n", tid);
             indent_level++;
 
-            /* Element binding */
+            /* Element binding — into a temp first when destructuring */
             emit_indent(out);
             Type *elem_type = iter_type->slice.elem;
+            const char *elem_name = e->for_expr.var_pattern
+                ? e->for_expr.elem_tmp : e->for_expr.var;
             emit_type(elem_type, out);
-            fprintf(out, " %s = ", e->for_expr.var);
+            fprintf(out, " %s = ", elem_name);
             emit_expr(e->for_expr.iter, out);
             fprintf(out, ".ptr[_fi%d];\n", tid);
+            if (e->for_expr.var_pattern) {
+                emit_pat_bindings(e->for_expr.var_pattern, elem_name, elem_type, out);
+                emit_indent(out);
+                fprintf(out, "(void)%s;\n", elem_name);
+            }
 
             /* Index binding if present */
             if (e->for_expr.index_var) {

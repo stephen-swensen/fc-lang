@@ -1339,13 +1339,25 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_FOR: {
         advance_p(p);
-        const char *var = tok_intern(p, expect(p, TOK_IDENT));
+        const char *var = NULL;
+        Pattern *var_pattern = NULL;
         const char *index_var = NULL;
-        if (check(p, TOK_COMMA)) {
-            advance_p(p);
-            /* first was index, second is element */
-            index_var = var;
+        /* The element binding may be a destructure pattern (`{ ... }`); the
+         * index, when present, is always a plain identifier. */
+        if (check(p, TOK_LBRACE)) {
+            var_pattern = parse_pattern(p);
+        } else {
             var = tok_intern(p, expect(p, TOK_IDENT));
+            if (check(p, TOK_COMMA)) {
+                advance_p(p);
+                /* first was index, second is element (ident or destructure) */
+                index_var = var;
+                var = NULL;
+                if (check(p, TOK_LBRACE))
+                    var_pattern = parse_pattern(p);
+                else
+                    var = tok_intern(p, expect(p, TOK_IDENT));
+            }
         }
         expect(p, TOK_IN);
         Expr *iter = parse_expr(p, PREC_NONE + 1);
@@ -1358,6 +1370,7 @@ static Expr *parse_prefix(Parser *p) {
         Expr **body = parse_body(p, &body_count);
         Expr *e = alloc_expr(p, EXPR_FOR, loc);
         e->for_expr.var = var;
+        e->for_expr.var_pattern = var_pattern;
         e->for_expr.index_var = index_var;
         e->for_expr.iter = iter;
         e->for_expr.range_end = range_end;

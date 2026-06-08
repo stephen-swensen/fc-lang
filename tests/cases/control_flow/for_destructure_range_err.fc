@@ -1,0 +1,5 @@
+// A range produces integers, so its element cannot be destructured.
+let main = (args: str[]) ->
+    for { a, b } in 0..5
+        assert(a + b > 0)
+    0

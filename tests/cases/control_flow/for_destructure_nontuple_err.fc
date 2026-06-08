@@ -1,0 +1,6 @@
+// Positional destructuring requires the element to be a tuple.
+let main = (args: str[]) ->
+    let xs = int32[3] { 1, 2, 3 }
+    for { a, b } in xs
+        assert(a + b > 0)
+    0

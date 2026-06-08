@@ -1789,6 +1789,29 @@ for i, p in points
 
 The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration.
 
+#### Destructuring the element
+
+When the element is a tuple or struct, the element binding may be a destructuring pattern instead of a plain name — the same `{ a, b }` (positional) and `{ field = name }` (named) syntax used in `let` bindings and match patterns. The pattern is matched against the element type on each iteration, and its bindings are scoped to the loop body:
+
+```fc
+// positional destructuring of a tuple slice
+for { x, y } in points
+    plot(x, y)
+
+// named destructuring of a struct slice (omitted fields are not bound)
+for { x = px } in points
+    sum = sum + px
+```
+
+Destructuring composes with index-element iteration — the index stays a plain identifier, the element is destructured — and patterns may nest and use wildcards:
+
+```fc
+for i, { a, _ } in pairs
+    io.write("pairs[%d{i}].0 = %d{a}\n", stdout)
+```
+
+Like every `for` element binding, the destructured names are immutable `let` bindings holding a per-iteration copy. Destructuring is only available for element iteration — a range produces integers, so `for { a, b } in 0..n` is a compile error.
+
 #### Copy semantics
 
 Element iteration and index-element iteration copy the current element into the loop binding on each iteration. For slices of large structs, this copy may be significant. When per-element copies are undesirable — for example, when only one field of a large struct is needed — use range iteration with indexed access, or `loop` for full control:

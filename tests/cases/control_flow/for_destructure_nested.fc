@@ -1,0 +1,27 @@
+// Nested destructuring and wildcards inside a for-loop element pattern.
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    // Nested tuple-in-tuple.
+    let nested = {int32, {int32, int32}}[2] { { 1, { 2, 3 } }, { 4, { 5, 6 } } }
+    let mut n = 0
+    for { a, { b, c } } in nested
+        n = n + a + b + c
+    assert(n == 21)
+
+    // Wildcard skips an element.
+    let pairs = {int32, int32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+    let mut firsts = 0
+    for { a, _ } in pairs
+        firsts = firsts + a
+    assert(firsts == 9)
+
+    // Struct nested inside a tuple.
+    let mixed = {int32, point}[2] { { 1, point { x = 2, y = 3 } }, { 4, point { x = 5, y = 6 } } }
+    let mut m = 0
+    for { a, { x = px, y = py } } in mixed
+        m = m + a + px + py
+    assert(m == 21)
+    0
