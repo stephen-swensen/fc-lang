@@ -429,7 +429,7 @@ let main = (args: str[]) ->
     // A tuple is a synthesized struct: bare braces, no type name, >= 2 elements.
     // Type and value share the same shape: value { 4, "hi" } has type {int32, str}.
     let t = { 4, "hello" }
-    assert(t[0] == 4)              // 0-based indexing; the index must be a literal
+    assert(t[0] == 4)              // 0-based; index is a literal — it selects a field, not an offset
     assert(t[1].len == 5i64)
 
     // Positional destructuring (binds by position, not by field name)

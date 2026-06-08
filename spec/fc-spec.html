@@ -2326,7 +2326,7 @@ Errors and inferred signatures display tuples in this same `{…}` form — neve
 
 ### Indexing
 
-Tuple elements are read with a postfix index, **0-based**, where the index must be an **integer literal** (the element type is fixed per position, so a runtime index has no single type). The bound is checked at compile time; no runtime bounds check is emitted.
+Tuple elements are read with a postfix index, **0-based**, where the index must be an **integer literal**:
 
 ```fc
 let t = { 4, "hello" }
@@ -2334,6 +2334,8 @@ t[0]          // 4        (int32)
 t[1]          // "hello"  (str)
 t[1].len      // 5
 ```
+
+The literal requirement is deliberate and complete, not a restriction awaiting relaxation. A tuple is heterogeneous — each position has its own type (`t[0]` is `int32`, `t[1]` is `str`) — so the index is not a computed offset into uniform storage the way an array index is, but a *static selection of one field*, resolved during type checking. An index that merely happens to be constant (`t[1 + 1]`, a `let`-bound value) would gain nothing: there is no single element type for a runtime index to land on, so there is nothing to compute and nothing const-folding could recover. Wanting a computed index is precisely the signal that you want an **array** (homogeneous, runtime `[expr]`, bounds-checked) rather than a tuple — the two readings of `[…]` are how FC draws that line. Because the position is fixed at compile time, the bound is checked then and no runtime bounds check is emitted.
 
 There is no `.field` access on a tuple — `t[0]`, not `t.e0`. Indexing is the only accessor.
 
@@ -2402,10 +2404,6 @@ Tuples also work where structs do: as struct fields and union variant payloads, 
 let xs = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }   // array of tuples
 let origin = { 0, 0 }                               // module-level constant
 ```
-
-### v1 limitations
-
-- The index must be an integer **literal**; a `let`-bound constant index is not yet accepted.
 
 > **Transpilation**
 > Each distinct tuple type is emitted as an ordinary C struct with positional fields `e0, e1, …`. `{int32, str}` becomes roughly `typedef struct { int32_t e0; fc_str e1; } fc_tuple2_int32_str;`, indexing becomes `.e0`/`.e1`, and the generated structural `==` and zero-`default` are shared with every other struct.
