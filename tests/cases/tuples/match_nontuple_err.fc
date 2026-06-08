@@ -1,4 +1,4 @@
 let main = (args: str[]) ->
-    let t = { 1, 2 }
-    match t with
+    let x = 5
+    match x with
     | { a, b } -> a + b

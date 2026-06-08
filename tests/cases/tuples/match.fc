@@ -1,0 +1,13 @@
+let classify = (p: {int32, int32}) ->
+    match p with
+    | { 0, 0 } -> 0
+    | { 0, _ } -> 1
+    | { _, 0 } -> 2
+    | { a, b } -> a + b
+
+let main = (args: str[]) ->
+    assert(classify({ 0, 0 }) == 0)
+    assert(classify({ 0, 9 }) == 1)
+    assert(classify({ 9, 0 }) == 2)
+    assert(classify({ 3, 4 }) == 7)
+    0

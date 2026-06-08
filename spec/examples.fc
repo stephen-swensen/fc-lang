@@ -447,6 +447,18 @@ let main = (args: str[]) ->
     assert(tuple_flip({ 7, "world" })[1] == 7)
     assert(tuple_flip({ true, 9 })[0] == 9)
 
+    // Tuples match positionally in match arms (with literals, wildcards, binds)
+    let quadrant = (pt: {int32, int32}) ->
+        match pt with
+        | { 0, 0 } -> 0
+        | { 0, _ } -> 1
+        | { x, y } -> x + y
+    assert(quadrant({ 0, 0 }) == 0 && quadrant({ 3, 4 }) == 7)
+
+    // Tuples work as array elements and module-level constants, like structs
+    let grid = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }
+    assert(grid[1][0] == 3)
+
     // --------------------------------------------------------
     // Unions (tagged unions)
     // --------------------------------------------------------

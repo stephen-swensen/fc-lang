@@ -1,0 +1,12 @@
+// Finite element types: exhaustive without a wildcard.
+let both = (p: {bool, bool}) ->
+    match p with
+    | { true, true } -> 1
+    | { true, false } -> 2
+    | { false, true } -> 3
+    | { false, false } -> 4
+
+let main = (args: str[]) ->
+    assert(both({ true, true }) == 1)
+    assert(both({ false, true }) == 3)
+    0

@@ -1,0 +1,21 @@
+let sum_first = (xs: {int32, int32}[]) ->
+    let mut acc = 0
+    for x in xs
+        acc = acc + x[0]
+    acc
+
+let main = (args: str[]) ->
+    let xs = {int32, int32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+    assert(xs.len == 3i64)
+    assert(xs[0][0] == 1)
+    assert(xs[1][1] == 4)
+    assert(sum_first(xs) == 9)
+
+    // a tuple literal that is merely indexed still parses as such
+    assert({ 10, 20 }[1] == 20)
+
+    // nested tuple element type
+    let ys = {{int32, int32}, int32}[2] { { { 1, 2 }, 3 }, { { 4, 5 }, 6 } }
+    assert(ys[1][0][1] == 5)
+    assert(ys[1][1] == 6)
+    0

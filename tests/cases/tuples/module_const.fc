@@ -1,0 +1,14 @@
+// Module/file-level tuple constants, same rules as struct constants.
+let origin = { 0, 0 }
+let labeled = { 42, "answer" }
+let nested = { { 1, 2 }, 3 }
+
+module config =
+    let limits = { 100, 200 }
+
+let main = (args: str[]) ->
+    assert(origin[0] == 0 && origin[1] == 0)
+    assert(labeled[0] == 42 && labeled[1].len == 6i64)
+    assert(nested[0][1] == 2 && nested[1] == 3)
+    assert(config.limits[1] == 200)
+    0

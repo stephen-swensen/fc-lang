@@ -755,6 +755,10 @@ static bool pattern_has_predicate(Pattern *pat) {
         for (int i = 0; i < pat->struc.field_count; i++)
             if (pattern_has_predicate(pat->struc.fields[i].pattern)) return true;
         return false;
+    case PAT_TUPLE:
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++)
+            if (pattern_has_predicate(pat->tuple_pat.patterns[i])) return true;
+        return false;
     case PAT_OR:
         for (int i = 0; i < pat->or_pat.alt_count; i++)
             if (pattern_has_predicate(pat->or_pat.alts[i])) return true;
@@ -870,7 +874,12 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         break;
     }
     case PAT_TUPLE:
-        /* Unreachable: tuple patterns are rejected outside let-bindings in pass2. */
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s.e%d", expr, i);
+            emit_pat_predicate(pat->tuple_pat.patterns[i], path,
+                pat->tuple_pat.resolved_types[i], first, out);
+        }
         break;
     }
 }
@@ -3668,6 +3677,10 @@ static void collect_eq_from_pattern(Pattern *pat, TypeSet *eqs) {
     case PAT_STRUCT:
         for (int i = 0; i < pat->struc.field_count; i++)
             collect_eq_from_pattern(pat->struc.fields[i].pattern, eqs);
+        break;
+    case PAT_TUPLE:
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++)
+            collect_eq_from_pattern(pat->tuple_pat.patterns[i], eqs);
         break;
     case PAT_OR:
         for (int i = 0; i < pat->or_pat.alt_count; i++)

@@ -1,0 +1,6 @@
+let both = (p: {bool, bool}) ->
+    match p with
+    | { true, true } -> 1
+    | { false, false } -> 4
+let main = (args: str[]) ->
+    both({ true, false })

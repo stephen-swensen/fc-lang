@@ -4865,18 +4865,33 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
         }
         break;
     }
-    case PAT_TUPLE:
-        diag_error(pat->loc, "tuple patterns are only allowed in let-bindings, "
-            "not in match arms");
+    case PAT_TUPLE: {
+        if (type->kind != TYPE_STRUCT || !type->struc.is_tuple) {
+            diag_error(pat->loc, "tuple pattern on non-tuple type %s", type_name(type));
+            return;
+        }
+        if (pat->tuple_pat.pattern_count != type->struc.field_count) {
+            diag_error(pat->loc, "tuple %s has %d elements but the pattern matches %d",
+                type_name(type), type->struc.field_count, pat->tuple_pat.pattern_count);
+            return;
+        }
+        pat->tuple_pat.resolved_types = arena_alloc(ctx->arena,
+            sizeof(Type*) * (size_t)(pat->tuple_pat.pattern_count > 0 ? pat->tuple_pat.pattern_count : 1));
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
+            Type *elem_type = resolve_type(ctx, type->struc.fields[i].type);
+            pat->tuple_pat.resolved_types[i] = elem_type;
+            check_match_pattern(ctx, pat->tuple_pat.patterns[i], elem_type, reject_bindings);
+        }
         return;
+    }
     case PAT_STRUCT: {
         if (type->kind != TYPE_STRUCT) {
             diag_error(pat->loc, "struct pattern on non-struct type %s", type_name(type));
             return;
         }
         if (type->struc.is_tuple) {
-            diag_error(pat->loc, "cannot match on tuple type %s; "
-                "destructure it with a let-binding instead", type_name(type));
+            diag_error(pat->loc, "use a positional pattern '{ a, b }' to match tuple type %s",
+                type_name(type));
             return;
         }
         if (type->struc.is_c_union) {
@@ -5054,10 +5069,23 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
            fall through to wildcard as a safe default. */
         m.is_wildcard = true;
         return m;
-    case PAT_TUPLE:
-        /* Unreachable: rejected in check_match_pattern. Treat as wildcard. */
-        m.is_wildcard = true;
+    case PAT_TUPLE: {
+        /* A tuple has a single (struct-like) constructor; sub-patterns are
+         * positional, one per element, all present (no omitted positions). */
+        int nfields = (type && type->kind == TYPE_STRUCT) ? type->struc.field_count : 0;
+        m.ctor.kind = CTOR_STRUCT;
+        m.ctor.name = type ? type->struc.name : NULL;
+        m.ctor.arity = nfields;
+        m.sub = arena_alloc(a, (nfields > 0 ? nfields : 1) * sizeof(MatPat));
+        for (int i = 0; i < nfields; i++) {
+            if (i < pat->tuple_pat.pattern_count)
+                m.sub[i] = pat_to_matpat(ctx, pat->tuple_pat.patterns[i],
+                                         type->struc.fields[i].type);
+            else
+                m.sub[i] = matpat_wild();
+        }
         return m;
+    }
     }
     m.is_wildcard = true;
     return m;
@@ -5211,9 +5239,56 @@ static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLo
         *out = result;
         return (int)total;
     }
-    case PAT_TUPLE:
-        /* Unreachable in match position (rejected earlier); no or-expansion. */
-        break;
+    case PAT_TUPLE: {
+        int nf = pat->tuple_pat.pattern_count;
+        Pattern ***elem_exp = arena_alloc(a, sizeof(Pattern **) * (size_t)(nf > 0 ? nf : 1));
+        int *elem_counts = arena_alloc(a, sizeof(int) * (size_t)(nf > 0 ? nf : 1));
+        bool any_expanded = false;
+        for (int i = 0; i < nf; i++) {
+            int ec = flatten_or_pattern(ctx, pat->tuple_pat.patterns[i],
+                                        &elem_exp[i], match_loc);
+            if (ec < 0) return -1;
+            elem_counts[i] = ec;
+            if (ec > 1 || elem_exp[i][0] != pat->tuple_pat.patterns[i])
+                any_expanded = true;
+        }
+        if (!any_expanded) {
+            *out = arena_alloc(a, sizeof(Pattern *));
+            (*out)[0] = pat;
+            return 1;
+        }
+        long long total = 1;
+        for (int i = 0; i < nf; i++) {
+            total *= elem_counts[i];
+            if (total > MAX_OR_EXPANSION) {
+                diag_error(match_loc,
+                    "or-pattern expands to too many combinations — simplify");
+                return -1;
+            }
+        }
+        Pattern **result = arena_alloc(a, sizeof(Pattern *) * (size_t)total);
+        int *idx = arena_alloc(a, sizeof(int) * (size_t)(nf > 0 ? nf : 1));
+        memset(idx, 0, sizeof(int) * (size_t)(nf > 0 ? nf : 1));
+        for (int n = 0; n < total; n++) {
+            Pattern **new_pats = arena_alloc(a, sizeof(Pattern *) * (size_t)(nf > 0 ? nf : 1));
+            for (int i = 0; i < nf; i++)
+                new_pats[i] = elem_exp[i][idx[i]];
+            Pattern *np = arena_alloc(a, sizeof(Pattern));
+            np->kind = PAT_TUPLE;
+            np->loc = pat->loc;
+            np->tuple_pat.patterns = new_pats;
+            np->tuple_pat.pattern_count = nf;
+            np->tuple_pat.resolved_types = pat->tuple_pat.resolved_types;
+            result[n] = np;
+            for (int i = nf - 1; i >= 0; i--) {
+                idx[i]++;
+                if (idx[i] < elem_counts[i]) break;
+                idx[i] = 0;
+            }
+        }
+        *out = result;
+        return (int)total;
+    }
     }
     *out = arena_alloc(a, sizeof(Pattern *));
     (*out)[0] = pat;
@@ -5800,6 +5875,18 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
         }
         return n;
     }
+    case EXPR_TUPLE_LIT: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        int ec = src->tuple_lit.elem_count;
+        if (ec > 0) {
+            Expr **elems = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)ec);
+            for (int i = 0; i < ec; i++)
+                elems[i] = const_clone_expr(ctx, src->tuple_lit.elems[i]);
+            n->tuple_lit.elems = elems;
+        }
+        return n;
+    }
     case EXPR_ARRAY_LIT: {
         Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
         *n = *src;
@@ -6182,6 +6269,26 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         n->struct_lit.fields = fields;
         return n;
     }
+    case EXPR_TUPLE_LIT: {
+        bool changed = false;
+        int ec = e->tuple_lit.elem_count;
+        Expr **new_elems = NULL;
+        for (int i = 0; i < ec; i++) {
+            Expr *nv = const_fold_expr(ctx, e->tuple_lit.elems[i]);
+            if (!nv) return NULL;
+            if (nv != e->tuple_lit.elems[i] && !new_elems) {
+                new_elems = arena_alloc(ctx->arena, sizeof(Expr*) * (size_t)ec);
+                for (int k = 0; k < i; k++) new_elems[k] = e->tuple_lit.elems[k];
+            }
+            if (new_elems) new_elems[i] = nv;
+            if (nv != e->tuple_lit.elems[i]) changed = true;
+        }
+        if (!changed) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->tuple_lit.elems = new_elems;
+        return n;
+    }
     case EXPR_ARRAY_LIT: {
         bool changed = false;
         int ec = e->array_lit.elem_count;
@@ -6333,6 +6440,11 @@ static bool is_const_expr(Expr *e) {
         for (int i = 0; i < e->struct_lit.field_count; i++)
             if (!is_const_expr(e->struct_lit.fields[i].value)) return false;
         return true;
+    /* Tuple literal — valid if all elements are const (a plain compound literal) */
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            if (!is_const_expr(e->tuple_lit.elems[i])) return false;
+        return true;
     /* Array literal — valid if all elements and size are const.  Codegen
      * lifts the backing array to file scope in const context. */
     case EXPR_ARRAY_LIT:
@@ -6396,6 +6508,10 @@ static bool is_file_init_expr(Expr *e) {
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
             if (!is_file_init_expr(e->struct_lit.fields[i].value)) return false;
+        return true;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            if (!is_file_init_expr(e->tuple_lit.elems[i])) return false;
         return true;
     case EXPR_ALLOC:
         return is_file_init_expr(e->alloc_expr.size_expr) &&

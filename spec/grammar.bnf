@@ -753,8 +753,8 @@ field_pattern_list      = field_pattern , { "," , field_pattern } ;
 
 field_pattern           = IDENT , "=" , pattern ;
 
-(* Tuple destructuring pattern: { pat, pat, ... } — binds by position. Valid    *)
-(* only in let-bindings (not match arms). Arity must equal the tuple's.         *)
+(* Tuple destructuring pattern: { pat, pat, ... } — binds by position, in both  *)
+(* let-bindings and match arms. Arity must equal the tuple's.                   *)
 tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}" ;
 
 

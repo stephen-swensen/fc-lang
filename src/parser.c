@@ -756,6 +756,66 @@ static Expr *parse_block_item(Parser *p) {
 
 /* ---- Prefix parsing ---- */
 
+/* Parse the body of an array or slice literal given an already-parsed element
+ * type. The parser must be positioned just before the '[':
+ *   T[]  { ptr = expr, len = expr }   → EXPR_SLICE_LIT
+ *   T[N] { e0, e1, ... }              → EXPR_ARRAY_LIT
+ * Shared by the IDENT-typed and tuple-typed literal paths. */
+static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
+    expect(p, TOK_LBRACKET);
+
+    /* T[] { ptr = expr, len = expr } — slice construction from raw parts */
+    if (check(p, TOK_RBRACKET)) {
+        advance_p(p); /* consume ] */
+        expect(p, TOK_LBRACE);
+        Expr *ptr_val = NULL, *len_val = NULL;
+        while (!check(p, TOK_RBRACE)) {
+            const char *fn = tok_intern(p, expect(p, TOK_IDENT));
+            expect(p, TOK_EQ);
+            Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
+            if (strcmp(fn, "ptr") == 0) ptr_val = val;
+            else if (strcmp(fn, "len") == 0) len_val = val;
+            else {
+                SrcLoc floc = loc_from_token(current(p));
+                diag_fatal(floc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
+            }
+            if (check(p, TOK_COMMA)) advance_p(p);
+        }
+        expect(p, TOK_RBRACE);
+        if (!ptr_val || !len_val)
+            diag_fatal(loc, "slice literal requires both 'ptr' and 'len' fields");
+        Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
+        e->slice_lit.elem_type = elem_type;
+        e->slice_lit.ptr_expr = ptr_val;
+        e->slice_lit.len_expr = len_val;
+        return e;
+    }
+
+    Expr *size_expr = parse_bracketed_expr(p, PREC_NONE + 1);
+    expect(p, TOK_RBRACKET);
+    expect(p, TOK_LBRACE);
+
+    Expr **elems = NULL;
+    int elem_count = 0, elem_cap = 0;
+    if (!check(p, TOK_RBRACE)) {
+        do {
+            Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
+            DA_APPEND(elems, elem_count, elem_cap, elem);
+            if (!check(p, TOK_COMMA)) break;
+            advance_p(p);
+        } while (!check(p, TOK_RBRACE));
+    }
+    expect(p, TOK_RBRACE);
+
+    Expr *e = alloc_expr(p, EXPR_ARRAY_LIT, loc);
+    e->array_lit.elem_type = elem_type;
+    e->array_lit.size_expr = size_expr;
+    e->array_lit.elems = arena_copy_exprs(p, elems, elem_count);
+    e->array_lit.elem_count = elem_count;
+    free(elems);
+    return e;
+}
+
 static Expr *parse_prefix(Parser *p) {
     Token *t = current(p);
     SrcLoc loc = loc_from_token(t);
@@ -1025,60 +1085,7 @@ static Expr *parse_prefix(Parser *p) {
                         elem_type = type_pointer(p->arena, elem_type);
                     }
                 }
-                expect(p, TOK_LBRACKET);
-
-                /* T[] { ptr = expr, len = expr } — slice construction from raw parts */
-                if (check(p, TOK_RBRACKET)) {
-                    advance_p(p); /* consume ] */
-                    expect(p, TOK_LBRACE);
-                    /* Parse ptr and len fields (either order) */
-                    Expr *ptr_val = NULL, *len_val = NULL;
-                    while (!check(p, TOK_RBRACE)) {
-                        const char *fn = tok_intern(p, expect(p, TOK_IDENT));
-                        expect(p, TOK_EQ);
-                        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
-                        if (strcmp(fn, "ptr") == 0) ptr_val = val;
-                        else if (strcmp(fn, "len") == 0) len_val = val;
-                        else {
-                            SrcLoc floc = loc_from_token(current(p));
-                            diag_fatal(floc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
-                        }
-                        if (check(p, TOK_COMMA)) advance_p(p);
-                    }
-                    expect(p, TOK_RBRACE);
-                    if (!ptr_val || !len_val) {
-                        diag_fatal(loc, "slice literal requires both 'ptr' and 'len' fields");
-                    }
-                    Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
-                    e->slice_lit.elem_type = elem_type;
-                    e->slice_lit.ptr_expr = ptr_val;
-                    e->slice_lit.len_expr = len_val;
-                    return e;
-                }
-
-                Expr *size_expr = parse_bracketed_expr(p, PREC_NONE + 1);
-                expect(p, TOK_RBRACKET);
-                expect(p, TOK_LBRACE);
-
-                Expr **elems = NULL;
-                int elem_count = 0, elem_cap = 0;
-                if (!check(p, TOK_RBRACE)) {
-                    do {
-                        Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
-                        DA_APPEND(elems, elem_count, elem_cap, elem);
-                        if (!check(p, TOK_COMMA)) break;
-                        advance_p(p);
-                    } while (!check(p, TOK_RBRACE));
-                }
-                expect(p, TOK_RBRACE);
-
-                Expr *e = alloc_expr(p, EXPR_ARRAY_LIT, loc);
-                e->array_lit.elem_type = elem_type;
-                e->array_lit.size_expr = size_expr;
-                e->array_lit.elems = arena_copy_exprs(p, elems, elem_count);
-                e->array_lit.elem_count = elem_count;
-                free(elems);
-                return e;
+                return parse_array_lit_body(p, elem_type, loc);
             }
         }
         } /* end array literal check */
@@ -1229,6 +1236,35 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_LBRACE: {
+        /* Array/slice literal with a tuple element type: {T1, T2}[N] { ... }.
+         * Detected by the shape "{ ... } [ ... ] {" — the trailing { after ] is
+         * what distinguishes it from a tuple literal that is merely indexed
+         * ({a, b}[i], which is never followed by a brace). */
+        {
+            int depth = 0, k = 0;
+            do {
+                TokenKind tk = peek_at(p, k)->kind;
+                if (tk == TOK_LBRACE) depth++;
+                else if (tk == TOK_RBRACE) depth--;
+                else if (tk == TOK_EOF) break;
+                k++;
+            } while (depth > 0);
+            if (peek_at(p, k)->kind == TOK_LBRACKET) {
+                int bd = 0, j = k;
+                do {
+                    TokenKind tk = peek_at(p, j)->kind;
+                    if (tk == TOK_LBRACKET) bd++;
+                    else if (tk == TOK_RBRACKET) bd--;
+                    else if (tk == TOK_EOF) break;
+                    j++;
+                } while (bd > 0);
+                if (peek_at(p, j)->kind == TOK_LBRACE) {
+                    Type *elem_type = parse_type(p);   /* parses the {T1, T2, ...} tuple type */
+                    return parse_array_lit_body(p, elem_type, loc);
+                }
+            }
+        }
+
         /* Bare positional braces — anonymous tuple literal { e0, e1, ... } (>= 2 elements).
          * Struct and array literals always carry a type prefix, so a leading { is
          * unambiguously a tuple; blocks are indentation-based, never brace-delimited. */
