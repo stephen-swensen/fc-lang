@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let s = str
+    s.len

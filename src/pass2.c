@@ -2201,6 +2201,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (other_ns) {
                 diag_error(e->loc, "module '%s' is in a different namespace; use 'import' to access it",
                     e->ident.name);
+            } else if (type_from_name(e->ident.name, (int)strlen(e->ident.name))) {
+                /* A type name used where a value is expected — e.g. writing a tuple
+                 * type {int32, str} in expression position instead of a value, or
+                 * an array literal element type without the [N]{ ... } body. */
+                diag_error(e->loc, "'%s' is a type, not a value", e->ident.name);
             } else {
                 diag_error(e->loc, "undefined name '%s'", e->ident.name);
             }
@@ -4202,13 +4207,22 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * elements mean a runtime index has no single type — so there is no
          * bounds check emitted (the bound is proven here). */
         if (obj_type->kind == TYPE_STRUCT && obj_type->struc.is_tuple) {
-            if (e->index.index->kind != EXPR_INT_LIT) {
-                diag_error(e->loc, "tuple index must be a non-negative integer literal");
+            Expr *ix = e->index.index;
+            if (ix->kind != EXPR_INT_LIT) {
+                diag_error(e->loc, "tuple index must be an integer literal");
                 e->type = type_error();
                 return e->type;
             }
-            uint64_t idx = e->index.index->int_lit.value;
-            if (e->index.index->int_lit.out_of_range ||
+            /* A negated literal (e.g. -1) folds to a large unsigned value; report
+             * it as negative rather than as a huge out-of-range index. */
+            if (ix->int_lit.lit_type && type_is_signed(ix->int_lit.lit_type) &&
+                (int64_t)ix->int_lit.value < 0) {
+                diag_error(e->loc, "tuple index cannot be negative");
+                e->type = type_error();
+                return e->type;
+            }
+            uint64_t idx = ix->int_lit.value;
+            if (ix->int_lit.out_of_range ||
                 idx >= (uint64_t)obj_type->struc.field_count) {
                 diag_error(e->loc, "tuple index %llu is out of range for %s (has %d elements)",
                     (unsigned long long)idx, type_name(obj_type), obj_type->struc.field_count);
