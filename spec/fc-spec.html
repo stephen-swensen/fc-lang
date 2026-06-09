@@ -2339,6 +2339,20 @@ The literal requirement is deliberate and complete, not a restriction awaiting r
 
 There is no `.field` access on a tuple — `t[0]`, not `t.e0`. Indexing is the only accessor.
 
+Because `t[N]` *is* a field selection on a synthesized struct, it carries no tuple-specific access or mutation rules of its own. It yields an **lvalue** and composes with every other postfix accessor and with assignment exactly as the equivalent struct-field or array-element access would — there is nothing extra to learn:
+
+```fc
+let mut p = point { x = 3, y = 4 }
+let t = { &p, 99 }        // type {point*, int32}
+
+t[0]->x                   // read a field through a pointer element
+t[0]->x = 10              // write through it  → mutates p (the pointee)
+&t[1]                     // address of an element (when t is `let mut`)
+t[0]->pair[1]             // chains left-to-right like any postfix run
+```
+
+The element here is a pointer, so `->` dereferences it; if it were a struct value the accessor would be `.`, and if it were an array the next `[…]` would be a runtime, bounds-checked index. In each case `t[N]` participates as a plain field access. Mutating through `t[N]` follows the same rule as a struct field: the immutability of the tuple *binding* governs only whole-tuple reassignment and rebinding an element (`t[0] = …`, which needs `let mut`) — it never blocks writing *through* a pointer element, since that mutates the pointee, not the tuple. A `let` tuple holding `&p` can still drive `t[0]->x = 10`.
+
 ### Destructuring
 
 Tuples destructure **positionally** in `let`/`let mut` bindings — bare names (or `_`), no `=`:

@@ -1,0 +1,29 @@
+// A tuple element can be a pointer, and `t[N]->field` composes exactly like
+// `struct_field->field`: the index selects the element (a pointer), then `->`
+// dereferences it. Works for both reading and writing, and the immutability of
+// the tuple *binding* is irrelevant — writing goes through the pointer, not the
+// tuple, so an immutable `let` tuple still mutates the pointee.
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let mut p = point { x = 3, y = 4 }
+    let t = { &p, 99 }              // type {point*, int32}, immutable binding
+
+    // read a field through the pointer stored in the tuple element
+    assert(t[0]->x == 3)
+    assert(t[0]->y == 4)
+    assert(t[1] == 99)
+
+    // bind a read into a local
+    let saved = t[0]->x
+    assert(saved == 3)
+
+    // write a field through the pointer stored in the tuple element
+    t[0]->x = 10
+    t[0]->y = 20
+    assert(p.x == 10)              // the pointee changed
+    assert(p.y == 20)
+    assert(t[0]->x == 10)          // observed back through the tuple element
+    0

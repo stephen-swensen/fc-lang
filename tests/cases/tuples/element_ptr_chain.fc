@@ -1,0 +1,23 @@
+// Postfix accessors chain uniformly: a tuple element holding a pointer to a
+// struct whose field is itself a tuple. `t[0]->pair[1]` reads as left-to-right
+// postfix selection — tuple index, arrow-deref, struct field, tuple index —
+// with no special-casing for tuples at any link. Reading and writing both work.
+struct box =
+    pair: {int32, int32}
+    tag: int32
+
+let main = (args: str[]) ->
+    let mut b = box { pair = { 3, 4 }, tag = 9 }
+    let t = { &b, "label" }        // type {box*, str}
+
+    // chain: tuple index -> arrow -> struct field -> tuple index
+    assert(t[0]->pair[0] == 3)
+    assert(t[0]->pair[1] == 4)
+    assert(t[0]->tag == 9)
+
+    // write through the same chain
+    t[0]->pair[0] = 30
+    t[0]->tag = 90
+    assert(b.pair[0] == 30)
+    assert(b.tag == 90)
+    0

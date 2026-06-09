@@ -1,0 +1,22 @@
+// A `let mut` tuple lets the pointer-typed element itself be reassigned (point
+// it at a different struct), just as a mutable struct field could be. After the
+// rebind, `t[0]->field` reads/writes the new pointee. This exercises tuple
+// element assignment (`t[0] = …`) and arrow-deref (`t[0]->…`) together.
+struct point =
+    x: int32
+    y: int32
+
+let main = (args: str[]) ->
+    let mut a = point { x = 1, y = 2 }
+    let mut b = point { x = 100, y = 200 }
+    let mut t = { &a, 0 }          // t[0] points at a
+
+    t[0]->x = 7                    // mutate a through the element
+    assert(a.x == 7)
+
+    t[0] = &b                      // rebind the element to point at b
+    t[0]->y = 250                  // mutate b through the element
+    assert(b.y == 250)
+    assert(a.y == 2)               // a is untouched after the rebind
+    assert(t[0]->x == 100)
+    0
