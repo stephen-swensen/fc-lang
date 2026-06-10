@@ -4196,7 +4196,7 @@ A **data race** — one thread writing an object with a plain access while anoth
 
 ### The SPSC pattern
 
-The motivating use is a single-producer/single-consumer command ring shared with a C-created thread (e.g. an audio callback). Each index is written by exactly one side: the producer owns `tail`, the consumer owns `head`. Slot contents are plain reads and writes — the release/acquire pair on the index publishes them:
+The supported pair is complete for single-producer/single-consumer communication, and the SPSC command ring is its canonical shape. Consider a hypothetical game whose audio mixer runs on a library-created callback thread: the main thread enqueues commands ("play this sound", "switch tracks") and the callback drains them, so neither thread ever blocks on the other. Each ring index is written by exactly one side — the producer owns `tail`, the consumer owns `head`. Slot contents are plain reads and writes; the release/acquire pair on the index publishes them:
 
 ```fc
 struct ring =

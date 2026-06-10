@@ -9,7 +9,7 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 `atomic_load_acquire` / `atomic_store_release` (shipped 2026-06-10, see archived TODO) accept
 only integer and `bool` pointees. The one common lock-free idiom that restriction blocks is
 **pointer publication**: release-store a `T*` into a shared cell and let the other thread
-acquire-load it — the "swap in the new config/track and the consumer picks it up" pattern
+acquire-load it — the "swap in the new state and let the consumer pick it up" pattern
 (double-buffer swaps, hot-reload handoffs). Workarounds exist and are honest — publish an index
 into a known array (indices are integers), or pass the pointer through a one-slot SPSC ring as
 ordinary slot payload — so this is not urgent, but it's the first gap a user is likely to hit.
