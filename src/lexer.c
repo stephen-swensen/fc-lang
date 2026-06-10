@@ -123,6 +123,8 @@ static TokenKind check_keyword(const char *start, int len) {
         {"default",   7,  TOK_DEFAULT},
         {"const",     5,  TOK_CONST},
         {"assert",    6,  TOK_ASSERT},
+        {"atomic_load_acquire",  19, TOK_ATOMIC_LOAD},
+        {"atomic_store_release", 20, TOK_ATOMIC_STORE},
     };
     for (int i = 0; i < (int)(sizeof(keywords)/sizeof(keywords[0])); i++) {
         if (keywords[i].klen == len && memcmp(start, keywords[i].kw, (size_t)len) == 0)

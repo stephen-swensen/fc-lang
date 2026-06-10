@@ -1,0 +1,27 @@
+// Atomic operations on struct fields: through a stack struct binding (&r.field)
+// and through a heap pointer (&p->field) — the shapes an SPSC ring uses.
+
+struct counters =
+    head: usize
+    tail: usize
+
+let main = (args: str[]) ->
+    // Stack struct: field address via &r.field
+    let mut r = counters { head = 0u, tail = 0u }
+    atomic_store_release(&r.tail, 3u)
+    atomic_store_release(&r.head, 1u)
+    assert(atomic_load_acquire(&r.tail) == 3u)
+    assert(atomic_load_acquire(&r.head) == 1u)
+    assert(atomic_load_acquire(&r.tail) - atomic_load_acquire(&r.head) == 2u)
+
+    // Heap struct: field address through a pointer, &p->field
+    let p = alloc(counters)!
+    atomic_store_release(&p->tail, 10u)
+    assert(atomic_load_acquire(&p->tail) == 10u)
+
+    // Mixed plain and atomic access from the same (single) thread is defined
+    p->head = 4u
+    assert(atomic_load_acquire(&p->head) == 4u)
+
+    free(p)
+    0

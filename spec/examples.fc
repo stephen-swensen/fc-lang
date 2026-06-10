@@ -597,6 +597,16 @@ let main = (args: str[]) ->
     assert(default(bool) == false)
     assert(default(int32?).is_none)
 
+    // Atomics — load-acquire / store-release through a pointer to a plain
+    // integer or bool. For publishing data to threads created by C libraries
+    // (FC itself has no threads). See spec §Atomics & Memory Model.
+    let mut shared = 0u
+    atomic_store_release(&shared, 42u)              // release: publishes prior writes
+    assert(atomic_load_acquire(&shared) == 42u)     // acquire: sees published writes
+    let mut ready = false
+    atomic_store_release(&ready, true)
+    assert(atomic_load_acquire(&ready))
+
     // --------------------------------------------------------
     // Generics
     // --------------------------------------------------------

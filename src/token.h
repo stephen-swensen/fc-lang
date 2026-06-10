@@ -51,6 +51,8 @@ typedef enum {
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,
+    TOK_ATOMIC_LOAD,    /* atomic_load_acquire */
+    TOK_ATOMIC_STORE,   /* atomic_store_release */
     /* String interpolation */
     TOK_INTERP_START,       /* leading text of interpolated string */
     TOK_CINTERP_START,      /* leading text of interpolated cstring */

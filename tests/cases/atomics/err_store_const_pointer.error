@@ -1,0 +1,1 @@
+cannot atomic_store_release through const pointer

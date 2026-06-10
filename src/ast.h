@@ -58,6 +58,8 @@ typedef enum {
     EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
     EXPR_ASSERT,
     EXPR_DEFER,
+    EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
+    EXPR_ATOMIC_STORE,  /* atomic_store_release(p, v) */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -316,6 +318,12 @@ struct Expr {
 
         /* EXPR_DEFER */
         struct { Expr *value; } defer_expr;
+
+        /* EXPR_ATOMIC_LOAD — atomic_load_acquire(p) */
+        struct { Expr *ptr; } atomic_load;
+
+        /* EXPR_ATOMIC_STORE — atomic_store_release(p, v) */
+        struct { Expr *ptr; Expr *value; } atomic_store;
     };
 };
 

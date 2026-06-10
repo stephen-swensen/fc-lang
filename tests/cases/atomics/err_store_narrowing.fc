@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let mut x = 0
+    let big = 5000000000i64
+    atomic_store_release(&x, big)
+    x

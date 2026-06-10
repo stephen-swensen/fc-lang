@@ -1,0 +1,9 @@
+// atomic_load_acquire is permitted through a const pointer — loads are reads.
+
+let peek = (p: const usize*) -> atomic_load_acquire(p)
+
+let main = (args: str[]) ->
+    let mut tail = 0u
+    atomic_store_release(&tail, 17u)
+    assert(peek(&tail) == 17u)
+    0

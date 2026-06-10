@@ -1,0 +1,18 @@
+// Implicit widening applies to the atomic_store_release value, mirroring
+// assignment: an int32 literal widens losslessly into a wider cell.
+
+let main = (args: str[]) ->
+    let mut wide = 0i64
+    atomic_store_release(&wide, 7)            // int32 literal widens to int64
+    assert(atomic_load_acquire(&wide) == 7i64)
+
+    let mut uwide = 0u64
+    let small = 9u8
+    atomic_store_release(&uwide, small)       // uint8 widens to uint64
+    assert(atomic_load_acquire(&uwide) == 9u64)
+
+    // Loaded value widens like any other expression
+    let mut narrow = 100
+    let got = atomic_load_acquire(&narrow)
+    assert(got == 100i64)                      // int32 result widens in comparison
+    0

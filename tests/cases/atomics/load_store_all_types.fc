@@ -1,0 +1,51 @@
+// Atomic load-acquire / store-release roundtrip on every permitted pointee
+// type: all fixed-width integers, isize/usize, and bool.
+
+let main = (args: str[]) ->
+    let mut a = 0i8
+    atomic_store_release(&a, -5i8)
+    assert(atomic_load_acquire(&a) == -5i8)
+
+    let mut b = 0i16
+    atomic_store_release(&b, -300i16)
+    assert(atomic_load_acquire(&b) == -300i16)
+
+    let mut c = 0
+    atomic_store_release(&c, -70000)
+    assert(atomic_load_acquire(&c) == -70000)
+
+    let mut d = 0i64
+    atomic_store_release(&d, -5000000000i64)
+    assert(atomic_load_acquire(&d) == -5000000000i64)
+
+    let mut e = 0u8
+    atomic_store_release(&e, 200u8)
+    assert(atomic_load_acquire(&e) == 200u8)
+
+    let mut f = 0u16
+    atomic_store_release(&f, 60000u16)
+    assert(atomic_load_acquire(&f) == 60000u16)
+
+    let mut g = 0u32
+    atomic_store_release(&g, 4000000000u32)
+    assert(atomic_load_acquire(&g) == 4000000000u32)
+
+    let mut h = 0u64
+    atomic_store_release(&h, 18000000000000000000u64)
+    assert(atomic_load_acquire(&h) == 18000000000000000000u64)
+
+    let mut i = 0i
+    atomic_store_release(&i, -42i)
+    assert(atomic_load_acquire(&i) == -42i)
+
+    let mut j = 0u
+    atomic_store_release(&j, 42u)
+    assert(atomic_load_acquire(&j) == 42u)
+
+    let mut k = false
+    atomic_store_release(&k, true)
+    assert(atomic_load_acquire(&k))
+    atomic_store_release(&k, false)
+    assert(!atomic_load_acquire(&k))
+
+    0

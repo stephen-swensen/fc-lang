@@ -1,0 +1,1 @@
+atomic_load_acquire requires a pointer to a concrete integer or bool type; type variable 'a is not supported

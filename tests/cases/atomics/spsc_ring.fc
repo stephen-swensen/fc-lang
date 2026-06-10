@@ -1,0 +1,61 @@
+// Single-threaded exercise of the SPSC command-ring pattern these primitives
+// exist for: the producer writes the slot then release-stores tail; the
+// consumer acquire-loads tail then reads the slot. Indices grow monotonically;
+// slot = index % capacity. Wraps the ring several times.
+
+struct ring =
+    buf: int32[]
+    head: usize
+    tail: usize
+
+let cap = 4u
+
+let enqueue = (r: ring*, v: int32) ->
+    let t = atomic_load_acquire(&r->tail)
+    let h = atomic_load_acquire(&r->head)
+    if t - h == cap then false
+    else
+        r->buf[t % cap] = v
+        atomic_store_release(&r->tail, t + 1u)
+        true
+
+// Returns -1 when empty (test values are all positive)
+let dequeue = (r: ring*) ->
+    let t = atomic_load_acquire(&r->tail)
+    let h = atomic_load_acquire(&r->head)
+    if t == h then -1
+    else
+        let v = r->buf[h % cap]
+        atomic_store_release(&r->head, h + 1u)
+        v
+
+let main = (args: str[]) ->
+    let buf = alloc(int32[4] { })!
+    let r = alloc(ring)!
+    r->buf = buf
+    r->head = 0u
+    r->tail = 0u
+
+    // empty: dequeue fails
+    assert(dequeue(r) == -1)
+
+    // fill to capacity, then overflow is rejected
+    for v in 1..5
+        assert(enqueue(r, v))
+    assert(!enqueue(r, 99))
+
+    // drain in FIFO order
+    for v in 1..5
+        assert(dequeue(r) == v)
+    assert(dequeue(r) == -1)
+
+    // wrap the ring: interleaved enqueue/dequeue across 3 laps
+    for v in 10..22
+        assert(enqueue(r, v))
+        assert(enqueue(r, v * 100))
+        assert(dequeue(r) == v)
+        assert(dequeue(r) == v * 100)
+
+    free(buf)
+    free(r)
+    0

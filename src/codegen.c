@@ -267,6 +267,13 @@ static void collect_hoisted_bindings(Expr *e) {
     case EXPR_FREE:
         collect_hoisted_bindings(e->free_expr.operand);
         break;
+    case EXPR_ATOMIC_LOAD:
+        collect_hoisted_bindings(e->atomic_load.ptr);
+        break;
+    case EXPR_ATOMIC_STORE:
+        collect_hoisted_bindings(e->atomic_store.ptr);
+        collect_hoisted_bindings(e->atomic_store.value);
+        break;
     case EXPR_ASSERT:
         collect_hoisted_bindings(e->assert_expr.condition);
         if (e->assert_expr.message) collect_hoisted_bindings(e->assert_expr.message);
@@ -3094,6 +3101,30 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_ATOMIC_LOAD: {
+        Type *cell = e->atomic_load.ptr->type->pointer.pointee;
+        fprintf(out, "({ _Static_assert(__atomic_always_lock_free(sizeof(");
+        emit_type(cell, out);
+        fprintf(out, "), 0), \"FC atomics require lock-free access for this type on the target\"); "
+                     "__atomic_load_n((");
+        emit_expr(e->atomic_load.ptr, out);
+        fprintf(out, "), __ATOMIC_ACQUIRE); })");
+        break;
+    }
+
+    case EXPR_ATOMIC_STORE: {
+        Type *cell = e->atomic_store.ptr->type->pointer.pointee;
+        fprintf(out, "({ _Static_assert(__atomic_always_lock_free(sizeof(");
+        emit_type(cell, out);
+        fprintf(out, "), 0), \"FC atomics require lock-free access for this type on the target\"); "
+                     "__atomic_store_n((");
+        emit_expr(e->atomic_store.ptr, out);
+        fprintf(out, "), (");
+        emit_expr(e->atomic_store.value, out);
+        fprintf(out, "), __ATOMIC_RELEASE); })");
+        break;
+    }
+
     case EXPR_ALLOC: {
         if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
             /* alloc(T, N) → T*? (raw buffer, null sentinel) */
@@ -3828,6 +3859,13 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_FREE:
         collect_types_expr(e->free_expr.operand, slices, options, fns);
         break;
+    case EXPR_ATOMIC_LOAD:
+        collect_types_expr(e->atomic_load.ptr, slices, options, fns);
+        break;
+    case EXPR_ATOMIC_STORE:
+        collect_types_expr(e->atomic_store.ptr, slices, options, fns);
+        collect_types_expr(e->atomic_store.value, slices, options, fns);
+        break;
     case EXPR_ASSERT:
         collect_types_expr(e->assert_expr.condition, slices, options, fns);
         if (e->assert_expr.message)
@@ -4124,6 +4162,13 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
     case EXPR_FREE:
         collect_trampolines_expr(e->free_expr.operand, ts);
         break;
+    case EXPR_ATOMIC_LOAD:
+        collect_trampolines_expr(e->atomic_load.ptr, ts);
+        break;
+    case EXPR_ATOMIC_STORE:
+        collect_trampolines_expr(e->atomic_store.ptr, ts);
+        collect_trampolines_expr(e->atomic_store.value, ts);
+        break;
     case EXPR_ASSERT:
         collect_trampolines_expr(e->assert_expr.condition, ts);
         if (e->assert_expr.message)
@@ -4241,6 +4286,13 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         break;
     case EXPR_FREE:
         collect_lambdas_expr(e->free_expr.operand, ls);
+        break;
+    case EXPR_ATOMIC_LOAD:
+        collect_lambdas_expr(e->atomic_load.ptr, ls);
+        break;
+    case EXPR_ATOMIC_STORE:
+        collect_lambdas_expr(e->atomic_store.ptr, ls);
+        collect_lambdas_expr(e->atomic_store.value, ls);
         break;
     case EXPR_ASSERT:
         collect_lambdas_expr(e->assert_expr.condition, ls);
@@ -4767,6 +4819,13 @@ static void detect_features_expr(Expr *e) {
         return;
     case EXPR_FREE:
         detect_features_expr(e->free_expr.operand);
+        return;
+    case EXPR_ATOMIC_LOAD:
+        detect_features_expr(e->atomic_load.ptr);
+        return;
+    case EXPR_ATOMIC_STORE:
+        detect_features_expr(e->atomic_store.ptr);
+        detect_features_expr(e->atomic_store.value);
         return;
     case EXPR_ASSERT:
         g_needs_stdio = true;

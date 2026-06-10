@@ -4,6 +4,30 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Concurrency primitives — atomics + a memory model (resolved 2026-06-10)
+
+FC had no concurrency story: no atomics and no multi-threaded memory model, so the only way to
+talk to threads created by C libraries (e.g. SDL's audio callback in wolf-fc) was bound host
+primitives or blocking locks. Resolved with two builtin operators scoped to the lock-free
+single-producer/single-consumer case:
+
+- **`atomic_load_acquire(p)` / `atomic_store_release(p, v)`** — keywords like `alloc`/`free`,
+  operating through a pointer to a *plain* object (no atomic type, following the Linux kernel
+  `smp_load_acquire`/`smp_store_release` and Zig builtin school rather than the C11 `_Atomic` /
+  Rust `AtomicT` type-based school). Pointee must be an integer type or `bool`; the store value
+  widens implicitly; loads through `const` pointers are allowed, stores are not. Type-variable
+  pointees are rejected (conservative-but-complete).
+- **Memory model**: the acquire/release subset of C11, specified in §Atomics & Memory Model
+  (Part 7) along with the no-tearing guarantee and the data-race rules. Codegen emits
+  `__atomic_load_n`/`__atomic_store_n` plus a per-use
+  `_Static_assert(__atomic_always_lock_free(...))` so non-lock-free targets fail the C build
+  instead of degrading to a locked implementation.
+
+Deliberately excluded (new names if ever added, semantics of these two never change):
+read-modify-write ops (`fetch_add`, CAS, `exchange`), standalone fences, relaxed/seq_cst
+orderings, pointer-pointee atomics, and any thread spawn/join — SPSC publication needs none of
+them. Tests in `tests/cases/atomics/` including a full SPSC ring exercise.
+
 ## Diverging expressions lack a bottom type in match-arm / if-branch unification (resolved 2026-06-02)
 
 Originally: `return`/`break`/`continue` were typed `void` inside a match arm or if branch

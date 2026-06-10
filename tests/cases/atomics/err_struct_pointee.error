@@ -1,0 +1,1 @@
+atomic_store_release requires a pointer to an integer or bool type, got point*

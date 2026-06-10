@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let x = 5
+    atomic_store_release(x, 6)
+    0

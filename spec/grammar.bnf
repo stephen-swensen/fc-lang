@@ -120,7 +120,8 @@ keyword = "let" | "mut" | "struct" | "union" | "module"
 
 (* Reserved identifiers — built-in compile-time operators.             *)
 (* These may not be shadowed by user-defined bindings.                 *)
-reserved_ident = "alloc" | "free" | "sizeof" | "alignof" | "default" | "assert" ;
+reserved_ident = "alloc" | "free" | "sizeof" | "alignof" | "default" | "assert"
+               | "atomic_load_acquire" | "atomic_store_release" ;
 
 (* Built-in globals — predefined identifiers typed any*.                *)
 builtin_global = "stdin" | "stdout" | "stderr" ;
@@ -573,6 +574,8 @@ primary_expr     = INT_LIT
                  | alignof_expr
                  | default_expr
                  | assert_expr
+                 | atomic_load_expr
+                 | atomic_store_expr
                  | some_expr
                  | none_expr
                  | struct_literal
@@ -680,6 +683,10 @@ alignof_expr     = "alignof" , "(" , type_expr , ")" ;
 default_expr     = "default" , "(" , type_expr , ")" ;
 
 assert_expr      = "assert" , "(" , expr , [ "," , expr ] , ")" ;
+
+(* Atomic builtins: pointer to integer/bool pointee; acquire/release ordering *)
+atomic_load_expr  = "atomic_load_acquire" , "(" , expr , ")" ;
+atomic_store_expr = "atomic_store_release" , "(" , expr , "," , expr , ")" ;
 
 some_expr        = "some" , "(" , expr , ")" ;
 

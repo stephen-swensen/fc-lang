@@ -4164,6 +4164,70 @@ let p = alloc(point3d)!
 > **Transpilation**
 > `*p = point3d { x = 2, z = 4 }` transpiles to `*p = (point3d) { .x = 2, .z = 4 }` — a C99 compound literal assigned through a pointer dereference.
 
+## Atomics & Memory Model
+
+FC has no threads of its own — no spawn, no join, no async. But FC programs routinely share memory with threads created by C libraries: an SDL audio callback, a pthread worker, an OS timer. The atomic builtins exist for exactly this boundary — they let two threads communicate through shared memory with defined behavior, without locks.
+
+```fc
+let v = atomic_load_acquire(p)      // atomic load with acquire ordering
+atomic_store_release(p, v)          // atomic store with release ordering
+```
+
+Both builtins operate **through a pointer to a plain object** — there is no atomic type. The pointee must be an integer type (`int8`–`int64`, `uint8`–`uint64`, `isize`, `usize`) or `bool`. Any other pointee — floats, structs, pointers, `any*`, type variables — is a compile error. `atomic_load_acquire(p)` returns the pointee type; `atomic_store_release(p, v)` is void, and `v` widens implicitly to the pointee type under the standard lossless-widening rules. Loading through a `const` pointer is permitted (a load is a read); storing through one is a compile error.
+
+### Ordering semantics
+
+FC adopts the acquire/release subset of the C11 memory model. The language offers exactly one ordering per direction:
+
+- **`atomic_store_release(p, v)`** — a *release store*. All memory writes made by this thread before the store (plain or atomic) become visible to any thread that subsequently acquire-loads the same location and sees the stored value.
+- **`atomic_load_acquire(p)`** — an *acquire load*. If it observes a value written by a release store, then all writes that preceded that store are visible to this thread after the load.
+
+This release/acquire pair is the publication idiom: prepare data with ordinary writes, then release-store a flag or index; the other thread acquire-loads the flag, and once it sees the new value, the prepared data is safely readable with ordinary reads. The data being published never needs atomic access itself — only the flag does.
+
+There are no relaxed or sequentially-consistent orderings, no read-modify-write operations (`fetch_add`, `compare_exchange`, `exchange`), and no standalone fences. These belong to multi-producer designs (shared counters, MPMC queues) and are deliberately out of scope; the supported pair is complete for single-producer/single-consumer communication. If they are ever added, they will be new names — the semantics of these two builtins will not change.
+
+### Tearing and alignment
+
+An atomic load or store on a permitted type is **all-or-nothing**: a concurrent reader sees either the old value or the new value, never a mix of bytes. FC guarantees natural alignment for all declared objects, struct fields, and heap allocations, so every addressable integer or bool is a valid atomic target. The compiler enforces the guarantee per use: if the target platform cannot perform a lock-free atomic access for the pointee's size, the generated C fails to compile rather than silently degrading to a locked implementation.
+
+### Data races
+
+A **data race** — one thread writing an object with a plain access while another thread concurrently reads or writes it — is undefined behavior, exactly as in C11. Atomic accesses to the same location never race with each other. Mixing plain and atomic access to the same object is well-defined only when the accesses cannot be concurrent: from a single thread, or separated by an acquire/release edge. The compiler does not detect races — like memory management, this responsibility follows C's philosophy and stays with the programmer.
+
+### The SPSC pattern
+
+The motivating use is a single-producer/single-consumer command ring shared with a C-created thread (e.g. an audio callback). Each index is written by exactly one side: the producer owns `tail`, the consumer owns `head`. Slot contents are plain reads and writes — the release/acquire pair on the index publishes them:
+
+```fc
+struct ring =
+    buf: command[]
+    head: usize        // written only by consumer
+    tail: usize        // written only by producer
+
+let enqueue = (r: ring*, c: command) ->
+    let t = atomic_load_acquire(&r->tail)
+    let h = atomic_load_acquire(&r->head)
+    if t - h == (usize) r->buf.len then false
+    else
+        r->buf[t % (usize) r->buf.len] = c          // plain write to the slot
+        atomic_store_release(&r->tail, t + 1u)      // publish it
+        true
+
+let dequeue = (r: ring*) ->
+    let t = atomic_load_acquire(&r->tail)
+    let h = atomic_load_acquire(&r->head)
+    if t == h then none(command)
+    else
+        let c = r->buf[h % (usize) r->buf.len]      // plain read of the slot
+        atomic_store_release(&r->head, h + 1u)      // release the slot
+        some(c)
+```
+
+Indices grow monotonically and wrap via `%`; unsigned subtraction `t - h` yields the correct count even across `usize` overflow.
+
+> **Transpilation**
+> `atomic_load_acquire(p)` emits `__atomic_load_n(p, __ATOMIC_ACQUIRE)` and `atomic_store_release(p, v)` emits `__atomic_store_n(p, v, __ATOMIC_RELEASE)` — GCC/clang builtins that operate on plain objects, the same primitives C compilers use to implement `<stdatomic.h>`. Each use site also emits `_Static_assert(__atomic_always_lock_free(sizeof(T), 0), ...)`, which is how a non-lock-free target is rejected at C compile time.
+
 # PART 8 — C Interop
 
 ## C Interop

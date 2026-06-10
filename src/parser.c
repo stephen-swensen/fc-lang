@@ -1440,6 +1440,29 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_ATOMIC_LOAD: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *ptr = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ATOMIC_LOAD, loc);
+        e->atomic_load.ptr = ptr;
+        return e;
+    }
+
+    case TOK_ATOMIC_STORE: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *ptr = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_COMMA);
+        Expr *value = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ATOMIC_STORE, loc);
+        e->atomic_store.ptr = ptr;
+        e->atomic_store.value = value;
+        return e;
+    }
+
     case TOK_ASSERT: {
         advance_p(p);
         expect(p, TOK_LPAREN);

@@ -328,6 +328,13 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
     case EXPR_FREE:
         discover_in_expr(e->free_expr.operand, t, a, intern, var_names, concrete, var_count);
         return;
+    case EXPR_ATOMIC_LOAD:
+        discover_in_expr(e->atomic_load.ptr, t, a, intern, var_names, concrete, var_count);
+        return;
+    case EXPR_ATOMIC_STORE:
+        discover_in_expr(e->atomic_store.ptr, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->atomic_store.value, t, a, intern, var_names, concrete, var_count);
+        return;
     case EXPR_ASSERT:
         discover_in_expr(e->assert_expr.condition, t, a, intern, var_names, concrete, var_count);
         if (e->assert_expr.message)

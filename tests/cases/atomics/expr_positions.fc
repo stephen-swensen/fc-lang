@@ -1,0 +1,40 @@
+// atomic_load_acquire is an expression — usable in conditions, arithmetic,
+// match subjects, loop bodies, and as a function argument.
+// atomic_store_release is void — usable as a statement and in defer.
+
+let double_it = (n: int32) -> n * 2
+
+let bump_deferred = (p: int32*) ->
+    defer atomic_store_release(p, atomic_load_acquire(p) + 1)
+    atomic_store_release(p, 10)
+
+let main = (args: str[]) ->
+    let mut x = 0
+    atomic_store_release(&x, 5)
+
+    // condition position
+    let label = if atomic_load_acquire(&x) > 3 then "big" else "small"
+    assert(label == "big")
+
+    // arithmetic position
+    assert(atomic_load_acquire(&x) + 1 == 6)
+
+    // function argument position
+    assert(double_it(atomic_load_acquire(&x)) == 10)
+
+    // match subject position
+    let desc = match atomic_load_acquire(&x) with
+    | 5 -> "five"
+    | _ -> "other"
+    assert(desc == "five")
+
+    // loop interplay: producer-style counter publish
+    let mut published = 0
+    for i in 1..4
+        atomic_store_release(&published, i)
+    assert(atomic_load_acquire(&published) == 3)
+
+    // defer runs the store at scope exit (after the store of 10)
+    bump_deferred(&x)
+    assert(atomic_load_acquire(&x) == 11)
+    0

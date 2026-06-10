@@ -1,0 +1,7 @@
+let poke = (p: const int32*) ->
+    atomic_store_release(p, 1)
+
+let main = (args: str[]) ->
+    let mut x = 0
+    poke(&x)
+    x

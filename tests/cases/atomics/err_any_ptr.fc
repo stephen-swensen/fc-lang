@@ -1,0 +1,7 @@
+let peek = (p: any*) ->
+    atomic_load_acquire(p)
+
+let main = (args: str[]) ->
+    let mut x = 0
+    let v = peek(&x)
+    v

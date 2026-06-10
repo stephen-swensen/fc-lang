@@ -855,6 +855,28 @@ static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
     return cast;
 }
 
+/* Validate the operand of an atomic builtin: must be a pointer to an integer
+ * type or bool (the only types with guaranteed lock-free, tear-free access).
+ * Emits a diagnostic and returns false on violation. */
+static bool atomic_pointee_ok(Type *pt, SrcLoc loc, const char *op_name) {
+    if (pt->kind != TYPE_POINTER) {
+        diag_error(loc, "%s requires a pointer operand, got %s", op_name, type_name(pt));
+        return false;
+    }
+    Type *cell = pt->pointer.pointee;
+    if (cell->kind == TYPE_TYPE_VAR) {
+        diag_error(loc, "%s requires a pointer to a concrete integer or bool type; "
+            "type variable %s is not supported", op_name, type_name(cell));
+        return false;
+    }
+    if (!type_is_integer(cell) && cell->kind != TYPE_BOOL) {
+        diag_error(loc, "%s requires a pointer to an integer or bool type, got %s",
+            op_name, type_name(pt));
+        return false;
+    }
+    return true;
+}
+
 static Type *check_match(CheckCtx *ctx, Expr *e);
 
 /* ---- Generic unification ---- */
@@ -1787,6 +1809,13 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_FREE:
         ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
         break;
+    case EXPR_ATOMIC_LOAD:
+        ok &= validate_generic_body(e->atomic_load.ptr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
+    case EXPR_ATOMIC_STORE:
+        ok &= validate_generic_body(e->atomic_store.ptr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->atomic_store.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        break;
     case EXPR_ASSERT:
         ok &= validate_generic_body(e->assert_expr.condition, arena, type_params, bindings, ntp, call_loc, inst_desc);
         if (e->assert_expr.message)
@@ -1884,6 +1913,11 @@ static bool expr_contains_control_flow(Expr *e) {
         return expr_contains_control_flow(e->unary_prefix.operand);
     case EXPR_UNARY_POSTFIX:
         return expr_contains_control_flow(e->unary_postfix.operand);
+    case EXPR_ATOMIC_LOAD:
+        return expr_contains_control_flow(e->atomic_load.ptr);
+    case EXPR_ATOMIC_STORE:
+        return expr_contains_control_flow(e->atomic_store.ptr) ||
+               expr_contains_control_flow(e->atomic_store.value);
     case EXPR_MATCH:
         if (expr_contains_control_flow(e->match_expr.subject)) return true;
         for (int i = 0; i < e->match_expr.arm_count; i++)
@@ -4618,6 +4652,39 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
         }
         e->type = type_void();
+        return e->type;
+    }
+
+    case EXPR_ATOMIC_LOAD: {
+        Type *pt = check_expr(ctx, e->atomic_load.ptr);
+        if (type_is_error(pt)) { e->type = type_error(); return e->type; }
+        if (!atomic_pointee_ok(pt, e->loc, "atomic_load_acquire")) {
+            e->type = type_error();
+            return e->type;
+        }
+        e->type = pt->pointer.pointee;
+        return e->type;
+    }
+
+    case EXPR_ATOMIC_STORE: {
+        Type *pt = check_expr(ctx, e->atomic_store.ptr);
+        Type *vt = check_expr(ctx, e->atomic_store.value);
+        e->type = type_void();
+        if (type_is_error(pt) || type_is_error(vt)) return e->type;
+        if (!atomic_pointee_ok(pt, e->loc, "atomic_store_release")) return e->type;
+        if (pt->is_const) {
+            diag_error(e->loc, "cannot atomic_store_release through const pointer");
+            return e->type;
+        }
+        Type *cell = pt->pointer.pointee;
+        if (!type_eq(cell, vt)) {
+            if (type_can_widen(vt, cell)) {
+                e->atomic_store.value = wrap_widen(ctx->arena, e->atomic_store.value, cell);
+            } else {
+                diag_error(e->loc, "atomic_store_release value type mismatch: %s vs %s",
+                    type_name(cell), type_name(vt));
+            }
+        }
         return e->type;
     }
 
