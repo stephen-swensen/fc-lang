@@ -1,0 +1,34 @@
+// Explicit type arguments that are module-qualified names: make<m.cmd>(...).
+// Regression test: the <> disambiguation scan must accept dotted type names
+// instead of falling back to parsing a chained ordering comparison.
+module m =
+    struct cmd =
+        x: int32
+
+module spsc =
+    struct ring =
+        item: 'a
+        len: int64
+
+    let make = <'a>(n: int64) ->
+        ring { item = default('a), len = n }
+
+let make_default = <'a>() -> default('a)
+
+let size_sum = <'a, 'b>() ->
+    let a = sizeof('a)
+    let b = sizeof('b)
+    a + b
+
+let main = (args: str[]) ->
+    // module-qualified callee with a qualified type arg
+    let r = spsc.make<m.cmd>(64)
+    assert(r.len == 64)
+    assert(r.item.x == 0)
+    // top-level callee with a qualified type arg
+    let c = make_default<m.cmd>()
+    assert(c.x == 0)
+    // multiple type args mixing qualified and simple names
+    let s = size_sum<m.cmd, int32>()
+    assert((int32) s == 8)
+    0

@@ -153,6 +153,7 @@ static bool is_type_arg_token(TokenKind k) {
     case TOK_IDENT: case TOK_TYPE_VAR: case TOK_VOID:
     case TOK_LT: case TOK_GT:
     case TOK_COMMA:
+    case TOK_DOT:                       /* module-qualified type: m.point */
     case TOK_QUESTION: case TOK_STAR:
     case TOK_LBRACKET: case TOK_RBRACKET:
     case TOK_LPAREN: case TOK_RPAREN:

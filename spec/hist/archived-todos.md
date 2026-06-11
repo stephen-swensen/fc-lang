@@ -4,6 +4,49 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Generic call with a qualified type argument mis-parses (resolved 2026-06-10)
+
+A parser gap in the explicit-type-argument call form `name<Type>(...)`, surfaced building a
+generic lock-free ring (`spsc.ring<'a>`) in wolf-fc: a **qualified** type argument
+(`module.type`) failed the `<` disambiguation scan. The tentative scan that decides "generic
+call vs comparison" (`is_type_arg_token` in `parser.c`, shared by the call-position scan and
+the array-literal scan) accepted identifiers, `*`, `?`, `[]`, etc. — but not `.`. Any dotted
+name inside `<...>` aborted the scan and the expression fell through to comparison parsing.
+Type *annotations* accepted these fine (`cmd_ring: spsc.ring<audio_q.cmd>*` parsed, and
+`parse_type` itself handles qualified names); only the call/value position failed — a
+parser-only, not type-system, issue.
+
+The one root cause showed up as two different downstream errors:
+
+1. **Plain qualified argument read as comparison.** `spsc.make<audio_q.cmd>(64)` parsed as
+   `spsc.make < audio_q.cmd > (64)` — a chained ordering comparison — giving the baffling
+   `ordering comparison requires numeric or pointer types, got <'a>(int64) -> spsc.ring<'a>*
+   and audio_q.cmd`.
+
+2. **Qualified pointer argument died on the `*`.** `spsc.make<imf.player*>(16)` also fell
+   through to comparison parsing, where `imf.player * ` is a multiplication missing its right
+   operand — `unexpected token '>' in expression`. Not a separate pointer gap: a bare pointer
+   type argument (`make<int32*>(16)`) always parsed fine; the dot was again the culprit.
+
+**Resolution:** added `TOK_DOT` to `is_type_arg_token` so qualified names pass the
+type-argument scan at both shared scan sites (generic call/variant-construction position and
+array-literal position). `parse_type` already handled qualified names, so no other change was
+needed. This extends the spec's disambiguation rule ("`name<type>()` is always a generic
+call") to dotted names — `a < m.b > (c)` is now a generic call, which costs nothing because
+the chained comparison it would otherwise be is a bool-ordering type error anyway. Spec
+§Generic Functions **Parsing** paragraph updated to enumerate the accepted type-argument
+spellings (qualified names, `*`/`?`/`[]` suffixes) and the rule's precedence. Four regression
+tests added under `tests/cases/generics/qualified_*` covering qualified args on module and
+top-level callees, mixed multi-args, pointer/option/slice suffixes, bare-pointer args, generic
+union variant construction (`maybe<m.cmd>.just(v)`), and array literals (`slot<m.cmd>[2]
+{...}`).
+
+Noted while fixing, left open (pre-existing, unrelated to the dot gap): a generic call only
+parses when the callee is the *leftmost* token of its expression — as a later operand
+(`assert(qo >= size_of<int32>())`, `1 + size_of<int32>()`, `!is_big<int32>()`) precedence
+climbing grabs the callee name as the operator's operand before the `<` disambiguation can see
+it. Tracked as its own TODO ("Generic call as a non-first operand mis-parses").
+
 ## Concurrency primitives — atomics + a memory model (resolved 2026-06-10)
 
 FC had no concurrency story: no atomics and no multi-threaded memory model, so the only way to

@@ -1,0 +1,22 @@
+// Array literal of a generic struct instantiated with a qualified type
+// argument: slot<m.cmd>[N] { ... }. Exercises the array-literal lookahead
+// scan, which shares the <> type-arg token predicate with the call scan.
+module m =
+    struct cmd =
+        x: int32
+
+struct slot =
+    item: 'a
+    used: bool
+
+let main = (args: str[]) ->
+    let arr = slot<m.cmd>[2] {
+        slot { item = m.cmd { x = 1 }, used = true },
+        slot { item = m.cmd { x = 2 }, used = false }
+    }
+    assert(arr.len == 2)
+    assert(arr[0].item.x == 1)
+    assert(arr[1].item.x == 2)
+    assert(arr[0].used)
+    assert(!arr[1].used)
+    0

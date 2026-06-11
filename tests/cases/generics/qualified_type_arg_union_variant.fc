@@ -1,0 +1,22 @@
+// Generic union variant construction with a qualified type argument:
+// maybe<m.cmd>.just(...) goes through the same <> disambiguation scan as
+// generic calls (the > is followed by '.' instead of '(').
+module m =
+    struct cmd =
+        x: int32
+
+union maybe =
+    | just('a)
+    | nothing
+
+let val_of = (mb: maybe<m.cmd>, fallback: int32) ->
+    match mb with
+    | just(c) -> c.x
+    | nothing -> fallback
+
+let main = (args: str[]) ->
+    let j = maybe<m.cmd>.just(m.cmd { x = 7 })
+    let n = maybe<m.cmd>.nothing
+    assert(val_of(j, 0) == 7)
+    assert(val_of(n, -1) == -1)
+    0
