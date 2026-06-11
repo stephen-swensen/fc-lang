@@ -361,10 +361,22 @@ static void end_hoisted_scope(void) {
     g_hoisted_count = 0;
 }
 
+/* Resolve a type variable to its concrete type under the active
+   monomorphization substitution; identity for everything else. */
+static Type *subst_resolve(Type *t) {
+    if (g_subst && t && t->kind == TYPE_TYPE_VAR) {
+        for (int i = 0; i < g_subst->count; i++)
+            if (g_subst->var_names[i] == t->type_var.name)
+                return g_subst->concrete[i];
+    }
+    return t;
+}
+
 /* Does the option inner type use null-sentinel optimization (bare pointer, NULL = none)? */
 static bool is_null_sentinel(Type *opt_type) {
+    opt_type = subst_resolve(opt_type);
     if (!opt_type || opt_type->kind != TYPE_OPTION) return false;
-    Type *inner = opt_type->option.inner;
+    Type *inner = subst_resolve(opt_type->option.inner);
     return inner && (inner->kind == TYPE_POINTER ||
                      inner->kind == TYPE_ANY_PTR);
 }
@@ -517,17 +529,19 @@ static void emit_type(Type *t, FILE *out) {
             emit_type_ident(t->slice.elem, out);
         }
         break;
-    case TYPE_OPTION:
-        if (t->option.inner && (t->option.inner->kind == TYPE_POINTER ||
-            t->option.inner->kind == TYPE_ANY_PTR)) {
+    case TYPE_OPTION: {
+        Type *inner = subst_resolve(t->option.inner);
+        if (inner && (inner->kind == TYPE_POINTER ||
+            inner->kind == TYPE_ANY_PTR)) {
             /* Pointer-like? → plain pointer (null = none) */
-            emit_type(t->option.inner, out);
+            emit_type(inner, out);
         } else {
             fprintf(out, "fc_option_");
-            if (t->option.inner) emit_type_ident(t->option.inner, out);
+            if (inner) emit_type_ident(inner, out);
             else fprintf(out, "void");
         }
         break;
+    }
     case TYPE_STRUCT:
         if (t->struc.is_tuple) {
             if (g_subst && type_contains_type_var(t))

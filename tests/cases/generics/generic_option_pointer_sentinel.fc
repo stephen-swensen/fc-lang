@@ -1,0 +1,56 @@
+// Options of pointers use the null-sentinel representation (bare pointer,
+// NULL = none) instead of the fc_option_* struct. That special case must
+// also apply inside monomorphized generics where the inner type is a type
+// variable bound to a pointer — signatures, some/none construction, match,
+// and unwrap all have to agree on the representation.
+struct point =
+    x: int32
+
+let pick = (s: 'a[], i: int64, ok: bool) ->
+    if ok then some(s[i]) else none('a)
+
+let unwrap_or = (o: 'a?, d: 'a) ->
+    match o with
+    | some(v) -> v
+    | none -> d
+
+let has = (o: 'a?) ->
+    match o with
+    | some(_) -> true
+    | none -> false
+
+let none_of = <'a>() -> none('a)
+
+let main = (args: str[]) ->
+    let mut p = point { x = 5 }
+    let mut q = point { x = 9 }
+    let arr = point*[2] { &p, &q }
+
+    // generic return of 'a? with 'a = point*: some and none paths
+    let got = pick(arr, 1, true)
+    assert(has(got))
+    let missing = pick(arr, 0, false)
+    assert(!has(missing))
+
+    // generic 'a? parameter with pointer payload
+    assert(unwrap_or(got, &p)->x == 9)
+    assert(unwrap_or(missing, &p)->x == 5)
+
+    // postfix unwrap of a generic option-of-pointer result
+    assert(pick(arr, 0, true)!->x == 5)
+
+    // explicit pointer type argument constructing a none
+    let n = none_of<point*>()
+    assert(!has(n))
+
+    // 'a = any* (the other null-sentinel pointee kind)
+    let ap = (any*) &p
+    assert(has(some(ap)))
+    assert(!has(none_of<any*>()))
+
+    // non-pointer instantiation of the same generics still uses the
+    // struct representation
+    let iv = pick(int32[2] { 7, 8 }, 0, true)
+    assert(unwrap_or(iv, 0) == 7)
+    assert(!has(none_of<int32>()))
+    0
