@@ -653,7 +653,7 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `alignof`, `default`, `assert`
+`alloc`, `free`, `sizeof`, `alignof`, `default`, `assert`, `atomic_load_acquire`, `atomic_store_release`
 
 The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
 
@@ -704,6 +704,9 @@ Implicit widening conversions are allowed in binary expressions and comparisons 
 | 42i | isize (platform-width signed) |
 | 42u | usize (platform-width unsigned) |
 | 42i32 | int32 (explicit, same as default) |
+| 0xFF, 0x1A2B | int32 (hexadecimal; suffixes allowed, e.g. `0xFFu64`) |
+| 0b1010 | int32 (binary; suffixes allowed) |
+| 0o17 | int32 (octal; suffixes allowed) |
 | 3.14 | float64 (default) |
 | 3.14f32, 3.14f64 | float32, float64 |
 | 1e9, 1.5e-3, 1E+18 | float64 (scientific notation) |
@@ -1067,7 +1070,7 @@ At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `impo
 
 **Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine.
 
-**File-level** non-function `let` bindings — those at the top level of the entry-point file, the only place a top-level `let` may appear (see §Top-level declarations and the entry-point file) — are more permissive: in addition to everything allowed at module level, they may use `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. Variable references and function calls are still not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
+**File-level** non-function `let` bindings — those at the top level of the entry-point file, the only place a top-level `let` may appear (see §Top-level declarations and the entry-point file) — accept all module-level constant-expression *forms* plus runtime forms: `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. The one thing they are stricter about is references: a file-level initializer may not reference other bindings (unlike module level, where const-expr members may reference each other), and function calls are not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
 
 ```fc
 // constant expressions — allowed at both file and module level
@@ -1524,7 +1527,7 @@ if condition then
 
 ## Match Expressions
 
-`match` is an expression. The compiler enforces exhaustiveness — all variants must be covered. Inside a match, variant names may be used unqualified since the type is known from the match subject. All arms must return the same type. Match arms are introduced at a deeper indentation level than the `match` keyword.
+`match` is an expression. The compiler enforces exhaustiveness — all variants must be covered. Inside a match, variant names may be used unqualified since the type is known from the match subject. All arms must return the same type. Match arms are canonically aligned at the same column as the `match` keyword — the lexer treats `|` as a same-level delimiter; indenting the arms deeper than `match` is also accepted.
 
 ```fc
 match s with
@@ -2707,6 +2710,8 @@ libc.puts((cstr) s)           // stack copy with null terminator
 libc.puts(c"hello")          // cstr literal — always null-terminated
 ```
 
+For both calls to type-check, `puts` must be declared with a `const cstr` parameter: `c"..."` literals are `const cstr`, which a plain `cstr` parameter rejects (a non-`const` `cstr` argument freezes to `const cstr` implicitly, so the cast form still works).
+
 For C functions that take a pointer and length (e.g. `fwrite`), pass `.ptr` and `.len` directly — no null termination needed.
 
 ### Embedded targets and raw pointer arrays
@@ -3025,6 +3030,8 @@ let mut nums = arraylist.make<int32>()
 let mut strs = arraylist.make<str>()
 ```
 
+(The `arraylist` shown in this Part is an illustrative sketch, not the standard library API — the stdlib module is `array_list` in `std::data`, and its function set differs; e.g. there is no `repeat`.)
+
 Multiple explicit type variables are separated by commas:
 
 ```fc
@@ -3106,8 +3113,8 @@ let b = box { value = 3.14 }                     // box<float64>
 For generic unions, type arguments must be provided explicitly at the construction site using `name<types>.variant(args)` syntax. This is required because a variant's payload may not constrain all type parameters — for example, `result.err(32)` cannot determine `'a`:
 
 ```fc
-let r = result<int32, str>.ok(42)                // result<int32, str>
-let e = result<int32, str>.err("fail")           // result<int32, str>
+let r = result<int32, const str>.ok(42)          // result<int32, const str>
+let e = result<int32, const str>.err("fail")     // result<int32, const str>
 ```
 
 Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
@@ -3867,7 +3874,7 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 
 These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
 
-`alloc`, `free`, `sizeof`, `alignof`, `default`, and `assert` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
+`alloc`, `free`, `sizeof`, `alignof`, `default`, `assert`, `atomic_load_acquire`, and `atomic_store_release` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
 
 The idiomatic name for a type's cleanup function is `destroy`, mirroring the C ecosystem's convention for releasing compound resources (`pthread_mutex_destroy`, `SDL_DestroyWindow`, and so on). `T.destroy` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
 
@@ -4253,7 +4260,7 @@ module c_stdlib from "stdlib.h" =
     extern malloc:  (usize) -> any*?
 
 module c_stdio from "stdio.h" =
-    extern fopen:   (cstr, cstr) -> any*?
+    extern fopen:   (const cstr, const cstr) -> any*?
 
 module c_string from "string.h" =
     extern memcpy:  (any*, any*, usize) -> any*
@@ -4687,12 +4694,12 @@ FC code that receives `any*` handles never constructs or inspects them; it passe
 
 ```fc
 module sqlite from "sqlite3.h" =
-    extern sqlite3_open:  (cstr, any*?) -> int32
-    extern sqlite3_exec:  (any*, cstr, (any*, int32, any*, any*) -> int32, any*?, any*?) -> int32
+    extern sqlite3_open:  (const cstr, any*?) -> int32
+    extern sqlite3_exec:  (any*, const cstr, (any*, int32, any*, any*) -> int32, any*?, any*?) -> int32
     extern sqlite3_close: (any*) -> int32
 
 module c_stdio from "stdio.h" =
-    extern fopen:  (cstr, cstr) -> any*?
+    extern fopen:  (const cstr, const cstr) -> any*?
     extern fclose: (any*) -> int32
     extern fread:  (any*, int64, int64, any*) -> int64
     extern fwrite: (any*, int64, int64, any*) -> int64
@@ -4807,7 +4814,7 @@ String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searchin
 
 ## std::net
 
-POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `netdb.h`. IPv4 only. Provides socket lifecycle (`open_tcp`, `open_udp`, `open_icmp`, `close`, `shutdown`), address construction (`make_addr`, `make_addr_str`), TCP operations (`bind_addr`, `listen`, `accept`, `connect_addr`), data transfer (`send_bytes`, `recv_bytes`, `send_to`, `recv_from`), byte order conversion (`host_to_net16`, `host_to_net32`, `net_to_host16`, `net_to_host32`), DNS resolution (`resolve`), and socket options (`set_reuse_addr`). Socket creation functions return `int32?`; callers check for failure with option handling. Requires POSIX sockets (Linux, macOS, Windows via MinGW).
+POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `netdb.h`. IPv4 only. Provides socket lifecycle (`open_tcp`, `open_udp`, `open_icmp`, `close`, `shutdown`), address construction (`make_addr`, `make_addr_str`), TCP operations (`bind_addr`, `listen`, `accept`, `connect_addr`), data transfer (`send_bytes`, `recv_bytes`, `send_to`, `recv_from`), byte order conversion (`host_to_net16`, `host_to_net32`, `net_to_host16`, `net_to_host32`), DNS resolution (`resolve`), socket options (`set_reuse_addr`), and local address inspection (`local_port`). Exported constants (`af_inet`, `sock_stream`, `sock_dgram`, `shut_rd`/`shut_wr`/`shut_rdwr`, `inaddr_any`/`inaddr_loopback`, and friends) mirror the underlying POSIX values. Socket creation functions return `int32?`; callers check for failure with option handling. Requires POSIX sockets (Linux, macOS, Windows via MinGW).
 
 ## std::data
 
@@ -4823,7 +4830,7 @@ All sequential collections (array_list, linked_list, slice) share a consistent f
 
 ## std::random
 
-Pseudo-random number generators with explicit state (no hidden globals). Two generators are provided: `lcg_random` (Knuth LCG, fast and compact) and `pcg_random` (PCG-XSH-RR, higher statistical quality). Both expose `next_uint32` / `next_uint64`, `next_float32` / `next_float64` in `[0.0, 1.0)`, and bounded-integer variants. `pcg_random` additionally supports multiple independent streams via `make_with_channel`. Callers own the generator state and thread it through explicitly.
+Pseudo-random number generators with explicit state (no hidden globals). Two generators are provided: `lcg_random` (Knuth LCG, fast and compact) and `pcg_random` (PCG-XSH-RR, higher statistical quality). Both expose `next_uint32` / `next_uint64`, `next_float32` / `next_float64` in `[0.0, 1.0)`, and a bounded-integer form (`next_bounded_uint32`). `pcg_random` additionally supports multiple independent streams via `make_with_channel`. Callers own the generator state and thread it through explicitly.
 
 ---
 
@@ -4959,13 +4966,13 @@ The FC compiler and all supporting materials are developed in a single repositor
 
 **`spec/`** — This specification (`fc-spec.html`), a BNF grammar (`grammar.bnf`), and a runnable quick-reference program (`examples.fc`) that demonstrates core language features in commented, compilable FC code. Read `examples.fc` first for a fast overview of the language.
 
-**`src/`** — The compiler implementation. A single-pass C11 program that reads `.fc` source files and emits a self-contained `.c` file. The pipeline is: lexer → parser → pass 1 (declaration collection) → pass 2 (type checking) → monomorphization → C code emission.
+**`src/`** — The compiler implementation. A C11 program that reads `.fc` source files and emits a self-contained `.c` file. The pipeline is: lexer → parser → pass 1 (declaration collection) → pass 2 (type checking) → monomorphization → C code emission.
 
-**`stdlib/`** — The standard library, written in FC. Modules for I/O (`io.fc`), system operations (`sys.fc`), math (`math.fc`), text processing (`text.fc`), and generic data structures (`data.fc`). These are regular FC source files that wrap C standard library functions via `extern`.
+**`stdlib/`** — The standard library, written in FC. Modules for I/O (`io.fc`), system operations (`sys.fc`), math (`math.fc`), text processing (`text.fc`), networking (`net.fc`), random number generation (`random.fc`), and generic data structures (`data.fc`). These are regular FC source files that wrap C standard library functions via `extern`.
 
 **`tests/`** — Comprehensive test suite organized by feature category. Each test is a `.fc` file (or multi-file subdirectory) with expected exit codes or expected compiler error messages. Tests are compiled and run with both GCC and Clang.
 
-**`demos/`** — Standalone demo applications that exercise the language and standard library in realistic scenarios: `fibbles` is a Snake/Nibbles clone using SDL2, `fing` is a ping clone using raw ICMP sockets, and `furl` is an HTTP client (curl clone) using TCP sockets. Each demo has its own `run.sh` and README.
+**`demos/`** — Standalone demo applications that exercise the language and standard library in realistic scenarios: `fibbles` is a Snake/Nibbles clone using SDL2, `fing` is a ping clone using raw ICMP sockets, `furl` is an HTTP client (curl clone) using TCP sockets, and `face-invaders` and `fasteroids` are SDL2 arcade-game clones. Each demo has its own `run.sh` and README.
 
 </script>
 

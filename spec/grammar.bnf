@@ -1,6 +1,6 @@
 (* ================================================================== *)
 (* FC Language — EBNF Grammar                                         *)
-(* Version 0.9-draft                                                   *)
+(* Version 1.0.0-rc.4                                                  *)
 (*                                                                     *)
 (* Notation:                                                           *)
 (*   =          defines a production                                   *)
@@ -144,24 +144,35 @@ builtin_type = "int8" | "int16" | "int32" | "int64"
 int_suffix    = "i8" | "i16" | "i32" | "i64"
               | "u8" | "u16" | "u32" | "u64"
               | "i"  | "u" ;                   (* isize / usize suffixes *)
-INT_LIT       = digit , { [ '_' ] , digit } , [ int_suffix ] ;
+bin_digit     = '0' | '1' ;
+oct_digit     = '0' | '1' | ... | '7' ;
+dec_int       = digit , { [ '_' ] , digit } ;
+hex_int       = '0' , ( 'x' | 'X' ) , hex_digit , { [ '_' ] , hex_digit } ;
+bin_int       = '0' , ( 'b' | 'B' ) , bin_digit , { [ '_' ] , bin_digit } ;
+oct_int       = '0' , ( 'o' | 'O' ) , oct_digit , { [ '_' ] , oct_digit } ;
+INT_LIT       = ( dec_int | hex_int | bin_int | oct_int ) , [ int_suffix ] ;
 
-(* Underscores may appear between digits for readability: 1_000_000.   *)
-(* Suffixed integer literals are range-checked at compile time.        *)
+(* Underscores may appear between digits for readability: 1_000_000,   *)
+(* 0xFF_FF, 0b1010_0101. Suffixed integer literals are range-checked   *)
+(* at compile time.                                                    *)
 
 (* --- Float literals ---                                              *)
 
 float_suffix  = "f32" | "f64" ;
 exponent      = ( "e" | "E" ) , [ "+" | "-" ] , digit , { [ '_' ] , digit } ;
-FLOAT_LIT     = digit , { [ '_' ] , digit } ,
+dec_float     = digit , { [ '_' ] , digit } ,
                 ( '.' , digit , { [ '_' ] , digit } , [ exponent ]
-                | exponent )
-              , [ float_suffix ] ;
+                | exponent ) ;
+hex_exponent  = ( 'p' | 'P' ) , [ "+" | "-" ] , digit , { [ '_' ] , digit } ;
+hex_float     = '0' , ( 'x' | 'X' ) , hex_digit , { [ '_' ] , hex_digit } ,
+                [ '.' , hex_digit , { [ '_' ] , hex_digit } ] ,
+                hex_exponent ;                 (* p exponent is mandatory *)
+FLOAT_LIT     = ( dec_float | hex_float ) , [ float_suffix ] ;
 
-(* Examples: 3.14, 6.022_140_76e23, 1e9, 1.5e-3, 2.5e10f32.            *)
+(* Examples: 3.14, 6.022_140_76e23, 1e9, 1.5e-3, 2.5e10f32,            *)
+(* 0x1.8p+1, 0x1p-3 (hex float — hex mantissa, decimal p exponent).    *)
 (* Float literals are range-checked at compile time: overflow to ±inf  *)
 (* and underflow-from-nonzero-to-zero are FC errors, not C errors.     *)
-(* Hex float literals (0x1.8p+1) are not supported.                    *)
 
 (* --- Boolean literals ---                                            *)
 
@@ -378,13 +389,26 @@ extern_union     = "extern" , "union" , IDENT , [ "as" , IDENT ] , "="
 (*                    Conditional Compilation                          *)
 (* ================================================================== *)
 
-cond_comp_block  = PP_IF , IDENT , NEWLINE
+cond_comp_block  = PP_IF , cond_expr , NEWLINE
                  , { top_level_item , NEWLINE | module_item , NEWLINE | block_expr_item }
-                 , { PP_ELSE_IF , IDENT , NEWLINE
+                 , { PP_ELSE_IF , cond_expr , NEWLINE
                    , { top_level_item , NEWLINE | module_item , NEWLINE | block_expr_item } }
                  , [ PP_ELSE , NEWLINE
                    , { top_level_item , NEWLINE | module_item , NEWLINE | block_expr_item } ]
                  , PP_END
+                 ;
+
+(* Directive condition expressions: flag presence and value checks      *)
+(* combined with the usual boolean connectives. A bare IDENT tests      *)
+(* whether the flag is defined; IDENT == "value" / IDENT != "value"     *)
+(* compare the flag's value against a string literal.                   *)
+cond_expr        = cond_and , { "||" , cond_and } ;
+cond_and         = cond_unary , { "&&" , cond_unary } ;
+cond_unary       = "!" , cond_unary
+                 | cond_primary
+                 ;
+cond_primary     = "(" , cond_expr , ")"
+                 | IDENT , [ ( "==" | "!=" ) , STR_LIT ]
                  ;
 
 
@@ -445,12 +469,13 @@ expr_or_block    = expr
 block            = block_expr_item , { NEWLINE , block_expr_item } ;
 
 block_expr_item  = let_binding
-                 | struct_decl               (* local struct definition  *)
-                 | union_decl                (* local union definition   *)
                  | cond_comp_block           (* #if inside a block       *)
                  | defer_stmt                (* deferred execution       *)
                  | expr
                  ;
+
+(* Note: struct and union declarations are top-level/module-level only; *)
+(* they may not appear inside a function body.                          *)
 
 let_binding      = "let" , [ "mut" ] , let_target , "=" , expr_or_block ;
 
@@ -629,7 +654,12 @@ match_arms       = match_arm , { NEWLINE , match_arm } ;
 (* A `when` guard is optional and attaches to the whole arm pattern (all
    or-alternatives share the guard). The guard expression must have type
    bool. Arms carrying a guard do not contribute to exhaustiveness. *)
-match_arm        = "|" , pattern , [ "when" , expr ] , "->" , expr_or_block ;
+(* A body-less arm ("|" pattern with no "->") is an or-alternative that
+   falls through to the body of the next arm that has "->". The final
+   arm must have a body, and a `when` guard is only permitted on an arm
+   that ends with "->". *)
+match_arm        = "|" , pattern , [ "when" , expr ] , "->" , expr_or_block
+                 | "|" , pattern ;              (* body-less fall-through arm *)
 
 loop_expr        = "loop" , INDENT , block , DEDENT ;
 
@@ -637,8 +667,15 @@ for_expr         = "for" , for_binding , "in" , for_iterable
                  , INDENT , block , DEDENT
                  ;
 
-for_binding      = IDENT                        (* element iteration          *)
-                 | IDENT , "," , IDENT          (* index-element iteration    *)
+for_binding      = for_elem                     (* element iteration          *)
+                 | IDENT , "," , for_elem       (* index-element iteration    *)
+                 ;
+
+(* The element position may destructure a struct or tuple element.     *)
+(* Destructuring requires slice iteration — it is an error on ranges.  *)
+for_elem         = IDENT
+                 | struct_destruct_pattern
+                 | tuple_destruct_pattern
                  ;
 
 (* The parser parses a single expr, then checks for ".." to            *)
@@ -664,12 +701,14 @@ alloc_expr       = "alloc" , "(" , alloc_arg , ")" ;
 (*   - a bare type name:               alloc(node)                     *)
 (*   - a slice literal (empty):        alloc(int32[128] { })           *)
 (*   - a slice literal (with values):  alloc(int32[4] { 1,2,3,4 })   *)
+(*   - a raw buffer:                   alloc(int32, n)                 *)
 (*   - a value expression:             alloc(point { x = 1 })         *)
 (*   - a variant:                      alloc(shape.circle(3.14))      *)
 (* Note: alloc(T[N]) without { } is not valid — use alloc(T[N] { })   *)
 (* N may be runtime for empty { }; explicit elements require literal N *)
 alloc_arg        = type_expr , "[" , expr , "]" , "{" , [ expr_list ] , "}"
                                                  (* slice alloc — { } required  *)
+                 | type_expr , "," , expr        (* raw buffer — N elements, zero-initialized *)
                  | type_expr                     (* bare type alloc             *)
                  | expr                          (* value expression alloc      *)
                  ;
@@ -738,7 +777,11 @@ type_property_access = ( builtin_type | "any" , "*" | TYPE_VAR
 (*                           Patterns                                  *)
 (* ================================================================== *)
 
-pattern          = "_"                                   (* wildcard           *)
+(* Or-patterns: alternatives joined by `|`, flattened to one disjunction. *)
+(* Alternatives must be binding-free when more than one is present.       *)
+pattern          = pattern_atom , { "|" , pattern_atom } ;
+
+pattern_atom     = "_"                                   (* wildcard           *)
                  | BOOL_LIT                              (* true / false       *)
                  | "none"                                (* option none        *)
                  | CHAR_LIT                              (* char literal       *)
