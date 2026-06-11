@@ -4,6 +4,35 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Generic call as a non-first operand mis-parses (resolved 2026-06-10)
+
+Surfaced while fixing the qualified-type-argument scan (next entry): an explicit-type-argument
+call `name<T>(...)` only parsed when `name` was the *leftmost* token of its expression. As any
+later operand it fell apart — with simple type args, no dots involved:
+
+- `assert(qo >= size_of<int32>())` — `unexpected token ')' in expression`
+- `let x = 1 + size_of<int32>()` — same
+- `assert(!is_big<int32>())` — same (prefix operand, not just binary RHS)
+
+Root cause was *where* the disambiguation lived. The "generic call vs comparison" scan ran only
+in the `TOK_LT` infix handler and only fired when `left` was a bare `EXPR_IDENT`/`EXPR_FIELD`.
+When the callee appeared as the right operand of `>=`/`+`/`!`/etc., precedence climbing had
+already grabbed the bare name as that operator's operand (the `<` is at comparison precedence,
+too low to bind in the recursive call), so by the time the loop saw `<`, `left` was the whole
+compound expression and the scan never ran — the tokens then parsed as a chained comparison and
+died on `>(`.
+
+Fix: the scan was factored into `generic_call_scan()` (type-arg tokens between `<` and `>`,
+then `(` or `.`), and the Pratt loop in `parse_expr` now bumps a `<` that passes the scan to
+`PREC_POSTFIX` when `left` is a bare ident/field — a generic call *is* a call, so its `<` binds
+at call precedence like an ordinary call's `(`. Since the infix handler consumes the entire
+`name<T>(...)` form once entered, the bump only adds entry points and cannot change existing
+parses; the comparison fallback stays for everything the scan rejects. Same disambiguation rule
+as before (spec §Generic Functions, Parsing), now applied wherever a call can appear. Test:
+`generics/explicit_call_operand_position.fc` (binary RHS at several precedences, prefix
+operands, module-qualified callees, nested type args, variant construction in operand position,
+plain comparisons unaffected).
+
 ## Generic call with a qualified type argument mis-parses (resolved 2026-06-10)
 
 A parser gap in the explicit-type-argument call form `name<Type>(...)`, surfaced building a

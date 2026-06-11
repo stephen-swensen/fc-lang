@@ -166,6 +166,31 @@ static bool is_type_arg_token(TokenKind k) {
     }
 }
 
+/* Decide whether a '<' begins a generic-call type-argument list: scan from
+ * `start` (the token just after the '<') for type-compatible tokens up to the
+ * matching '>', which must be followed by '(' (call) or '.' (variant). */
+static bool generic_call_scan(Parser *p, int start) {
+    int scan = start;
+    int depth = 1;
+    while (scan < p->token_count && depth > 0) {
+        TokenKind k = p->tokens[scan].kind;
+        if (k == TOK_LT) { depth++; scan++; continue; }
+        if (k == TOK_GT) {
+            depth--;
+            if (depth == 0) break;
+            scan++;
+            continue;
+        }
+        if (!is_type_arg_token(k)) return false;
+        scan++;
+    }
+    return depth == 0 && scan < p->token_count &&
+           p->tokens[scan].kind == TOK_GT &&
+           scan + 1 < p->token_count &&
+           (p->tokens[scan + 1].kind == TOK_LPAREN ||
+            p->tokens[scan + 1].kind == TOK_DOT);
+}
+
 static bool is_type_name(const char *s, int len) {
     struct { const char *n; int l; } names[] = {
         {"int8",2+2}, {"int16",2+3}, {"int32",2+3}, {"int64",2+3},
@@ -1776,28 +1801,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
          * Scan forward to see if tokens between here and '>' are all
          * type-compatible, and '>' is followed by '('. */
         if (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) {
-            int scan = p->pos;
-            int depth = 1;
-            bool valid = true;
-
-            while (scan < p->token_count && depth > 0) {
-                TokenKind k = p->tokens[scan].kind;
-                if (k == TOK_LT) { depth++; scan++; continue; }
-                if (k == TOK_GT) {
-                    depth--;
-                    if (depth == 0) break;
-                    scan++;
-                    continue;
-                }
-                if (!is_type_arg_token(k)) { valid = false; break; }
-                scan++;
-            }
-
-            if (valid && depth == 0 && scan < p->token_count &&
-                p->tokens[scan].kind == TOK_GT &&
-                scan + 1 < p->token_count &&
-                (p->tokens[scan + 1].kind == TOK_LPAREN ||
-                 p->tokens[scan + 1].kind == TOK_DOT)) {
+            if (generic_call_scan(p, p->pos)) {
                 /* Parse type args */
                 Type **type_args = NULL;
                 int ta_count = 0, ta_cap = 0;
@@ -1922,6 +1926,15 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
            clear this flag so pointer-field access still works when wrapped. */
         if (p->block_arm_arrow && t->kind == TOK_ARROW) break;
         Prec prec = infix_prec(t->kind);
+        /* A generic call name<T,...>(args) is a call, so its '<' binds at
+         * call precedence — not comparison. Without the bump the callee gets
+         * absorbed as an operand of any tighter-binding operator on its left
+         * (`1 + size_of<int32>()`, `!is_big<int32>()`) and the '<' is never
+         * reached with the bare name as `left`. */
+        if (t->kind == TOK_LT &&
+            (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) &&
+            generic_call_scan(p, p->pos + 1))
+            prec = PREC_POSTFIX;
         if (prec == PREC_NONE || prec < min_prec) break;
         Token *op_tok = advance_p(p);
         left = parse_infix(p, left, op_tok);

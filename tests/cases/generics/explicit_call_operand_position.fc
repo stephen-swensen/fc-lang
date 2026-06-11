@@ -1,0 +1,48 @@
+// Explicit-type-argument calls in non-first operand position: name<T>(...)
+// previously parsed only when the callee was the leftmost token of its
+// expression — as a binary RHS or prefix operand the '<' fell back to
+// comparison and died with "unexpected token ')' in expression". A generic
+// call is a call, so its '<' binds at call precedence wherever it appears.
+module m =
+    let zero = <'a>() -> default('a)
+
+union maybe =
+    | just('a)
+    | nothing
+
+let size_of = <'a>() -> sizeof('a)
+let is_wide = <'a>() -> sizeof('a) >= 8i64
+
+let main = (args: str[]) ->
+    // comparison RHS (the original repro)
+    let qo = size_of<int64>()
+    assert(qo >= size_of<int32>())
+    // arithmetic RHS at additive and multiplicative precedence
+    let x = 1i64 + size_of<int32>()
+    assert(x == 5i64)
+    assert(2i64 * size_of<int32>() == 8i64)
+    // prefix operand
+    assert(!is_wide<int32>())
+    assert(-size_of<int32>() == -4i64)
+    // logical operators
+    assert(is_wide<int64>() && !is_wide<int8>())
+    assert(is_wide<float64>() || is_wide<int8>())
+    // equality with generic calls on both sides
+    assert(size_of<int32>() == size_of<uint32>())
+    // module-qualified callee as a non-first operand
+    assert(10 + m.zero<int32>() == 10)
+    // nested type args as a binary RHS
+    assert(qo == size_of<maybe<int8>*>())
+    // generic variant construction as a non-first operand
+    let v = if args.len < 100 then maybe<int32>.just(7) else maybe<int32>.nothing
+    let got =
+        match v with
+        | just(n) -> 3 + n
+        | nothing -> 0
+    assert(got == 10)
+    // plain comparisons still parse as comparisons
+    let a = 3
+    let b = 5
+    assert(a < b)
+    assert(a < b == true)
+    0

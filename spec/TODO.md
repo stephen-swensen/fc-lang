@@ -4,36 +4,6 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
-## Generic call as a non-first operand mis-parses
-
-Surfaced while fixing the qualified-type-argument scan (see archived TODO, resolved
-2026-06-10): an explicit-type-argument call `name<T>(...)` only parses when `name` is the
-*leftmost* token of its expression. As any later operand it falls apart — with simple type
-args, no dots involved:
-
-- `assert(qo >= size_of<int32>())` — `unexpected token ')' in expression`
-- `let x = 1 + size_of<int32>()` — same
-- `assert(!is_big<int32>())` — same (prefix operand, not just binary RHS)
-
-Root cause is *where* the disambiguation lives. The "generic call vs comparison" scan runs in
-the `TOK_LT` infix handler (`parser.c`, `case TOK_LT`) and only fires when `left` is a bare
-`EXPR_IDENT`/`EXPR_FIELD`. When the callee appears as the right operand of `>=`/`+`/`!`/etc.,
-precedence climbing has already grabbed the bare name as that operator's operand (the `<` is at
-comparison precedence, too low to bind in the recursive call), so by the time the loop sees
-`<`, `left` is the whole compound expression and the scan never runs — the tokens then parse as
-a chained comparison and die on `>(`.
-
-Workarounds are clean and always available: bind the call with `let` first, or parenthesize the
-call itself (`1 + (size_of<int32>())`, `!(is_big<int32>())`). Call-argument position
-(`f(size_of<int32>())`) is unaffected since a bracketed expression restarts precedence.
-
-Likely fix: hoist the generic-call disambiguation out of the infix `<` handler into postfix
-position, so `name<T>(...)` binds at call precedence like an ordinary call `name(...)` — a
-generic call *is* a call, and call arguments already restart precedence. The existing scan
-(type-arg tokens between `<` and `>`, then `(` or `.`) transplants as-is; the infix handler's
-comparison fallback stays for everything the scan rejects. Same disambiguation rule as today
-(spec §Generic Functions, Parsing), just applied wherever a call can appear.
-
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 
 `atomic_load_acquire` / `atomic_store_release` (shipped 2026-06-10, see archived TODO) accept
