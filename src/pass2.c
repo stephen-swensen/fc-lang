@@ -4516,12 +4516,24 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 diag_error(e->loc, "range bounds must be integer types");
                 scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
             } else {
-                /* Use the wider type; if both same, use that */
-                Type *var_type = iter_type;
-                if (!type_eq(iter_type, end_type)) {
-                    /* Allow int32..int64 widening */
-                    if (iter_type->kind < end_type->kind) var_type = end_type;
-                    else var_type = iter_type;
+                /* Unify the endpoints by widening rules — not by TypeKind
+                 * ordinal. The common type becomes the loop variable's type,
+                 * and both endpoints are widened to it so the emitted C loop
+                 * variable, `<` test, and `++` all share one consistent type.
+                 * Mixed pairs with no common type (e.g. uint32..int32, or any
+                 * implicit isize/usize mix) are rejected here, the same as
+                 * `+`/`<` would reject them. */
+                Type *var_type = type_common_numeric(iter_type, end_type);
+                if (!var_type) {
+                    diag_error(e->loc,
+                        "range endpoints have incompatible types: %s and %s",
+                        type_name(iter_type), type_name(end_type));
+                    var_type = type_error();
+                } else {
+                    if (!type_eq(iter_type, var_type))
+                        e->for_expr.iter = wrap_widen(ctx->arena, e->for_expr.iter, var_type);
+                    if (!type_eq(end_type, var_type))
+                        e->for_expr.range_end = wrap_widen(ctx->arena, e->for_expr.range_end, var_type);
                 }
                 scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, var_type, false);
             }

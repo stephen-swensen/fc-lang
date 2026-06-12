@@ -2776,23 +2776,38 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_FOR: {
         if (e->for_expr.range_end) {
-            /* Range iteration: for i in lo..hi */
+            /* Range iteration: for i in lo..hi. Hoist the end bound into a
+             * once-evaluated temp so a side-effecting end expression (e.g.
+             * `for i in 0..get_end()`) runs exactly once, not every iteration.
+             * pass2 has widened both endpoints to the loop variable's type, so
+             * the start, end temp, `<` test, and `++` all share `var_type`. */
+            int tid = temp_counter++;
             Type *var_type = e->for_expr.iter->type;
+            emit_type(var_type, out);
+            fprintf(out, " _fe%d = ", tid);
+            emit_expr(e->for_expr.range_end, out);
+            fprintf(out, ";\n");
+            emit_indent(out);
             fprintf(out, "for (");
             emit_type(var_type, out);
             fprintf(out, " %s = ", e->for_expr.var);
             emit_expr(e->for_expr.iter, out);
-            fprintf(out, "; %s < ", e->for_expr.var);
-            emit_expr(e->for_expr.range_end, out);
-            fprintf(out, "; %s++) {\n", e->for_expr.var);
+            fprintf(out, "; %s < _fe%d; %s++) {\n", e->for_expr.var, tid, e->for_expr.var);
         } else {
-            /* Collection iteration */
+            /* Collection iteration. Hoist the iterable into a once-evaluated
+             * temp: it was previously re-emitted in both the `.len` bound and
+             * the `.ptr[]` element read, so a slice-returning call (e.g.
+             * `for x in get_slice()`) ran 2n+1 times. */
             int tid = temp_counter++;
             Type *iter_type = e->for_expr.iter->type;
 
-            fprintf(out, "for (int64_t _fi%d = 0; _fi%d < ", tid, tid);
+            emit_type(iter_type, out);
+            fprintf(out, " _fs%d = ", tid);
             emit_expr(e->for_expr.iter, out);
-            fprintf(out, ".len; _fi%d++) {\n", tid);
+            fprintf(out, ";\n");
+            emit_indent(out);
+            fprintf(out, "for (int64_t _fi%d = 0; _fi%d < _fs%d.len; _fi%d++) {\n",
+                tid, tid, tid, tid);
             indent_level++;
 
             /* Element binding — into a temp first when destructuring */
@@ -2801,9 +2816,7 @@ static void emit_expr(Expr *e, FILE *out) {
             const char *elem_name = e->for_expr.var_pattern
                 ? e->for_expr.elem_tmp : e->for_expr.var;
             emit_type(elem_type, out);
-            fprintf(out, " %s = ", elem_name);
-            emit_expr(e->for_expr.iter, out);
-            fprintf(out, ".ptr[_fi%d];\n", tid);
+            fprintf(out, " %s = _fs%d.ptr[_fi%d];\n", elem_name, tid, tid);
             if (e->for_expr.var_pattern) {
                 emit_pat_bindings(e->for_expr.var_pattern, elem_name, elem_type, out);
                 emit_indent(out);

@@ -1,0 +1,13 @@
+// A side-effecting range end is evaluated exactly once, not every iteration.
+let mut calls = 0i32
+let get_end = () ->
+    calls = calls + 1
+    5
+
+let main = (args: str[]) ->
+    let mut iters = 0i32
+    for i in 0..get_end()
+        iters = iters + 1
+    assert(iters == 5)
+    assert(calls == 1)
+    0

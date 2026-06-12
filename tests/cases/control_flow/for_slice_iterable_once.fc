@@ -1,0 +1,22 @@
+// A side-effecting slice iterable is evaluated exactly once, not 2n+1 times
+// (previously re-emitted in both the .len bound and every .ptr[] element read).
+let mut calls = 0i32
+let tap = (s: int32[]) ->
+    calls = calls + 1
+    s
+
+let main = (args: str[]) ->
+    let data = int32[3] { 10, 20, 30 }
+    let mut total = 0i32
+    for x in tap(data)
+        total = total + x
+    assert(total == 60)
+    assert(calls == 1)
+
+    // Index form reads the same hoisted temp.
+    let mut isum = 0i32
+    for i, x in tap(data)
+        isum = isum + (int32) i + x
+    assert(isum == 63)
+    assert(calls == 2)
+    0

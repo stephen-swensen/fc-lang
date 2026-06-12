@@ -1,0 +1,8 @@
+// No implicit widening to/from isize/usize: a default-int32 start with a usize
+// end has no common type and is rejected. The fix is to make the start usize
+// too (`for i in 0u..n`), matching the rule that `+`/`<` enforce elsewhere.
+let main = (args: str[]) ->
+    let n = 5u
+    for i in 0..n
+        assert(i < 10u)
+    0

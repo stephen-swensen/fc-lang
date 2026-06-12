@@ -1791,7 +1791,9 @@ for i in 0..10
     process(data[i])
 ```
 
-The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is inferred from the range endpoints using the standard widening rules. `0..10` gives `int32` (both default). `0..points.len` gives `int64` (`int32` widens to `int64`). Both endpoints must be integer types — float ranges are a compile error.
+The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is the common type of the two endpoints under the standard widening rules, and that single type is used for the binding, the bound test, and the increment alike. `0..10` gives `int32` (both default). `0..points.len` gives `int64` (`int32` widens to `int64`). Both endpoints must be integer types — float ranges are a compile error — and they must share a common type: a pair with no lossless widening between them (`0u32..m` where `m` is `int32`, or any implicit `isize`/`usize` mix such as `0..n` where `n` is `usize`) is rejected, exactly as the same operands would be rejected under `+` or `<`. Make both endpoints the same width to fix it — `0u..n` for a `usize` end.
+
+Both endpoints are evaluated exactly once, in left-to-right order, before the loop begins — a side-effecting bound such as `for i in 0..next()` calls `next()` once, not once per iteration.
 
 If the start exceeds or equals the end, the body executes zero times. This handles signed endpoints naturally — `for i in -5..5` iterates from -5 to 4.
 
@@ -1804,7 +1806,7 @@ for i, p in points
     if p.x == 0.0 then io.write("zero at index %d{i}\n", stdout)
 ```
 
-The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration.
+The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration. As with a range bound, the slice iterable is evaluated exactly once before the loop — `for x in next_batch()` calls `next_batch()` once, not once per element.
 
 #### Destructuring the element
 
@@ -1898,22 +1900,27 @@ loop
 ```
 
 > **Transpilation**
-> All three `for` forms transpile to standard C `for` loops:
+> All three `for` forms transpile to standard C `for` loops. The slice iterable
+> (or range end) is hoisted into a temporary first, so it is evaluated exactly
+> once even when it is a side-effecting expression:
 > ```c
 > // for p in points (element iteration)
-> for (int64_t _i = 0; _i < points.len; _i++) {
->     point p = points.ptr[_i];
+> fc_slice_point _s = points;          // iterable evaluated once
+> for (int64_t _i = 0; _i < _s.len; _i++) {
+>     point p = _s.ptr[_i];
 >     // body
 > }
 >
 > // for i in 0..n (range iteration)
-> for (int32_t i = 0; i < n; i++) {
+> int32_t _end = n;                    // end evaluated once
+> for (int32_t i = 0; i < _end; i++) {
 >     // body
 > }
 >
 > // for i, p in points (index-element iteration)
-> for (int64_t i = 0; i < points.len; i++) {
->     point p = points.ptr[i];
+> fc_slice_point _s = points;
+> for (int64_t i = 0; i < _s.len; i++) {
+>     point p = _s.ptr[i];
 >     // body
 > }
 > ```
