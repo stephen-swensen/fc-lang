@@ -1,0 +1,42 @@
+// A narrow-width arithmetic result must be identical whether it is consumed
+// directly or first stored through a binding. Before the audit-2026-06-rc4
+// item 1 fix, the binding form truncated (assignment to the typed slot) while
+// the direct form leaked C's promoted `int`, so `a + b == c` and
+// `let s = a + b; s == c` could disagree. This pins them together.
+
+let o_u8  = (x: uint8)  -> x
+let o_u16 = (x: uint16) -> x
+let o_i16 = (x: int16)  -> x
+
+let main = (args: str[]) ->
+    // unsigned, every wrapping operator
+    let a8 = o_u8(200u8)
+    let b8 = o_u8(123u8)
+    let add8 = a8 + b8
+    assert(a8 + b8 == add8)
+    let sub8 = b8 - a8
+    assert(b8 - a8 == sub8)
+    let mul8 = a8 * b8
+    assert(a8 * b8 == mul8)
+    let shl8 = a8 << 1u8
+    assert(a8 << 1u8 == shl8)
+
+    let a16 = o_u16(50000u16)
+    let b16 = o_u16(40000u16)
+    let add16 = a16 + b16
+    assert(a16 + b16 == add16)
+    let mul16 = a16 * b16
+    assert(a16 * b16 == mul16)
+
+    // signed multiply — the former int-overflow UB path
+    let p = o_i16(-200i16)
+    let q = o_i16(300i16)
+    let smul = p * q
+    assert(p * q == smul)
+    let sadd = p + q
+    assert(p + q == sadd)
+
+    // (signed `min / -1` is intentionally excluded — it is item 15's int.min/-1
+    // overflow case, genuine UB where the FC type is as wide as C's `int`.)
+
+    0

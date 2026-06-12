@@ -1235,6 +1235,16 @@ int64_t x = (int64_t) ((uint64_t) a + (uint64_t) b);
 
 Each signed type casts through its same-width unsigned counterpart — `int8` through `uint8_t`, `int16` through `uint16_t`, and so on. All signed integer types share the same two's complement layout as their unsigned counterparts — the cast is a reinterpretation of bits, not a computation. Unsigned addition is guaranteed to wrap in C, so the result is fully defined behavior on any C11 compiler with no additional flags required.
 
+**Sub-`int` widths.** C's integer-promotion rules widen `int8`, `uint8`, `int16`, and `uint16` operands to `int` before `+`, `-`, `*`, or `<<`. A naive `a + b` would therefore leave a value wider than the FC type visible to the surrounding expression (`200u8 + 100u8` would read as `300`, not `44`), and a narrow *signed* multiply would overflow `int` — reintroducing the very undefined behavior the cast-through-unsigned pattern exists to eliminate (`-1i16 * -1i16` would compute `65535 * 65535`). For these four types each of `+ - * <<` is performed in `unsigned` and the result truncated back to the FC type. Because `unsigned` arithmetic is modular and only the low bits are kept, this is correct for *any* conforming `int` width — including 16-bit-`int` embedded targets (where `unsigned` is 16 bits and the truncation is simply a no-op). This applies to both signed and unsigned sub-`int` types:
+
+```c
+// FC: let x = a * b   (a, b: int16)
+int16_t x = (int16_t)(uint16_t)((unsigned)(uint16_t) a * (unsigned)(uint16_t) b);
+
+// FC: let x = a + b   (a, b: uint8)
+uint8_t x = (uint8_t)((unsigned)(uint8_t) a + (unsigned)(uint8_t) b);
+```
+
 The consequences of wrapping are predictable and consistent:
 
 - `int32.max + 1` → `int32.min`
@@ -1242,7 +1252,7 @@ The consequences of wrapping are predictable and consistent:
 - `int32.min * -1` → `int32.min` (the one asymmetry of two's complement)
 
 > **Transpilation**
-> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on signed integer types. Division, comparison, and bitwise operators are unaffected — their signed and unsigned semantics already agree or overflow is not applicable.
+> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on all signed integer types and on the sub-`int` unsigned types (`uint8`, `uint16`); wider unsigned types (`uint32`, `uint64`, `usize`) are already modular in C and emitted plain. For the sub-`int` types — which C promotes to `int` — the operands are evaluated in `unsigned` and the result truncated back to the FC type, so a narrow `*` cannot hit `int`-overflow UB and the wrap holds at the operand's own width on any target. Division, comparison, and bitwise operators are unaffected — their signed and unsigned semantics already agree or overflow is not applicable.
 
 ### Shift semantics
 

@@ -1267,13 +1267,24 @@ static void emit_branch_into(Expr *branch, const char *res_var, FILE *out) {
 /* Helper: C unsigned type name for a signed integer type */
 static const char *unsigned_counterpart(Type *t) {
     switch (t->kind) {
-    case TYPE_INT8:  return "uint8_t";
-    case TYPE_INT16: return "uint16_t";
-    case TYPE_INT32: return "uint32_t";
-    case TYPE_INT64: return "uint64_t";
-    case TYPE_ISIZE: return "size_t";
+    case TYPE_INT8:  case TYPE_UINT8:  return "uint8_t";
+    case TYPE_INT16: case TYPE_UINT16: return "uint16_t";
+    case TYPE_INT32: case TYPE_UINT32: return "uint32_t";
+    case TYPE_INT64: case TYPE_UINT64: return "uint64_t";
+    case TYPE_ISIZE: case TYPE_USIZE:  return "size_t";
     default: return NULL;
     }
+}
+
+/* Sub-int integer types (int8/uint8/int16/uint16). C's integer-promotion rules
+ * widen these to `int` in arithmetic, so a plain `a + b` yields an un-truncated
+ * value (200u8 + 100u8 observes as 300, not 44) and narrow signed multiply hits
+ * signed-overflow UB (-1i16 * -1i16 promotes to int and 65535*65535 overflows).
+ * Such results must be routed through `unsigned` and/or truncated back to the
+ * FC type. Types at least as wide as int (int32+/uint32+) don't need this. */
+static bool type_is_subint(Type *t) {
+    return t->kind == TYPE_INT8  || t->kind == TYPE_UINT8 ||
+           t->kind == TYPE_INT16 || t->kind == TYPE_UINT16;
 }
 
 /* Helper: shift mask for an integer type's bit width.
@@ -1764,18 +1775,51 @@ static void emit_expr(Expr *e, FILE *out) {
             break;
         }
 
-        /* Signed overflow wrapping: (int32_t)((uint32_t)a + (uint32_t)b) */
+        /* Integer +, -, *: overflow is defined as modular wraparound.
+         *
+         * Sub-int result types (int8/uint8/int16/uint16) promote to `int`, which
+         * leaves the value un-truncated in the surrounding expression
+         * (200u8 + 100u8 would observe as 300, not 44) and causes signed-overflow
+         * UB on multiply (-1i16 * -1i16 promotes to int and 65535*65535 overflows
+         * int). Route through `unsigned` so the math is modular regardless of
+         * int's width, then truncate back to the FC type:
+         *   (int16_t)(uint16_t)((unsigned)(uint16_t)a * (unsigned)(uint16_t)b)
+         *
+         * Signed result types at least as wide as int (int32/int64/isize) cast
+         * through the unsigned counterpart so overflow wraps instead of being UB:
+         *   (int32_t)((uint32_t)a + (uint32_t)b)
+         *
+         * Unsigned result types at least as wide as int (uint32/uint64/usize) are
+         * already modular in C — emit plain (fall through). */
         if ((op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR) &&
-            rt && type_is_signed(rt)) {
-            const char *ut = unsigned_counterpart(rt);
-            fprintf(out, "(");
-            emit_type(rt, out);
-            fprintf(out, ")(((%s)", ut);
-            emit_expr(e->binary.left, out);
-            fprintf(out, ") %s ((%s)", op == TOK_PLUS ? "+" : op == TOK_MINUS ? "-" : "*", ut);
-            emit_expr(e->binary.right, out);
-            fprintf(out, "))");
-            break;
+            rt && type_is_integer(rt)) {
+            const char *op_c = op == TOK_PLUS ? "+" : op == TOK_MINUS ? "-" : "*";
+            if (type_is_subint(rt)) {
+                const char *ut = unsigned_counterpart(rt);
+                fprintf(out, "(");
+                emit_type(rt, out);
+                fprintf(out, ")");
+                /* well-defined truncation before reinterpreting as signed */
+                if (type_is_signed(rt)) fprintf(out, "(%s)", ut);
+                fprintf(out, "((unsigned)(%s)", ut);
+                emit_expr(e->binary.left, out);
+                fprintf(out, " %s (unsigned)(%s)", op_c, ut);
+                emit_expr(e->binary.right, out);
+                fprintf(out, ")");
+                break;
+            }
+            if (type_is_signed(rt)) {
+                const char *ut = unsigned_counterpart(rt);
+                fprintf(out, "(");
+                emit_type(rt, out);
+                fprintf(out, ")(((%s)", ut);
+                emit_expr(e->binary.left, out);
+                fprintf(out, ") %s ((%s)", op_c, ut);
+                emit_expr(e->binary.right, out);
+                fprintf(out, "))");
+                break;
+            }
+            /* unsigned, width >= int: modular in C — fall through to plain emit */
         }
 
         /* Shift masking: a << (b & 31) for 32-bit, etc. */
@@ -1788,8 +1832,12 @@ static void emit_expr(Expr *e, FILE *out) {
                 snprintf(mask_buf, sizeof(mask_buf), "((int)(sizeof(size_t)*8)-1)");
                 mask_expr = mask_buf;
             }
-            if (op == TOK_LTLT && type_is_signed(rt)) {
-                /* Signed left shift: also wrap through unsigned */
+            if (op == TOK_LTLT && (type_is_signed(rt) || type_is_subint(rt))) {
+                /* Left shift through the unsigned counterpart, then cast back to
+                 * the result type: makes signed shift well-defined (no overflow
+                 * UB) and truncates narrow results that would otherwise promote
+                 * to int (200u8 << 1 observes as 144, not 400). Wide unsigned
+                 * types fall to the plain branch below — already full-width. */
                 const char *ut = unsigned_counterpart(rt);
                 fprintf(out, "(");
                 emit_type(rt, out);
