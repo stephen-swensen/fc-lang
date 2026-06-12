@@ -1,0 +1,54 @@
+// Static type properties are valid module-member initializers, including when
+// nested inside other constant forms (struct/tuple literals, some(...), casts).
+// Integer properties fold to literals; float and isize/usize properties are not
+// host-foldable (target-defined / deferred to the C compiler) but still emit a
+// valid C constant initializer (their stdint/float.h macro) directly.
+struct range =
+    lo: int32
+    hi: int32
+
+module m =
+    // Integer (foldable).
+    let imin = int32.min
+    let imax = int64.max
+    let ibits = uint16.bits
+    // Float (emitted as macro).
+    let fmax = float64.max
+    let fmin = float32.min
+    let feps = float64.epsilon
+    let fnan = float64.nan
+    let finf = float32.inf
+    let fninf = float64.neg_inf
+    // isize / usize (target-defined; emitted as macro).
+    let smin = isize.min
+    let smax = isize.max
+    let umax = usize.max
+    let sbits = isize.bits
+    // Nested in other constant forms.
+    let r = range { lo = int32.min, hi = int32.max }
+    let t = { int16.min, int16.max }
+    let o = some(uint8.max)
+    let widened = (int64) int32.min
+
+let main = (args: str[]) ->
+    assert(m.imin == int32.min)
+    assert(m.imax == int64.max)
+    assert(m.ibits == 16)
+    assert(m.fmax == float64.max)
+    assert(m.fmin == float32.min)
+    assert(m.feps == float64.epsilon)
+    assert(m.fnan != m.fnan)            // NaN is never equal to itself
+    assert(m.finf == float32.inf)
+    assert(m.finf > float32.max)
+    assert(m.fninf == float64.neg_inf)
+    assert(m.smin == isize.min)
+    assert(m.smax == isize.max)
+    assert(m.umax == usize.max)
+    assert(m.sbits == isize.bits)
+    assert(m.r.lo == int32.min)
+    assert(m.r.hi == int32.max)
+    assert(m.t[0] == int16.min)
+    assert(m.t[1] == int16.max)
+    assert(m.o! == 255u8)
+    assert(m.widened == (int64) int32.min)
+    0

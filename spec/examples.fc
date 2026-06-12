@@ -83,6 +83,11 @@ module point =
     let half = base / 2                                     // folds to 5
     let rem = base % 3                                      // folds to 1
     let shifted = base << 2                                 // folds to 40
+    // Static type properties are constant expressions too; fixed-width integer
+    // .min/.max/.bits fold to literals (float and isize/usize emit their macro).
+    let lo = int32.min                                      // folds to -2147483648
+    let mid = int32.max / 2 + 1                             // type prop in const div
+    let nbits = int64.bits                                  // folds to 64
 
 // ============================================================
 // Higher-order functions

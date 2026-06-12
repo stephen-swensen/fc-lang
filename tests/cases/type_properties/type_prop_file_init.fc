@@ -1,0 +1,22 @@
+// Static type properties are valid file-level (top-level) initializers too.
+// File-level lets are runtime-initialized, so integer, float, and isize/usize
+// properties — and expressions over them — are all accepted.
+let imin = int32.min
+let imax = int32.max
+let half = int32.min / 2        // -1073741824
+let bits = int64.bits           // 64
+let dmax = float64.max
+let dnan = float32.nan
+let smax = isize.max
+let umax = usize.max
+
+let main = (args: str[]) ->
+    assert(imin == int32.min)
+    assert(imax == int32.max)
+    assert(half == -1073741824)
+    assert(bits == 64)
+    assert(dmax == float64.max)
+    assert(dnan != dnan)
+    assert(smax == isize.max)
+    assert(umax == usize.max)
+    0

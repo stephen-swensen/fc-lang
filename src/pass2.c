@@ -3834,6 +3834,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
             if (prop_type) {
                 e->field.codegen_name = codegen_cstr;
+                e->field.is_type_property = true;
                 e->type = prop_type;
                 return e->type;
             }
@@ -6163,6 +6164,38 @@ static Expr *const_make_bool(CheckCtx *ctx, Type *t, bool v, SrcLoc loc) {
     return n;
 }
 
+/* Fold a static integer type property (int32.min, uint8.max, int16.bits, ...)
+ * to a host literal so it can participate in compile-time evaluation — integer
+ * division/modulo, comparisons, and reuse from other const initializers.
+ * Returns NULL for properties whose value is not a fixed-width host constant:
+ * float properties (min/max/nan/... — deferred to the C compiler) and the
+ * target-defined isize/usize width.  Those still satisfy the const-expr gate and
+ * emit their C macro unchanged. */
+static Expr *const_fold_type_property(CheckCtx *ctx, Expr *e) {
+    if (!e->field.is_type_property || e->field.object->kind != EXPR_IDENT)
+        return NULL;
+    Type *t = type_from_name(e->field.object->ident.name,
+                             (int)strlen(e->field.object->ident.name));
+    if (!t) return NULL;
+    int w = const_int_width(t);  /* 0 for floats and isize/usize */
+    const char *prop = e->field.name;
+
+    if (strcmp(prop, "bits") == 0) {
+        if (w == 0) return NULL;  /* isize/usize width is target-defined */
+        return const_make_int(ctx, type_int32(), (uint64_t)w, e->loc);
+    }
+    if (w == 0) return NULL;  /* float min/max/etc. and isize/usize min/max */
+    bool s = type_is_signed(t);
+    uint64_t v;
+    if (strcmp(prop, "min") == 0)
+        v = s ? ((uint64_t)1 << (w - 1)) : 0;
+    else if (strcmp(prop, "max") == 0)
+        v = s ? (((uint64_t)1 << (w - 1)) - 1) : ~(uint64_t)0;
+    else
+        return NULL;
+    return const_make_int(ctx, t, const_mask_extend(v, w, s), e->loc);
+}
+
 /* Try to evaluate a node whose children have already been const-folded to a
  * single literal.  Returns the literal, or NULL if the node is not evaluable
  * (caller keeps the folded tree).  Emits a diagnostic for compile-time
@@ -6383,6 +6416,10 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         return v ? v : node;
     }
     case EXPR_FIELD:
+        if (e->field.is_type_property) {
+            Expr *v = const_fold_type_property(ctx, e);
+            return v ? v : e;  /* host-foldable → literal; else keep the macro node */
+        }
         if (e->field.is_extern_const || e->field.is_variant_constructor)
             return e;
         return NULL;
@@ -6579,9 +6616,12 @@ static bool is_const_expr(Expr *e) {
             return false;
         return is_const_expr(e->cast.operand);
     /* Extern constants — C macros/enums are compile-time constants.
+     * Static type properties (int32.min, float64.nan, ...) emit C macros or
+     * folded literals — all valid C constant expressions.
      * No-payload variant constructors also emit plain compound literals. */
     case EXPR_FIELD:
-        return e->field.is_extern_const || e->field.is_variant_constructor;
+        return e->field.is_extern_const || e->field.is_variant_constructor ||
+               e->field.is_type_property;
     /* Struct literal — valid if all field values are const */
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
@@ -6685,8 +6725,9 @@ static bool is_file_init_expr(Expr *e) {
         /* Allow no-payload union variant constructors */
         if (e->type && e->type->kind == TYPE_UNION)
             return true;
-        /* Allow extern constants (C macros/enums) */
-        if (e->field.is_extern_const)
+        /* Allow extern constants (C macros/enums) and static type properties
+         * (int32.min, float64.nan, ...) */
+        if (e->field.is_extern_const || e->field.is_type_property)
             return true;
         return false;
     default:
