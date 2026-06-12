@@ -36,7 +36,11 @@ let main = (args: str[]) ->
     let sadd = p + q
     assert(p + q == sadd)
 
-    // (signed `min / -1` is intentionally excluded — it is item 15's int.min/-1
-    // overflow case, genuine UB where the FC type is as wide as C's `int`.)
+    // signed `min / -1` (item 15, resolved as wrap) is consistent too: the
+    // divisor guard substitutes the wrapped value identically whether consumed
+    // directly or stored through a binding.
+    let r = o_i16(-32768i16)
+    let sdiv = r / -1i16
+    assert(r / -1i16 == sdiv)
 
     0

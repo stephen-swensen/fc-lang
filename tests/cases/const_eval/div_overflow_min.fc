@@ -1,0 +1,32 @@
+// The compile-time const-fold path defines signed `min / -1` and `min % -1` the
+// same way the runtime path does: wrap (the fold guards `ra == -1` so fcc itself
+// never executes the UB divide). Runtime coverage is in
+// expressions/div_overflow_wrap.fc; this pins the folded values to match.
+//
+// (Min is written as a literal rather than `int32.min` because type properties
+// are not const-foldable in module-level initializers — a separate limitation.)
+module m =
+    let q8  = -128i8 / -1i8
+    let r8  = -128i8 % -1i8
+    let q16 = -32768i16 / -1i16
+    let r16 = -32768i16 % -1i16
+    let q32 = -2147483648i32 / -1i32
+    let r32 = -2147483648i32 % -1i32
+    let q64 = -9223372036854775808i64 / -1i64
+    let r64 = -9223372036854775808i64 % -1i64
+    // non-min dividends fold to ordinary negation / zero remainder
+    let q_pos = 5i32 / -1i32
+    let r_pos = 7i32 % -1i32
+
+let main = (args: str[]) ->
+    assert(m.q8  == -128i8)
+    assert(m.r8  == 0i8)
+    assert(m.q16 == -32768i16)
+    assert(m.r16 == 0i16)
+    assert(m.q32 == -2147483648i32)
+    assert(m.r32 == 0i32)
+    assert(m.q64 == -9223372036854775808i64)
+    assert(m.r64 == 0i64)
+    assert(m.q_pos == -5i32)
+    assert(m.r_pos == 0i32)
+    0

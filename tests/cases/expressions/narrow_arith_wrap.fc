@@ -46,11 +46,14 @@ let main = (args: str[]) ->
     // --- ordinary (non-overflowing) division/modulo are unaffected ---
     assert(o_i8(100i8) / o_i8(3i8) == 33i8)
     assert(o_u16(60000u16) % o_u16(7u16) == 3u16)
-    // NOTE: signed `min / -1` (e.g. -128i8 / -1i8) is deliberately NOT covered
-    // here — it is the int.min/-1 overflow case (audit item 15), which is genuine
-    // UB on a target where the FC type is as wide as C's `int` (int16 on a 16-bit
-    // `int`). It cannot be defined by a result cast-back and awaits item 15's
-    // wrap-vs-abort decision, so asserting it would be wrong on a 16-bit-int host.
+    // Narrow signed `min / -1` wraps to min (audit item 15, resolved as wrap):
+    // the divisor guard substitutes the wrapped value rather than dividing, so
+    // this holds at the operand's own width on any target — including a 16-bit
+    // `int` where int16.min/-1 would otherwise be a genuine SIGFPE. Full
+    // cross-width coverage lives in expressions/div_overflow_wrap.fc.
+    assert(o_i8(-128i8) / o_i8(-1i8) == -128i8)
+    assert(o_i16(-32768i16) / o_i16(-1i16) == -32768i16)
+    assert(o_i8(-128i8) % o_i8(-1i8) == 0i8)
 
     // --- nested narrow arithmetic truncates at each step ---
     assert((o_u8(200u8) + o_u8(100u8)) * o_u8(3u8) == 132u8) // (44) * 3

@@ -1858,22 +1858,50 @@ static void emit_expr(Expr *e, FILE *out) {
             break;
         }
 
-        /* Integer division/modulo by zero check */
+        /* Integer division/modulo: guard the divisor.
+         *  - divide-by-zero: hard abort (a defined failure, like bounds/unwrap).
+         *  - signed `min / -1` and `min % -1`: two's-complement overflow. C
+         *    leaves it undefined and x86 traps it (SIGFPE) exactly like /0, so a
+         *    plain divide would be UB — and the trap precedes any result, so a
+         *    cast-back cannot fix it. FC defines signed overflow as wrapping (see
+         *    spec "Integer overflow"), and `a / -1 == -a`, `a % -1 == 0` under
+         *    modular arithmetic, so we substitute the wrapped value instead of
+         *    dividing. The quotient is a wrapping negation through the unsigned
+         *    counterpart (correct at every width, including `min`, and
+         *    int-width-agnostic). Unsigned division never overflows, so the
+         *    `== -1` arm is signed-only. */
         if ((op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
             int tid = temp_counter++;
             const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
             int fn_len = (int)strlen(fn);
             int line = e->loc.line;
+            bool wrap = type_is_signed(rt);
             fprintf(out, "({ ");
             emit_type(rt, out);
             fprintf(out, " _dv%d = ", tid);
             emit_expr(e->binary.right, out);
             fprintf(out, "; if (_dv%d == 0) { fprintf(stderr, \"", tid);
             emit_c_escaped(fn, fn_len, out);
-            fprintf(out, ":%d: %s by zero\\n\"); FC_ABORT(); } (",
+            fprintf(out, ":%d: %s by zero\\n\"); FC_ABORT(); } ",
                     line, op == TOK_SLASH ? "divide" : "modulo");
-            emit_expr(e->binary.left, out);
-            fprintf(out, ") %s _dv%d; })", op == TOK_SLASH ? "/" : "%", tid);
+            if (wrap) {
+                /* hoist lhs so it is evaluated once across both ternary arms */
+                const char *ut = unsigned_counterpart(rt);
+                emit_type(rt, out);
+                fprintf(out, " _nv%d = ", tid);
+                emit_expr(e->binary.left, out);
+                fprintf(out, "; (_dv%d == -1) ? (", tid);
+                emit_type(rt, out);
+                if (op == TOK_SLASH) fprintf(out, ")(-(%s)_nv%d) : (", ut, tid);
+                else                 fprintf(out, ")0 : (");
+                emit_type(rt, out);
+                fprintf(out, ")(_nv%d %s _dv%d); })",
+                        tid, op == TOK_SLASH ? "/" : "%", tid);
+            } else {
+                fprintf(out, "(");
+                emit_expr(e->binary.left, out);
+                fprintf(out, ") %s _dv%d; })", op == TOK_SLASH ? "/" : "%", tid);
+            }
             break;
         }
 

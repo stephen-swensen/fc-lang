@@ -1,0 +1,58 @@
+// Signed `min / -1` and `min % -1` are two's-complement overflow: C leaves
+// them undefined and x86 traps them (SIGFPE) exactly like divide-by-zero, so a
+// plain divide is UB and a result cast-back cannot help (the trap precedes it).
+// FC defines signed overflow as wrapping, so `min / -1 == min` and `min % -1 ==
+// 0` at every signed width, int-width-agnostic. See audit-2026-06-rc4 item 15.
+//
+// The opaque identity helpers force the operands to be runtime values so these
+// assertions exercise the emitted division (the const-fold path is covered by
+// const_eval/div_overflow_min.fc). Pre-fix this aborted with SIGFPE (exit 136)
+// for int32/int64/isize and produced an out-of-range value for int8/int16.
+
+let o_i8  = (x: int8)  -> x
+let o_i16 = (x: int16) -> x
+let o_i32 = (x: int32) -> x
+let o_i64 = (x: int64) -> x
+let o_is  = (x: isize) -> x
+let o_u8  = (x: uint8) -> x
+let o_u16 = (x: uint16) -> x
+
+let main = (args: str[]) ->
+    // --- min / -1 wraps to min at every signed width ---
+    assert(o_i8(int8.min)   / o_i8(-1i8)   == int8.min)
+    assert(o_i16(int16.min) / o_i16(-1i16) == int16.min)
+    assert(o_i32(int32.min) / o_i32(-1i32) == int32.min)
+    assert(o_i64(int64.min) / o_i64(-1i64) == int64.min)
+    assert(o_is(isize.min)  / o_is(-1i)    == isize.min)
+
+    // --- min % -1 == 0 at every signed width ---
+    assert(o_i8(int8.min)   % o_i8(-1i8)   == 0i8)
+    assert(o_i16(int16.min) % o_i16(-1i16) == 0i16)
+    assert(o_i32(int32.min) % o_i32(-1i32) == 0i32)
+    assert(o_i64(int64.min) % o_i64(-1i64) == 0i64)
+    assert(o_is(isize.min)  % o_is(-1i)    == 0i)
+
+    // --- non-min / -1 is ordinary negation (the common case still divides) ---
+    assert(o_i32(5i32)  / o_i32(-1i32) == -5i32)
+    assert(o_i32(-5i32) / o_i32(-1i32) == 5i32)
+    assert(o_i8(100i8)  / o_i8(-1i8)   == -100i8)
+    assert(o_i32(7i32)  % o_i32(-1i32) == 0i32)
+    assert(o_i32(-9i32) % o_i32(-1i32) == 0i32)
+
+    // --- a / -1 agrees with a * -1 (the wrap is the same overflow) ---
+    assert(o_i32(int32.min) / o_i32(-1i32) == o_i32(int32.min) * o_i32(-1i32))
+    assert(o_i64(int64.min) / o_i64(-1i64) == o_i64(int64.min) * o_i64(-1i64))
+
+    // --- unsigned: a divisor whose bit pattern is all-ones (== type max, not
+    //     -1) must take the ordinary divide path, never the signed wrap arm ---
+    assert(o_u8(255u8) / o_u8(255u8) == 1u8)
+    assert(o_u8(200u8) % o_u8(255u8) == 200u8)
+    assert(o_u16(65535u16) / o_u16(65535u16) == 1u16)
+    assert(o_u16(1000u16) % o_u16(65535u16) == 1000u16)
+
+    // --- ordinary (non-overflowing) division/modulo are unaffected ---
+    assert(o_i32(100i32) / o_i32(3i32) == 33i32)
+    assert(o_i32(100i32) % o_i32(7i32) == 2i32)
+    assert(o_i32(-100i32) / o_i32(3i32) == -33i32)  // truncates toward zero
+    assert(o_i32(-100i32) % o_i32(7i32) == -2i32)   // sign of dividend
+    0
