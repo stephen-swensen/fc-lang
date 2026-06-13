@@ -1,0 +1,14 @@
+// A loop reads p before its stack reassignment textually, but iteration 2
+// returns the stack pointer assigned in iteration 1. The loop pre-taint catches
+// this despite the read appearing first in source order.
+let bad = () ->
+    let mut p = default(int32*)
+    for i in 0..2
+        if i > 0 then return p else void()
+        let mut x = 5
+        p = &x
+    return default(int32*)
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

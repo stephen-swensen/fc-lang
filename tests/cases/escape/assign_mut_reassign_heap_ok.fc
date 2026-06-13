@@ -1,0 +1,14 @@
+// Reassigning a mut binding to a heap pointer keeps it returnable
+let ok = (param: int32*) ->
+    let mut p = param
+    let q = alloc(int32)!
+    *q = 99
+    p = q
+    return p
+
+let main = (args: str[]) ->
+    let r = ok(default(int32*))
+    let v = *r
+    free(r)
+    assert(v == 99)
+    0

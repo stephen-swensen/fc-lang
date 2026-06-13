@@ -136,6 +136,26 @@ static Provenance merge_prov(Provenance a, Provenance b) {
     return PROV_UNKNOWN;
 }
 
+/* Merge a freshly-assigned value's provenance into a mut binding (identified by
+ * its unique codegen name). Reassignment of a `let mut` binding can change what
+ * it holds, but escape analysis is flow-insensitive: once a binding has held a
+ * stack value on any checked path, every later read must treat it as stack so
+ * the return/global/heap sinks fire. merge_prov is monotone toward STACK, so the
+ * taint is conservative (it can only add rejections, never remove them) and
+ * branch-safe (a stack assignment in one arm taints the binding for the join). */
+static void scope_taint_prov(Scope *s, const char *codegen_name, Provenance prov) {
+    if (!codegen_name) return;
+    for (Scope *sc = s; sc; sc = sc->parent) {
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].codegen_name &&
+                strcmp(sc->locals[i].codegen_name, codegen_name) == 0) {
+                sc->locals[i].prov = merge_prov(sc->locals[i].prov, prov);
+                return;
+            }
+        }
+    }
+}
+
 /* Unify two if-branch / match-arm result types. A `never` (return/break/continue)
    branch carries no value, so it is absorbed by its sibling — the result is the
    other branch's type. When both diverge, the result is `never`. Returns the
@@ -176,6 +196,250 @@ static bool type_has_provenance(Type *t) {
     /* Conservative: unresolved stubs might refer to a struct with pointer fields */
     if (t->kind == TYPE_STUB) return true;
     return false;
+}
+
+/* ---- Loop-carried escape pre-taint ----
+ * Escape analysis is flow-insensitive and runs in a single textual pass, so a
+ * read of a `let mut` binding that is textually BEFORE its stack-tainting
+ * reassignment is checked while the binding still looks safe — yet in a loop
+ * that read executes AFTER the assignment on a later iteration:
+ *     let mut p = ...
+ *     for _ in 0..2
+ *         saved = p      // iteration 2 observes &x from iteration 1
+ *         let mut x = 5
+ *         p = &x
+ * Before a loop body is checked we therefore pre-taint: any in-scope mut binding
+ * that is assigned a (transitively) stack-derived value anywhere in the body is
+ * marked PROV_STACK up front, so every read inside and after the loop sees it.
+ * This mirrors the conservative over-rejection the assignment merge already
+ * applies across branches; the taint is monotone (never cleared), so the pass
+ * can only add rejections, never remove a sound one. */
+
+/* Conservative syntactic predicate: could evaluating `e` produce a value with
+ * stack/local provenance? Used only by the pre-taint, so it must not depend on
+ * type info pass2 has not computed yet. Call results are excluded — a function
+ * can never return a stack pointer (the return sink rejects that); alloc is
+ * heap; literals/arithmetic are not pointers. */
+static bool expr_may_yield_stack(Scope *scope, Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_AMP) {
+            /* &x is a stack address — except &fn, a static C function pointer. */
+            Expr *operand = e->unary_prefix.operand;
+            if (operand->kind == EXPR_IDENT) {
+                Type *ot = scope_lookup_capture(scope, operand->ident.name,
+                    NULL, NULL, NULL, NULL);
+                if (ot && ot->kind == TYPE_FUNC) return false;
+            }
+            return true;
+        }
+        if (e->unary_prefix.op == TOK_STAR)
+            return expr_may_yield_stack(scope, e->unary_prefix.operand);
+        return false;
+    case EXPR_ARRAY_LIT:
+    case EXPR_INTERP_STRING:
+    case EXPR_SLICE_LIT:
+        return true;   /* stack/alloca-backed temporaries */
+    case EXPR_IDENT:
+        return scope_lookup_prov(scope, e->ident.name) == PROV_STACK;
+    case EXPR_CAST:
+        return expr_may_yield_stack(scope, e->cast.operand);
+    case EXPR_SOME:
+        return expr_may_yield_stack(scope, e->some_expr.value);
+    case EXPR_UNARY_POSTFIX:           /* option unwrap x! preserves provenance */
+        return expr_may_yield_stack(scope, e->unary_postfix.operand);
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        return expr_may_yield_stack(scope, e->field.object);
+    case EXPR_INDEX:
+        return expr_may_yield_stack(scope, e->index.object);
+    case EXPR_SLICE:
+        return expr_may_yield_stack(scope, e->slice.object);
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            if (expr_may_yield_stack(scope, e->struct_lit.fields[i].value)) return true;
+        return false;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            if (expr_may_yield_stack(scope, e->tuple_lit.elems[i])) return true;
+        return false;
+    case EXPR_IF:
+        return expr_may_yield_stack(scope, e->if_expr.then_body) ||
+               expr_may_yield_stack(scope, e->if_expr.else_body);
+    case EXPR_MATCH:
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            int bc = e->match_expr.arms[i].body_count;
+            if (bc > 0 && expr_may_yield_stack(scope, e->match_expr.arms[i].body[bc - 1]))
+                return true;
+        }
+        return false;
+    case EXPR_BLOCK:
+        return e->block.count > 0 &&
+               expr_may_yield_stack(scope, e->block.stmts[e->block.count - 1]);
+    default:
+        return false;
+    }
+}
+
+/* Find the nearest in-scope binding with this (interned) source name. */
+static LocalBinding *scope_find_binding(Scope *s, const char *name) {
+    for (Scope *sc = s; sc; sc = sc->parent)
+        for (int i = sc->local_count - 1; i >= 0; i--)
+            if (sc->locals[i].name == name)
+                return &sc->locals[i];
+    return NULL;
+}
+
+/* One pre-taint sweep over a loop-body expression tree. Taints any in-scope mut
+ * binding assigned a may-be-stack value; sets *changed when a binding newly
+ * becomes stack so the caller can iterate to a fixpoint (covering p = q; q = &x
+ * chains regardless of textual order). Does not descend into nested lambdas:
+ * mut bindings cannot be captured, so an assignment there cannot target an outer
+ * mut binding. */
+static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_ASSIGN:
+        if (e->assign.target->kind == EXPR_IDENT &&
+            expr_may_yield_stack(scope, e->assign.value)) {
+            LocalBinding *b = scope_find_binding(scope, e->assign.target->ident.name);
+            if (b && b->is_mut && b->prov != PROV_STACK && type_has_provenance(b->type)) {
+                b->prov = PROV_STACK;
+                *changed = true;
+            }
+        }
+        pretaint_walk(scope, e->assign.target, changed);
+        pretaint_walk(scope, e->assign.value, changed);
+        break;
+    case EXPR_FUNC:
+        break;   /* nested lambda: own scope, cannot reach outer mut bindings */
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            pretaint_walk(scope, e->block.stmts[i], changed);
+        break;
+    case EXPR_IF:
+        pretaint_walk(scope, e->if_expr.cond, changed);
+        pretaint_walk(scope, e->if_expr.then_body, changed);
+        pretaint_walk(scope, e->if_expr.else_body, changed);
+        break;
+    case EXPR_MATCH:
+        pretaint_walk(scope, e->match_expr.subject, changed);
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                pretaint_walk(scope, e->match_expr.arms[i].body[j], changed);
+        break;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            pretaint_walk(scope, e->loop_expr.body[i], changed);
+        break;
+    case EXPR_FOR:
+        pretaint_walk(scope, e->for_expr.iter, changed);
+        if (e->for_expr.range_end) pretaint_walk(scope, e->for_expr.range_end, changed);
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            pretaint_walk(scope, e->for_expr.body[i], changed);
+        break;
+    case EXPR_LET:
+        pretaint_walk(scope, e->let_expr.let_init, changed);
+        break;
+    case EXPR_LET_DESTRUCT:
+        pretaint_walk(scope, e->let_destruct.init, changed);
+        break;
+    case EXPR_RETURN:
+        pretaint_walk(scope, e->return_expr.value, changed);
+        break;
+    case EXPR_BREAK:
+        pretaint_walk(scope, e->break_expr.value, changed);
+        break;
+    case EXPR_DEFER:
+        pretaint_walk(scope, e->defer_expr.value, changed);
+        break;
+    case EXPR_BINARY:
+        pretaint_walk(scope, e->binary.left, changed);
+        pretaint_walk(scope, e->binary.right, changed);
+        break;
+    case EXPR_UNARY_PREFIX:
+        pretaint_walk(scope, e->unary_prefix.operand, changed);
+        break;
+    case EXPR_UNARY_POSTFIX:
+        pretaint_walk(scope, e->unary_postfix.operand, changed);
+        break;
+    case EXPR_CALL:
+        pretaint_walk(scope, e->call.func, changed);
+        for (int i = 0; i < e->call.arg_count; i++)
+            pretaint_walk(scope, e->call.args[i], changed);
+        break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        pretaint_walk(scope, e->field.object, changed);
+        break;
+    case EXPR_INDEX:
+        pretaint_walk(scope, e->index.object, changed);
+        pretaint_walk(scope, e->index.index, changed);
+        break;
+    case EXPR_SLICE:
+        pretaint_walk(scope, e->slice.object, changed);
+        pretaint_walk(scope, e->slice.lo, changed);
+        pretaint_walk(scope, e->slice.hi, changed);
+        break;
+    case EXPR_CAST:
+        pretaint_walk(scope, e->cast.operand, changed);
+        break;
+    case EXPR_SOME:
+        pretaint_walk(scope, e->some_expr.value, changed);
+        break;
+    case EXPR_ASSERT:
+        pretaint_walk(scope, e->assert_expr.condition, changed);
+        pretaint_walk(scope, e->assert_expr.message, changed);
+        break;
+    case EXPR_ALLOC:
+        pretaint_walk(scope, e->alloc_expr.init_expr, changed);
+        pretaint_walk(scope, e->alloc_expr.size_expr, changed);
+        break;
+    case EXPR_FREE:
+        pretaint_walk(scope, e->free_expr.operand, changed);
+        break;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            pretaint_walk(scope, e->struct_lit.fields[i].value, changed);
+        break;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            pretaint_walk(scope, e->array_lit.elems[i], changed);
+        break;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            pretaint_walk(scope, e->tuple_lit.elems[i], changed);
+        break;
+    case EXPR_SLICE_LIT:
+        pretaint_walk(scope, e->slice_lit.ptr_expr, changed);
+        pretaint_walk(scope, e->slice_lit.len_expr, changed);
+        break;
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (!e->interp_string.segments[i].is_literal)
+                pretaint_walk(scope, e->interp_string.segments[i].expr, changed);
+        break;
+    case EXPR_ATOMIC_LOAD:
+        pretaint_walk(scope, e->atomic_load.ptr, changed);
+        break;
+    case EXPR_ATOMIC_STORE:
+        pretaint_walk(scope, e->atomic_store.ptr, changed);
+        pretaint_walk(scope, e->atomic_store.value, changed);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Pre-taint a loop body to a fixpoint before it is type-checked. */
+static void pretaint_loop_body(Scope *scope, Expr **body, int count) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int i = 0; i < count; i++)
+            pretaint_walk(scope, body[i], &changed);
+    }
 }
 
 /* ---- Type checking ---- */
@@ -1503,6 +1767,39 @@ static bool is_write_through_const(Expr *target) {
                is_write_through_const(target->index.object);
     default:
         return false;
+    }
+}
+
+/* Provenance of the storage that a write to this lvalue lands in. Walks the
+ * lvalue path (field / index / deref / deref-field) down to the root so the
+ * escape check can ask one question of any target shape — "does this store
+ * reach memory that outlives the stack frame?" — instead of pattern-matching a
+ * single shape. Reads the propagated `prov` already computed on each sub-expr:
+ *   *p          -> where p points       (p's prov)
+ *   p->field    -> the struct p points at (p's prov)
+ *   obj.field   -> obj's own storage     (recurse)
+ *   obj[i]      -> the buffer obj views  (obj's prov: slice/pointer pointee)
+ *   ident       -> stack for a local, static for a global
+ * A loaded-through-unknown pointer (e.g. **pp, or *param) yields PROV_UNKNOWN,
+ * which the caller treats leniently — the same out-param latitude the analysis
+ * already grants writes through unknown-provenance pointers. */
+static Provenance assign_dest_prov(Expr *target) {
+    if (!target) return PROV_UNKNOWN;
+    switch (target->kind) {
+    case EXPR_IDENT:
+        return target->ident.is_local ? PROV_STACK : PROV_STATIC;
+    case EXPR_UNARY_PREFIX:
+        if (target->unary_prefix.op == TOK_STAR)
+            return target->unary_prefix.operand->prov;
+        return PROV_UNKNOWN;
+    case EXPR_DEREF_FIELD:
+        return target->field.object->prov;
+    case EXPR_FIELD:
+        return assign_dest_prov(target->field.object);
+    case EXPR_INDEX:
+        return target->index.object->prov;
+    default:
+        return PROV_UNKNOWN;
     }
 }
 
@@ -3549,20 +3846,33 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         /* Escape check: storing stack-allocated values where they outlive the stack frame. */
         if (e->assign.value->prov == PROV_STACK && type_has_provenance(vt)) {
-            /* Assignment to a global binding */
-            if (e->assign.target->kind == EXPR_IDENT && !e->assign.target->ident.is_local) {
+            Expr *target = e->assign.target;
+            if (target->kind == EXPR_IDENT && !target->ident.is_local) {
+                /* Direct store to a global binding. */
                 diag_error(e->loc, "cannot store stack-allocated %s in global '%s'",
-                    type_name(vt), e->assign.target->ident.name);
-            }
-            /* Assignment through a heap pointer (h->field = ...) */
-            if (e->assign.target->kind == EXPR_DEREF_FIELD) {
-                Expr *obj = e->assign.target->field.object;
-                if (obj->prov == PROV_HEAP) {
+                    type_name(vt), target->ident.name);
+            } else if (target->kind != EXPR_IDENT) {
+                /* Store through a field / index / deref path: reject when the
+                 * destination storage outlives the frame (heap or static). A
+                 * direct local ident is exempt — its own storage is the frame,
+                 * and the taint below tracks the binding instead. */
+                Provenance dest = assign_dest_prov(target);
+                if (dest == PROV_HEAP || dest == PROV_STATIC) {
+                    bool is_field = (target->kind == EXPR_DEREF_FIELD ||
+                                     target->kind == EXPR_FIELD);
                     diag_error(e->loc,
-                        "cannot store stack-allocated %s in heap-allocated struct field",
-                        type_name(vt));
+                        "cannot store stack-allocated %s in heap-allocated %s",
+                        type_name(vt), is_field ? "struct field" : "memory");
                 }
             }
+        }
+        /* Reassignment of a mut local: merge the value's provenance into the
+         * binding so subsequent reads (return/global/heap sinks) see a stack
+         * taint that was assigned after the original binding. */
+        if (e->assign.target->kind == EXPR_IDENT && e->assign.target->ident.is_local &&
+            type_has_provenance(vt)) {
+            scope_taint_prov(ctx->scope, e->assign.target->ident.codegen_name,
+                e->assign.value->prov);
         }
         e->type = type_void();
         return e->type;
@@ -4476,6 +4786,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->loop_break_type = &break_type;
         ctx->in_for = false;
 
+        pretaint_loop_body(ctx->scope, e->loop_expr.body, e->loop_expr.body_count);
         check_block(ctx, e->loop_expr.body, e->loop_expr.body_count);
 
         ctx->scope = saved;
@@ -4560,6 +4871,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->loop_break_type = &break_type;
         ctx->in_for = true;
 
+        pretaint_loop_body(ctx->scope, e->for_expr.body, e->for_expr.body_count);
         check_block(ctx, e->for_expr.body, e->for_expr.body_count);
 
         ctx->scope = saved;

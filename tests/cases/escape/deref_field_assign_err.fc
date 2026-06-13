@@ -1,0 +1,13 @@
+// (*h).p is the same heap store as h->p — both must be rejected
+struct holder =
+    p: int32*
+
+let leak = () ->
+    let h = alloc(holder { p = default(int32*) })!
+    let mut x = 42
+    (*h).p = &x
+    free(h)
+
+let main = (args: str[]) ->
+    leak()
+    0

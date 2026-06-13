@@ -1,0 +1,18 @@
+// A heap accumulator reassigned each iteration must NOT be over-tainted by the
+// loop pre-taint — heap/unknown values never taint.
+let pick = (n: int32) ->
+    let mut best = alloc(int32)!
+    *best = 0
+    for i in 1..n
+        let cur = alloc(int32)!
+        *cur = i
+        free(best)
+        best = cur
+    return best
+
+let main = (args: str[]) ->
+    let r = pick(4)
+    let v = *r
+    free(r)
+    assert(v == 3)
+    0

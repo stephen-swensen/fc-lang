@@ -1,0 +1,10 @@
+// A mut binding holding a stack address is fine when only read locally (no sink)
+let main = (args: str[]) ->
+    let mut p = default(int32*)
+    let mut sum = 0
+    for i in 0..4
+        let mut x = i
+        p = &x
+        sum = sum + *p
+    assert(sum == 6)
+    0

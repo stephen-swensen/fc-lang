@@ -1,0 +1,10 @@
+// Writing a stack address through a heap int32** escapes
+let leak = () ->
+    let hp = alloc(int32*)!
+    let mut x = 42
+    *hp = &x
+    free(hp)
+
+let main = (args: str[]) ->
+    leak()
+    0

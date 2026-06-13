@@ -1,0 +1,14 @@
+// Loop-carried taint through a second mut binding: saved = p reads the stack
+// pointer p held from a previous iteration.
+let bad = () ->
+    let mut p = default(int32*)
+    let mut saved = default(int32*)
+    for i in 0..2
+        saved = p
+        let mut x = 5
+        p = &x
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

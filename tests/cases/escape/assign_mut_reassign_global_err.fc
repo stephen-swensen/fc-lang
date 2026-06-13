@@ -1,0 +1,12 @@
+// Reassigning a mut binding to a stack address must taint it for the global sink
+let mut gp = default(int32*)
+
+let bad = (param: int32*) ->
+    let mut p = param
+    let mut x = 5
+    p = &x
+    gp = p
+
+let main = (args: str[]) ->
+    bad(default(int32*))
+    0

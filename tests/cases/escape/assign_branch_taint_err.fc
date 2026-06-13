@@ -1,0 +1,10 @@
+// A stack assignment in one branch taints the binding for a post-join sink
+let bad = (cond: bool, param: int32*) ->
+    let mut p = param
+    let mut x = 5
+    if cond then p = &x else void()
+    return p
+
+let main = (args: str[]) ->
+    let r = bad(true, default(int32*))
+    0
