@@ -1,0 +1,14 @@
+// Two array literals that are live at the same time must use distinct backing
+// arrays — the per-function-entry hoist must not collapse separate lexical
+// literals onto one slot. Covers simultaneously-live bindings and two array
+// literal arguments live across a single call.
+let take2 = (x: int32[], y: int32[]) -> x[0] * 100 + y[0]
+
+let main = (args: str[]) ->
+    let a = int32[3] { 1, 2, 3 }
+    let b = int32[3] { 4, 5, 6 }
+    assert(a[0] == 1)   // a must not be clobbered by b's backing
+    assert(b[0] == 4)
+    // both argument literals are live during the call → must be distinct
+    assert(take2(int32[2] { 7, 8 }, int32[2] { 9, 0 }) == 709)
+    0

@@ -54,6 +54,19 @@ static HoistedDecl *g_hoisted = NULL;
 static int g_hoisted_count = 0;
 static int g_hoisted_cap = 0;
 
+/* Function-entry backing arrays for stack array literals and constant-size
+ * interpolation buffers.  Each entry is the array-literal or interp-string node;
+ * a fixed C array is emitted at function top and the node's use site references
+ * it by name (via codegen_backing_name).  This replaces a per-evaluation
+ * __builtin_alloca so the slot is reused across loop iterations — stack use stays
+ * bounded instead of growing the frame until the function returns.  The backing
+ * keeps function lifetime, matching the lifetime alloca already gave the produced
+ * slice/str, so escape analysis stays valid.  Collected fresh per function body. */
+static Expr **g_fn_backings = NULL;
+static int g_fn_backing_count = 0;
+static int g_fn_backing_cap = 0;
+static int g_fn_backing_counter = 0;
+
 /* Block-scoped defer tracking */
 typedef struct DeferScope DeferScope;
 struct DeferScope {
@@ -79,6 +92,7 @@ static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
 static bool type_valueless(Type *t);
+static bool interp_const_buffer_size(Expr *e, int64_t *out_size);
 
 static bool is_hoisted(const char *codegen_name) {
     for (int i = 0; i < g_hoisted_count; i++)
@@ -253,6 +267,20 @@ static void collect_hoisted_bindings(Expr *e) {
             collect_hoisted_bindings(e->struct_lit.fields[i].value);
         break;
     case EXPR_ARRAY_LIT:
+        /* Hoist a fixed backing array (size N is a compile-time literal, enforced
+         * in pass2) to function entry so the slot is reused per loop iteration.
+         * Skip zero-length literals — C has no zero-length arrays — and let them
+         * fall back to alloca at the use site. */
+        if (e->array_lit.size_expr &&
+            e->array_lit.size_expr->kind == EXPR_INT_LIT &&
+            e->array_lit.size_expr->int_lit.value > 0) {
+            if (!e->array_lit.codegen_backing_name) {
+                char buf[40];
+                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
+                e->array_lit.codegen_backing_name = arena_strdup(g_arena, buf, n);
+            }
+            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
+        }
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_hoisted_bindings(e->array_lit.elems[i]);
         break;
@@ -262,7 +290,24 @@ static void collect_hoisted_bindings(Expr *e) {
         break;
     case EXPR_ALLOC:
         if (e->alloc_expr.size_expr) collect_hoisted_bindings(e->alloc_expr.size_expr);
-        if (e->alloc_expr.init_expr) collect_hoisted_bindings(e->alloc_expr.init_expr);
+        if (e->alloc_expr.init_expr) {
+            /* alloc(T[N]{...}) and alloc("...%d") emit their array/interp init
+             * straight into the heap buffer — no stack backing.  Recurse past the
+             * top node into its children so nested stack temporaries are still
+             * hoisted, but don't give the heap-bound init itself a backing. */
+            Expr *init = e->alloc_expr.init_expr;
+            if (init->kind == EXPR_ARRAY_LIT) {
+                for (int i = 0; i < init->array_lit.elem_count; i++)
+                    collect_hoisted_bindings(init->array_lit.elems[i]);
+            } else if (init->kind == EXPR_INTERP_STRING) {
+                for (int i = 0; i < init->interp_string.segment_count; i++)
+                    if (!init->interp_string.segments[i].is_literal &&
+                        init->interp_string.segments[i].expr)
+                        collect_hoisted_bindings(init->interp_string.segments[i].expr);
+            } else {
+                collect_hoisted_bindings(init);
+            }
+        }
         break;
     case EXPR_FREE:
         collect_hoisted_bindings(e->free_expr.operand);
@@ -283,11 +328,26 @@ static void collect_hoisted_bindings(Expr *e) {
         if (e->slice.lo) collect_hoisted_bindings(e->slice.lo);
         if (e->slice.hi) collect_hoisted_bindings(e->slice.hi);
         break;
-    case EXPR_INTERP_STRING:
+    case EXPR_INTERP_STRING: {
+        /* Constant-size buffer (no runtime-length %s) → hoist a fixed backing
+         * array to function entry, reused per iteration.  Runtime-sized buffers
+         * stay on alloca (documented: grows per loop iteration; use alloc(s)! to
+         * promote to the heap). */
+        int64_t bsize = 0;
+        if (interp_const_buffer_size(e, &bsize)) {
+            if (!e->interp_string.codegen_backing_name) {
+                char buf[40];
+                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
+                e->interp_string.codegen_backing_name = arena_strdup(g_arena, buf, n);
+            }
+            e->interp_string.backing_size = bsize;
+            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
+        }
         for (int i = 0; i < e->interp_string.segment_count; i++)
             if (!e->interp_string.segments[i].is_literal && e->interp_string.segments[i].expr)
                 collect_hoisted_bindings(e->interp_string.segments[i].expr);
         break;
+    }
     case EXPR_FUNC:
         /* Don't recurse into nested lambdas — they get their own hoisting scope */
         break;
@@ -349,16 +409,39 @@ static void emit_hoisted_decls(FILE *out) {
     }
 }
 
+/* Emit the function-entry backing arrays for stack array literals and
+ * constant-size interpolation buffers (see g_fn_backings).  Each is a plain
+ * fixed C array whose single slot is reused on every loop iteration. */
+static void emit_fn_backing_decls(FILE *out) {
+    for (int i = 0; i < g_fn_backing_count; i++) {
+        Expr *e = g_fn_backings[i];
+        emit_indent(out);
+        if (e->kind == EXPR_ARRAY_LIT) {
+            emit_type(e->array_lit.elem_type, out);
+            fprintf(out, " %s[%" PRIu64 "];\n",
+                    e->array_lit.codegen_backing_name,
+                    e->array_lit.size_expr->int_lit.value);
+        } else { /* EXPR_INTERP_STRING */
+            fprintf(out, "uint8_t %s[%" PRId64 "];\n",
+                    e->interp_string.codegen_backing_name,
+                    e->interp_string.backing_size + 1);
+        }
+    }
+}
+
 /* Set up hoisting for a function body, emit declarations, then tear down */
 static void begin_hoisted_scope(Expr **body, int body_count, FILE *out) {
     g_hoisted_count = 0;
+    g_fn_backing_count = 0;
     for (int i = 0; i < body_count; i++)
         collect_hoisted_bindings(body[i]);
     emit_hoisted_decls(out);
+    emit_fn_backing_decls(out);
 }
 
 static void end_hoisted_scope(void) {
     g_hoisted_count = 0;
+    g_fn_backing_count = 0;
 }
 
 /* Resolve a type variable to its concrete type under the active
@@ -1327,6 +1410,135 @@ static void parse_format_width_prec(const char *text,
     }
 }
 
+/* Bytes a literal segment contributes to the formatted output: each `%%` folds
+ * to one `%`, and a backslash escape counts as the single byte it denotes. */
+static int interp_literal_len(InterpSegment *seg) {
+    int actual_len = 0;
+    const char *s = seg->text;
+    int slen = seg->text_length;
+    for (int j = 0; j < slen; j++) {
+        if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
+        else if (s[j] == '\\' && j + 1 < slen) {
+            if (s[j+1] == 'x' && j + 3 < slen) j += 3;
+            else j++;
+        }
+        actual_len++;
+    }
+    return actual_len;
+}
+
+/* Upper bound on the bytes a non-string conversion can emit, for buffer sizing.
+ * A field width is a *minimum*, never a maximum, so it can only widen the bound;
+ * flags may add a sign/space/`#`-prefix byte.  Shared by the buffer-size emitter
+ * and the constant-size scan so the two can never disagree on the budget. */
+static int interp_numeric_bound(char conv, Type *t, const char *flags_text,
+                                int explicit_width, int explicit_prec) {
+    int bound;
+    switch (conv) {
+    case 'd': case 'i': case 'u':
+        switch (t ? t->kind : 0) {
+        case TYPE_INT8: bound = 4; break;
+        case TYPE_UINT8: bound = 3; break;
+        case TYPE_INT16: bound = 6; break;
+        case TYPE_UINT16: bound = 5; break;
+        case TYPE_INT32: bound = 11; break;
+        case TYPE_UINT32: bound = 10; break;
+        case TYPE_INT64: bound = 20; break;
+        case TYPE_UINT64: bound = 20; break;
+        default: bound = 20; break;
+        }
+        break;
+    case 'x': case 'X':
+        switch (t ? t->kind : 0) {
+        case TYPE_INT8: case TYPE_UINT8: bound = 2; break;
+        case TYPE_INT16: case TYPE_UINT16: bound = 4; break;
+        case TYPE_INT32: case TYPE_UINT32: bound = 8; break;
+        case TYPE_INT64: case TYPE_UINT64: bound = 16; break;
+        default: bound = 16; break;
+        }
+        break;
+    case 'o':
+        switch (t ? t->kind : 0) {
+        case TYPE_INT8: case TYPE_UINT8: bound = 3; break;
+        case TYPE_INT16: case TYPE_UINT16: bound = 6; break;
+        case TYPE_INT32: case TYPE_UINT32: bound = 11; break;
+        case TYPE_INT64: case TYPE_UINT64: bound = 22; break;
+        default: bound = 22; break;
+        }
+        break;
+    case 'f': {
+        /* A %f field width is a *minimum*, never a maximum: the integer part can
+         * be as wide as the type's largest exponent in digits (DBL_MAX ≈ 1.8e308
+         * → 309 digits; FLT_MAX ≈ 3.4e38 → 39).  The budget must cover sign +
+         * integer digits + '.' + fraction (default precision 6). */
+        int int_digits = (t && t->kind == TYPE_FLOAT32) ? 39 : 309;
+        int prec = explicit_prec >= 0 ? explicit_prec : 6;
+        bound = 1 + int_digits + 1 + prec;
+        break;
+    }
+    case 'e': case 'E': case 'g': case 'G': {
+        /* Scientific/shortest forms are bounded by precision, not the exponent:
+         * sign + leading digit + '.' + prec mantissa digits + 'e±ddd'. */
+        int prec = explicit_prec >= 0 ? explicit_prec : 6;
+        bound = 9 + prec;
+        break;
+    }
+    case 'c': bound = 1; break;
+    case 'p': bound = 18; break;
+    default: bound = 24; break;
+    }
+    const char *flags = flags_text;
+    while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
+        if (*flags == '+' || *flags == ' ') bound++;
+        if (*flags == '#') bound += 2;
+        flags++;
+    }
+    if (explicit_width > bound) bound = explicit_width;
+    return bound;
+}
+
+/* If the interpolation buffer length is a compile-time constant — i.e. no
+ * segment contributes a runtime length, the only such case being a %s (str or
+ * cstr) without an explicit precision — compute that constant byte budget (the
+ * exact value the emitted _flen sums to, since both go through the helpers
+ * above) and return true.  Otherwise return false: the buffer stays
+ * runtime-sized and keeps its alloca/malloc allocation. */
+static bool interp_const_buffer_size(Expr *e, int64_t *out_size) {
+    int seg_count = e->interp_string.segment_count;
+    InterpSegment *segs = e->interp_string.segments;
+    int64_t total = 0;
+    for (int i = 0; i < seg_count; i++) {
+        if (segs[i].is_literal) {
+            total += interp_literal_len(&segs[i]);
+            continue;
+        }
+        if (segs[i].conversion == 'T') {
+            total += (int64_t)strlen(type_name(segs[i].expr->type));
+            continue;
+        }
+        char conv = segs[i].conversion;
+        int explicit_width = 0, explicit_prec = -1;
+        parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
+        Type *t = segs[i].expr->type;
+        bool is_str_arg = (conv == 's' && t && is_str_type(t));
+        bool is_cstr_arg = (conv == 's' && t && is_cstr_type(t));
+        if (is_str_arg || is_cstr_arg) {
+            if (explicit_prec >= 0) {
+                int b = explicit_prec;
+                if (explicit_width > b) b = explicit_width;
+                total += b;
+            } else {
+                return false;  /* runtime string length */
+            }
+        } else {
+            total += interp_numeric_bound(conv, t, segs[i].text,
+                                          explicit_width, explicit_prec);
+        }
+    }
+    *out_size = total;
+    return true;
+}
+
 /* Emit interpolated string code.
  * alloc_opt_type: NULL → standalone (alloca), non-NULL → inside alloc() (malloc).
  * Handles both str and cstr interpolation (e->interp_string.is_cstr). */
@@ -1363,17 +1575,7 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
     int k = 0;
     for (int i = 0; i < seg_count; i++) {
         if (segs[i].is_literal) {
-            int actual_len = 0;
-            const char *s = segs[i].text;
-            int slen = segs[i].text_length;
-            for (int j = 0; j < slen; j++) {
-                if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
-                else if (s[j] == '\\' && j + 1 < slen) {
-                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
-                    else j++;
-                }
-                actual_len++;
-            }
+            int actual_len = interp_literal_len(&segs[i]);
             if (actual_len > 0) {
                 if (!first_term) fprintf(out, " + ");
                 fprintf(out, "%d", actual_len);
@@ -1425,70 +1627,8 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                     fprintf(out, "(int64_t)strlen((const char*)_sg%d_%d)", tid, k);
             }
         } else {
-            int bound;
-            switch (conv) {
-            case 'd': case 'i': case 'u':
-                switch (t ? t->kind : 0) {
-                case TYPE_INT8: bound = 4; break;
-                case TYPE_UINT8: bound = 3; break;
-                case TYPE_INT16: bound = 6; break;
-                case TYPE_UINT16: bound = 5; break;
-                case TYPE_INT32: bound = 11; break;
-                case TYPE_UINT32: bound = 10; break;
-                case TYPE_INT64: bound = 20; break;
-                case TYPE_UINT64: bound = 20; break;
-                default: bound = 20; break;
-                }
-                break;
-            case 'x': case 'X':
-                switch (t ? t->kind : 0) {
-                case TYPE_INT8: case TYPE_UINT8: bound = 2; break;
-                case TYPE_INT16: case TYPE_UINT16: bound = 4; break;
-                case TYPE_INT32: case TYPE_UINT32: bound = 8; break;
-                case TYPE_INT64: case TYPE_UINT64: bound = 16; break;
-                default: bound = 16; break;
-                }
-                break;
-            case 'o':
-                switch (t ? t->kind : 0) {
-                case TYPE_INT8: case TYPE_UINT8: bound = 3; break;
-                case TYPE_INT16: case TYPE_UINT16: bound = 6; break;
-                case TYPE_INT32: case TYPE_UINT32: bound = 11; break;
-                case TYPE_INT64: case TYPE_UINT64: bound = 22; break;
-                default: bound = 22; break;
-                }
-                break;
-            case 'f': {
-                /* A %f field width is a *minimum*, never a maximum: the integer
-                 * part can be as wide as the type's largest exponent in digits
-                 * (DBL_MAX ≈ 1.8e308 → 309 digits; FLT_MAX ≈ 3.4e38 → 39). The
-                 * budget must cover sign + integer digits + '.' + fraction
-                 * (default precision 6). The previous `width-or-24` bound
-                 * truncated large magnitudes. */
-                int int_digits = (t && t->kind == TYPE_FLOAT32) ? 39 : 309;
-                int prec = explicit_prec >= 0 ? explicit_prec : 6;
-                bound = 1 + int_digits + 1 + prec;
-                break;
-            }
-            case 'e': case 'E': case 'g': case 'G': {
-                /* Scientific/shortest forms are bounded by precision, not the
-                 * exponent: sign + leading digit + '.' + prec mantissa digits +
-                 * 'e±ddd' (≤ 3 exponent digits for double). */
-                int prec = explicit_prec >= 0 ? explicit_prec : 6;
-                bound = 9 + prec;
-                break;
-            }
-            case 'c': bound = 1; break;
-            case 'p': bound = 18; break;
-            default: bound = 24; break;
-            }
-            const char *flags = segs[i].text;
-            while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
-                if (*flags == '+' || *flags == ' ') bound++;
-                if (*flags == '#') bound += 2;
-                flags++;
-            }
-            if (explicit_width > bound) bound = explicit_width;
+            int bound = interp_numeric_bound(conv, t, segs[i].text,
+                                             explicit_width, explicit_prec);
             fprintf(out, "%d", bound);
         }
         k++;
@@ -1496,9 +1636,16 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
     if (first_term) fprintf(out, "0");
     fprintf(out, "; ");
 
-    /* Allocate buffer */
+    /* Allocate buffer.  A constant-size buffer points at the fixed array hoisted
+     * to function entry (codegen_backing_name) — its slot is reused on every loop
+     * iteration, so stack use stays bounded.  A runtime-sized buffer (a %s/cstr
+     * without an explicit precision) alloca's afresh each evaluation — which
+     * grows the frame per loop iteration, documented as a known cost with
+     * alloc(s)! as the heap-promoting escape hatch — or malloc's under alloc(s)!. */
     if (use_heap)
         fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)malloc(fc_to_size(_flen%d + 1)); ", tid, tid);
+    else if (e->interp_string.codegen_backing_name)
+        fprintf(out, "uint8_t *_fbuf%d = %s; ", tid, e->interp_string.codegen_backing_name);
     else
         fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)__builtin_alloca(fc_to_size(_flen%d + 1)); ", tid, tid);
 
@@ -2546,37 +2693,55 @@ static void emit_expr(Expr *e, FILE *out) {
             }
             break;
         }
-        /* Stack array literal → alloca + slice struct.
-         * Uses __builtin_alloca for function-frame lifetime — the backing memory
-         * survives until the function returns, unlike a block-scope VLA which
-         * the optimizer can reclaim after the statement expression closes.
-         * Per spec, N is always a compile-time literal. */
+        /* Stack array literal → slice over backing storage.
+         *
+         * The common case uses a fixed C array hoisted to function entry
+         * (codegen_backing_name, set during the hoist pass): its single slot is
+         * reused on every loop iteration, so stack use is bounded.  Zero-length
+         * literals (and any not reached by the hoist pass) fall back to
+         * __builtin_alloca.  Both give the backing function-frame lifetime — the
+         * memory must outlive this statement-expression because the produced
+         * slice escapes it (e.g. into a `let` binding used later). */
         int tid = temp_counter++;
+        const char *bk = e->array_lit.codegen_backing_name;
+        char arrname[24];
+        const char *tgt;
         fprintf(out, "({ ");
-        emit_type(e->array_lit.elem_type, out);
-        fprintf(out, " *_arr%d = (", tid);
-        emit_type(e->array_lit.elem_type, out);
-        fprintf(out, "*)__builtin_alloca(fc_to_size(");
-        emit_expr(e->array_lit.size_expr, out);
-        fprintf(out, ") * sizeof(");
-        emit_type(e->array_lit.elem_type, out);
-        fprintf(out, ")); ");
-        if (e->array_lit.elem_count == 0) {
-            fprintf(out, "memset(_arr%d, 0, fc_to_size(", tid);
+        if (bk) {
+            tgt = bk;
+        } else {
+            snprintf(arrname, sizeof arrname, "_arr%d", tid);
+            tgt = arrname;
+            emit_type(e->array_lit.elem_type, out);
+            fprintf(out, " *%s = (", tgt);
+            emit_type(e->array_lit.elem_type, out);
+            fprintf(out, "*)__builtin_alloca(fc_to_size(");
             emit_expr(e->array_lit.size_expr, out);
             fprintf(out, ") * sizeof(");
             emit_type(e->array_lit.elem_type, out);
             fprintf(out, ")); ");
+        }
+        if (e->array_lit.elem_count == 0) {
+            if (bk) {
+                /* backing is a real array → sizeof yields its byte count */
+                fprintf(out, "memset(%s, 0, sizeof %s); ", tgt, tgt);
+            } else {
+                fprintf(out, "memset(%s, 0, fc_to_size(", tgt);
+                emit_expr(e->array_lit.size_expr, out);
+                fprintf(out, ") * sizeof(");
+                emit_type(e->array_lit.elem_type, out);
+                fprintf(out, ")); ");
+            }
         } else {
             for (int i = 0; i < e->array_lit.elem_count; i++) {
-                fprintf(out, "_arr%d[%d] = ", tid, i);
+                fprintf(out, "%s[%d] = ", tgt, i);
                 emit_expr(e->array_lit.elems[i], out);
                 fprintf(out, "; ");
             }
         }
         fprintf(out, "(");
         emit_type(e->type, out);
-        fprintf(out, "){ .ptr = _arr%d, .len = ", tid);
+        fprintf(out, "){ .ptr = %s, .len = ", tgt);
         emit_expr(e->array_lit.size_expr, out);
         fprintf(out, " }; })");
         break;

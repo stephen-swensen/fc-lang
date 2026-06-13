@@ -237,8 +237,11 @@ struct Expr {
             Expr *size_expr;    /* NULL for unsized */
             Expr **elems;
             int elem_count;
-            const char *codegen_backing_name; /* non-NULL when lifted to a static
-                                                 backing array at file scope */
+            const char *codegen_backing_name; /* non-NULL when a backing array was
+                                                 lifted out of line: a file-scope
+                                                 static (const context) or a
+                                                 function-entry local (stack context,
+                                                 reused per loop iteration) */
         } array_lit;
 
         /* EXPR_SLICE_LIT — T[] { ptr = expr, len = expr } */
@@ -273,6 +276,13 @@ struct Expr {
             InterpSegment *segments;
             int segment_count;
             bool is_cstr;       /* true for c"..." interpolation → cstr result */
+            const char *codegen_backing_name; /* non-NULL when the buffer size is a
+                                                 compile-time constant and a fixed
+                                                 backing array was hoisted to function
+                                                 entry (reused per loop iteration)
+                                                 instead of alloca'd each evaluation */
+            int64_t backing_size;             /* byte budget N (excludes the NUL slot);
+                                                 the hoisted array is uint8_t[N + 1] */
         } interp_string;
 
         /* EXPR_SOME */

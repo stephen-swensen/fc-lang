@@ -1,0 +1,15 @@
+// Regression: a constant-size interpolation buffer (no runtime-length %s) inside
+// a loop must reuse a single fixed backing array hoisted to function entry, not
+// __builtin_alloca a fresh buffer every iteration. Pre-fix the frame grew each
+// iteration; with the fix the slot is reused. Asserts both that a specific
+// iteration's content is correct (the reused buffer is rewritten cleanly) and
+// that the full loop completes.
+let main = (args: str[]) ->
+    let mut count = 0
+    for i in 0..200000
+        let s = "value=%d{i} hex=%x{i}"
+        if i == 12345 then
+            assert(s == "value=12345 hex=3039")
+        count = count + 1
+    assert(count == 200000)
+    0

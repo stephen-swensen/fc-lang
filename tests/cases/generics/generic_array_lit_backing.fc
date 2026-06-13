@@ -1,0 +1,16 @@
+// A generic function containing a concrete-typed stack array literal must emit
+// its function-entry backing array correctly in every monomorphized instance.
+// Each instantiation is a separate C function, so the same AST node is emitted
+// once per concrete 'a, each with its own backing declaration.
+let scratch = (xs: 'a[]) ->
+    let buf = int32[4] { 0, 0, 0, 0 }
+    buf[0] = (int32) xs.len
+    buf[3] = (int32) xs.len
+    buf[0] + buf[3]
+
+let main = (args: str[]) ->
+    let ints = int32[2] { 5, 6 }
+    let longs = int64[2] { 5i64, 6i64 }
+    assert(scratch(ints) == 4)    // 'a = int32
+    assert(scratch(longs) == 4)   // 'a = int64 → distinct monomorph
+    0
