@@ -1,0 +1,35 @@
+// Every interpolated expression must be evaluated exactly once. Pre-fix a
+// cstr %s expression was evaluated twice (once for strlen in the buffer-size
+// computation, once as the snprintf argument).
+let mut calls = 0
+
+let bump_cstr = () ->
+    calls = calls + 1
+    c"x"
+
+let bump_str = () ->
+    calls = calls + 1
+    "y"
+
+let bump_int = () ->
+    calls = calls + 1
+    7
+
+let main = (args: str[]) ->
+    let _result =
+        let mut r = 0
+        calls = 0
+        let a = "%s{bump_cstr()}"
+        if calls == 1 then r = r + 1
+        if a == "x" then r = r + 2
+        calls = 0
+        let b = "%s{bump_str()}"
+        if calls == 1 then r = r + 4
+        if b == "y" then r = r + 8
+        calls = 0
+        let c = "%d{bump_int()}"
+        if calls == 1 then r = r + 16
+        if c == "7" then r = r + 32
+        r
+    assert(_result == 63)
+    0

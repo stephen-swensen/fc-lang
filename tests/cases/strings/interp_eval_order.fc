@@ -1,0 +1,26 @@
+// Interpolated expressions must be evaluated in textual (left-to-right) order.
+// Pre-fix, non-str segments were emitted directly as snprintf arguments, whose
+// evaluation order is unspecified in C (right-to-left under gcc).
+let mut seq = 0
+
+let mark = (slot: int32*) ->
+    *slot = seq
+    seq = seq + 1
+    0
+
+let main = (args: str[]) ->
+    let _result =
+        let mut a = -1
+        let mut b = -1
+        let mut c = -1
+        let mut r = 0
+        seq = 0
+        // three side-effecting segments; each mark() returns 0
+        let s = "%d{mark(&a)}%d{mark(&b)}%d{mark(&c)}"
+        if s == "000" then r = r + 1
+        if a == 0 then r = r + 2
+        if b == 1 then r = r + 4
+        if c == 2 then r = r + 8
+        r
+    assert(_result == 15)
+    0

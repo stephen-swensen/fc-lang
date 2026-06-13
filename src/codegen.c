@@ -1339,22 +1339,28 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
 
     fprintf(out, "({ ");
 
-    /* Pre-evaluate str arguments and compute their lengths */
-    int str_arg_idx = 0;
-    for (int i = 0; i < seg_count; i++) {
-        if (!segs[i].is_literal && segs[i].conversion == 's' &&
-            segs[i].expr->type && is_str_type(segs[i].expr->type)) {
-            fprintf(out, "fc_str _sa%d_%d = ", tid, str_arg_idx);
-            emit_expr(segs[i].expr, out);
-            fprintf(out, "; ");
-            str_arg_idx++;
-        }
+    /* Pre-evaluate every non-literal, non-%T segment into a temp, in textual
+     * order. This guarantees each interpolated expression is evaluated exactly
+     * once (snprintf evaluates its arguments in unspecified order, and a cstr
+     * %s would otherwise be evaluated twice — once for strlen, once as the
+     * argument) and in source order. %T is excluded: its operand is never
+     * evaluated, only its static type name is used. */
+    for (int i = 0, k = 0; i < seg_count; i++) {
+        if (segs[i].is_literal || segs[i].conversion == 'T') continue;
+        emit_type(segs[i].expr->type, out);
+        fprintf(out, " _sg%d_%d = ", tid, k);
+        emit_expr(segs[i].expr, out);
+        fprintf(out, "; ");
+        k++;
     }
 
-    /* Compute buffer size expression */
+    /* Compute buffer size expression. The buffer must be guaranteed large
+     * enough: a printf field width is a *minimum*, never a maximum, so it can
+     * never tighten a bound — only widen it. String precision is the one true
+     * maximum. */
     fprintf(out, "int64_t _flen%d = ", tid);
     bool first_term = true;
-    str_arg_idx = 0;
+    int k = 0;
     for (int i = 0; i < seg_count; i++) {
         if (segs[i].is_literal) {
             int actual_len = 0;
@@ -1373,104 +1379,119 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                 fprintf(out, "%d", actual_len);
                 first_term = false;
             }
-        } else {
-            int bound = 0;
-            char conv = segs[i].conversion;
-            int explicit_width = 0, explicit_prec = -1;
-            parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
-            bool is_str_arg = (conv == 's' && segs[i].expr->type &&
-                               is_str_type(segs[i].expr->type));
-            bool is_cstr_arg = (conv == 's' && segs[i].expr->type &&
-                                is_cstr_type(segs[i].expr->type));
-
-            if (is_str_arg) {
-                if (!first_term) fprintf(out, " + ");
-                if (explicit_prec >= 0) {
-                    int str_bound = explicit_prec;
-                    if (explicit_width > str_bound) str_bound = explicit_width;
-                    fprintf(out, "%d", str_bound);
-                } else if (explicit_width > 0) {
-                    fprintf(out, "(%d > _sa%d_%d.len ? %d : _sa%d_%d.len)",
-                        explicit_width, tid, str_arg_idx, explicit_width, tid, str_arg_idx);
-                } else {
-                    fprintf(out, "_sa%d_%d.len", tid, str_arg_idx);
-                }
-                first_term = false;
-                str_arg_idx++;
-            } else if (is_cstr_arg) {
-                if (!first_term) fprintf(out, " + ");
-                if (explicit_prec >= 0) {
-                    int str_bound = explicit_prec;
-                    if (explicit_width > str_bound) str_bound = explicit_width;
-                    fprintf(out, "%d", str_bound);
-                } else {
-                    fprintf(out, "(int64_t)strlen((const char*)");
-                    emit_expr(segs[i].expr, out);
-                    fprintf(out, ")");
-                }
-                first_term = false;
-            } else if (conv == 'T') {
-                const char *tname = type_name(segs[i].expr->type);
-                bound = (int)strlen(tname);
-                if (!first_term) fprintf(out, " + ");
-                fprintf(out, "%d", bound);
-                first_term = false;
-            } else {
-                Type *t = segs[i].expr->type;
-                switch (conv) {
-                case 'd': case 'i': case 'u':
-                    switch (t ? t->kind : 0) {
-                    case TYPE_INT8: bound = 4; break;
-                    case TYPE_UINT8: bound = 3; break;
-                    case TYPE_INT16: bound = 6; break;
-                    case TYPE_UINT16: bound = 5; break;
-                    case TYPE_INT32: bound = 11; break;
-                    case TYPE_UINT32: bound = 10; break;
-                    case TYPE_INT64: bound = 20; break;
-                    case TYPE_UINT64: bound = 20; break;
-                    default: bound = 20; break;
-                    }
-                    break;
-                case 'x': case 'X':
-                    switch (t ? t->kind : 0) {
-                    case TYPE_INT8: case TYPE_UINT8: bound = 2; break;
-                    case TYPE_INT16: case TYPE_UINT16: bound = 4; break;
-                    case TYPE_INT32: case TYPE_UINT32: bound = 8; break;
-                    case TYPE_INT64: case TYPE_UINT64: bound = 16; break;
-                    default: bound = 16; break;
-                    }
-                    break;
-                case 'o':
-                    switch (t ? t->kind : 0) {
-                    case TYPE_INT8: case TYPE_UINT8: bound = 3; break;
-                    case TYPE_INT16: case TYPE_UINT16: bound = 6; break;
-                    case TYPE_INT32: case TYPE_UINT32: bound = 11; break;
-                    case TYPE_INT64: case TYPE_UINT64: bound = 22; break;
-                    default: bound = 22; break;
-                    }
-                    break;
-                case 'f':
-                    bound = explicit_width > 0 ? explicit_width : 24;
-                    break;
-                case 'e': case 'E': case 'g': case 'G':
-                    bound = (t && t->kind == TYPE_FLOAT32) ? 15 : 24;
-                    break;
-                case 'c': bound = 1; break;
-                case 'p': bound = 18; break;
-                default: bound = 24; break;
-                }
-                const char *flags = segs[i].text;
-                while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
-                    if (*flags == '+' || *flags == ' ') bound++;
-                    if (*flags == '#') bound += 2;
-                    flags++;
-                }
-                if (explicit_width > bound) bound = explicit_width;
-                if (!first_term) fprintf(out, " + ");
-                fprintf(out, "%d", bound);
-                first_term = false;
-            }
+            continue;
         }
+        if (segs[i].conversion == 'T') {
+            /* %T contributes the fixed length of the compile-time type name. */
+            const char *tname = type_name(segs[i].expr->type);
+            if (!first_term) fprintf(out, " + ");
+            fprintf(out, "%d", (int)strlen(tname));
+            first_term = false;
+            continue;
+        }
+
+        char conv = segs[i].conversion;
+        int explicit_width = 0, explicit_prec = -1;
+        parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
+        Type *t = segs[i].expr->type;
+        bool is_str_arg = (conv == 's' && t && is_str_type(t));
+        bool is_cstr_arg = (conv == 's' && t && is_cstr_type(t));
+
+        if (!first_term) fprintf(out, " + ");
+        first_term = false;
+
+        if (is_str_arg || is_cstr_arg) {
+            /* String-valued: precision is a hard maximum; width is a minimum
+             * field. With a precision the bound is the constant max(prec,
+             * width); otherwise it is the runtime length, floored at the
+             * minimum field width (the str path was already correct; the cstr
+             * path previously ignored the width and under-allocated). */
+            if (explicit_prec >= 0) {
+                int b = explicit_prec;
+                if (explicit_width > b) b = explicit_width;
+                fprintf(out, "%d", b);
+            } else if (is_str_arg) {
+                if (explicit_width > 0)
+                    fprintf(out, "(%d > _sg%d_%d.len ? %d : _sg%d_%d.len)",
+                        explicit_width, tid, k, explicit_width, tid, k);
+                else
+                    fprintf(out, "_sg%d_%d.len", tid, k);
+            } else {
+                if (explicit_width > 0)
+                    fprintf(out, "((int64_t)%d > (int64_t)strlen((const char*)_sg%d_%d)"
+                                 " ? (int64_t)%d : (int64_t)strlen((const char*)_sg%d_%d))",
+                        explicit_width, tid, k, explicit_width, tid, k);
+                else
+                    fprintf(out, "(int64_t)strlen((const char*)_sg%d_%d)", tid, k);
+            }
+        } else {
+            int bound;
+            switch (conv) {
+            case 'd': case 'i': case 'u':
+                switch (t ? t->kind : 0) {
+                case TYPE_INT8: bound = 4; break;
+                case TYPE_UINT8: bound = 3; break;
+                case TYPE_INT16: bound = 6; break;
+                case TYPE_UINT16: bound = 5; break;
+                case TYPE_INT32: bound = 11; break;
+                case TYPE_UINT32: bound = 10; break;
+                case TYPE_INT64: bound = 20; break;
+                case TYPE_UINT64: bound = 20; break;
+                default: bound = 20; break;
+                }
+                break;
+            case 'x': case 'X':
+                switch (t ? t->kind : 0) {
+                case TYPE_INT8: case TYPE_UINT8: bound = 2; break;
+                case TYPE_INT16: case TYPE_UINT16: bound = 4; break;
+                case TYPE_INT32: case TYPE_UINT32: bound = 8; break;
+                case TYPE_INT64: case TYPE_UINT64: bound = 16; break;
+                default: bound = 16; break;
+                }
+                break;
+            case 'o':
+                switch (t ? t->kind : 0) {
+                case TYPE_INT8: case TYPE_UINT8: bound = 3; break;
+                case TYPE_INT16: case TYPE_UINT16: bound = 6; break;
+                case TYPE_INT32: case TYPE_UINT32: bound = 11; break;
+                case TYPE_INT64: case TYPE_UINT64: bound = 22; break;
+                default: bound = 22; break;
+                }
+                break;
+            case 'f': {
+                /* A %f field width is a *minimum*, never a maximum: the integer
+                 * part can be as wide as the type's largest exponent in digits
+                 * (DBL_MAX ≈ 1.8e308 → 309 digits; FLT_MAX ≈ 3.4e38 → 39). The
+                 * budget must cover sign + integer digits + '.' + fraction
+                 * (default precision 6). The previous `width-or-24` bound
+                 * truncated large magnitudes. */
+                int int_digits = (t && t->kind == TYPE_FLOAT32) ? 39 : 309;
+                int prec = explicit_prec >= 0 ? explicit_prec : 6;
+                bound = 1 + int_digits + 1 + prec;
+                break;
+            }
+            case 'e': case 'E': case 'g': case 'G': {
+                /* Scientific/shortest forms are bounded by precision, not the
+                 * exponent: sign + leading digit + '.' + prec mantissa digits +
+                 * 'e±ddd' (≤ 3 exponent digits for double). */
+                int prec = explicit_prec >= 0 ? explicit_prec : 6;
+                bound = 9 + prec;
+                break;
+            }
+            case 'c': bound = 1; break;
+            case 'p': bound = 18; break;
+            default: bound = 24; break;
+            }
+            const char *flags = segs[i].text;
+            while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
+                if (*flags == '+' || *flags == ' ') bound++;
+                if (*flags == '#') bound += 2;
+                flags++;
+            }
+            if (explicit_width > bound) bound = explicit_width;
+            fprintf(out, "%d", bound);
+        }
+        k++;
     }
     if (first_term) fprintf(out, "0");
     fprintf(out, "; ");
@@ -1490,7 +1511,6 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
             tid, tid, tid);
 
     /* Emit format string */
-    str_arg_idx = 0;
     for (int i = 0; i < seg_count; i++) {
         if (segs[i].is_literal) {
             const char *s = segs[i].text;
@@ -1530,7 +1550,6 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                     while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') j++;
                 }
                 fprintf(out, ".*s");
-                str_arg_idx++;
             } else {
                 Type *t = segs[i].expr->type;
                 bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
@@ -1548,14 +1567,16 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
     }
     fprintf(out, "\"");
 
-    /* Emit arguments */
-    str_arg_idx = 0;
+    /* Emit arguments — every one reads its pre-evaluated temp (_sg<tid>_<k>),
+     * so each expression is evaluated exactly once and in source order. */
+    int ak = 0;
     for (int i = 0; i < seg_count; i++) {
         if (segs[i].is_literal) continue;
         if (segs[i].conversion == 'T') continue;
         fprintf(out, ", ");
-        bool is_str_arg2 = (segs[i].conversion == 's' &&
-                           segs[i].expr->type && is_str_type(segs[i].expr->type));
+        char conv = segs[i].conversion;
+        Type *t = segs[i].expr->type;
+        bool is_str_arg2 = (conv == 's' && t && is_str_type(t));
         if (is_str_arg2) {
             int prec_w = 0, prec_p = -1;
             parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
@@ -1563,20 +1584,30 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                 /* Compare in int64 to avoid truncating before the min; the
                  * fc_to_int branch is only taken when len < prec_p, so the
                  * narrowing assert is trivially satisfied. */
-                fprintf(out, "(_sa%d_%d.len < (int64_t)%d ? fc_to_int(_sa%d_%d.len) : %d), _sa%d_%d.ptr",
-                    tid, str_arg_idx, prec_p, tid, str_arg_idx, prec_p, tid, str_arg_idx);
+                fprintf(out, "(_sg%d_%d.len < (int64_t)%d ? fc_to_int(_sg%d_%d.len) : %d), _sg%d_%d.ptr",
+                    tid, ak, prec_p, tid, ak, prec_p, tid, ak);
             } else {
-                fprintf(out, "fc_to_int(_sa%d_%d.len), _sa%d_%d.ptr",
-                    tid, str_arg_idx, tid, str_arg_idx);
+                fprintf(out, "fc_to_int(_sg%d_%d.len), _sg%d_%d.ptr",
+                    tid, ak, tid, ak);
             }
-            str_arg_idx++;
         } else {
-            Type *t = segs[i].expr->type;
-            char conv = segs[i].conversion;
             bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
             if (t && type_is_integer(t)) {
                 if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
-                    fprintf(out, is_64bit ? "(unsigned long long)" : "(unsigned int)");
+                    /* Unsigned conversions print the operand's bit pattern.
+                     * Casting a *signed narrow* operand straight to (unsigned
+                     * int) sign-extends it (e.g. -16i8 → 0xFFFFFFF0, formatted
+                     * "fffffff0" and overrunning the 2-digit budget), so first
+                     * reinterpret it at its own width via the unsigned
+                     * counterpart, then widen for the printf length modifier. */
+                    const char *uw;
+                    switch (t->kind) {
+                    case TYPE_INT8:  case TYPE_UINT8:  uw = "uint8_t";  break;
+                    case TYPE_INT16: case TYPE_UINT16: uw = "uint16_t"; break;
+                    case TYPE_INT32: case TYPE_UINT32: uw = "uint32_t"; break;
+                    default:                           uw = "uint64_t"; break;
+                    }
+                    fprintf(out, is_64bit ? "(unsigned long long)(%s)" : "(unsigned int)(%s)", uw);
                 } else {
                     fprintf(out, is_64bit ? "(long long)" : "(int)");
                 }
@@ -1590,8 +1621,9 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
             } else if (t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR)) {
                 fprintf(out, "(void*)");
             }
-            emit_expr(segs[i].expr, out);
+            fprintf(out, "_sg%d_%d", tid, ak);
         }
+        ak++;
     }
     fprintf(out, ")");
     if (use_heap) fprintf(out, " : 0");  /* close the _fbuf ? snprintf(...) : 0 ternary */

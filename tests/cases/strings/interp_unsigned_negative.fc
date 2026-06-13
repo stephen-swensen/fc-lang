@@ -1,0 +1,31 @@
+// Unsigned conversions (%x %X %o %u) of negative narrow integers must print
+// the operand's bit pattern at its own width, not the sign-extended (unsigned
+// int) value. Pre-fix, %x{-16i8} sign-extended to 0xFFFFFFF0 and the 2-char
+// budget truncated the leading digits to "ff".
+let main = (args: str[]) ->
+    let _result =
+        let mut r = 0
+        // int8 -16 = 0xF0
+        let a = "%x{-16i8}"
+        if a == "f0" then r = r + 1
+        // int8 -1 = 0xFF, uppercase
+        let b = "%X{-1i8}"
+        if b == "FF" then r = r + 2
+        // int16 -2 = 0xFFFE
+        let c = "%x{-2i16}"
+        if c == "fffe" then r = r + 4
+        // octal of int8 -1 (0xFF = 255) = 377
+        let d = "%o{-1i8}"
+        if d == "377" then r = r + 8
+        // unsigned decimal of int8 -16 = 240
+        let e = "%u{-16i8}"
+        if e == "240" then r = r + 16
+        // unsigned decimal of int16 -1 = 65535
+        let f = "%u{-1i16}"
+        if f == "65535" then r = r + 32
+        // int32 -1 = 0xFFFFFFFF (width matches operand: unchanged by the fix)
+        let g = "%x{-1i32}"
+        if g == "ffffffff" then r = r + 64
+        r
+    assert(_result == 127)
+    0

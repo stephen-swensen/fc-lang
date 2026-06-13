@@ -1,0 +1,18 @@
+// A %f field width is a minimum, not a maximum. Pre-fix the buffer was sized
+// to the width (or 24), so large magnitudes were truncated mid-number.
+let main = (args: str[]) ->
+    let _result =
+        let mut r = 0
+        // value needs 13 chars; width 8 must not cap it
+        let a = "%8.2f{1000000000.0}"
+        if a == "1000000000.00" then r = r + 1
+        if a.len == 13 then r = r + 2
+        // small value: width 8 still pads (minimum honored)
+        let b = "%8.2f{3.14}"
+        if b == "    3.14" then r = r + 4
+        // no-width %e with explicit precision must not overflow the old 24 cap
+        let c = "%.20e{1.0}"
+        if c.len == 26 then r = r + 8   // "1." + 20 digits + "e+00"
+        r
+    assert(_result == 15)
+    0

@@ -1,0 +1,14 @@
+// Interleaving str, cstr, and numeric segments exercises the unified
+// pre-evaluation temp indexing: every non-literal segment now gets a temp, so
+// the buffer-size, format-string, and argument passes must stay aligned across
+// segment kinds (str segments were previously counted on a separate index).
+let main = (args: str[]) ->
+    let _result =
+        let nm = "bob"            // str
+        let cs = (cstr) "CS"      // cstr
+        let mut r = 0
+        let s = "%d{42}/%s{nm}/%x{-1i8}/%s{cs}/%6.2f{3.5}"
+        if s == "42/bob/ff/CS/  3.50" then r = r + 1
+        r
+    assert(_result == 1)
+    0
