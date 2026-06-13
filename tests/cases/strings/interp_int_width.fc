@@ -1,0 +1,27 @@
+// Integer interpolation must be int-width-agnostic. Every integer-number
+// conversion (%d %i %u %x %X %o) is passed as (unsigned) long long with an `ll`
+// length modifier, so a full-width int32/uint32 value is never truncated on a
+// 16-bit-`int` target (where int32_t is `long`, not `int`). On a 32-bit-`int`
+// host these values are unchanged; the test pins format/argument agreement and
+// guards against reverting to a width-dependent (int)/%d form.
+let main = (args: str[]) ->
+    let _result =
+        let mut r = 0
+        let a = 2000000000          // near int32 max
+        if "%d{a}" == "2000000000" then r = r + 1
+        if "%x{a}" == "77359400" then r = r + 2
+        if "%u{a}" == "2000000000" then r = r + 4
+        if "%o{a}" == "16715312000" then r = r + 8
+        let b = -2000000000
+        if "%d{b}" == "-2000000000" then r = r + 16
+        let c = 9000000000000000000i64
+        if "%d{c}" == "9000000000000000000" then r = r + 32
+        if "%x{c}" == "7ce66c50e2840000" then r = r + 64
+        let d = 18000000000000000000u64
+        if "%u{d}" == "18000000000000000000" then r = r + 128
+        // %c stays an int argument (no ll modifier)
+        let e = 65u8
+        if "%c{e}" == "A" then r = r + 256
+        r
+    assert(_result == 511)
+    0

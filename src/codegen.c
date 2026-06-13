@@ -1552,11 +1552,18 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                 fprintf(out, ".*s");
             } else {
                 Type *t = segs[i].expr->type;
-                bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
+                char conv = segs[i].conversion;
+                /* Every integer-number conversion is passed as (unsigned) long
+                 * long (see the argument pass), so it always takes the `ll`
+                 * length modifier — independent of the target's `int` width.
+                 * %c (char/uint8) is passed as int and keeps no modifier. */
+                bool int_number = t && type_is_integer(t) &&
+                    (conv == 'd' || conv == 'i' || conv == 'u' ||
+                     conv == 'x' || conv == 'X' || conv == 'o');
                 const char *sp = segs[i].text;
                 int splen = segs[i].text_length;
                 fprintf(out, "%%");
-                if (is_64bit) {
+                if (int_number) {
                     for (int j = 0; j < splen - 1; j++) fputc(sp[j], out);
                     fprintf(out, "ll%c", sp[splen - 1]);
                 } else {
@@ -1591,15 +1598,17 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                     tid, ak, tid, ak);
             }
         } else {
-            bool is_64bit = t && (t->kind == TYPE_INT64 || t->kind == TYPE_UINT64 || t->kind == TYPE_ISIZE || t->kind == TYPE_USIZE);
             if (t && type_is_integer(t)) {
                 if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
                     /* Unsigned conversions print the operand's bit pattern.
-                     * Casting a *signed narrow* operand straight to (unsigned
-                     * int) sign-extends it (e.g. -16i8 → 0xFFFFFFF0, formatted
-                     * "fffffff0" and overrunning the 2-digit budget), so first
-                     * reinterpret it at its own width via the unsigned
-                     * counterpart, then widen for the printf length modifier. */
+                     * First reinterpret it at its *own* width via the unsigned
+                     * counterpart — casting a signed narrow operand straight to
+                     * a wider unsigned type sign-extends it (e.g. -16i8 →
+                     * 0xFFFFFFF0, formatted "fffffff0" and overrunning the
+                     * 2-digit budget). Then widen to unsigned long long so the
+                     * `ll` length modifier is correct on every target: a plain
+                     * (unsigned int) is only 16 bits where C's `int` is, which
+                     * would truncate a uint32 value. */
                     const char *uw;
                     switch (t->kind) {
                     case TYPE_INT8:  case TYPE_UINT8:  uw = "uint8_t";  break;
@@ -1607,9 +1616,15 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                     case TYPE_INT32: case TYPE_UINT32: uw = "uint32_t"; break;
                     default:                           uw = "uint64_t"; break;
                     }
-                    fprintf(out, is_64bit ? "(unsigned long long)(%s)" : "(unsigned int)(%s)", uw);
+                    fprintf(out, "(unsigned long long)(%s)", uw);
+                } else if (conv == 'c') {
+                    /* %c (uint8 operand) takes an int argument, no modifier. */
+                    fprintf(out, "(int)");
                 } else {
-                    fprintf(out, is_64bit ? "(long long)" : "(int)");
+                    /* Signed decimal: widen to long long (matches the `ll`
+                     * modifier) so int32 is not truncated on a 16-bit-`int`
+                     * target, where int32_t is `long`, not `int`. */
+                    fprintf(out, "(long long)");
                 }
             } else if (t && t->kind == TYPE_FLOAT32) {
                 fprintf(out, "(double)");
