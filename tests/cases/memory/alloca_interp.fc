@@ -1,0 +1,22 @@
+// alloca(...) gives a runtime-sized stack temporary directly (no option, no
+// free): the explicit home for an unbounded interpolation or str->cstr copy.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let name = "world"
+
+    // alloca str interpolation with an unbounded %s
+    let m = alloca("val=%s{name}")
+    assert(m == "val=world")
+    assert(m.len == 9)
+
+    // alloca cstr interpolation
+    let g = alloca(c"hi %s{name}!")
+    assert(c.strlen(g) == 9u)
+    assert(((str) g) == "hi world!")
+
+    // alloca is the dynamic-stack home for a str->cstr copy
+    let cs = alloca(c"%s{name}")
+    assert(c.strlen(cs) == 5u)
+    0

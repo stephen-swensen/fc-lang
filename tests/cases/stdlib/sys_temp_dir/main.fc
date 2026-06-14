@@ -11,7 +11,7 @@ let main = (args: str[]) ->
 
         // Confirm the returned path is actually a writable directory by
         // round-tripping a file through it.
-        let path = "%s{tmp}/fc_test_temp_dir_probe.txt"
+        let path = alloca("%s{tmp}/fc_test_temp_dir_probe.txt")
         match io.open(path, "w") with
         | none -> return 2
         | some(f) ->

@@ -1,0 +1,6 @@
+// Error: casting a string literal to cstr should use a c"..." literal (static
+// data) rather than (cstr), which would copy at runtime.
+let main = (args: str[]) ->
+    let cs = (cstr) "hello"
+    assert(cs[0] == 104u8)
+    0

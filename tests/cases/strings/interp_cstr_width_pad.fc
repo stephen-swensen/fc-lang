@@ -3,17 +3,17 @@
 // strlen), so a padded value overran the buffer and was truncated.
 let main = (args: str[]) ->
     let _result =
-        let name = (cstr) "hi"
+        let name = c"hi"
         let mut r = 0
         // right-aligned in a 10-wide field
-        let a = "[%10s{name}]"
+        let a = alloca("[%10s{name}]")
         if a == "[        hi]" then r = r + 1
         if a.len == 12 then r = r + 2
         // left-aligned in a 10-wide field
-        let b = "[%-10s{name}]"
+        let b = alloca("[%-10s{name}]")
         if b == "[hi        ]" then r = r + 4
         // width smaller than length: no padding, no truncation
-        let c = "[%1s{name}]"
+        let c = alloca("[%1s{name}]")
         if c == "[hi]" then r = r + 8
         r
     assert(_result == 15)

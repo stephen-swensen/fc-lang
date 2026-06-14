@@ -1242,12 +1242,31 @@ static Expr *parse_prefix(Parser *p) {
             int save = p->pos;
             advance_p(p); /* ( */
             Type *target = parse_type(p);
+            /* (cstr[N]) — bounded str→cstr cast. cstr is uint8*, so allow_fixed_array
+             * (off in expression context) left the [N] unconsumed for us to claim. */
+            int buffer_size = 0;
+            if (is_cstr_type(target) && check(p, TOK_LBRACKET) &&
+                peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
+                advance_p(p); /* [ */
+                Token *nt = current(p);
+                bool oor = false;
+                int64_t n = parse_int_value(nt->start, nt->length, &oor);
+                if (oor || n < 1) {
+                    SrcLoc nloc = loc_from_token(nt);
+                    diag_fatal(nloc, "(cstr[N]) buffer size must be a positive integer, got %lld",
+                               (long long)n);
+                }
+                advance_p(p); /* N */
+                advance_p(p); /* ] */
+                buffer_size = (int)n;
+            }
             if (check(p, TOK_RPAREN)) {
                 advance_p(p);
                 Expr *operand = parse_expr(p, PREC_PREFIX);
                 Expr *e = alloc_expr(p, EXPR_CAST, loc);
                 e->cast.target = target;
                 e->cast.operand = operand;
+                e->cast.buffer_size = buffer_size;
                 return e;
             }
             /* Not a cast — backtrack */
@@ -1516,7 +1535,9 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
-    case TOK_ALLOC: {
+    case TOK_ALLOC:
+    case TOK_ALLOCA: {
+        bool is_stack = (current(p)->kind == TOK_ALLOCA);
         advance_p(p);
         expect(p, TOK_LPAREN);
 
@@ -1560,6 +1581,7 @@ static Expr *parse_prefix(Parser *p) {
                 e->alloc_expr.alloc_type = ty;
                 e->alloc_expr.size_expr = NULL;
                 e->alloc_expr.init_expr = NULL;
+                e->alloc_expr.is_stack = is_stack;
                 return e;
             }
             if (check(p, TOK_LBRACKET)) {
@@ -1592,6 +1614,7 @@ static Expr *parse_prefix(Parser *p) {
                     e->alloc_expr.alloc_type = ty;
                     e->alloc_expr.size_expr = size;
                     e->alloc_expr.init_expr = NULL;
+                    e->alloc_expr.is_stack = is_stack;
                     return e;
                 }
                 Expr **arena_elems = arena_alloc(p->arena,
@@ -1608,6 +1631,7 @@ static Expr *parse_prefix(Parser *p) {
                 e->alloc_expr.alloc_type = NULL;
                 e->alloc_expr.size_expr = NULL;
                 e->alloc_expr.init_expr = arr;
+                e->alloc_expr.is_stack = is_stack;
                 return e;
             }
             if (check(p, TOK_COMMA)) {
@@ -1620,6 +1644,7 @@ static Expr *parse_prefix(Parser *p) {
                 e->alloc_expr.size_expr = size;
                 e->alloc_expr.init_expr = NULL;
                 e->alloc_expr.alloc_raw = true;
+                e->alloc_expr.is_stack = is_stack;
                 return e;
             }
             if (try_type) {
@@ -1630,13 +1655,18 @@ static Expr *parse_prefix(Parser *p) {
             }
         }
 
-        /* alloc(expr) — initialized alloc */
+        /* alloc(expr) / alloca(expr) — initialized alloc. An interpolated string
+         * init is "wrapped": this licenses an unbounded (runtime-sized) interpolation
+         * that would be rejected as a bare expression. */
         Expr *init = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
+        if (init->kind == EXPR_INTERP_STRING)
+            init->interp_string.wrapped = true;
         Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
         e->alloc_expr.alloc_type = NULL;
         e->alloc_expr.size_expr = NULL;
         e->alloc_expr.init_expr = init;
+        e->alloc_expr.is_stack = is_stack;
         return e;
     }
 

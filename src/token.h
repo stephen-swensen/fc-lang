@@ -45,6 +45,7 @@ typedef enum {
 
     /* Built-in operators (reserved identifiers) */
     TOK_ALLOC,
+    TOK_ALLOCA,
     TOK_FREE,
     TOK_SIZEOF,
     TOK_ALIGNOF,

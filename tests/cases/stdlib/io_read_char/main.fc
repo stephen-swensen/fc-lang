@@ -3,7 +3,7 @@ import sys from std::
 
 let main = (args: str[]) ->
     let tmp = sys.temp_dir()!
-    let path = "%s{tmp}/fc_test_read_char.txt"
+    let path = alloca("%s{tmp}/fc_test_read_char.txt")
 
     // Write a tiny known payload.
     match io.open(path, "w") with

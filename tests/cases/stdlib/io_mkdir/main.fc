@@ -3,8 +3,8 @@ import sys from std::
 
 let main = (args: str[]) ->
     let tmp = sys.temp_dir()!
-    let dir = "%s{tmp}/fc_test_mkdir"
-    let file = "%s{tmp}/fc_test_mkdir/test.txt"
+    let dir = alloca("%s{tmp}/fc_test_mkdir")
+    let file = alloca("%s{tmp}/fc_test_mkdir/test.txt")
 
     // Create a directory
     assert(io.mkdir(dir) == true)
@@ -21,7 +21,7 @@ let main = (args: str[]) ->
 
     // Clean up
     io.remove(file)
-    c.rmdir((cstr) dir)
+    c.rmdir(alloca(c"%s{dir}"))
 
     0
 

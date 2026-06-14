@@ -19,7 +19,7 @@ module h from "fixed_array_box.h" =
 
 let main = (args: str[]) ->
     let mut box = default(h.fc_box)
-    let written = h.fc_box_fill(&box, (cstr) "hello")
+    let written = h.fc_box_fill(&box, c"hello")
     assert(written == 5)
     assert(box.filled == 5)
 

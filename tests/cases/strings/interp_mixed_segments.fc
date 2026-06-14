@@ -5,9 +5,9 @@
 let main = (args: str[]) ->
     let _result =
         let nm = "bob"            // str
-        let cs = (cstr) "CS"      // cstr
+        let cs = c"CS"      // cstr
         let mut r = 0
-        let s = "%d{42}/%s{nm}/%x{-1i8}/%s{cs}/%6.2f{3.5}"
+        let s = alloca("%d{42}/%s{nm}/%x{-1i8}/%s{cs}/%6.2f{3.5}")
         if s == "42/bob/ff/CS/  3.50" then r = r + 1
         r
     assert(_result == 1)

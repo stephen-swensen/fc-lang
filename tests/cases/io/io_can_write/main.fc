@@ -11,7 +11,7 @@ let main = (args: str[]) ->
     assert(!io.can_write("nonexistent_xyz_should_not_exist"))
 
     // write a temp file and verify it's writable
-    let path = "%s{tmp}/fc_test_can_write.txt"
+    let path = alloca("%s{tmp}/fc_test_can_write.txt")
     match io.open(path, "w") with
     | some(wf) ->
         io.write("test", wf)

@@ -173,7 +173,13 @@ struct Expr {
         struct { Expr *object; Expr *lo; Expr *hi; } slice;
 
         /* EXPR_CAST */
-        struct { Type *target; Expr *operand; } cast;
+        struct {
+            Type *target;
+            Expr *operand;
+            int buffer_size;  /* (cstr[N]) bounded str→cstr cast: N > 0; 0 = plain cast.
+                                 Copies min(len, N-1) bytes + NUL into a hoisted uint8[N]. */
+            const char *codegen_backing_name;  /* hoisted backing array name (set in codegen) */
+        } cast;
 
         /* EXPR_IF */
         struct { Expr *cond; Expr *then_body; Expr *else_body; } if_expr;
@@ -257,6 +263,7 @@ struct Expr {
             Expr *size_expr;      /* array size for alloc(T[N])/alloc(T,N) — NULL for single */
             Expr *init_expr;      /* init expression for alloc(expr) — NULL for type-only */
             bool alloc_raw;       /* true for alloc(T, N) → T*?, false for alloc(T[N]) → T[]? */
+            bool is_stack;        /* true for alloca(...) → dynamic stack, no option, no free */
         } alloc_expr;
 
         /* EXPR_FREE */
@@ -283,6 +290,9 @@ struct Expr {
                                                  instead of alloca'd each evaluation */
             int64_t backing_size;             /* byte budget N (excludes the NUL slot);
                                                  the hoisted array is uint8_t[N + 1] */
+            bool wrapped;                     /* true when this interp is the direct init of
+                                                 alloc(...)/alloca(...) — licenses an otherwise
+                                                 illegal unbounded (runtime-sized) interpolation */
         } interp_string;
 
         /* EXPR_SOME */
@@ -484,3 +494,11 @@ typedef struct Program {
     Decl **decls;
     int decl_count;
 } Program;
+
+/* True if an interpolated string's buffer size is not a compile-time constant —
+ * i.e. it contains a %s/cstr segment with no explicit precision, making its byte
+ * budget depend on a runtime string length. Such interpolations must be given a
+ * home explicitly (a precision, alloc, or alloca); a bare one is rejected in
+ * pass2. Defined in codegen.c so it shares the exact const-size logic the buffer
+ * emitter uses (the two can never disagree on what counts as bounded). */
+bool interp_is_runtime_sized(const struct Expr *e);

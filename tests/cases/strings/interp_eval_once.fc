@@ -19,11 +19,11 @@ let main = (args: str[]) ->
     let _result =
         let mut r = 0
         calls = 0
-        let a = "%s{bump_cstr()}"
+        let a = alloca("%s{bump_cstr()}")
         if calls == 1 then r = r + 1
         if a == "x" then r = r + 2
         calls = 0
-        let b = "%s{bump_str()}"
+        let b = alloca("%s{bump_str()}")
         if calls == 1 then r = r + 4
         if b == "y" then r = r + 8
         calls = 0

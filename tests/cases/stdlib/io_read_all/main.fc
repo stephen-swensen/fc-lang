@@ -3,7 +3,7 @@ import sys from std::
 
 let main = (args: str[]) ->
     let tmp = sys.temp_dir()!
-    let path = "%s{tmp}/fc_test_read_all.txt"
+    let path = alloca("%s{tmp}/fc_test_read_all.txt")
     let payload = "abcdefghij"
 
     // Write a known payload.
@@ -28,7 +28,7 @@ let main = (args: str[]) ->
     io.remove(path)
 
     // read_all on a missing path should return none rather than crash.
-    let missing = "%s{tmp}/fc_test_read_all_does_not_exist.txt"
+    let missing = alloca("%s{tmp}/fc_test_read_all_does_not_exist.txt")
     assert(io.read_all(missing).is_none)
 
     0

@@ -33,7 +33,7 @@ module sys =
     // returns: const str? — the value if set, none if unset. Const because the
     //   returned str points into the process environment block.
     let env = (name: const str) ->
-        match c.getenv((cstr) name) with
+        match c.getenv(alloca(c"%s{name}")) with
         | some(cs) -> some((const str) cs)
         | none -> default(const str?)
 
@@ -67,13 +67,13 @@ module sys =
     // since those env vars are often unset; Windows always sets TEMP/TMP.
     // returns: const str? — the temp directory path if found, none otherwise.
     let temp_dir = () ->
-        match c.getenv((cstr) "TMPDIR") with
+        match c.getenv(c"TMPDIR") with
         | some(cs) -> some((const str) cs)
         | none ->
-            match c.getenv((cstr) "TMP") with
+            match c.getenv(c"TMP") with
             | some(cs) -> some((const str) cs)
             | none ->
-                match c.getenv((cstr) "TEMP") with
+                match c.getenv(c"TEMP") with
                 | some(cs) -> some((const str) cs)
 #if os == "windows"
                 | none -> default(const str?)
@@ -85,10 +85,10 @@ module sys =
     // Checks HOME (Linux, macOS, MinGW), then USERPROFILE (Windows).
     // returns: const str? — the home directory path if found, none otherwise.
     let home_dir = () ->
-        match c.getenv((cstr) "HOME") with
+        match c.getenv(c"HOME") with
         | some(cs) -> some((const str) cs)
         | none ->
-            match c.getenv((cstr) "USERPROFILE") with
+            match c.getenv(c"USERPROFILE") with
             | some(cs) -> some((const str) cs)
             | none -> default(const str?)
 

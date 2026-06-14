@@ -3,7 +3,7 @@ import sys from std::
 
 let main = (args: str[]) ->
     let tmp = sys.temp_dir()!
-    let path = "%s{tmp}/fc_test_seek_tell.txt"
+    let path = alloca("%s{tmp}/fc_test_seek_tell.txt")
 
     // Write a test file
     let f = io.open(path, "w")

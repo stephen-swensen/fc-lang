@@ -1059,7 +1059,7 @@ let gen_wave_clear = () ->
 let load_high_score = () ->
     match sys.home_dir() with
     | some(hd) ->
-        match io.open("%s{hd}/.face-invaders/highscore.txt", "r") with
+        match io.open(alloca("%s{hd}/.face-invaders/highscore.txt"), "r") with
         | some(fp) ->
             let mut buf = uint8[32] { }
             io.read(buf, 32, fp)
@@ -1073,8 +1073,8 @@ let load_high_score = () ->
 let save_high_score = (score: int32) ->
     match sys.home_dir() with
     | some(hd) ->
-        io.mkdir("%s{hd}/.face-invaders")
-        match io.open("%s{hd}/.face-invaders/highscore.txt", "w") with
+        io.mkdir(alloca("%s{hd}/.face-invaders"))
+        match io.open(alloca("%s{hd}/.face-invaders/highscore.txt"), "w") with
         | some(fp) ->
             io.write("%d{score}\n", fp)
             io.close(fp)
@@ -1400,7 +1400,7 @@ let main = (args: str[]) ->
                         w->game.high_score = 0
                         match sys.home_dir() with
                         | some(hd) ->
-                            io.remove("%s{hd}/.face-invaders/highscore.txt")
+                            io.remove(alloca("%s{hd}/.face-invaders/highscore.txt"))
                             void()
                         | none -> void()
                     | _ -> void()

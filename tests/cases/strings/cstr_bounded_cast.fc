@@ -1,0 +1,28 @@
+// (cstr[N]) bounded str->cstr cast: copies min(len, N-1) bytes into a fixed
+// N-byte stack backing and always NUL-terminates. Fits unchanged; over-long
+// input truncates (strlcpy semantics) rather than overrunning.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let s = "hello"
+
+    // fits: 5 chars into a 16-byte buffer, full round-trip
+    let c1 = (cstr[16]) s
+    assert(c.strlen(c1) == 5u)
+    assert(((str) c1) == "hello")
+
+    // truncates: N-1 = 3 chars -> "hel"
+    let c2 = (cstr[4]) s
+    assert(c.strlen(c2) == 3u)
+    assert(((str) c2) == "hel")
+
+    // exact fit: N-1 == len
+    let c3 = (cstr[6]) s
+    assert(((str) c3) == "hello")
+
+    // empty source -> empty, NUL only
+    let e = ""
+    let c4 = (cstr[8]) e
+    assert(c.strlen(c4) == 0u)
+    0

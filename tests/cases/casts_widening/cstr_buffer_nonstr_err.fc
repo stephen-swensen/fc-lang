@@ -1,0 +1,6 @@
+// Error: the (cstr[N]) buffer-size form applies only to a str->cstr cast.
+let main = (args: str[]) ->
+    let p = default(int32*)
+    let q = (cstr[8]) p
+    assert(q == default(cstr))
+    0

@@ -1,0 +1,7 @@
+// Error: an interpolation with an unprecisioned %s is runtime-sized and must
+// be given an explicit home (a precision, alloc, or alloca).
+let main = (args: str[]) ->
+    let name = "world"
+    let s = "hello %s{name}!"
+    assert(s.len == 12)
+    0

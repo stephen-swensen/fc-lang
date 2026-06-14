@@ -117,6 +117,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"none",      4,  TOK_NONE},
         {"void",      4,  TOK_VOID},
         {"alloc",     5,  TOK_ALLOC},
+        {"alloca",    6,  TOK_ALLOCA},
         {"free",      4,  TOK_FREE},
         {"sizeof",    6,  TOK_SIZEOF},
         {"alignof",   7,  TOK_ALIGNOF},

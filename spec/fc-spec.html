@@ -473,7 +473,7 @@ FC targets **C11** specifically, plus a small set of GNU extensions supported by
 The generated C uses the following extensions beyond the C11 standard:
 
 - **GNU statement expressions** (`({ ... })`) — used pervasively for bounds-checked slice access, option unwrap, `alloc` expressions, match-as-expression, loop-as-expression, and other constructs that must evaluate a sequence of statements and produce a value. This is the primary GNU dependency.
-- **`__builtin_alloca`** — used only for *runtime-sized* stack temporaries, whose length is not known until execution: interpolation buffers containing a `%s`/cstr segment without an explicit precision, `(cstr) str` casts, and the `argc`/`argv` conversion in the generated `main` wrapper. Constant-size temporaries — array literals (whose length is always a compile-time literal) and interpolation buffers whose every segment is compile-time-bounded — instead use a plain fixed C array hoisted to the top of the enclosing function, so a single stack slot is reused across loop iterations rather than the frame growing on every pass. Avoids any `<alloca.h>` dependency.
+- **`__builtin_alloca`** — used only for *runtime-sized* stack temporaries the programmer asked for explicitly with the `alloca` operator (an unbounded interpolation, a runtime str→cstr copy, or a runtime-sized buffer), plus the `argc`/`argv` conversion in the generated `main` wrapper. Constant-size temporaries — array literals (whose length is always a compile-time literal), `(cstr[N])` casts, and interpolation buffers whose every segment is compile-time-bounded — instead use a plain fixed C array hoisted to the top of the enclosing function, so a single stack slot is reused across loop iterations rather than the frame growing on every pass. There is no *implicit* `alloca`. Avoids any `<alloca.h>` dependency.
 - **`__attribute__`** — every emitted helper is marked `static __attribute__((unused))` (so unreferenced helpers stay warning-clean); the runtime also uses `((constructor))`, `((cold))`, `((noinline))`, and `((noreturn))` on a few internal functions.
 - **`__builtin_expect`** — emitted in slice/option bounds checks to hint the failure branch as cold.
 
@@ -820,16 +820,23 @@ The `%f` format requires an explicit width (e.g., `%8.2f`) to make the field siz
 
 #### Allocation
 
-Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, pointer, and float formats are bounded at compile time by the type's maximum formatted width — for floats, the largest magnitude the type can hold. A field width is only ever a *floor* on a segment's contribution, never a cap, so widening a field can only enlarge the buffer. String formats (`%s`) use the runtime `.len` by default, raised to the field width when one is given. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size. The compiler's escape analysis tracks interpolated strings as stack-allocated — returning one from a function or freeing one is a compile error. Use `alloc(s)!` to deep-copy to the heap if the string must outlive the function.
+Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, pointer, and float formats are bounded at compile time by the type's maximum formatted width — for floats, the largest magnitude the type can hold. A field width is only ever a *floor* on a segment's contribution, never a cap, so widening a field can only enlarge the buffer. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size. The compiler's escape analysis tracks interpolated strings as stack-allocated — returning one from a function or freeing one is a compile error. Use `alloc(s)!` to deep-copy to the heap if the string must outlive the function.
 
-When `%s` includes a precision (e.g., `%.256s{name}`), the precision acts as a compile-time bound on that segment. If the string is longer than the precision, it is truncated (standard printf truncation semantics). When **all** segments in an interpolated string have compile-time bounds — i.e., all `%s` segments use precision and all other segments are numeric/char/pointer — the entire buffer size is a compile-time constant, and the compiler allocates the buffer as a fixed array hoisted to the top of the enclosing function: a single slot reused on every iteration, so building such a string in a loop uses bounded stack and supports static stack analysis. A buffer whose size is *not* a compile-time constant — any interpolation containing a `%s`/cstr segment without an explicit precision — is allocated with `alloca` instead, and because alloca memory is reclaimed only when the function returns, evaluating it repeatedly in a loop extends the frame on every iteration. For unbounded `%s` interpolation inside a hot loop, promote the result to the heap with `alloc(s)!` (freeing it per iteration) to keep stack use bounded.
+FC has **no implicit unbounded stack allocation**: a string interpolation is only allowed as a bare expression when its buffer size is a compile-time constant — i.e., every segment is bounded (numeric/char/pointer/`%T`, or a `%s` carrying an explicit precision). Such a buffer is a fixed array hoisted to the top of the enclosing function: a single slot reused on every iteration, so building the string in a loop uses bounded stack and supports static stack analysis.
+
+A `%s`/cstr segment **without** a precision is *runtime-sized* — its buffer length is not known until execution. A bare interpolation containing one is a **compile error**, because evaluating it in a loop would extend the stack frame on every iteration. You must give it an explicit home, in increasing cost:
+
+- **Bound it** — add a precision (`%.64s{name}`). The precision is a compile-time cap on that segment; a longer string is truncated (standard printf semantics). The whole buffer becomes constant-size and loop-safe.
+- **Heap** — `alloc("...%s{name}")!` copies the result to the heap; the caller must `free` it. Loop-safe if freed per iteration.
+- **Dynamic stack** — `alloca("...%s{name}")` allocates the runtime-sized buffer on the stack. The result is reclaimed when the function returns and may not escape it. Because the memory is held until return, evaluating an `alloca` repeatedly *within the same function's* loop extends the frame each iteration — that cost is now explicit at the call site (see §Stack Allocation → `alloca`).
 
 ```fc
-// Runtime-dependent buffer size (bare %s):
-let msg = "hello %s{name}"
+let name = arg                       // runtime-length str
 
-// Compile-time constant buffer size (precision-bounded %s):
-let msg = "hello %.64s{name}"
+// let msg = "hello %s{name}"        // ERROR: unbounded interpolation
+let a = "hello %.64s{name}"          // bounded: fixed stack buffer (truncates past 64)
+let b = alloc("hello %s{name}")!     // heap: caller frees
+let c = alloca("hello %s{name}")     // dynamic stack: dies at function return
 ```
 
 #### Escape rules
@@ -848,10 +855,10 @@ The `c"..."` prefix produces a **null-terminated cstr** instead of a `str` slice
 
 ```fc
 let name = "world"
-let msg = c"hello %s{name}"   // cstr — null-terminated, stack-allocated via alloca
+let msg = c"hello %.16s{name}"   // cstr — null-terminated, bounded stack buffer
 ```
 
-Like str interpolation, cstr interpolation is stack-allocated — the result cannot be returned from a function or freed. Use `alloc(c"...")` to promote an interpolated cstr to heap-owned memory:
+The same bounded/unbounded rule applies: an unprecisioned `%s`/cstr segment makes a bare `c"..."` interpolation a compile error. Bound it with a precision, or choose a home with `alloc(c"...")!` (heap) or `alloca(c"...")` (dynamic stack). Like str interpolation, cstr interpolation is stack-allocated — the result cannot be returned from a function or freed. Use `alloc(c"...")` to promote an interpolated cstr to heap-owned memory:
 
 ```fc
 let heap_msg = alloc(c"hello %s{name}")!   // heap-allocated cstr, caller must free
@@ -889,14 +896,25 @@ let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
 
 Pointer-to-pointer casts include const changes: `(const int32*) ptr` freezes a pointer (safe), `(int32*) const_ptr` strips const (unsafe). For slices, `(const str) s` and `(str) const_s` work similarly. See §The const qualifier.
 
-**str to cstr** — `(cstr)` cast creates a null-terminated stack copy of the string via `alloca`. The copy lives until the enclosing function returns. This is the safe way to pass FC strings to C functions that expect null-terminated strings:
+**str to cstr** — converting a runtime-length `str` to a null-terminated `cstr` requires a copy, whose size depends on `str.len`. As with interpolation, FC does not allocate that copy implicitly. There is exactly one *cast* form, the **bounded** `(cstr[N])`, which copies into a fixed `N`-byte stack buffer (hoisted to function entry, so it is loop-safe):
 
 ```fc
 let s = "hello"
-let cs = (cstr) s   // stack copy with null terminator
+let cs = (cstr[16]) s   // copy into a 16-byte stack buffer, NUL-terminated
 ```
 
-The allocation size is `str.len + 1`, which is unbounded at compile time — casting a large string on a small stack will overflow. Because the copy is `alloca`'d and alloca memory is reclaimed only when the function returns, a `(cstr)` cast evaluated repeatedly in a loop extends the frame on every iteration; to cast inside a hot loop with bounded stack, promote to the heap (`alloc(c"%s{s}")!`, freed per iteration) instead. The compiler's escape analysis tracks the result as stack-allocated — returning a `(cstr) str` cast from a function is a compile error. Note that `cstr` **literals** (written as `c"..."`) are static data and do not involve `alloca`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
+`(cstr[N])` copies at most `N-1` bytes and always NUL-terminates; a longer string is **truncated** (`strlcpy` semantics). Pick `N` to fit the longest value you expect — too small silently clips the string passed to C. A bare `(cstr) s` (no size) is a **compile error**: its copy is runtime-sized and would grow the frame per loop iteration. The error points to the three homes:
+
+```fc
+// let cs = (cstr) s              // ERROR: unbounded str→cstr cast
+let a = (cstr[256]) path          // bounded stack buffer (truncates past 255)
+let b = alloc(c"%s{path}")!       // heap: caller frees
+let c = alloca(c"%s{path}")       // dynamic stack: dies at function return
+```
+
+The compiler's escape analysis tracks every str→cstr result as stack-allocated — returning one (`(cstr[N])` or `alloca`) from a function is a compile error. `cstr` **literals** (written as `c"..."`) are static data and involve no copy — use them in place of `(cstr) "literal"`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
+
+> **Passing a runtime string to a C function** that takes the string only for the duration of the call (e.g. `fopen`, `getenv`): wrap it in `alloca(c"%s{path}")`. The buffer is non-truncating and is reclaimed when the *wrapping FC function* returns, so a caller looping over that function frees it each iteration — the standard-library interop layer is written this way.
 
 **cstr to str** — `(str)` constructs a `str` slice from a `cstr` by computing its length with `strlen` and **sharing** the original backing memory — no copy or allocation occurs. The result is valid only as long as the underlying C string stays live, and assumes it is null-terminated:
 
@@ -4005,6 +4023,25 @@ Stack slices are backed by a compiler-generated C array. The slice binding is th
 
 > **Transpilation**
 > `int32[128] { }` transpiles to `int32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
+
+#### Dynamic stack (`alloca`)
+
+When a stack temporary's size is only known at runtime, the `alloca` operator allocates it on the current frame explicitly. It is the stack counterpart of `alloc`: same forms, but it yields the value **directly** (no option, no failure sentinel) and there is **no `free`** — the memory is reclaimed automatically when the enclosing function returns.
+
+```fc
+let n = parse(arg)                   // runtime length
+
+let buf = alloca(uint8, n)           // uint8*  — raw runtime-sized buffer (unchecked)
+let sl  = alloca(uint8[n] { })       // uint8[] — zeroed, bounds-checked slice
+let msg = alloca("status: %s{name}") // str     — unbounded interpolation on the stack
+let cs  = alloca(c"%s{path}")        // cstr    — runtime str→cstr copy on the stack
+```
+
+`alloca` exists so that runtime-sized stack allocation is always a deliberate, visible choice — the constructs that would otherwise allocate it implicitly (an unbounded `%s` interpolation, a bare `(cstr) str` cast) are instead compile errors that point here. It is reached only through the keyword; there is no hidden `alloca` anywhere in emitted code.
+
+**Cost** — `alloca` memory lives until the function returns, exactly like a normal local. Evaluating an `alloca` inside a loop *within the same function* therefore extends the frame on every iteration (the C `alloca` behavior); the size and the loop are both visible at the call site. For a hot loop, prefer a compile-time bound (`%.Ns`, `(cstr[N])`) so the buffer is a single reused slot, or `alloc`/`free` per iteration. A runtime str→cstr copy passed straight to a C function — `c_fn(alloca(c"%s{s}"))` — is loop-safe from the *caller's* side, since the wrapping FC function reclaims the buffer on return.
+
+**Lifetime** — an `alloca` result is stack memory and is governed by the same escape analysis as any other stack binding: returning it or storing it in heap/static memory is a compile error.
 
 **Lifetime** — all local bindings share the stack frame of their enclosing function. A pointer or slice into stack memory is valid for the duration of the function call and must not escape it. Returning a stack-allocated pointer or slice, or storing it in heap memory that outlives the call, produces a dangling pointer. Use heap allocation for data that must outlive a function call.
 

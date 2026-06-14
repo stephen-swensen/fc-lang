@@ -3,8 +3,8 @@ import sys from std::
 
 let main = (args: str[]) ->
     let tmp = sys.temp_dir()!
-    let path = "%s{tmp}/fc_test_exists_access.txt"
-    let missing = "%s{tmp}/fc_test_exists_access_does_not_exist.txt"
+    let path = alloca("%s{tmp}/fc_test_exists_access.txt")
+    let missing = alloca("%s{tmp}/fc_test_exists_access_does_not_exist.txt")
 
     // Clean up any leftover from a prior run.
     io.remove(path)

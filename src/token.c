@@ -38,6 +38,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_NONE]         = "'none'",
     [TOK_VOID]         = "'void'",
     [TOK_ALLOC]        = "'alloc'",
+    [TOK_ALLOCA]       = "'alloca'",
     [TOK_FREE]         = "'free'",
     [TOK_SIZEOF]       = "'sizeof'",
     [TOK_ALIGNOF]      = "'alignof'",

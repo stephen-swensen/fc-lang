@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
     let _result =
         let name = "world"
-        let s = "hello %s{name}!"
+        let s = alloca("hello %s{name}!")
         let mut r = 0
         if s == "hello world!" then r = r + 1
         if s.len == 12 then r = r + 2

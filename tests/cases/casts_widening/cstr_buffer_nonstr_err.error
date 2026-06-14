@@ -1,0 +1,1 @@
+buffer size applies only to a (cstr) cast of a str

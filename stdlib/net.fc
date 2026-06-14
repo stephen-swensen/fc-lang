@@ -185,7 +185,7 @@ module net =
         inet.sockaddr_in {
             sin_family = (uint16) sock.af_inet,
             sin_port = host_to_net16(port),
-            sin_addr = inet.in_addr { s_addr = arpa.inet_addr((cstr) ip) }
+            sin_addr = inet.in_addr { s_addr = arpa.inet_addr(alloca(c"%s{ip}")) }
         }
 
     // --- Socket lifecycle ---
@@ -307,9 +307,9 @@ module net =
     // returns: some(ip) in network byte order, or none if resolution fails.
     let resolve = (host: const str) ->
         ensure_init()
-        let ip = arpa.inet_addr((cstr) host)
+        let ip = arpa.inet_addr(alloca(c"%s{host}"))
         if ip != 0xFFFFFFFFu32 then some(ip)
         else
-            match dns.gethostbyname((cstr) host) with
+            match dns.gethostbyname(alloca(c"%s{host}")) with
             | some(h) -> some(**((uint32**) h->h_addr_list))
             | none -> default(uint32?)

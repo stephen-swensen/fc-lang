@@ -2,7 +2,7 @@ let main = (args: str[]) ->
     let _result =
         let a = "hello"
         let b = "world"
-        let s = "%.3s{a} %s{b}"
+        let s = alloca("%.3s{a} %s{b}")
         let mut r = 0
         if s == "hel world" then r = r + 1
         if s.len == 9 then r = r + 2

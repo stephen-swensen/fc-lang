@@ -5,7 +5,7 @@ let main = (args: str[]) ->
     let _result =
         let x = add(10, 20)
         let name = "result"
-        let s = "%s{name}=%d{x} (%T{x})"
+        let s = alloca("%s{name}=%d{x} (%T{x})")
         let mut r = 0
         if s == "result=30 (int32)" then r = r + 1
         r

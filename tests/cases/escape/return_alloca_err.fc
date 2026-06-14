@@ -1,0 +1,8 @@
+// Error: an alloca(...) result is stack memory (reclaimed at function return),
+// so returning it from a function is rejected by escape analysis.
+let bad = (name: str) ->
+    alloca(c"%s{name}")
+
+let main = (args: str[]) ->
+    let c = bad("hello")
+    0

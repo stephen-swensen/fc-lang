@@ -257,6 +257,17 @@ static void collect_hoisted_bindings(Expr *e) {
         collect_hoisted_bindings(e->defer_expr.value);
         break;
     case EXPR_CAST:
+        /* (cstr[N]) bounded str→cstr cast: hoist a fixed uint8[N] backing to
+         * function entry so the truncating copy reuses one slot across loop
+         * iterations (and so the produced cstr keeps function-frame lifetime). */
+        if (e->cast.buffer_size > 0) {
+            if (!e->cast.codegen_backing_name) {
+                char buf[40];
+                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
+                e->cast.codegen_backing_name = arena_strdup(g_arena, buf, n);
+            }
+            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
+        }
         collect_hoisted_bindings(e->cast.operand);
         break;
     case EXPR_SOME:
@@ -421,6 +432,9 @@ static void emit_fn_backing_decls(FILE *out) {
             fprintf(out, " %s[%" PRIu64 "];\n",
                     e->array_lit.codegen_backing_name,
                     e->array_lit.size_expr->int_lit.value);
+        } else if (e->kind == EXPR_CAST) { /* (cstr[N]) */
+            fprintf(out, "uint8_t %s[%d];\n",
+                    e->cast.codegen_backing_name, e->cast.buffer_size);
         } else { /* EXPR_INTERP_STRING */
             fprintf(out, "uint8_t %s[%" PRId64 "];\n",
                     e->interp_string.codegen_backing_name,
@@ -1539,6 +1553,15 @@ static bool interp_const_buffer_size(Expr *e, int64_t *out_size) {
     return true;
 }
 
+/* Exported predicate (declared in ast.h): an interpolation is runtime-sized iff
+ * its buffer size is not a compile-time constant — the single source being a
+ * %s/cstr segment without an explicit precision. Shares interp_const_buffer_size
+ * so pass2's rejection and codegen's buffer emission agree exactly. */
+bool interp_is_runtime_sized(const Expr *e) {
+    int64_t dummy = 0;
+    return !interp_const_buffer_size((Expr *)e, &dummy);
+}
+
 /* Emit interpolated string code.
  * alloc_opt_type: NULL → standalone (alloca), non-NULL → inside alloc() (malloc).
  * Handles both str and cstr interpolation (e->interp_string.is_cstr). */
@@ -2424,11 +2447,27 @@ static void emit_expr(Expr *e, FILE *out) {
         if (e->cast.operand->type && is_str_type(e->cast.operand->type) &&
             is_cstr_type(e->cast.target)) {
             int tid = temp_counter++;
-            fprintf(out, "({ fc_str _sc%d = ", tid);
-            emit_expr(e->cast.operand, out);
-            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca(fc_to_size(_sc%d.len + 1))", tid, tid);
-            fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, fc_to_size(_sc%d.len))", tid, tid, tid);
-            fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
+            if (e->cast.buffer_size > 0) {
+                /* (cstr[N]) — truncating copy into a fixed N-byte backing array
+                 * hoisted to function entry: bounded, loop-safe. Copy at most
+                 * N-1 bytes, always NUL-terminate. */
+                int n = e->cast.buffer_size;
+                const char *bk = e->cast.codegen_backing_name;
+                fprintf(out, "({ fc_str _sc%d = ", tid);
+                emit_expr(e->cast.operand, out);
+                fprintf(out, "; int64_t _cn%d = _sc%d.len < %d ? _sc%d.len : %d",
+                        tid, tid, n - 1, tid, n - 1);
+                fprintf(out, "; memcpy(%s, _sc%d.ptr, fc_to_size(_cn%d))", bk, tid, tid);
+                fprintf(out, "; %s[_cn%d] = '\\0'; (uint8_t*)%s; })", bk, tid, bk);
+            } else {
+                /* Unbounded (cstr) — rejected in pass2; retained only as a fallback
+                 * during staging. */
+                fprintf(out, "({ fc_str _sc%d = ", tid);
+                emit_expr(e->cast.operand, out);
+                fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca(fc_to_size(_sc%d.len + 1))", tid, tid);
+                fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, fc_to_size(_sc%d.len))", tid, tid, tid);
+                fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
+            }
         /* cstr -> str: wrap pointer with strlen-computed length */
         } else if (e->cast.operand->type && is_cstr_type(e->cast.operand->type) &&
                    is_str_type(e->cast.target)) {
@@ -3441,6 +3480,49 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_ALLOC: {
+        if (e->alloc_expr.is_stack) {
+            /* alloca(...) — dynamic stack, no option wrapper, no failure sentinel.
+             * Reclaimed when the enclosing function returns. */
+            if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
+                /* alloca(T, N) → T* (raw buffer) */
+                fprintf(out, "(");
+                emit_type(e->alloc_expr.alloc_type, out);
+                fprintf(out, "*)__builtin_alloca(fc_to_size(");
+                emit_expr(e->alloc_expr.size_expr, out);
+                fprintf(out, ") * sizeof(");
+                emit_type(e->alloc_expr.alloc_type, out);
+                fprintf(out, "))");
+            } else if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
+                /* alloca(T[n] { }) → T[] (zero-initialized runtime-sized slice) */
+                int tid = temp_counter++;
+                fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
+                emit_expr(e->alloc_expr.size_expr, out);
+                fprintf(out, "; ");
+                emit_type(e->alloc_expr.alloc_type, out);
+                fprintf(out, "* _aptr%d = (", tid);
+                emit_type(e->alloc_expr.alloc_type, out);
+                fprintf(out, "*)__builtin_alloca(fc_to_size(_asz%d) * sizeof(", tid);
+                emit_type(e->alloc_expr.alloc_type, out);
+                fprintf(out, ")); memset(_aptr%d, 0, fc_to_size(_asz%d) * sizeof(", tid, tid);
+                emit_type(e->alloc_expr.alloc_type, out);
+                fprintf(out, ")); (");
+                emit_type(e->type, out);
+                fprintf(out, "){ .ptr = _aptr%d, .len = _asz%d }; })", tid, tid);
+            } else if (e->alloc_expr.init_expr &&
+                       e->alloc_expr.init_expr->kind == EXPR_INTERP_STRING) {
+                /* alloca("interp %s{x}") / alloca(c"...") → str/cstr on the stack.
+                 * The standalone (NULL) path emits __builtin_alloca. */
+                emit_interp_string_impl(e->alloc_expr.init_expr, out, NULL);
+            } else if (e->alloc_expr.init_expr &&
+                       e->alloc_expr.init_expr->kind == EXPR_ARRAY_LIT) {
+                /* alloca(T[N] { elems }) literal → reuse the array-literal stack
+                 * emission (already a function-frame backing). */
+                emit_expr(e->alloc_expr.init_expr, out);
+            } else {
+                emit_expr(e->alloc_expr.init_expr, out);
+            }
+            break;
+        }
         if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
             /* alloc(T, N) → T*? (raw buffer, null sentinel) */
             fprintf(out, "(");

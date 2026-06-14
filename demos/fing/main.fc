@@ -70,7 +70,7 @@ let main = (args: str[]) ->
     // Resolve hostname / IP
     let ip_opt = net.resolve(host)
     if ip_opt.is_none then
-        io.write("fing: unknown host %s{host}\n", stderr)
+        io.write(alloca("fing: unknown host %s{host}\n"), stderr)
         sys.exit(1)
     let ip = ip_opt!
 
@@ -95,7 +95,7 @@ let main = (args: str[]) ->
     let addr = net.make_addr(net.net_to_host32(ip), 0u16)
     let id = (uint16) (sys.get_pid() & 0xFFFF)
 
-    io.write("FING %s{host} (%d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d})\n", stdout)
+    io.write(alloca("FING %s{host} (%d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d})\n"), stdout)
 
     let mut sent = 0
     let mut received = 0
@@ -139,7 +139,7 @@ let main = (args: str[]) ->
         if seq < count - 1 then sys.sleep(1000)
 
     // Summary
-    io.write("\n--- %s{host} fing statistics ---\n", stdout)
+    io.write(alloca("\n--- %s{host} fing statistics ---\n"), stdout)
     let loss = if sent > 0 then (sent - received) * 100 / sent else 0
     io.write("%d{sent} packets transmitted, %d{received} received, %d{loss}%% packet loss\n", stdout)
     if received > 0 then

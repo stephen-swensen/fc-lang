@@ -811,7 +811,7 @@ let gen_extra_life = () ->
 let load_high_score = () ->
     match sys.home_dir() with
     | some(hd) ->
-        match io.open("%s{hd}/.fasteroids/highscore.txt", "r") with
+        match io.open(alloca("%s{hd}/.fasteroids/highscore.txt"), "r") with
         | some(fp) ->
             let mut buf = uint8[32] { }
             io.read(buf, 32, fp)
@@ -825,8 +825,8 @@ let load_high_score = () ->
 let save_high_score = (score: int32) ->
     match sys.home_dir() with
     | some(hd) ->
-        io.mkdir("%s{hd}/.fasteroids")
-        match io.open("%s{hd}/.fasteroids/highscore.txt", "w") with
+        io.mkdir(alloca("%s{hd}/.fasteroids"))
+        match io.open(alloca("%s{hd}/.fasteroids/highscore.txt"), "w") with
         | some(fp) ->
             io.write("%d{score}\n", fp)
             io.close(fp)

@@ -1,0 +1,7 @@
+// Error: a bare (cstr) cast of a runtime-length str is unbounded; use (cstr[N]),
+// alloc(c"%s{...}")!, or alloca(c"%s{...}").
+let main = (args: str[]) ->
+    let s = "hello"
+    let cs = (cstr) s
+    assert(cs[0] == 104u8)
+    0

@@ -1,0 +1,20 @@
+// alloca(T, n) -> T* (raw, unchecked) and alloca(T[n] {}) -> T[] (zeroed,
+// bounds-checked slice), both runtime-sized on the stack with no free.
+let main = (args: str[]) ->
+    let n = 8
+
+    // raw pointer form
+    let mut p = alloca(uint8, n)
+    p[0] = 65u8
+    p[7] = 90u8
+    assert(p[0] == 65u8)
+    assert(p[7] == 90u8)
+
+    // slice form: has .len and is zero-initialized
+    let mut sl = alloca(uint8[n] {})
+    assert(sl.len == 8)
+    assert(sl[0] == 0u8)
+    assert(sl[7] == 0u8)
+    sl[3] = 42u8
+    assert(sl[3] == 42u8)
+    0

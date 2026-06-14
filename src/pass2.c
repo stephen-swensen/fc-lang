@@ -3909,8 +3909,30 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
+        /* (cstr[N]) buffer size is only meaningful for a str→cstr cast. */
+        if (e->cast.buffer_size > 0 && !str_to_cstr) {
+            diag_error(e->loc,
+                "[N] buffer size applies only to a (cstr) cast of a str");
+            e->type = type_error();
+            return e->type;
+        }
+        /* An unbounded str→cstr cast is rejected: its stack copy is runtime-sized
+         * and would grow the frame per loop iteration. Force an explicit home. */
+        if (str_to_cstr && e->cast.buffer_size == 0) {
+            if (e->cast.operand->kind == EXPR_STRING_LIT)
+                diag_error(e->loc,
+                    "use a c\"...\" literal for a null-terminated string constant "
+                    "instead of casting with (cstr)");
+            else
+                diag_error(e->loc,
+                    "unbounded (cstr) cast of a runtime-length str; use (cstr[N]) for a "
+                    "fixed N-byte stack buffer (truncating), alloc(c\"%%s{...}\")! for the "
+                    "heap, or alloca(c\"%%s{...}\") for dynamic stack");
+            e->type = type_error();
+            return e->type;
+        }
         e->type = to;
-        /* str→cstr creates alloca copy; cstr→str wraps with strlen on stack */
+        /* str→cstr creates a stack copy; cstr→str wraps with strlen on stack */
         if (str_to_cstr)
             e->prov = PROV_STACK;
         else if (cstr_to_str) {
@@ -5023,6 +5045,55 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_ALLOC: {
+        if (e->alloc_expr.is_stack) {
+            /* alloca(...) — dynamic stack. Same shapes as alloc but the result is
+             * the value directly (no option, no failure sentinel) and it is tagged
+             * PROV_STACK so escape analysis forbids returning it or storing it in
+             * heap/static memory, exactly like today's implicit stack temporaries. */
+            if (e->alloc_expr.alloc_type) {
+                Type *ty = resolve_type(ctx, e->alloc_expr.alloc_type);
+                e->alloc_expr.alloc_type = ty;
+                if (e->alloc_expr.size_expr) {
+                    Type *st = check_expr(ctx, e->alloc_expr.size_expr);
+                    if (type_is_error(st)) { e->type = type_error(); return e->type; }
+                    if (!type_is_integer(st)) {
+                        diag_error(e->loc, "alloca buffer size must be integer, got %s",
+                                   type_name(st));
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    e->type = e->alloc_expr.alloc_raw
+                        ? type_pointer(ctx->arena, ty)   /* alloca(T, N) → T* */
+                        : type_slice(ctx->arena, ty);    /* alloca(T[n] { }) → T[] */
+                } else {
+                    e->type = type_pointer(ctx->arena, ty);  /* alloca(T) → T* */
+                }
+                e->prov = PROV_STACK;
+                return e->type;
+            }
+            /* alloca(expr) — only an interpolated string (str/cstr) or array literal
+             * makes sense as a runtime-sized stack temporary. */
+            Expr *ie = e->alloc_expr.init_expr;
+            Type *t = check_expr(ctx, ie);
+            if (type_is_error(t)) { e->type = type_error(); return e->type; }
+            if (ie->kind == EXPR_INTERP_STRING || ie->kind == EXPR_ARRAY_LIT ||
+                t->kind == TYPE_SLICE || is_cstr_type(t)) {
+                Type *rt = t;
+                if (rt->is_const) {
+                    rt = arena_alloc(ctx->arena, sizeof(Type));
+                    *rt = *t;
+                    rt->is_const = false;
+                }
+                e->type = rt;
+                e->prov = PROV_STACK;
+                return e->type;
+            }
+            diag_error(e->loc,
+                "alloca(expr) requires an interpolated string or array literal; "
+                "use alloca(T, n) or alloca(T[n] {}) for an uninitialized buffer");
+            e->type = type_error();
+            return e->type;
+        }
         if (e->alloc_expr.alloc_type) {
             Type *ty = resolve_type(ctx, e->alloc_expr.alloc_type);
             e->alloc_expr.alloc_type = ty;
@@ -5162,6 +5233,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_INTERP_STRING: {
+        bool any_seg_err = false;
         for (int i = 0; i < e->interp_string.segment_count; i++) {
             InterpSegment *seg = &e->interp_string.segments[i];
             if (seg->is_literal) continue;
@@ -5170,7 +5242,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
              * it as a value, so allow a generic function name here. */
             if (seg->conversion == 'T') ctx->in_reflection_position = true;
             Type *et = check_expr(ctx, seg->expr);
-            if (type_is_error(et)) continue;
+            if (type_is_error(et)) { any_seg_err = true; continue; }
             et = resolve_type(ctx, et);
 
             char conv = seg->conversion;
@@ -5229,6 +5301,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     "unknown format specifier %%%c", conv);
                 break;
             }
+        }
+        /* A runtime-sized interpolation (a %s/cstr segment with no precision) has a
+         * buffer whose size isn't known until execution; evaluating it in a loop
+         * would grow the frame each iteration. Reject it unless given an explicit
+         * home (a precision makes it constant; alloc/alloca wrap it). */
+        if (!any_seg_err && !e->interp_string.wrapped && interp_is_runtime_sized(e)) {
+            diag_error(e->loc,
+                "unbounded string interpolation: a %%s segment has no compile-time "
+                "size; add a precision (e.g. %%.64s), or wrap the string in "
+                "alloc(...)! (heap) or alloca(...) (dynamic stack)");
         }
         if (e->interp_string.is_cstr) {
             e->type = type_pointer(ctx->arena, type_uint8());

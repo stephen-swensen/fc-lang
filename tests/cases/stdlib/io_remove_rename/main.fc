@@ -3,8 +3,8 @@ import sys from std::
 
 let main = (args: str[]) ->
     let tmp = sys.temp_dir()!
-    let src = "%s{tmp}/fc_test_rename_src.txt"
-    let dst = "%s{tmp}/fc_test_rename_dst.txt"
+    let src = alloca("%s{tmp}/fc_test_rename_src.txt")
+    let dst = alloca("%s{tmp}/fc_test_rename_dst.txt")
 
     // Clean up any leftovers from a prior run (Windows rename() fails if dst exists)
     io.remove(src)

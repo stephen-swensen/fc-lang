@@ -50,7 +50,7 @@ let main = (args: str[]) ->
                 sys.exit(1)
             body_data = args[i]
         else if text.starts_with(arg, "-") then
-            io.write("furl: unknown option %s{arg}\n", stderr)
+            io.write(alloca("furl: unknown option %s{arg}\n"), stderr)
             sys.exit(1)
         else url_arg = arg
         i = i + 1
@@ -103,7 +103,7 @@ let main = (args: str[]) ->
     // --- DNS resolution ---
     let ip_opt = net.resolve(host)
     if ip_opt.is_none then
-        io.write("furl: could not resolve host %s{host}\n", stderr)
+        io.write(alloca("furl: could not resolve host %s{host}\n"), stderr)
         sys.exit(1)
     let ip = ip_opt!
 
@@ -117,7 +117,7 @@ let main = (args: str[]) ->
 
     let addr = net.make_addr(net.net_to_host32(ip), (uint16) port)
     if !net.connect_addr(fd, addr) then
-        io.write("furl: connection to %s{host} port %d{port} failed\n", stderr)
+        io.write(alloca("furl: connection to %s{host} port %d{port} failed\n"), stderr)
         sys.exit(1)
 
     // --- Build and send HTTP request ---
@@ -127,8 +127,8 @@ let main = (args: str[]) ->
     let req_line = alloc("%s{actual_method} %s{path} HTTP/1.0\r\nHost: %s{host}\r\n")!
     defer free(req_line)
     if verbose then
-        io.write("> %s{actual_method} %s{path} HTTP/1.0\n", stderr)
-        io.write("> Host: %s{host}\n", stderr)
+        io.write(alloca("> %s{actual_method} %s{path} HTTP/1.0\n"), stderr)
+        io.write(alloca("> Host: %s{host}\n"), stderr)
     net.send_bytes(fd, req_line)
 
     // Fixed headers
@@ -146,7 +146,7 @@ let main = (args: str[]) ->
         let hdr = custom_hdrs[hi]
         let hdr_line = alloc("%s{hdr}\r\n")!
         defer free(hdr_line)
-        if verbose then io.write("> %s{hdr}\n", stderr)
+        if verbose then io.write(alloca("> %s{hdr}\n"), stderr)
         net.send_bytes(fd, hdr_line)
 
     // Content-Length if body present
@@ -176,7 +176,7 @@ let main = (args: str[]) ->
     if out_file.len > 0 then
         let f = io.open(out_file, "w")
         if f.is_none then
-            io.write("furl: could not open %s{out_file}\n", stderr)
+            io.write(alloca("furl: could not open %s{out_file}\n"), stderr)
             sys.exit(1)
         out = f!
         out_opened = true
@@ -206,8 +206,8 @@ let main = (args: str[]) ->
                     defer free(lines)
                     for line in lines
                         if line.len > 0 then
-                            if verbose then io.write("< %s{line}\n", stderr)
-                            if head_only then io.write("%s{line}\n", out)
+                            if verbose then io.write(alloca("< %s{line}\n"), stderr)
+                            if head_only then io.write(alloca("%s{line}\n"), out)
                     if verbose then io.write("<\n", stderr)
 
                 // Output body portion from this chunk

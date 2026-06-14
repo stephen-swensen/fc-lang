@@ -1,6 +1,6 @@
-// Error: returning cstr from str->cstr cast (alloca copy)
+// Error: returning a cstr from a bounded (cstr[N]) cast (stack backing buffer)
 let bad = (s: str) ->
-    (cstr) s
+    (cstr[16]) s
 
 let main = (args: str[]) ->
     let c = bad("hello")

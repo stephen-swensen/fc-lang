@@ -1,0 +1,18 @@
+// A generic function body containing a concrete (cstr[N]) cast and an alloca
+// interpolation must emit its function-entry backing and stack temporaries
+// correctly in every monomorphized instance (one C function per concrete 'a).
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let describe = (xs: 'a[]) ->
+    let label = "len"
+    let cs = (cstr[8]) label          // hoisted backing, per monomorph
+    let msg = alloca("%s{label}=%d{(int32) xs.len}")
+    (int64) c.strlen(cs) + (int64) msg.len
+
+let main = (args: str[]) ->
+    let ints = int32[2] { 5, 6 }
+    let longs = int64[3] { 5i64, 6i64, 7i64 }
+    assert(describe(ints) == 3i64 + 5i64)    // "len" + "len=2"  ('a = int32)
+    assert(describe(longs) == 3i64 + 5i64)   // "len" + "len=3"  ('a = int64)
+    0

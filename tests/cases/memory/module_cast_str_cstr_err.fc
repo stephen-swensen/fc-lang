@@ -1,7 +1,7 @@
-// str-to-cstr cast in module-level const-expr should be rejected —
-// codegen emits alloca statement expression
+// bounded (cstr[N]) cast in a module-level const-expr should be rejected —
+// it needs a function-frame backing array, so it is not a constant expression
 module m =
-    let s = (cstr) "hello"
+    let s = (cstr[8]) "hello"
 
 let main = (args: str[]) ->
     0

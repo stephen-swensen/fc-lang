@@ -11,7 +11,7 @@ let main = (args: str[]) ->
     assert(io.exists("."))
 
     // create a temp file, check it exists, remove it
-    let path = "%s{tmp}/fc_test_io_exists.txt"
+    let path = alloca("%s{tmp}/fc_test_io_exists.txt")
     match io.open(path, "w") with
     | some(f) -> io.close(f)
     | none -> assert(false)

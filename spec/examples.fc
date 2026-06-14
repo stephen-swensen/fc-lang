@@ -560,9 +560,20 @@ let main = (args: str[]) ->
     // String interpolation with format specifiers
     // Arbitrary expressions are allowed inside %spec{expr}
     let name = "world"
-    let msg = "hello %s{name}, n=%d{i}"
     let expr_msg = "sum=%d{i + 1}, double=%d{i * 2}"
     assert(expr_msg == "sum=43, double=84")
+
+    // A runtime-length %s has no compile-time buffer size, so a bare
+    // interpolation containing one is rejected. Give it a home:
+    let bounded = "hello %.16s{name}"          // precision → fixed stack buffer
+    let on_stack = alloca("hello %s{name}")     // alloca → dynamic stack
+    assert(bounded == "hello world")
+    assert(on_stack == "hello world")
+
+    // str → cstr conversion is likewise explicit: (cstr[N]) is the only cast
+    // form (bounded, truncating); the runtime homes route through interpolation.
+    let cs = (cstr[16]) name                    // 16-byte stack buffer, NUL-terminated
+    assert(((str) cs) == "world")
 
     // Slice construction from raw pointer
     let raw = int32[] { ptr = buf.ptr, len = buf.len }
