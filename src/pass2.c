@@ -1108,7 +1108,17 @@ static void check_float_literal_range(Type *type, bool out_of_range, bool underf
     }
 }
 
-/* Wrap an expression in an implicit widening cast */
+/* Wrap an expression in an implicit widening cast.
+ *
+ * Provenance must carry through: a widen either produces a fresh scalar
+ * (numeric widening, no provenance to speak of) or a pointer/slice that aliases
+ * the *same* storage as its operand (const-add, slice const-change). In every
+ * case the operand's provenance is the wrapper's provenance, so we copy it.
+ * Forgetting this silently launders a stack value's PROV_STACK into the
+ * arena-zeroed default (PROV_UNKNOWN) and defeats EVERY escape sink that reads
+ * the post-widen value's provenance — return, global store, heap-field store,
+ * option payload, struct-literal field. (e.g. assigning a stack `(cstr[N]) s`
+ * into a `const cstr` global widens cstr→const cstr and used to leak.) */
 static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
     Expr *cast = arena_alloc(a, sizeof(Expr));
     cast->kind = EXPR_CAST;
@@ -1116,6 +1126,7 @@ static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
     cast->type = target;
     cast->cast.target = target;
     cast->cast.operand = e;
+    cast->prov = e->prov;
     return cast;
 }
 

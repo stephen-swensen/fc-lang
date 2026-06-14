@@ -1,0 +1,11 @@
+// A mut `const cstr` tainted by a stack (cstr[N]) cast may still be used within
+// the frame — the taint only forbids escaping, never local use.
+let use_local = (p: const str) ->
+    let mut c = c"xxxxxxxx"
+    c = (cstr[8]) p
+    c[0]
+
+let main = (args: str[]) ->
+    let n = use_local("hi")
+    assert(n == 104)
+    0

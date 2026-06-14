@@ -1,0 +1,13 @@
+// alloca(c"...") (dynamic stack) stored into a heap struct's `const cstr` field
+// widens cstr -> const cstr; the widen must keep PROV_STACK at the heap sink.
+struct holder =
+    name: const cstr
+
+let leak = (p: const str) ->
+    let h = alloc(holder)!
+    h->name = alloca((cstr) p)
+    free(h)
+
+let main = (args: str[]) ->
+    leak("hi")
+    0

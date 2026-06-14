@@ -1,0 +1,10 @@
+// A stack (cstr[N]) cast widened to a `const cstr` global must still be rejected.
+// The implicit cstr -> const cstr widen must not launder away PROV_STACK.
+let mut g = c"xxxxxxxx"
+
+let leak = (p: const str) ->
+    g = (cstr[8]) p
+
+let main = (args: str[]) ->
+    leak("hi")
+    0

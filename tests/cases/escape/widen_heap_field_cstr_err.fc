@@ -1,0 +1,13 @@
+// Storing a stack (cstr[N]) cast into a heap struct's `const cstr` field widens
+// cstr -> const cstr; the widen must not strip PROV_STACK at the heap sink.
+struct holder =
+    name: const cstr
+
+let leak = (p: const str) ->
+    let h = alloc(holder)!
+    h->name = (cstr[8]) p
+    free(h)
+
+let main = (args: str[]) ->
+    leak("hi")
+    0

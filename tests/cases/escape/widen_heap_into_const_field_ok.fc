@@ -1,0 +1,12 @@
+// A heap cstr widened into a heap struct's `const cstr` field is fine: both
+// outlive the frame. Confirms the widen carries PROV_HEAP (not a stack taint).
+struct holder =
+    name: const cstr
+
+let main = (args: str[]) ->
+    let h = alloc(holder)!
+    let c = alloc((cstr) "hi")!
+    h->name = c
+    free(c)
+    free(h)
+    0

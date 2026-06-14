@@ -1,0 +1,11 @@
+// A heap slice widened to a `const int32[]` global is fine — heap outlives the
+// frame. Confirms the prov-preserving widen does not over-reject heap values.
+// (Freed via the non-const handle `h`, since `g` is const.)
+let mut g = default(const int32[])
+
+let main = (args: str[]) ->
+    let h = alloc(int32[4] { })!
+    g = h
+    assert(g[0] == 0)
+    free(h)
+    0

@@ -1,0 +1,10 @@
+// some((cstr[N]) p) widens its cstr payload to a const cstr option; the payload
+// widen must preserve PROV_STACK so returning the tainted option is rejected.
+let bad = (p: const str) ->
+    let mut r = some(c"xxxxxxxx")
+    r = some((cstr[8]) p)
+    r
+
+let main = (args: str[]) ->
+    let x = bad("hi")
+    0
