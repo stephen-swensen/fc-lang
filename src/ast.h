@@ -179,6 +179,9 @@ struct Expr {
             int buffer_size;  /* (cstr[N]) bounded str→cstr cast: N > 0; 0 = plain cast.
                                  Copies min(len, N-1) bytes + NUL into a hoisted uint8[N]. */
             const char *codegen_backing_name;  /* hoisted backing array name (set in codegen) */
+            bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...) —
+                                 licenses an otherwise illegal unbounded (cstr) str→cstr cast,
+                                 whose home (heap/dynamic stack) the wrapping alloc/alloca gives. */
         } cast;
 
         /* EXPR_IF */

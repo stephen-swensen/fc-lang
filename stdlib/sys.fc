@@ -33,7 +33,7 @@ module sys =
     // returns: const str? — the value if set, none if unset. Const because the
     //   returned str points into the process environment block.
     let env = (name: const str) ->
-        match c.getenv(alloca(c"%s{name}")) with
+        match c.getenv(alloca((cstr) name)) with
         | some(cs) -> some((const str) cs)
         | none -> default(const str?)
 

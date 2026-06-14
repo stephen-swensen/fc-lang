@@ -1,0 +1,9 @@
+// Error: alloca((cstr) s) is a dynamic-stack copy (reclaimed at function return),
+// so returning it — like any alloca result — is rejected by escape analysis.
+// (The heap home, alloc((cstr) s)!, is returnable; see strings/cstr_cast_heap_returns.)
+let bad = (path: const str) ->
+    alloca((cstr) path)
+
+let main = (args: str[]) ->
+    let c = bad("hello")
+    0

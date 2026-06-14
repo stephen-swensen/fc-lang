@@ -3600,6 +3600,19 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d + 1); ", tid, actual_len);
             fprintf(out, "if (_ap%d) memcpy(_ap%d, (uint8_t*)\"%.*s\", %d + 1); _ap%d; })",
                 tid, tid, ie->cstring_lit.length, ie->cstring_lit.value, actual_len, tid);
+        } else if (e->alloc_expr.init_expr->kind == EXPR_CAST &&
+                   is_cstr_type(e->alloc_expr.init_expr->type)) {
+            /* alloc((cstr) str) → cstr? — heap copy of str + NUL (null sentinel on
+             * malloc failure). The cast's own (alloca) codegen is bypassed: the
+             * str→cstr copy goes straight into the heap buffer. */
+            int tid = temp_counter++;
+            Expr *operand = e->alloc_expr.init_expr->cast.operand;
+            fprintf(out, "({ fc_str _sc%d = ", tid);
+            emit_expr(operand, out);
+            fprintf(out, "; uint8_t *_ap%d = (uint8_t*)malloc(fc_to_size(_sc%d.len + 1)); ", tid, tid);
+            fprintf(out, "if (_ap%d) { memcpy(_ap%d, _sc%d.ptr, fc_to_size(_sc%d.len)); "
+                         "_ap%d[_sc%d.len] = '\\0'; } _ap%d; })",
+                    tid, tid, tid, tid, tid, tid, tid);
         } else if (e->alloc_expr.init_expr->kind == EXPR_INTERP_STRING) {
             /* alloc("interp %d{x}") or alloc(c"interp %d{x}") → str?/cstr? */
             emit_interp_string_impl(e->alloc_expr.init_expr, out, e->type);

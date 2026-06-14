@@ -3917,8 +3917,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         /* An unbounded str→cstr cast is rejected: its stack copy is runtime-sized
-         * and would grow the frame per loop iteration. Force an explicit home. */
-        if (str_to_cstr && e->cast.buffer_size == 0) {
+         * and would grow the frame per loop iteration. Force an explicit home —
+         * unless this cast is the direct init of alloc(...)/alloca(...), which gives
+         * it one (the `licensed` flag, set by the parser). */
+        if (str_to_cstr && e->cast.buffer_size == 0 && !e->cast.licensed) {
             if (e->cast.operand->kind == EXPR_STRING_LIT)
                 diag_error(e->loc,
                     "use a c\"...\" literal for a null-terminated string constant "
@@ -3926,8 +3928,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             else
                 diag_error(e->loc,
                     "unbounded (cstr) cast of a runtime-length str; use (cstr[N]) for a "
-                    "fixed N-byte stack buffer (truncating), alloc(c\"%%s{...}\")! for the "
-                    "heap, or alloca(c\"%%s{...}\") for dynamic stack");
+                    "fixed N-byte stack buffer (truncating), alloc((cstr) ...)! for the "
+                    "heap, or alloca((cstr) ...) for dynamic stack");
             e->type = type_error();
             return e->type;
         }
@@ -5171,6 +5173,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
             /* alloc(c"interp %d{x}") → cstr? */
             if (ie->kind == EXPR_INTERP_STRING && ie->interp_string.is_cstr) {
+                Type *rt = type_pointer(ctx->arena, type_uint8());
+                e->type = type_option(ctx->arena, rt);
+                e->prov = PROV_HEAP;
+                return e->type;
+            }
+            /* alloc((cstr) str) → cstr? — heap copy of a str→cstr conversion (the
+             * heap home for an unbounded (cstr) cast). The bounded (cstr[N]) form
+             * already has its own home, so only the unbounded cast qualifies. */
+            if (ie->kind == EXPR_CAST && ie->cast.buffer_size == 0 && is_cstr_type(t)) {
                 Type *rt = type_pointer(ctx->arena, type_uint8());
                 e->type = type_option(ctx->arena, rt);
                 e->prov = PROV_HEAP;

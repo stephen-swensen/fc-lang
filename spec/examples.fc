@@ -570,10 +570,16 @@ let main = (args: str[]) ->
     assert(bounded == "hello world")
     assert(on_stack == "hello world")
 
-    // str → cstr conversion is likewise explicit: (cstr[N]) is the only cast
-    // form (bounded, truncating); the runtime homes route through interpolation.
-    let cs = (cstr[16]) name                    // 16-byte stack buffer, NUL-terminated
+    // str → cstr conversion is likewise explicit: the (cstr) cast names the
+    // conversion, and the same three homes apply. A bare (cstr) cast is rejected;
+    // pick a home.
+    let cs = (cstr[16]) name                    // bounded: 16-byte stack buffer (truncating)
+    let cs_stack = alloca((cstr) name)          // alloca → dynamic stack (non-truncating)
+    let cs_heap = alloc((cstr) name)!           // heap → caller frees
+    defer free(cs_heap)
     assert(((str) cs) == "world")
+    assert(((str) cs_stack) == "world")
+    assert(((str) cs_heap) == "world")
 
     // Slice construction from raw pointer
     let raw = int32[] { ptr = buf.ptr, len = buf.len }

@@ -903,18 +903,18 @@ let s = "hello"
 let cs = (cstr[16]) s   // copy into a 16-byte stack buffer, NUL-terminated
 ```
 
-`(cstr[N])` copies at most `N-1` bytes and always NUL-terminates; a longer string is **truncated** (`strlcpy` semantics). Pick `N` to fit the longest value you expect — too small silently clips the string passed to C. A bare `(cstr) s` (no size) is a **compile error**: its copy is runtime-sized and would grow the frame per loop iteration. The error points to the three homes:
+`(cstr[N])` copies at most `N-1` bytes and always NUL-terminates; a longer string is **truncated** (`strlcpy` semantics). Pick `N` to fit the longest value you expect — too small silently clips the string passed to C. A bare `(cstr) s` (no size) is a **compile error**: its copy is runtime-sized and would grow the frame per loop iteration. The `(cstr)` cast *names the conversion*; the home is named separately, and the same three homes apply as for interpolation. The bounded cast (`(cstr[N])`) carries its own fixed buffer; the two non-truncating homes are reached by wrapping the bare `(cstr)` cast in `alloc`/`alloca`, which give the otherwise-homeless cast a home:
 
 ```fc
 // let cs = (cstr) s              // ERROR: unbounded str→cstr cast
 let a = (cstr[256]) path          // bounded stack buffer (truncates past 255)
-let b = alloc(c"%s{path}")!       // heap: caller frees
-let c = alloca(c"%s{path}")       // dynamic stack: dies at function return
+let b = alloc((cstr) path)!       // heap: caller frees
+let c = alloca((cstr) path)       // dynamic stack: dies at function return
 ```
 
-The compiler's escape analysis tracks every str→cstr result as stack-allocated — returning one (`(cstr[N])` or `alloca`) from a function is a compile error. `cstr` **literals** (written as `c"..."`) are static data and involve no copy — use them in place of `(cstr) "literal"`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
+`alloc((cstr) s)` / `alloca((cstr) s)` are non-truncating — the buffer is sized to the source length plus the NUL. They are a direct memory copy (no `snprintf`), so prefer them to the equivalent single-segment interpolation `alloc(c"%s{s}")` / `alloca(c"%s{s}")` for a plain conversion; reserve `c"..."` for when you actually need formatting. The compiler's escape analysis tracks every str→cstr result by its home — the two stack homes (`(cstr[N])` and `alloca`) cannot be returned from a function, while the `alloc` heap home can (the caller then owns and frees it). `cstr` **literals** (written as `c"..."`) are static data and involve no copy — use them in place of `(cstr) "literal"`. The `.ptr` field of a `str` is also freely available without a cast, but does not guarantee null-termination.
 
-> **Passing a runtime string to a C function** that takes the string only for the duration of the call (e.g. `fopen`, `getenv`): wrap it in `alloca(c"%s{path}")`. The buffer is non-truncating and is reclaimed when the *wrapping FC function* returns, so a caller looping over that function frees it each iteration — the standard-library interop layer is written this way.
+> **Passing a runtime string to a C function** that takes the string only for the duration of the call (e.g. `fopen`, `getenv`): wrap it in `alloca((cstr) path)`. The buffer is non-truncating and is reclaimed when the *wrapping FC function* returns, so a caller looping over that function frees it each iteration — the standard-library interop layer is written this way.
 
 **cstr to str** — `(str)` constructs a `str` slice from a `cstr` by computing its length with `strlen` and **sharing** the original backing memory — no copy or allocation occurs. The result is valid only as long as the underlying C string stays live, and assumes it is null-terminated:
 
@@ -4034,12 +4034,12 @@ let n = parse(arg)                   // runtime length
 let buf = alloca(uint8, n)           // uint8*  — raw runtime-sized buffer (unchecked)
 let sl  = alloca(uint8[n] { })       // uint8[] — zeroed, bounds-checked slice
 let msg = alloca("status: %s{name}") // str     — unbounded interpolation on the stack
-let cs  = alloca(c"%s{path}")        // cstr    — runtime str→cstr copy on the stack
+let cs  = alloca((cstr) path)        // cstr    — runtime str→cstr copy on the stack
 ```
 
-`alloca` exists so that runtime-sized stack allocation is always a deliberate, visible choice — the constructs that would otherwise allocate it implicitly (an unbounded `%s` interpolation, a bare `(cstr) str` cast) are instead compile errors that point here. It is reached only through the keyword; there is no hidden `alloca` anywhere in emitted code.
+`alloca` exists so that runtime-sized stack allocation is always a deliberate, visible choice — the constructs that would otherwise allocate it implicitly (an unbounded `%s` interpolation, a bare `(cstr) str` cast) are instead compile errors that point here. Wrapping such a cast — `alloca((cstr) s)` — *is* that deliberate choice, licensing the otherwise-illegal bare cast by giving it a home. It is reached only through the keyword; there is no hidden `alloca` anywhere in emitted code.
 
-**Cost** — `alloca` memory lives until the function returns, exactly like a normal local. Evaluating an `alloca` inside a loop *within the same function* therefore extends the frame on every iteration (the C `alloca` behavior); the size and the loop are both visible at the call site. For a hot loop, prefer a compile-time bound (`%.Ns`, `(cstr[N])`) so the buffer is a single reused slot, or `alloc`/`free` per iteration. A runtime str→cstr copy passed straight to a C function — `c_fn(alloca(c"%s{s}"))` — is loop-safe from the *caller's* side, since the wrapping FC function reclaims the buffer on return.
+**Cost** — `alloca` memory lives until the function returns, exactly like a normal local. Evaluating an `alloca` inside a loop *within the same function* therefore extends the frame on every iteration (the C `alloca` behavior); the size and the loop are both visible at the call site. For a hot loop, prefer a compile-time bound (`%.Ns`, `(cstr[N])`) so the buffer is a single reused slot, or `alloc`/`free` per iteration. A runtime str→cstr copy passed straight to a C function — `c_fn(alloca((cstr) s))` — is loop-safe from the *caller's* side, since the wrapping FC function reclaims the buffer on return.
 
 **Lifetime** — an `alloca` result is stack memory and is governed by the same escape analysis as any other stack binding: returning it or storing it in heap/static memory is a compile error.
 

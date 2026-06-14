@@ -1,0 +1,21 @@
+// The heap home of a str→cstr conversion — alloc((cstr) s)! — is PROV_HEAP, so
+// (unlike the alloca and (cstr[N]) stack homes) it may be returned from the
+// function that built it. The caller owns and frees it.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let dup_cstr = (path: const str) ->
+    alloc((cstr) path)!
+
+let main = (args: str[]) ->
+    let h = dup_cstr("greetings")
+    assert(c.strlen(h) == 9u)
+    assert(((str) h) == "greetings")
+    free(h)
+
+    // freed per iteration → bounded heap use across a loop
+    for i in 0..4
+        let t = dup_cstr("loop")
+        assert(c.strlen(t) == 4u)
+        free(t)
+    0

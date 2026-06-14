@@ -20,7 +20,7 @@ module text =
     let parse_int32 = (s: const str) ->
         if s.len > max_parse_len then default(int32?)
         else
-            let cs = alloca(c"%s{s}")
+            let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtoll(cs, &endptr, 10)
             if endptr == cs then default(int32?)
@@ -32,7 +32,7 @@ module text =
     let parse_int64 = (s: const str) ->
         if s.len > max_parse_len then default(int64?)
         else
-            let cs = alloca(c"%s{s}")
+            let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtoll(cs, &endptr, 10)
             if endptr == cs then default(int64?)
@@ -44,7 +44,7 @@ module text =
     let parse_float32 = (s: const str) ->
         if s.len > max_parse_len then default(float32?)
         else
-            let cs = alloca(c"%s{s}")
+            let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtof(cs, &endptr)
             if endptr == cs then default(float32?)
@@ -56,7 +56,7 @@ module text =
     let parse_float64 = (s: const str) ->
         if s.len > max_parse_len then default(float64?)
         else
-            let cs = alloca(c"%s{s}")
+            let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtod(cs, &endptr)
             if endptr == cs then default(float64?)

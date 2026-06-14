@@ -1656,12 +1656,15 @@ static Expr *parse_prefix(Parser *p) {
         }
 
         /* alloc(expr) / alloca(expr) — initialized alloc. An interpolated string
-         * init is "wrapped": this licenses an unbounded (runtime-sized) interpolation
-         * that would be rejected as a bare expression. */
+         * init is "wrapped" and a bare (cstr) cast init is "licensed": either licenses
+         * an otherwise-illegal unbounded (runtime-sized) str→cstr conversion that the
+         * wrapping alloc/alloca gives a home (heap / dynamic stack). */
         Expr *init = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
         if (init->kind == EXPR_INTERP_STRING)
             init->interp_string.wrapped = true;
+        else if (init->kind == EXPR_CAST && init->cast.buffer_size == 0)
+            init->cast.licensed = true;
         Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
         e->alloc_expr.alloc_type = NULL;
         e->alloc_expr.size_expr = NULL;

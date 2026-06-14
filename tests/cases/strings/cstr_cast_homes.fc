@@ -1,0 +1,31 @@
+// The unbounded (cstr) str→cstr cast is illegal on its own, but alloc(...) and
+// alloca(...) give it a home: alloc((cstr) s)! copies to the heap (caller frees),
+// alloca((cstr) s) copies onto the dynamic stack (dies at function return). Both
+// are non-truncating — the buffer is sized to the source length + NUL.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let s = "hello world"
+
+    // dynamic-stack home: full-length copy, NUL-terminated
+    let cs = alloca((cstr) s)
+    assert(c.strlen(cs) == 11u)
+    assert(((str) cs) == "hello world")
+
+    // heap home: option result, unwrap then free
+    let hp = alloc((cstr) s)!
+    assert(c.strlen(hp) == 11u)
+    assert(((str) hp) == "hello world")
+    free(hp)
+
+    // empty source → empty cstr (NUL only)
+    let e = ""
+    let ce = alloca((cstr) e)
+    assert(c.strlen(ce) == 0u)
+
+    // a const str (string literal) is a valid source for both homes
+    let chp = alloc((cstr) "abc")!
+    assert(c.strlen(chp) == 3u)
+    free(chp)
+    0

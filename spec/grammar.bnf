@@ -551,6 +551,9 @@ prefix_expr      = "-" , prefix_expr                   (* negation       *)
 (* parenthesized expression.  See disambiguation rule 6.               *)
 (* The (cstr[N]) form is a bounded str->cstr cast: it copies into a    *)
 (* fixed N-byte stack buffer (truncating). N is an integer literal >=1.*)
+(* A bare (cstr) cast of a runtime-length str is rejected on its own   *)
+(* (unbounded stack copy); it is legal only as the direct argument of  *)
+(* alloc(...) / alloca(...), which give it a home (heap / dyn. stack). *)
 cast_expr        = "(" , type_expr , ")" , prefix_expr
                  | "(" , "cstr" , "[" , int_lit , "]" , ")" , prefix_expr ;
 
@@ -707,6 +710,9 @@ alloc_expr       = ( "alloc" | "alloca" ) , "(" , alloc_arg , ")" ;
 (*   - a raw buffer:                   alloc(int32, n)                 *)
 (*   - a value expression:             alloc(point { x = 1 })         *)
 (*   - a variant:                      alloc(shape.circle(3.14))      *)
+(*   - an interpolated string:         alloc(c"%d{x}")                *)
+(*   - a bare (cstr) str->cstr cast:   alloc((cstr) path)            *)
+(*     (heap copy; the bare cast is illegal anywhere else)            *)
 (* Note: alloc(T[N]) without { } is not valid — use alloc(T[N] { })   *)
 (* N may be runtime for empty { }; explicit elements require literal N *)
 (* alloca(...) is the dynamic-stack counterpart: same argument forms   *)
