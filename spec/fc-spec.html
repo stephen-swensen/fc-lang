@@ -1252,6 +1252,32 @@ Operators are listed from highest to lowest precedence. Operators at the same le
 
 Integer division truncates toward zero. `%` produces the remainder with the sign of the dividend. Division by zero is a hard failure (see *Division by zero*); signed `min / -1` overflows and wraps (see *Integer overflow*).
 
+### Evaluation order
+
+Within an expression, subexpressions are evaluated **left-to-right**, and each is evaluated **exactly once**. This diverges from C, which leaves the order of function-call arguments and of most binary operands *unspecified* — a portability hazard and a recurring source of surprise. FC fixes the order, following the modern convention shared by Rust, Java, C#, and Zig: reading order *is* evaluation order. Specifically:
+
+- **Binary operands** — the left operand is evaluated before the right. This includes `/` and `%`: the dividend is evaluated before the divisor.
+- **Function and method call arguments** — the callee is evaluated first (for an indirect call through a function value), then the arguments in source order.
+- **Assignment** — the target's lvalue subexpressions are evaluated first (e.g. the index in `s[f()] = g()` runs before the value), then the value, then the store.
+- **Aggregate literals** — struct fields, tuple elements, array-literal elements, and the `ptr`/`len` of a raw slice literal are evaluated in source order.
+
+The two short-circuiting operators are the deliberate exception to *evaluate-once*-per-position: `&&` evaluates its right operand only when the left is `true`, and `||` only when the left is `false`. When the right operand is skipped, its side effects do not occur.
+
+```fc
+let bump = (c: int32*) ->     // increments *c and returns the new value
+    *c = *c + 1
+    *c
+
+let mut n = 0
+// f(bump(&n), bump(&n)) passes (1, 2), never (2, 1)
+// a / b evaluates a before b;  s[bump(&n)] = bump(&n) runs the index before the value
+```
+
+This is the same guarantee already stated for string-interpolation segments (see *String interpolation*) and for `for`-loop range endpoints and iterables (see *For loops*) — it now holds uniformly for every expression position.
+
+> **Transpilation**
+> C only specifies an order for a few operators (`&&`, `||`, `?:`, the comma operator, and the assignment of a value before its use in the same full expression). Everywhere else the order is unspecified. To guarantee left-to-right semantics, codegen evaluates the earlier operands of a side-effecting operand list into temporaries — in source order, inside a GNU statement-expression `({ … })` — and then combines them, leaving the final operand in place. Operands with no side effects (literals, plain reads) need no ordering and are emitted directly, so the common case is unchanged. The temporaries are trivially eliminated by the C optimizer, making the guarantee zero-cost.
+
 ### Integer overflow
 
 Unsigned integer overflow wraps modulo 2ⁿ — this is C's existing guarantee and FC inherits it directly.

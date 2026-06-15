@@ -1,0 +1,30 @@
+// Function-call arguments are evaluated left-to-right, each exactly once.
+let bump = (c: int32*) ->
+    *c = *c + 1
+    *c
+
+let three = (a: int32, b: int32, c: int32) ->
+    a * 100 + b * 10 + c
+
+let combine = (a: int32, b: int32) ->
+    a * 10 + b
+
+let main = (args: str[]) ->
+    // Three side-effecting args: must observe 1, 2, 3 in order.
+    let mut c = 0
+    assert(three(bump(&c), bump(&c), bump(&c)) == 123)
+    assert(c == 3)
+
+    // Mixed pure / side-effecting args still preserve left-to-right order of
+    // the effects relative to one another.
+    let mut d = 0
+    assert(three(bump(&d), 9, bump(&d)) == 192)
+    assert(d == 2)
+
+    // Nested calls: inner argument lists also run left-to-right, and the whole
+    // first argument resolves before the second.
+    let mut e = 0
+    // combine(bump,bump) -> combine(1,2)=12 ; then combine(12, bump=3) -> 123
+    assert(combine(combine(bump(&e), bump(&e)), bump(&e)) == 123)
+    assert(e == 3)
+    0

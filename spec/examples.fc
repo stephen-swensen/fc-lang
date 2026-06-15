@@ -391,6 +391,16 @@ let main = (args: str[]) ->
     log_phase(shape.circle(7), &seen)
     assert(seen == 2)
 
+    // Evaluation order is left-to-right, each subexpression exactly once —
+    // for operands, call arguments, assignment, and aggregate fields alike.
+    let bump = (c: int32*) ->
+        *c = *c + 1
+        *c
+    let pack = (a: int32, b: int32) -> a * 10 + b
+    let mut tick = 0
+    assert(pack(bump(&tick), bump(&tick)) == 12)  // args run 1 then 2, not 2 then 1
+    assert(bump(&tick) - bump(&tick) == -1)       // lhs(3) before rhs(4)
+
     // Closures capture let bindings by copy (let mut cannot be captured)
     let threshold = 50
     let above = (n: int32) -> n > threshold

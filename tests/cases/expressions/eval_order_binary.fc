@@ -1,0 +1,32 @@
+// Binary operands are evaluated left-to-right, each exactly once.
+let bump = (c: int32*) ->
+    *c = *c + 1
+    *c
+
+let main = (args: str[]) ->
+    // Subtraction: lhs(1) - rhs(2) = -1.  (Right-to-left would give +1.)
+    let mut a = 0
+    assert(bump(&a) - bump(&a) == -1)
+    assert(a == 2)
+
+    // Bitwise / shift operands also left-to-right: (1 << 2) reads lhs=1 then
+    // rhs=2 -> 4.  rhs-first would shift 2 by 1 = 4 too, so use subtraction-like
+    // asymmetry: lhs=1, rhs=2 -> 1 - 2 via bit trick is awkward; use comparison.
+    let mut b = 0
+    // lhs(1) < rhs(2) is true; reversed it would be false.
+    assert(bump(&b) < bump(&b))
+    assert(b == 2)
+
+    // Comparison chained through &&: short-circuit order preserved, no extra
+    // evaluation of the right operand's effects beyond once.
+    let mut e = 0
+    let r = bump(&e) == 1 && bump(&e) == 2
+    assert(r)
+    assert(e == 2)
+
+    // Left operand of && that is false must not evaluate the right at all.
+    let mut f = 0
+    let r2 = bump(&f) == 99 && bump(&f) == 1
+    assert(!r2)
+    assert(f == 1)   // right operand never ran
+    0

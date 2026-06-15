@@ -871,6 +871,158 @@ static void emit_fn_type_suffix(Type *t, FILE *out) {
 static void emit_expr(Expr *e, FILE *out);
 static void emit_eq_func_name(Type *t, FILE *out);
 
+/* ---- Left-to-right evaluation-order sequencing ---------------------------
+ *
+ * C leaves the evaluation order of function-call arguments and of most binary
+ * operands unspecified.  FC guarantees left-to-right, evaluate-once semantics
+ * (see spec "Evaluation order").  Where an operand list contains a
+ * side-effecting expression, codegen forces the order by evaluating the earlier
+ * operands into temporaries — in source order — inside a statement-expression,
+ * then rewriting those operand slots to read the temporaries.  Pure operands
+ * (no calls/assignments/allocations) need no ordering and are emitted in place.
+ */
+
+/* Conservative "may produce an observable side effect" test: a call,
+ * assignment, allocation, free, or atomic op anywhere in the tree.  Pure reads,
+ * literals, and lambda values return false; control-flow operands default to
+ * true (they may contain anything). */
+static bool expr_has_side_effects(Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT: case EXPR_STRING_LIT: case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT: case EXPR_IDENT: case EXPR_SIZEOF:
+    case EXPR_ALIGNOF: case EXPR_TYPE_VAR_REF: case EXPR_DEFAULT:
+    case EXPR_FUNC:
+        return false;
+    case EXPR_CALL: case EXPR_ASSIGN: case EXPR_ALLOC: case EXPR_FREE:
+    case EXPR_ATOMIC_LOAD: case EXPR_ATOMIC_STORE:
+        return true;
+    case EXPR_BINARY:
+        return expr_has_side_effects(e->binary.left) ||
+               expr_has_side_effects(e->binary.right);
+    case EXPR_UNARY_PREFIX:  return expr_has_side_effects(e->unary_prefix.operand);
+    case EXPR_UNARY_POSTFIX: return expr_has_side_effects(e->unary_postfix.operand);
+    case EXPR_FIELD: case EXPR_DEREF_FIELD:
+        return expr_has_side_effects(e->field.object);
+    case EXPR_INDEX:
+        return expr_has_side_effects(e->index.object) ||
+               expr_has_side_effects(e->index.index);
+    case EXPR_SLICE:
+        return expr_has_side_effects(e->slice.object) ||
+               expr_has_side_effects(e->slice.lo) ||
+               expr_has_side_effects(e->slice.hi);
+    case EXPR_CAST: return expr_has_side_effects(e->cast.operand);
+    case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (!e->interp_string.segments[i].is_literal &&
+                expr_has_side_effects(e->interp_string.segments[i].expr))
+                return true;
+        return false;
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            if (expr_has_side_effects(e->struct_lit.fields[i].value)) return true;
+        return false;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            if (expr_has_side_effects(e->tuple_lit.elems[i])) return true;
+        return false;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            if (expr_has_side_effects(e->array_lit.elems[i])) return true;
+        return false;
+    case EXPR_SLICE_LIT:
+        return expr_has_side_effects(e->slice_lit.ptr_expr) ||
+               expr_has_side_effects(e->slice_lit.len_expr);
+    default:
+        /* if/match/loop/for/block/break/return/... may contain effects */
+        return true;
+    }
+}
+
+/* True for operands that read no mutable state and have no side effects, so
+ * their position relative to a side-effecting sibling can never be observed —
+ * leaving them in place avoids a pointless temporary. */
+static bool seq_is_atom(Expr *e) {
+    switch (e->kind) {
+    case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT: case EXPR_STRING_LIT: case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT: case EXPR_SIZEOF: case EXPR_ALIGNOF:
+    case EXPR_TYPE_VAR_REF: case EXPR_DEFAULT:
+        return true;
+    case EXPR_IDENT:
+        /* a top-level function reference is a constant, not a variable read */
+        return e->type && e->type->kind == TYPE_FUNC && !e->ident.is_local;
+    case EXPR_FIELD:
+        return e->field.is_type_property || e->field.is_extern_const;
+    default:
+        return false;
+    }
+}
+
+/* A synthetic local-ident expr that emits as the bare temp name (is_local
+ * suppresses the function-value fat-pointer wrapping in EXPR_IDENT). */
+static Expr seq_make_ref(const char *name, Type *type) {
+    Expr e;
+    memset(&e, 0, sizeof e);
+    e.kind = EXPR_IDENT;
+    e.type = type;
+    e.ident.name = name;
+    e.ident.codegen_name = name;
+    e.ident.is_local = true;
+    return e;
+}
+
+/* Does any operand in this list have side effects?  (If not, C's order is
+ * already unobservable and no sequencing temps are needed.) */
+static bool seq_needed(Expr ***slots, int n) {
+    for (int i = 0; i < n; i++)
+        if (expr_has_side_effects(*slots[i])) return true;
+    return false;
+}
+
+/* Evaluate operands [0, n-1) into temporaries in source order (skipping
+ * side-effect-free atoms and any operand lacking a type), rewriting their slots
+ * to read the temporaries.  The final operand is left in place — it is
+ * evaluated last regardless.  Assumes a statement-expression `({ ` is already
+ * open.  `scratch` (length >= n) backs the synthetic ident refs and must
+ * outlive the body emit; `saved` (length >= n) records originals for restore. */
+static void seq_hoist(Expr ***slots, int n, Expr *scratch, Expr **saved, FILE *out) {
+    for (int i = 0; i < n - 1; i++) {
+        Expr *op = *slots[i];
+        saved[i] = op;
+        if (!op->type || seq_is_atom(op)) continue;
+        char *nm = arena_alloc(g_arena, 24);
+        snprintf(nm, 24, "_sq%d", temp_counter++);
+        emit_type(op->type, out);
+        fprintf(out, " %s = ", nm);
+        emit_expr(op, out);
+        fprintf(out, "; ");
+        scratch[i] = seq_make_ref(nm, op->type);
+        *slots[i] = &scratch[i];
+    }
+}
+
+/* Restore operand slots rewritten by seq_hoist. */
+static void seq_restore(Expr ***slots, int n, Expr **saved) {
+    for (int i = 0; i < n - 1; i++) *slots[i] = saved[i];
+}
+
+/* True when emitting `e` yields a plainly parenthesized `(...)` expression, so
+ * a controlling-position `if ` may follow it without adding its own parens
+ * (avoiding clang's -Wparentheses-equality on `if ((x == y))`).  A binary
+ * operand list with side effects, or a division/modulo, instead emits a
+ * statement-expression `({...})` and must be parenthesized normally. */
+static bool emit_self_parens(Expr *e) {
+    if (e->kind != EXPR_BINARY) return false;
+    if (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) return false;
+    Expr **slots[2] = { &e->binary.left, &e->binary.right };
+    bool seq = e->binary.op != TOK_AMPAMP && e->binary.op != TOK_PIPEPIPE &&
+               !g_const_context && seq_needed(slots, 2);
+    return !seq;
+}
+
 /* Emit a function call argument for an extern call, inserting casts at the
  * C boundary: cstr (uint8*) → const char*, cstr* (uint8**) → char**,
  * and any** (void**) → void* (C's void* converts to any T** implicitly,
@@ -1345,7 +1497,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
      * Binary expressions emit their own outer parens, so use "if "
      * to avoid double-parens like if ((x == y)) which triggers
      * clang's -Wparentheses-equality. */
-    if (e->if_expr.cond->kind == EXPR_BINARY) {
+    if (emit_self_parens(e->if_expr.cond)) {
         fprintf(out, "if ");
         emit_expr(e->if_expr.cond, out);
         fprintf(out, " {\n");
@@ -2062,6 +2214,17 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_BINARY: {
+        /* Force left-to-right operand evaluation when an operand has side
+         * effects (C leaves binary-operand order unspecified).  /, %, &&, ||
+         * are excluded: division self-sequences its temps below, and &&/|| are
+         * already left-to-right and must not have their right operand hoisted
+         * (it is conditionally evaluated). */
+        Expr **_bslots[2] = { &e->binary.left, &e->binary.right };
+        Expr _bscratch[2]; Expr *_bsaved[2];
+        bool _bseq = e->binary.op != TOK_SLASH && e->binary.op != TOK_PERCENT &&
+                     e->binary.op != TOK_AMPAMP && e->binary.op != TOK_PIPEPIPE &&
+                     !g_const_context && seq_needed(_bslots, 2);
+        if (_bseq) { fprintf(out, "({ "); seq_hoist(_bslots, 2, _bscratch, _bsaved, out); }
         /* Structural equality on complex types */
         if ((e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) && e->binary.left->type) {
             Type *cmp_type = e->binary.left->type;
@@ -2082,7 +2245,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, ", ");
                 emit_expr(e->binary.right, out);
                 fprintf(out, "))");
-                break;
+                goto _binary_done;
             }
         }
         int op = e->binary.op;
@@ -2100,7 +2263,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, " - ");
             emit_expr(e->binary.right, out);
             fprintf(out, ")");
-            break;
+            goto _binary_done;
         }
 
         /* Integer +, -, *: overflow is defined as modular wraparound.
@@ -2134,7 +2297,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, " %s (unsigned)(%s)", op_c, ut);
                 emit_expr(e->binary.right, out);
                 fprintf(out, ")");
-                break;
+                goto _binary_done;
             }
             if (type_is_signed(rt)) {
                 const char *ut = unsigned_counterpart(rt);
@@ -2145,7 +2308,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, ") %s ((%s)", op_c, ut);
                 emit_expr(e->binary.right, out);
                 fprintf(out, "))");
-                break;
+                goto _binary_done;
             }
             /* unsigned, width >= int: modular in C — fall through to plain emit */
         }
@@ -2183,7 +2346,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (mask_expr) fprintf(out, " & %s))", mask_expr);
                 else fprintf(out, " & %d))", mask);
             }
-            break;
+            goto _binary_done;
         }
 
         /* Integer division/modulo: guard the divisor.
@@ -2204,7 +2367,14 @@ static void emit_expr(Expr *e, FILE *out) {
             int fn_len = (int)strlen(fn);
             int line = e->loc.line;
             bool wrap = type_is_signed(rt);
+            /* Evaluate the dividend (lhs) first, then the divisor (rhs):
+             * left-to-right, each exactly once.  Both are hoisted regardless of
+             * the wrap path so the guard and result reference them by name. */
             fprintf(out, "({ ");
+            emit_type(rt, out);
+            fprintf(out, " _nv%d = ", tid);
+            emit_expr(e->binary.left, out);
+            fprintf(out, "; ");
             emit_type(rt, out);
             fprintf(out, " _dv%d = ", tid);
             emit_expr(e->binary.right, out);
@@ -2213,12 +2383,10 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ":%d: %s by zero\\n\"); FC_ABORT(); } ",
                     line, op == TOK_SLASH ? "divide" : "modulo");
             if (wrap) {
-                /* hoist lhs so it is evaluated once across both ternary arms */
+                /* signed min / -1 and min % -1 overflow: substitute the wrapped
+                 * value (a / -1 == -a, a % -1 == 0) instead of trapping. */
                 const char *ut = unsigned_counterpart(rt);
-                emit_type(rt, out);
-                fprintf(out, " _nv%d = ", tid);
-                emit_expr(e->binary.left, out);
-                fprintf(out, "; (_dv%d == -1) ? (", tid);
+                fprintf(out, "(_dv%d == -1) ? (", tid);
                 emit_type(rt, out);
                 if (op == TOK_SLASH) fprintf(out, ")(-(%s)_nv%d) : (", ut, tid);
                 else                 fprintf(out, ")0 : (");
@@ -2226,11 +2394,10 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, ")(_nv%d %s _dv%d); })",
                         tid, op == TOK_SLASH ? "/" : "%", tid);
             } else {
-                fprintf(out, "(");
-                emit_expr(e->binary.left, out);
-                fprintf(out, ") %s _dv%d; })", op == TOK_SLASH ? "/" : "%", tid);
+                fprintf(out, "_nv%d %s _dv%d; })",
+                        tid, op == TOK_SLASH ? "/" : "%", tid);
             }
-            break;
+            goto _binary_done;
         }
 
         const char *op_str;
@@ -2260,6 +2427,8 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, " %s ", op_str);
         emit_expr(e->binary.right, out);
         fprintf(out, ")");
+    _binary_done:
+        if (_bseq) { fprintf(out, "; })"); seq_restore(_bslots, 2, _bsaved); }
         break;
     }
 
@@ -2384,6 +2553,21 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Get callee function type for coercion */
         Type *call_ft = e->call.func->type;
 
+        /* Force left-to-right argument evaluation when any argument has side
+         * effects: evaluate the earlier arguments into temps in source order
+         * (the callee is evaluated first, the final argument last). */
+        Expr ***aslots = NULL; Expr *ascratch = NULL; Expr **asaved = NULL;
+        bool aseq = !g_const_context && e->call.arg_count >= 2;
+        if (aseq) {
+            aslots = arena_alloc(g_arena, sizeof(Expr**) * (size_t)e->call.arg_count);
+            for (int i = 0; i < e->call.arg_count; i++) aslots[i] = &e->call.args[i];
+            aseq = seq_needed(aslots, e->call.arg_count);
+        }
+        if (aseq) {
+            ascratch = arena_alloc(g_arena, sizeof(Expr) * (size_t)e->call.arg_count);
+            asaved = arena_alloc(g_arena, sizeof(Expr*) * (size_t)e->call.arg_count);
+        }
+
         if (e->call.is_indirect) {
             /* Indirect call through fat pointer */
             int tid = temp_counter++;
@@ -2391,14 +2575,21 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(call_ft, out);
             fprintf(out, " _cf%d = ", tid);
             emit_expr(e->call.func, out);
-            fprintf(out, "; _cf%d.fn_ptr(", tid);
+            fprintf(out, "; ");
+            if (aseq) seq_hoist(aslots, e->call.arg_count, ascratch, asaved, out);
+            fprintf(out, "_cf%d.fn_ptr(", tid);
             for (int i = 0; i < e->call.arg_count; i++) {
                 if (i > 0) fprintf(out, ", ");
                 emit_expr(e->call.args[i], out);
             }
             if (e->call.arg_count > 0) fprintf(out, ", ");
             fprintf(out, "_cf%d.ctx); })", tid);
+            if (aseq) seq_restore(aslots, e->call.arg_count, asaved);
         } else {
+            if (aseq) {
+                fprintf(out, "({ ");
+                seq_hoist(aslots, e->call.arg_count, ascratch, asaved, out);
+            }
             /* Direct call — emit function name directly (not via emit_expr
                to avoid fat-pointer wrapping) and append NULL for _ctx */
             Expr *callee = e->call.func;
@@ -2478,6 +2669,10 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
                 fprintf(out, ")");
             }
+            if (aseq) {
+                fprintf(out, "; })");
+                seq_restore(aslots, e->call.arg_count, asaved);
+            }
         }
         break;
     }
@@ -2512,7 +2707,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->type, out);
             fprintf(out, " %s;\n", res_var);
             emit_indent(out);
-            if (e->if_expr.cond->kind == EXPR_BINARY) {
+            if (emit_self_parens(e->if_expr.cond)) {
                 fprintf(out, "if ");
                 emit_expr(e->if_expr.cond, out);
                 fprintf(out, " {\n");
@@ -2935,36 +3130,54 @@ static void emit_expr(Expr *e, FILE *out) {
          * is a pass2-verified constant, and a function call is not a constant
          * expression) and when pass2 proved len non-negative. */
         bool guard = !g_const_context && !e->slice_lit.len_nonneg;
-        int tid = 0;
-        if (guard) {
-            tid = temp_counter++;
-            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
-            int fn_len = (int)strlen(fn);
-            fprintf(out, "({ int64_t _sll%d = (", tid);
+        Type *ptr_type = e->slice_lit.ptr_expr->type;
+        bool const_ptr = ptr_type && ptr_type->kind == TYPE_POINTER && ptr_type->is_const;
+        /* The guard hoists len into a temp; to keep ptr-before-len source order
+         * (left-to-right) we then hoist ptr first.  Also sequence when both
+         * operands have side effects even without the guard. */
+        bool seq = guard || (!g_const_context &&
+                             expr_has_side_effects(e->slice_lit.ptr_expr) &&
+                             expr_has_side_effects(e->slice_lit.len_expr));
+        if (seq) {
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            /* ptr first (left-to-right) */
+            emit_type(e->slice_lit.elem_type, out);
+            fprintf(out, " *_sp%d = ", tid);
+            if (const_ptr) {
+                fprintf(out, "(");
+                emit_type(e->slice_lit.elem_type, out);
+                fprintf(out, "*)");
+            }
+            emit_expr(e->slice_lit.ptr_expr, out);
+            fprintf(out, "; int64_t _sll%d = (", tid);
             emit_expr(e->slice_lit.len_expr, out);
-            fprintf(out, "); if (__builtin_expect(_sll%d < 0, 0)) fc_neg_len(\"", tid);
-            emit_c_escaped(fn, fn_len, out);
-            fprintf(out, "\", %d, (long long)_sll%d); ", e->loc.line, tid);
+            fprintf(out, "); ");
+            if (guard) {
+                const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+                int fn_len = (int)strlen(fn);
+                fprintf(out, "if (__builtin_expect(_sll%d < 0, 0)) fc_neg_len(\"", tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, "\", %d, (long long)_sll%d); ", e->loc.line, tid);
+            }
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .ptr = _sp%d, .len = _sll%d }; })", tid, tid);
+            break;
         }
         fprintf(out, "(");
         emit_type(e->type, out);
         fprintf(out, "){ .ptr = ");
         /* Cast away const if source pointer is const (FC tracks constness at slice level) */
-        Type *ptr_type = e->slice_lit.ptr_expr->type;
-        if (ptr_type && ptr_type->kind == TYPE_POINTER && ptr_type->is_const) {
+        if (const_ptr) {
             fprintf(out, "(");
             emit_type(e->slice_lit.elem_type, out);
             fprintf(out, "*)");
         }
         emit_expr(e->slice_lit.ptr_expr, out);
         fprintf(out, ", .len = ");
-        if (guard)
-            fprintf(out, "_sll%d", tid);
-        else
-            emit_expr(e->slice_lit.len_expr, out);
+        emit_expr(e->slice_lit.len_expr, out);
         fprintf(out, " }");
-        if (guard)
-            fprintf(out, "; })");
         break;
     }
 
@@ -2987,6 +3200,24 @@ static void emit_expr(Expr *e, FILE *out) {
                     break;
                 }
             }
+        }
+        /* Force left-to-right field evaluation when a field has side effects (C
+         * leaves initializer-list order unspecified).  Only the plain
+         * compound-literal path needs this: the fixed-array paths already
+         * assign field-by-field in order, and const context has no effects. */
+        int sln = e->struct_lit.field_count;
+        Expr ***slslots = NULL; Expr *slscratch = NULL; Expr **slsaved = NULL;
+        bool slseq = !has_fixed_array && !g_const_context && sln >= 2;
+        if (slseq) {
+            slslots = arena_alloc(g_arena, sizeof(Expr**) * (size_t)sln);
+            for (int i = 0; i < sln; i++) slslots[i] = &e->struct_lit.fields[i].value;
+            slseq = seq_needed(slslots, sln);
+        }
+        if (slseq) {
+            slscratch = arena_alloc(g_arena, sizeof(Expr) * (size_t)sln);
+            slsaved = arena_alloc(g_arena, sizeof(Expr*) * (size_t)sln);
+            fprintf(out, "({ ");
+            seq_hoist(slslots, sln, slscratch, slsaved, out);
         }
         if (has_fixed_array && g_const_context) {
             /* File-scope aggregate initializer: emit each field inline.  For
@@ -3117,6 +3348,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, " }");
             }
         }
+        if (slseq) { fprintf(out, "; })"); seq_restore(slslots, sln, slsaved); }
         break;
     }
 
@@ -3126,6 +3358,22 @@ static void emit_expr(Expr *e, FILE *out) {
          * nested statement-expressions (alloc(...)!, interpolated strings) don't
          * collapse into one over-long line that trips gcc's column tracking. */
         bool multiline = e->tuple_lit.elem_count >= 2;
+        /* Force left-to-right element evaluation when an element has side
+         * effects (C leaves initializer-list order unspecified). */
+        int tn = e->tuple_lit.elem_count;
+        Expr ***tslots = NULL; Expr *tscratch = NULL; Expr **tsaved = NULL;
+        bool tseq = !g_const_context && tn >= 2;
+        if (tseq) {
+            tslots = arena_alloc(g_arena, sizeof(Expr**) * (size_t)tn);
+            for (int i = 0; i < tn; i++) tslots[i] = &e->tuple_lit.elems[i];
+            tseq = seq_needed(tslots, tn);
+        }
+        if (tseq) {
+            tscratch = arena_alloc(g_arena, sizeof(Expr) * (size_t)tn);
+            tsaved = arena_alloc(g_arena, sizeof(Expr*) * (size_t)tn);
+            fprintf(out, "({ ");
+            seq_hoist(tslots, tn, tscratch, tsaved, out);
+        }
         fprintf(out, "(");
         emit_type(e->type, out);
         fprintf(out, "){");
@@ -3149,6 +3397,7 @@ static void emit_expr(Expr *e, FILE *out) {
         } else {
             fprintf(out, " }");
         }
+        if (tseq) { fprintf(out, "; })"); seq_restore(tslots, tn, tsaved); }
         break;
     }
 
@@ -3336,7 +3585,7 @@ static void emit_expr(Expr *e, FILE *out) {
                     /* Avoid double-parens like if ((x == y)) which triggers
                        clang's -Wparentheses-equality when the guard is a
                        binary expression (emit_expr wraps binaries in parens). */
-                    if (arm->guard->kind == EXPR_BINARY) {
+                    if (emit_self_parens(arm->guard)) {
                         fprintf(out, "if ");
                         emit_expr(arm->guard, out);
                         fprintf(out, " {\n");
@@ -3888,7 +4137,17 @@ static void emit_expr(Expr *e, FILE *out) {
             const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
             int fn_len = (int)strlen(fn);
             int line = e->loc.line;
+            bool deref = target->kind == EXPR_DEREF_FIELD;
             fprintf(out, "({ ");
+            /* Evaluate the destination object exactly once and before the
+             * source (left-to-right): hoist a pointer to the containing struct.
+             * For x->f the object is already a pointer; for x.f take its
+             * address. */
+            emit_type(target->field.object->type, out);
+            if (deref) fprintf(out, " _ao%d = (", tid);
+            else       fprintf(out, " *_ao%d = &(", tid);
+            emit_expr(target->field.object, out);
+            fprintf(out, "); ");
             /* Evaluate source slice */
             emit_type(e->assign.value->type, out);
             fprintf(out, " _fas%d = ", tid);
@@ -3902,39 +4161,46 @@ static void emit_expr(Expr *e, FILE *out) {
                     line, target->field.name,
                     (long long)fat->fixed_array.size, tid);
             /* memcpy the data */
-            fprintf(out, "memcpy(");
-            if (target->kind == EXPR_DEREF_FIELD) {
-                emit_expr(target->field.object, out);
-                fprintf(out, "->%s", target->field.name);
-            } else {
-                emit_expr(target->field.object, out);
-                fprintf(out, ".%s", target->field.name);
-            }
-            fprintf(out, ", _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
-                    tid, tid);
+            fprintf(out, "memcpy(_ao%d->%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
+                    tid, target->field.name, tid, tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); ");
             /* Zero-fill remainder */
-            fprintf(out, "if (_fas%d.len < %lld) memset(",
-                    tid, (long long)fat->fixed_array.size);
-            if (target->kind == EXPR_DEREF_FIELD) {
-                emit_expr(target->field.object, out);
-                fprintf(out, "->%s", target->field.name);
-            } else {
-                emit_expr(target->field.object, out);
-                fprintf(out, ".%s", target->field.name);
-            }
-            fprintf(out, " + _fas%d.len, 0, fc_to_size(%lld - _fas%d.len) * sizeof(",
+            fprintf(out, "if (_fas%d.len < %lld) memset(_ao%d->%s + _fas%d.len, 0, "
+                         "fc_to_size(%lld - _fas%d.len) * sizeof(",
+                    tid, (long long)fat->fixed_array.size, tid, target->field.name,
                     tid, (long long)fat->fixed_array.size, tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); })");
             break;
         }
         /* Slice element assignment handled generically — EXPR_INDEX now produces
-         * an lvalue via pointer dereference, so no special case needed. */
-        emit_expr(e->assign.target, out);
-        fprintf(out, " = ");
-        emit_expr(e->assign.value, out);
+         * an lvalue via pointer dereference, so no special case needed.
+         *
+         * When the target subexpressions or the value have side effects, force
+         * left-to-right order (target's lvalue subexpressions, then the value):
+         * take the target's address first, then evaluate the value, then store.
+         * &(target) is well-defined for every assignment target (it is an
+         * lvalue), and the index/field lowering inside it is already
+         * left-to-right. */
+        if (!g_const_context &&
+            (expr_has_side_effects(e->assign.value) ||
+             expr_has_side_effects(e->assign.target))) {
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            emit_type(e->assign.target->type, out);
+            fprintf(out, " *_at%d = &(", tid);
+            emit_expr(e->assign.target, out);
+            fprintf(out, "); ");
+            emit_type(e->assign.value->type, out);
+            fprintf(out, " _av%d = ", tid);
+            emit_expr(e->assign.value, out);
+            fprintf(out, "; *_at%d = _av%d; })", tid, tid);
+        } else {
+            emit_expr(e->assign.target, out);
+            fprintf(out, " = ");
+            emit_expr(e->assign.value, out);
+        }
         break;
     }
 

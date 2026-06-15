@@ -1,0 +1,48 @@
+// Struct, tuple, and array literal fields/elements are evaluated left-to-right,
+// each exactly once.
+struct trip =
+    a: int32
+    b: int32
+    c: int32
+
+let bump = (c: int32*) ->
+    *c = *c + 1
+    *c
+
+// Bumps the counter and returns the pointer unchanged (for slice-literal ptr).
+let bump_ptr = (c: int32*, p: int32*) ->
+    *c = *c + 1
+    p
+
+let main = (args: str[]) ->
+    // Struct literal: fields run in source order.
+    let mut s = 0
+    let t = trip { a = bump(&s), b = bump(&s), c = bump(&s) }
+    assert(t.a == 1 && t.b == 2 && t.c == 3)
+    assert(s == 3)
+
+    // Tuple literal: elements run in source order.
+    let mut p = 0
+    let tup = { bump(&p), bump(&p), bump(&p) }
+    assert(tup[0] == 1 && tup[1] == 2 && tup[2] == 3)
+    assert(p == 3)
+
+    // Array literal: elements run in source order.
+    let mut r = 0
+    let arr = int32[3] { bump(&r), bump(&r), bump(&r) }
+    assert(arr[0] == 1 && arr[1] == 2 && arr[2] == 3)
+    assert(r == 3)
+
+    // Mixed pure and side-effecting struct fields: effect order preserved.
+    let mut m = 0
+    let t2 = trip { a = bump(&m), b = 50, c = bump(&m) }
+    assert(t2.a == 1 && t2.b == 50 && t2.c == 2)
+    assert(m == 2)
+
+    // Raw slice literal: the ptr expression runs before the len expression.
+    let mut backing = int32[8] { 0, 0, 0, 0, 0, 0, 0, 0 }
+    let mut k = 0
+    // ptr() bumps k 0->1, then len reads k == 1.  Reversed order would read 0.
+    let sl = int32[] { ptr = bump_ptr(&k, backing.ptr), len = k }
+    assert(k == 1 && sl.len == 1)
+    0

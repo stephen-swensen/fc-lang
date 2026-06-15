@@ -1,0 +1,32 @@
+// Division and modulo evaluate the dividend (lhs) before the divisor (rhs),
+// each exactly once — matching every other binary operator.
+let bump = (c: int32*) ->
+    *c = *c + 1
+    *c
+
+let bumpu = (c: uint32*) ->
+    *c = *c + 1u32
+    *c
+
+let main = (args: str[]) ->
+    // Signed divide: lhs(1) / rhs(2) == 0.  (rhs-first would give 2/1 == 2.)
+    let mut a = 0
+    assert(bump(&a) / bump(&a) == 0)
+    assert(a == 2)
+
+    // Signed modulo: lhs(1) % rhs(2) == 1.  (rhs-first would give 2 % 1 == 0.)
+    let mut b = 0
+    assert(bump(&b) % bump(&b) == 1)
+    assert(b == 2)
+
+    // Unsigned divide takes the non-wrap path; still lhs-first, once each.
+    let mut u = 0u32
+    assert(bumpu(&u) / bumpu(&u) == 0u32)
+    assert(u == 2u32)
+
+    // Divisor evaluated exactly once (guard + divide share one temp).
+    let mut d = 0
+    let q = 10 / bump(&d)
+    assert(q == 10)   // 10 / 1
+    assert(d == 1)    // bump ran once, not twice
+    0

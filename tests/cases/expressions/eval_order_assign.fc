@@ -1,0 +1,41 @@
+// Assignment evaluates the target's lvalue subexpressions left-to-right, then
+// the value, each exactly once.
+struct cell =
+    x: int32
+
+let bump = (c: int32*) ->
+    *c = *c + 1
+    *c
+
+let main = (args: str[]) ->
+    // s[f()] = g(): the index f() runs first (1), then the value g() (2).
+    let mut a = 0
+    let mut buf = int32[4] { 0, 0, 0, 0 }
+    buf[bump(&a)] = bump(&a)
+    assert(buf[1] == 2)
+    assert(buf[0] == 0 && buf[2] == 0 && buf[3] == 0)
+    assert(a == 2)
+
+    // Side-effecting target object then value: arr[f()].x = g().
+    let mut b = 0
+    let mut cells = cell[3] { cell { x = 0 }, cell { x = 0 }, cell { x = 0 } }
+    cells[bump(&b)].x = bump(&b)
+    assert(cells[1].x == 2)
+    assert(cells[0].x == 0 && cells[2].x == 0)
+    assert(b == 2)
+
+    // Target index evaluated exactly once.
+    let mut d = 0
+    let mut buf2 = int32[4] { 0, 0, 0, 0 }
+    buf2[bump(&d)] = 7
+    assert(buf2[1] == 7)
+    assert(d == 1)   // index ran once, not twice
+
+    // Pointer-deref target: *p computed, then value.
+    let mut v = 0
+    let mut sink = 0
+    let p = &sink
+    *p = bump(&v)
+    assert(sink == 1)
+    assert(v == 1)
+    0
