@@ -1,0 +1,6 @@
+// Negative length is rejected regardless of the literal's integer width.
+let main = (args: str[]) ->
+    let mut x = 42i32
+    let p = &x
+    let s = int32[] { ptr = p, len = -1i8 }
+    s[0]

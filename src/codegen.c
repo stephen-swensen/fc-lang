@@ -2847,7 +2847,28 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_SLICE_LIT: {
-        /* Slice construction from raw parts: (fc_slice_T){ .ptr = ptr, .len = len } */
+        /* Slice construction from raw parts: (fc_slice_T){ .ptr = ptr, .len = len }
+         *
+         * A slice's length must be non-negative: the index/subslice bounds
+         * checks fuse the negative-index test into an unsigned compare
+         * ((uint64_t)idx >= (uint64_t)len), which a negative len silently
+         * defeats.  When pass2 could not prove len >= 0, guard a runtime len so
+         * a negative value aborts at construction instead of corrupting every
+         * later access.  Skipped in const context (file-scope initializer: len
+         * is a pass2-verified constant, and a function call is not a constant
+         * expression) and when pass2 proved len non-negative. */
+        bool guard = !g_const_context && !e->slice_lit.len_nonneg;
+        int tid = 0;
+        if (guard) {
+            tid = temp_counter++;
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int fn_len = (int)strlen(fn);
+            fprintf(out, "({ int64_t _sll%d = (", tid);
+            emit_expr(e->slice_lit.len_expr, out);
+            fprintf(out, "); if (__builtin_expect(_sll%d < 0, 0)) fc_neg_len(\"", tid);
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, "\", %d, (long long)_sll%d); ", e->loc.line, tid);
+        }
         fprintf(out, "(");
         emit_type(e->type, out);
         fprintf(out, "){ .ptr = ");
@@ -2860,8 +2881,13 @@ static void emit_expr(Expr *e, FILE *out) {
         }
         emit_expr(e->slice_lit.ptr_expr, out);
         fprintf(out, ", .len = ");
-        emit_expr(e->slice_lit.len_expr, out);
+        if (guard)
+            fprintf(out, "_sll%d", tid);
+        else
+            emit_expr(e->slice_lit.len_expr, out);
         fprintf(out, " }");
+        if (guard)
+            fprintf(out, "; })");
         break;
     }
 
@@ -5343,6 +5369,10 @@ static void detect_features_expr(Expr *e) {
             detect_features_expr(e->tuple_lit.elems[i]);
         return;
     case EXPR_SLICE_LIT:
+        /* A runtime-len slice literal emits a negative-length abort via stderr
+         * (fc_neg_len).  Provably non-negative lens skip the guard. */
+        if (!e->slice_lit.len_nonneg)
+            g_needs_stdio = true;
         detect_features_expr(e->slice_lit.ptr_expr);
         detect_features_expr(e->slice_lit.len_expr);
         return;
@@ -5574,11 +5604,18 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "    fprintf(stderr, \"%%s:%%d: subslice out of range: lo=%%lld hi=%%lld len=%%lld\\n\",\n"
             "            file, line, lo, hi, len);\n"
             "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_neg_len(const char *file, int line, long long len) {\n"
+            "    fprintf(stderr, \"%%s:%%d: slice literal length is negative: len=%%lld\\n\",\n"
+            "            file, line, len);\n"
+            "    FC_ABORT();\n"
             "}\n");
         /* Register the helpers as skip-entries so their frames don't pollute
          * the user-visible backtrace when a bounds check fires. */
         symmap_add("fc_oob", NULL, "<runtime>", 0);
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
+        symmap_add("fc_neg_len", NULL, "<runtime>", 0);
     }
 
     /* Collect all slice, option, function, and eq types used in the program */

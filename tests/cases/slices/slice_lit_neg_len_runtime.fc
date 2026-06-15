@@ -1,0 +1,10 @@
+// A negative length only known at runtime aborts at slice construction
+// (fc_neg_len) rather than corrupting every later bounds check.  With no extra
+// argv, args.len == 1, so the length below is -4 — not constant-foldable, so it
+// reaches the runtime guard and aborts before the slice is ever used.
+let main = (args: str[]) ->
+    let mut x = 42i32
+    let p = &x
+    let n = (int64) args.len - 5i64
+    let s = int32[] { ptr = p, len = n }   // aborts here at construction
+    (int32) s.len                          // never reached

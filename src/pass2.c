@@ -4783,12 +4783,34 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         /* len must be int64 (or widenable to int64) */
         Type *len_type = type_int64();
+        Expr *orig_len = e->slice_lit.len_expr;  /* before any widening wrap */
+        bool len_type_ok = true;
         if (!type_eq(lt, len_type)) {
             if (type_can_widen(lt, len_type)) {
                 e->slice_lit.len_expr = wrap_widen(ctx->arena, e->slice_lit.len_expr, len_type);
             } else {
                 diag_error(e->slice_lit.len_expr->loc,
                     "slice len field: expected int64, got %s", type_name(lt));
+                len_type_ok = false;
+            }
+        }
+        /* A slice's length must be non-negative.  The index/subslice bounds
+         * checks fuse the negative-index test into an unsigned compare
+         * ((uint64_t)idx >= (uint64_t)len), which a negative len defeats — it
+         * casts to an enormous value, so every later access slips through.
+         * Reject a statically-negative literal here; flag a provably
+         * non-negative len so codegen can skip the runtime guard.  An unsigned
+         * source is always >= 0; a non-constant signed len is guarded at
+         * construction in codegen; a const-context computed negative is caught
+         * in const_fold_expr (no runtime guard there). */
+        if (len_type_ok && type_is_integer(lt)) {
+            if (!type_is_signed(lt)) {
+                e->slice_lit.len_nonneg = true;
+            } else if (orig_len->kind == EXPR_INT_LIT && !orig_len->int_lit.out_of_range) {
+                if ((int64_t)orig_len->int_lit.value < 0)
+                    diag_error(orig_len->loc, "slice literal length cannot be negative");
+                else
+                    e->slice_lit.len_nonneg = true;
             }
         }
         Type *slice_type = type_slice(ctx->arena, elem_type);
@@ -6572,6 +6594,18 @@ static bool const_read_scalar(Expr *e, ConstScalar *out) {
     }
 }
 
+/* True when a slice literal's len is a (possibly implicitly-widened) integer
+ * literal — the form check_expr already validated for negativity, so
+ * const_fold_expr skips it to avoid a duplicate diagnostic. */
+static bool slicelit_len_is_literal(Expr *len) {
+    if (!len) return false;
+    if (len->kind == EXPR_INT_LIT) return true;
+    if (len->kind == EXPR_CAST && len->cast.operand &&
+        len->cast.operand->kind == EXPR_INT_LIT)
+        return true;
+    return false;
+}
+
 static Expr *const_make_int(CheckCtx *ctx, Type *t, uint64_t v, SrcLoc loc) {
     Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
     n->kind = EXPR_INT_LIT;
@@ -6936,6 +6970,18 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         Expr *p = const_fold_expr(ctx, e->slice_lit.ptr_expr);
         Expr *l = const_fold_expr(ctx, e->slice_lit.len_expr);
         if (!p || !l) return NULL;
+        /* Const-context slice literals are emitted as C file-scope initializers
+         * with no runtime guard, so a negative len must be caught statically.
+         * A plain (possibly widened) integer literal was already validated in
+         * check_expr; only report here when folding a non-literal const
+         * expression (e.g. `0 - 1`, or a reference to a negative const) yields a
+         * negative value, to avoid a duplicate diagnostic. */
+        if (!slicelit_len_is_literal(e->slice_lit.len_expr)) {
+            ConstScalar cs;
+            if (const_read_scalar(l, &cs) && cs.is_signed && (int64_t)cs.val < 0)
+                diag_error(e->slice_lit.len_expr->loc,
+                    "slice literal length cannot be negative");
+        }
         if (p == e->slice_lit.ptr_expr && l == e->slice_lit.len_expr) return e;
         Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
         *n = *e;

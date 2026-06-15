@@ -1,0 +1,10 @@
+// A correctly-constructed runtime-len slice still enforces its length on
+// indexing: with a trustworthy (non-negative) len, the unsigned-compare fusion
+// works as intended.  The index (5) is inside the physical backing (8 elements)
+// but past the logical slice length (2), so the C access stays in bounds while
+// FC's bounds check fires on idx >= len.
+let main = (args: str[]) ->
+    let mut data = int32[8] { 1, 2, 3, 4, 5, 6, 7, 8 }
+    let n = (int64) args.len + 1i64    // runtime, == 2 with no extra argv
+    let s = int32[] { ptr = data.ptr, len = n }
+    s[5]                               // 5 >= len(2) → bounds-check abort

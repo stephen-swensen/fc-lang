@@ -1,0 +1,26 @@
+// Non-negative slice-literal lengths (literal, unsigned-source, runtime, and
+// zero) all construct correctly and remain bounds-checked.
+let main = (args: str[]) ->
+    let mut data = int32[4] { 10, 20, 30, 40 }
+
+    // literal length (provably non-negative → no runtime guard)
+    let a = int32[] { ptr = data.ptr, len = 4 }
+    assert(a.len == 4i64)
+    assert(a[3] == 40)
+
+    // unsigned-source length (provably non-negative → no runtime guard)
+    let un = 2u32
+    let b = int32[] { ptr = data.ptr, len = un }
+    assert(b.len == 2i64)
+    assert(b[1] == 20)
+
+    // runtime signed length that is non-negative (guarded, passes)
+    let n = (int64) args.len + 2i64
+    let c = int32[] { ptr = data.ptr, len = n - (int64) args.len }
+    assert(c.len == 2i64)
+    assert(c[0] == 10)
+
+    // zero length is valid (empty slice)
+    let e = int32[] { ptr = data.ptr, len = 0 }
+    assert(e.len == 0i64)
+    0

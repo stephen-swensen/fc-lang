@@ -2756,6 +2756,14 @@ let buf = uint8[] { ptr = some_ptr, len = 128 }
 
 The resulting slice shares memory with the original pointer — no allocation occurs. The programmer is responsible for ensuring the pointer remains live for the lifetime of the slice.
 
+A slice's length must be **non-negative**. The bounds checks for indexing and sub-slicing fuse the negative-index test into a single unsigned comparison (`(uint64_t) idx >= (uint64_t) len`), which relies on `len ≥ 0` — a negative length casts to an enormous unsigned value and would silently disable every later bounds check. A statically-negative length is therefore a **compile error**:
+
+```fc
+let bad = int32[] { ptr = p, len = -1 }   // error: slice literal length cannot be negative
+```
+
+When the length is computed at runtime, it is checked at construction: a negative value aborts immediately (like a failed bounds check) rather than producing a slice that defeats later checks. The guard is elided when the compiler can prove the length is non-negative (an unsigned-typed length, or a non-negative constant).
+
 ### C interop
 
 For C functions expecting a null-terminated string, use `(cstr)` to create a stack copy with a null terminator, or use `c"..."` literals for constant strings:

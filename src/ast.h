@@ -258,6 +258,8 @@ struct Expr {
             Type *elem_type;    /* element type (e.g., uint8 for str) */
             Expr *ptr_expr;
             Expr *len_expr;
+            bool  len_nonneg;   /* pass2 proved len >= 0 → codegen skips the
+                                 * negative-length runtime guard */
         } slice_lit;
 
         /* EXPR_ALLOC */

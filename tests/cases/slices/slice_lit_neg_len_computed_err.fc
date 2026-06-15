@@ -1,0 +1,7 @@
+// A non-literal constant length that folds negative is also rejected in const
+// context (caught during constant folding).
+module m =
+    let bad = int32[] { ptr = default(int32*), len = 0 - 1 }
+
+let main = (args: str[]) ->
+    (int32) m.bad.len
