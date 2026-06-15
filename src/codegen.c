@@ -478,6 +478,63 @@ static bool is_null_sentinel(Type *opt_type) {
                      inner->kind == TYPE_ANY_PTR);
 }
 
+/* Pointer-value null-status predicates (declared in ast.h, shared by pass2 and
+ * codegen). A null-sentinel option (T*?, any*?, cstr?) represents none as a null
+ * pointer, so some(p) over a null p is indistinguishable from none. pass2 uses
+ * these to reject a provably-null payload and to gate const context; codegen uses
+ * provably_nonnull to elide the runtime null-guard. Defined here, in one place,
+ * so the guard/elide/reject decisions can never drift apart.
+ *
+ * Both are conservative toward emitting the guard: provably_nonnull returns true
+ * ONLY when the value can never be null (so a guard would be dead), and
+ * provably_null returns true ONLY when it is always null. Anything uncertain
+ * (params, field reads, call results, extern returns) yields false from both →
+ * a runtime guard. */
+bool ptr_value_provably_nonnull(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_UNARY_PREFIX:
+        /* &x / &fn — address of a binding/element/function is never null. */
+        return e->unary_prefix.op == TOK_AMP;
+    case EXPR_UNARY_POSTFIX:
+        /* p! — unwrap yields the some-payload, which for a pointer option is
+         * non-null (some(null) is itself rejected/guarded), and alloc(...)! is
+         * malloc-checked. Only reached here when the result is pointer-typed. */
+        return e->unary_postfix.op == TOK_BANG;
+    case EXPR_CSTRING_LIT:
+        /* c"..." points into static storage. */
+        return true;
+    case EXPR_CAST:
+        /* (T*) <nonzero integer literal> — e.g. a fixed MMIO address. */
+        if (e->cast.operand && e->cast.operand->kind == EXPR_INT_LIT)
+            return e->cast.operand->int_lit.value != 0;
+        /* A widening / const-add cast preserves the operand's null-status. */
+        return ptr_value_provably_nonnull(e->cast.operand);
+    default:
+        return false;
+    }
+}
+
+bool ptr_value_provably_null(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_DEFAULT:
+        /* default(T*) / default(any*) zero-init to NULL. (default(T*?) is an
+         * EXPR_DEFAULT with an option target — that is none, not a some, and
+         * never reaches some().) */
+        return e->default_expr.target &&
+               (e->default_expr.target->kind == TYPE_POINTER ||
+                e->default_expr.target->kind == TYPE_ANY_PTR);
+    case EXPR_CAST:
+        /* (T*) 0 — integer-literal zero cast to pointer. */
+        if (e->cast.operand && e->cast.operand->kind == EXPR_INT_LIT)
+            return e->cast.operand->int_lit.value == 0;
+        return ptr_value_provably_null(e->cast.operand);
+    default:
+        return false;
+    }
+}
+
 static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
@@ -2760,8 +2817,28 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_SOME: {
         if (is_null_sentinel(e->type)) {
-            /* T*?/any*?/cstr? → plain pointer, some(x) = x */
-            emit_expr(e->some_expr.value, out);
+            /* T*?/any*?/cstr? → plain pointer, some(x) = x.  null would be
+             * indistinguishable from none, so guard a not-provably-non-null
+             * payload: evaluate once into a temp and abort if it is null.
+             * Elided when the payload is provably non-null, and in const context
+             * (a file-scope initializer cannot contain a statement-expression;
+             * pass2 guarantees only provably-non-null payloads reach here). */
+            Expr *val = e->some_expr.value;
+            if (g_const_context || ptr_value_provably_nonnull(val)) {
+                emit_expr(val, out);
+            } else {
+                int tid = temp_counter++;
+                const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+                int fn_len = (int)strlen(fn);
+                fprintf(out, "({ ");
+                emit_type(e->type->option.inner, out);
+                fprintf(out, " _sm%d = ", tid);
+                emit_expr(val, out);
+                fprintf(out, "; if (__builtin_expect(_sm%d == NULL, 0)) fc_null_some(\"",
+                        tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, "\", %d); _sm%d; })", e->loc.line, tid);
+            }
         } else {
             fprintf(out, "(");
             emit_type(e->type, out);
@@ -5306,9 +5383,20 @@ static void detect_features_expr(Expr *e) {
         for (int i = 0; i < e->func.body_count; i++)
             detect_features_expr(e->func.body[i]);
         return;
-    case EXPR_SOME:
+    case EXPR_SOME: {
+        /* A null-sentinel some(p) over a not-provably-non-null pointer emits a
+         * null-pointer abort via stderr (fc_null_some).  A type variable may
+         * monomorphize to a pointer, so treat it as possibly guarded too — at
+         * worst this pulls in stdio.h for a program that does not need it. */
+        Type *inner = e->type && e->type->kind == TYPE_OPTION
+                          ? e->type->option.inner : NULL;
+        if (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_ANY_PTR ||
+                      inner->kind == TYPE_TYPE_VAR) &&
+            !ptr_value_provably_nonnull(e->some_expr.value))
+            g_needs_stdio = true;
         detect_features_expr(e->some_expr.value);
         return;
+    }
     case EXPR_ALLOC:
         detect_features_expr(e->alloc_expr.init_expr);
         detect_features_expr(e->alloc_expr.size_expr);
@@ -5610,12 +5698,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "    fprintf(stderr, \"%%s:%%d: slice literal length is negative: len=%%lld\\n\",\n"
             "            file, line, len);\n"
             "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_null_some(const char *file, int line) {\n"
+            "    fprintf(stderr, \"%%s:%%d: some() of a null pointer "
+            "(pointer options use null as the none sentinel)\\n\", file, line);\n"
+            "    FC_ABORT();\n"
             "}\n");
         /* Register the helpers as skip-entries so their frames don't pollute
          * the user-visible backtrace when a bounds check fires. */
         symmap_add("fc_oob", NULL, "<runtime>", 0);
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
         symmap_add("fc_neg_len", NULL, "<runtime>", 0);
+        symmap_add("fc_null_some", NULL, "<runtime>", 0);
     }
 
     /* Collect all slice, option, function, and eq types used in the program */

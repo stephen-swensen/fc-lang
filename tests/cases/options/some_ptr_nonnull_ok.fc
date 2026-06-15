@@ -1,0 +1,22 @@
+// Provably-non-null payloads skip the guard entirely (no fc_null_some emitted),
+// and a runtime-checked non-null pointer passes the guard without aborting.
+let main = (args: str[]) ->
+    let mut x = 42
+    let a = some(&x)               // &x — provably non-null, guard elided
+    let b = some(alloc(int32)!)    // alloc(...)! — non-null, guard elided
+    let cs = some(c"hi")           // cstr literal — non-null, guard elided
+    let d = some((int32*) 4096)    // nonzero literal cast — non-null, guard elided
+    assert(a.is_some)
+    assert(b.is_some)
+    assert(cs.is_some)
+    assert(d.is_some)
+    assert(*a! == 42)
+    free(b!)
+
+    // guarded path with a genuinely non-null pointer: must pass, not abort
+    let mut y = 7
+    let py = &y
+    let e = some(py)              // py is an ident → guarded, but non-null → passes
+    assert(e.is_some)
+    assert(*e! == 7)
+    0

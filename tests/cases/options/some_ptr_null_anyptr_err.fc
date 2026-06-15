@@ -1,0 +1,6 @@
+// any*? is also a null-sentinel option; some(default(any*)) is rejected too.
+let main = (args: str[]) ->
+    let o = some(default(any*))
+    match o with
+    | some(_) -> 1
+    | none -> 0

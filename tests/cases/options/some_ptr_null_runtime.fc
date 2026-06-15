@@ -1,0 +1,9 @@
+// A null pointer that reaches some() only at runtime (laundered through a
+// binding, so not statically rejected) aborts at construction via fc_null_some,
+// rather than silently producing a value that observes as none.
+let main = (args: str[]) ->
+    let p = default(int32*)
+    let o = some(p)             // aborts here: p is null
+    match o with               // never reached
+    | some(_) -> 0
+    | none -> 1

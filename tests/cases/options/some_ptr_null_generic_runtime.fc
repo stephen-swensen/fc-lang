@@ -1,0 +1,10 @@
+// The guard also fires through a generic body: wrap's some(p) is null-sentinel
+// only once 'a monomorphizes to int32*, where a null p aborts at construction.
+let wrap = (p: 'a) -> some(p)
+
+let main = (args: str[]) ->
+    let p = default(int32*)
+    let o = wrap(p)            // monomorphized 'a = int32* → guard fires → abort
+    match o with
+    | some(_) -> 0
+    | none -> 1

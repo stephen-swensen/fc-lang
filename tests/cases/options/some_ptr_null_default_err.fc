@@ -1,0 +1,7 @@
+// some(default(T*)) is a provably-null payload for a null-sentinel option, so
+// the constructed some would be indistinguishable from none — rejected.
+let main = (args: str[]) ->
+    let r = match some(default(int32*)) with
+    | some(_) -> 1
+    | none -> 0
+    r

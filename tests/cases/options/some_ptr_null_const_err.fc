@@ -1,0 +1,13 @@
+// A null-sentinel some() compiles to a runtime null-guard, which is not a valid
+// C file-scope constant.  A module-member some() of a not-provably-non-null
+// pointer (here an extern const) is rejected in const context.
+module c from "stdlib.h" =
+    extern environ: any*
+
+module m =
+    let g = some((int32*) c.environ)
+
+let main = (args: str[]) ->
+    match m.g with
+    | some(_) -> 0
+    | none -> 1

@@ -1,0 +1,6 @@
+// (T*) 0 is a provably-null pointer; wrapping it in some() is rejected.
+let main = (args: str[]) ->
+    let r = match some((int32*) 0) with
+    | some(_) -> 1
+    | none -> 0
+    r

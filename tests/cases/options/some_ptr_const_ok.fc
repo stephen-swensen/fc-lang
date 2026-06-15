@@ -1,0 +1,10 @@
+// Provably-non-null payloads are valid in const context (module-member let):
+// the bare pointer is a valid C file-scope initializer, no guard needed.
+module m =
+    let g = some(c"const")
+    let h = some((uint8*) 4096)
+
+let main = (args: str[]) ->
+    assert(m.g.is_some)
+    assert(m.h.is_some)
+    0

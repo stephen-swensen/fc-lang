@@ -4828,6 +4828,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (type_is_error(inner)) { e->type = type_error(); return e->type; }
         e->type = type_option(ctx->arena, inner);
         e->prov = e->some_expr.value->prov;
+        /* Null-sentinel options (T*?, any*?, cstr?) represent none as a null
+         * pointer, so some(p) over a null p is indistinguishable from none.
+         * Reject a provably-null payload outright; a not-provably-non-null
+         * payload is guarded at construction in codegen (a generic 'a? whose
+         * concrete type is a pointer is likewise guarded there). */
+        if (inner->kind == TYPE_POINTER || inner->kind == TYPE_ANY_PTR) {
+            if (ptr_value_provably_null(e->some_expr.value))
+                diag_error(e->loc,
+                    "some() of a null pointer is indistinguishable from none "
+                    "(pointer options use null as the none sentinel)");
+        }
         return e->type;
     }
 
@@ -6992,6 +7003,22 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_SOME: {
         Expr *v = const_fold_expr(ctx, e->some_expr.value);
         if (!v) return NULL;
+        /* A null-sentinel some(p) compiles to a runtime null-guard
+         * (statement-expression), which is not a valid C file-scope constant
+         * initializer.  A provably-non-null payload emits the bare pointer (a
+         * valid constant) and is fine; reject anything else in const context
+         * with a targeted message (a provably-null payload already errored in
+         * check_expr). */
+        if (e->type && e->type->kind == TYPE_OPTION && e->type->option.inner &&
+            (e->type->option.inner->kind == TYPE_POINTER ||
+             e->type->option.inner->kind == TYPE_ANY_PTR) &&
+            !ptr_value_provably_nonnull(v)) {
+            diag_error(e->loc,
+                "some() of a possibly-null pointer is not allowed in a constant "
+                "initializer; wrap a provably non-null pointer or initialize at "
+                "runtime");
+            return NULL;
+        }
         if (v == e->some_expr.value) return e;
         Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
         *n = *e;

@@ -507,3 +507,12 @@ typedef struct Program {
  * pass2. Defined in codegen.c so it shares the exact const-size logic the buffer
  * emitter uses (the two can never disagree on what counts as bounded). */
 bool interp_is_runtime_sized(const struct Expr *e);
+
+/* Pointer-value null-status predicates for null-sentinel options (T*?, any*?,
+ * cstr?), where none is represented by a null pointer. provably_nonnull is true
+ * only when a value can never be null (codegen elides the some() null-guard);
+ * provably_null is true only when it is always null (pass2 rejects some(p) of
+ * it). Both are false for anything uncertain → a runtime guard. Defined in
+ * codegen.c so the guard/elide/reject decisions share one source of truth. */
+bool ptr_value_provably_nonnull(const struct Expr *e);
+bool ptr_value_provably_null(const struct Expr *e);

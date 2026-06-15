@@ -1,0 +1,11 @@
+// A non-null pointer round-trips through a generic null-sentinel option: wrap's
+// some(p) is guarded once 'a = int32*, and a non-null payload passes.
+let wrap = (p: 'a) -> some(p)
+
+let main = (args: str[]) ->
+    let mut x = 99
+    let o = wrap(&x)
+    match o with
+    | some(q) -> assert(*q == 99)
+    | none -> assert(false)
+    0
