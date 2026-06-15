@@ -872,9 +872,23 @@ Explicit casts use C-style prefix cast syntax: `(T) expr`. All conversions not c
 
 ```fc
 let x = (float64) 32        // int32 to float64
-let y = (int32) 3.14        // float64 to int32, truncates toward zero
+let y = (int32) 3.14        // float64 to int32, truncates toward zero -> 3
 let z = (uint8) some_int32  // narrowing cast, programmer responsible
 ```
+
+**Float-to-integer casts saturate.** Converting a float to an integer type is *defined* for every input — there is no undefined behavior and no platform-dependent result. The value is truncated toward zero; an input that lies beyond the target type's range clamps to that type's minimum or maximum, and `nan` converts to `0`. This matches Rust's `as` and WebAssembly's saturating-truncation conversions, and differs from C, where an out-of-range or `nan` float-to-integer conversion is undefined behavior.
+
+```fc
+let a = (int32) 3.9         // 3            (truncates toward zero)
+let b = (int32) (-3.9)      // -3           (toward zero, not floor)
+let c = (int32) 1e30        // 2147483647   (clamps to int32.max)
+let d = (int32) (-1e30)     // -2147483648  (clamps to int32.min)
+let e = (uint8) (-5.0)      // 0            (clamps to uint8.min)
+let f = (uint8) 999.0       // 255          (clamps to uint8.max)
+let g = (int32) (0.0 / 0.0) // 0            (nan -> 0)
+```
+
+A `float32` operand is converted as if first promoted to `float64` (which is lossless), so the truncation and the clamping bounds are identical regardless of the source float width.
 
 **Bool to numeric** — `bool` casts to any numeric type, producing `1` for `true` and `0` for `false`. Useful for bit-packing flags, summing boolean conditions, or formatting bools in string interpolation. The reverse direction (numeric to `bool`) is **not allowed**, even as an explicit cast — unlike bool-to-int, there's no unambiguously correct mapping (C-style `!= 0` vs strict 0/1 only), so FC requires the programmer to write the comparison explicitly (`x != 0`):
 
@@ -1363,7 +1377,7 @@ FC allows implicit widening conversions in binary expressions and comparisons wh
 | `uint32` | `uint64`, `int64` |
 | `float32` | `float64` |
 
-All other mixed-type expressions require an explicit cast. Integer-to-float conversions are always explicit — `int32` to `float64` is safe in range but can lose precision for large values.
+All other mixed-type expressions require an explicit cast. Integer-to-float conversions are always explicit — `int32` to `float64` is safe in range but can lose precision for large values. Float-to-integer conversions are likewise explicit and **saturate** rather than invoking undefined behavior at the range edges (see §Casting).
 
 ```fc
 let x = 42i32

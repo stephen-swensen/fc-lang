@@ -1,0 +1,39 @@
+// Float-to-integer saturation must also hold in CONST context — module-member
+// initializers are emitted as C file-scope initializers (and module-member
+// array literals as `static` backing arrays), where a runtime helper *call* is
+// not a constant expression. There the compiler emits an equivalent saturating
+// ternary instead, producing the same NaN->0 / clamp / truncate-toward-zero
+// result as the runtime form. (Audit item 16, const-context path.)
+module m =
+    // scalar module members: in-range truncates, out-of-range clamps
+    let in_range  = (int32) 3.9
+    let neg_trunc = (int32) (-3.9)
+    let pos_over  = (int32) 1e30
+    let neg_over  = (int32) (-1e30)
+    let u_neg     = (uint8) (-5.0)
+    let u_over    = (uint8) 999.0
+    let nan_zero  = (int32) (0.0 / 0.0)
+    // 64-bit + platform-width targets (exercise the dead-branch cast / macros)
+    let i64_over  = (int64) 1e30
+    let u64_over  = (uint64) 1e30
+    let isz_over  = (isize) 1e30
+    let usz_neg   = (usize) (-1.0)
+    // module-member array literal -> emitted as a static backing array
+    let arr = int32[3] { (int32) 7.9, (int32) 9e9, (int32) (-9e9) }
+
+let main = (args: str[]) ->
+    assert(m.in_range == 3)
+    assert(m.neg_trunc == -3)
+    assert(m.pos_over == int32.max)
+    assert(m.neg_over == int32.min)
+    assert(m.u_neg == 0u8)
+    assert(m.u_over == 255u8)
+    assert(m.nan_zero == 0)
+    assert(m.i64_over == int64.max)
+    assert(m.u64_over == uint64.max)
+    assert(m.isz_over == isize.max)
+    assert(m.usz_neg == 0u)
+    assert(m.arr[0] == 7)
+    assert(m.arr[1] == int32.max)
+    assert(m.arr[2] == int32.min)
+    0

@@ -1857,6 +1857,60 @@ static void emit_c_escaped(const char *text, int len, FILE *out) {
     }
 }
 
+/* Per-integer-type data for FC's saturating float->int conversion (audit item
+ * 16): NaN -> 0, clamp to [min,max] at the range edge, else truncate toward
+ * zero. Single source of truth for the two emission sites in float_to_int_emit:
+ * the runtime helpers `fc_f2*` (prelude) and the equivalent constant-expression
+ * ternary. The guard constants are the exact power-of-two boundaries just
+ * outside each type's range (all exactly representable as double), so the inner
+ * cast never sees an unrepresentable value. `lo`/`hi` are the double-typed
+ * saturation guards; `imin`/`imax` the integer results at/beyond them. Returns
+ * false if `k` is not an integer type. */
+typedef struct { const char *fn, *cty, *lo, *imin, *hi, *imax; } F2iInfo;
+
+static bool float_to_int_info(TypeKind k, F2iInfo *o) {
+    switch (k) {
+    case TYPE_INT8:   *o = (F2iInfo){"fc_f2i8",  "int8_t",  "-128.0",                 "INT8_MIN",  "128.0",                 "INT8_MAX"};  return true;
+    case TYPE_INT16:  *o = (F2iInfo){"fc_f2i16", "int16_t", "-32768.0",               "INT16_MIN", "32768.0",               "INT16_MAX"}; return true;
+    case TYPE_INT32:  *o = (F2iInfo){"fc_f2i32", "int32_t", "-2147483648.0",          "INT32_MIN", "2147483648.0",          "INT32_MAX"}; return true;
+    case TYPE_INT64:  *o = (F2iInfo){"fc_f2i64", "int64_t", "-9223372036854775808.0", "INT64_MIN", "9223372036854775808.0", "INT64_MAX"}; return true;
+    case TYPE_UINT8:  *o = (F2iInfo){"fc_f2u8",  "uint8_t",  "0.0", "0", "256.0",                  "UINT8_MAX"};  return true;
+    case TYPE_UINT16: *o = (F2iInfo){"fc_f2u16", "uint16_t", "0.0", "0", "65536.0",                "UINT16_MAX"}; return true;
+    case TYPE_UINT32: *o = (F2iInfo){"fc_f2u32", "uint32_t", "0.0", "0", "4294967296.0",           "UINT32_MAX"}; return true;
+    case TYPE_UINT64: *o = (F2iInfo){"fc_f2u64", "uint64_t", "0.0", "0", "18446744073709551616.0", "UINT64_MAX"}; return true;
+    case TYPE_ISIZE:  *o = (F2iInfo){"fc_f2isize", "ptrdiff_t", "(double)PTRDIFF_MIN", "PTRDIFF_MIN", "-(double)PTRDIFF_MIN", "PTRDIFF_MAX"}; return true;
+    case TYPE_USIZE:  *o = (F2iInfo){"fc_f2usize", "size_t", "0.0", "0", "(double)SIZE_MAX", "SIZE_MAX"}; return true;
+    default: return false;
+    }
+}
+
+/* Emit a saturating float->int conversion of `operand` to integer type `info`.
+ * At runtime, call the single-evaluation helper. In const context (a C
+ * file-scope initializer, where a function call is not a constant expression)
+ * emit the equivalent ternary directly — the operand is a pure constant there,
+ * so evaluating it up to four times is harmless, and deferring the float
+ * arithmetic to the C compiler keeps it target-correct (FC does not fold
+ * floats). Both forms produce identical results. */
+static void float_to_int_emit(const F2iInfo *info, Expr *operand, FILE *out) {
+    if (!g_const_context) {
+        fprintf(out, "%s(", info->fn);
+        emit_expr(operand, out);
+        fprintf(out, ")");
+        return;
+    }
+    fprintf(out, "((");
+    emit_expr(operand, out);
+    fprintf(out, ") != (");
+    emit_expr(operand, out);
+    fprintf(out, ") ? 0 : ((");
+    emit_expr(operand, out);
+    fprintf(out, ") < %s ? %s : ((", info->lo, info->imin);
+    emit_expr(operand, out);
+    fprintf(out, ") >= %s ? %s : (%s)(", info->hi, info->imax, info->cty);
+    emit_expr(operand, out);
+    fprintf(out, "))))");
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -2443,6 +2497,7 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_CAST: {
+        F2iInfo f2i_info;
         /* str -> cstr: stack copy with null terminator */
         if (e->cast.operand->type && is_str_type(e->cast.operand->type) &&
             is_cstr_type(e->cast.target)) {
@@ -2477,6 +2532,11 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->cast.operand, out);
             fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
                     src_const ? "(uint8_t*)" : "", tid, tid);
+        } else if (e->cast.operand->type && type_is_float(e->cast.operand->type) &&
+                   float_to_int_info(e->cast.target->kind, &f2i_info)) {
+            /* float -> int: saturating conversion (NaN->0, clamp to range, else
+             * truncate toward zero). A raw C cast here is UB out of range. */
+            float_to_int_emit(&f2i_info, e->cast.operand, out);
         } else {
             fprintf(out, "((");
             emit_type(e->cast.target, out);
@@ -5460,6 +5520,31 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "    assert(n >= 0 && n <= INT_MAX);\n"
         "    return (int)n;\n"
         "}\n");
+
+    /* Saturating float->int conversion helpers (audit item 16). A raw C cast of
+     * an out-of-range or NaN float to an integer is undefined behavior (and
+     * observably divergent across -O levels), so FC defines `(intT) floatexpr` to
+     * saturate. These are the runtime form (single operand evaluation); the
+     * const-context form is an equivalent ternary emitted at the use site. Both
+     * are driven by the one float_to_int_info table, so they cannot drift. Each
+     * takes `double` — a float32 operand promotes losslessly, so the bounds and
+     * truncation are identical regardless of source width. Fixed-width targets use
+     * absolute constants (int-width-agnostic); isize/usize use PTRDIFF_MIN/SIZE_MAX. */
+    {
+        static const TypeKind f2i_kinds[] = {
+            TYPE_INT8, TYPE_UINT8, TYPE_INT16, TYPE_UINT16, TYPE_INT32,
+            TYPE_UINT32, TYPE_INT64, TYPE_UINT64, TYPE_ISIZE, TYPE_USIZE,
+        };
+        for (size_t i = 0; i < sizeof f2i_kinds / sizeof f2i_kinds[0]; i++) {
+            F2iInfo fi;
+            float_to_int_info(f2i_kinds[i], &fi);
+            fprintf(out,
+                "__attribute__((unused)) static inline %s %s(double f) { "
+                "if (f!=f) return 0; if (f < %s) return %s; if (f >= %s) return %s; "
+                "return (%s)f; }\n",
+                fi.cty, fi.fn, fi.lo, fi.imin, fi.hi, fi.imax, fi.cty);
+        }
+    }
 
     /* Abort macro.  When --backtraces is on, every abort site dumps a
      * backtrace before bailing.  Forward-declare fc_dump_backtrace here so
