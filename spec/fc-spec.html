@@ -1031,6 +1031,8 @@ f(buf)                     // ok — str widens to const str
 
 Typed pointers implicitly widen to `any*`, respecting const: `T*` widens to `any*`, and `const T*` widens to `const any*`. However, `const T*` does **not** widen to `any*` — that would silently drop the const guarantee.
 
+An option type widens only when its inner type widens **representation-preservingly** — that is, by one of the conversions just described (adding `const`, or `T*` → `any*`), which change no bits. So `int32*?` widens to `const int32*?` and to `any*?`, and `int32[]?` widens to `const int32[]?`. A *numeric* option does **not** widen, even though its inner type would: `int32?` does not widen to `int64?`, because the two are distinct option representations and the conversion would have to rebuild the option rather than reinterpret it. To bridge numeric options, unwrap and re-wrap explicitly: `if x.is_some then some((int64) x!) else none(int64)`. As with all widening, this applies only in the asymmetric anchor positions (call arguments, assignment, struct-literal fields, option payloads); `if`/`match`/`loop`/`return` joins require an exact match either way.
+
 #### Explicit casts
 
 Both directions are available via regular cast syntax:

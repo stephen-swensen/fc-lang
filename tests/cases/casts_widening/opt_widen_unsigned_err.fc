@@ -1,0 +1,10 @@
+// uint8? must not widen to uint32? (unsigned numeric option widening).
+let take = (x: uint32?) ->
+    match x with
+    | some(v) -> v
+    | none -> 0u32
+
+let main = (args: str[]) ->
+    let a = some(7u8)
+    let r = take(a)
+    (int32) r

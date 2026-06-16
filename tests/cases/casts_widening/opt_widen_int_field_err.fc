@@ -1,0 +1,8 @@
+struct box =
+    v: int64?
+
+// int32? must not widen to int64? in a struct-literal field.
+let main = (args: str[]) ->
+    let b = box { v = some(3i32) }
+    assert(b.v! == 3i64)
+    0

@@ -1,0 +1,8 @@
+// Symmetric positions (if/match joins) require an exact option-type match —
+// no numeric option widening here either (locks the consistency).
+let main = (args: str[]) ->
+    let c = true
+    let r = if c then some(1i32) else some(2i64)
+    match r with
+    | some(_) -> 1
+    | none -> 0

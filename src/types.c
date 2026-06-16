@@ -529,8 +529,18 @@ const char *type_name(Type *t) {
     }
 }
 
-bool type_can_widen(Type *from, Type *to) {
-    if (from->kind == TYPE_ERROR || to->kind == TYPE_ERROR) return true;
+/* A representation-preserving widen changes no bits: it only adds `const`, or
+ * widens a typed pointer to `any*` (a plain pointer cast). It never changes a
+ * value's size. These are the pointer/slice/`any*` cases of widening; the
+ * numeric/float widenings below are NOT representation-preserving (they change a
+ * scalar's width). This is also the ONLY widening permitted on an option's inner
+ * type: a struct option is a distinct `fc_option_<T>` per representation, so a
+ * size-changing inner widen (e.g. `int32? → int64?`) would emit an invalid
+ * struct-to-struct C cast — whereas a null-sentinel option (`T*?`, `any*?`,
+ * `cstr?`) is a bare pointer for which const-add / `T* → any*` is a valid pointer
+ * cast, and a slice/`str` option's const-add is a no-op (const is display-only in
+ * the option's C type). */
+static bool widen_repr_preserving(Type *from, Type *to) {
     if (type_eq(from, to)) return true;
 
     /* non-const pointer/slice/any* → const pointer/slice/any* */
@@ -552,10 +562,25 @@ bool type_can_widen(Type *from, Type *to) {
         return true;
     }
 
-    /* option inner widening (e.g., int32*? → const int32*?) */
+    return false;
+}
+
+bool type_can_widen(Type *from, Type *to) {
+    if (from->kind == TYPE_ERROR || to->kind == TYPE_ERROR) return true;
+    if (type_eq(from, to)) return true;
+
+    /* Representation-preserving widens: const-add and T* → any*. */
+    if (widen_repr_preserving(from, to)) return true;
+
+    /* Option inner widening (e.g. int32*? → const int32*?, int32*? → any*?).
+     * Restricted to representation-preserving inner widens only: a size-changing
+     * numeric inner widen (int32? → int64?) would require an invalid
+     * struct-to-struct cast between distinct fc_option_<T> types, so it is
+     * rejected here — consistently with if/match joins, which require an exact
+     * type match. */
     if (from->kind == TYPE_OPTION && to->kind == TYPE_OPTION &&
         from->option.inner && to->option.inner)
-        return type_can_widen(from->option.inner, to->option.inner);
+        return widen_repr_preserving(from->option.inner, to->option.inner);
 
     TypeKind f = from->kind, t = to->kind;
 

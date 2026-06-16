@@ -1,0 +1,57 @@
+// Representation-preserving option widenings stay legal everywhere they were:
+// adding const, and widening a typed pointer option to any*. None of these
+// changes the value's bits, so the C cast is a no-op or a plain pointer cast.
+
+// const-add on a pointer option (null-sentinel: bare pointer)
+let p_const = (x: const int32*?) ->
+    match x with
+    | some(p) -> *p
+    | none -> -1
+
+// typed pointer option -> any* option (null-sentinel)
+let p_any = (x: any*?) ->
+    match x with
+    | some(_) -> 1
+    | none -> 0
+
+// const-add on a slice option (struct option; const is display-only -> no-op cast)
+let s_const = (x: const int32[]?) ->
+    match x with
+    | some(s) -> (int32) s.len
+    | none -> -1
+
+// const-add on a str option
+let str_const = (x: const str?) ->
+    match x with
+    | some(s) -> (int32) s.len
+    | none -> -1
+
+struct holder =
+    p: const int32*?
+
+let main = (args: str[]) ->
+    let mut n = 42
+
+    // call-argument anchor positions
+    let a = some(&n)                       // int32*?
+    assert(p_const(a) == 42)               // int32*? -> const int32*?
+    assert(p_any(a) == 1)                  // int32*? -> any*?
+
+    let mut buf = int32[4] { }
+    let sl = some(buf[0..4])               // int32[]?
+    assert(s_const(sl) == 4)               // int32[]? -> const int32[]?
+
+    let so = some("hello")                 // str?
+    assert(str_const(so) == 5)             // str? -> const str?
+
+    // struct-literal field position
+    let h = holder { p = some(&n) }        // int32*? -> const int32*?
+    assert(*(h.p!) == 42)
+
+    // assignment position: q is inferred const int32*? from the const-cast seed,
+    // then a plain int32*? widens into it on reassignment.
+    let cp = (const int32*) &n             // const int32*
+    let mut q = some(cp)                   // const int32*?
+    q = some(&n)                           // int32*? -> const int32*?
+    assert(*(q!) == 42)
+    0

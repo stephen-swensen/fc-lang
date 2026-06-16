@@ -1,0 +1,13 @@
+// int32? must not implicitly widen to int64? as a call argument:
+// the two options are distinct fc_option_<T> structs, so the widen
+// would emit an invalid struct-to-struct C cast.
+let take = (x: int64?) ->
+    match x with
+    | some(v) -> v
+    | none -> 0i64
+
+let main = (args: str[]) ->
+    let a = some(5i32)
+    let r = take(a)
+    assert(r == 5i64)
+    0

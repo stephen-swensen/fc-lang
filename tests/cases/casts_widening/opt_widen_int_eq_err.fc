@@ -1,0 +1,6 @@
+// int32? and int64? are different types and must not be compared via widening.
+let main = (args: str[]) ->
+    let a = some(1i32)
+    let b = some(1i64)
+    let r = a == b
+    if r then 1 else 0
