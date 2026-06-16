@@ -426,7 +426,23 @@ static Type *parse_type(Parser *p) {
             }
         }
         expect(p, TOK_RPAREN);
-        expect(p, TOK_ARROW);
+        if (!check(p, TOK_ARROW)) {
+            /* No "->": this "(...)" was a parenthesized (grouped) type, not a
+             * function type — e.g. `((int32) -> int32)?` groups the inner
+             * function type so a postfix (?, *, []) can apply to the whole thing.
+             * Grammar: `type_atom = "(" type_param_list ")"`, which is a valid
+             * type_primary that postfixes attach to. Only a single, non-variadic
+             * element forms a grouped type; a bare `(T1, T2)` or `(...)` is
+             * meaningful only as a function parameter list and needs the `->`. */
+            if (pcount != 1 || is_variadic) {
+                SrcLoc gloc = loc_from_token(current(p));
+                diag_fatal(gloc, "expected '->' after function parameter list");
+            }
+            Type *grouped = params[0];
+            free(params);
+            return parse_type_suffix(p, grouped);
+        }
+        advance_p(p); /* consume -> */
         Type *ret = parse_type(p);
 
         Type *ft = arena_alloc(p->arena, sizeof(Type));

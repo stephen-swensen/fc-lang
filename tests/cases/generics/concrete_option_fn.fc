@@ -1,0 +1,22 @@
+// Item 8c: an option wrapping a function type, reached via a generic field 'a?
+// instantiated with a function type. The option body (struct fc_option_fc_fn_...)
+// embeds the function-pointer typedef by value, but option-of-fn bodies were
+// emitted in the scalar-option pass BEFORE the function typedefs -> "unknown type
+// name". Fixed by emitting all fn typedefs early (a fn-ptr typedef tolerates
+// incomplete by-value params, and every aggregate is forward-declared), then
+// option-of-fn bodies right after, before any struct that embeds them by value.
+struct optbox =
+    v: 'a?
+
+let dbl = (x: int32) -> x * 2
+
+let main = (args: str[]) ->
+    let h = optbox { v = some(dbl) }
+    assert(h.v!(21) == 42)
+
+    let e = optbox { v = none((int32) -> int32) }
+    let r = match e.v with
+        | some(_) -> -1
+        | none -> 7
+    assert(r == 7)
+    0

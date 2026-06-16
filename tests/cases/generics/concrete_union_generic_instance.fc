@@ -1,0 +1,26 @@
+// Item 8a (union side): a concrete union whose variant payload names a nested
+// generic instance must canonicalize the payload stub the same way a struct
+// field does. Re-instantiating box<int32> at a different arg (bool) confirms the
+// in-place stub canonicalization of one decl doesn't corrupt a shared subtree.
+struct box =
+    v: 'a
+
+union holder =
+    | wrap(box<box<int32> >)
+    | flag(box<bool>)
+    | empty
+
+let main = (args: str[]) ->
+    let h = holder.wrap(box { v = box { v = 42 } })
+    let r = match h with
+        | wrap(b) -> b.v.v
+        | flag(_) -> -1
+        | empty -> 0
+    assert(r == 42)
+    let f = holder.flag(box { v = true })
+    let g = match f with
+        | wrap(_) -> -1
+        | flag(b) -> if b.v then 7 else 8
+        | empty -> 0
+    assert(g == 7)
+    0

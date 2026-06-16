@@ -4451,10 +4451,25 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
         collect_types_in_type(t->slice.elem, slices, options, fns);
         typeset_add(slices, t);
     } else if (t->kind == TYPE_OPTION) {
+        /* Canonicalize a stub inner (box<int32>?) to its monomorphized struct so
+         * the stored option's inner carries the mangled name. Two things depend
+         * on this: (1) the def-ordering interleave matches the option to its inner
+         * def by name, and (2) an option collected from a concrete field type
+         * (inner = base-name stub) dedupes against the same option collected from
+         * a some()/value expression (inner = resolved struct) — otherwise both
+         * emit `fc_option_box__5_int32`, a duplicate typedef. */
+        Type *inner = t->option.inner;
+        if (inner && inner->kind == TYPE_STUB) {
+            Type *resolved = resolve_struct_stub(inner);
+            if (resolved != inner) {
+                t = type_option(g_arena, resolved);
+                inner = resolved;
+            }
+        }
         /* Recurse into inner type FIRST so dependencies are emitted before this type */
-        collect_types_in_type(t->option.inner, slices, options, fns);
+        collect_types_in_type(inner, slices, options, fns);
         /* Only non-pointer options need typedefs */
-        if (!t->option.inner || t->option.inner->kind != TYPE_POINTER) {
+        if (!inner || inner->kind != TYPE_POINTER) {
             typeset_add(options, t);
         }
     } else if (t->kind == TYPE_FUNC) {
@@ -5156,28 +5171,6 @@ static void emit_eq_func_name(Type *t, FILE *out) {
     emit_type_ident(t, out);
 }
 
-/* Returns true if the function type references any struct/union/option-of-struct/union
-   by value in params or return — such typedefs must be emitted after struct defs. */
-static bool fn_type_uses_struct_option(Type *f) {
-    Type *rt = f->func.return_type;
-    if (rt) {
-        if (rt->kind == TYPE_STRUCT || rt->kind == TYPE_UNION || rt->kind == TYPE_STUB) return true;
-        if (rt->kind == TYPE_OPTION && rt->option.inner &&
-            (rt->option.inner->kind == TYPE_STRUCT || rt->option.inner->kind == TYPE_UNION ||
-             rt->option.inner->kind == TYPE_STUB))
-            return true;
-    }
-    for (int i = 0; i < f->func.param_count; i++) {
-        Type *pt = f->func.param_types[i];
-        if (pt->kind == TYPE_STRUCT || pt->kind == TYPE_UNION || pt->kind == TYPE_STUB) return true;
-        if (pt->kind == TYPE_OPTION && pt->option.inner &&
-            (pt->option.inner->kind == TYPE_STRUCT || pt->option.inner->kind == TYPE_UNION ||
-             pt->option.inner->kind == TYPE_STUB))
-            return true;
-    }
-    return false;
-}
-
 static void emit_eq_forward(Type *t, FILE *out) {
     fprintf(out, "static inline bool ");
     emit_eq_func_name(t, out);
@@ -5359,6 +5352,13 @@ static const char *find_by_value_dep_name(Type *type) {
                                        type->stub.type_args, type->stub.type_arg_count);
         return type->stub.name;
     case TYPE_FIXED_ARRAY: return find_by_value_dep_name(type->fixed_array.elem);
+    case TYPE_OPTION:
+        /* A by-value option-of-struct/union/stub embeds its inner aggregate, so
+         * the enclosing def must be ordered after the inner's def — the option
+         * body (fc_option_<inner>) is emitted in the interleave immediately
+         * after the inner def. Option-of-pointer/scalar/fn carries no by-value
+         * aggregate dependency (inner recurses to NULL). */
+        return find_by_value_dep_name(type->option.inner);
     default: return NULL;
     }
 }
@@ -6096,13 +6096,15 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
 
     /* Emit scalar option bodies (primitives, pointers, slices). Options wrapping
-       structs/unions are deferred until after struct/union definitions. */
+       structs/unions are deferred until after their definitions; options wrapping
+       function types are deferred until just after the function typedefs below
+       (the body embeds the fn struct by value, so the typedef must precede it). */
     for (int i = 0; i < options.count; i++) {
         Type *o = options.types[i];
         if (o->option.inner &&
             (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION ||
-             o->option.inner->kind == TYPE_STUB))
-            continue; /* defer until after struct/union defs */
+             o->option.inner->kind == TYPE_STUB || o->option.inner->kind == TYPE_FUNC))
+            continue; /* deferred (see comment above) */
         fprintf(out, "struct fc_option_");
         emit_type_ident(o->option.inner, out);
         fprintf(out, " { ");
@@ -6110,12 +6112,16 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, " value; bool has_value; };\n");
     }
 
-    /* Phase 1: function typedefs that only use primitive/pointer/slice types.
-       These are safe before struct defs (e.g. structs with callback fields).
-       Typedefs referencing struct/union/option-of-struct are deferred to phase 2. */
+    /* Function typedefs. A function-pointer typedef tolerates *incomplete*
+       by-value struct/union/option params and return (C only requires those
+       complete at a call or definition, not at the pointer-type declaration),
+       and every struct/union/option is already forward-declared above, so all
+       fn typedefs can be emitted here in one pass — before struct/union defs.
+       The `fns` set is dependency-ordered inner-first (collect_types_in_type
+       recurses param/return before adding the outer fn), so a fn type used by
+       value inside another fn's signature is declared first. */
     for (int i = 0; i < fns.count; i++) {
         Type *f = fns.types[i];
-        if (fn_type_uses_struct_option(f)) continue;
         fprintf(out, "typedef struct { ");
         emit_type(f->func.return_type, out);
         fprintf(out, " (*fn_ptr)(");
@@ -6127,6 +6133,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "void*); void* ctx; } ");
         emit_type(f, out);
         fprintf(out, ";\n");
+    }
+
+    /* Option-of-function bodies, now that every fn typedef is complete. These
+       embed the fn struct by value, so they must follow the typedefs but precede
+       any struct that embeds the option by value (the struct defs come next). */
+    for (int i = 0; i < options.count; i++) {
+        Type *o = options.types[i];
+        if (!o->option.inner || o->option.inner->kind != TYPE_FUNC) continue;
+        fprintf(out, "struct fc_option_");
+        emit_type_ident(o->option.inner, out);
+        fprintf(out, " { ");
+        emit_type(o->option.inner, out);
+        fprintf(out, " value; bool has_value; };\n");
     }
 
     /* Combined topological sort of ALL struct/union definitions — top-level
@@ -6221,24 +6240,6 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     free(def_order);
     free(defs);
     free(opt_emitted);
-
-    /* Phase 2: deferred function typedefs that reference struct/union/option-of-struct.
-       All struct defs and option-of-struct typedefs are now emitted above. */
-    for (int i = 0; i < fns.count; i++) {
-        Type *f = fns.types[i];
-        if (!fn_type_uses_struct_option(f)) continue;
-        fprintf(out, "typedef struct { ");
-        emit_type(f->func.return_type, out);
-        fprintf(out, " (*fn_ptr)(");
-        for (int j = 0; j < f->func.param_count; j++) {
-            if (j > 0) fprintf(out, ", ");
-            emit_type(f->func.param_types[j], out);
-        }
-        if (f->func.param_count > 0) fprintf(out, ", ");
-        fprintf(out, "void*); void* ctx; } ");
-        emit_type(f, out);
-        fprintf(out, ";\n");
-    }
 
     /* Emit eq function forward declarations and definitions */
     for (int i = 0; i < eqs.count; i++)

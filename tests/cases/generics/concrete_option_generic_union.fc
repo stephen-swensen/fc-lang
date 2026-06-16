@@ -1,0 +1,17 @@
+// Item 8b (union side): a by-value option-of-generic-union field. The option body
+// embeds the union by value, so the same ordering edge (holder -> union -> option)
+// must hold for unions, not just structs.
+union maybe =
+    | present('a)
+    | absent
+
+struct holder =
+    u: maybe<int32>?
+
+let main = (args: str[]) ->
+    let h = holder { u = some(maybe<int32>.present(42)) }
+    let r = match h.u! with
+        | present(x) -> x
+        | absent -> 0
+    assert(r == 42)
+    0

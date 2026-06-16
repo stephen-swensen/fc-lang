@@ -2993,6 +2993,15 @@ Each monomorphized instance (e.g. `buffer<int32>`) produces a concrete C struct 
 (int32) -> (int32) -> int32       // returns a function
 ```
 
+A postfix type modifier (`?`, `*`, `[]`) binds to the type immediately to its left, which for a function type is the **return** type — so parenthesize the function type to apply a modifier to the whole thing:
+
+```fc
+(int32) -> int32?                 // function returning int32?
+((int32) -> int32)?               // optional function
+((int32) -> int32)*               // pointer to a function
+((int32) -> int32)[]              // slice of functions
+```
+
 Function types transpile to C function pointers. When the function type appears in a position that may receive a closure (such as a function parameter), the compiler uses a fat function pointer — a function pointer paired with a `void*` context pointer. See §Closures & Capture for the full transpilation treatment.
 
 > **Aside — function values and slices as fat pointers**

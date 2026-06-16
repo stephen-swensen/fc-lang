@@ -940,7 +940,22 @@ char *mangle_type_name(Type *t) {
     case TYPE_NEVER:   return str_dup("never"); /* defensive: never monomorphized */
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
-    case TYPE_STUB:    return str_dup(t->stub.name);
+    case TYPE_STUB:
+        /* A generic-instance stub (box<int32>) must mangle identically to its
+         * monomorphized struct (box__5_int32): base "__" lp(arg)*, mirroring
+         * mangle_generic_name. Without recursing into the args, a stub nested in
+         * another instance's type args (box<box<int32>>, where the inner arg is
+         * still an unresolved stub) would drop its args to the bare base name —
+         * making distinct instantiations collide and mis-resolving the C type
+         * name. Concrete top-level decl field types keep their args as base-name
+         * stubs (never rewritten in place), so this never double-mangles. */
+        if (t->stub.type_arg_count > 0) {
+            char *r = mangle_cat(str_dup(t->stub.name), "__");
+            for (int i = 0; i < t->stub.type_arg_count; i++)
+                r = mangle_append_piece(r, mangle_type_name(t->stub.type_args[i]));
+            return r;
+        }
+        return str_dup(t->stub.name);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
     case TYPE_ANY_PTR: return str_dup("__y");
     case TYPE_ERROR:   return str_dup("__err"); /* defensive: never monomorphized */

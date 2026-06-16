@@ -1,0 +1,9 @@
+// A parenthesized type with more than one element (or a variadic) is only
+// meaningful as a function parameter list and still requires the `->`. A grouped
+// type is restricted to a single non-variadic element, so a bare multi-element
+// `(int32, int32)` without an arrow is a parse error.
+struct holder =
+    x: (int32, int32)
+
+let main = (args: str[]) ->
+    0
