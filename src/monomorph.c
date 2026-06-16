@@ -141,15 +141,38 @@ static Type **substitute_type_args(Arena *a, Type **type_args, int type_arg_coun
     return result;
 }
 
+static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
+                                  InternTable *intern, SymbolTable *symtab);
+
+/* Substitute the type vars of an expression's *type operand* (e.g. the target of
+ * sizeof/alignof/default/alloc, an array/slice-literal element type, or a variant
+ * constructor's union result type) and register any generic struct/union instances
+ * it transitively names. Such instances are otherwise never registered when they
+ * appear only inside a generic body — pass2 sees the still-abstract template type,
+ * and the expression walk below recurses into sub-expressions but not into the
+ * types they carry. */
+static void discover_in_type(Type *ty, MonoTable *t, Arena *a, InternTable *intern,
+                             SymbolTable *symtab, const char **var_names,
+                             Type **concrete, int var_count) {
+    if (!ty) return;
+    Type *ct = type_substitute(a, ty, var_names, concrete, var_count);
+    if (type_contains_type_var(ct)) return;
+    /* discover_nested_types rewrites struct/union/stub names in place; isolate a
+     * private deep copy so it can't corrupt the live AST type or a template. */
+    ct = type_deep_copy(a, ct);
+    discover_nested_types(ct, t, a, intern, symtab);
+}
+
 /* Recursively walk an expression tree to discover transitive mono instances */
 static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *intern,
+                              SymbolTable *symtab,
                               const char **var_names, Type **concrete, int var_count) {
     if (!e) return;
     switch (e->kind) {
     case EXPR_CALL:
-        discover_in_expr(e->call.func, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->call.func, t, a, intern, symtab, var_names, concrete, var_count);
         for (int i = 0; i < e->call.arg_count; i++)
-            discover_in_expr(e->call.args[i], t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->call.args[i], t, a, intern, symtab, var_names, concrete, var_count);
         /* Resolve deferred generic call */
         if (!e->call.mangled_name && e->call.type_arg_count > 0) {
             Type **concrete_args = substitute_type_args(a, e->call.type_args,
@@ -181,7 +204,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         return;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, symtab, var_names, concrete, var_count);
         /* Register generic struct instances created under substitution */
         if (e->type && e->type->kind == TYPE_STRUCT && type_contains_type_var(e->type)) {
             /* Use resolved_sym from pass2 — always set for struct literals */
@@ -232,9 +255,16 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
             }
         }
         return;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            discover_in_expr(e->array_lit.elems[i], t, a, intern, symtab, var_names, concrete, var_count);
+        /* The element type may be a generic instance (box<'a>[N] { ... }) used only
+         * inside a generic body — register it even when no element constructs it. */
+        discover_in_type(e->array_lit.elem_type, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     case EXPR_TUPLE_LIT:
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            discover_in_expr(e->tuple_lit.elems[i], t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->tuple_lit.elems[i], t, a, intern, symtab, var_names, concrete, var_count);
         /* Register the concrete tuple instance produced under this substitution.
          * Concrete tuples were already registered in pass2; only generic ones
          * (type vars in the element types) need handling here. */
@@ -254,105 +284,125 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         }
         return;
     case EXPR_BINARY:
-        discover_in_expr(e->binary.left, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->binary.right, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->binary.left, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->binary.right, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_UNARY_PREFIX:
-        discover_in_expr(e->unary_prefix.operand, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->unary_prefix.operand, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_UNARY_POSTFIX:
-        discover_in_expr(e->unary_postfix.operand, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->unary_postfix.operand, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        discover_in_expr(e->field.object, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->field.object, t, a, intern, symtab, var_names, concrete, var_count);
+        /* Generic-union variant construction (maybe<'a>.just(x) / maybe<'a>.nothing):
+         * the result type is the union instance, otherwise unregistered when the
+         * construction appears only inside a generic body. */
+        if (e->field.is_variant_constructor)
+            discover_in_type(e->type, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_INDEX:
-        discover_in_expr(e->index.object, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->index.index, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->index.object, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->index.index, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_IF:
-        discover_in_expr(e->if_expr.cond, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->if_expr.then_body, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->if_expr.else_body, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->if_expr.cond, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->if_expr.then_body, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->if_expr.else_body, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
-            discover_in_expr(e->block.stmts[i], t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->block.stmts[i], t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_FUNC:
         for (int i = 0; i < e->func.body_count; i++)
-            discover_in_expr(e->func.body[i], t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->func.body[i], t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_LET:
-        discover_in_expr(e->let_expr.let_init, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->let_expr.let_init, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_ASSIGN:
-        discover_in_expr(e->assign.target, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->assign.value, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->assign.target, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->assign.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_RETURN:
-        discover_in_expr(e->return_expr.value, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->return_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_BREAK:
-        discover_in_expr(e->break_expr.value, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->break_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_LOOP:
         for (int i = 0; i < e->loop_expr.body_count; i++)
-            discover_in_expr(e->loop_expr.body[i], t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->loop_expr.body[i], t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_FOR:
-        discover_in_expr(e->for_expr.iter, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->for_expr.iter, t, a, intern, symtab, var_names, concrete, var_count);
         for (int i = 0; i < e->for_expr.body_count; i++)
-            discover_in_expr(e->for_expr.body[i], t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->for_expr.body[i], t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_MATCH:
-        discover_in_expr(e->match_expr.subject, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->match_expr.subject, t, a, intern, symtab, var_names, concrete, var_count);
         for (int i = 0; i < e->match_expr.arm_count; i++)
             for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                discover_in_expr(e->match_expr.arms[i].body[j], t, a, intern, var_names, concrete, var_count);
+                discover_in_expr(e->match_expr.arms[i].body[j], t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_CAST:
-        discover_in_expr(e->cast.operand, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->cast.operand, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_type(e->cast.target, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_SOME:
-        discover_in_expr(e->some_expr.value, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->some_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_SLICE:
-        discover_in_expr(e->slice.object, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->slice.lo, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->slice.hi, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->slice.object, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->slice.lo, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->slice.hi, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_ALLOC:
-        discover_in_expr(e->alloc_expr.size_expr, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->alloc_expr.init_expr, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->alloc_expr.size_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->alloc_expr.init_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_type(e->alloc_expr.alloc_type, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_FREE:
-        discover_in_expr(e->free_expr.operand, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->free_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_ATOMIC_LOAD:
-        discover_in_expr(e->atomic_load.ptr, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->atomic_load.ptr, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_ATOMIC_STORE:
-        discover_in_expr(e->atomic_store.ptr, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->atomic_store.value, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->atomic_store.ptr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->atomic_store.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_ASSERT:
-        discover_in_expr(e->assert_expr.condition, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->assert_expr.condition, t, a, intern, symtab, var_names, concrete, var_count);
         if (e->assert_expr.message)
-            discover_in_expr(e->assert_expr.message, t, a, intern, var_names, concrete, var_count);
+            discover_in_expr(e->assert_expr.message, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_DEFER:
-        discover_in_expr(e->defer_expr.value, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->defer_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++) {
             if (!e->interp_string.segments[i].is_literal)
-                discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, var_names, concrete, var_count);
+                discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, symtab, var_names, concrete, var_count);
         }
         return;
     case EXPR_SLICE_LIT:
-        discover_in_expr(e->slice_lit.ptr_expr, t, a, intern, var_names, concrete, var_count);
-        discover_in_expr(e->slice_lit.len_expr, t, a, intern, var_names, concrete, var_count);
+        discover_in_expr(e->slice_lit.ptr_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_expr(e->slice_lit.len_expr, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_type(e->slice_lit.elem_type, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
+    case EXPR_LET_DESTRUCT:
+        discover_in_expr(e->let_destruct.init, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
+    case EXPR_SIZEOF:
+        discover_in_type(e->sizeof_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
+    case EXPR_ALIGNOF:
+        discover_in_type(e->alignof_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
+    case EXPR_DEFAULT:
+        discover_in_type(e->default_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
         return;
     default: return;
     }
@@ -462,8 +512,13 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                     discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
                 return;
             }
-            /* Use resolved_sym from pass1/pass2 for the canonical name */
+            /* Use resolved_sym from pass1/pass2 for the canonical name. A type
+             * coming straight from resolve_type (e.g. a sizeof/default/alloc
+             * operand) may carry no resolved_sym — fall back to a name lookup,
+             * as the STUB branch below already does. */
             Symbol *sym = type->struc.resolved_sym;
+            if (!sym && symtab)
+                sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
             const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->struc.type_args, type->struc.type_arg_count);
@@ -498,6 +553,8 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                 return;
             }
             Symbol *sym = type->unio.resolved_sym;
+            if (!sym && symtab)
+                sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
             const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->unio.type_args, type->unio.type_arg_count);
@@ -634,7 +691,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     free(order);
 }
 
-void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern) {
+void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     int discovered = 0;
     while (discovered < t->count) {
         int batch_end = t->count;
@@ -645,7 +702,7 @@ void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern) {
             if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
             Expr *fn = tmpl->let.init;
             for (int j = 0; j < fn->func.body_count; j++) {
-                discover_in_expr(fn->func.body[j], t, a, intern,
+                discover_in_expr(fn->func.body[j], t, a, intern, symtab,
                     inst->type_param_names, inst->type_args, inst->type_param_count);
             }
         }

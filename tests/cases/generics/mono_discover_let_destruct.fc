@@ -1,0 +1,25 @@
+// Item 6: a destructuring let (let { ... } = init) inside a generic body.
+// discover_in_expr had no EXPR_LET_DESTRUCT case, so its init expression was
+// never walked — the generic call mk(x) (and the pair<int64> it builds) went
+// undiscovered, yielding undefined `pair__5_int64` / `fc__mk__5_int64`.
+// Covers a named struct destructure of a generic call and a positional tuple
+// destructure of a tuple built in-body; both init forms must be walked.
+struct pair =
+    a: 'a
+    b: 'a
+
+let mk = (x: 'a) -> pair { a = x, b = x }
+
+let use_struct = (x: 'a) ->
+    let { a = p, b = q } = mk(x)        // init is a generic call -> mk<'a>, pair<'a>
+    p + q
+
+let use_tuple = (x: 'a) ->
+    let { p, q } = { x, x }             // init is a generic tuple literal -> {int64,int64}
+    p + q
+
+let main = (args: str[]) ->
+    assert(use_struct(20i64) == 40i64)
+    assert(use_struct(3i16) == 6i16)    // distinct instantiation
+    assert(use_tuple(11i64) == 22i64)
+    0

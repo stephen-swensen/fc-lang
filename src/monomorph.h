@@ -46,4 +46,4 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
 /* Discover all transitive monomorphized instances by walking template function
  * bodies. Generic calls inside generic functions aren't resolved until the outer
  * function is instantiated; this fixpoint loop finds them all. Call after pass2. */
-void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern);
+void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);

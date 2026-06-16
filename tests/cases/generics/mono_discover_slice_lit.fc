@@ -1,0 +1,16 @@
+// Item 6 (same class): a slice literal (T[] { ptr = ..., len = ... }) whose
+// element type is a generic struct instance used only inside a generic body.
+// discover_in_expr walked ptr/len but not slice_lit.elem_type, so the slice
+// typedef referenced an undefined `box__5_int64`.
+struct box =
+    v: 'a
+
+let first = (x: 'a) ->
+    let backing = box<'a>[1] { box { v = x } }
+    let s = box<'a>[] { ptr = &backing[0], len = 1 }
+    s[0].v
+
+let main = (args: str[]) ->
+    assert(first(7i64) == 7i64)
+    assert(first(2i16) == 2i16)   // distinct instantiation
+    0

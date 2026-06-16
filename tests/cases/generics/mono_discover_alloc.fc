@@ -1,0 +1,20 @@
+// Item 6 (same class): alloc whose type operand is a generic struct instance
+// used only inside a generic body. discover_in_expr walked alloc's size/init
+// sub-expressions but not its alloc_type, so box<int64> went unregistered ->
+// undefined `box__5_int64` in the calloc/sizeof emission. A heap slice of the
+// generic struct exercises alloc + index field write/read + free.
+struct box =
+    v: 'a
+
+let mk = (x: 'a) ->
+    let s = alloc(box<'a>[2] { })!
+    s[0].v = x
+    s[1].v = x
+    let r = s[0].v + s[1].v
+    free(s)
+    r
+
+let main = (args: str[]) ->
+    assert(mk(7i64) == 14i64)
+    assert(mk(3i16) == 6i16)   // distinct instantiation
+    0

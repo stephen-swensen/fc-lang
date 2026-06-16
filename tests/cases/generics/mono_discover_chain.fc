@@ -1,0 +1,29 @@
+// Item 6: feature interaction + multi-level transitive discovery. An outer
+// generic calls an inner generic whose body combines several of the fixed
+// constructs (union variant constructor, default(T), and an array literal of a
+// generic struct). None of opt<int64>, box<int64> appears in any concrete
+// signature — discovery must follow the call chain (the fixpoint loop) and
+// register every instance once outer is instantiated. Two instantiations.
+union opt =
+    | present('a)
+    | absent
+
+struct box =
+    v: 'a
+
+let inner = (x: 'a) ->
+    let o = opt<'a>.present(x)
+    let picked =
+        match o with
+        | present(v) -> v
+        | absent -> default(box<'a>).v      // default(box<'a>) discovered via dead arm
+    let arr = box<'a>[2] { box { v = picked }, box { v = picked } }
+    arr[0].v + arr[1].v                     // 2 * x
+
+let outer = (x: 'a) ->
+    inner(x) + inner(x)                     // 4 * x
+
+let main = (args: str[]) ->
+    assert(outer(5i64) == 20i64)
+    assert(outer(3i16) == 12i16)            // distinct instantiation chain
+    0

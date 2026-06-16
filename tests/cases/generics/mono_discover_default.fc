@@ -1,0 +1,14 @@
+// Item 6 (same class as sizeof/alignof): default(T) whose type operand is a
+// generic struct instance used only inside a generic body. The EXPR_DEFAULT
+// operand box<int64> was never registered -> undefined `box__5_int64`.
+struct box =
+    v: 'a
+
+let zero = (x: 'a) ->
+    let d = default(box<'a>)   // x only anchors 'a; d is the zero box<'a>
+    d.v
+
+let main = (args: str[]) ->
+    assert(zero(99i64) == 0i64)
+    assert(zero(99i16) == 0i16)   // distinct instantiation
+    0
