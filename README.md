@@ -1,6 +1,6 @@
 # FC
 
-FC is a systems programming language that transpiles to C11. It aims to combine modern language ergonomics with C's performance and memory model — no garbage collector, no borrow checker, just direct control.
+FC is a systems and embedded programming language that transpiles to C11. Its syntax and feature set are drawn from the ML family — lexical scoping, option types, tuples, tagged unions, pattern matching, structural equality, type inference, generics, and first-class functions — but deliberately pared to fit C's low-level execution model: manual memory management, unrestricted side effects, zero runtime, and no garbage collector or borrow checker. C is the grounding constraint, not a foundation to escape. Where that model carries footguns, FC smooths the sharpest ones — bounds-checked access, no undefined behavior, deterministic left-to-right evaluation, fat-pointer strings — keeping ML's ergonomics while staying close to the machine.
 
 https://fc-lang.dev
 
