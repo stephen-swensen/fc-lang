@@ -1,0 +1,26 @@
+// An array literal whose element type is a (grouped) function type:
+// ((int32) -> int32)[N] { f0, f1, ... }. The parser now recognizes the
+// "( ... ) [ ... ] {" shape for a parenthesized element type (previously only
+// IDENT- and tuple-typed element types were handled). Indexing yields the
+// function, and slicing yields a slice-of-fn — which exercises the codegen fix
+// that emits the fc_slice_<fn> typedef AFTER the fn typedef it references.
+//
+// (Note: a slice *literal* of a function type — ((int32) -> int32)[] { ptr = ..,
+// len = .. } — is not constructible, because &f on a function value is a raw
+// any* C handle, not a dereferenceable fn pointer. Build a slice by slicing an
+// array literal instead, as below.)
+let dbl = (x: int32) -> x * 2
+let inc = (x: int32) -> x + 1
+
+let apply_first = (fs: ((int32) -> int32)[], n: int32) -> fs[0](n)
+
+let main = (args: str[]) ->
+    let fs = ((int32) -> int32)[2] { dbl, inc }
+    assert(fs.len == 2i64)
+    assert(fs[0](10) == 20)
+    assert(fs[1](10) == 11)
+
+    let sl = fs[0..2]
+    assert(sl[1](10) == 11)
+    assert(apply_first(sl, 21) == 42)
+    0

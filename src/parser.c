@@ -229,7 +229,13 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             base = type_pointer(p->arena, base);
             continue;
         }
-        if (check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_RBRACKET) {
+        if (check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_RBRACKET &&
+            peek_at(p, 2)->kind != TOK_LBRACE) {
+            /* "[]" NOT followed by "{" is a slice-type suffix. "T[] {" is a slice
+             * *literal* (T[] { ptr = .., len = .. }) whose "[]" belongs to the
+             * literal, not the element type — leave it for parse_array_lit_body.
+             * A type is never legitimately followed by an open brace, so this
+             * guard is unambiguous in every context. */
             advance_p(p); advance_p(p);
             base = type_slice(p->arena, base);
             continue;
@@ -1216,6 +1222,37 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_LPAREN: {
+        /* Array/slice literal with a parenthesized (grouped/function) element
+         * type: `((A) -> B)[N] { e0, ... }` or `((A) -> B)[] { ptr = .., len = .. }`.
+         * Detected by the shape "( ... ) [ ... ] {" — the trailing { after ] is
+         * what distinguishes it from a cast or an indexed parenthesized
+         * expression, neither of which is ever followed by a brace here (same
+         * reasoning as the tuple-element path in the TOK_LBRACE case). */
+        {
+            int depth = 0, k = 0;
+            do {
+                TokenKind tk = peek_at(p, k)->kind;
+                if (tk == TOK_LPAREN) depth++;
+                else if (tk == TOK_RPAREN) depth--;
+                else if (tk == TOK_EOF) break;
+                k++;
+            } while (depth > 0);
+            if (peek_at(p, k)->kind == TOK_LBRACKET) {
+                int bd = 0, j = k;
+                do {
+                    TokenKind tk = peek_at(p, j)->kind;
+                    if (tk == TOK_LBRACKET) bd++;
+                    else if (tk == TOK_RBRACKET) bd--;
+                    else if (tk == TOK_EOF) break;
+                    j++;
+                } while (bd > 0);
+                if (peek_at(p, j)->kind == TOK_LBRACE) {
+                    Type *elem_type = parse_type(p); /* parses the grouped/function type */
+                    return parse_array_lit_body(p, elem_type, loc);
+                }
+            }
+        }
+
         /* Disambiguate: function literal vs parenthesized expression */
         /* () -> ... : empty-param function */
         if (peek_at(p, 1)->kind == TOK_RPAREN && peek_at(p, 2)->kind == TOK_ARROW) {

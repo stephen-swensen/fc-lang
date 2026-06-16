@@ -6081,45 +6081,31 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, ";\n");
     }
 
-    /* Emit slice typedefs — before struct defs since structs may contain slices */
+    /* Slice typedefs are split into a forward declaration (named struct tag) and
+       a body. The forward decls precede the function typedefs so a function type
+       can take a slice by value as a parameter (an incomplete by-value param is
+       fine in a function-pointer typedef). The bodies follow the fn typedefs so
+       a slice OF a function type can name the now-declared fn typedef in its
+       `elem* ptr` field. Both precede the scalar option bodies below, since an
+       option-of-slice embeds the slice body by value. */
     for (int i = 0; i < slices.count; i++) {
         Type *s = slices.types[i];
         if (is_str_type(s)) continue; /* str already emitted */
-        /* Forward-declare as named struct so structs can reference it */
         fprintf(out, "typedef struct fc_slice_");
         emit_type_ident(s->slice.elem, out);
-        fprintf(out, "_s { ");
-        emit_type(s->slice.elem, out);
-        fprintf(out, "* ptr; int64_t len; } fc_slice_");
+        fprintf(out, "_s fc_slice_");
         emit_type_ident(s->slice.elem, out);
         fprintf(out, ";\n");
     }
 
-    /* Emit scalar option bodies (primitives, pointers, slices). Options wrapping
-       structs/unions are deferred until after their definitions; options wrapping
-       function types are deferred until just after the function typedefs below
-       (the body embeds the fn struct by value, so the typedef must precede it). */
-    for (int i = 0; i < options.count; i++) {
-        Type *o = options.types[i];
-        if (o->option.inner &&
-            (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION ||
-             o->option.inner->kind == TYPE_STUB || o->option.inner->kind == TYPE_FUNC))
-            continue; /* deferred (see comment above) */
-        fprintf(out, "struct fc_option_");
-        emit_type_ident(o->option.inner, out);
-        fprintf(out, " { ");
-        emit_type(o->option.inner, out);
-        fprintf(out, " value; bool has_value; };\n");
-    }
-
     /* Function typedefs. A function-pointer typedef tolerates *incomplete*
-       by-value struct/union/option params and return (C only requires those
-       complete at a call or definition, not at the pointer-type declaration),
-       and every struct/union/option is already forward-declared above, so all
-       fn typedefs can be emitted here in one pass — before struct/union defs.
-       The `fns` set is dependency-ordered inner-first (collect_types_in_type
-       recurses param/return before adding the outer fn), so a fn type used by
-       value inside another fn's signature is declared first. */
+       by-value struct/union/option/slice params and return (C only requires
+       those complete at a call or definition, not at the pointer-type
+       declaration), and every struct/union/option/slice is forward-declared
+       above, so all fn typedefs can be emitted here in one pass — before
+       struct/union defs. The `fns` set is dependency-ordered inner-first
+       (collect_types_in_type recurses param/return before adding the outer fn),
+       so a fn type used by value inside another fn's signature is declared first. */
     for (int i = 0; i < fns.count; i++) {
         Type *f = fns.types[i];
         fprintf(out, "typedef struct { ");
@@ -6133,6 +6119,35 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "void*); void* ctx; } ");
         emit_type(f, out);
         fprintf(out, ";\n");
+    }
+
+    /* Slice bodies — the fn typedefs above are now complete, so a slice of a
+       function type can reference it by pointer. */
+    for (int i = 0; i < slices.count; i++) {
+        Type *s = slices.types[i];
+        if (is_str_type(s)) continue;
+        fprintf(out, "struct fc_slice_");
+        emit_type_ident(s->slice.elem, out);
+        fprintf(out, "_s { ");
+        emit_type(s->slice.elem, out);
+        fprintf(out, "* ptr; int64_t len; };\n");
+    }
+
+    /* Emit scalar option bodies (primitives, pointers, slices). Options wrapping
+       structs/unions are deferred until after their definitions; options wrapping
+       function types are deferred until just after the function typedefs (the
+       body embeds the fn struct by value, so the typedef must precede it). */
+    for (int i = 0; i < options.count; i++) {
+        Type *o = options.types[i];
+        if (o->option.inner &&
+            (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION ||
+             o->option.inner->kind == TYPE_STUB || o->option.inner->kind == TYPE_FUNC))
+            continue; /* deferred (see comment above) */
+        fprintf(out, "struct fc_option_");
+        emit_type_ident(o->option.inner, out);
+        fprintf(out, " { ");
+        emit_type(o->option.inner, out);
+        fprintf(out, " value; bool has_value; };\n");
     }
 
     /* Option-of-function bodies, now that every fn typedef is complete. These

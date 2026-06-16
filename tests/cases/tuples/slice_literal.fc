@@ -1,0 +1,22 @@
+// A slice literal with a tuple element type: {T1, T2}[] { ptr = .., len = .. }.
+// This used to fail to parse ("expected '[', got '{'") because parse_type ate the
+// trailing "[]" as a slice-TYPE suffix, leaving parse_array_lit_body looking at
+// "{". The element-type parse now leaves a "[] {" bracket for the literal (a type
+// is never legitimately followed by an open brace). Array literals of tuples
+// (which already worked) are covered by tuples/array_literal.fc.
+let first0 = (s: {int32, int32}[]) -> s[0][0]
+
+let main = (args: str[]) ->
+    let mut t = { 7, 8 }
+    let s = {int32, int32}[] { ptr = &t, len = 1 }
+    assert(s.len == 1i64)
+    assert(s[0][0] == 7)
+    assert(s[0][1] == 8)
+    assert(first0(s) == 7)
+
+    // slice taken from a tuple array literal, then re-sliced
+    let arr = {int32, int32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+    let mid = arr[1..3]
+    assert(mid.len == 2i64)
+    assert(mid[0][1] == 4)
+    0

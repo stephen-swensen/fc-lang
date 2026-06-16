@@ -2725,6 +2725,8 @@ Two initialization forms for stack slices:
 
 There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
 
+The element type may be any type — a primitive, struct, union, tuple (`{int32, int32}[2] { … }`), or a parenthesized function type (`((int32) -> int32)[2] { dbl, inc }`). A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built by sub-slicing a function *array* literal rather than from raw parts.
+
 The backing storage for a stack array literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing an array literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
 
 `free` accepts a slice directly — the compiler emits `free(buf.ptr)`. Only free slices returned by `alloc`. The compiler's escape analysis detects and rejects `free` on stack-allocated slices and string literals at compile time. Freeing a sub-slice or other non-heap memory that escapes detection is undefined behavior.
