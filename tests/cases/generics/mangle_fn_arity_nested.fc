@@ -1,0 +1,16 @@
+// Item 9 interactions: function types of different arity must mangle distinctly
+// (both were "unknown"), and nested generic instances must compose injectively.
+struct box =
+    value: 'a
+
+let add2 = (x: int32, y: int32) -> x + y
+let neg = (x: int32) -> 0 - x
+
+let main = (args: str[]) ->
+    let b2 = box { value = add2 }   // box<(int32, int32) -> int32>
+    let b1 = box { value = neg }    // box<(int32) -> int32>
+    assert(b2.value(3, 4) == 7)
+    assert(b1.value(5) == -5)
+    let nested = box { value = box { value = 42 } }  // box<box<int32>>
+    assert(nested.value.value == 42)
+    0

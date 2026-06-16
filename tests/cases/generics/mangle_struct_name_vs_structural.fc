@@ -1,0 +1,23 @@
+// Item 9: a user struct named exactly like a structural mangling (ptr_int32,
+// opt_int32) collided with the mangling of the corresponding structural type
+// (int32*, int32?). Structural manglings now carry a "__" tag that a user
+// identifier can never contain, so box<int32*> and box<ptr_int32> are distinct.
+struct ptr_int32 =
+    p: int32
+struct opt_int32 =
+    o: int32
+
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let mut n = 7
+    let real_ptr = box { value = &n }                   // box<int32*>
+    let fake_ptr = box { value = ptr_int32 { p = 11 } } // box<ptr_int32>
+    let real_opt = box { value = some(99) }             // box<int32?>
+    let fake_opt = box { value = opt_int32 { o = 22 } } // box<opt_int32>
+    assert(*(real_ptr.value) == 7)
+    assert(fake_ptr.value.p == 11)
+    assert(real_opt.value! == 99)
+    assert(fake_opt.value.o == 22)
+    0

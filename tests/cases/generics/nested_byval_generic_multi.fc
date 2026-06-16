@@ -1,0 +1,17 @@
+// Item 7: a generic struct whose by-value field is a multi-parameter generic
+// instance. Both type vars must substitute into the isolated field copy.
+struct pair =
+    a: 'a
+    b: 'b
+
+struct wrap =
+    p: pair<'a, 'b>
+
+let main = (args: str[]) ->
+    let w = wrap { p = pair { a = 1, b = true } }
+    assert(w.p.a == 1)
+    assert(w.p.b == true)
+    let w2 = wrap { p = pair { a = true, b = 9 } }
+    assert(w2.p.a == true)
+    assert(w2.p.b == 9)
+    0

@@ -1,0 +1,25 @@
+// Item 9: the '_'-joined mangling made pair<foo_bar, baz> and pair<foo, bar_baz>
+// collide (both "pair_foo_bar_baz"), deduping two differently-laid-out structs
+// into one -> wrong field types in the generated C. Length-prefixed joining
+// keeps them distinct.
+struct foo_bar =
+    a: int32
+struct baz =
+    b: int32
+struct foo =
+    c: int32
+struct bar_baz =
+    d: int32
+
+struct pair =
+    first: 'a
+    second: 'b
+
+let main = (args: str[]) ->
+    let p1 = pair { first = foo_bar { a = 1 }, second = baz { b = 2 } }
+    let p2 = pair { first = foo { c = 3 }, second = bar_baz { d = 4 } }
+    assert(p1.first.a == 1)
+    assert(p1.second.b == 2)
+    assert(p2.first.c == 3)
+    assert(p2.second.d == 4)
+    0

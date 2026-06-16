@@ -110,6 +110,93 @@ Type *type_copy(Arena *a, Type *t) {
     return c;
 }
 
+/* Recursively copy a type tree, allocating fresh nodes for every constructor
+ * (struct/union/pointer/slice/option/array/function/stub) and a fresh
+ * fields/variants/params array. Leaves that are never rewritten by
+ * mono_resolve_type_names — primitives (singletons), type vars, any* — are
+ * shared, as are stub/struct/union *type_args* (read-only when computing a
+ * mangled name). This is the isolation needed so that the in-place name
+ * canonicalization done by mono_resolve_type_names / discover_nested_types on a
+ * monomorphized instance's concrete_type can never mutate a subtree that is
+ * still shared with a pass2-live expression type or a generic template.
+ *
+ * Termination: a type referencing another (or the same) generic struct in a
+ * field appears as a TYPE_STUB or a pointer-to-stub (a name + concrete
+ * type_args, which are not recursed here), never as the full embedded
+ * definition — by-value self-embedding is rejected as infinite-size — so the
+ * recursion is finite. */
+Type *type_deep_copy(Arena *a, Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+    case TYPE_STRUCT: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        int n = t->struc.field_count;
+        c->struc.fields = arena_alloc(a, sizeof(StructField) * (size_t)(n > 0 ? n : 1));
+        for (int i = 0; i < n; i++) {
+            c->struc.fields[i].name = t->struc.fields[i].name;
+            c->struc.fields[i].type = type_deep_copy(a, t->struc.fields[i].type);
+        }
+        return c;
+    }
+    case TYPE_UNION: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        int n = t->unio.variant_count;
+        c->unio.variants = arena_alloc(a, sizeof(UnionVariant) * (size_t)(n > 0 ? n : 1));
+        for (int i = 0; i < n; i++) {
+            c->unio.variants[i].name = t->unio.variants[i].name;
+            c->unio.variants[i].payload = type_deep_copy(a, t->unio.variants[i].payload);
+        }
+        return c;
+    }
+    case TYPE_POINTER: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        c->pointer.pointee = type_deep_copy(a, t->pointer.pointee);
+        return c;
+    }
+    case TYPE_SLICE: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        c->slice.elem = type_deep_copy(a, t->slice.elem);
+        return c;
+    }
+    case TYPE_OPTION: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        c->option.inner = type_deep_copy(a, t->option.inner);
+        return c;
+    }
+    case TYPE_FIXED_ARRAY: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        c->fixed_array.elem = type_deep_copy(a, t->fixed_array.elem);
+        return c;
+    }
+    case TYPE_FUNC: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        int n = t->func.param_count;
+        c->func.param_types = arena_alloc(a, sizeof(Type*) * (size_t)(n > 0 ? n : 1));
+        for (int i = 0; i < n; i++)
+            c->func.param_types[i] = type_deep_copy(a, t->func.param_types[i]);
+        c->func.return_type = type_deep_copy(a, t->func.return_type);
+        return c;
+    }
+    case TYPE_STUB: {
+        /* Fresh node so mangling its name can't corrupt a shared stub; type_args
+         * are read-only for name computation, so they stay shared. */
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        return c;
+    }
+    default:
+        /* Primitive singletons, type vars, any*, error, never — never renamed. */
+        return t;
+    }
+}
+
 Type *type_make_const(Arena *a, Type *t) {
     if (!t) return NULL;
     if (t->is_const) return t;
@@ -780,20 +867,57 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
     }
 }
 
+/* Concatenate b onto a (a is realloc'd in place, b is borrowed). */
+static char *mangle_cat(char *a, const char *b) {
+    size_t la = strlen(a), lb = strlen(b);
+    char *r = realloc(a, la + lb + 1);
+    memcpy(r + la, b, lb + 1);
+    return r;
+}
+
+/* Append a length-prefixed, self-delimiting encoding of `piece` ("5_int32")
+ * onto `acc`. `piece` is consumed (freed). The leading decimal length keeps a
+ * join of components injective even when components themselves contain '_'
+ * separators: the boundary between components is always implied by the length,
+ * never inferred from a '_'. */
+static char *mangle_append_piece(char *acc, char *piece) {
+    char hdr[24];
+    snprintf(hdr, sizeof(hdr), "%zu_", strlen(piece));
+    acc = mangle_cat(acc, hdr);
+    acc = mangle_cat(acc, piece);
+    free(piece);
+    return acc;
+}
+
 /* Returns a type name suitable for mangling. The result is always a malloc'd
- * string that the caller must free (even for primitive types). */
+ * string that the caller must free (even for primitive types).
+ *
+ * The mangling is INJECTIVE: distinct types always produce distinct strings,
+ * so two unrelated generic instantiations can never dedupe to one C symbol.
+ * Two devices guarantee this:
+ *   - Every structural type constructor (pointer/slice/option/const/array/
+ *     function/any*) is tagged with a leading "__" sequence. A user-written
+ *     identifier can never contain "__" (the lexer reserves it), and a
+ *     module-mangled name only ever has "__" followed by a name segment, which
+ *     starts with a letter or '_' — never a digit. So a structural tag can be
+ *     neither forged by nor confused with a leaf (struct/union/primitive) name:
+ *     e.g. a pointer `int32*` mangles to "__pint32", which a user struct named
+ *     `ptr_int32` (mangling to "ptr_int32") can never collide with.
+ *   - Multi-component manglings (function params, plus the generic/tuple joins
+ *     below) length-prefix each component, so a '_' inside one component can
+ *     never be mistaken for a component boundary. */
 char *mangle_type_name(Type *t) {
     if (!t) return str_dup("void");
-    /* Const types get a "const_" prefix */
+    /* Const types get a "__c" structural tag. Only pointer/slice/any* carry a
+     * const qualifier, so the inner mangling always begins with its own "__"
+     * tag (or "str"/"cstr"), keeping the result unambiguous. */
     if (t->is_const) {
         Type tmp = *t;
         tmp.is_const = false;
         char *inner = mangle_type_name(&tmp);
-        int needed = snprintf(NULL, 0, "const_%s", inner) + 1;
-        char *buf = malloc((size_t)needed);
-        snprintf(buf, (size_t)needed, "const_%s", inner);
+        char *r = mangle_cat(str_dup("__c"), inner);
         free(inner);
-        return buf;
+        return r;
     }
     if (is_str_type(t)) return str_dup("str");
     if (is_cstr_type(t)) return str_dup("cstr");
@@ -811,58 +935,72 @@ char *mangle_type_name(Type *t) {
     case TYPE_FLOAT32: return str_dup("f32");
     case TYPE_FLOAT64: return str_dup("f64");
     case TYPE_BOOL:    return str_dup("bool");
+    case TYPE_CHAR:    return str_dup("char");
     case TYPE_VOID:    return str_dup("void");
     case TYPE_NEVER:   return str_dup("never"); /* defensive: never monomorphized */
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
     case TYPE_STUB:    return str_dup(t->stub.name);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
+    case TYPE_ANY_PTR: return str_dup("__y");
+    case TYPE_ERROR:   return str_dup("__err"); /* defensive: never monomorphized */
+    case TYPE_POINTER: {
+        char *inner = mangle_type_name(t->pointer.pointee);
+        char *r = mangle_cat(str_dup("__p"), inner);
+        free(inner);
+        return r;
+    }
+    case TYPE_SLICE: {
+        char *inner = mangle_type_name(t->slice.elem);
+        char *r = mangle_cat(str_dup("__l"), inner);
+        free(inner);
+        return r;
+    }
+    case TYPE_OPTION: {
+        char *inner = mangle_type_name(t->option.inner);
+        char *r = mangle_cat(str_dup("__o"), inner);
+        free(inner);
+        return r;
+    }
     case TYPE_FIXED_ARRAY: {
         char *inner = mangle_type_name(t->fixed_array.elem);
-        int needed = snprintf(NULL, 0, "fixarr%lld_%s", (long long)t->fixed_array.size, inner) + 1;
-        char *buf = malloc((size_t)needed);
-        snprintf(buf, (size_t)needed, "fixarr%lld_%s", (long long)t->fixed_array.size, inner);
+        char hdr[32];
+        snprintf(hdr, sizeof(hdr), "__a%lld_", (long long)t->fixed_array.size);
+        char *r = mangle_cat(str_dup(hdr), inner);
         free(inner);
-        return buf;
+        return r;
     }
-    default: {
-        const char *prefix;
-        char *inner;
-        if (t->kind == TYPE_POINTER) {
-            prefix = "ptr_"; inner = mangle_type_name(t->pointer.pointee);
-        } else if (t->kind == TYPE_SLICE) {
-            prefix = "slice_"; inner = mangle_type_name(t->slice.elem);
-        } else if (t->kind == TYPE_OPTION) {
-            prefix = "opt_"; inner = mangle_type_name(t->option.inner);
-        } else {
-            return str_dup("unknown");
-        }
-        int needed = snprintf(NULL, 0, "%s%s", prefix, inner) + 1;
-        char *buf = malloc((size_t)needed);
-        snprintf(buf, (size_t)needed, "%s%s", prefix, inner);
-        free(inner);
-        return buf;
+    case TYPE_FUNC: {
+        /* "__f" <nparams> "_" lp(param)* lp(ret) [ "_v" if variadic ]. The
+         * param count tells the join where the params end and the return type
+         * begins; each param/return is length-prefixed (mangle_append_piece). */
+        char hdr[24];
+        snprintf(hdr, sizeof(hdr), "__f%d_", t->func.param_count);
+        char *r = str_dup(hdr);
+        for (int i = 0; i < t->func.param_count; i++)
+            r = mangle_append_piece(r, mangle_type_name(t->func.param_types[i]));
+        r = mangle_append_piece(r, mangle_type_name(t->func.return_type));
+        if (t->func.is_variadic) r = mangle_cat(r, "_v");
+        return r;
     }
+    default: return str_dup("__unk"); /* defensive: TYPE_COUNT etc. */
     }
 }
 
 const char *mangle_generic_name(Arena *a, InternTable *intern_tbl,
                                 const char *base, Type **type_args, int count) {
-    /* Measure total length needed */
-    char **names = malloc(sizeof(char*) * (size_t)count);
-    int needed = (int)strlen(base);
-    for (int i = 0; i < count; i++) {
-        names[i] = mangle_type_name(type_args[i]);
-        needed += 1 + (int)strlen(names[i]); /* "_" + name */
+    /* base "__" lp(arg)*  — injective. The "__" boundary is unambiguous: every
+     * arg piece begins with its decimal length (a digit), whereas any "__"
+     * occurring *inside* a module-mangled base is followed by a name segment
+     * (a letter or '_', never a digit). Length-prefixing each arg then keeps the
+     * join itself injective. So neither `pair<foo_bar,baz>` vs `pair<foo,bar_baz>`
+     * nor a base whose own name embeds "__<arg-like>" can collide. */
+    char *buf = str_dup(base);
+    if (count > 0) {
+        buf = mangle_cat(buf, "__");
+        for (int i = 0; i < count; i++)
+            buf = mangle_append_piece(buf, mangle_type_name(type_args[i]));
     }
-    char *buf = malloc((size_t)(needed + 1));
-    int pos = 0;
-    pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "%s", base);
-    for (int i = 0; i < count; i++) {
-        pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "_%s", names[i]);
-        free(names[i]);
-    }
-    free(names);
     (void)a;
     const char *result = intern_cstr(intern_tbl, buf);
     free(buf);
@@ -872,22 +1010,15 @@ const char *mangle_generic_name(Arena *a, InternTable *intern_tbl,
 const char *tuple_canonical_name(Arena *a, InternTable *intern_tbl,
                                  StructField *fields, int n) {
     (void)a;
+    /* "fc_tupleN" "__" lp(field-type)* — same injective join as generics. */
     char base[24];
     snprintf(base, sizeof(base), "fc_tuple%d", n);
-    char **names = malloc(sizeof(char*) * (size_t)(n > 0 ? n : 1));
-    int needed = (int)strlen(base);
-    for (int i = 0; i < n; i++) {
-        names[i] = mangle_type_name(fields[i].type);
-        needed += 1 + (int)strlen(names[i]); /* "_" + name */
+    char *buf = str_dup(base);
+    if (n > 0) {
+        buf = mangle_cat(buf, "__");
+        for (int i = 0; i < n; i++)
+            buf = mangle_append_piece(buf, mangle_type_name(fields[i].type));
     }
-    char *buf = malloc((size_t)(needed + 1));
-    int pos = 0;
-    pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "%s", base);
-    for (int i = 0; i < n; i++) {
-        pos += snprintf(buf + pos, (size_t)(needed + 1 - pos), "_%s", names[i]);
-        free(names[i]);
-    }
-    free(names);
     const char *result = intern_cstr(intern_tbl, buf);
     free(buf);
     return result;

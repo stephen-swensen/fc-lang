@@ -1,0 +1,16 @@
+// Item 7: three levels of by-value generic nesting (outer<cell<inner>>). Each
+// level's concrete field type is discovered and canonicalized; a shared subtree
+// at any level would corrupt the others.
+struct inner =
+    v: 'a
+
+struct cell =
+    i: inner<'a>
+
+struct outer =
+    c: cell<'a>
+
+let main = (args: str[]) ->
+    let o = outer { c = cell { i = inner { v = 42 } } }
+    assert(o.c.i.v == 42)
+    0

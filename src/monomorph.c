@@ -219,9 +219,10 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                         int ntp = struct_sym->type_param_count < vc ? struct_sym->type_param_count : vc;
                         Type *ct = type_substitute(a, struct_sym->type,
                             struct_sym->type_params, concrete_args, ntp);
-                        if (ct == struct_sym->type) {
-                            ct = type_copy(a, ct);
-                        }
+                        /* Deep copy: type_substitute shares unchanged field
+                         * subtrees with the template, which the in-place name
+                         * canonicalization below would otherwise corrupt. */
+                        ct = type_deep_copy(a, ct);
                         ct->struc.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
@@ -241,7 +242,7 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
             type_contains_type_var(e->type)) {
             Type *ct = type_substitute(a, e->type, var_names, concrete, var_count);
             if (!type_contains_type_var(ct)) {
-                if (ct == e->type) ct = type_copy(a, ct);
+                ct = type_deep_copy(a, ct);  /* isolate before in-place name canonicalization */
                 mono_resolve_type_names(t, a, intern, ct);  /* sets ct->struc.name canonically */
                 Type *noargs[1] = {0};
                 const char *mangled = mono_register(t, a, intern, ct->struc.name, NULL,
@@ -450,7 +451,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                     mono_register(t, a, intern, cn, NULL, noargs, 0, NULL, DECL_STRUCT, NULL, 0);
                     MonoInstance *mi = mono_find(t, cn);
                     if (mi && !mi->concrete_type)
-                        mi->concrete_type = type_copy(a, type);
+                        mi->concrete_type = type_deep_copy(a, type);
                 }
             }
             return;
@@ -478,7 +479,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                                   ? sym->type_param_count : type->struc.type_arg_count;
                         Type *ct = type_substitute(a, sym->type,
                             sym->type_params, type->struc.type_args, ntp);
-                        if (ct == sym->type) ct = type_copy(a, ct);
+                        ct = type_deep_copy(a, ct);  /* isolate before in-place canonicalization */
                         ct->struc.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
@@ -512,7 +513,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                                   ? sym->type_param_count : type->unio.type_arg_count;
                         Type *ct = type_substitute(a, sym->type,
                             sym->type_params, type->unio.type_args, ntp);
-                        if (ct == sym->type) ct = type_copy(a, ct);
+                        ct = type_deep_copy(a, ct);  /* isolate before in-place canonicalization */
                         ct->unio.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
                         mi->concrete_type = ct;
@@ -544,7 +545,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                                   ? sym->type_param_count : type->stub.type_arg_count;
                         Type *ct = type_substitute(a, sym->type,
                             sym->type_params, type->stub.type_args, ntp);
-                        if (ct == sym->type) ct = type_copy(a, ct);
+                        ct = type_deep_copy(a, ct);  /* isolate before in-place canonicalization */
                         if (ct->kind == TYPE_STRUCT) ct->struc.name = mangled;
                         else if (ct->kind == TYPE_UNION) ct->unio.name = mangled;
                         mono_resolve_type_names(t, a, intern, ct);
@@ -560,6 +561,19 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
 
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     if (t->count == 0) return;
+
+    /* Isolate every concrete_type as a private deep copy before the in-place name
+     * canonicalization done below (discover_nested_types and mono_resolve_type_names
+     * both rewrite struct/union/stub names in place). Several pass2 sites store the
+     * concrete_type as the very expression type they inferred (a shallow copy that
+     * shares field/variant subtrees with a pass2-live type or a generic template);
+     * mangling those shared nodes would corrupt them (item 7). Deep-copying here
+     * makes the finalize phase's mutations local. Instances created *during* the
+     * discovery loop below already deep-copy at their build sites. */
+    for (int i = 0; i < t->count; i++) {
+        if (t->entries[i].concrete_type)
+            t->entries[i].concrete_type = type_deep_copy(a, t->entries[i].concrete_type);
+    }
 
     /* Discover any concrete generic structs/unions referenced in field types
      * that don't have their own MonoInstance yet (e.g., entry<int32> used only

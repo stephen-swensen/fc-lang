@@ -864,7 +864,9 @@ static void register_concrete_tuple(CheckCtx *ctx, Type *tup) {
                                         NULL, 0);
     MonoInstance *mi = mono_find(ctx->mono_table, mangled);
     if (mi && !mi->concrete_type) {
-        Type *ct = type_copy(ctx->arena, tup);
+        /* Deep copy so the in-place name canonicalization below cannot mutate a
+         * field subtree still shared with the live tuple expression type. */
+        Type *ct = type_deep_copy(ctx->arena, tup);
         mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
         mi->concrete_type = ct;
     }
@@ -4089,7 +4091,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 concrete->struc.name = mangled;
                 MonoInstance *mi = mono_find(ctx->mono_table, mangled);
                 if (mi && !mi->concrete_type) {
-                    Type *ct = type_copy(ctx->arena, concrete);
+                    /* Deep copy: canonicalizing nested generic field names in place
+                     * must not corrupt the live struct-literal type (e->type), whose
+                     * fields a shallow copy would alias (item 7). */
+                    Type *ct = type_deep_copy(ctx->arena, concrete);
                     mono_resolve_type_names(ctx->mono_table, ctx->arena, ctx->intern, ct);
                     mi->concrete_type = ct;
                 }

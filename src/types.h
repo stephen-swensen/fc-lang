@@ -136,6 +136,10 @@ bool is_cstr_type(Type *t);
 
 /* Const helpers */
 Type *type_copy(Arena *a, Type *t);
+/* Recursive copy: fresh nodes for every constructor + fresh field/variant/param
+ * arrays (leaves and type_args shared). Use when a copy will be mutated in place
+ * by mono name canonicalization and must not alias a live/template subtree. */
+Type *type_deep_copy(Arena *a, Type *t);
 Type *type_make_const(Arena *a, Type *t);
 
 /* Queries */

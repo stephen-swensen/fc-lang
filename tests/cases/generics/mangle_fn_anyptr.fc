@@ -1,0 +1,18 @@
+// Item 9: TYPE_FUNC and any* both used to mangle to "unknown", so box<fn> and
+// box<any*> deduped to one C struct (box_unknown) with conflicting field types
+// -> the generated C failed to compile. They must now mangle distinctly.
+struct box =
+    value: 'a
+
+let bump = (x: int32) -> x + 1
+
+let main = (args: str[]) ->
+    let mut n = 5
+    let p = (any*) &n
+    let bf = box { value = bump }     // box<(int32) -> int32>
+    let by = box { value = p }        // box<any*>
+    assert(bf.value(10) == 11)
+    let q = (int32*) by.value
+    assert(q == &n)
+    assert(*q == 5)
+    0
