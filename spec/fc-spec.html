@@ -427,7 +427,7 @@
 
 FC compiles directly to C as its backend, making it highly compatible with existing C code and toolchains. The language follows C's memory management philosophy — manual, no garbage collector, no borrow checker — while cleaning up C's syntax and fixing well-known footguns. FC supports parametric polymorphism through monomorphized generics — generic functions and types are resolved entirely at compile time, producing concrete C output with no runtime overhead.
 
-Every feature in FC should transpile to clean, readable C. This is a core design constraint. When a feature cannot be expressed as straightforward C output, that is a signal to reconsider the feature.
+Every feature in FC must transpile to readable C with predictable, C-like cost and no hidden runtime machinery (targeting the GNU C dialect — see §Why C as a target). This is a core design constraint. When a feature cannot be expressed without a runtime support layer or opaque codegen state, that is a signal to reconsider the feature.
 
 The guiding principles are:
 
