@@ -1,0 +1,7 @@
+// Non-uniform self-reference through a union variant payload.
+union tree =
+    | leaf('a)
+    | branch(tree<tree<'a> >*?)
+
+let main = (args: str[]) ->
+    0

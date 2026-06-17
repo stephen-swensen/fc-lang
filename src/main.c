@@ -238,6 +238,14 @@ int main(int argc, char **argv) {
     /* Finalize: sort monomorphized types for correct C emission order */
     mono_finalize_types(&mono, &arena, &intern_table, &symtab);
 
+    /* Monomorphization can detect an infinite generic instantiation (a generic
+     * that instantiates itself with an ever-growing type argument); bail before
+     * emitting C built from a truncated/dangling instance family. */
+    if (diag_error_count() > 0) {
+        fprintf(stderr, "%d error(s)\n", diag_error_count());
+        return 1;
+    }
+
     /* Code generation */
     if (!output_path) {
         output_path = change_extension(input_paths[0], ".c");

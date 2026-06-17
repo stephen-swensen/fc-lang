@@ -1,0 +1,9 @@
+// Mutual recursion with growing type arguments: g<'a> needs f<'a?> needs
+// g<'a??> ... — the mutual version of the infinite-instantiation hang.
+let f = (x: 'a) ->
+    if true then 0 else g(some(x))
+let g = (x: 'a) ->
+    if true then 0 else f(some(x))
+
+let main = (args: str[]) ->
+    f(5)

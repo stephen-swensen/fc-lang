@@ -1,0 +1,9 @@
+// A struct whose field refers to itself with a *larger* type argument
+// (node<node<'a>>) is non-uniform recursion: it needs a distinct instance at
+// every depth, an infinite family. Rejected at the definition site.
+struct node =
+    val: 'a
+    next: node<node<'a> >*?
+
+let main = (args: str[]) ->
+    0

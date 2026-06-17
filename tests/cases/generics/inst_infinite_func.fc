@@ -1,0 +1,9 @@
+// A generic function that recursively calls itself with an ever-larger type
+// argument (some(x): 'a -> 'a?) forces f<'a> -> f<'a?> -> f<'a??> -> ...,
+// an infinite family of monomorphized copies. The compiler must reject this
+// (via the instantiation-depth cap) rather than hang.
+let f = (x: 'a) ->
+    if true then 0 else f(some(x))
+
+let main = (args: str[]) ->
+    f(5)

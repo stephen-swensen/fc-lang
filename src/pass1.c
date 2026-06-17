@@ -35,6 +35,134 @@ static void detect_generic_union(Decl *d, Symbol *sym) {
     }
 }
 
+/* ---- Reject non-uniform recursive type definitions (audit item 14) ----
+ *
+ * A generic type may refer to itself only *uniformly* — applied to its own type
+ * parameters, in order (e.g. `next: node<'a>*` inside `struct node<'a>`). That is
+ * an ordinary recursive data structure: a single, finite monomorphized instance
+ * per concrete `'a`. A *non-uniform* self-reference — `node<node<'a>>`, `node<int32>`,
+ * or reordered params `pair<'b, 'a>` — demands a different instance at every depth,
+ * an infinite family no by-value monomorphizing backend can lay out. We reject it
+ * at the definition site (conservative-but-complete), which also gives a precise
+ * diagnostic; genuinely mutual/indirect non-uniform recursion that slips past this
+ * direct-self check is still caught by the instantiation-depth cap in monomorph.c.
+ *
+ * Runs on raw parser output before any name mangling, so self-references (still
+ * TYPE_STUB with the source name) compare equal to the type's own source name. */
+
+/* The only uniform form: args are exactly params[0..pc) as type vars, in order. */
+static bool self_ref_is_uniform(Type **args, int argc, const char **params, int pc) {
+    if (argc != pc) return false;
+    for (int i = 0; i < argc; i++) {
+        if (!args[i] || args[i]->kind != TYPE_TYPE_VAR) return false;
+        if (args[i]->type_var.name != params[i]) return false;
+    }
+    return true;
+}
+
+/* Return the offending node if `t` contains a non-uniform reference to
+ * `self_name`, else NULL. Recurses through every type constructor and into
+ * generic type arguments, but never into a referenced struct/union's *fields*
+ * (those belong to that type's own definition) — so the walk stays over the
+ * finite syntactic type tree and terminates even for recursive types. */
+static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
+                                      const char **params, int pc) {
+    if (!t) return NULL;
+    Type *r;
+    switch (t->kind) {
+    case TYPE_POINTER:     return find_nonuniform_self_ref(t->pointer.pointee, self_name, params, pc);
+    case TYPE_SLICE:       return find_nonuniform_self_ref(t->slice.elem, self_name, params, pc);
+    case TYPE_OPTION:      return find_nonuniform_self_ref(t->option.inner, self_name, params, pc);
+    case TYPE_FIXED_ARRAY: return find_nonuniform_self_ref(t->fixed_array.elem, self_name, params, pc);
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            if ((r = find_nonuniform_self_ref(t->func.param_types[i], self_name, params, pc))) return r;
+        return find_nonuniform_self_ref(t->func.return_type, self_name, params, pc);
+    case TYPE_STUB:
+        if (t->stub.name == self_name && t->stub.type_arg_count > 0 &&
+            !self_ref_is_uniform(t->stub.type_args, t->stub.type_arg_count, params, pc))
+            return t;
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            if ((r = find_nonuniform_self_ref(t->stub.type_args[i], self_name, params, pc))) return r;
+        return NULL;
+    case TYPE_STRUCT:
+        if (t->struc.name == self_name && t->struc.type_arg_count > 0 &&
+            !self_ref_is_uniform(t->struc.type_args, t->struc.type_arg_count, params, pc))
+            return t;
+        for (int i = 0; i < t->struc.type_arg_count; i++)
+            if ((r = find_nonuniform_self_ref(t->struc.type_args[i], self_name, params, pc))) return r;
+        return NULL;
+    case TYPE_UNION:
+        if (t->unio.name == self_name && t->unio.type_arg_count > 0 &&
+            !self_ref_is_uniform(t->unio.type_args, t->unio.type_arg_count, params, pc))
+            return t;
+        for (int i = 0; i < t->unio.type_arg_count; i++)
+            if ((r = find_nonuniform_self_ref(t->unio.type_args[i], self_name, params, pc))) return r;
+        return NULL;
+    default: return NULL;
+    }
+}
+
+/* Build the one legal self-reference form, "name<'a, 'b>", for the diagnostic. */
+static const char *uniform_self_form(const char *name, const char **params, int pc) {
+    static char buf[256];
+    int pos = snprintf(buf, sizeof(buf), "%s<", name);
+    for (int i = 0; i < pc && pos < (int)sizeof(buf); i++)
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s%s", i ? ", " : "", params[i]);
+    if (pos < (int)sizeof(buf)) snprintf(buf + pos, sizeof(buf) - (size_t)pos, ">");
+    return buf;
+}
+
+static void check_type_def_recursion(Decl *d) {
+    const char **params = NULL;
+    int pc = 0, pcap = 0;
+    const char *self_name = NULL;
+
+    if (d->kind == DECL_STRUCT) {
+        if (d->struc.is_extern) return;
+        self_name = d->struc.name;
+        for (int i = 0; i < d->struc.field_count; i++)
+            type_collect_vars(d->struc.fields[i].type, &params, &pc, &pcap);
+    } else if (d->kind == DECL_UNION) {
+        self_name = d->unio.name;
+        for (int i = 0; i < d->unio.variant_count; i++)
+            type_collect_vars(d->unio.variants[i].payload, &params, &pc, &pcap);
+    } else {
+        return;
+    }
+    if (pc == 0) { free(params); return; }  /* not generic: no non-uniform form possible */
+
+    /* Scan each field/variant type for a non-uniform self-reference. */
+    Type *bad = NULL;
+    if (d->kind == DECL_STRUCT) {
+        for (int i = 0; i < d->struc.field_count && !bad; i++)
+            bad = find_nonuniform_self_ref(d->struc.fields[i].type, self_name, params, pc);
+    } else {
+        for (int i = 0; i < d->unio.variant_count && !bad; i++)
+            bad = find_nonuniform_self_ref(d->unio.variants[i].payload, self_name, params, pc);
+    }
+    if (bad) {
+        diag_error(d->loc,
+            "non-uniform recursive type '%s' is not supported: a generic type may "
+            "only refer to itself uniformly as '%s'; a self-reference with any other "
+            "type arguments would require infinitely many monomorphized instances",
+            self_name, uniform_self_form(self_name, params, pc));
+    }
+    free(params);
+}
+
+/* Walk all struct/union definitions (descending into modules) for non-uniform
+ * self-reference. Called before pass1 mangles any names. */
+static void check_recursion_in_decls(Decl **decls, int count) {
+    for (int i = 0; i < count; i++) {
+        Decl *d = decls[i];
+        if (d->kind == DECL_STRUCT || d->kind == DECL_UNION)
+            check_type_def_recursion(d);
+        else if (d->kind == DECL_MODULE)
+            check_recursion_in_decls(d->module.decls, d->module.decl_count);
+    }
+}
+
 static void detect_generic_func(Decl *d, Symbol *sym) {
     if (!d->let.init || d->let.init->kind != EXPR_FUNC) return;
     Expr *fn = d->let.init;
@@ -882,6 +1010,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             }
         }
     }
+
+    /* Phase 0.5: Reject non-uniform recursive type definitions (audit item 14).
+     * Runs before any name mangling so self-references still carry source names. */
+    check_recursion_in_decls(prog->decls, prog->decl_count);
 
     /* Phase 1: Register modules.
      * Track current namespace as we iterate — DECL_NAMESPACE resets it. */

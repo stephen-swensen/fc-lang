@@ -1,0 +1,11 @@
+// Self-reference with reordered parameters (pair<'b, 'a>) is non-uniform. Even
+// though this particular cycle is finite, FC rejects all non-uniform self-
+// reference uniformly (conservative-but-complete) — the only allowed form is
+// pair<'a, 'b>.
+struct pair =
+    a: 'a
+    b: 'b
+    flip: pair<'b, 'a>*?
+
+let main = (args: str[]) ->
+    0

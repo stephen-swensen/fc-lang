@@ -1,15 +1,92 @@
 #include "monomorph.h"
 #include "types.h"
+#include "diag.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Monomorphization termination guards (audit item 14).
+ *
+ * A generic that instantiates itself with an ever-growing type argument produces
+ * an infinite family of monomorphized copies — e.g. `f(some(x))` forces
+ * f<'a> -> f<'a?> -> f<'a??> -> ..., and a non-uniform recursive type forces
+ * node<int32> -> node<node<int32>> -> ... Both fixpoint loops below (function
+ * discovery in mono_discover_transitive, nested-type discovery in
+ * mono_finalize_types) would otherwise never converge (hang) or, when a name
+ * collision happens to halt the loop, silently emit a truncated/dangling C type.
+ *
+ * The divergence always manifests as type arguments that nest one constructor
+ * deeper each round, so a cap on the structural depth of an instance's type
+ * arguments catches it regardless of shape. Because FC has no type-level
+ * computation (array sizes, tuple arities, etc. are fixed by source, never
+ * synthesized), a bounded type-argument depth admits only finitely many distinct
+ * types — so the depth cap alone *guarantees* termination. The count cap is a
+ * belt-and-suspenders backstop against any breadth-divergence shape not foreseen
+ * here. Both limits are far above anything a finite program reaches (real generic
+ * nesting is a handful of levels deep; whole programs have thousands, not
+ * hundreds of thousands, of instances). */
+#define MONO_MAX_INSTANTIATION_DEPTH 128
+#define MONO_MAX_INSTANCES           200000
+
+/* Structural nesting depth of a type's *type arguments*: the axis along which a
+ * divergent instantiation grows. Recurses through wrapper constructors and into
+ * generic type arguments, but NOT into struct/union fields (those are bounded by
+ * the definition; only the args grow during divergence) — which also keeps this
+ * walk finite on by-value-recursive concrete types. */
+static int mono_type_arg_depth(Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_POINTER:     return 1 + mono_type_arg_depth(t->pointer.pointee);
+    case TYPE_SLICE:       return 1 + mono_type_arg_depth(t->slice.elem);
+    case TYPE_OPTION:      return 1 + mono_type_arg_depth(t->option.inner);
+    case TYPE_FIXED_ARRAY: return 1 + mono_type_arg_depth(t->fixed_array.elem);
+    case TYPE_FUNC: {
+        int m = mono_type_arg_depth(t->func.return_type);
+        for (int i = 0; i < t->func.param_count; i++) {
+            int d = mono_type_arg_depth(t->func.param_types[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    case TYPE_STRUCT: {
+        int m = 0;
+        for (int i = 0; i < t->struc.type_arg_count; i++) {
+            int d = mono_type_arg_depth(t->struc.type_args[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    case TYPE_UNION: {
+        int m = 0;
+        for (int i = 0; i < t->unio.type_arg_count; i++) {
+            int d = mono_type_arg_depth(t->unio.type_args[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    case TYPE_STUB: {
+        int m = 0;
+        for (int i = 0; i < t->stub.type_arg_count; i++) {
+            int d = mono_type_arg_depth(t->stub.type_args[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    default: return 1; /* primitives, type vars, any* */
+    }
+}
 
 const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
                           const char *name, const char *ns_prefix,
                           Type **type_args, int count,
                           Decl *tmpl, DeclKind kind,
                           const char **type_params, int tp_count) {
+    /* Once an infinite instantiation has been reported, stop growing the table so
+     * both discovery fixpoint loops converge (their guards key off t->count). The
+     * single diagnostic below is thus emitted exactly once. */
+    if (diag_error_count() > 0) return name;
+
     /* Build the base name for mangling */
     const char *base = name;
     if (ns_prefix) {
@@ -23,6 +100,40 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
     for (int i = 0; i < t->count; i++) {
         if (t->entries[i].mangled_name == mangled)
             return mangled;
+    }
+
+    /* Termination guard: a new instance whose type arguments nest deeper than any
+     * finite program would means a generic is instantiating itself with a growing
+     * type argument (infinite monomorphization). Report once and stop. */
+    int arg_depth = 0;
+    for (int i = 0; i < count; i++) {
+        int d = mono_type_arg_depth(type_args[i]);
+        if (d > arg_depth) arg_depth = d;
+    }
+    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES) {
+        /* Prefer the source-level name over the mangled C name for the message. */
+        const char *disp = name;
+        SrcLoc loc = {0};
+        if (tmpl) {
+            loc = tmpl->loc;
+            /* DECL_LET keeps its source name; struct/union Decl names are mangled
+             * by pass1, so those fall back to the mangled name (rare path: the
+             * direct-self type case is already caught at the definition site). */
+            if (tmpl->kind == DECL_LET && tmpl->let.name)
+                disp = tmpl->let.name;
+            else if (tmpl->kind == DECL_STRUCT)
+                disp = tmpl->struc.name;
+            else if (tmpl->kind == DECL_UNION)
+                disp = tmpl->unio.name;
+        }
+        diag_error(loc,
+            "infinite generic instantiation of '%s': it is instantiated with an "
+            "unbounded family of ever-deeper type arguments (exceeded depth %d / "
+            "%d instances). A generic function or type that instantiates itself "
+            "with a growing type argument (e.g. f(some(x)), or a non-uniform "
+            "recursive type) requires infinitely many monomorphized copies.",
+            disp, MONO_MAX_INSTANTIATION_DEPTH, MONO_MAX_INSTANCES);
+        return mangled;
     }
 
     /* Copy type_args into arena */
@@ -616,6 +727,59 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
     }
 }
 
+/* Completeness backstop (audit item 14): walk a finalized concrete type and, if
+ * it references a generic struct/union instance that was never registered (so
+ * codegen would emit a dangling C typedef name), report an infinite-instantiation
+ * error once. A missing instance is the fingerprint of a truncated infinite
+ * family — the mutually/indirectly non-uniform recursive types that the
+ * definition-site self-check (pass1) and the depth cap don't catch, because the
+ * buggy discovery fixpoint halts itself (via a name collision) below the depth
+ * limit instead of growing without bound. Recurses through wrapper constructors
+ * and into type arguments, but not into a referenced instance's own fields (those
+ * are validated when its own table entry is visited), so this terminates. */
+static void check_dangling_instance(MonoTable *t, Type *ty, Decl *site, bool *reported) {
+    if (!ty || *reported) return;
+    /* A type that still contains a type variable is template residue, not a
+     * concrete instance codegen emits, so it is never dangling. */
+    if (type_contains_type_var(ty)) return;
+    switch (ty->kind) {
+    /* Recurse only through wrapper constructors and function signatures — the
+     * shapes that carry an emitted *field* type. NOT into a generic instance's
+     * type arguments: those are mangling inputs, not emitted member types, and
+     * mono_resolve_type_names deliberately leaves them at their base name. Every
+     * emitted instance is reached as some entry's field anyway, so heads are
+     * fully covered without descending into args. */
+    case TYPE_POINTER:     check_dangling_instance(t, ty->pointer.pointee, site, reported); return;
+    case TYPE_SLICE:       check_dangling_instance(t, ty->slice.elem, site, reported); return;
+    case TYPE_OPTION:      check_dangling_instance(t, ty->option.inner, site, reported); return;
+    case TYPE_FIXED_ARRAY: check_dangling_instance(t, ty->fixed_array.elem, site, reported); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < ty->func.param_count; i++)
+            check_dangling_instance(t, ty->func.param_types[i], site, reported);
+        check_dangling_instance(t, ty->func.return_type, site, reported);
+        return;
+    case TYPE_STRUCT:
+        if (ty->struc.type_arg_count > 0 && !mono_find(t, ty->struc.name)) goto dangling;
+        return;
+    case TYPE_UNION:
+        if (ty->unio.type_arg_count > 0 && !mono_find(t, ty->unio.name)) goto dangling;
+        return;
+    case TYPE_STUB:
+        /* A stub with args should have been resolved+registered by now; if not,
+         * it is the same dangling-reference condition. */
+        if (ty->stub.type_arg_count > 0 && !mono_find(t, ty->stub.name)) goto dangling;
+        return;
+    default: return;
+    }
+dangling:
+    *reported = true;
+    diag_error(site ? site->loc : (SrcLoc){0},
+        "infinite generic instantiation: a generic type transitively references an "
+        "unbounded family of instances (a mutually or indirectly non-uniform "
+        "recursive type). A generic type may only refer to other generic types with "
+        "concrete or parameter-preserving type arguments around any recursion cycle.");
+}
+
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     if (t->count == 0) return;
 
@@ -662,6 +826,25 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
         if (inst->concrete_type)
             mono_resolve_type_names(t, a, intern, inst->concrete_type);
     }
+
+    /* Completeness backstop: reject any concrete type that references an
+     * unregistered generic instance (a truncated infinite family — see
+     * check_dangling_instance). Done before the topo sort so an incomplete table
+     * is never handed to codegen. */
+    bool dangling_reported = false;
+    for (int i = 0; i < t->count && !dangling_reported; i++) {
+        MonoInstance *inst = &t->entries[i];
+        if (!inst->concrete_type) continue;
+        Type *ct = inst->concrete_type;
+        if (ct->kind == TYPE_STRUCT) {
+            for (int f = 0; f < ct->struc.field_count && !dangling_reported; f++)
+                check_dangling_instance(t, ct->struc.fields[f].type, inst->template_decl, &dangling_reported);
+        } else if (ct->kind == TYPE_UNION) {
+            for (int v = 0; v < ct->unio.variant_count && !dangling_reported; v++)
+                check_dangling_instance(t, ct->unio.variants[v].payload, inst->template_decl, &dangling_reported);
+        }
+    }
+    if (dangling_reported) return;  /* main gates codegen on the error count */
 
     /* Topologically sort struct/union entries so by-value dependencies come first.
      * Function entries are left in their original order at the end. */

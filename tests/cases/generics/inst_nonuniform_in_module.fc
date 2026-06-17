@@ -1,0 +1,8 @@
+// The definition-site check descends into modules too.
+module m =
+    struct box =
+        v: 'a
+        deeper: box<box<'a> >*?
+
+let main = (args: str[]) ->
+    0

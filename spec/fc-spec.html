@@ -2303,6 +2303,8 @@ struct child_list =
 
 The same rules apply to generic structs — a generic type may reference itself or another generic type via pointer fields. The monomorphizer follows the same pointer rule: it only needs the layout of a type to emit a pointer to it, so the instantiation graph never cycles. A direct recursive field without a pointer — `struct foo = value: foo<'a>` — would be an infinitely-sized type and is a compile error, exactly as for non-generic structs.
 
+A generic type may only refer to itself **uniformly** — applied to its own type parameters, in order. `struct list = head: 'a; tail: list<'a>*?` is fine: each concrete `'a` yields one finite instance. A **non-uniform** self-reference — applying the type to anything other than its bare parameters, such as `next: node<node<'a>>*` or reordered parameters `flip: pair<'b, 'a>*` — is rejected, because it would require a distinct instance at every depth: an infinite family that a by-value monomorphizing backend cannot lay out. This is reported at the definition site. The same infinite family can also arise *mutually* or *indirectly* (e.g. `a<'a>` holding a `b<a<'a>>*` whose `b` holds an `a<...>*`); when it does, it is caught during monomorphization (see *Errors at monomorphization*). Note that nesting a *non-recursive* generic — `inner: box<box<'a>>` where `box` does not refer back — is perfectly fine: that family is finite.
+
 ### Construction
 
 Struct literals use named fields. Fields may appear in any order, and fields may be omitted — omitted fields are zero-initialized to their default value.
@@ -3328,6 +3330,8 @@ add("x", "y")       // compile error at this call site — str does not support 
 ```
 
 The error message identifies the call site and the substitution: something like "when calling `add` with `'a = str`, operator `+` is not defined for `str`." This makes it straightforward to diagnose in practice, even without a formal constraint declaration in the source.
+
+**Infinite instantiation.** Because instantiation is monomorphic, a generic that instantiates itself with an *ever-growing* type argument names an infinite family of concrete types and cannot be compiled. The two shapes are a generic **function** that recurses on a larger type — `let f = (x: 'a) -> if done then 0 else f(some(x))` forces `f<'a>` → `f<'a?>` → `f<'a??>` → … — and a **non-uniform recursive type**, whether direct (`node<node<'a>>`, rejected at its definition) or arising mutually/indirectly across several generic types. The compiler detects this rather than looping: it reports an *infinite generic instantiation* error once a single instantiation's type arguments nest past a fixed depth limit, or once a referenced instance is found to have no finite definition. Ordinary recursion is unaffected — a generic function that calls itself at the *same* type, or a uniformly recursive type (`list<'a>` whose field is `list<'a>*`), produces a finite instance set and compiles normally.
 
 ### Scope of operations on type variables
 

@@ -1,0 +1,16 @@
+// Guards against over-rejection: neither the non-uniform check nor the
+// monomorphization completeness backstop may flag legitimate finite nesting.
+struct box =
+    v: 'a
+
+// holder refers to box (a *different*, non-recursive generic) with a compound
+// type-var argument box<box<'a>>. Finite family -> must compile.
+struct holder =
+    inner: box<box<'a> >
+
+let main = (args: str[]) ->
+    let deep = box { v = box { v = box { v = box { v = 7 } } } }
+    let h = holder { inner = box { v = box { v = 41 } } }
+    assert(deep.v.v.v.v == 7)
+    assert(h.inner.v.v == 41)
+    0

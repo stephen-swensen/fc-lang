@@ -1,0 +1,14 @@
+// Mutual non-uniform recursion: a<'a> references b<a<'a>>, which references
+// a<...> with an ever-larger argument. Neither type's *direct* self-reference
+// is non-uniform, so this slips past the definition-site check and is caught by
+// the monomorphization completeness backstop.
+struct a =
+    x: 'a
+    link: b<a<'a> >*?
+struct b =
+    y: 'a
+    back: a<'a>*?
+
+let main = (args: str[]) ->
+    let mut v = a { x = 1, link = none(b<a<int32> >*) }
+    v.x

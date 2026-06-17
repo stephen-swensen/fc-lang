@@ -1,0 +1,11 @@
+// Uniform self-reference (cell<'a> applied to its own parameter) is an ordinary
+// recursive data structure — one finite instance per concrete 'a. Must compile.
+struct cell =
+    val: 'a
+    next: cell<'a>*?
+
+let main = (args: str[]) ->
+    let mut tail = cell { val = 2, next = none(cell<int32>*) }
+    let head = cell { val = 1, next = some(&tail) }
+    assert(head.val + head.next!->val == 3)
+    0
