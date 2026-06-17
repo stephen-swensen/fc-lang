@@ -1,0 +1,21 @@
+// Audit item 10: struct and union fields typed as a nested generic instance
+// closing with '>>'.
+struct box =
+    v: 'a
+
+struct holder =
+    b: box<box<int32>>
+
+union maybe_box =
+    | present(box<box<int32>>)
+    | absent
+
+let main = (args: str[]) ->
+    let h = holder { b = box { v = box { v = 42 } } }
+    assert(h.b.v.v == 42)
+
+    let m = maybe_box.present(box { v = box { v = 8 } })
+    match m with
+    | present(b) -> assert(b.v.v == 8)
+    | absent -> assert(false)
+    0

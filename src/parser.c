@@ -20,6 +20,8 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->allow_fixed_array = false;
     p->block_arm_arrow = false;
     p->expr_start_pos = 0;
+    p->half_gt = false;
+    p->half_gt_pos = -1;
 }
 
 /* ---- Token access ---- */
@@ -46,6 +48,63 @@ static Token *advance_p(Parser *p) {
     Token *t = current(p);
     if (!at_end_p(p)) p->pos++;
     return t;
+}
+
+/* Backtrack to a saved token position. Always abandons any pending '>>' split
+ * (the '>>' token is never mutated, so a re-parse from `save` sees it intact),
+ * which keeps a split that occurred after `save` from leaking across the
+ * restore — e.g. a tentative type parse in `(a<b>>c)` that splits the '>>' then
+ * backtracks must re-parse it as the shift `b >> c`. */
+static void restore_pos(Parser *p, int save) {
+    p->half_gt = false;
+    p->half_gt_pos = -1;
+    p->pos = save;
+}
+
+/* True if the current token closes a type-argument list: a '>' (TOK_GT), a
+ * '>>' (TOK_GTGT, two closers), or the parked second half of an already-split
+ * '>>'. */
+static bool at_typearg_gt(Parser *p) {
+    if (p->half_gt && p->pos == p->half_gt_pos) return true;
+    TokenKind k = current(p)->kind;
+    return k == TOK_GT || k == TOK_GTGT;
+}
+
+/* Consume one closing '>' of a type-argument list. A '>>' (TOK_GTGT) carries two
+ * closers: the first call splits it — recording the split and staying parked on
+ * the token — so a nested list can close; the enclosing list's call consumes the
+ * second half and advances. This mirrors the token-splitting that C++11, Java,
+ * and Rust perform for '>>' in type-argument context. Returns false (consuming
+ * nothing) when the current token closes no type-arg list. */
+static bool consume_typearg_gt(Parser *p) {
+    if (p->half_gt && p->pos == p->half_gt_pos) {
+        /* second '>' of a previously-split '>>' */
+        p->half_gt = false;
+        p->half_gt_pos = -1;
+        advance_p(p);
+        return true;
+    }
+    TokenKind k = current(p)->kind;
+    if (k == TOK_GT) {
+        advance_p(p);
+        return true;
+    }
+    if (k == TOK_GTGT) {
+        /* consume the first '>'; stay parked for the enclosing list's closer */
+        p->half_gt = true;
+        p->half_gt_pos = p->pos;
+        return true;
+    }
+    return false;
+}
+
+/* Consume a required type-argument closer, erroring otherwise. */
+static void expect_typearg_gt(Parser *p) {
+    if (!consume_typearg_gt(p)) {
+        SrcLoc loc = loc_from_token(current(p));
+        diag_fatal(loc, "expected '>' to close type arguments, got %s",
+            token_kind_name(current(p)->kind));
+    }
 }
 
 static Token *expect(Parser *p, TokenKind kind) {
@@ -175,20 +234,22 @@ static bool generic_call_scan(Parser *p, int start) {
     while (scan < p->token_count && depth > 0) {
         TokenKind k = p->tokens[scan].kind;
         if (k == TOK_LT) { depth++; scan++; continue; }
-        if (k == TOK_GT) {
-            depth--;
-            if (depth == 0) break;
+        if (k == TOK_GT) { depth--; scan++; continue; }
+        if (k == TOK_GTGT) {
+            /* '>>' closes two levels (split in type-argument context) */
+            depth -= 2;
+            if (depth < 0) return false; /* unbalanced — read as comparison/shift */
             scan++;
             continue;
         }
         if (!is_type_arg_token(k)) return false;
         scan++;
     }
+    /* depth reached 0; `scan` now sits just past the closing '>' / '>>', which
+     * must be followed by '(' (call) or '.' (variant). */
     return depth == 0 && scan < p->token_count &&
-           p->tokens[scan].kind == TOK_GT &&
-           scan + 1 < p->token_count &&
-           (p->tokens[scan + 1].kind == TOK_LPAREN ||
-            p->tokens[scan + 1].kind == TOK_DOT);
+           (p->tokens[scan].kind == TOK_LPAREN ||
+            p->tokens[scan].kind == TOK_DOT);
 }
 
 static bool is_type_name(const char *s, int len) {
@@ -368,15 +429,15 @@ static Type *parse_type(Parser *p) {
                 if (!check(p, TOK_COMMA)) break;
                 advance_p(p);
             } while (1);
-            if (valid && check(p, TOK_GT)) {
-                advance_p(p); /* consume > */
+            if (valid && at_typearg_gt(p)) {
+                consume_typearg_gt(p); /* consume > (splitting a >> for a nested list) */
                 udt->stub.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
                 memcpy(udt->stub.type_args, targs, sizeof(Type*) * (size_t)ta_count);
                 udt->stub.type_arg_count = ta_count;
                 free(targs);
             } else {
                 /* Not type args — backtrack */
-                p->pos = save;
+                restore_pos(p, save);
                 free(targs);
             }
         }
@@ -698,7 +759,7 @@ static Expr *parse_if_expr(Parser *p) {
         }
     } else {
         /* No else — restore position so NEWLINE is visible to Pratt loop */
-        p->pos = save_pos;
+        restore_pos(p, save_pos);
     }
 
     Expr *e = alloc_expr(p, EXPR_IF, loc);
@@ -1048,17 +1109,23 @@ static Expr *parse_prefix(Parser *p) {
         while (peek_at(p, arr_start)->kind == TOK_DOT &&
                peek_at(p, arr_start + 1)->kind == TOK_IDENT)
             arr_start += 2;
-        /* Scan past optional generic type args: <T, T, ...>.
+        /* Scan past optional generic type args: <T, T, ...> (depth-counted so
+           nested args like box<box<int32>> are skipped; '>>' closes two levels).
            Only matches when every token inside <...> is valid in a type position. */
         if (peek_at(p, arr_start)->kind == TOK_LT) {
             int scan = arr_start + 1;
+            int depth = 1;
             bool ok = true;
-            while (peek_at(p, scan)->kind != TOK_GT) {
+            while (depth > 0) {
                 TokenKind k = peek_at(p, scan)->kind;
-                if (k == TOK_EOF || !is_type_arg_token(k)) { ok = false; break; }
+                if (k == TOK_EOF) { ok = false; break; }
+                if (k == TOK_LT) depth++;
+                else if (k == TOK_GT) depth--;
+                else if (k == TOK_GTGT) { depth -= 2; if (depth < 0) { ok = false; break; } }
+                else if (!is_type_arg_token(k)) { ok = false; break; }
                 scan++;
             }
-            if (ok) arr_start = scan + 1; /* consume trailing > */
+            if (ok) arr_start = scan; /* scan sits just past the closing > / >> */
         }
         /* Scan past ? / * type suffixes on the element type: name?*[N]{...} */
         while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
@@ -1078,7 +1145,7 @@ static Expr *parse_prefix(Parser *p) {
             }
             bool is_array_lit = check(p, TOK_LBRACE);
             /* Restore position */
-            p->pos = save;
+            restore_pos(p, save);
 
             if (is_array_lit) {
                 /* Build the type name (possibly dotted) */
@@ -1115,7 +1182,7 @@ static Expr *parse_prefix(Parser *p) {
                         if (!check(p, TOK_COMMA)) break;
                         advance_p(p);
                     } while (1);
-                    expect(p, TOK_GT);
+                    expect_typearg_gt(p);
                     elem_type->stub.type_args = arena_alloc(p->arena,
                         sizeof(Type*) * (size_t)ta_count);
                     memcpy(elem_type->stub.type_args, targs,
@@ -1323,7 +1390,7 @@ static Expr *parse_prefix(Parser *p) {
                 return e;
             }
             /* Not a cast — backtrack */
-            p->pos = save;
+            restore_pos(p, save);
         }
         } /* end try_cast block */
         /* Parenthesized expression */
@@ -1702,7 +1769,7 @@ static Expr *parse_prefix(Parser *p) {
             }
             if (try_type) {
                 /* Generic type args didn't pan out — backtrack */
-                p->pos = save;
+                restore_pos(p, save);
             } else {
                 diag_fatal(loc, "expected ')', '[', or ',' after type in alloc");
             }
@@ -1897,7 +1964,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                     if (!check(p, TOK_COMMA)) break;
                     advance_p(p);
                 } while (1);
-                expect(p, TOK_GT);
+                expect_typearg_gt(p);
 
                 if (check(p, TOK_DOT)) {
                     /* name<Types>.variant — generic union variant construction */

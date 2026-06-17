@@ -1,0 +1,11 @@
+// Audit item 10: an array literal whose element type is a nested generic
+// instance ending in '>>'. The element-type scan is depth-counted so the '>>'
+// closer is recognized while locating the literal's '['.
+struct box =
+    v: 'a
+
+let main = (args: str[]) ->
+    let arr = box<box<int32>>[2] { box { v = box { v = 1 } }, box { v = box { v = 2 } } }
+    assert(arr[0].v.v == 1)
+    assert(arr[1].v.v == 2)
+    0

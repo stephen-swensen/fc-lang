@@ -1,0 +1,23 @@
+// Audit item 10 regression guard: splitting '>>' for type arguments must not
+// change how '>>' parses as the right-shift operator in expression position.
+// In particular `(a<b>>c)` makes the cast-detection path tentatively parse the
+// type `a<b>` (splitting the '>>') and then backtrack; the abandoned split must
+// not leak, so the expression re-parses as `a < (b >> c)`.
+let main = (args: str[]) ->
+    let a = 1
+    let b = 256
+    let c = 4
+
+    // bare: '<' is PREC_CMP, '>>' is PREC_SHIFT (binds tighter) => 1 < (256 >> 4) = 1 < 16
+    assert(a < b >> c)
+
+    // parenthesized: exercises the tentative-cast backtrack-after-split path
+    let r = (a<b>>c)
+    assert(r)
+
+    // plain right-shift still works on its own
+    assert((b >> c) == 16)
+
+    // and '>>' chains
+    assert((1024 >> 2 >> 3) == 32)
+    0

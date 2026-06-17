@@ -1,0 +1,21 @@
+// Audit item 10: generic union variant construction with a '>>' type-arg closer.
+struct box =
+    v: 'a
+
+union wrap =
+    | full('a)
+    | empty
+
+let main = (args: str[]) ->
+    // payload variant with a nested '>>' closer
+    let x = wrap<box<int32>>.full(box { v = 5 })
+    match x with
+    | full(b) -> assert(b.v == 5)
+    | empty -> assert(false)
+
+    // no-payload variant with a nested '>>' closer
+    let y = wrap<box<int32>>.empty
+    match y with
+    | full(b) -> assert(false)
+    | empty -> assert(true)
+    0
