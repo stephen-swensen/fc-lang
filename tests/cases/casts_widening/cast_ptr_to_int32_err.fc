@@ -1,0 +1,7 @@
+// A narrower signed fixed-width int is rejected just like the unsigned forms.
+let main = (args: str[]) ->
+    let mut x = 5i32
+    let p = &x
+    let bad = (int32) p
+    assert(bad != 0)
+    0

@@ -2124,6 +2124,10 @@ static void float_to_int_emit(const F2iInfo *info, Expr *operand, FILE *out) {
     fprintf(out, "))))");
 }
 
+static bool cast_is_ptr_kind(Type *t) {
+    return t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR);
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -2794,6 +2798,18 @@ static void emit_expr(Expr *e, FILE *out) {
             /* float -> int: saturating conversion (NaN->0, clamp to range, else
              * truncate toward zero). A raw C cast here is UB out of range. */
             float_to_int_emit(&f2i_info, e->cast.operand, out);
+        } else if (e->cast.operand->type &&
+                   ((cast_is_ptr_kind(e->cast.operand->type) && type_is_integer(e->cast.target)) ||
+                    (type_is_integer(e->cast.operand->type) && cast_is_ptr_kind(e->cast.target)))) {
+            /* pointer<->integer: route through uintptr_t so the cast is exact
+             * pointer-width on every target (no -Wpointer-to-int-cast /
+             * -Wint-to-pointer-cast). pass2 restricts the integer side to
+             * usize/isize; uintptr_t bridges to the C pointer width cleanly. */
+            fprintf(out, "((");
+            emit_type(e->cast.target, out);
+            fprintf(out, ")(uintptr_t)");
+            emit_expr(e->cast.operand, out);
+            fprintf(out, ")");
         } else {
             fprintf(out, "((");
             emit_type(e->cast.target, out);

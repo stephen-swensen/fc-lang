@@ -5,7 +5,7 @@ let main = (args: str[]) ->
     let a = some(&x)               // &x — provably non-null, guard elided
     let b = some(alloc(int32)!)    // alloc(...)! — non-null, guard elided
     let cs = some(c"hi")           // cstr literal — non-null, guard elided
-    let d = some((int32*) 4096)    // nonzero literal cast — non-null, guard elided
+    let d = some((int32*) 4096u)   // nonzero literal cast (via usize) — non-null, guard elided
     assert(a.is_some)
     assert(b.is_some)
     assert(cs.is_some)

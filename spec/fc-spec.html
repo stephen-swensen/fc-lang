@@ -936,11 +936,18 @@ let c = alloca((cstr) path)       // dynamic stack: dies at function return
 let s = (str) c"hello"   // shares backing; len computed via strlen → 5
 ```
 
-**Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe:
+**Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe, and restricted to the **pointer-width** integer types `usize`/`isize` (the `u`/`i` literal suffixes):
 
 ```fc
-let addr = (uint64) some_ptr          // pointer to integer — raw address value
-let reg = (uint32*) 0x40001000u64     // integer to pointer — memory-mapped register
+let addr = (usize) some_ptr           // pointer to integer — raw address value
+let reg = (uint32*) 0x40001000u       // integer to pointer — memory-mapped register
+```
+
+A pointer may only be cast to or from `usize`/`isize`, never a fixed-width int (`int32`, `uint64`, …): a fixed width does not match the target's pointer size, so the conversion would be lossy on some targets and is rejected with *"pointer↔integer cast must go through usize/isize."* This mirrors the rule that `usize`/`isize` have no implicit widening to or from fixed-width types (§Platform-width types) — pointer width is target-defined, so FC never reinterprets it at a guessed fixed width. To reach a fixed-width int, cast explicitly through `usize`/`isize`; the second cast names the (lossy) narrowing:
+
+```fc
+let low32 = (uint32) (usize) some_ptr   // address truncated to 32 bits — explicit
+let p = (int32*) (usize) raw_u64        // a uint64 address reaches a pointer via usize
 ```
 
 **Identity casts** — casting a scalar value to its own type (e.g. `(int32) x` where `x` is already `int32`, or `(bool) b`) is a permitted no-op for any numeric, `bool`, `char`, or pointer type. Aggregate types (structs, unions, slices) cannot be cast at all, so they have no identity-cast form.

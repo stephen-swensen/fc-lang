@@ -1,0 +1,5 @@
+// A fixed-width int cannot be cast to a pointer; route through usize.
+let main = (args: str[]) ->
+    let reg = (int32*) 0x40001000u64
+    assert(reg == reg)
+    0

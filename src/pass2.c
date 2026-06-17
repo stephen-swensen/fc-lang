@@ -3907,6 +3907,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR);
         bool from_int = type_is_integer(from);
         bool to_int = type_is_integer(to);
+        /* Pointer<->integer conversions are restricted to the pointer-width
+         * integer types (usize/isize). A fixed-width int (int32/uint64/...)
+         * does not match the target's pointer width, so the cast is both
+         * lossy on some targets and a -Wpointer-to-int-cast /
+         * -Wint-to-pointer-cast failure in C. This mirrors FC's refusal to
+         * implicitly widen to/from usize/isize (their width is target-defined). */
+        bool from_ptrwidth_int = (from->kind == TYPE_USIZE || from->kind == TYPE_ISIZE);
+        bool to_ptrwidth_int = (to->kind == TYPE_USIZE || to->kind == TYPE_ISIZE);
         bool bool_to_num = (from->kind == TYPE_BOOL && to_num);
         bool str_to_cstr = (is_str_type(from) && is_cstr_type(to));
         bool cstr_to_str = (is_cstr_type(from) && is_str_type(to));
@@ -3918,11 +3926,25 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * (struct/union/slice) cannot be cast in C, so they stay rejected. */
         bool same_type = type_eq(from, to) &&
             (from_num || from_ptr || from->kind == TYPE_BOOL || from->kind == TYPE_CHAR);
+        /* A pointer<->integer cast through a fixed-width int gets a targeted
+         * diagnostic pointing to the pointer-width types, rather than the
+         * generic "invalid cast" below. */
+        if ((from_ptr && to_int && !to_ptrwidth_int) ||
+            (from_int && !from_ptrwidth_int && to_ptr)) {
+            diag_error(e->loc,
+                "pointer<->integer cast must go through usize/isize (the "
+                "pointer-width integer types), not %s; chain through "
+                "(usize)/(isize) to convert width",
+                type_name(from_ptr ? to : from));
+            e->type = type_error();
+            return e->type;
+        }
         /* Allowed: identity, numeric <-> numeric, bool -> numeric (0/1),
-         * pointer <-> pointer, pointer <-> integer, str <-> cstr, slice const cast.
-         * NOT allowed: numeric -> bool (ambiguous: !=0 vs strict 0/1?). */
+         * pointer <-> pointer, pointer <-> usize/isize, str <-> cstr, slice
+         * const cast. NOT allowed: numeric -> bool (ambiguous: !=0 vs 0/1?). */
         if (!(same_type || (from_num && to_num) || bool_to_num || (from_ptr && to_ptr) ||
-              (from_ptr && to_int) || (from_int && to_ptr) || str_to_cstr || cstr_to_str || const_change_slice)) {
+              (from_ptr && to_ptrwidth_int) || (from_ptrwidth_int && to_ptr) ||
+              str_to_cstr || cstr_to_str || const_change_slice)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
             e->type = type_error();
             return e->type;
