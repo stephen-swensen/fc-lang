@@ -1,0 +1,26 @@
+// A struct whose name collides with a libc typedef (div_t, declared by
+// <stdlib.h> which the prelude includes) used across pointer, slice, and
+// option positions. The mangled fc__ type name keeps it distinct from the
+// libc typedef so the C compile is clean.
+struct div_t =
+    static: int32
+
+let via_ptr = (p: div_t*) -> p->static
+let via_slice = (s: div_t[]) -> s[0].static
+let via_opt = (o: div_t?) ->
+    match o with
+    | some(v) -> v.static
+    | none -> -1
+
+let main = (args: str[]) ->
+    let mut d = div_t { static = 42 }
+    assert(via_ptr(&d) == 42)
+
+    let mut arr = alloc(div_t[2] { })!
+    arr[0] = div_t { static = 99 }
+    assert(via_slice(arr) == 99)
+    free(arr.ptr)
+
+    assert(via_opt(some(div_t { static = 7 })) == 7)
+    assert(via_opt(none(div_t)) == -1)
+    0

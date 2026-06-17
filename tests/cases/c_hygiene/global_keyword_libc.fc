@@ -1,0 +1,21 @@
+// File-level globals whose names collide with libc symbols (log, index from
+// <math.h>/<string.h>) or C keywords (static) reach C file scope and would
+// otherwise clash with the real libc declarations. They are mangled into the
+// reserved fc__ namespace; their hoisted initialization and every reference
+// must use the mangled name.
+let mut log = 100
+let index = 5
+let static = true
+
+let bump = () ->
+    log = log + index       // mutate a file-level global from another function
+
+let main = (args: str[]) ->
+    assert(log == 100)
+    assert(index == 5)
+    assert(static)
+    bump()
+    assert(log == 105)
+    log = log + 1
+    assert(log == 106)
+    0

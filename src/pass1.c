@@ -404,15 +404,26 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
 }
 
 /* Register a struct type symbol and return the created type */
-static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
-    symtab_add(tab, d->struc.name, DECL_STRUCT, d);
+static Type *register_struct_sym(SymbolTable *tab, InternTable *intern, Decl *d) {
+    /* File-scope (no namespace/module) struct types are mangled into the
+     * compiler-reserved `fc__` namespace, exactly as module members get
+     * `m__name`. The bare tag/typedef would otherwise reach C file scope raw
+     * and collide with C keywords (`struct restrict`) or libc typedefs
+     * (`FILE`, `size_t`). The symtab is still keyed by the source name so name
+     * resolution is unchanged; the mangled name is also registered so that
+     * canonicalized type stubs (e.g. from monomorphization) resolve directly.
+     * qualified_name stays the source name for diagnostics. */
+    const char *src_name = d->struc.name;
+    const char *mangled = make_mangled(intern, "fc", src_name);
+    d->struc.name = mangled;
+    symtab_add(tab, src_name, DECL_STRUCT, d);
     /* Use the last added entry (not symtab_lookup which may find a module with same name) */
     Symbol *sym = &tab->symbols[tab->count - 1];
     Type *st = malloc(sizeof(Type));
     memset(st, 0, sizeof(Type));
     st->kind = TYPE_STRUCT;
-    st->struc.name = d->struc.name;
-    st->struc.qualified_name = d->struc.name;
+    st->struc.name = mangled;
+    st->struc.qualified_name = src_name;
     st->struc.c_name = d->struc.c_name;
     st->struc.is_c_union = d->struc.is_c_union;
     st->struc.fields = d->struc.fields;
@@ -420,26 +431,42 @@ static Type *register_struct_sym(SymbolTable *tab, Decl *d) {
     st->struc.type_args = NULL;
     st->struc.type_arg_count = 0;
     sym->type = st;
+    st->struc.resolved_sym = sym;
     detect_generic_struct(d, sym);
+    symtab_add(tab, mangled, DECL_STRUCT, d);
+    Symbol *sym2 = &tab->symbols[tab->count - 1];
+    sym2->type = st;
+    detect_generic_struct(d, sym2);
     return st;
 }
 
 /* Register a union type symbol and return the created type */
-static Type *register_union_sym(SymbolTable *tab, Decl *d) {
-    symtab_add(tab, d->unio.name, DECL_UNION, d);
+static Type *register_union_sym(SymbolTable *tab, InternTable *intern, Decl *d) {
+    /* See register_struct_sym: file-scope union types are mangled into the
+     * `fc__` namespace so their tag/typedef and `<name>_tag` enum cannot
+     * collide with C keywords or libc names at C file scope. */
+    const char *src_name = d->unio.name;
+    const char *mangled = make_mangled(intern, "fc", src_name);
+    d->unio.name = mangled;
+    symtab_add(tab, src_name, DECL_UNION, d);
     /* Use the last added entry (not symtab_lookup which may find a module with same name) */
     Symbol *sym = &tab->symbols[tab->count - 1];
     Type *ut = malloc(sizeof(Type));
     memset(ut, 0, sizeof(Type));
     ut->kind = TYPE_UNION;
-    ut->unio.name = d->unio.name;
-    ut->unio.qualified_name = d->unio.name;
+    ut->unio.name = mangled;
+    ut->unio.qualified_name = src_name;
     ut->unio.variants = d->unio.variants;
     ut->unio.variant_count = d->unio.variant_count;
     ut->unio.type_args = NULL;
     ut->unio.type_arg_count = 0;
     sym->type = ut;
+    ut->unio.resolved_sym = sym;
     detect_generic_union(d, sym);
+    symtab_add(tab, mangled, DECL_UNION, d);
+    Symbol *sym2 = &tab->symbols[tab->count - 1];
+    sym2->type = ut;
+    detect_generic_union(d, sym2);
     return ut;
 }
 
@@ -1002,9 +1029,14 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             } else {
                 symtab_add(symtab, d->let.name, DECL_LET, d);
             }
-            /* Mangle non-main top-level function names to avoid C namespace collisions */
+            /* Mangle non-main top-level names — both functions and file-level
+             * globals — into the reserved `fc__` namespace, so neither collides
+             * with a C keyword or libc symbol once emitted at C file scope
+             * (e.g. a global named `log`). File-level globals remain
+             * distinguished from module members by is_module_member (false
+             * here), not by the presence of codegen_name. */
             if (strcmp(d->let.name, "main") != 0 && !d->let.codegen_name &&
-                d->let.init && d->let.init->kind == EXPR_FUNC) {
+                d->let.init) {
                 d->let.codegen_name = make_mangled(intern, "fc", d->let.name);
             }
             /* Detect generic functions */
@@ -1075,7 +1107,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 if (existing) {
                     diag_error(d->loc, "redefinition of '%s'", d->struc.name);
                 } else {
-                    register_struct_sym(symtab, d);
+                    register_struct_sym(symtab, intern, d);
                 }
             }
             break;
@@ -1129,7 +1161,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 if (existing) {
                     diag_error(d->loc, "redefinition of '%s'", d->unio.name);
                 } else {
-                    register_union_sym(symtab, d);
+                    register_union_sym(symtab, intern, d);
                 }
             }
             break;

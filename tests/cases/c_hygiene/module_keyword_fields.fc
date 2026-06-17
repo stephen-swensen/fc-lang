@@ -1,0 +1,30 @@
+// Module-scoped struct/union types already mangle their type name (m__...),
+// but their fields and variant payloads flow through the same emitters as
+// file-scope types, so keyword member names must still be escaped. Also
+// covers a module-level let whose name is a C keyword/libc symbol.
+module m =
+    struct flags =
+        register: int32
+        static: bool
+    union tag =
+        | switch(int32)
+        | volatile
+
+    let log = 7   // module-level constant named like a libc symbol
+
+let main = (args: str[]) ->
+    let f = m.flags { register = 5, static = true }
+    assert(f.register == 5)
+    assert(f.static)
+    assert(f == m.flags { register = 5, static = true })
+
+    let t = m.tag.switch(9)
+    let r = match t with
+            | switch(n) -> n
+            | volatile -> 0
+    assert(r == 9)
+    assert(m.tag.switch(9) == m.tag.switch(9))
+    assert(m.tag.switch(9) != m.tag.volatile)
+
+    assert(m.log == 7)
+    0

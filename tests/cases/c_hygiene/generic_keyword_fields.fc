@@ -1,0 +1,34 @@
+// Generic struct and union with keyword-named fields / variant payloads,
+// instantiated at several concrete types. The monomorphized definitions and
+// their equality functions must escape the keyword member names too.
+struct box =
+    register: 'a
+    volatile: int32
+
+union opt =
+    | static('a)
+    | switch
+
+let get = (o: opt<int32>) ->
+    match o with
+    | static(v) -> v
+    | switch -> 0
+
+let main = (args: str[]) ->
+    let bi = box { register = 7, volatile = 1 }
+    let bf = box { register = 2.5, volatile = 2 }
+    assert(bi.register == 7)
+    assert(bf.register == 2.5)
+    assert(bi.volatile == 1)
+
+    // Equality over a monomorphized generic struct with keyword fields.
+    assert(bi == box { register = 7, volatile = 1 })
+    assert(bi != box { register = 8, volatile = 1 })
+
+    // Generic union instances with keyword-named payload.
+    assert(get(opt<int32>.static(99)) == 99)
+    assert(get(opt<int32>.switch) == 0)
+    let oi = opt<int32>.static(99)
+    assert(oi == opt<int32>.static(99))
+    assert(oi != opt<int32>.switch)
+    0

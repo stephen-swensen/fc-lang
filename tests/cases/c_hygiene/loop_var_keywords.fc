@@ -1,0 +1,26 @@
+// Loop variables — range vars, element vars, and index vars — named after C
+// keywords / libc symbols. The emitted C loop variable and every body
+// reference must use the escaped name consistently.
+let main = (args: str[]) ->
+    let mut sum = 0
+
+    // Range loop variable named like a C keyword.
+    for restrict in 0..5
+        sum = sum + restrict
+    assert(sum == 10)
+
+    // Element + index iteration with keyword/libc names.
+    let mut arr = alloc(int32[3] { 10, 20, 30 })!
+    let mut total = 0
+    for index, static in arr
+        total = total + static + (int32) index
+    free(arr.ptr)
+    assert(total == 63)
+
+    // Keyword-named range var used inside a nested expression / capture.
+    let mut acc = 0
+    for switch in 1..4
+        let f = (n: int32) -> n * switch
+        acc = acc + f(2)
+    assert(acc == 12)
+    0

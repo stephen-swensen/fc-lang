@@ -1,0 +1,29 @@
+// A union whose type name collides with a libc typedef (time_t), with
+// variant payload field names that are C keywords (the payload becomes a
+// C union member, which must be escaped in construction, matching, and the
+// generated equality function). Variant tags themselves stay composed.
+union time_t =
+    | switch(int32)
+    | volatile(float64)
+    | static
+    | register(int32)
+
+let classify = (t: time_t) ->
+    match t with
+    | switch(n) -> n
+    | volatile(f) -> (int32) f
+    | static -> -1
+    | register(n) -> n * 2
+
+let main = (args: str[]) ->
+    assert(classify(time_t.switch(7)) == 7)
+    assert(classify(time_t.volatile(3.9)) == 3)
+    assert(classify(time_t.static) == -1)
+    assert(classify(time_t.register(5)) == 10)
+
+    // Equality over keyword-named payload fields.
+    assert(time_t.switch(7) == time_t.switch(7))
+    assert(time_t.switch(7) != time_t.switch(8))
+    assert(time_t.switch(7) != time_t.static)
+    assert(time_t.static == time_t.static)
+    0

@@ -1,0 +1,43 @@
+// Struct fields named after C reserved words (register/volatile/static/...)
+// must be escaped in the struct definition, construction, field access,
+// partial/default construction, and the generated equality function.
+struct flags =
+    register: int32
+    volatile: int32
+    static: bool
+    signed: int32
+    double: float64
+
+let main = (args: str[]) ->
+    let a = flags { register = 3, volatile = 4, static = true, signed = -2, double = 1.5 }
+    assert(a.register == 3)
+    assert(a.volatile == 4)
+    assert(a.static)
+    assert(a.signed == -2)
+    assert(a.double == 1.5)
+
+    // Structural equality compares every (escaped) field.
+    let b = flags { register = 3, volatile = 4, static = true, signed = -2, double = 1.5 }
+    assert(a == b)
+    let d = flags { register = 3, volatile = 99, static = true, signed = -2, double = 1.5 }
+    assert(a != d)
+
+    // Partial construction: unspecified keyword fields zero-default.
+    let c = flags { register = 9 }
+    assert(c.register == 9)
+    assert(c.volatile == 0)
+    assert(!c.static)
+    assert(c.signed == 0)
+    assert(c.double == 0.0)
+
+    // Field mutation through a mutable binding.
+    let mut m = a
+    m.register = 100
+    assert(m.register == 100)
+
+    // Destructuring binds keyword-named fields (the access path uses the
+    // escaped member name).
+    let { register = r, volatile = v } = a
+    assert(r == 3)
+    assert(v == 4)
+    0

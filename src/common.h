@@ -55,6 +55,24 @@ void intern_init(InternTable *t, Arena *a);
 const char *intern(InternTable *t, const char *s, int len);
 const char *intern_cstr(InternTable *t, const char *s);
 
+/* ---- C identifier hygiene ---- */
+
+/* True if `name` is a C reserved word (C11/C23 keyword or implementation-
+ * reserved spelling) that cannot appear as any C identifier — including a
+ * struct/union member, a parameter, or a block-scope variable. FC permits
+ * these spellings as user identifiers (e.g. `register`, `restrict`), so the
+ * codegen must escape them before they reach C scope. */
+bool is_c_reserved(const char *name);
+
+/* Map a user identifier to a C-safe spelling. If `name` is a C reserved word,
+ * returns the interned "fc__"+name; otherwise returns `name` unchanged. The
+ * escaped form lives in the compiler-reserved `__` (double-underscore)
+ * namespace — the lexer forbids `__` in FC identifiers — so it can never
+ * collide with a user identifier, and (being keyword-free) is a valid C
+ * identifier. Deterministic and idempotent: declaration and use sites that
+ * both call this agree without any shared state. */
+const char *c_safe_ident(InternTable *t, const char *name);
+
 /* ---- Dynamic array ---- */
 
 #define DA_APPEND(arr, len, cap, val) do {          \

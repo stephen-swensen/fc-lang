@@ -1,0 +1,37 @@
+// Keyword-named fields exercised through pointer access (-> / EXPR_DEREF_FIELD)
+// and through a keyword-named fixed-array field (slice-view read, element
+// index assignment, and whole-array slice assignment with its memcpy path).
+struct node =
+    volatile: int32
+    register: int32[4]
+
+let bump = (p: node*) ->
+    p->volatile = p->volatile + 1   // pointer field write to a keyword field
+
+let main = (args: str[]) ->
+    let mut n = node { volatile = 41, register = int32[4] { 1, 2, 3, 4 } }
+
+    // Pointer read/write of a keyword-named scalar field.
+    let ptr = &n
+    assert(ptr->volatile == 41)
+    bump(ptr)
+    assert(n.volatile == 42)
+
+    // Element index assignment into a keyword-named fixed-array field.
+    n.register[0] = 100
+    assert(n.register[0] == 100)
+    assert(n.register[3] == 4)
+
+    // Whole fixed-array assignment from a slice (exercises the field memcpy /
+    // zero-fill path keyed on the escaped member name).
+    let src = int32[2] { 7, 8 }
+    n.register = src
+    assert(n.register[0] == 7)
+    assert(n.register[1] == 8)
+    assert(n.register[2] == 0)
+
+    // Slice-view of a keyword-named fixed-array field.
+    let view = n.register
+    assert(view.len == 4)
+    assert(view[0] == 7)
+    0

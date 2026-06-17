@@ -122,3 +122,43 @@ const char *intern(InternTable *t, const char *s, int len) {
 const char *intern_cstr(InternTable *t, const char *s) {
     return intern(t, s, (int)strlen(s));
 }
+
+/* ---- C identifier hygiene ---- */
+
+/* C reserved spellings that FC permits as identifiers and that therefore must
+ * be escaped before reaching C scope. Covers C11 keywords, the `_Capital`
+ * keyword family, and the C23 keywords plus the <stdbool.h>/<assert.h> macros
+ * the prelude pulls in (bool/true/false/static_assert) — those can't currently
+ * be FC identifiers, but listing them keeps the escape correct if that ever
+ * changes. Spellings containing `__` are omitted: the lexer forbids `__` in FC
+ * identifiers, so the user can never produce one. */
+static const char *const C_RESERVED[] = {
+    "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
+    "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
+    "alignas", "alignof", "asm", "auto", "bool", "break", "case", "char",
+    "const", "constexpr", "continue", "default", "do", "double", "else",
+    "enum", "extern", "false", "float", "for", "goto", "if", "inline", "int",
+    "long", "nullptr", "register", "restrict", "return", "short", "signed",
+    "sizeof", "static", "static_assert", "struct", "switch", "thread_local",
+    "true", "typedef", "typeof", "typeof_unqual", "union", "unsigned", "void",
+    "volatile", "while",
+};
+
+bool is_c_reserved(const char *name) {
+    if (!name) return false;
+    for (size_t i = 0; i < sizeof(C_RESERVED) / sizeof(C_RESERVED[0]); i++) {
+        if (strcmp(name, C_RESERVED[i]) == 0) return true;
+    }
+    return false;
+}
+
+const char *c_safe_ident(InternTable *t, const char *name) {
+    if (!is_c_reserved(name)) return name;
+    size_t n = strlen(name);
+    char *buf = malloc(n + 5);  /* "fc__" + name + NUL */
+    memcpy(buf, "fc__", 4);
+    memcpy(buf + 4, name, n + 1);
+    const char *result = intern_cstr(t, buf);
+    free(buf);
+    return result;
+}

@@ -1155,7 +1155,8 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         fprintf(out, "%s.tag == %s_tag_%s", expr, uname, pat->variant.variant);
         if (pat->variant.payload) {
             char payload_expr[256];
-            snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr, pat->variant.variant);
+            snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr,
+                c_safe_ident(g_intern, pat->variant.variant));
             Type *payload_type = NULL;
             for (int v = 0; v < type->unio.variant_count; v++) {
                 if (type->unio.variants[v].name == pat->variant.variant) {
@@ -1171,7 +1172,8 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     case PAT_STRUCT:
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
             char path[256];
-            snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
+            snprintf(path, sizeof(path), "%s.%s", expr,
+                c_safe_ident(g_intern, pat->struc.fields[fi].name));
             emit_pat_predicate(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, first, out);
         }
         break;
@@ -1287,7 +1289,8 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
             }
             if (payload_type) {
                 char payload_expr[256];
-                snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr, pat->variant.variant);
+                snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr,
+                    c_safe_ident(g_intern, pat->variant.variant));
                 emit_pat_bindings(pat->variant.payload, payload_expr, payload_type, out);
             }
         }
@@ -1296,7 +1299,8 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     case PAT_STRUCT:
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
             char path[256];
-            snprintf(path, sizeof(path), "%s.%s", expr, pat->struc.fields[fi].name);
+            snprintf(path, sizeof(path), "%s.%s", expr,
+                c_safe_ident(g_intern, pat->struc.fields[fi].name));
             emit_pat_bindings(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, out);
         }
         break;
@@ -2544,7 +2548,8 @@ static void emit_expr(Expr *e, FILE *out) {
             }
             const char *variant_name = e->call.func->field.name;
             fprintf(out, "(%s){ .tag = %s_tag_%s, .%s = ",
-                union_name, union_name, variant_name, variant_name);
+                union_name, union_name, variant_name,
+                c_safe_ident(g_intern, variant_name));
             emit_expr(e->call.args[0], out);
             fprintf(out, " }");
             break;
@@ -2865,7 +2870,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, "*)");
             emit_expr(e->field.object, out);
-            fprintf(out, ".%s, .len = %lld }", e->field.name,
+            fprintf(out, ".%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
                     (long long)fat->fixed_array.size);
             break;
         }
@@ -2897,7 +2902,7 @@ static void emit_expr(Expr *e, FILE *out) {
             }
         }
         emit_expr(e->field.object, out);
-        fprintf(out, ".%s", e->field.name);
+        fprintf(out, ".%s", c_safe_ident(g_intern, e->field.name));
         break;
     }
 
@@ -2915,12 +2920,12 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, "*)");
             emit_expr(e->field.object, out);
-            fprintf(out, "->%s, .len = %lld }", e->field.name,
+            fprintf(out, "->%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
                     (long long)fat->fixed_array.size);
             break;
         }
         emit_expr(e->field.object, out);
-        fprintf(out, "->%s", e->field.name);
+        fprintf(out, "->%s", c_safe_ident(g_intern, e->field.name));
         break;
     }
 
@@ -3243,7 +3248,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
                 if (!first) fprintf(out, ", ");
                 first = false;
-                fprintf(out, ".%s = ", fname);
+                fprintf(out, ".%s = ", c_safe_ident(g_intern, fname));
                 Expr *v = e->struct_lit.fields[i].value;
                 if (field_type && field_type->kind == TYPE_FIXED_ARRAY &&
                     v && v->kind == EXPR_ARRAY_LIT) {
@@ -3302,11 +3307,11 @@ static void emit_expr(Expr *e, FILE *out) {
                             vloc.line, fname, (long long)field_type->fixed_array.size,
                             sid);
                     fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
-                            tid, fname, sid, sid);
+                            tid, c_safe_ident(g_intern, fname), sid, sid);
                     emit_type(field_type->fixed_array.elem, out);
                     fprintf(out, ")); ");
                 } else {
-                    fprintf(out, "_sl%d.%s = ", tid, fname);
+                    fprintf(out, "_sl%d.%s = ", tid, c_safe_ident(g_intern, fname));
                     emit_expr(e->struct_lit.fields[i].value, out);
                     fprintf(out, "; ");
                 }
@@ -3336,7 +3341,7 @@ static void emit_expr(Expr *e, FILE *out) {
                     else fprintf(out, " ");
                 }
                 if (multiline) emit_indent(out);
-                fprintf(out, ".%s = ", e->struct_lit.fields[i].name);
+                fprintf(out, ".%s = ", c_safe_ident(g_intern, e->struct_lit.fields[i].name));
                 emit_expr(e->struct_lit.fields[i].value, out);
             }
             if (multiline) {
@@ -3453,9 +3458,10 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_indent(out);
             fprintf(out, "for (");
             emit_type(var_type, out);
-            fprintf(out, " %s = ", e->for_expr.var);
+            const char *rvar = c_safe_ident(g_intern, e->for_expr.var);
+            fprintf(out, " %s = ", rvar);
             emit_expr(e->for_expr.iter, out);
-            fprintf(out, "; %s < _fe%d; %s++) {\n", e->for_expr.var, tid, e->for_expr.var);
+            fprintf(out, "; %s < _fe%d; %s++) {\n", rvar, tid, rvar);
         } else {
             /* Collection iteration. Hoist the iterable into a once-evaluated
              * temp: it was previously re-emitted in both the `.len` bound and
@@ -3477,7 +3483,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_indent(out);
             Type *elem_type = iter_type->slice.elem;
             const char *elem_name = e->for_expr.var_pattern
-                ? e->for_expr.elem_tmp : e->for_expr.var;
+                ? e->for_expr.elem_tmp : c_safe_ident(g_intern, e->for_expr.var);
             emit_type(elem_type, out);
             fprintf(out, " %s = _fs%d.ptr[_fi%d];\n", elem_name, tid, tid);
             if (e->for_expr.var_pattern) {
@@ -3489,7 +3495,8 @@ static void emit_expr(Expr *e, FILE *out) {
             /* Index binding if present */
             if (e->for_expr.index_var) {
                 emit_indent(out);
-                fprintf(out, "int64_t %s = _fi%d;\n", e->for_expr.index_var, tid);
+                fprintf(out, "int64_t %s = _fi%d;\n",
+                    c_safe_ident(g_intern, e->for_expr.index_var), tid);
             }
 
             /* Body (already indented by indent_level++) */
@@ -4162,13 +4169,14 @@ static void emit_expr(Expr *e, FILE *out) {
                     (long long)fat->fixed_array.size, tid);
             /* memcpy the data */
             fprintf(out, "memcpy(_ao%d->%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
-                    tid, target->field.name, tid, tid);
+                    tid, c_safe_ident(g_intern, target->field.name), tid, tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); ");
             /* Zero-fill remainder */
             fprintf(out, "if (_fas%d.len < %lld) memset(_ao%d->%s + _fas%d.len, 0, "
                          "fc_to_size(%lld - _fas%d.len) * sizeof(",
-                    tid, (long long)fat->fixed_array.size, tid, target->field.name,
+                    tid, (long long)fat->fixed_array.size, tid,
+                    c_safe_ident(g_intern, target->field.name),
                     tid, (long long)fat->fixed_array.size, tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); })");
@@ -4281,7 +4289,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
          * int main(int, char**) wrapper (emitted below) calls it. */
         fprintf(out, "%sint32_t fc_main(", g_fn_attr);
         emit_type(fn->func.params[0].type, out);
-        fprintf(out, " %s) {\n", fn->func.params[0].name);
+        fprintf(out, " %s) {\n", c_safe_ident(g_intern, fn->func.params[0].name));
     } else {
         /* Emit return type.  Static: FC emits a single translation unit, so
          * nothing outside this TU calls these functions; static allows GCC
@@ -4292,7 +4300,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
         for (int i = 0; i < fn->func.param_count; i++) {
             if (i > 0) fprintf(out, ", ");
             emit_type(fn->func.params[i].type, out);
-            fprintf(out, " %s", fn->func.params[i].name);
+            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[i].name));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx) {\n");
@@ -4331,7 +4339,8 @@ static void emit_func_decl(Decl *d, FILE *out) {
         /* Hoisted file-level global initializations */
         for (int gi = 0; gi < g_file_global_count; gi++) {
             Decl *gd = g_file_globals[gi];
-            fprintf(out, "    %s = ", gd->let.name);
+            fprintf(out, "    %s = ",
+                gd->let.codegen_name ? gd->let.codegen_name : gd->let.name);
             emit_expr(gd->let.init, out);
             fprintf(out, ";\n");
         }
@@ -4366,7 +4375,8 @@ static void emit_struct_field(Type *ft, const char *name, FILE *out) {
 static void emit_struct_def(Decl *d, FILE *out) {
     fprintf(out, "struct %s {", d->struc.name);
     for (int i = 0; i < d->struc.field_count; i++) {
-        emit_struct_field(d->struc.fields[i].type, d->struc.fields[i].name, out);
+        emit_struct_field(d->struc.fields[i].type,
+            c_safe_ident(g_intern, d->struc.fields[i].name), out);
     }
     fprintf(out, " };\n");
 }
@@ -4398,7 +4408,7 @@ static void emit_union_def(Decl *d, FILE *out) {
             if (d->unio.variants[i].payload) {
                 fprintf(out, " ");
                 emit_type(d->unio.variants[i].payload, out);
-                fprintf(out, " %s;", d->unio.variants[i].name);
+                fprintf(out, " %s;", c_safe_ident(g_intern, d->unio.variants[i].name));
             }
         }
         fprintf(out, " }; };\n");
@@ -5219,7 +5229,7 @@ static void emit_eq_func(Type *t, FILE *out) {
                 for (int i = 0; i < fc; i++) {
                     if (i > 0) fprintf(out, " && ");
                     Type *ft = t->struc.fields[i].type;
-                    const char *fname = t->struc.fields[i].name;
+                    const char *fname = c_safe_ident(g_intern, t->struc.fields[i].name);
                     if (ft->kind == TYPE_FIXED_ARRAY) {
                         Type *elem = ft->fixed_array.elem;
                         if (!type_needs_eq_func(elem) && !type_is_float(elem)) {
@@ -5267,8 +5277,9 @@ static void emit_eq_func(Type *t, FILE *out) {
                 fprintf(out, "    case %s_tag_%s: ", uname, t->unio.variants[i].name);
                 if (t->unio.variants[i].payload) {
                     char a_buf[256], b_buf[256];
-                    snprintf(a_buf, sizeof(a_buf), "a.%s", t->unio.variants[i].name);
-                    snprintf(b_buf, sizeof(b_buf), "b.%s", t->unio.variants[i].name);
+                    const char *vfield = c_safe_ident(g_intern, t->unio.variants[i].name);
+                    snprintf(a_buf, sizeof(a_buf), "a.%s", vfield);
+                    snprintf(b_buf, sizeof(b_buf), "b.%s", vfield);
                     fprintf(out, "return ");
                     emit_value_eq(t->unio.variants[i].payload, a_buf, b_buf, out);
                     fprintf(out, ";\n");
@@ -6212,7 +6223,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             if (inst->decl_kind == DECL_STRUCT) {
                 fprintf(out, "struct %s {", inst->mangled_name);
                 for (int f = 0; f < ct->struc.field_count; f++)
-                    emit_struct_field(ct->struc.fields[f].type, ct->struc.fields[f].name, out);
+                    emit_struct_field(ct->struc.fields[f].type,
+                        c_safe_ident(g_intern, ct->struc.fields[f].name), out);
                 fprintf(out, " };\n");
             } else if (inst->decl_kind == DECL_UNION) {
                 bool has_payload = false;
@@ -6224,7 +6236,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
                         if (ct->unio.variants[v].payload) {
                             fprintf(out, " ");
                             emit_type(ct->unio.variants[v].payload, out);
-                            fprintf(out, " %s;", ct->unio.variants[v].name);
+                            fprintf(out, " %s;", c_safe_ident(g_intern, ct->unio.variants[v].name));
                         }
                     }
                     fprintf(out, " }; };\n");
@@ -6286,7 +6298,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     if (has_main) {
         for (int i = 0; i < all_count; i++) {
             Decl *d = all_decls[i];
-            if (d->kind == DECL_LET && !is_func_decl(d) && !d->let.codegen_name)
+            if (d->kind == DECL_LET && !is_func_decl(d) && !d->let.is_module_member)
                 g_file_global_count++;
         }
         if (g_file_global_count > 0) {
@@ -6294,7 +6306,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             int idx = 0;
             for (int i = 0; i < all_count; i++) {
                 Decl *d = all_decls[i];
-                if (d->kind == DECL_LET && !is_func_decl(d) && !d->let.codegen_name)
+                if (d->kind == DECL_LET && !is_func_decl(d) && !d->let.is_module_member)
                     g_file_globals[idx++] = d;
             }
         }
@@ -6308,7 +6320,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             Expr *fn = d->let.init;
             fprintf(out, "%sint32_t fc_main(", g_fn_attr);
             emit_type(fn->func.params[0].type, out);
-            fprintf(out, " %s);\n", fn->func.params[0].name);
+            fprintf(out, " %s);\n", c_safe_ident(g_intern, fn->func.params[0].name));
             symmap_add("fc_main", "main", d->loc.filename, d->loc.line);
             continue;
         }
@@ -6322,7 +6334,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             for (int j = 0; j < fn->func.param_count; j++) {
                 if (j > 0) fprintf(out, ", ");
                 emit_type(fn->func.params[j].type, out);
-                fprintf(out, " %s", fn->func.params[j].name);
+                fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
             }
             if (fn->func.param_count > 0) fprintf(out, ", ");
             fprintf(out, "void* _ctx);\n");
@@ -6345,7 +6357,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < fn->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(fn->func.params[j].type, out);
-            fprintf(out, " %s", fn->func.params[j].name);
+            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
@@ -6406,7 +6418,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
      * alloca-based emission. */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
-        if (d->kind == DECL_LET && !is_func_decl(d) && d->let.codegen_name &&
+        if (d->kind == DECL_LET && !is_func_decl(d) && d->let.is_module_member &&
             d->let.init && d->let.init->kind != EXPR_FUNC) {
             collect_const_backings(d->let.init);
         }
@@ -6434,16 +6446,17 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
     /* Emit non-function global variable definitions.
      * Must come before lifted lambdas so they can reference globals.
-     * Module members (with codegen_name) are emitted with const-expr initializers
-     * at C file scope.  File-level globals (no codegen_name) are declared without
-     * initializers here; their initialization is hoisted into the C main wrapper. */
+     * Module members are emitted with const-expr initializers at C file scope.
+     * File-level globals are declared without initializers here; their
+     * initialization is hoisted into the C main wrapper.  Both carry a mangled
+     * codegen_name (fc__name); the two are told apart by is_module_member. */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d) &&
-            (d->let.codegen_name || has_main)) {
+            (d->let.is_module_member || has_main)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             emit_type(d->let.resolved_type, out);
-            if (d->let.codegen_name) {
+            if (d->let.is_module_member) {
                 /* Module member: emit with initializer (must be const expr).
                  * Flip const context so array/struct-with-fixed-array/etc.
                  * take the aggregate-initializer path. */
@@ -6484,7 +6497,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < lam->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(lam->func.params[j].type, out);
-            fprintf(out, " %s", lam->func.params[j].name);
+            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
         }
         if (lam->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
@@ -6516,7 +6529,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < lam->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(lam->func.params[j].type, out);
-            fprintf(out, " %s", lam->func.params[j].name);
+            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
         }
         if (lam->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx) {\n");
@@ -6583,7 +6596,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < fn->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(fn->func.params[j].type, out);
-            fprintf(out, " %s", fn->func.params[j].name);
+            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
@@ -6606,7 +6619,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < fn->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(fn->func.params[j].type, out);
-            fprintf(out, " %s", fn->func.params[j].name);
+            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx) {\n");

@@ -1659,7 +1659,8 @@ static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
         else
             check_destruct_pattern(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
     } else {
-        scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, elem_type, false);
+        scope_add(ctx->scope, e->for_expr.var,
+            c_safe_ident(ctx->intern, e->for_expr.var), elem_type, false);
     }
 }
 
@@ -3074,7 +3075,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 ptypes[i] = type_error();
             }
             e->func.params[i].type = ptypes[i];
-            scope_add(inner, e->func.params[i].name, e->func.params[i].name, ptypes[i], false);
+            /* Codegen name escapes C reserved words (e.g. a parameter named
+             * `register`); the FC lookup name stays raw so source references
+             * still resolve. Decl emission applies the same escape. */
+            scope_add(inner, e->func.params[i].name,
+                c_safe_ident(ctx->intern, e->func.params[i].name), ptypes[i], false);
         }
 
         /* Consume the pending-self channel set by an enclosing EXPR_LET so this
@@ -4919,14 +4924,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     if (!type_eq(end_type, var_type))
                         e->for_expr.range_end = wrap_widen(ctx->arena, e->for_expr.range_end, var_type);
                 }
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, var_type, false);
+                scope_add(ctx->scope, e->for_expr.var,
+                    c_safe_ident(ctx->intern, e->for_expr.var), var_type, false);
             }
         } else {
             /* Collection iteration: for x in slice */
             if (iter_type->kind == TYPE_SLICE) {
                 bind_for_element(ctx, e, iter_type->slice.elem);
                 if (e->for_expr.index_var) {
-                    scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
+                    scope_add(ctx->scope, e->for_expr.index_var,
+                        c_safe_ident(ctx->intern, e->for_expr.index_var), type_int64(), false);
                 }
             } else {
                 diag_error(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
