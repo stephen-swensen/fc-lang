@@ -1,0 +1,8 @@
+// `a<b>(c)` on a numeric value parses as a generic call (the <...> reads as
+// type arguments) and fails; the error points at the likely comparison reading.
+let main = (args: str[]) ->
+    let a = 3
+    let b = 4
+    let c = 5
+    let r = a<b>(c)
+    r

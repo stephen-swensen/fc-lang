@@ -2118,6 +2118,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
         pat->int_lit.value = -parse_int_value(t->start, t->length, &pat_oor);
         pat->int_lit.lit_type = lt;
         pat->int_lit.out_of_range = pat_oor;
+        pat->int_lit.negative = true;
         return pat;
     }
 

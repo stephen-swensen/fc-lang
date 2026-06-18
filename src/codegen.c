@@ -1032,11 +1032,11 @@ static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
         /* Function at C extern boundary — emit C-compatible trampoline name */
         if (e->kind == EXPR_IDENT && !e->ident.is_local) {
             const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
-            fprintf(out, "_ctramp_%s", name);
+            fprintf(out, "fc_ctramp_%s", name);
             return;
         }
         if (e->kind == EXPR_FUNC && e->func.capture_count == 0 && e->func.lifted_name) {
-            fprintf(out, "_ctramp_%s", e->func.lifted_name);
+            fprintf(out, "fc_ctramp_%s", e->func.lifted_name);
             return;
         }
         /* Capturing lambda at C boundary — fall through, will produce type error */
@@ -2471,18 +2471,18 @@ static void emit_expr(Expr *e, FILE *out) {
                 operand->type && operand->type->kind == TYPE_FUNC) {
                 const char *name = operand->ident.codegen_name
                     ? operand->ident.codegen_name : operand->ident.name;
-                fprintf(out, "_ctramp_%s", name);
+                fprintf(out, "fc_ctramp_%s", name);
                 break;
             }
             if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
                 operand->type && operand->type->kind == TYPE_FUNC) {
-                fprintf(out, "_ctramp_%s", operand->field.codegen_name);
+                fprintf(out, "fc_ctramp_%s", operand->field.codegen_name);
                 break;
             }
             if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
                 operand->func.lifted_name && operand->type &&
                 operand->type->kind == TYPE_FUNC) {
-                fprintf(out, "_ctramp_%s", operand->func.lifted_name);
+                fprintf(out, "fc_ctramp_%s", operand->func.lifted_name);
                 break;
             }
         }
@@ -3495,24 +3495,30 @@ static void emit_expr(Expr *e, FILE *out) {
                 tid, tid, tid, tid);
             indent_level++;
 
-            /* Element binding — into a temp first when destructuring */
+            /* Element binding — into a temp first when destructuring. The
+             * (void) cast suppresses -Wunused-variable when the binding is
+             * referenced only inside a %T{} interpolation, which reads the
+             * binding's type rather than its value and so emits no runtime
+             * use of the C variable. */
             emit_indent(out);
             Type *elem_type = iter_type->slice.elem;
             const char *elem_name = e->for_expr.var_pattern
                 ? e->for_expr.elem_tmp : c_safe_ident(g_intern, e->for_expr.var);
             emit_type(elem_type, out);
             fprintf(out, " %s = _fs%d.ptr[_fi%d];\n", elem_name, tid, tid);
+            emit_indent(out);
+            fprintf(out, "(void)%s;\n", elem_name);
             if (e->for_expr.var_pattern) {
                 emit_pat_bindings(e->for_expr.var_pattern, elem_name, elem_type, out);
-                emit_indent(out);
-                fprintf(out, "(void)%s;\n", elem_name);
             }
 
-            /* Index binding if present */
+            /* Index binding if present (same %T{}-only-use guard) */
             if (e->for_expr.index_var) {
+                const char *iname = c_safe_ident(g_intern, e->for_expr.index_var);
                 emit_indent(out);
-                fprintf(out, "int64_t %s = _fi%d;\n",
-                    c_safe_ident(g_intern, e->for_expr.index_var), tid);
+                fprintf(out, "int64_t %s = _fi%d;\n", iname, tid);
+                emit_indent(out);
+                fprintf(out, "(void)%s;\n", iname);
             }
 
             /* Body (already indented by indent_level++) */
@@ -6524,7 +6530,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Type *ft = te->type;
         fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
-        fprintf(out, " _ctramp_%s(", te->name);
+        fprintf(out, " fc_ctramp_%s(", te->name);
         for (int j = 0; j < ft->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(ft->func.param_types[j], out);
@@ -6657,7 +6663,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Type *ft = te->type;
         fprintf(out, "%s", g_fn_attr);
         emit_type(ft->func.return_type, out);
-        fprintf(out, " _ctramp_%s(", te->name);
+        fprintf(out, " fc_ctramp_%s(", te->name);
         for (int j = 0; j < ft->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(ft->func.param_types[j], out);

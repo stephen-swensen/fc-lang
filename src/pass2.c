@@ -1051,9 +1051,18 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
  * Unsigned negation is caught separately in negation folding.
  * If the parser flagged the literal as out-of-range (strtoull saturated
  * to ULLONG_MAX), report that first since the stored value is meaningless. */
-static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc, bool out_of_range) {
+static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
+                                    bool out_of_range, bool negative) {
     if (out_of_range) {
         diag_error(loc, "integer literal exceeds 64-bit unsigned range (max 18446744073709551615)");
+        return;
+    }
+    /* A literal written with a leading minus can never fit an unsigned type.
+     * `value` holds its two's-complement bit pattern, so report the original
+     * negative value rather than the (huge, misleading) bit pattern. */
+    if (negative && type_is_unsigned(type)) {
+        diag_error(loc, "integer literal -%" PRIu64 " out of range for %s",
+                   (uint64_t)(-(int64_t)value), type_name(type));
         return;
     }
     switch (type->kind) {
@@ -2411,7 +2420,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
-        check_int_literal_range(e->int_lit.value, e->type, e->loc, e->int_lit.out_of_range);
+        /* Expression literals are never negative here — negation is a separate
+         * EXPR_UNARY_PREFIX folded earlier — so pass negative=false. */
+        check_int_literal_range(e->int_lit.value, e->type, e->loc, e->int_lit.out_of_range, false);
         return e->type;
 
     case EXPR_FLOAT_LIT:
@@ -3478,7 +3489,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
 
         if (ft->kind != TYPE_FUNC) {
-            diag_error(e->loc, "cannot call non-function type %s", type_name(ft));
+            /* `a<b>(c)` parses as a generic call on `a`; when `a` is a plain
+             * numeric value the user most likely meant a comparison, so point
+             * at that reading alongside the call error. */
+            if (e->call.type_arg_count > 0 && type_is_numeric(ft))
+                diag_error(e->loc, "cannot call non-function type %s "
+                    "(if you meant a comparison, parenthesize: '(a < b) > c')",
+                    type_name(ft));
+            else
+                diag_error(e->loc, "cannot call non-function type %s", type_name(ft));
             e->type = type_error();
             return e->type;
         }
@@ -5575,7 +5594,8 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             diag_error(pat->loc, "integer pattern on non-integer type %s", type_name(type));
             return;
         }
-        check_int_literal_range(pat->int_lit.value, type, pat->loc, pat->int_lit.out_of_range);
+        check_int_literal_range(pat->int_lit.value, type, pat->loc,
+                                pat->int_lit.out_of_range, pat->int_lit.negative);
         break;
     case PAT_BOOL_LIT:
         if (!type_eq(type, type_bool())) {

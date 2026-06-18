@@ -1,0 +1,7 @@
+// A bare negative literal pattern against an unsigned type is reported with the
+// written (negative) value, not its huge two's-complement bit pattern.
+let main = (args: str[]) ->
+    let x = 5u8
+    match x with
+    | -1 -> 1
+    | _ -> 0

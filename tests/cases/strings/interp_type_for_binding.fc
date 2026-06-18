@@ -1,0 +1,29 @@
+// A for-loop binding referenced only inside a %T{} interpolation must not trip
+// -Wunused-variable in the generated C under -Werror: %T reads the binding's
+// type, not its value, so it emits no runtime use of the C variable.
+// Pre-fix the plain-element and index forms failed to compile.
+let main = (args: str[]) ->
+    let xs = int32[3] { 10, 20, 30 }
+
+    // Plain element binding used only in %T
+    let mut e = ""
+    for x in xs[0..3]
+        e = "%T{x}"
+    assert(e == "int32")
+
+    // Index + element bindings, both used only in %T
+    let mut it = ""
+    let mut et = ""
+    for i, y in xs[0..3]
+        it = "%T{i}"
+        et = "%T{y}"
+    assert(it == "int64")
+    assert(et == "int32")
+
+    // Destructured tuple element used only in %T
+    let pairs = {int32, bool}[2] { { 1, true }, { 2, false } }
+    let mut dt = ""
+    for { a, b } in pairs
+        dt = "%T{a}/%T{b}"
+    assert(dt == "int32/bool")
+    0

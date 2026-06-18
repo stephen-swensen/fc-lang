@@ -1,0 +1,7 @@
+// A negative literal pattern against usize was previously accepted silently
+// (reinterpreted as its unsigned bit pattern); it is now a range error.
+let main = (args: str[]) ->
+    let x = 5u
+    match x with
+    | -1 -> 1
+    | _ -> 0

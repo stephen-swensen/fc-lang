@@ -375,7 +375,7 @@ struct Pattern {
     SrcLoc loc;
     union {
         struct { const char *name; } binding;
-        struct { uint64_t value; Type *lit_type; bool out_of_range; } int_lit;
+        struct { uint64_t value; Type *lit_type; bool out_of_range; bool negative; } int_lit;
         struct { uint8_t value; } char_lit;
         struct { bool value; } bool_lit;
         struct { const char *value; int length; } string_lit;
