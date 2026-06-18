@@ -1,0 +1,10 @@
+// Recursion buried in a breakless loop body: every iteration calls `spin` again, so
+// the loop never returns by recursing rather than by looping. This is the case a
+// tail-position-only check misses (the loop itself types as void). It is rejected —
+// distinct from an intentional infinite loop, which makes no self-call.
+let main = (args: str[]) ->
+    let spin = (n: int32) ->
+        loop
+            spin(n)
+    if args.len > 99 then spin(1)
+    0

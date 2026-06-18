@@ -1,0 +1,8 @@
+// Every branch of the if recurses and there is no base case in any arm, so the
+// function never returns regardless of which branch is taken. Rejected.
+let spin = (n: int32) ->
+    if n > 0 then spin(n - 1) else spin(n + 1)
+
+let main = (args: str[]) ->
+    if args.len > 99 then spin(1)
+    0

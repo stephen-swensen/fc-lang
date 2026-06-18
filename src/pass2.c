@@ -607,6 +607,148 @@ static bool branch_can_anchor(Expr *e, const char *self) {
     }
 }
 
+/* --- Unconditional infinite self-recursion detection ---------------------------
+ *
+ * A function whose every control-flow path reaches a self-recursive call before it
+ * can return or fall off the end never returns. Its generated C is rejected by the
+ * C compiler (gcc's -Winfinite-recursion, which is in -Wall -Werror), so we reject
+ * it here with a clear FC diagnostic instead. An intentional infinite *loop* is
+ * written `loop ...` (a breakless loop never makes a self-call, so it is never
+ * flagged — it compiles to `while (1)`).
+ *
+ * The analysis abstracts each expression to the set of ways control can leave it:
+ * complete normally, return from the function, make a self-recursive call, or
+ * break/continue an enclosing loop. A function is rejected exactly when its body
+ * can ONLY leave via a self-recursive call — no completing path, no return, and no
+ * loop exit. This is sound (it only flags when every path provably self-recurses),
+ * so a real base case — reachable on any path — always keeps it accepted. */
+enum {
+    SR_COMPLETE = 1 << 0,   /* falls off the end normally */
+    SR_RETURN   = 1 << 1,   /* a `return [value]` leaves the function */
+    SR_SELFREC  = 1 << 2,   /* a self-recursive call is reached */
+    SR_BREAK    = 1 << 3,   /* a `break` leaves the enclosing loop */
+    SR_CONTINUE = 1 << 4,   /* a `continue` restarts the enclosing loop */
+};
+
+/* A *direct* self-recursive call: invoked by the function's own name (so a call to a
+   mutually-recursive sibling is excluded — gcc only flags direct self-recursion) AND
+   carrying the function's own return placeholder as its result type. The placeholder
+   match — pointer-identical whether or not a base case later anchored that cell —
+   excludes a same-named inner binding that shadows the function (it resolves to a
+   different type). Together they pin exactly the calls that recurse into THIS body. */
+static bool sr_is_self_call(Expr *e, const char *self, Type *placeholder) {
+    return e->kind == EXPR_CALL &&
+           e->call.func->kind == EXPR_IDENT &&
+           e->call.func->ident.name == self &&
+           e->type == placeholder;
+}
+
+static int sr_flow_block(Expr **stmts, int count, const char *self, Type *ph);
+
+/* Outcome set of evaluating one expression in statement/tail position. */
+static int sr_flow(Expr *e, const char *self, Type *ph) {
+    if (!e) return SR_COMPLETE;
+    switch (e->kind) {
+    case EXPR_CALL:
+        return sr_is_self_call(e, self, ph) ? SR_SELFREC : SR_COMPLETE;
+    case EXPR_RETURN: {
+        /* A self-call in the returned value recurses before control transfers out. */
+        if (e->return_expr.value) {
+            int vf = sr_flow(e->return_expr.value, self, ph);
+            if ((vf & SR_SELFREC) && !(vf & SR_COMPLETE)) return SR_SELFREC;
+        }
+        return SR_RETURN;
+    }
+    case EXPR_BREAK:    return SR_BREAK;
+    case EXPR_CONTINUE: return SR_CONTINUE;
+    case EXPR_BLOCK:    return sr_flow_block(e->block.stmts, e->block.count, self, ph);
+    case EXPR_IF: {
+        /* The condition is evaluated unconditionally but a self-call there is
+           consumed as a value and rejected elsewhere; the branch bodies decide
+           whether the construct can complete. A missing `else` completes. */
+        int tf = sr_flow(e->if_expr.then_body, self, ph);
+        int ef = e->if_expr.else_body ? sr_flow(e->if_expr.else_body, self, ph) : SR_COMPLETE;
+        return tf | ef;
+    }
+    case EXPR_MATCH: {
+        /* `match` is exhaustive, so its outcome is the union of its arms — there is
+           no implicit completing path. */
+        int acc = 0;
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            acc |= sr_flow_block(e->match_expr.arms[i].body,
+                                 e->match_expr.arms[i].body_count, self, ph);
+        return acc ? acc : SR_COMPLETE;
+    }
+    case EXPR_LOOP: {
+        /* A breakless loop never completes or continues outward on its own; only a
+           `break` lets it exit normally. A self-call reached on every iteration path
+           makes the loop self-recurse. */
+        int f = sr_flow_block(e->loop_expr.body, e->loop_expr.body_count, self, ph);
+        int out = 0;
+        if (f & SR_RETURN)  out |= SR_RETURN;
+        if (f & SR_SELFREC) out |= SR_SELFREC;
+        if (f & SR_BREAK)   out |= SR_COMPLETE;
+        return out;   /* empty set = clean infinite loop: never returns, no self-call */
+    }
+    case EXPR_FOR:
+        /* A `for` may iterate zero times, so it can always complete; a body self-call
+           is therefore conditional, never on every path. A `return` in the body is
+           still reachable; break/continue stay within the loop. */
+        return SR_COMPLETE |
+               (sr_flow_block(e->for_expr.body, e->for_expr.body_count, self, ph) & SR_RETURN);
+    default:
+        /* Everything else (value expressions, let bindings, lambda definitions,
+           assignments) completes for the purpose of this analysis; a self-call buried
+           in such a position is consumed as a value and rejected at that site. */
+        return SR_COMPLETE;
+    }
+}
+
+/* Outcome set of a statement sequence: walk until a statement cannot complete, then
+   stop (later statements are unreachable). The block completes only if control can
+   thread normal completion through every statement. */
+static int sr_flow_block(Expr **stmts, int count, const char *self, Type *ph) {
+    int acc = 0;
+    bool reachable = true;
+    for (int i = 0; i < count; i++) {
+        int f = sr_flow(stmts[i], self, ph);
+        acc |= (f & (SR_RETURN | SR_SELFREC | SR_BREAK | SR_CONTINUE));
+        if (!(f & SR_COMPLETE)) { reachable = false; break; }
+    }
+    if (reachable) acc |= SR_COMPLETE;
+    return acc;
+}
+
+/* The function body provably never returns because every path self-recurses: a
+   self-call is reachable and no path completes, returns, or exits a loop. */
+static bool body_always_self_recurses(Expr **body, int count, const char *self,
+                                      Type *placeholder) {
+    if (!self || !placeholder) return false;
+    int out = sr_flow_block(body, count, self, placeholder);
+    return (out & SR_SELFREC) &&
+           !(out & (SR_COMPLETE | SR_RETURN | SR_BREAK | SR_CONTINUE));
+}
+
+/* A self-recursive call's result reaching a value-consuming position (a binary
+   operand, call argument, cast, index, …) while the return type is still the
+   unresolved placeholder means the recursion has no base case to anchor a return
+   type before the result is used — genuine non-termination, the same fault as a
+   body that always recurses. Report it with the same message instead of leaking the
+   internal `<unresolved>` placeholder into a downstream type-mismatch diagnostic,
+   and poison the type so nothing else complains. Sound by construction: in a valid
+   recursive function a reachable base case anchors the placeholder (via the if/match
+   branch reordering) before any operand is consumed, so this never misfires. Returns
+   true when it fired (the operand was an unresolved recursive result). */
+static bool reject_unresolved_recursive_value(Expr *e) {
+    if (e && e->type && e->type->kind == TYPE_UNRESOLVED) {
+        diag_error(e->loc, "this function never returns: it calls itself on every "
+            "path with no base case; use 'loop' for an intentional infinite loop");
+        e->type = type_error();
+        return true;
+    }
+    return false;
+}
+
 /* True while a recursive function's return type is still being inferred. */
 static bool resolving_recursion(CheckCtx *ctx) {
     return ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_UNRESOLVED &&
@@ -2905,6 +3047,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     case EXPR_BINARY: {
         Type *lt = check_expr(ctx, e->binary.left);
         Type *rt = check_expr(ctx, e->binary.right);
+        if (reject_unresolved_recursive_value(e->binary.left) ||
+            reject_unresolved_recursive_value(e->binary.right)) {
+            e->type = type_error(); return e->type;
+        }
         if (type_is_error(lt) || type_is_error(rt)) { e->type = type_error(); return e->type; }
         TokenKind op = e->binary.op;
 
@@ -3147,6 +3293,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
         }
         Type *ot = check_expr(ctx, e->unary_prefix.operand);
+        if (reject_unresolved_recursive_value(e->unary_prefix.operand)) { e->type = type_error(); return e->type; }
         if (type_is_error(ot)) { e->type = type_error(); return e->type; }
         TokenKind op = e->unary_prefix.op;
         /* Defer unary minus and bitwise not on type variables to monomorphization */
@@ -3400,6 +3547,25 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
            (e.g. a nested lambda that calls its enclosing function). Leave ret as
            that function's placeholder cell — patched in place when it resolves —
            exactly as a directly-returned recursive call is handled. */
+
+        /* Reject unconditional infinite self-recursion. If every path through the
+           body reaches a *direct* self-recursive call before it can return or
+           complete, the function never returns and its generated C trips the C
+           compiler's -Winfinite-recursion (in -Wall -Werror) — surface a clear FC
+           error instead. The flow analysis covers a tail self-call, recursion in
+           every branch of an if/match, a self-call buried in a non-tail statement,
+           and recursion inside a breakless loop body. Mutual recursion (a→b→a) is
+           deliberately not flagged — gcc doesn't flag it either, and the name match
+           in sr_is_self_call excludes the sibling call. An intentional infinite loop
+           is written with `loop`, which makes no self-call and is never flagged.
+           Poison the return type so dependents (e.g. a binding of the result) don't
+           also error. */
+        if (body_always_self_recurses(e->func.body, e->func.body_count,
+                                      my_recursive_self, my_recursive_ret)) {
+            diag_error(e->loc, "this function never returns: it calls itself on every "
+                "path with no base case; use 'loop' for an intentional infinite loop");
+            ret = type_error();
+        }
 
         /* Validate every explicit `return [value]` against the inferred return type.
            A bare `return` requires a void-returning function; `return value` requires
@@ -3828,6 +3994,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         bool arg_err = false;
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *at = check_expr(ctx, e->call.args[i]);
+            if (reject_unresolved_recursive_value(e->call.args[i])) { arg_err = true; continue; }
             if (type_is_error(at)) { arg_err = true; continue; }
             /* Variadic args beyond fixed params: type-check the expr but skip param matching */
             if (i >= ft->func.param_count) continue;
@@ -3881,6 +4048,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
     case EXPR_IF: {
         Type *ct = check_expr(ctx, e->if_expr.cond);
+        if (reject_unresolved_recursive_value(e->if_expr.cond)) ct = type_error();
         if (type_is_error(ct)) {
             /* Still check branches for more errors */
             Type *tt = check_expr(ctx, e->if_expr.then_body);
@@ -4215,6 +4383,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
     case EXPR_CAST: {
         Type *from = check_expr(ctx, e->cast.operand);
+        if (reject_unresolved_recursive_value(e->cast.operand)) { e->type = type_error(); return e->type; }
         if (type_is_error(from)) { e->type = type_error(); return e->type; }
         Type *to = resolve_type(ctx, e->cast.target);
         e->cast.target = to;
@@ -4970,6 +5139,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     case EXPR_INDEX: {
         Type *obj_type = check_expr(ctx, e->index.object);
         Type *idx_type = check_expr(ctx, e->index.index);
+        if (reject_unresolved_recursive_value(e->index.object) ||
+            reject_unresolved_recursive_value(e->index.index)) { e->type = type_error(); return e->type; }
         if (type_is_error(obj_type) || type_is_error(idx_type)) { e->type = type_error(); return e->type; }
 
         /* Tuple indexing: the index must be a non-negative integer literal in
@@ -5174,6 +5345,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
     case EXPR_SOME: {
         Type *inner = check_expr(ctx, e->some_expr.value);
+        if (reject_unresolved_recursive_value(e->some_expr.value)) { e->type = type_error(); return e->type; }
         if (type_is_error(inner)) { e->type = type_error(); return e->type; }
         e->type = type_option(ctx->arena, inner);
         e->prov = e->some_expr.value->prov;
@@ -5384,6 +5556,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
     case EXPR_ASSERT: {
         Type *ct = check_expr(ctx, e->assert_expr.condition);
+        if (reject_unresolved_recursive_value(e->assert_expr.condition)) { e->type = type_void(); return e->type; }
         if (!type_is_error(ct) && ct->kind != TYPE_BOOL) {
             diag_error(e->loc, "assert condition must be bool, got %s", type_name(ct));
         }
@@ -6675,6 +6848,7 @@ static void check_match_exhaustiveness(CheckCtx *ctx, Expr *e, Type *subj_type) 
 
 static Type *check_match(CheckCtx *ctx, Expr *e) {
     Type *subj_type = check_expr(ctx, e->match_expr.subject);
+    if (reject_unresolved_recursive_value(e->match_expr.subject)) { e->type = type_error(); return e->type; }
     subj_type = resolve_type(ctx, subj_type);
     /* Update the subject's type to the resolved type so codegen can access it */
     e->match_expr.subject->type = subj_type;

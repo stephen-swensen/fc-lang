@@ -1,0 +1,13 @@
+// An unconditional self-call in the middle of the body (not the tail): `step` runs,
+// then `loopy` recurses, so the trailing `step` is dead code. Every path still reaches
+// the self-call, so the function never returns and is rejected.
+let step = (n: int32) -> n + 1
+
+let loopy = (n: int32) ->
+    step(n)
+    loopy(n)
+    step(n)
+
+let main = (args: str[]) ->
+    if args.len > 99 then loopy(1)
+    0

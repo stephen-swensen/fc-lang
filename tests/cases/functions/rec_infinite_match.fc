@@ -1,0 +1,10 @@
+// All arms of an exhaustive match recurse with no base case: the function never
+// returns no matter which arm is selected. Rejected.
+let spin = (n: int32) ->
+    match n > 0 with
+    | true -> spin(n - 1)
+    | false -> spin(n + 1)
+
+let main = (args: str[]) ->
+    if args.len > 99 then spin(1)
+    0
