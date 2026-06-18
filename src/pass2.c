@@ -3801,15 +3801,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
 
         if (ft->kind != TYPE_FUNC) {
-            /* `a<b>(c)` parses as a generic call on `a`; when `a` is a plain
-             * numeric value the user most likely meant a comparison, so point
-             * at that reading alongside the call error. */
-            if (e->call.type_arg_count > 0 && type_is_numeric(ft))
-                diag_error(e->loc, "cannot call non-function type %s "
-                    "(if you meant a comparison, parenthesize: '(a < b) > c')",
-                    type_name(ft));
-            else
-                diag_error(e->loc, "cannot call non-function type %s", type_name(ft));
+            diag_error(e->loc, "cannot call non-function type %s", type_name(ft));
             e->type = type_error();
             return e->type;
         }
