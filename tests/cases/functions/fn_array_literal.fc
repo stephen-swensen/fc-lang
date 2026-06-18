@@ -7,8 +7,8 @@
 //
 // (Note: a slice *literal* of a function type — ((int32) -> int32)[] { ptr = ..,
 // len = .. } — is not constructible, because &f on a function value is a raw
-// any* C handle, not a dereferenceable fn pointer. Build a slice by slicing an
-// array literal instead, as below.)
+// any* C handle, not a dereferenceable fn pointer. Build a slice from an array
+// literal instead (which already yields a slice), as below.)
 let dbl = (x: int32) -> x * 2
 let inc = (x: int32) -> x + 1
 
