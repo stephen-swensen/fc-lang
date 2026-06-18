@@ -1,0 +1,33 @@
+// A slice literal whose element type is the bare type variable 'a, written in
+// expression position (not inside alloc()). Each monomorphization emits its own
+// correctly-typed backing array. Previously rejected at parse/check time with
+// "type variable 'a cannot be used as a value" — the bare-expression form was
+// the one entry point that never reached the (already type-var-aware) array
+// literal handling.
+let make4 = (x: 'a) ->
+    let buf = 'a[4] { x, x, x, x }
+    buf[0] + buf[1] + buf[2] + buf[3]
+
+let count_len = (x: 'a) ->
+    let buf = 'a[4] { x, x, x, x }
+    (int32) buf.len
+
+let sum_iter = (x: 'a) ->
+    let buf = 'a[3] { x, x, x }
+    let mut acc = x
+    for e in buf
+        acc = acc + e
+    acc
+
+// index the literal directly, without binding it first
+let pick_second = (a: 'a, b: 'a) ->
+    'a[2] { a, b }[1]
+
+let main = (args: str[]) ->
+    assert(make4(5) == 20)            // 'a = int32
+    assert(make4(3i64) == 12i64)      // 'a = int64, distinct monomorph
+    assert(count_len(0i16) == 4)      // result is a slice: .len is known
+    assert(sum_iter(2i16) == 8i16)    // 'a = int16, iterate the slice
+    assert(pick_second(7, 8) == 8)
+    assert(pick_second(7i64, 8i64) == 8i64)
+    0

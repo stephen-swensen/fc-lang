@@ -1,0 +1,17 @@
+// The empty slice-literal form 'a[N] { } zero-initializes every element, even
+// when the element type is a type variable. .len is the declared length and
+// each element is the element type's zero value, across distinct monomorphs.
+let zlen = (x: 'a) ->
+    let buf = 'a[5] { }
+    (int32) buf.len
+
+let zfirst = (x: 'a) ->
+    let buf = 'a[2] { }
+    buf[0]                 // zero-initialized regardless of the argument
+
+let main = (args: str[]) ->
+    assert(zlen(9) == 5)         // 'a = int32
+    assert(zlen(9i64) == 5)      // 'a = int64
+    assert(zfirst(7) == 0)       // arg 7 ignored; element is the zero value
+    assert(zfirst(7i64) == 0i64)
+    0

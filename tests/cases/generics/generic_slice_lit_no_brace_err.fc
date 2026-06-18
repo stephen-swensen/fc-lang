@@ -1,0 +1,10 @@
+// Disambiguation guard for the type-variable slice literal: only 'a[expr] { ... }
+// (a following '{') is a slice literal. A bare 'a[i] with no brace is not a
+// value — it must still be rejected, not silently parsed as indexing a type
+// variable.
+let bad = (x: 'a) ->
+    'a[0]
+
+let main = (args: str[]) ->
+    bad(1)
+    0

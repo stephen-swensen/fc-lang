@@ -1834,6 +1834,46 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_TYPE_VAR: {
+        /* Slice literal with a type-variable element type: 'a[N] { e0, ... }
+         * (or 'a[] { ptr =, len = }, and 'a?/'a* element-type suffixes). The
+         * element type is the abstract type var inside a generic body; it is
+         * substituted per-monomorphization. Mirrors the IDENT array-literal
+         * lookahead: a bare 'a[expr] with no following '{' is not a value and
+         * falls through to the type-var-ref path, which pass2 rejects. */
+        {
+            int arr_start = 1; /* offset past the type-var token */
+            while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
+                   peek_at(p, arr_start)->kind == TOK_STAR)
+                arr_start += 1;
+            if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
+                int save = p->pos;
+                for (int skip = 0; skip < arr_start + 1; skip++) advance_p(p);
+                int depth = 1;
+                while (depth > 0 && !at_end_p(p)) {
+                    if (check(p, TOK_LBRACKET)) depth++;
+                    if (check(p, TOK_RBRACKET)) depth--;
+                    advance_p(p);
+                }
+                bool is_array_lit = check(p, TOK_LBRACE);
+                restore_pos(p, save);
+                if (is_array_lit) {
+                    advance_p(p); /* consume the type-var token */
+                    Type *elem_type = arena_alloc(p->arena, sizeof(Type));
+                    elem_type->kind = TYPE_TYPE_VAR;
+                    elem_type->type_var.name = tok_intern(p, t);
+                    while (check(p, TOK_QUESTION) || check(p, TOK_STAR)) {
+                        if (check(p, TOK_QUESTION)) {
+                            advance_p(p);
+                            elem_type = type_option(p->arena, elem_type);
+                        } else {
+                            advance_p(p);
+                            elem_type = type_pointer(p->arena, elem_type);
+                        }
+                    }
+                    return parse_array_lit_body(p, elem_type, loc);
+                }
+            }
+        }
         /* Allow 'a in expression position for type-variable property access ('a.min etc.) */
         advance_p(p);
         Expr *e = alloc_expr(p, EXPR_TYPE_VAR_REF, loc);

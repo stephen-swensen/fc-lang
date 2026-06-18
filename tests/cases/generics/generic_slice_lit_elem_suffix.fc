@@ -1,0 +1,25 @@
+// Element-type suffixes on a type-variable slice literal: 'a*[N] (pointer
+// elements) and 'a?[N] (option elements). The parser applies ? / * suffixes to
+// the type-variable element type, mirroring the IDENT array-literal path, and
+// each form monomorphizes correctly.
+let ptr_elems = (x: 'a) ->
+    let mut a = x
+    let mut b = x
+    let buf = 'a*[2] { &a, &b }
+    if buf[0] == buf[1] then 0 else 1   // &a and &b are distinct -> 1
+
+let opt_elems = (x: 'a) ->
+    let buf = 'a?[3] { some(x), none('a), some(x) }
+    let mut n = 0
+    for o in buf
+        match o with
+        | some(_) -> n = n + 1
+        | none -> n = n + 0
+    n
+
+let main = (args: str[]) ->
+    assert(ptr_elems(5) == 1)        // 'a = int32
+    assert(ptr_elems(9i64) == 1)     // 'a = int64
+    assert(opt_elems(1) == 2)        // two some, one none
+    assert(opt_elems(1i64) == 2)
+    0
