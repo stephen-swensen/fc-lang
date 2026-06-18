@@ -14,7 +14,7 @@ let main = (args: str[]) ->
     assert(s[0][1] == 8)
     assert(first0(s) == 7)
 
-    // slice taken from a tuple array literal, then re-sliced
+    // slice taken from a tuple slice literal, then re-sliced
     let arr = {int32, int32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
     let mid = arr[1..3]
     assert(mid.len == 2i64)

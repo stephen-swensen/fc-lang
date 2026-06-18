@@ -1,4 +1,4 @@
-// Test: array literal whose element count exactly matches the declared length
+// Test: slice literal whose element count exactly matches the declared length
 let main = (args: str[]) ->
     let buf = int32[3] { 10, 20, 30 }
     let sum = buf[0] + buf[1] + buf[2]

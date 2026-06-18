@@ -34,8 +34,8 @@ static int g_file_global_count = 0;
  * expression path, which C11 rejects at file scope. */
 static bool g_const_context = false;
 
-/* Backing arrays for file-scope slice-typed array literals.  Collected by
- * a pre-pass over module-member inits (including nested array lits), emitted
+/* Backing arrays for file-scope slice literals.  Collected by
+ * a pre-pass over module-member inits (including nested slice lits), emitted
  * as `static T _fc_const_backing_N[] = {...};` ahead of the module-member
  * definitions.  Each entry's AST node carries the backing name; the slice
  * header emitted at the use site references it. */
@@ -54,8 +54,8 @@ static HoistedDecl *g_hoisted = NULL;
 static int g_hoisted_count = 0;
 static int g_hoisted_cap = 0;
 
-/* Function-entry backing arrays for stack array literals and constant-size
- * interpolation buffers.  Each entry is the array-literal or interp-string node;
+/* Function-entry backing arrays for stack slice literals and constant-size
+ * interpolation buffers.  Each entry is the slice-literal or interp-string node;
  * a fixed C array is emitted at function top and the node's use site references
  * it by name (via codegen_backing_name).  This replaces a per-evaluation
  * __builtin_alloca so the slot is reused across loop iterations — stack use stays
@@ -420,7 +420,7 @@ static void emit_hoisted_decls(FILE *out) {
     }
 }
 
-/* Emit the function-entry backing arrays for stack array literals and
+/* Emit the function-entry backing arrays for stack slice literals and
  * constant-size interpolation buffers (see g_fn_backings).  Each is a plain
  * fixed C array whose single slot is reused on every loop iteration. */
 static void emit_fn_backing_decls(FILE *out) {
@@ -3086,7 +3086,7 @@ static void emit_expr(Expr *e, FILE *out) {
             }
             break;
         }
-        /* Stack array literal → slice over backing storage.
+        /* Stack slice literal → slice over backing storage.
          *
          * The common case uses a fixed C array hoisted to function entry
          * (codegen_backing_name, set during the hoist pass): its single slot is
@@ -3957,7 +3957,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_interp_string_impl(e->alloc_expr.init_expr, out, NULL);
             } else if (e->alloc_expr.init_expr &&
                        e->alloc_expr.init_expr->kind == EXPR_ARRAY_LIT) {
-                /* alloca(T[N] { elems }) literal → reuse the array-literal stack
+                /* alloca(T[N] { elems }) literal → reuse the slice-literal stack
                  * emission (already a function-frame backing). */
                 emit_expr(e->alloc_expr.init_expr, out);
             } else {

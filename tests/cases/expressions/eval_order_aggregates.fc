@@ -1,4 +1,4 @@
-// Struct, tuple, and array literal fields/elements are evaluated left-to-right,
+// Struct, tuple, and slice literal fields/elements are evaluated left-to-right,
 // each exactly once.
 struct trip =
     a: int32

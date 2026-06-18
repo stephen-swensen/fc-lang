@@ -1,4 +1,4 @@
-// Nested aggregate: an ident inside a struct inside an array lit.
+// Nested aggregate: an ident inside a struct inside a slice lit.
 module m =
     struct point =
         x: int32

@@ -1,6 +1,6 @@
 // Float-to-integer saturation must also hold in CONST context — module-member
 // initializers are emitted as C file-scope initializers (and module-member
-// array literals as `static` backing arrays), where a runtime helper *call* is
+// slice literals as `static` backing arrays), where a runtime helper *call* is
 // not a constant expression. There the compiler emits an equivalent saturating
 // ternary instead, producing the same NaN->0 / clamp / truncate-toward-zero
 // result as the runtime form. (Audit item 16, const-context path.)
@@ -18,7 +18,7 @@ module m =
     let u64_over  = (uint64) 1e30
     let isz_over  = (isize) 1e30
     let usz_neg   = (usize) (-1.0)
-    // module-member array literal -> emitted as a static backing array
+    // module-member slice literal -> emitted as a static backing array
     let arr = int32[3] { (int32) 7.9, (int32) 9e9, (int32) (-9e9) }
 
 let main = (args: str[]) ->

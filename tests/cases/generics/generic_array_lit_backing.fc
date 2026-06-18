@@ -1,4 +1,4 @@
-// A generic function containing a concrete-typed stack array literal must emit
+// A generic function containing a concrete-typed stack slice literal must emit
 // its function-entry backing array correctly in every monomorphized instance.
 // Each instantiation is a separate C function, so the same AST node is emitted
 // once per concrete 'a, each with its own backing declaration.

@@ -1,4 +1,4 @@
-// Evaluated values compose inside struct literals, array literals, array
+// Evaluated values compose inside struct literals, slice literals, array
 // sizes, some(), and union variant payloads.
 module m =
     struct point =

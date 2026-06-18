@@ -1,4 +1,4 @@
-// stack array literal of primitive pointer elements, including chained * suffixes
+// stack slice literal of primitive pointer elements, including chained * suffixes
 let main = (args: str[]) ->
     let mut a = 1
     let mut b = 2

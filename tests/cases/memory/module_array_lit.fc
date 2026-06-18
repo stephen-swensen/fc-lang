@@ -1,4 +1,4 @@
-// Module-level array literal — lifted to a static backing array in C
+// Module-level slice literal — lifted to a static backing array in C
 module nums =
     let triples = int32[3] { 10, 20, 30 }
     let empty = int32[0] {}

@@ -1,4 +1,4 @@
-// Test: array literal with fewer elements than declared length is rejected
+// Test: slice literal with fewer elements than declared length is rejected
 // (would otherwise leave trailing elements uninitialized)
 let main = (args: str[]) ->
     let buf = int32[3] { 7, 8 }

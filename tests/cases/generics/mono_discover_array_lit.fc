@@ -1,4 +1,4 @@
-// Item 6: an array literal of a generic struct instance inside a generic body.
+// Item 6: a slice literal of a generic struct instance inside a generic body.
 // discover_in_expr had no EXPR_ARRAY_LIT case at all, so neither the element
 // expressions (the box {...} struct literals) nor the element type box<int64>
 // were walked during transitive discovery -> undefined `box__5_int64`. The

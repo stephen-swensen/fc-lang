@@ -1,5 +1,5 @@
 // Array literal of a generic struct instantiated with a qualified type
-// argument: slot<m.cmd>[N] { ... }. Exercises the array-literal lookahead
+// argument: slot<m.cmd>[N] { ... }. Exercises the slice-literal lookahead
 // scan, which shares the <> type-arg token predicate with the call scan.
 module m =
     struct cmd =

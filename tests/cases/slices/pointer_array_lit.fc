@@ -1,4 +1,4 @@
-// stack array literal of pointer-typed elements: T*[N] { ... }
+// stack slice literal of pointer-typed elements: T*[N] { ... }
 struct p =
     x: int32
 

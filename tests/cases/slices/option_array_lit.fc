@@ -1,4 +1,4 @@
-// stack array literal of option-typed elements: int32?[N] { ... }
+// stack slice literal of option-typed elements: int32?[N] { ... }
 let main = (args: str[]) ->
     let opts = int32?[4] { some(10), none(int32), some(3), some(9) }
     let mut sum = 0

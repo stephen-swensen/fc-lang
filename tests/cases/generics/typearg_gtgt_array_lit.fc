@@ -1,4 +1,4 @@
-// Audit item 10: an array literal whose element type is a nested generic
+// Audit item 10: a slice literal whose element type is a nested generic
 // instance ending in '>>'. The element-type scan is depth-counted so the '>>'
 // closer is recognized while locating the literal's '['.
 struct box =

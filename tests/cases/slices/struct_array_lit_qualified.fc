@@ -1,4 +1,4 @@
-// Test: module-qualified struct array literal
+// Test: module-qualified struct slice literal
 module m =
     struct point =
         x: int32

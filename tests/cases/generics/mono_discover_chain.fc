@@ -1,6 +1,6 @@
 // Item 6: feature interaction + multi-level transitive discovery. An outer
 // generic calls an inner generic whose body combines several of the fixed
-// constructs (union variant constructor, default(T), and an array literal of a
+// constructs (union variant constructor, default(T), and a slice literal of a
 // generic struct). None of opt<int64>, box<int64> appears in any concrete
 // signature — discovery must follow the call chain (the fixpoint loop) and
 // register every instance once outer is instantiated. Two instantiations.

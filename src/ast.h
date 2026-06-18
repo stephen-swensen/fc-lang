@@ -7,7 +7,7 @@
 
 typedef enum {
     PROV_UNKNOWN,   /* default: function params, call returns, extern results */
-    PROV_STACK,     /* stack-allocated: &local, array literals, interp strings, cstr casts */
+    PROV_STACK,     /* stack-allocated: &local, slice literals, interp strings, cstr casts */
     PROV_HEAP,      /* heap-allocated: alloc() results */
     PROV_STATIC,    /* static storage: string/cstring literals */
 } Provenance;

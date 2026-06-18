@@ -1,4 +1,4 @@
-// An array literal whose element type is a (grouped) function type:
+// A slice literal whose element type is a (grouped) function type:
 // ((int32) -> int32)[N] { f0, f1, ... }. The parser now recognizes the
 // "( ... ) [ ... ] {" shape for a parenthesized element type (previously only
 // IDENT- and tuple-typed element types were handled). Indexing yields the

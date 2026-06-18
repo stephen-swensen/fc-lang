@@ -575,7 +575,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
         return false;
     case EXPR_RETURN:       return e->return_expr.value && expr_refs_self(e->return_expr.value, self);
     case EXPR_BREAK:        return e->break_expr.value && expr_refs_self(e->break_expr.value, self);
-    /* Other forms (literals, nested EXPR_FUNC, struct/tuple/array literals, …) do
+    /* Other forms (literals, nested EXPR_FUNC, struct/tuple/slice literals, …) do
        not contribute a self-recursive call to a value position we order against;
        treat them as self-free. */
     default:                return false;
@@ -2972,7 +2972,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             } else if (type_from_name(e->ident.name, (int)strlen(e->ident.name))) {
                 /* A type name used where a value is expected — e.g. writing a tuple
                  * type {int32, str} in expression position instead of a value, or
-                 * an array literal element type without the [N]{ ... } body. */
+                 * a slice literal element type without the [N]{ ... } body. */
                 diag_error(e->loc, "'%s' is a type, not a value", e->ident.name);
             } else {
                 diag_error(e->loc, "undefined name '%s'", e->ident.name);
@@ -5221,22 +5221,23 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_ARRAY_LIT: {
-        /* Array literal: type[size] { elems... } → creates a slice */
-        /* The size expression must be an integer */
+        /* Slice literal: type[length] { elems... } → creates a slice (the
+         * EXPR_ARRAY_LIT node name reflects the backing-array mechanism). */
+        /* The length expression must be an integer */
         Type *size_type = check_expr(ctx, e->array_lit.size_expr);
         if (!type_is_error(size_type) && !type_is_integer(size_type)) {
-            diag_error(e->loc, "array size must be integer, got %s", type_name(size_type));
+            diag_error(e->loc, "slice literal length must be integer, got %s", type_name(size_type));
             e->type = type_error();
             return e->type;
         }
-        /* Size must be a compile-time constant (integer literal) */
+        /* Length must be a compile-time constant (integer literal) */
         if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
             diag_error(e->array_lit.size_expr->loc,
-                "array size must be a compile-time constant");
+                "slice literal length must be a compile-time constant");
             e->type = type_error();
             return e->type;
         }
-        /* Element count must match the declared size exactly. The empty
+        /* Element count must match the declared length exactly. The empty
          * form `{ }` (elem_count == 0) zero-initializes all elements and is
          * always allowed; an explicit element list must be exhaustive. Without
          * this check, a short list leaves elements uninitialized and an
@@ -5245,7 +5246,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (e->array_lit.elem_count > 0 &&
             (uint64_t) e->array_lit.elem_count != declared_size) {
             diag_error(e->loc,
-                "array literal has %d element%s but declared length is %" PRIu64
+                "slice literal has %d element%s but declared length is %" PRIu64
                 "; the element list must be exhaustive (or use `{ }` to zero-initialize)",
                 e->array_lit.elem_count,
                 e->array_lit.elem_count == 1 ? "" : "s",
@@ -5262,7 +5263,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (type_is_error(et)) { elem_error = true; continue; }
             if (!type_eq(et, elem_type)) {
                 diag_error(e->array_lit.elems[i]->loc,
-                    "array element type mismatch: expected %s, got %s",
+                    "slice literal element type mismatch: expected %s, got %s",
                     type_name(elem_type), type_name(et));
                 elem_error = true;
             }
@@ -5633,7 +5634,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->prov = PROV_STACK;
                 return e->type;
             }
-            /* alloca(expr) — only an interpolated string (str/cstr) or array literal
+            /* alloca(expr) — only an interpolated string (str/cstr) or slice literal
              * makes sense as a runtime-sized stack temporary. */
             Expr *ie = e->alloc_expr.init_expr;
             Type *t = check_expr(ctx, ie);
@@ -5651,7 +5652,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             diag_error(e->loc,
-                "alloca(expr) requires an interpolated string or array literal; "
+                "alloca(expr) requires an interpolated string or slice literal; "
                 "use alloca(T, n) or alloca(T[n] {}) for an uninitialized buffer");
             e->type = type_error();
             return e->type;
@@ -5676,7 +5677,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 Type *st = check_expr(ctx, e->alloc_expr.size_expr);
                 if (type_is_error(st)) { e->type = type_error(); return e->type; }
                 if (!type_is_integer(st)) {
-                    diag_error(e->loc, "alloc array size must be integer, got %s", type_name(st));
+                    diag_error(e->loc, "alloc slice length must be integer, got %s", type_name(st));
                     e->type = type_error();
                     return e->type;
                 }

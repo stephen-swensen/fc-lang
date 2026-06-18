@@ -1,4 +1,4 @@
-// Struct with a fixed-array field initialized from an array literal at module scope
+// Struct with a fixed-array field initialized from a slice literal at module scope
 module bufs =
     struct buf4 =
         data: int32[4]

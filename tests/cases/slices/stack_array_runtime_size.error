@@ -1,1 +1,1 @@
-array size must be a compile-time constant
+slice literal length must be a compile-time constant

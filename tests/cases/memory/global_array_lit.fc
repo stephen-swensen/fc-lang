@@ -1,4 +1,4 @@
-// File-level array literal — backed by alloca in C main
+// File-level slice literal — backed by alloca in C main
 let arr = int32[3] { 10, 20, 30 }
 
 let main = (args: str[]) ->

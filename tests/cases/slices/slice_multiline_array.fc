@@ -1,4 +1,4 @@
-// Multiline array literal
+// Multiline slice literal
 let main = (args: str[]) ->
     let _result =
         let arr = int32[3]{

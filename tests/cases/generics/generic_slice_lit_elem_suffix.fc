@@ -1,6 +1,6 @@
 // Element-type suffixes on a type-variable slice literal: 'a*[N] (pointer
 // elements) and 'a?[N] (option elements). The parser applies ? / * suffixes to
-// the type-variable element type, mirroring the IDENT array-literal path, and
+// the type-variable element type, mirroring the IDENT slice-literal path, and
 // each form monomorphizes correctly.
 let ptr_elems = (x: 'a) ->
     let mut a = x

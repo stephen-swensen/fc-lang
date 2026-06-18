@@ -1,4 +1,4 @@
-// stack array literal with generic struct element type: box<int32>[N] { ... }
+// stack slice literal with generic struct element type: box<int32>[N] { ... }
 struct box =
     v: 'a
 

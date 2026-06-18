@@ -1,4 +1,4 @@
-// Regression: a stack array literal inside a loop must reuse a single backing
+// Regression: a stack slice literal inside a loop must reuse a single backing
 // slot hoisted to function entry, not __builtin_alloca a fresh frame extension
 // every iteration. Pre-fix, alloca memory persisted until function return, so
 // 100_000 iterations of a 512-int (2 KB) array grew the frame ~200 MB and

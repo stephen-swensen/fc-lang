@@ -1,4 +1,4 @@
-// Test: heap array literal with too many elements is rejected
+// Test: heap slice literal with too many elements is rejected
 // (would otherwise overflow the malloc'd buffer)
 let main = (args: str[]) ->
     let buf = alloc(int32[2] { 1, 2, 3, 4 })!

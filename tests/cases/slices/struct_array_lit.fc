@@ -1,4 +1,4 @@
-// Test: stack array literal with struct element type
+// Test: stack slice literal with struct element type
 struct point =
     x: int32
     y: int32

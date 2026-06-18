@@ -1,4 +1,4 @@
-// Error: returning a stack-allocated array literal
+// Error: returning a stack-allocated slice literal
 let bad = () ->
     int32[4] { 1, 2, 3, 4 }
 

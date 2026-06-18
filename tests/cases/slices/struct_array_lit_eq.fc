@@ -1,4 +1,4 @@
-// Test: equality on struct slices created from array literals.
+// Test: equality on struct slices created from slice literals.
 // This test previously failed at default optimization due to VLA
 // block-scope lifetime — the optimizer reused stack slots.
 struct point =

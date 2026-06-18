@@ -68,9 +68,9 @@ module point =
         let abs_y = if p.y < 0 then -p.y else p.y
         abs_x + abs_y
 
-    // Module-level constant-expression lets: struct literals, array literals,
+    // Module-level constant-expression lets: struct literals, slice literals,
     // some(...), and union variant constructors are all allowed as long as
-    // their contents are recursively constant.  Array literals are lifted to
+    // their contents are recursively constant.  Slice literals are lifted to
     // a static backing array at C file scope.  Const-expr lets may reference
     // other const-expr lets by name (order-independent, including imports).
     let zero = point { x = 0, y = 0 }

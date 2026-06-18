@@ -1,4 +1,4 @@
-// Two array literals that are live at the same time must use distinct backing
+// Two slice literals that are live at the same time must use distinct backing
 // arrays — the per-function-entry hoist must not collapse separate lexical
 // literals onto one slot. Covers simultaneously-live bindings and two array
 // literal arguments live across a single call.

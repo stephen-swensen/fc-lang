@@ -1,4 +1,4 @@
-// stack array literal with multi-param generic struct: pair<int32, bool>[N] { ... }
+// stack slice literal with multi-param generic struct: pair<int32, bool>[N] { ... }
 struct pair =
     a: 'a
     b: 'b

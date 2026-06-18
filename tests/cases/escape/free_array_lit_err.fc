@@ -1,4 +1,4 @@
-// Error: cannot free a stack-allocated array literal
+// Error: cannot free a stack-allocated slice literal
 let main = (args: str[]) ->
     let arr = int32[3] { 1, 2, 3 }
     free(arr)

@@ -473,7 +473,7 @@ FC targets **C11** specifically, plus a small set of GNU extensions supported by
 The generated C uses the following extensions beyond the C11 standard:
 
 - **GNU statement expressions** (`({ ... })`) — used pervasively for bounds-checked slice access, option unwrap, `alloc` expressions, match-as-expression, loop-as-expression, and other constructs that must evaluate a sequence of statements and produce a value. This is the primary GNU dependency.
-- **`__builtin_alloca`** — used only for *runtime-sized* stack temporaries the programmer asked for explicitly with the `alloca` operator (an unbounded interpolation, a runtime str→cstr copy, or a runtime-sized buffer), plus the `argc`/`argv` conversion in the generated `main` wrapper. Constant-size temporaries — array literals (whose length is always a compile-time literal), `(cstr[N])` casts, and interpolation buffers whose every segment is compile-time-bounded — instead use a plain fixed C array hoisted to the top of the enclosing function, so a single stack slot is reused across loop iterations rather than the frame growing on every pass. There is no *implicit* `alloca`. Avoids any `<alloca.h>` dependency.
+- **`__builtin_alloca`** — used only for *runtime-sized* stack temporaries the programmer asked for explicitly with the `alloca` operator (an unbounded interpolation, a runtime str→cstr copy, or a runtime-sized buffer), plus the `argc`/`argv` conversion in the generated `main` wrapper. Constant-size temporaries — slice literals (whose length is always a compile-time literal), `(cstr[N])` casts, and interpolation buffers whose every segment is compile-time-bounded — instead use a plain fixed C array hoisted to the top of the enclosing function, so a single stack slot is reused across loop iterations rather than the frame growing on every pass. There is no *implicit* `alloca`. Avoids any `<alloca.h>` dependency.
 - **`__attribute__`** — every emitted helper is marked `static __attribute__((unused))` (so unreferenced helpers stay warning-clean); the runtime also uses `((constructor))`, `((cold))`, `((noinline))`, and `((noreturn))` on a few internal functions.
 - **`__builtin_expect`** — emitted in slice/option bounds checks to hint the failure branch as cold.
 
@@ -1107,7 +1107,7 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
 
-**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`int32.min`, `float64.nan`, `isize.bits`, …), struct literals with constant fields, array and slice literals with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; array literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
+**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`int32.min`, `float64.nan`, `isize.bits`, …), struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
 
 **Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine. Static type properties follow the same split: a fixed-width integer `.min`, `.max`, or `.bits` is folded to its literal value (so it can take part in const division/modulo and comparisons, e.g. `int32.min / 2`), while float properties and the target-defined `isize`/`usize` `.min`/`.max`/`.bits` are emitted as their C macro and left to the C compiler.
 
@@ -1124,7 +1124,7 @@ let span = int32.max / 2 + 1    // ok — type property in const arithmetic
 let nan64 = float64.nan         // ok — float property (emitted as its C macro)
 // let bad = 1 / 0              // ERROR — division by zero in constant expression
 let origin = point { x = 0, y = 0 }       // ok — struct literal with constant fields
-let primes = int32[3] { 2, 3, 5 }         // ok — array literal with constant elements
+let primes = int32[3] { 2, 3, 5 }         // ok — slice literal with constant elements
 let answer = some(42)                     // ok — some wrapping a constant
 let flag = color.green                    // ok — no-payload variant constructor
 let tagged = shape.circle(5)              // ok — variant with constant payload
@@ -1268,7 +1268,7 @@ Within an expression, subexpressions are evaluated **left-to-right**, and each i
 - **Binary operands** — the left operand is evaluated before the right. This includes `/` and `%`: the dividend is evaluated before the divisor.
 - **Function and method call arguments** — the callee is evaluated first (for an indirect call through a function value), then the arguments in source order.
 - **Assignment** — the target's lvalue subexpressions are evaluated first (e.g. the index in `s[f()] = g()` runs before the value), then the value, then the store.
-- **Aggregate literals** — struct fields, tuple elements, array-literal elements, and the `ptr`/`len` of a raw slice literal are evaluated in source order.
+- **Aggregate literals** — struct fields, tuple elements, slice-literal elements, and the `ptr`/`len` of a raw slice literal are evaluated in source order.
 
 The two short-circuiting operators are the deliberate exception to *evaluate-once*-per-position: `&&` evaluates its right operand only when the left is `true`, and `||` only when the left is `false`. When the right operand is skipped, its side effects do not occur.
 
@@ -2397,7 +2397,7 @@ A **tuple** is an anonymous, positional product type — a lightweight way to gr
 
 ### Tuple values
 
-A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and array literals always carry a type prefix (`point { … }`, `int32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
+A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and slice literals always carry a type prefix (`point { … }`, `int32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
 
 ```fc
 let t = { 4, "hello" }     // type {int32, str}
@@ -2509,7 +2509,7 @@ let a = { 1, 2 }; let mut b = a   // b is an independent copy
 b[0] = 99                         // element mutation on a let mut binding
 ```
 
-Tuples also work where structs do: as struct fields and union variant payloads, as the element type of a slice/array literal, in `option`, and as module- or file-level constants — all subject to the same rules as named structs.
+Tuples also work where structs do: as struct fields and union variant payloads, as the element type of a slice literal, in `option`, and as module- or file-level constants — all subject to the same rules as named structs.
 
 ```fc
 let xs = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }   // array of tuples
@@ -2742,7 +2742,7 @@ There is no partial-list initialization. If you want all elements to hold a spec
 
 The element type may be any type — a primitive, struct, union, tuple (`{int32, int32}[2] { … }`), or a parenthesized function type (`((int32) -> int32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
 
-The backing storage for a stack array literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing an array literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
+The backing storage for a stack slice literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
 
 `free` accepts a slice directly — the compiler emits `free(buf.ptr)`. Only free slices returned by `alloc`. The compiler's escape analysis detects and rejects `free` on stack-allocated slices and string literals at compile time. Freeing a sub-slice or other non-heap memory that escapes detection is undefined behavior.
 
@@ -3988,7 +3988,7 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 | `alloc(T[N] { })` | Heap-allocate a zero-initialized slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
 | `alloc(T[N] { elems })` | Heap-allocate a slice initialized with provided elements. `N` must be a literal. |
 | `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
-| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
@@ -4237,7 +4237,7 @@ free(buf)                        // free a heap-allocated slice — compiler emi
 | `alloc(union.variant(val))` | `T*?` | Heap union initialized from variant |
 | `alloc(slice_expr)` | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
 
-`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), array literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. The bare form `alloc(T[N])` is not valid — the `{ }` initializer is always required, even when empty. This keeps `T[N]` unambiguously a type and `T[N] { }` unambiguously a value expression. For runtime-sized allocation, `N` may be any integer expression but explicit element values are not allowed (the array is zero-initialized). Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
+`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. The bare form `alloc(T[N])` is not valid — the `{ }` initializer is always required, even when empty. This keeps `T[N]` unambiguously a type and `T[N] { }` unambiguously a value expression. For runtime-sized allocation, `N` may be any integer expression but explicit element values are not allowed (the array is zero-initialized). Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
 
 The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
 
@@ -4261,7 +4261,7 @@ let c = alloc(c"hello")!        // cstr? — heap copy with null terminator
 
 #### Direct-to-heap optimization
 
-When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or array literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `malloc`'d buffer (no `calloc`, since `snprintf` overwrites every byte). This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
+When `alloc` wraps a literal expression — string literals, cstr literals, interpolated strings, struct literals, union variants, or slice literals — the compiler writes directly to heap memory. No intermediate stack allocation occurs. For interpolated strings, this means `snprintf` writes directly into the `malloc`'d buffer (no `calloc`, since `snprintf` overwrites every byte). This is an implementation optimization; the semantics are identical to allocating on the stack and then copying.
 
 #### Raw buffer allocation
 
@@ -4303,7 +4303,7 @@ let buf = alloc(int32[4] { })!               // heap slice, all zeros (the `{ }`
 In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
-> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(int32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the empty array-literal form `alloc(int32[4] { })` use `calloc` instead.) All are conditional on the allocation succeeding.
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(int32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the empty slice-literal form `alloc(int32[4] { })` use `calloc` instead.) All are conditional on the allocation succeeding.
 
 ### Initialization after alloc
 

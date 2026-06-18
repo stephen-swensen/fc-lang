@@ -1100,7 +1100,7 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_IDENT: {
         const char *name = tok_intern(p, t);
 
-        /* Check for array literal: type_name[size] { ... }
+        /* Check for slice literal: type_name[size] { ... }
          * Supports built-in types, user-defined structs, and module-qualified types.
          * Disambiguate from indexing: scan past [expr] and check for { */
         {
@@ -1132,7 +1132,7 @@ static Expr *parse_prefix(Parser *p) {
                peek_at(p, arr_start)->kind == TOK_STAR)
             arr_start += 1;
         if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
-            /* Look ahead: type[expr] { — the { after ] means array literal */
+            /* Look ahead: type[expr] { — the { after ] means slice literal */
             int save = p->pos;
             /* Advance past IDENT (.IDENT)* [ */
             for (int skip = 0; skip < arr_start + 1; skip++) advance_p(p);
@@ -1203,7 +1203,7 @@ static Expr *parse_prefix(Parser *p) {
                 return parse_array_lit_body(p, elem_type, loc);
             }
         }
-        } /* end array literal check */
+        } /* end slice literal check */
 
         /* Check for struct literal: name { field = expr, ... }
          * Disambiguate from block: peek past { for IDENT = or } */
@@ -1431,7 +1431,7 @@ static Expr *parse_prefix(Parser *p) {
         }
 
         /* Bare positional braces — anonymous tuple literal { e0, e1, ... } (>= 2 elements).
-         * Struct and array literals always carry a type prefix, so a leading { is
+         * Struct and slice literals always carry a type prefix, so a leading { is
          * unambiguously a tuple; blocks are indentation-based, never brace-delimited. */
         advance_p(p); /* consume { */
         Expr **elems = NULL;
@@ -1837,7 +1837,7 @@ static Expr *parse_prefix(Parser *p) {
         /* Slice literal with a type-variable element type: 'a[N] { e0, ... }
          * (or 'a[] { ptr =, len = }, and 'a?/'a* element-type suffixes). The
          * element type is the abstract type var inside a generic body; it is
-         * substituted per-monomorphization. Mirrors the IDENT array-literal
+         * substituted per-monomorphization. Mirrors the IDENT slice-literal
          * lookahead: a bare 'a[expr] with no following '{' is not a value and
          * falls through to the type-var-ref path, which pass2 rejects. */
         {
