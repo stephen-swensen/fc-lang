@@ -1,0 +1,11 @@
+// Two recursive calls before the base case: the then-branch sums two recursive
+// calls and the base case sits in the else-branch.
+let fib = (n: int32) ->
+    if n >= 2 then fib(n - 1) + fib(n - 2) else n
+
+let main = (args: str[]) ->
+    assert(fib(0) == 0)
+    assert(fib(1) == 1)
+    assert(fib(10) == 55)
+    assert(fib(15) == 610)
+    0

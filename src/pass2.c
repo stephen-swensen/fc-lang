@@ -162,6 +162,12 @@ static void scope_taint_prov(Scope *s, const char *codegen_name, Provenance prov
    unified type, or NULL if the two concrete types are incompatible (the caller
    emits the appropriate "different types" diagnostic). */
 static Type *unify_branch(Type *a, Type *b) {
+    /* The unresolved recursion marker carries no value of its own (a branch that
+       is only a self-recursive call): it is absorbed by its sibling, exactly like
+       `never`. When both sides are markers the result stays a marker — every
+       branch recurses, so the function never returns (resolved to `never` later). */
+    if (type_is_unresolved(a)) return b;
+    if (type_is_unresolved(b)) return a;
     if (type_is_never(a)) return b;
     if (type_is_never(b)) return a;
     if (type_eq(a, b)) return a;
@@ -472,7 +478,16 @@ typedef struct {
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
     ModuleScopeChain *parent_modules;  /* chain of ancestor module symtabs (nearest first) */
     const char *current_ns;      /* current namespace for namespace isolation */
-    Type *recursive_ret;         /* non-NULL placeholder when resolving a recursive function */
+    Type *recursive_ret;         /* TYPE_UNRESOLVED placeholder while resolving a recursive
+                                    function's body; scoped to that body by EXPR_FUNC */
+    const char *recursive_self_name; /* interned name of the function being resolved, so the
+                                    if/match handlers can order base-case branches before
+                                    branches that consume a self-recursive call's result */
+    /* One-shot channel to the recursive function's own EXPR_FUNC (set by the enclosing
+       EXPR_LET / check_decl_let, consumed and cleared by EXPR_FUNC). Keeps the placeholder
+       from leaking into nested or anonymous lambda bodies defined inside the recursive one. */
+    Type *pending_recursive_ret;
+    const char *pending_recursive_self;
     /* One-shot channel from EXPR_LET to the EXPR_FUNC it wraps, so a `let f = <lambda>`
        binding becomes visible inside its own body (self-recursion). Set by EXPR_LET,
        consumed and cleared by EXPR_FUNC before checking the body so nested lambdas
@@ -506,6 +521,107 @@ typedef struct {
 static Type *check_expr(CheckCtx *ctx, Expr *e);
 static Type *check_expr_inner(CheckCtx *ctx, Expr *e);
 static void check_decl_let(CheckCtx *ctx, Decl *d);
+
+/* ---- Recursive return-type inference: branch ordering ----
+ * A recursive function's return type is inferred from its base cases. The base
+ * case may sit in any branch, but a self-recursive call cannot be typed until
+ * that base case has anchored the return type. So when checking an if/match
+ * inside a recursive body we check anchor-able (base-case) branches first, then
+ * the branches that consume a self-recursive result. These helpers decide the
+ * order; they only ever change the order of checking, never the resulting types,
+ * so a misjudgment can at worst forgo an ordering improvement. */
+
+/* Does e syntactically reference the recursive function `self` (called or used
+   as a value)? Does not descend into nested lambda bodies — a self-reference
+   there is deferred (the lambda is a value, not evaluated as part of e), so it
+   does not make e's own value depend on the not-yet-inferred return type. */
+static bool expr_refs_self(Expr *e, const char *self) {
+    if (!e || !self) return false;
+    switch (e->kind) {
+    case EXPR_IDENT:        return e->ident.name == self;
+    case EXPR_BINARY:       return expr_refs_self(e->binary.left, self) ||
+                                   expr_refs_self(e->binary.right, self);
+    case EXPR_UNARY_PREFIX: return expr_refs_self(e->unary_prefix.operand, self);
+    case EXPR_UNARY_POSTFIX:return expr_refs_self(e->unary_postfix.operand, self);
+    case EXPR_CALL:
+        if (expr_refs_self(e->call.func, self)) return true;
+        for (int i = 0; i < e->call.arg_count; i++)
+            if (expr_refs_self(e->call.args[i], self)) return true;
+        return false;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:  return expr_refs_self(e->field.object, self);
+    case EXPR_INDEX:        return expr_refs_self(e->index.object, self) ||
+                                   expr_refs_self(e->index.index, self);
+    case EXPR_SLICE:        return expr_refs_self(e->slice.object, self) ||
+                                   (e->slice.lo && expr_refs_self(e->slice.lo, self)) ||
+                                   (e->slice.hi && expr_refs_self(e->slice.hi, self));
+    case EXPR_CAST:         return expr_refs_self(e->cast.operand, self);
+    case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
+    case EXPR_ASSERT:       return expr_refs_self(e->assert_expr.condition, self);
+    case EXPR_IF:           return expr_refs_self(e->if_expr.cond, self) ||
+                                   expr_refs_self(e->if_expr.then_body, self) ||
+                                   (e->if_expr.else_body && expr_refs_self(e->if_expr.else_body, self));
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            if (expr_refs_self(e->block.stmts[i], self)) return true;
+        return false;
+    case EXPR_MATCH:
+        if (expr_refs_self(e->match_expr.subject, self)) return true;
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            MatchArm *arm = &e->match_expr.arms[i];
+            for (int j = 0; j < arm->body_count; j++)
+                if (expr_refs_self(arm->body[j], self)) return true;
+        }
+        return false;
+    case EXPR_RETURN:       return e->return_expr.value && expr_refs_self(e->return_expr.value, self);
+    case EXPR_BREAK:        return e->break_expr.value && expr_refs_self(e->break_expr.value, self);
+    /* Other forms (literals, nested EXPR_FUNC, struct/tuple/array literals, …) do
+       not contribute a self-recursive call to a value position we order against;
+       treat them as self-free. */
+    default:                return false;
+    }
+}
+
+/* Can checking this branch anchor the recursive return type — i.e. does it have a
+   tail value (reachable through if/match/block control flow) that does not consume
+   a self-recursive call? Such branches are checked before recursive branches. */
+static bool branch_can_anchor(Expr *e, const char *self) {
+    if (!e) return true;   /* a missing/void tail consumes no self-call */
+    switch (e->kind) {
+    case EXPR_IF:
+        return branch_can_anchor(e->if_expr.then_body, self) ||
+               (e->if_expr.else_body ? branch_can_anchor(e->if_expr.else_body, self) : true);
+    case EXPR_MATCH:
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            MatchArm *arm = &e->match_expr.arms[i];
+            Expr *tail = arm->body_count > 0 ? arm->body[arm->body_count - 1] : NULL;
+            if (branch_can_anchor(tail, self)) return true;
+        }
+        return false;
+    case EXPR_BLOCK:
+        return e->block.count > 0
+            ? branch_can_anchor(e->block.stmts[e->block.count - 1], self)
+            : true;
+    default:
+        return !expr_refs_self(e, self);
+    }
+}
+
+/* True while a recursive function's return type is still being inferred. */
+static bool resolving_recursion(CheckCtx *ctx) {
+    return ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_UNRESOLVED &&
+           ctx->recursive_self_name;
+}
+
+/* Anchor an unresolved recursive return type to the first concrete branch type
+   seen (skipping void/never/error/unresolved), so a sibling branch's recursive
+   call observes the inferred type. */
+static void maybe_anchor_recursive(CheckCtx *ctx, Type *t) {
+    if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_UNRESOLVED &&
+        t && t->kind != TYPE_VOID && t->kind != TYPE_NEVER &&
+        t->kind != TYPE_UNRESOLVED && !type_is_error(t))
+        *ctx->recursive_ret = *t;
+}
 
 /* Saved CheckCtx fields for save/restore around on-demand scope switches. */
 typedef struct {
@@ -3220,6 +3336,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (self_name)
             scope_add(inner, self_name, self_cg, self_type, false);
 
+        /* Consume the recursion channel set by the enclosing let/decl when this is
+           the recursive binding's own initializer. Clearing it here scopes the
+           return-type placeholder to this body alone — a nested or anonymous lambda
+           checked within finds it empty, so it cannot wrongly anchor the enclosing
+           function's return type on its own branches. */
+        Type *my_recursive_ret = ctx->pending_recursive_ret;
+        const char *my_recursive_self = ctx->pending_recursive_self;
+        ctx->pending_recursive_ret = NULL;
+        ctx->pending_recursive_self = NULL;
+
         /* Push lambda context for capture tracking */
         LambdaCtx lctx = { .parent = ctx->lambda_ctx };
         if (self_name) {
@@ -3229,21 +3355,33 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         LambdaCtx *saved_lambda = ctx->lambda_ctx;
         ctx->lambda_ctx = &lctx;
 
-        /* Type-check body in inner scope */
+        /* Type-check body in inner scope. recursive_ret/self_name are scoped to
+           exactly this body (see channel consumption above): NULL for an ordinary
+           lambda, the placeholder for the recursive function being resolved. */
+        Type *saved_recursive_ret = ctx->recursive_ret;
+        const char *saved_recursive_self = ctx->recursive_self_name;
+        ctx->recursive_ret = my_recursive_ret;
+        ctx->recursive_self_name = my_recursive_self;
         Scope *saved = ctx->scope;
         ctx->scope = inner;
         Type *ret = check_block(ctx, e->func.body, e->func.body_count);
         ctx->scope = saved;
+        ctx->recursive_ret = saved_recursive_ret;
+        ctx->recursive_self_name = saved_recursive_self;
 
-        /* If the body's tail diverges (`never` — e.g. a trailing `return value`, or an
-           exhaustive `match` whose every arm returns), the tail yields no value, so the
-           function's return type is derived from its `return` statements instead. A
-           `never` tail at function scope can only arise from returns (top-level
-           break/continue already errored "outside of loop"). Pick the first valued
-           return as the inferred type; all-bare returns => void. The validation loop
-           below then enforces agreement across all returns. */
-        if (ret->kind == TYPE_NEVER) {
-            Type *derived = type_void();
+        /* The body's tail yields no value of its own — it either diverges (`never`:
+           a trailing `return value`, or an exhaustive `match` whose every arm
+           returns) or every path recurses (the unresolved recursion marker: the
+           function's tail is a self-recursive call). Derive the return type from the
+           function's `return` statements: the first valued return wins, else a bare
+           `return` makes it void. With no returns at all, a `never` tail must have
+           come from a return elsewhere → void, whereas an unresolved tail is genuine
+           non-terminating recursion → never. The validation loop below then enforces
+           agreement across all returns. Patching the placeholder cell (further down)
+           propagates the resolved type to the recursive call sites that read it. */
+        bool own_marker = ret->kind == TYPE_UNRESOLVED && ret == my_recursive_ret;
+        if (ret->kind == TYPE_NEVER || own_marker) {
+            Type *derived = NULL;
             for (int i = 0; i < lctx.return_count; i++) {
                 Expr *re = lctx.returns[i];
                 if (re->return_expr.value && re->return_expr.value->type &&
@@ -3251,9 +3389,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     derived = re->return_expr.value->type;
                     break;
                 }
+                if (!re->return_expr.value && !derived) derived = type_void();
             }
+            if (!derived)
+                derived = own_marker ? type_never() : type_void();
             ret = derived;
         }
+        /* An UNRESOLVED tail that is NOT this function's own placeholder is a
+           forward reference to another recursive function still being resolved
+           (e.g. a nested lambda that calls its enclosing function). Leave ret as
+           that function's placeholder cell — patched in place when it resolves —
+           exactly as a directly-returned recursive call is handled. */
 
         /* Validate every explicit `return [value]` against the inferred return type.
            A bare `return` requires a void-returning function; `return value` requires
@@ -3751,15 +3897,24 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
-        Type *tt = check_expr(ctx, e->if_expr.then_body);
-        /* If resolving a recursive function, fill in the return type from the
-         * base case (then-branch) before checking the recursive branch (else). */
-        if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
-            tt->kind != TYPE_VOID && tt->kind != TYPE_NEVER && !type_is_error(tt)) {
-            *ctx->recursive_ret = *tt;
+        /* While inferring a recursive function's return type, check a base-case
+         * branch before a branch that consumes a self-recursive call's result, so
+         * the placeholder is anchored first (order-independent: the base case may
+         * be in either branch). This only reorders checking; types are unchanged. */
+        Type *tt, *et = NULL;
+        bool if_reorder = resolving_recursion(ctx) && e->if_expr.else_body &&
+            !branch_can_anchor(e->if_expr.then_body, ctx->recursive_self_name) &&
+            branch_can_anchor(e->if_expr.else_body, ctx->recursive_self_name);
+        if (if_reorder) {
+            et = check_expr(ctx, e->if_expr.else_body);
+            maybe_anchor_recursive(ctx, et);
+            tt = check_expr(ctx, e->if_expr.then_body);
+        } else {
+            tt = check_expr(ctx, e->if_expr.then_body);
+            maybe_anchor_recursive(ctx, tt);
+            if (e->if_expr.else_body) et = check_expr(ctx, e->if_expr.else_body);
         }
         if (e->if_expr.else_body) {
-            Type *et = check_expr(ctx, e->if_expr.else_body);
             if (type_is_error(tt) || type_is_error(et)) {
                 /* Use whichever is non-error, or error if both */
                 e->type = type_is_error(tt) ? et : tt;
@@ -3821,7 +3976,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         const char *saved_psn = ctx->pending_self_name;
         const char *saved_psc = ctx->pending_self_codegen;
         Type *saved_pst = ctx->pending_self_type;
-        Type *saved_rec = ctx->recursive_ret;
+        Type *saved_prr = ctx->pending_recursive_ret;
+        const char *saved_prs = ctx->pending_recursive_self;
         if (e->let_expr.let_init->kind == EXPR_FUNC && !e->let_expr.let_is_mut) {
             Expr *fn = e->let_expr.let_init;
             int pc = fn->func.param_count;
@@ -3832,7 +3988,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
             self_placeholder = malloc(sizeof(Type));
             memset(self_placeholder, 0, sizeof(Type));
-            self_placeholder->kind = TYPE_VOID;  /* patched after body check */
+            self_placeholder->kind = TYPE_UNRESOLVED;  /* patched after body check */
 
             Type *ft = arena_alloc(ctx->arena, sizeof(Type));
             ft->kind = TYPE_FUNC;
@@ -3845,17 +4001,19 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             ctx->pending_self_name = e->let_expr.let_name;
             ctx->pending_self_codegen = cg;
             ctx->pending_self_type = ft;
-            ctx->recursive_ret = self_placeholder;
+            ctx->pending_recursive_ret = self_placeholder;
+            ctx->pending_recursive_self = e->let_expr.let_name;
         }
 
         Type *t = check_expr(ctx, e->let_expr.let_init);
 
-        /* Restore the channel. EXPR_FUNC clears pending_self_* on consumption, but
-           restore unconditionally so error paths and non-lambda inits leave it clean. */
+        /* Restore the channels. EXPR_FUNC clears them on consumption, but restore
+           unconditionally so error paths and non-lambda inits leave them clean. */
         ctx->pending_self_name = saved_psn;
         ctx->pending_self_codegen = saved_psc;
         ctx->pending_self_type = saved_pst;
-        ctx->recursive_ret = saved_rec;
+        ctx->pending_recursive_ret = saved_prr;
+        ctx->pending_recursive_self = saved_prs;
 
         if (type_is_error(t)) {
             /* Add binding with error type so subsequent uses don't cascade "undefined" */
@@ -3874,6 +4032,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (t->kind == TYPE_NEVER) {
             diag_error(e->loc, "cannot bind '%s': every path through this expression "
                 "returns, so it has no value", e->let_expr.let_name);
+            e->let_expr.let_type = type_error();
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            e->type = type_void();
+            return e->type;
+        }
+        if (t->kind == TYPE_UNRESOLVED) {
+            /* The value is (or derives from) a self-recursive call made before any
+               base case anchors the return type — i.e. unconditional recursion. */
+            diag_error(e->loc, "cannot bind '%s': it depends on a recursive call made "
+                "before a base case establishes the return type", e->let_expr.let_name);
             e->let_expr.let_type = type_error();
             scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
             e->type = type_void();
@@ -3952,6 +4120,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     diag_error(e->loc, "cannot return stack-allocated %s from function",
                         type_name(e->return_expr.value->type));
             }
+            /* An early `return value` is a base case too: anchor the recursive
+               return type from it, so a self-recursive call appearing later in the
+               body (the common guard-clause idiom `if base then return v; … f(…) …`)
+               observes the inferred type. The final return-type check below still
+               enforces agreement across every return. */
+            maybe_anchor_recursive(ctx, e->return_expr.value->type);
         }
         /* Register with the enclosing function so its value can be checked against
            the inferred return type once the body's tail type is known. */
@@ -6514,7 +6688,27 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     Type *result_type = NULL;
     Provenance result_prov = PROV_UNKNOWN;
 
-    for (int i = 0; i < e->match_expr.arm_count; i++) {
+    /* While inferring a recursive function's return type, check base-case arms
+       before arms that consume a self-recursive call's result, so the placeholder
+       is anchored first. This reorders only the checking pass; the arms array (used
+       by codegen and the exhaustiveness check below) stays in source order. */
+    int arm_count = e->match_expr.arm_count;
+    int *order = arena_alloc(ctx->arena, sizeof(int) * (size_t)arm_count);
+    if (resolving_recursion(ctx)) {
+        int oc = 0;
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < arm_count; i++) {
+                MatchArm *a = &e->match_expr.arms[i];
+                Expr *tail = a->body_count > 0 ? a->body[a->body_count - 1] : NULL;
+                if (branch_can_anchor(tail, ctx->recursive_self_name) == (pass == 0))
+                    order[oc++] = i;
+            }
+    } else {
+        for (int i = 0; i < arm_count; i++) order[i] = i;
+    }
+
+    for (int k = 0; k < arm_count; k++) {
+        int i = order[k];
         MatchArm *arm = &e->match_expr.arms[i];
         Pattern *pat = arm->pattern;
 
@@ -6567,12 +6761,9 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
                 result_type = unified;
             }
         }
-        /* Fill recursive return type from the first concrete arm (base case). */
-        if (ctx->recursive_ret && ctx->recursive_ret->kind == TYPE_VOID &&
-            result_type && result_type->kind != TYPE_VOID &&
-            result_type->kind != TYPE_NEVER && !type_is_error(result_type)) {
-            *ctx->recursive_ret = *result_type;
-        }
+        /* Anchor the recursive return type from the first concrete arm (base case),
+           so a later arm's self-recursive call observes the inferred type. */
+        maybe_anchor_recursive(ctx, result_type);
     }
 
     /* ---- Exhaustiveness check ---- */
@@ -7436,7 +7627,7 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
 
         recursive_ret = malloc(sizeof(Type));
         memset(recursive_ret, 0, sizeof(Type));
-        recursive_ret->kind = TYPE_VOID;  /* placeholder */
+        recursive_ret->kind = TYPE_UNRESOLVED;  /* placeholder */
 
         Type *ft = arena_alloc(ctx->arena, sizeof(Type));
         ft->kind = TYPE_FUNC;
@@ -7450,10 +7641,15 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     if (d->let.init && d->let.init->kind == EXPR_FUNC)
         ctx->is_top_level_init = true;
 
-    Type *saved_recursive_ret = ctx->recursive_ret;
-    ctx->recursive_ret = recursive_ret;
+    /* Hand the placeholder to the function's own EXPR_FUNC via the recursion
+       channel (consumed there, which scopes it to that body — see EXPR_FUNC). */
+    Type *saved_prr = ctx->pending_recursive_ret;
+    const char *saved_prs = ctx->pending_recursive_self;
+    ctx->pending_recursive_ret = recursive_ret;
+    ctx->pending_recursive_self = recursive_ret ? d->let.name : NULL;
     Type *t = check_expr(ctx, d->let.init);
-    ctx->recursive_ret = saved_recursive_ret;
+    ctx->pending_recursive_ret = saved_prr;
+    ctx->pending_recursive_self = saved_prs;
     ctx->is_top_level_init = saved_top;
 
     /* If we pre-registered a recursive function type, patch the return type */

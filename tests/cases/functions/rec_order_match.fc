@@ -1,0 +1,12 @@
+// Order-independent recursion through `match`: the recursive arm appears before
+// the base-case arm. The base arm anchors the return type regardless of arm order.
+let sumto = (n: int32) ->
+    match n > 0 with
+    | true -> n + sumto(n - 1)
+    | false -> 0
+
+let main = (args: str[]) ->
+    assert(sumto(0) == 0)
+    assert(sumto(5) == 15)
+    assert(sumto(100) == 5050)
+    0

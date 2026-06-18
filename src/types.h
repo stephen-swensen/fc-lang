@@ -29,6 +29,10 @@ typedef enum {
     TYPE_STUB,       /* unresolved type reference: name only, resolved by pass1/pass2 */
     TYPE_ERROR,      /* poison type for error recovery */
     TYPE_NEVER,      /* bottom type: return/break/continue — absorbed by any branch sibling */
+    TYPE_UNRESOLVED, /* a recursive function's not-yet-inferred return type. Transient:
+                        exists only while a recursive body is being checked, then patched
+                        to the concrete inferred type (or `never` if no base case exists).
+                        Absorbed by any branch sibling, like TYPE_NEVER. */
 
     TYPE_COUNT
 } TypeKind;
@@ -120,8 +124,10 @@ Type *type_char(void);
 Type *type_any_ptr(void);
 Type *type_error(void);
 Type *type_never(void);
+Type *type_unresolved(void);
 bool type_is_error(Type *t);
 bool type_is_never(Type *t);
+bool type_is_unresolved(Type *t);
 bool type_is_const(Type *t);
 
 /* Type construction */

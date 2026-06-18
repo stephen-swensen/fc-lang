@@ -1,0 +1,15 @@
+// An anonymous lambda whose own branches resolve to a different type (bool) is
+// checked inside a recursive function before the recursive function's base case.
+// The recursive return-type placeholder is scoped to the recursive function's
+// own body, so the inner lambda's branches do not wrongly anchor it — `outer`
+// still infers int32 and `n * outer(n - 1)` type-checks.
+let apply_bool = (f: (int32) -> bool, x: int32) -> f(x)
+
+let main = (args: str[]) ->
+    let outer = (n: int32) ->
+        if n > 1 then
+            if apply_bool((y: int32) -> if y > 0 then true else false, n) then n * outer(n - 1) else 1
+        else 1
+    assert(outer(1) == 1)
+    assert(outer(5) == 120)
+    0

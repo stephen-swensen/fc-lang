@@ -1,0 +1,8 @@
+// Bare infinite recursion has no base case, so its return type is `never` (the
+// bottom type), not `void`. Binding its result is therefore rejected the same way
+// any never-valued expression is: it produces no value.
+let main = (args: str[]) ->
+    let spin = (n: int32) -> spin(n)
+    let x = spin(3)
+    assert(x == 0)
+    0

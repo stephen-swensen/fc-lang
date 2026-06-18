@@ -1,0 +1,19 @@
+// The guard-clause idiom: the base case is an early `return value`, followed by a
+// self-recursive call whose result is consumed. The early return anchors the
+// recursive return type, so both the tail-consume form and a mid-body `let` that
+// binds the recursive result type-check.
+let sum_tail = (n: int32) ->
+    if n <= 0 then return 0
+    n + sum_tail(n - 1)
+
+let sum_let = (n: int32) ->
+    if n <= 0 then return 0
+    let rest = sum_let(n - 1)
+    rest + n
+
+let main = (args: str[]) ->
+    assert(sum_tail(0) == 0)
+    assert(sum_tail(5) == 15)
+    assert(sum_let(5) == 15)
+    assert(sum_let(100) == 5050)
+    0

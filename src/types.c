@@ -59,6 +59,7 @@ Type *type_char(void) { return type_uint8(); }
 PRIM(any_ptr, TYPE_ANY_PTR)
 PRIM(error,   TYPE_ERROR)
 PRIM(never,   TYPE_NEVER)
+PRIM(unresolved, TYPE_UNRESOLVED)
 
 #undef PRIM
 
@@ -240,6 +241,10 @@ bool type_is_error(Type *t) {
 
 bool type_is_never(Type *t) {
     return t && t->kind == TYPE_NEVER;
+}
+
+bool type_is_unresolved(Type *t) {
+    return t && t->kind == TYPE_UNRESOLVED;
 }
 
 Type *type_pointer(Arena *a, Type *pointee) {
@@ -541,6 +546,7 @@ const char *type_name(Type *t) {
     case TYPE_TYPE_VAR:  return t->type_var.name;
     case TYPE_ERROR:     return "<error>";
     case TYPE_NEVER:     return "never";
+    case TYPE_UNRESOLVED: return "<unresolved>";
     default:             return "?";
     }
 }

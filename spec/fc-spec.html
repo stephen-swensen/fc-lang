@@ -2125,6 +2125,8 @@ In all cases `return` is only needed for early exits — the normal return value
 
 Every `return` in a function body must agree with the function's inferred return type — exactly, with no implicit widening. A `return expr` requires `expr`'s type to equal the function's return type; a bare `return` requires a void-returning function. The return type is inferred from the body's tail expression, or — when the tail itself diverges (e.g. the body ends in `return expr`, or in a `match` whose every arm returns) — from the `return` statements themselves. This matches the rule for `if`/`else` branches, `match` arms, and `loop` `break` values (see §Implicit Widening). To bridge types use an explicit cast: `return (int64) x`.
 
+**Recursive functions.** A recursive function's return type is inferred from its *base cases* — the paths that produce a value without calling back into the function. The base case may sit in any branch position: `if n > 1 then n * fac(n - 1) else 1` and `if n <= 1 then 1 else n * fac(n - 1)` are equally valid, as are `match` arms in any order. A self-recursive call takes whatever return type the base cases establish, so it can be consumed freely in the recursive branch (multiplied, compared, passed along) regardless of where it appears relative to the base case. A function with *no* base case — one whose every path recurses, such as `let spin = (n: int32) -> spin(n)` — does not return; its return type is `never` (the bottom type), so binding its result is rejected the same way any `never`-valued expression is. This applies identically to top-level functions and self-recursive local lambdas (see §Blocks).
+
 ### Entry point
 
 ```fc

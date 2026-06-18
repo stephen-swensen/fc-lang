@@ -669,6 +669,7 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_VOID:    fprintf(out, "void");      break;
     case TYPE_NEVER:   fprintf(out, "void");      break; /* defensive: never materialized */
+    case TYPE_UNRESOLVED: fprintf(out, "void");   break; /* defensive: patched before codegen */
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_POINTER:
         if (t->is_const) fprintf(out, "const ");
