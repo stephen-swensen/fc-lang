@@ -75,29 +75,4 @@ assert). Spec work extends the RMW section from the `fetch_add` item: exchange a
 are acq_rel RMWs in the cell's total modification order; CAS-failure is an acquire load with
 no store.
 
-## Heap-use-after-free in `discover_nested_types` (monomorph.c) — ASan-only, latent
-
-`discover_nested_types` in `src/monomorph.c` has a heap-use-after-free, reproducible with:
-
-```
-make clean && make OPT="-O1 -fsanitize=address,undefined"
-ASAN_OPTIONS=detect_leaks=0 ./build/<os>/fcc \
-    tests/cases/generics/generic_struct_union_field.fc -o /tmp/x.c
-```
-
-ASan reports `heap-use-after-free … in discover_nested_types` at `monomorph.c:669` (the
-`sym->type->unio.name` read on the generic-union branch; the struct branch is the same shape).
-It is **pre-existing** — reproduces on commit `dc55602` (before the item-14 follow-up that
-surfaced it), and is **benign in normal `-O0`/`-O2` builds**: the test passes because the freed
-block still holds valid data, so this is ASan-only today. Found while ASan-sweeping during the
-item-14 follow-up (see `spec/hist/audit-2026-06-rc4.md`).
-
-Likely cause: a pointer into the dynamic `mono.entries` array (a `MonoInstance*` from `mono_find`,
-or a `Symbol`/`Type` reachable from one) held across a `mono_register` → `DA_APPEND` that grows
-and frees the old backing — the classic "pointer into a vector kept across a push" bug. The fix
-is to re-fetch by mangled name (or index) after any registration that can append, rather than
-holding the pointer. Worth confirming the exact aliasing under ASan with `abort_on_error=1` and a
-backtrace, then auditing every `mono_find`/`&t->entries[i]` use that spans a `mono_register` call.
-Not urgent (no miscompile observed), but it's a real memory-safety bug and should be closed.
-
 ---

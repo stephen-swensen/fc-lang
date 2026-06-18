@@ -879,14 +879,20 @@ void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, Symbo
     while (discovered < t->count) {
         int batch_end = t->count;
         for (int i = discovered; i < batch_end; i++) {
-            MonoInstance *inst = &t->entries[i];
-            if (inst->decl_kind != DECL_LET) continue;
-            Decl *tmpl = inst->template_decl;
+            if (t->entries[i].decl_kind != DECL_LET) continue;
+            Decl *tmpl = t->entries[i].template_decl;
             if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
+            /* Snapshot the fields we pass into discover_in_expr before the loop:
+             * discover_in_expr can mono_register → DA_APPEND → realloc t->entries,
+             * which would dangle a held &t->entries[i]. These are arena/AST pointers
+             * and a plain int, so the snapshot stays valid across that growth. */
+            const char **tp_names = t->entries[i].type_param_names;
+            Type **tp_args = t->entries[i].type_args;
+            int tp_count = t->entries[i].type_param_count;
             Expr *fn = tmpl->let.init;
             for (int j = 0; j < fn->func.body_count; j++) {
                 discover_in_expr(fn->func.body[j], t, a, intern, symtab,
-                    inst->type_param_names, inst->type_args, inst->type_param_count);
+                    tp_names, tp_args, tp_count);
             }
         }
         discovered = batch_end;

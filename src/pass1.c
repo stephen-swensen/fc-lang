@@ -559,7 +559,9 @@ static Type *register_struct_sym(SymbolTable *tab, InternTable *intern, Decl *d)
     st->struc.type_args = NULL;
     st->struc.type_arg_count = 0;
     sym->type = st;
-    st->struc.resolved_sym = sym;
+    /* resolved_sym is bound in the final phase (set_type_resolved_syms), not here:
+     * the symtab_add below — and every later one — may realloc tab->symbols, so a
+     * &symbols[i] taken now would dangle. */
     detect_generic_struct(d, sym);
     symtab_add(tab, mangled, DECL_STRUCT, d);
     Symbol *sym2 = &tab->symbols[tab->count - 1];
@@ -589,7 +591,7 @@ static Type *register_union_sym(SymbolTable *tab, InternTable *intern, Decl *d) 
     ut->unio.type_args = NULL;
     ut->unio.type_arg_count = 0;
     sym->type = ut;
-    ut->unio.resolved_sym = sym;
+    /* resolved_sym deferred to set_type_resolved_syms — see register_struct_sym. */
     detect_generic_union(d, sym);
     symtab_add(tab, mangled, DECL_UNION, d);
     Symbol *sym2 = &tab->symbols[tab->count - 1];
@@ -951,6 +953,28 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
     }
 }
 
+/* Point each top-level struct/union Type at its address-stable defining Symbol.
+ * register_struct_sym / register_union_sym (and their namespace-scoped variants)
+ * cannot set Type.resolved_sym safely at registration time: every later
+ * symtab_add DA_APPENDs to the by-value `symbols` array and may realloc it,
+ * leaving an earlier &symbols[i] dangling — a heap-use-after-free once mono reads
+ * resolved_sym (ASan: discover_nested_types). Module members already defer this
+ * to a post-population loop in register_module_members; top-level types get the
+ * same treatment here, called at end of pass1 once all symtab mutations are done.
+ * The non-NULL guard leaves module-scoped types' resolved_sym (already pointed at
+ * their member Symbol) intact when their global-symtab alias is visited. */
+static void set_type_resolved_syms(SymbolTable *tab) {
+    for (int i = 0; i < tab->count; i++) {
+        Symbol *s = &tab->symbols[i];
+        if (s->kind == DECL_STRUCT && s->type && s->type->kind == TYPE_STRUCT
+            && !s->type->struc.resolved_sym)
+            s->type->struc.resolved_sym = s;
+        else if (s->kind == DECL_UNION && s->type && s->type->kind == TYPE_UNION
+                 && !s->type->unio.resolved_sym)
+            s->type->unio.resolved_sym = s;
+    }
+}
+
 /* Walk modules and set parent pointers. Called at end of pass1 after all
  * symtab mutations are complete, so Symbol pointers are stable. */
 static void set_module_parents(SymbolTable *tab, Symbol *parent) {
@@ -1219,7 +1243,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 st->struc.type_args = NULL;
                 st->struc.type_arg_count = 0;
                 sym->type = st;
-                st->struc.resolved_sym = sym;
+                /* resolved_sym deferred to set_type_resolved_syms (stable addr). */
                 detect_generic_struct(d, sym);
                 /* Also register under the mangled name so canonicalized type
                  * stubs resolve in the global symtab directly. The mangled
@@ -1277,7 +1301,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 ut->unio.type_args = NULL;
                 ut->unio.type_arg_count = 0;
                 sym->type = ut;
-                ut->unio.resolved_sym = sym;
+                /* resolved_sym deferred to set_type_resolved_syms (stable addr). */
                 detect_generic_union(d, sym);
                 /* Also register under the mangled name (see struct case). */
                 symtab_add(symtab, mangled, DECL_UNION, d);
@@ -1556,7 +1580,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         free(color);
     }
 
-    /* Final phase: set parent pointers on all nested modules. Must run after
-     * all symtab mutations are complete so Symbol pointers are stable. */
+    /* Final phase: set parent pointers on all nested modules, and bind top-level
+     * struct/union types to their (now address-stable) defining Symbols. Must run
+     * after all symtab mutations are complete so Symbol pointers are stable. */
+    set_type_resolved_syms(symtab);
     set_module_parents(symtab, NULL);
 }
