@@ -1,5 +1,22 @@
 #include "types.h"
 #include <stdio.h>
+#include <stdarg.h>
+
+/* Accumulating snprintf into a fixed buffer, robust to overflow: clamps *pos to
+ * [0, cap] so the remaining-size argument can never underflow to a huge size_t
+ * when a deeply nested type name exceeds the buffer (the name just truncates).
+ * The naive `snprintf(buf + pos, cap - (size_t)pos, ...)` idiom overflows the
+ * buffer once pos > cap — reachable for e.g. wrap<wrap<...>> at depth ~50+. */
+static void tn_appendf(char *buf, int *pos, int cap, const char *fmt, ...) {
+    if (*pos < 0) *pos = 0;
+    if (*pos >= cap) { *pos = cap; return; }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *pos, (size_t)(cap - *pos), fmt, ap);
+    va_end(ap);
+    if (n > 0) *pos += n;
+    if (*pos > cap) *pos = cap;
+}
 
 static char *str_dup(const char *s) {
     size_t len = strlen(s) + 1;
@@ -448,23 +465,23 @@ const char *type_name(Type *t) {
         char *buf = bufs[bidx & 1]; bidx++;
         int pos = 0;
         if (t->func.type_param_count > 0) {
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "<");
+            tn_appendf(buf, &pos, 256, "<");
             for (int i = 0; i < t->func.type_param_count; i++) {
-                if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
-                pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", t->func.type_params[i]);
+                if (i > 0) tn_appendf(buf, &pos, 256, ", ");
+                tn_appendf(buf, &pos, 256, "%s", t->func.type_params[i]);
             }
-            pos += snprintf(buf + pos, 256 - (size_t)pos, ">");
+            tn_appendf(buf, &pos, 256, ">");
         }
-        pos += snprintf(buf + pos, 256 - (size_t)pos, "(");
+        tn_appendf(buf, &pos, 256, "(");
         for (int i = 0; i < t->func.param_count; i++) {
-            if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->func.param_types[i]));
+            if (i > 0) tn_appendf(buf, &pos, 256, ", ");
+            tn_appendf(buf, &pos, 256, "%s", type_name(t->func.param_types[i]));
         }
         if (t->func.is_variadic) {
-            if (t->func.param_count > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "...");
+            if (t->func.param_count > 0) tn_appendf(buf, &pos, 256, ", ");
+            tn_appendf(buf, &pos, 256, "...");
         }
-        pos += snprintf(buf + pos, 256 - (size_t)pos, ") -> %s", type_name(t->func.return_type));
+        tn_appendf(buf, &pos, 256, ") -> %s", type_name(t->func.return_type));
         return buf;
     }
     case TYPE_STRUCT: {
@@ -473,13 +490,12 @@ const char *type_name(Type *t) {
             static int ttidx = 0;
             char *buf = ttbufs[ttidx & 3]; ttidx++;
             int pos = 0;
-            pos += snprintf(buf + pos, 512 - (size_t)pos, "{");
+            tn_appendf(buf, &pos, 512, "{");
             for (int i = 0; i < t->struc.field_count; i++) {
-                if (i > 0) pos += snprintf(buf + pos, 512 - (size_t)pos, ", ");
-                pos += snprintf(buf + pos, 512 - (size_t)pos, "%s",
-                                type_name(t->struc.fields[i].type));
+                if (i > 0) tn_appendf(buf, &pos, 512, ", ");
+                tn_appendf(buf, &pos, 512, "%s", type_name(t->struc.fields[i].type));
             }
-            snprintf(buf + pos, 512 - (size_t)pos, "}");
+            tn_appendf(buf, &pos, 512, "}");
             return buf;
         }
         if (t->struc.type_arg_count > 0 && t->struc.qualified_name) {
@@ -488,12 +504,12 @@ const char *type_name(Type *t) {
             char *buf = stbufs[stidx & 3]; stidx++;
             const char *display = t->struc.qualified_name;
             int pos = 0;
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", display);
+            tn_appendf(buf, &pos, 256, "%s<", display);
             for (int i = 0; i < t->struc.type_arg_count; i++) {
-                if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
-                pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->struc.type_args[i]));
+                if (i > 0) tn_appendf(buf, &pos, 256, ", ");
+                tn_appendf(buf, &pos, 256, "%s", type_name(t->struc.type_args[i]));
             }
-            snprintf(buf + pos, 256 - (size_t)pos, ">");
+            tn_appendf(buf, &pos, 256, ">");
             return buf;
         }
         if (t->struc.qualified_name) return t->struc.qualified_name;
@@ -506,12 +522,12 @@ const char *type_name(Type *t) {
             char *buf = utbufs[utidx & 3]; utidx++;
             const char *display = t->unio.qualified_name;
             int pos = 0;
-            pos += snprintf(buf + pos, 256 - (size_t)pos, "%s<", display);
+            tn_appendf(buf, &pos, 256, "%s<", display);
             for (int i = 0; i < t->unio.type_arg_count; i++) {
-                if (i > 0) pos += snprintf(buf + pos, 256 - (size_t)pos, ", ");
-                pos += snprintf(buf + pos, 256 - (size_t)pos, "%s", type_name(t->unio.type_args[i]));
+                if (i > 0) tn_appendf(buf, &pos, 256, ", ");
+                tn_appendf(buf, &pos, 256, "%s", type_name(t->unio.type_args[i]));
             }
-            snprintf(buf + pos, 256 - (size_t)pos, ">");
+            tn_appendf(buf, &pos, 256, ">");
             return buf;
         }
         if (t->unio.qualified_name) return t->unio.qualified_name;
@@ -680,36 +696,91 @@ bool type_needs_eq_func(Type *t) {
     }
 }
 
-bool type_contains_type_var(Type *t) {
+/* A fully-substituted generic struct/union instance shares ONE subtree between a
+ * field type and the matching type argument — type_substitute returns the same
+ * node for both. So a chain like wrap<wrap<...<int32>>> is a linear-size DAG, but
+ * a naive walk that descends through BOTH a struct's fields and its type_args
+ * visits each shared node twice per level => O(2^depth). A divergent generic
+ * (e.g. f(wrap{v=x}) instantiating f<wrap<'a>> -> f<wrap<wrap<'a>>> -> ...) builds
+ * such chains and hung the compiler here. A visited set of struct/union/stub nodes
+ * already proven type-var-FREE collapses the walk back to O(nodes): a `true`
+ * result short-circuits all the way out, so only the clean (false) joins need
+ * memoizing. The set holds only the branching nodes (struct/union/stub); single-
+ * child constructors (pointer/option/slice/array) can't compound a revisit. */
+typedef struct {
+    Type **items;
+    int count, cap;
+    Type *inline_buf[64];   /* avoids any heap allocation for ordinary types */
+} TypeVarCleanSet;
+
+static bool clean_set_has(TypeVarCleanSet *s, Type *t) {
+    for (int i = 0; i < s->count; i++)
+        if (s->items[i] == t) return true;
+    return false;
+}
+
+static void clean_set_add(TypeVarCleanSet *s, Type *t) {
+    if (s->count == s->cap) {
+        int ncap = s->cap * 2;
+        Type **ni;
+        if (s->items == s->inline_buf) {
+            ni = malloc(sizeof(Type*) * (size_t)ncap);
+            memcpy(ni, s->items, sizeof(Type*) * (size_t)s->count);
+        } else {
+            ni = realloc(s->items, sizeof(Type*) * (size_t)ncap);
+        }
+        s->items = ni;
+        s->cap = ncap;
+    }
+    s->items[s->count++] = t;
+}
+
+static bool type_contains_type_var_memo(Type *t, TypeVarCleanSet *clean) {
     if (!t) return false;
     switch (t->kind) {
     case TYPE_TYPE_VAR: return true;
-    case TYPE_POINTER:  return type_contains_type_var(t->pointer.pointee);
-    case TYPE_SLICE:    return type_contains_type_var(t->slice.elem);
-    case TYPE_OPTION:   return type_contains_type_var(t->option.inner);
-    case TYPE_FIXED_ARRAY: return type_contains_type_var(t->fixed_array.elem);
+    case TYPE_POINTER:  return type_contains_type_var_memo(t->pointer.pointee, clean);
+    case TYPE_SLICE:    return type_contains_type_var_memo(t->slice.elem, clean);
+    case TYPE_OPTION:   return type_contains_type_var_memo(t->option.inner, clean);
+    case TYPE_FIXED_ARRAY: return type_contains_type_var_memo(t->fixed_array.elem, clean);
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
-            if (type_contains_type_var(t->func.param_types[i])) return true;
-        return type_contains_type_var(t->func.return_type);
+            if (type_contains_type_var_memo(t->func.param_types[i], clean)) return true;
+        return type_contains_type_var_memo(t->func.return_type, clean);
     case TYPE_STRUCT:
+        if (clean_set_has(clean, t)) return false;
         for (int i = 0; i < t->struc.field_count; i++)
-            if (type_contains_type_var(t->struc.fields[i].type)) return true;
+            if (type_contains_type_var_memo(t->struc.fields[i].type, clean)) return true;
         for (int i = 0; i < t->struc.type_arg_count; i++)
-            if (type_contains_type_var(t->struc.type_args[i])) return true;
+            if (type_contains_type_var_memo(t->struc.type_args[i], clean)) return true;
+        clean_set_add(clean, t);
         return false;
     case TYPE_UNION:
+        if (clean_set_has(clean, t)) return false;
         for (int i = 0; i < t->unio.variant_count; i++)
-            if (type_contains_type_var(t->unio.variants[i].payload)) return true;
+            if (type_contains_type_var_memo(t->unio.variants[i].payload, clean)) return true;
         for (int i = 0; i < t->unio.type_arg_count; i++)
-            if (type_contains_type_var(t->unio.type_args[i])) return true;
+            if (type_contains_type_var_memo(t->unio.type_args[i], clean)) return true;
+        clean_set_add(clean, t);
         return false;
     case TYPE_STUB:
+        if (clean_set_has(clean, t)) return false;
         for (int i = 0; i < t->stub.type_arg_count; i++)
-            if (type_contains_type_var(t->stub.type_args[i])) return true;
+            if (type_contains_type_var_memo(t->stub.type_args[i], clean)) return true;
+        clean_set_add(clean, t);
         return false;
     default: return false;
     }
+}
+
+bool type_contains_type_var(Type *t) {
+    TypeVarCleanSet clean;
+    clean.items = clean.inline_buf;
+    clean.count = 0;
+    clean.cap = (int)(sizeof(clean.inline_buf) / sizeof(clean.inline_buf[0]));
+    bool r = type_contains_type_var_memo(t, &clean);
+    if (clean.items != clean.inline_buf) free(clean.items);
+    return r;
 }
 
 void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {

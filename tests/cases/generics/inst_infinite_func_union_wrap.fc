@@ -1,0 +1,11 @@
+// Divergent generic function growing its type argument through a generic union
+// wrapper: f<'a> -> f<box<'a>> -> f<box<box<'a>>> -> ... Rejected by the pass2
+// instantiation-depth backstop.
+union box =
+    | b('a)
+
+let f = (x: 'a) ->
+    if true then 0 else f(box<'a>.b(x))
+
+let main = (args: str[]) ->
+    f(5)

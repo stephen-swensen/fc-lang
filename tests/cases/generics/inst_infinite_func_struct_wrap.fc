@@ -1,0 +1,14 @@
+// A generic function that recursively calls itself wrapping its argument in a
+// generic struct (wrap{v=x}: 'a -> wrap<'a>) forces f<'a> -> f<wrap<'a>> ->
+// f<wrap<wrap<'a>>> -> ..., an infinite family of monomorphized copies. Unlike
+// option-wrapping, the recursive call lives in a function body, so the compiler
+// must reject it via the pass2 instantiation-depth backstop — previously this
+// hung the compiler (exponential type walk) and then emitted dangling C.
+struct wrap =
+    v: 'a
+
+let f = (x: 'a) ->
+    if true then 0 else f(wrap { v = x })
+
+let main = (args: str[]) ->
+    f(5)

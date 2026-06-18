@@ -1,0 +1,9 @@
+// A recursive generic function that calls itself with the SAME type argument
+// (the value recurses, the type does not) is an ordinary terminating recursion:
+// one instance, finite. The instantiation-depth backstop must NOT flag it.
+let count_down = (x: 'a, n: int32) ->
+    if n <= 0 then x else count_down(x, n - 1)
+
+let main = (args: str[]) ->
+    assert(count_down(7, 5) == 7)
+    0

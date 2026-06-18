@@ -1,0 +1,13 @@
+// Mutual recursion that grows the type argument each hop: f<'a> needs g<wrap<'a>>
+// needs f<wrap<wrap<'a>>> ... — the mutual variant of struct-wrapped infinite
+// instantiation. Caught by the pass2 instantiation-depth backstop.
+struct wrap =
+    v: 'a
+
+let f = (x: 'a) ->
+    if true then 0 else g(wrap { v = x })
+let g = (x: 'a) ->
+    if true then 0 else f(wrap { v = x })
+
+let main = (args: str[]) ->
+    f(5)

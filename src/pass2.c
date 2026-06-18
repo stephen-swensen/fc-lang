@@ -1825,25 +1825,101 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
     Type *func_type, const char **type_params, Type **bindings, int ntp)
 {
     static char buf[512];
+    const int cap = (int)sizeof(buf);
     int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s(", func_name);
+    /* Clamp pos to [0, cap] after every append so the remaining-size argument
+     * never underflows when a deeply nested instantiation's name overflows the
+     * buffer (the descriptor just truncates — it is depth-keyed for dedup). */
+    #define FGI_APPEND(...) do { \
+        if (pos < cap) { \
+            int _n = snprintf(buf + pos, (size_t)(cap - pos), __VA_ARGS__); \
+            if (_n > 0) pos += _n; \
+            if (pos > cap) pos = cap; \
+        } \
+    } while (0)
+    FGI_APPEND("%s(", func_name);
     if (func_type && func_type->kind == TYPE_FUNC) {
         for (int i = 0; i < func_type->func.param_count; i++) {
-            if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ", ");
+            if (i > 0) FGI_APPEND(", ");
             Type *pt = type_substitute(arena, func_type->func.param_types[i],
                 type_params, bindings, ntp);
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", type_name(pt));
+            FGI_APPEND("%s", type_name(pt));
         }
     }
-    snprintf(buf + pos, sizeof(buf) - (size_t)pos, ")");
+    FGI_APPEND(")");
+    #undef FGI_APPEND
     return buf;
 }
 
 /* Bounds transitive (cross-function-body) generic validation so a pathological
- * type-growing recursion can't loop forever. Deeper than any real call chain;
- * the instantiation memo below is the primary bound. */
-#define GEN_XBODY_DEPTH_MAX 64
+ * type-growing recursion can't loop forever. This is the absolute recursion net;
+ * GEN_INST_DEPTH_MAX (the depth backstop below) and the instantiation memo halt
+ * real divergence well before it. Set above GEN_INST_DEPTH_MAX so the backstop
+ * fires (with a precise diagnostic) before this silent cutoff. */
+#define GEN_XBODY_DEPTH_MAX 192
 static int g_gen_xbody_depth = 0;
+
+/* Depth backstop for infinite generic instantiation (audit item 14). A divergent
+ * generic function instantiates itself with an ever-deeper type argument —
+ * f(wrap{v=x}) forces f<wrap<'a>> -> f<wrap<wrap<'a>>> -> ..., naming an infinite
+ * family of monomorphized copies. Unlike option-wrapped divergence (caught later
+ * by monomorph.c's cap), a user struct/union wrapper produces a recursive call
+ * inside a *function body*; monomorphization either never registers it (the
+ * inferred call carries no explicit type args) or truncates it on a mangling
+ * collision, emitting dangling C. We catch it here, at the cross-body descent
+ * that already walks these growing instantiations, the moment a binding's
+ * structural depth exceeds anything a finite program reaches. Reuses the same
+ * "infinite generic instantiation" wording as the monomorph.c guards. */
+#define GEN_INST_DEPTH_MAX 64
+static bool g_gen_inf_reported = false;
+
+/* Structural nesting depth of a concrete instantiation's type argument — the axis
+ * a divergent generic grows along. Mirrors monomorph.c's mono_type_arg_depth:
+ * recurses through wrapper constructors and into generic type arguments, never
+ * into struct/union *fields* (bounded by the definition; only args grow), so it
+ * stays finite on by-value-recursive concrete types. */
+static int gen_inst_type_depth(Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_POINTER:     return 1 + gen_inst_type_depth(t->pointer.pointee);
+    case TYPE_SLICE:       return 1 + gen_inst_type_depth(t->slice.elem);
+    case TYPE_OPTION:      return 1 + gen_inst_type_depth(t->option.inner);
+    case TYPE_FIXED_ARRAY: return 1 + gen_inst_type_depth(t->fixed_array.elem);
+    case TYPE_FUNC: {
+        int m = gen_inst_type_depth(t->func.return_type);
+        for (int i = 0; i < t->func.param_count; i++) {
+            int d = gen_inst_type_depth(t->func.param_types[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    case TYPE_STRUCT: {
+        int m = 0;
+        for (int i = 0; i < t->struc.type_arg_count; i++) {
+            int d = gen_inst_type_depth(t->struc.type_args[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    case TYPE_UNION: {
+        int m = 0;
+        for (int i = 0; i < t->unio.type_arg_count; i++) {
+            int d = gen_inst_type_depth(t->unio.type_args[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    case TYPE_STUB: {
+        int m = 0;
+        for (int i = 0; i < t->stub.type_arg_count; i++) {
+            int d = gen_inst_type_depth(t->stub.type_args[i]);
+            if (d > m) m = d;
+        }
+        return 1 + m;
+    }
+    default: return 1;
+    }
+}
 
 /* Memo of generic instantiations already validated in the current top-level
  * pass. A self- or mutually-recursive generic (or a diamond of generic calls)
@@ -1858,7 +1934,7 @@ typedef struct { const Symbol *sym; const char *desc; } GenSeen;
 static GenSeen *g_gen_seen = NULL;
 static int g_gen_seen_n = 0, g_gen_seen_cap = 0;
 
-static void gen_seen_reset(void) { g_gen_seen_n = 0; }
+static void gen_seen_reset(void) { g_gen_seen_n = 0; g_gen_inf_reported = false; }
 
 /* Record (sym, desc) as validated. Returns true if newly added (caller should
  * descend), false if this instantiation was already validated this pass. */
@@ -2045,22 +2121,59 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                 for (int i = 0; i < cntp; i++)
                     if (!cbind[i] || type_contains_type_var(cbind[i])) { unified = false; break; }
             }
+            /* Depth backstop: a binding nesting deeper than any finite program
+             * would means this generic instantiates itself with an ever-growing
+             * type argument — an infinite monomorphized family. Report once (the
+             * pass2 error gate then stops compilation before codegen emits the
+             * dangling/truncated C such a family produces) and don't descend. */
             if (unified) {
-                /* fmt_generic_inst returns a shared static buffer; copy into the
-                 * arena so the descriptor stays valid across the recursive
-                 * descent (which calls fmt_generic_inst again) and can be
-                 * memoized. Validate each distinct instantiation once — recursive
-                 * or diamond generic calls otherwise re-descend exponentially. */
-                const char *tmp = fmt_generic_inst(callee->name, arena, cft,
-                    callee->type_params, cbind, cntp);
-                const char *cdesc = arena_strdup(arena, tmp, (int) strlen(tmp));
-                if (gen_seen_add(arena, callee, cdesc)) {
-                    Expr *cfn = callee->decl->let.init;
-                    g_gen_xbody_depth++;
-                    for (int i = 0; i < cfn->func.body_count; i++)
-                        ok &= validate_generic_body(cfn->func.body[i], arena,
-                            callee->type_params, cbind, cntp, call_loc, cdesc);
-                    g_gen_xbody_depth--;
+                int maxd = 0;
+                for (int i = 0; i < cntp; i++) {
+                    int d = gen_inst_type_depth(cbind[i]);
+                    if (d > maxd) maxd = d;
+                }
+                if (maxd > GEN_INST_DEPTH_MAX) {
+                    if (!g_gen_inf_reported) {
+                        g_gen_inf_reported = true;
+                        diag_error(call_loc,
+                            "infinite generic instantiation of '%s': it is instantiated "
+                            "with an unbounded family of ever-deeper type arguments "
+                            "(exceeded depth %d). A generic function that calls itself "
+                            "with a growing type argument (e.g. f(wrap{ v = x }), where "
+                            "each call wraps the argument in another generic layer) "
+                            "requires infinitely many monomorphized copies.",
+                            callee->name, GEN_INST_DEPTH_MAX);
+                    }
+                    ok = false;
+                } else {
+                    /* fmt_generic_inst returns a shared static buffer; copy into the
+                     * arena so the descriptor stays valid across the recursive
+                     * descent (which calls fmt_generic_inst again). cdesc is the
+                     * human-readable substitution context threaded into diagnostics.
+                     * Validate each distinct instantiation once — recursive or diamond
+                     * generic calls otherwise re-descend exponentially. */
+                    const char *tmp = fmt_generic_inst(callee->name, arena, cft,
+                        callee->type_params, cbind, cntp);
+                    const char *cdesc = arena_strdup(arena, tmp, (int) strlen(tmp));
+                    /* Memo key is depth-prefixed (kept separate from the display
+                     * descriptor): fmt_generic_inst truncates in its fixed buffer, so
+                     * two different-depth instantiations of a long-named generic can
+                     * format identically; without the depth in the key such a collision
+                     * would dedup them and silently halt a divergent descent before the
+                     * backstop above fires. */
+                    char keybuf[512];
+                    int klen = snprintf(keybuf, sizeof(keybuf), "%d:%s", maxd, tmp);
+                    if (klen < 0) klen = 0;
+                    if (klen >= (int)sizeof(keybuf)) klen = (int)sizeof(keybuf) - 1;
+                    const char *ckey = arena_strdup(arena, keybuf, klen);
+                    if (gen_seen_add(arena, callee, ckey)) {
+                        Expr *cfn = callee->decl->let.init;
+                        g_gen_xbody_depth++;
+                        for (int i = 0; i < cfn->func.body_count; i++)
+                            ok &= validate_generic_body(cfn->func.body[i], arena,
+                                callee->type_params, cbind, cntp, call_loc, cdesc);
+                        g_gen_xbody_depth--;
+                    }
                 }
             }
         }
@@ -3473,11 +3586,22 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         const char *tmp = fmt_generic_inst(callee_sym->name, ctx->arena,
                             ft, callee_sym->type_params, bindings, ntp);
                         const char *inst_desc = arena_strdup(ctx->arena, tmp, (int) strlen(tmp));
-                        /* Fresh memo for this top-level validation; seed it with
-                         * the entry instantiation so its own self-calls don't
-                         * re-descend into an identical body. */
+                        /* Fresh memo for this top-level validation; seed it with the
+                         * entry instantiation so its own self-calls don't re-descend
+                         * into an identical body. The memo key is depth-prefixed to
+                         * match the keys the cross-body descent builds (kept separate
+                         * from inst_desc, which is the display descriptor). */
+                        int seed_d = 0;
+                        for (int i = 0; i < ntp; i++) {
+                            int d = gen_inst_type_depth(bindings[i]);
+                            if (d > seed_d) seed_d = d;
+                        }
+                        char seedbuf[512];
+                        int slen = snprintf(seedbuf, sizeof(seedbuf), "%d:%s", seed_d, tmp);
+                        if (slen < 0) slen = 0;
+                        if (slen >= (int)sizeof(seedbuf)) slen = (int)sizeof(seedbuf) - 1;
                         gen_seen_reset();
-                        gen_seen_add(ctx->arena, callee_sym, inst_desc);
+                        gen_seen_add(ctx->arena, callee_sym, arena_strdup(ctx->arena, seedbuf, slen));
                         for (int i = 0; i < func_expr->func.body_count; i++) {
                             if (!validate_generic_body(func_expr->func.body[i], ctx->arena,
                                     callee_sym->type_params, bindings, ntp,

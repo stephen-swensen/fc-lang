@@ -1,0 +1,12 @@
+// The instantiation descriptor for a long-named generic truncates in the shared
+// format buffer, so distinct depths could format identically. The depth-keyed
+// memo keeps the divergent descent progressing to the depth backstop instead of
+// dedup'ing two truncated descriptors and silently emitting dangling C.
+struct a_rather_long_generic_wrapper_type_name_for_truncation =
+    v: 'a
+
+let f = (x: 'a) ->
+    if true then 0 else f(a_rather_long_generic_wrapper_type_name_for_truncation { v = x })
+
+let main = (args: str[]) ->
+    f(5)

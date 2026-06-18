@@ -1,0 +1,13 @@
+// Calling a generic function with a deeply but finitely nested concrete argument
+// names exactly one instance (id<box<box<box<int32>>>>). Must compile and run;
+// the depth backstop only fires for self-growing (unbounded) instantiation.
+struct box =
+    v: 'a
+
+let id = (x: 'a) ->
+    x
+
+let main = (args: str[]) ->
+    let d = id(box { v = box { v = box { v = 9 } } })
+    assert(d.v.v.v == 9)
+    0
