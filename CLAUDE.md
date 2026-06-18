@@ -95,7 +95,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42i`, `42u`
 - No implicit widening to/from `isize`/`usize` — explicit casts required
 - String types: `str` = `uint8[]` (fat pointer), `cstr` = `uint8*` (null-terminated, C interop)
-- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(int32) buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width required), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
+- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(int32) buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width/precision optional), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
 - `any*` = opaque pointer (`void*`), cannot be dereferenced
 
 ### Control Flow

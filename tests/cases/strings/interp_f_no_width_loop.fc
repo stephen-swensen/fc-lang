@@ -1,0 +1,13 @@
+// A bare %f buffer is constant-size (sized from the float type's max magnitude,
+// not from a runtime length), so in a loop it must hoist to a single reused
+// fixed backing — no per-iteration stack growth. 200k iterations would blow the
+// stack if a fresh alloca were emitted each pass.
+let main = (args: str[]) ->
+    let mut acc = 0
+    for i in 0..200000
+        let f = (float64)(i % 100) / 10.0
+        let s = "%.1f{f}"
+        // every formatted string is non-empty and bounded
+        if s.len >= 1 then acc = acc + 1
+    assert(acc == 200000)
+    0

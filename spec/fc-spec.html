@@ -803,7 +803,7 @@ The compiler validates that each format specifier is compatible with the express
 | `%u` | all integer types | unsigned decimal |
 | `%x`, `%X` | all integer types | hexadecimal |
 | `%o` | all integer types | octal |
-| `%f` | `float32`, `float64` | fixed-point — **width required** |
+| `%f` | `float32`, `float64` | fixed-point |
 | `%e`, `%E` | `float32`, `float64` | scientific notation |
 | `%g`, `%G` | `float32`, `float64` | shortest representation |
 | `%s` | `str`, `cstr` | string |
@@ -816,7 +816,7 @@ The `%T` format emits the compile-time type name of the expression as a string l
 
 Width, precision, and flag modifiers are allowed: `%04d{x}`, `%8.2f{pi}`, `%20s{name}`.
 
-The `%f` format requires an explicit width (e.g., `%8.2f`) to make the field size intentional at the call site. Note that this width is a *minimum* field width, exactly as in C `printf` — it never caps the output. A `%f` value wider than its field is **not** truncated: the compiler sizes the buffer from the type's largest possible magnitude (and any explicit precision), so `%8.2f{1e9}` correctly renders all 13 characters of `1000000000.00`. Other float formats (`%e`, `%g`) are bounded by the type and do not require an explicit width.
+A bare `%f` is allowed and defaults like C `printf` (six fractional digits); width and precision are optional (`%f{x}`, `%.2f{x}`, `%8.2f{x}`). Any width given is a *minimum* field width, exactly as in C `printf` — it never caps the output. A `%f` value wider than its field is **not** truncated: the compiler sizes the buffer from the type's largest possible magnitude (and any explicit precision), so `%8.2f{1e9}` correctly renders all 13 characters of `1000000000.00`. (Earlier drafts required an explicit width on `%f`; that requirement was removed once the buffer was sized from the type rather than the width, leaving it with no purpose.)
 
 #### Allocation
 

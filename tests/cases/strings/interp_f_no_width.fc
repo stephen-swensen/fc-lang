@@ -1,0 +1,36 @@
+// %f no longer requires an explicit field width (the requirement was vestigial:
+// the buffer is sized from the float type's max magnitude, not the width). Bare
+// `%f` and precision-only `%.Nf` are now accepted, defaulting like C's printf.
+let main = (args: str[]) ->
+    let x = 3.14159f64
+
+    // Bare %f → C default precision of 6 fractional digits.
+    assert("%f{x}" == "3.141590")
+    assert("%f{x}".len == 8)
+
+    // Precision-only, no field width (previously rejected).
+    assert("%.2f{x}" == "3.14")
+    assert("%.0f{x}" == "3")
+    assert("%.4f{x}" == "3.1416")
+
+    // Field width still honored (minimum, left-padded).
+    assert("%8.2f{x}" == "    3.14")
+    assert("%8f{x}" == "3.141590")   // width 8 < natural 8: no extra pad
+
+    // Flags compose with the now-optional width.
+    assert("%+f{x}" == "+3.141590")
+    assert("%-10.2f{x}" == "3.14      ")  // left-align within width 10
+
+    // Bare %f on a float32 operand (promotes to double for formatting).
+    assert("%f{2.5f32}" == "2.500000")
+
+    // Large magnitude with bare %f: the integer part is not capped by any width.
+    assert("%.1f{1000000000.0}" == "1000000000.0")
+
+    // %e / %g were never width-gated and still work bare.
+    assert("%e{1.0}" == "1.000000e+00")
+
+    // Interaction: bare %f interleaved with other conversions and literals.
+    let n = 7
+    assert("n=%d{n} v=%f{x}!" == "n=7 v=3.141590!")
+    0

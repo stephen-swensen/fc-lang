@@ -5830,20 +5830,6 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 if (!ok) diag_error(seg->expr->loc,
                     "format specifier %%%c expects float type, got %s",
                     conv, type_name(et));
-                /* For %f, check that explicit width is specified */
-                if (ok && conv == 'f') {
-                    /* Parse the format spec to check for width */
-                    bool has_width = false;
-                    const char *s = seg->text;
-                    /* Skip flags */
-                    while (*s == '-' || *s == '+' || *s == '0' || *s == '#' || *s == ' ') s++;
-                    /* Check for width digits */
-                    if (*s >= '1' && *s <= '9') has_width = true;
-                    if (!has_width) {
-                        diag_error(seg->expr->loc,
-                            "%%f format requires explicit width (e.g. %%8.2f)");
-                    }
-                }
                 break;
             case 's':
                 ok = (is_str_type(et) || is_cstr_type(et));
