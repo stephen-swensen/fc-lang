@@ -2544,8 +2544,8 @@ default(int32?)    // int32? with no value — identical to none(int32)
 
 **`some` of a null pointer.** A pointer option (`T*?`, `any*?`, `cstr?`) represents `none` as a null pointer (see the Transpilation note below), so a `some` wrapping a null pointer would be indistinguishable from `none`. To keep `some(p)` honest — what you construct is what you observe — `some` rejects a null payload:
 
-- a **provably-null** payload is a compile error: `some(default(T*))` and `some((T*) 0)` are rejected outright;
-- any other pointer payload is **guarded at construction**: if it is null at runtime, the program aborts with a diagnostic (`file.fc:N: some() of a null pointer`), exactly as unwrapping a `none` aborts. The guard is elided when the payload is provably non-null (`some(&x)`, `some(alloc(T)!)`, `some(c"…")`, `some((T*) <nonzero literal>)`), so the common cases pay nothing.
+- a **provably-null** payload is a compile error: `some(default(T*))` and `some((T*) 0u)` are rejected outright;
+- any other pointer payload is **guarded at construction**: if it is null at runtime, the program aborts with a diagnostic (`file.fc:N: some() of a null pointer`), exactly as unwrapping a `none` aborts. The guard is elided when the payload is provably non-null (`some(&x)`, `some(alloc(T)!)`, `some(c"…")`, `some((T*) <nonzero usize literal>)`), so the common cases pay nothing.
 
 The guard is a runtime check, so a `some()` of a not-provably-non-null pointer cannot appear in a constant initializer (a module-member `let` emitted at C file scope) — wrap a provably non-null pointer there, or initialize at runtime. Value options (`int32?`, `point?`, …) carry an explicit tag and have no such restriction. This applies only to `some`: a `T*?` *returned from C* still maps null → `none` directly (the intended ABI encoding), and `default(T*)` / a zero-initialized raw pointer field are still physically null (see §Pointers).
 
@@ -2582,7 +2582,7 @@ For safe unwrapping, use a `match` expression.
 > **Transpilation**
 > Option types transpile differently depending on whether the underlying type is a pointer:
 >
-> **Pointer options** (`T*?`) transpile to a plain C pointer `T*`. Null represents `none`, any non-null pointer represents `some`. No struct or tag is needed, which makes `T*?` directly ABI-compatible with C functions that return nullable pointers. A null raw pointer *is* physically reachable in FC (`default(T*)`, `(T*) 0`, a zero-initialized pointer field, a C return) — so to keep this representation unambiguous, `some(p)` itself refuses a null payload (compile error when provably null, runtime abort otherwise; see §Constructing options). The sentinel is thus reserved for `none` at the one point that could violate it, rather than assumed never to occur.
+> **Pointer options** (`T*?`) transpile to a plain C pointer `T*`. Null represents `none`, any non-null pointer represents `some`. No struct or tag is needed, which makes `T*?` directly ABI-compatible with C functions that return nullable pointers. A null raw pointer *is* physically reachable in FC (`default(T*)`, `(T*) 0u`, a zero-initialized pointer field, a C return) — so to keep this representation unambiguous, `some(p)` itself refuses a null payload (compile error when provably null, runtime abort otherwise; see §Constructing options). The sentinel is thus reserved for `none` at the one point that could violate it, rather than assumed never to occur.
 >
 > **All other options** (`int32?`, `float64?`, `str?`, `point?`, etc.) transpile to a C struct with a value field and a boolean tag:
 > ```c

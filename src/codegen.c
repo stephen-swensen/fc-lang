@@ -505,7 +505,9 @@ bool ptr_value_provably_nonnull(const Expr *e) {
         /* c"..." points into static storage. */
         return true;
     case EXPR_CAST:
-        /* (T*) <nonzero integer literal> — e.g. a fixed MMIO address. */
+        /* (T*) <nonzero usize literal> — e.g. a fixed MMIO address. (A bare
+         * fixed-width int literal never reaches here: pass2 rejects int<->ptr
+         * casts that don't go through usize/isize.) */
         if (e->cast.operand && e->cast.operand->kind == EXPR_INT_LIT)
             return e->cast.operand->int_lit.value != 0;
         /* A widening / const-add cast preserves the operand's null-status. */
@@ -526,7 +528,8 @@ bool ptr_value_provably_null(const Expr *e) {
                (e->default_expr.target->kind == TYPE_POINTER ||
                 e->default_expr.target->kind == TYPE_ANY_PTR);
     case EXPR_CAST:
-        /* (T*) 0 — integer-literal zero cast to pointer. */
+        /* (T*) 0u — pointer-width (usize) integer-literal zero cast to pointer.
+         * (Bare (T*) 0 is rejected in pass2; only the usize form reaches here.) */
         if (e->cast.operand && e->cast.operand->kind == EXPR_INT_LIT)
             return e->cast.operand->int_lit.value == 0;
         return ptr_value_provably_null(e->cast.operand);

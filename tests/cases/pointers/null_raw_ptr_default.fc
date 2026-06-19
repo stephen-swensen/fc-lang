@@ -1,0 +1,20 @@
+// default(any*) / default(T*) is the way to obtain a null raw pointer: the C
+// idiom (any*) 0 does not compile (see casts_widening/cast_zero_int_to_ptr_err).
+// A null raw pointer is null-comparable with ==/!= and ABI-null for C interop,
+// which is the migration target for the old `ptr == (any*) 0` pattern.
+let is_null = (p: any*) -> p == default(any*)
+
+let main = (args: str[]) ->
+    let n = default(any*)
+    let tn = default(int32*)
+    assert(n == default(any*))
+    assert(tn == default(int32*))
+    assert(is_null(n))
+
+    // a real address is not null, and (any*) of a pointer is a pointer->pointer
+    // cast (allowed) — only the int-literal cast is rejected.
+    let mut x = 7
+    let px = &x
+    assert(px != default(int32*))
+    assert(!is_null((any*) px))
+    0
