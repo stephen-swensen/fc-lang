@@ -75,4 +75,66 @@ assert). Spec work extends the RMW section from the `fetch_add` item: exchange a
 are acq_rel RMWs in the cell's total modification order; CAS-failure is an acquire load with
 no store.
 
+## Unchecked cast `(T!)` — opt out of float→int saturation in hot paths
+
+The saturating float→int cast (rc.5, audit item 16) is the **only** UB-fix we shipped that
+carries per-operation runtime overhead. Every other "define C's UB" cast decision is free at
+runtime: pointer↔int and int-literal→pointer are *static* restrictions (the emitted cast is a
+bare reinterpret), and int→float / narrowing int→int / float→float are already defined in C and
+emit a bare cast. Only `float → int` routes through the `fc_f2*` helper family (NaN check + two
+range branches before the truncate). Measured cost in a per-pixel loop (`-O3`): ~2.5× vs the
+bare `cvttsd2si`, +56% instructions / +3 `comisd` / +4 branches per cast. In wolf-fc's raycaster
+that's ~64k+ saturating conversions/frame in the wall-texturing band alone (see wolf-fc
+`[render-fp]`), almost always on values the programmer already knows are in range and clamps
+right after — the checks never fire but always cost.
+
+**Keep saturating as the default** — it removes real UB (NaN/overflow → portable, deterministic
+result instead of platform-dependent garbage or miscompiled surrounding code), consistent with
+the rest of the language. Add an opt-in escape hatch for the hot sites instead of weakening the
+default.
+
+**Syntax: `(int32!) f`** — suffix `!` on the target type in a cast. Reads like option-unwrap's
+postfix `!`: "I, the programmer, assert the precondition the compiler can't verify; don't make
+me pay for the failure path." Emits the bare `(int32_t)f` — i.e. exactly the rc.4 codegen, so it
+is **bit-identical to pre-rc.5 for every in-range value** (preserves wolf-fc's bit-stable golden
+render path at marked sites; UB only on the out-of-range/NaN inputs the programmer is vouching
+won't occur).
+
+**Legal only where a runtime check exists to skip — i.e. a float source with an integer target.**
+`(int32!) f`, `(uint8!) f`, `(usize!) f` are valid; `(int32!) someInt`, `(float64!) i`,
+`(usize!) ptr` are **compile errors**: "redundant `!`: this cast inserts no runtime check." This
+mirrors the existing rule that `x!` is rejected on a non-option — suffix `!` always *means
+something* everywhere it's accepted, never silently inert. This is the answer to "does `!` extend
+to other casts": no — float→int is the entire list, and the type checker enforces that.
+
+**Spec note — trap vs. UB asymmetry, deliberate.** Option `x!` is *checked* (emits the tag test,
+aborts on `none`); cast `(T!)` is *unchecked* (UB if out of range). Both read as "assert the
+precondition," but they fail differently. This is intentional: a *trapping* cast would still emit
+the range comparisons (just branching to `abort` instead of saturating) and would be no faster —
+defeating the purpose. The whole value is removing the branches, so `(T!)` must be genuinely
+unchecked. One explicit spec sentence so nobody expects `(int32!)` to abort like `x!`.
+
+Implementation is small: parser accepts an optional `!` after the type name in cast position;
+the type checker permits it only when the operand is float-typed and the target integral (error
+otherwise); codegen emits the bare C cast instead of the `fc_f2*` helper. No new runtime, no
+monomorph interaction.
+
+**Optional complement — a cast-then-clamp peephole.** A `(int32) f` whose result flows directly
+into a clamp to a sub-range (`if x < lo … if x > hi …`) has provably-dead saturation; the
+compiler could elide the helper there with zero source churn and bit-identical output. Attractive
+because it speeds up *existing* code (wolf's band loop already clamps to `[0,63]`), but it's
+narrow and pattern-fragile — ship it as a bonus, not the primary mechanism. The explicit `(T!)`
+is the general, predictable lever.
+
+**Scope boundary — don't bundle.** This item is casts only. The other runtime-checked constructs
+(slice indexing → bounds check, `/` and `%` → divide-by-zero + `INT_MIN/-1` guard) are
+*operators*, not casts; extending the `!`-unchecked convention to them (`s[i!]`, `a /! b`) is a
+separate, larger design question with its own soundness story. Note it here only so the map is
+complete; resolve it on its own.
+
+> Origin: rc.4→rc.5 wolf-fc codegen-regression audit (2026-06-19). The saturating cast was the
+> one measured per-frame regression; fixed-point texcoords (wolf-fc `[render-fp]`) sidestep it
+> for converted sites, and `(T!)` covers the float→int casts that remain (DDA setup, sprite
+> scaling).
+
 ---
