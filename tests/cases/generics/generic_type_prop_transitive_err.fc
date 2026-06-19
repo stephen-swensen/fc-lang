@@ -1,7 +1,9 @@
 // A11 (same root cause as A6): a type-property error on a type variable inside a
 // TRANSITIVELY instantiated generic (reached through a wrapper) is reported at
 // the FC call site with substitution context ("in inner(int32) ..."), not leaked
-// to the C compiler. ('a.nan is valid only for float types.)
+// to the C compiler. ('a.nan is valid only for float types.) The diagnostic now
+// also names the full instantiation chain, including the enclosing wrapper(int32)
+// frame that was previously collapsed (see generic_chain_*_err for more).
 let inner = (x: 'a) -> 'a.nan
 let wrapper = (y: 'b) -> inner(y)
 

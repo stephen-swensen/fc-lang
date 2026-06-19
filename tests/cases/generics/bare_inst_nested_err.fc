@@ -1,0 +1,9 @@
+// A nested generic argument ends the bare instantiation with '>>', which the
+// type-argument splitter handles; it is still rejected as a value.
+struct box =
+    v: 'a
+let make = <'a>() -> default('a)
+
+let main = (args: str[]) ->
+    let f = make<box<int32>>
+    0

@@ -10,6 +10,10 @@ void diag_set_filename(const char *filename) {
     g_filename = filename;
 }
 
+const char *diag_filename(void) {
+    return g_filename;
+}
+
 void diag_error(SrcLoc loc, const char *fmt, ...) {
     const char *fn = loc.filename ? loc.filename : g_filename;
     fprintf(stderr, "%s:%d:%d: error: ", fn, loc.line, loc.col);

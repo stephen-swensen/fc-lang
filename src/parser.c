@@ -252,6 +252,45 @@ static bool generic_call_scan(Parser *p, int start) {
             p->tokens[scan].kind == TOK_DOT);
 }
 
+/* Like generic_call_scan, but for a *bare* generic instantiation in value
+ * position: a balanced <...> type-argument list NOT followed by '(' or '.', but
+ * by a token that cannot begin the right operand of a comparison (an expression
+ * terminator). `name<Type>` followed by such a token can only be a misuse of
+ * explicit type arguments without a call — never a valid comparison chain
+ * (`a < b > c` keeps the comparison reading because `c` starts an expression) —
+ * so we route it to pass2 for a clean "cannot be used as a value" diagnostic
+ * instead of letting '>' fall through to a comparison and fail with a cryptic
+ * "unexpected token" parse error. The terminator set is deliberately
+ * conservative: it lists only tokens that unambiguously cannot start an
+ * expression, so no valid comparison is ever misread (a terminator we omit just
+ * keeps the old, less-helpful error — never a regression). */
+static bool bare_inst_scan(Parser *p, int start) {
+    int scan = start;
+    int depth = 1;
+    while (scan < p->token_count && depth > 0) {
+        TokenKind k = p->tokens[scan].kind;
+        if (k == TOK_LT) { depth++; scan++; continue; }
+        if (k == TOK_GT) { depth--; scan++; continue; }
+        if (k == TOK_GTGT) {
+            depth -= 2;
+            if (depth < 0) return false;
+            scan++;
+            continue;
+        }
+        if (!is_type_arg_token(k)) return false;
+        scan++;
+    }
+    if (depth != 0 || scan >= p->token_count) return false;
+    switch (p->tokens[scan].kind) {
+    case TOK_NEWLINE: case TOK_DEDENT: case TOK_EOF:
+    case TOK_RPAREN: case TOK_RBRACKET: case TOK_RBRACE:
+    case TOK_COMMA:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool is_type_name(const char *s, int len) {
     struct { const char *n; int l; } names[] = {
         {"int8",2+2}, {"int16",2+3}, {"int32",2+3}, {"int64",2+3},
@@ -2083,6 +2122,32 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                 e->call.type_arg_count = ta_count;
                 free(type_args);
                 free(args);
+                return e;
+            }
+            if (bare_inst_scan(p, p->pos)) {
+                /* `name<Types>` with no '(' — explicit type args in value
+                 * position. Parse the type args so they are consumed, then build
+                 * a marked EXPR_CALL with no arguments; pass2 rejects it with a
+                 * located diagnostic (a generic function/type cannot be a value). */
+                Type **type_args = NULL;
+                int ta_count = 0, ta_cap = 0;
+                do {
+                    Type *ty = parse_type(p);
+                    DA_APPEND(type_args, ta_count, ta_cap, ty);
+                    if (!check(p, TOK_COMMA)) break;
+                    advance_p(p);
+                } while (1);
+                expect_typearg_gt(p);
+
+                Expr *e = alloc_expr(p, EXPR_CALL, loc);
+                e->call.func = left;
+                e->call.args = NULL;
+                e->call.arg_count = 0;
+                e->call.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
+                memcpy(e->call.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
+                e->call.type_arg_count = ta_count;
+                e->call.bare_inst = true;
+                free(type_args);
                 return e;
             }
         }

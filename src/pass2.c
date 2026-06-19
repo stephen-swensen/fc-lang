@@ -2,6 +2,7 @@
 #include "diag.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 
 /* ---- Scope for local bindings ---- */
@@ -2214,13 +2215,74 @@ static bool gen_seen_add(Arena *arena, const Symbol *sym, const char *desc) {
     return true;
 }
 
+/* One frame of a generic-instantiation chain: a concrete instantiation and the
+ * call site that required it. Linked outward via `parent` (NULL at the entry
+ * call). Frames are stack-allocated during the validate_generic_body recursion,
+ * so their lifetime is exactly the descent that built them. */
+typedef struct InstFrame {
+    const char *desc;               /* "inner(int32)" — fmt_generic_inst output */
+    SrcLoc site;                    /* the call expression that triggered this instantiation */
+    const struct InstFrame *parent; /* enclosing instantiation, NULL at the entry */
+} InstFrame;
+
+/* The entry (outermost) frame — its site is the user's actionable call. */
+static const InstFrame *inst_frame_root(const InstFrame *f) {
+    while (f->parent) f = f->parent;
+    return f;
+}
+
+/* Emit a diagnostic for an error found while validating a generic instantiation.
+ * The head line keeps the long-standing one-line form
+ *   "in <innermost> at <err>: <message>"
+ * (so single-level diagnostics are byte-identical to before); when the failing
+ * instantiation was reached transitively, every enclosing instantiation and the
+ * site that required it is listed on its own continuation line — so the full
+ * chain, previously collapsed to just the innermost frame, is visible. The
+ * primary location is the outermost (entry) call site, the user's actionable code. */
+static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fmt, ...) {
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    SrcLoc primary = inst_frame_root(frame)->site;
+
+    if (!frame->parent) {
+        /* Single-level: identical to the original format. */
+        diag_error(primary, "in %s at %d:%d: %s",
+                   frame->desc, err_loc.line, err_loc.col, msg);
+        return;
+    }
+
+    /* Multi-level: head line + one continuation per frame (innermost first). */
+    char buf[4096];
+    int pos = 0;
+    const int cap = (int) sizeof(buf);
+    #define GID_APPEND(...) do { \
+        if (pos < cap) { \
+            int _n = snprintf(buf + pos, (size_t)(cap - pos), __VA_ARGS__); \
+            if (_n > 0) pos += _n; \
+            if (pos > cap) pos = cap; \
+        } \
+    } while (0)
+    GID_APPEND("in %s at %d:%d: %s", frame->desc, err_loc.line, err_loc.col, msg);
+    for (const InstFrame *f = frame; f; f = f->parent) {
+        const char *fn = f->site.filename ? f->site.filename : diag_filename();
+        GID_APPEND("\n    %s instantiated at %s:%d:%d",
+                   f->desc, fn, f->site.line, f->site.col);
+    }
+    #undef GID_APPEND
+    diag_error(primary, "%s", buf);
+}
+
 /* Walk a generic function body with concrete type bindings and validate
  * operations that were deferred during template type-checking (i.e. binary
  * operations on type variables and type property access).
  * Returns true if validation passed. */
 static bool validate_generic_body(Expr *e, Arena *arena,
     const char **type_params, Type **bindings, int ntp,
-    SrcLoc call_loc, const char *inst_desc)
+    const InstFrame *frame)
 {
     if (!e) return true;
     bool ok = true;
@@ -2228,8 +2290,8 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     switch (e->kind) {
     case EXPR_BINARY: {
         /* Recurse into children first */
-        ok &= validate_generic_body(e->binary.left, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        ok &= validate_generic_body(e->binary.right, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->binary.left, arena, type_params, bindings, ntp, frame);
+        ok &= validate_generic_body(e->binary.right, arena, type_params, bindings, ntp, frame);
 
         Type *lt_raw = e->binary.left->type;
         Type *rt_raw = e->binary.right->type;
@@ -2245,46 +2307,44 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
             op == TOK_SLASH || op == TOK_PERCENT) {
             if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                diag_error(call_loc, "in %s at %d:%d: arithmetic requires numeric operands, got %s and %s",
-                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                gen_inst_diag(frame, e->loc, "arithmetic requires numeric operands, got %s and %s",
+                    type_name(lt), type_name(rt));
                 ok = false;
             } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                diag_error(call_loc, "in %s at %d:%d: type mismatch: %s vs %s",
-                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
+                    type_name(lt), type_name(rt));
                 ok = false;
             }
         } else if (op == TOK_EQEQ || op == TOK_BANGEQ) {
             if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                diag_error(call_loc, "in %s at %d:%d: comparison type mismatch: %s vs %s",
-                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
+                    type_name(lt), type_name(rt));
                 ok = false;
             }
         } else if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
             if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                diag_error(call_loc, "in %s at %d:%d: ordering comparison requires numeric or pointer types, got %s and %s",
-                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                gen_inst_diag(frame, e->loc, "ordering comparison requires numeric or pointer types, got %s and %s",
+                    type_name(lt), type_name(rt));
                 ok = false;
             } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                diag_error(call_loc, "in %s at %d:%d: comparison type mismatch: %s vs %s",
-                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
+                    type_name(lt), type_name(rt));
                 ok = false;
             }
         } else if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
             if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
-                diag_error(call_loc, "in %s at %d:%d: logical operator requires bool operands",
-                    inst_desc, e->loc.line, e->loc.col);
+                gen_inst_diag(frame, e->loc, "logical operator requires bool operands");
                 ok = false;
             }
         } else if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET ||
                    op == TOK_LTLT || op == TOK_GTGT) {
             if (!type_is_integer(lt) || !type_is_integer(rt)) {
-                diag_error(call_loc, "in %s at %d:%d: bitwise/shift operator requires integer operands",
-                    inst_desc, e->loc.line, e->loc.col);
+                gen_inst_diag(frame, e->loc, "bitwise/shift operator requires integer operands");
                 ok = false;
             } else if (op != TOK_LTLT && op != TOK_GTGT &&
                        !type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                diag_error(call_loc, "in %s at %d:%d: type mismatch: %s vs %s",
-                    inst_desc, e->loc.line, e->loc.col, type_name(lt), type_name(rt));
+                gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
+                    type_name(lt), type_name(rt));
                 ok = false;
             }
         }
@@ -2293,7 +2353,7 @@ static bool validate_generic_body(Expr *e, Arena *arena,
 
     /* Type variable property access: 'a.nan, 'a.min, etc. */
     case EXPR_FIELD: case EXPR_DEREF_FIELD: {
-        ok &= validate_generic_body(e->field.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->field.object, arena, type_params, bindings, ntp, frame);
         if (e->field.object->kind == EXPR_TYPE_VAR_REF) {
             const char *tv_name = e->field.object->type_var_ref.name;
             const char *prop = e->field.name;
@@ -2318,8 +2378,8 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                     valid = is_float;
                 }
                 if (!valid) {
-                    diag_error(call_loc, "in %s at %d:%d: type '%s' has no property '%s'",
-                        inst_desc, e->loc.line, e->loc.col, type_name(concrete), prop);
+                    gen_inst_diag(frame, e->loc, "type '%s' has no property '%s'",
+                        type_name(concrete), prop);
                     ok = false;
                 }
             }
@@ -2329,7 +2389,7 @@ static bool validate_generic_body(Expr *e, Arena *arena,
 
     /* Recurse into all sub-expressions */
     case EXPR_UNARY_PREFIX: {
-        ok &= validate_generic_body(e->unary_prefix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->unary_prefix.operand, arena, type_params, bindings, ntp, frame);
         /* Validate deferred unary ops on type variables */
         Type *ot_raw = e->unary_prefix.operand->type;
         if (ot_raw && type_contains_type_var(ot_raw)) {
@@ -2337,14 +2397,14 @@ static bool validate_generic_body(Expr *e, Arena *arena,
             if (e->unary_prefix.op == TOK_MINUS) {
                 /* Same rule as the concrete path: signed/float only, never unsigned. */
                 if (!type_is_signed(ot) && !type_is_float(ot)) {
-                    diag_error(call_loc, "in %s at %d:%d: unary minus requires a signed integer or float operand, got %s",
-                        inst_desc, e->loc.line, e->loc.col, type_name(ot));
+                    gen_inst_diag(frame, e->loc, "unary minus requires a signed integer or float operand, got %s",
+                        type_name(ot));
                     ok = false;
                 }
             } else if (e->unary_prefix.op == TOK_TILDE) {
                 if (!type_is_integer(ot)) {
-                    diag_error(call_loc, "in %s at %d:%d: bitwise not requires integer operand, got %s",
-                        inst_desc, e->loc.line, e->loc.col, type_name(ot));
+                    gen_inst_diag(frame, e->loc, "bitwise not requires integer operand, got %s",
+                        type_name(ot));
                     ok = false;
                 }
             }
@@ -2352,12 +2412,12 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         break;
     }
     case EXPR_UNARY_POSTFIX:
-        ok &= validate_generic_body(e->unary_postfix.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->unary_postfix.operand, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_CALL: {
-        ok &= validate_generic_body(e->call.func, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->call.func, arena, type_params, bindings, ntp, frame);
         for (int i = 0; i < e->call.arg_count; i++)
-            ok &= validate_generic_body(e->call.args[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->call.args[i], arena, type_params, bindings, ntp, frame);
         /* Transitive validation: if this call targets another generic function,
          * propagate the concrete bindings into the callee's body so that an
          * unsupported operation on the instantiated type is reported here at the
@@ -2402,7 +2462,7 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                 if (maxd > GEN_INST_DEPTH_MAX) {
                     if (!g_gen_inf_reported) {
                         g_gen_inf_reported = true;
-                        diag_error(call_loc,
+                        diag_error(inst_frame_root(frame)->site,
                             "infinite generic instantiation of '%s': it is instantiated "
                             "with an unbounded family of ever-deeper type arguments "
                             "(exceeded depth %d). A generic function that calls itself "
@@ -2435,10 +2495,14 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                     const char *ckey = arena_strdup(arena, keybuf, klen);
                     if (gen_seen_add(arena, callee, ckey)) {
                         Expr *cfn = callee->decl->let.init;
+                        /* Push a chain frame: this callee instantiation, required
+                         * by the call expression `e`. Stack-allocated — its
+                         * lifetime is exactly this descent. */
+                        InstFrame child = { cdesc, e->loc, frame };
                         g_gen_xbody_depth++;
                         for (int i = 0; i < cfn->func.body_count; i++)
                             ok &= validate_generic_body(cfn->func.body[i], arena,
-                                callee->type_params, cbind, cntp, call_loc, cdesc);
+                                callee->type_params, cbind, cntp, &child);
                         g_gen_xbody_depth--;
                     }
                 }
@@ -2447,114 +2511,114 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         break;
     }
     case EXPR_INDEX:
-        ok &= validate_generic_body(e->index.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        ok &= validate_generic_body(e->index.index, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->index.object, arena, type_params, bindings, ntp, frame);
+        ok &= validate_generic_body(e->index.index, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_SLICE:
-        ok &= validate_generic_body(e->slice.object, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        if (e->slice.lo) ok &= validate_generic_body(e->slice.lo, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        if (e->slice.hi) ok &= validate_generic_body(e->slice.hi, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->slice.object, arena, type_params, bindings, ntp, frame);
+        if (e->slice.lo) ok &= validate_generic_body(e->slice.lo, arena, type_params, bindings, ntp, frame);
+        if (e->slice.hi) ok &= validate_generic_body(e->slice.hi, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_CAST:
-        ok &= validate_generic_body(e->cast.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->cast.operand, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_IF:
-        ok &= validate_generic_body(e->if_expr.cond, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        ok &= validate_generic_body(e->if_expr.then_body, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->if_expr.cond, arena, type_params, bindings, ntp, frame);
+        ok &= validate_generic_body(e->if_expr.then_body, arena, type_params, bindings, ntp, frame);
         if (e->if_expr.else_body)
-            ok &= validate_generic_body(e->if_expr.else_body, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->if_expr.else_body, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_LOOP:
         for (int i = 0; i < e->loop_expr.body_count; i++)
-            ok &= validate_generic_body(e->loop_expr.body[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->loop_expr.body[i], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_FOR:
-        ok &= validate_generic_body(e->for_expr.iter, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->for_expr.iter, arena, type_params, bindings, ntp, frame);
         if (e->for_expr.range_end)
-            ok &= validate_generic_body(e->for_expr.range_end, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->for_expr.range_end, arena, type_params, bindings, ntp, frame);
         for (int i = 0; i < e->for_expr.body_count; i++)
-            ok &= validate_generic_body(e->for_expr.body[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->for_expr.body[i], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_BREAK:
         if (e->break_expr.value)
-            ok &= validate_generic_body(e->break_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->break_expr.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_RETURN:
         if (e->return_expr.value)
-            ok &= validate_generic_body(e->return_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->return_expr.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
-            ok &= validate_generic_body(e->block.stmts[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->block.stmts[i], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_FUNC:
         for (int i = 0; i < e->func.body_count; i++)
-            ok &= validate_generic_body(e->func.body[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->func.body[i], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_ALLOC:
         if (e->alloc_expr.init_expr)
-            ok &= validate_generic_body(e->alloc_expr.init_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->alloc_expr.init_expr, arena, type_params, bindings, ntp, frame);
         if (e->alloc_expr.size_expr)
-            ok &= validate_generic_body(e->alloc_expr.size_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->alloc_expr.size_expr, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_FREE:
-        ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_ATOMIC_LOAD:
-        ok &= validate_generic_body(e->atomic_load.ptr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->atomic_load.ptr, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_ATOMIC_STORE:
-        ok &= validate_generic_body(e->atomic_store.ptr, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        ok &= validate_generic_body(e->atomic_store.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->atomic_store.ptr, arena, type_params, bindings, ntp, frame);
+        ok &= validate_generic_body(e->atomic_store.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_ASSERT:
-        ok &= validate_generic_body(e->assert_expr.condition, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->assert_expr.condition, arena, type_params, bindings, ntp, frame);
         if (e->assert_expr.message)
-            ok &= validate_generic_body(e->assert_expr.message, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->assert_expr.message, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_DEFER:
-        ok &= validate_generic_body(e->defer_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->defer_expr.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_SOME:
-        ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_ASSIGN:
-        ok &= validate_generic_body(e->assign.target, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        ok &= validate_generic_body(e->assign.value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->assign.target, arena, type_params, bindings, ntp, frame);
+        ok &= validate_generic_body(e->assign.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            ok &= validate_generic_body(e->struct_lit.fields[i].value, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->struct_lit.fields[i].value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
-            ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_TUPLE_LIT:
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            ok &= validate_generic_body(e->tuple_lit.elems[i], arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->tuple_lit.elems[i], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_SLICE_LIT:
-        ok &= validate_generic_body(e->slice_lit.ptr_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
-        ok &= validate_generic_body(e->slice_lit.len_expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->slice_lit.ptr_expr, arena, type_params, bindings, ntp, frame);
+        ok &= validate_generic_body(e->slice_lit.len_expr, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++)
             if (!e->interp_string.segments[i].is_literal && e->interp_string.segments[i].expr)
-                ok &= validate_generic_body(e->interp_string.segments[i].expr, arena, type_params, bindings, ntp, call_loc, inst_desc);
+                ok &= validate_generic_body(e->interp_string.segments[i].expr, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_MATCH:
-        ok &= validate_generic_body(e->match_expr.subject, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->match_expr.subject, arena, type_params, bindings, ntp, frame);
         for (int i = 0; i < e->match_expr.arm_count; i++)
             for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                ok &= validate_generic_body(e->match_expr.arms[i].body[j], arena, type_params, bindings, ntp, call_loc, inst_desc);
+                ok &= validate_generic_body(e->match_expr.arms[i].body[j], arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_LET:
         if (e->let_expr.let_init)
-            ok &= validate_generic_body(e->let_expr.let_init, arena, type_params, bindings, ntp, call_loc, inst_desc);
+            ok &= validate_generic_body(e->let_expr.let_init, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_LET_DESTRUCT:
-        ok &= validate_generic_body(e->let_destruct.init, arena, type_params, bindings, ntp, call_loc, inst_desc);
+        ok &= validate_generic_body(e->let_destruct.init, arena, type_params, bindings, ntp, frame);
         break;
 
     /* Leaf nodes — no children to walk */
@@ -3658,6 +3722,34 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->in_callee_position = true;
         Type *ft = check_expr(ctx, e->call.func);
         ctx->in_callee_position = false;
+
+        /* `name<Types>` written in value position with no call (parser-marked).
+         * Explicit type arguments are only meaningful on a function call (or
+         * `.variant` construction), so this is always an error. We resolved the
+         * callee in callee position above, suppressing check_expr's generic-as-
+         * value guard, so we can emit a message tailored to what `name` is. */
+        if (e->call.bare_inst) {
+            if (!type_is_error(ft)) {
+                Symbol *sym = find_callee_symbol(ctx, e->call.func);
+                const char *nm = e->call.func->kind == EXPR_IDENT ? e->call.func->ident.name
+                               : e->call.func->kind == EXPR_FIELD ? e->call.func->field.name
+                               : "?";
+                if (sym && sym->is_generic && sym->kind == DECL_LET) {
+                    diag_error(e->loc,
+                        "a generic function cannot be used as a value; call it with "
+                        "arguments, e.g. %s(...), or wrap it in a lambda", nm);
+                } else if (sym && sym->is_generic) {
+                    diag_error(e->loc,
+                        "generic type '%s' cannot be used as a value", nm);
+                } else {
+                    diag_error(e->loc,
+                        "explicit type arguments require a function call: write '%s(...)'", nm);
+                }
+            }
+            e->type = type_error();
+            return e->type;
+        }
+
         if (type_is_error(ft)) { e->type = type_error(); return e->type; }
 
         /* Check if this is a union variant constructor: union_name.variant(payload) */
@@ -3925,10 +4017,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         if (slen >= (int)sizeof(seedbuf)) slen = (int)sizeof(seedbuf) - 1;
                         gen_seen_reset();
                         gen_seen_add(ctx->arena, callee_sym, arena_strdup(ctx->arena, seedbuf, slen));
+                        /* Entry (root) chain frame: this instantiation, required by
+                         * the user's call `e`. Transitive descents push children. */
+                        InstFrame root = { inst_desc, e->loc, NULL };
                         for (int i = 0; i < func_expr->func.body_count; i++) {
                             if (!validate_generic_body(func_expr->func.body[i], ctx->arena,
-                                    callee_sym->type_params, bindings, ntp,
-                                    e->loc, inst_desc)) {
+                                    callee_sym->type_params, bindings, ntp, &root)) {
                                 e->type = type_error();
                                 return e->type;
                             }

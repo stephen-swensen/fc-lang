@@ -1,0 +1,11 @@
+// A generic chain that crosses files: gen.outer calls gen.inner, both defined
+// here in lib.fc. When instantiated from main.fc with bool, the chain diagnostic
+// must carry each frame's OWN file — inner's instantiation site is here in
+// lib.fc, outer's is in main.fc. Guards the per-frame filename rendering.
+namespace acme::
+
+module gen =
+    let inner = (x: 'a) ->
+        x + x
+    let outer = (x: 'a) ->
+        inner(x)

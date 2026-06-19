@@ -1,0 +1,8 @@
+// The bare-instantiation diagnostic fires in any value position, including a
+// call argument, where the closing '>' is followed by ')'.
+let identity = (x: 'a) -> x
+let take = (n: int32) -> n
+
+let main = (args: str[]) ->
+    let r = take(identity<int32>)
+    0

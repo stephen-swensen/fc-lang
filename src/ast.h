@@ -151,6 +151,8 @@ struct Expr {
             int type_arg_count;
             bool is_indirect;     /* callee is a function value (fat pointer) */
             bool is_extern_call;  /* callee is an extern function (no _ctx) */
+            bool bare_inst;       /* `name<Types>` in value position with no '(' — explicit type
+                                     args but no call; always an error, rejected in pass2 */
             const char *mangled_name;   /* C function name for monomorphized call, NULL for non-generic */
             struct Symbol *resolved_callee; /* resolved in pass2, used by mono discovery */
         } call;

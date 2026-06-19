@@ -1,0 +1,5 @@
+import gen from acme::
+
+let main = (args: str[]) ->
+    let r = gen.outer(true)
+    0

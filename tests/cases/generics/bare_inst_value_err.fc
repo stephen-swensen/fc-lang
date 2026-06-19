@@ -1,0 +1,9 @@
+// A generic function named with explicit type arguments but no call
+// (`identity<int32>`) is not a first-class value. The parser used to mis-read
+// the `<...>` as a comparison and fail with a cryptic "unexpected token"; it is
+// now routed to pass2 for a located, explanatory diagnostic.
+let identity = (x: 'a) -> x
+
+let main = (args: str[]) ->
+    let f = identity<int32>
+    0

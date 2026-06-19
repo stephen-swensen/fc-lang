@@ -15,6 +15,10 @@ static inline SrcLoc loc_from_token(const Token *t) {
 
 void diag_set_filename(const char *filename);
 
+/* The current default source filename (used when a SrcLoc carries no filename of
+ * its own — e.g. when rendering secondary locations in a multi-line diagnostic). */
+const char *diag_filename(void);
+
 /* Report error and increment error count. */
 void diag_error(SrcLoc loc, const char *fmt, ...);
 

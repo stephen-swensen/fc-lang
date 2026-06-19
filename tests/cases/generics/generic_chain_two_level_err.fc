@@ -1,0 +1,14 @@
+// A type error inside a generic body that is reached through ANOTHER generic
+// (main -> outer -> inner) must report the full instantiation chain, not just
+// the innermost frame. inner does arithmetic on 'a, invalid when 'a = bool;
+// the diagnostic names inner(bool) AND the enclosing outer(bool) frame that was
+// previously collapsed.
+let inner = (x: 'a) ->
+    x + x
+
+let outer = (x: 'a) ->
+    inner(x)
+
+let main = (args: str[]) ->
+    let r = outer(true)
+    0

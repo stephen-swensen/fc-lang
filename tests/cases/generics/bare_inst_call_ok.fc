@@ -1,0 +1,23 @@
+// Regression guard for the bare-instantiation diagnostic: a real explicit
+// generic call (`<...>` followed by '(') and a chained comparison (`<...>`
+// followed by an expression) must keep their normal readings — only a `<...>`
+// followed by an expression-terminator is treated as a bare instantiation.
+let make = <'a>() ->
+    default('a)
+
+let main = (args: str[]) ->
+    // explicit type-argument call still works
+    let v = make<int32>()
+    assert(v == 0)
+
+    // comparison chain `a < b > c` is unaffected (parses as (a < b) and (> c))
+    let a = 1
+    let b = 5
+    let lt = a < b
+    let gt = b > a
+    assert(lt)
+    assert(gt)
+
+    // right-shift next to '<' keeps tighter binding: 1 < (256 >> 4) == 1 < 16
+    assert(a < (256 >> 4))
+    0

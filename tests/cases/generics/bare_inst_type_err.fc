@@ -1,0 +1,8 @@
+// A generic *type* name with explicit type arguments in value position gets a
+// type-specific message rather than the function one.
+struct box =
+    v: 'a
+
+let main = (args: str[]) ->
+    let f = box<int32>
+    0

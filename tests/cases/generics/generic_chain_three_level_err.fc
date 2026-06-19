@@ -1,0 +1,15 @@
+// A three-level chain (main -> a -> b -> c, error in c) proves that EVERY
+// intermediate frame is rendered — not just the immediate parent. The middle
+// b(bool) frame must appear, which a two-level-only fix would miss.
+let c = (x: 'a) ->
+    x + x
+
+let b = (x: 'a) ->
+    c(x)
+
+let a = (x: 'a) ->
+    b(x)
+
+let main = (args: str[]) ->
+    let r = a(true)
+    0

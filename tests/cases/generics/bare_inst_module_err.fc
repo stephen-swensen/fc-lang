@@ -1,0 +1,8 @@
+// A module-qualified generic function (EXPR_FIELD callee) is rejected the same
+// way as a plain one.
+module m =
+    let identity = (x: 'a) -> x
+
+let main = (args: str[]) ->
+    let f = m.identity<int32>
+    0
