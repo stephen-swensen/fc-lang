@@ -213,8 +213,14 @@ let main = (args: str[]) ->
     assert(wide == 1001)
 
     // Explicit casts
-    let fi = (int32) 3.7       // float→int truncates: 3
+    let fi = (int32) 3.7       // float→int truncates: 3 (saturating, defined for all inputs)
     assert(fi == 3)
+
+    // Unchecked float→int cast: (T!) skips the saturation check, emitting a bare
+    // C truncation. Identical to (int32) for in-range values; UB out of range.
+    // For hot paths where the value is already known in range. Legal float→int only.
+    let fu = (int32!) 3.7      // bare truncation: 3
+    assert(fu == 3)
 
     // --------------------------------------------------------
     // If expressions — branches produce values

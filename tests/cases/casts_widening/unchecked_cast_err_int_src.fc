@@ -1,0 +1,7 @@
+// (T!) is rejected on an integer source: int→int casts emit no runtime check,
+// so the `!` would be silently inert.
+let main = (args: str[]) ->
+    let n = 5i64
+    let x = (int32!) n
+    assert(x == 5)
+    0

@@ -554,7 +554,11 @@ prefix_expr      = "-" , prefix_expr                   (* negation       *)
 (* A bare (cstr) cast of a runtime-length str is rejected on its own   *)
 (* (unbounded stack copy); it is legal only as the direct argument of  *)
 (* alloc(...) / alloca(...), which give it a home (heap / dyn. stack). *)
-cast_expr        = "(" , type_expr , ")" , prefix_expr
+(* An optional "!" after the type name is the unchecked cast: it opts  *)
+(* out of the saturating float->int conversion (bare C truncation, UB  *)
+(* out of range). Accepted only on a float->integer cast; a compile    *)
+(* error on any other cast.                                            *)
+cast_expr        = "(" , type_expr , [ "!" ] , ")" , prefix_expr
                  | "(" , "cstr" , "[" , int_lit , "]" , ")" , prefix_expr ;
 
 (* Level 1 — postfix (left-associative)                                *)

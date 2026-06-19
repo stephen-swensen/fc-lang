@@ -4,6 +4,46 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Unchecked cast `(T!)` — opt out of float→int saturation (resolved 2026-06-19)
+
+The saturating float→int cast (rc.5, audit item 16) is the only UB-fix that carries
+per-operation runtime overhead: `float → int` routes through the `fc_f2*` helper family (NaN
+check + two range branches before the truncate), measured at ~2.5× the bare `cvttsd2si` in a
+per-pixel loop. Other "define C's UB" cast decisions are free (static restrictions or
+already-defined C casts). In wolf-fc's raycaster that's ~64k+ saturating conversions/frame,
+almost always on values already known in range.
+
+**Shipped:** an opt-in escape hatch, suffix `!` on the target type in a cast — `(int32!) f`.
+Saturation stays the **default**; `(T!)` emits the bare `(int32_t)f` (exactly the rc.4 codegen,
+bit-identical for every in-range value; UB only on the out-of-range/NaN inputs the programmer
+vouches won't occur). Reads like option-unwrap's postfix `!`: "I assert the precondition the
+compiler can't verify; don't make me pay for the failure path."
+
+Legal **only** on a float→integer cast (the one cast with a runtime check to skip). On any other
+cast — `(int32!) someInt`, `(float64!) i`, `(usize!) ptr`, identity — it is a compile error
+("redundant '!': this cast inserts no runtime check"), mirroring the rule that `x!` is rejected
+on a non-option. Deliberate trap-vs-UB asymmetry vs option `x!`: `x!` is *checked* (aborts on
+`none`), `(T!)` is *unchecked* (UB out of range) — a trapping cast would still emit the range
+comparisons and be no faster, defeating the purpose.
+
+Implementation: a `bool unchecked` flag on the `EXPR_CAST` AST node — parser accepts the optional
+`!` in cast position (`parser.c`, `parse_prefix`); pass2 rejects it anywhere but float→int
+(`pass2.c`, `EXPR_CAST`); codegen guards the saturating branch so unchecked falls through to the
+bare cast (`codegen.c`, `EXPR_CAST`). No new runtime, no monomorph interaction. Spec: §Casting,
+`examples.fc`, `grammar.bnf` (`cast_expr` gains optional `"!"`). Tests:
+`casts_widening/unchecked_cast*` (happy path across integer targets from float64/float32; five
+`.error` cases for int/float-target/identity/bool/pointer sources).
+
+**The optional cast-then-clamp peephole** sketched in the original proposal was *considered and
+dropped*: detecting a `(T) f` whose result flows into a sub-range clamp is a fragile
+multi-statement AST pattern match, and — unlike the explicit `(T!)` — it would reintroduce UB on
+NaN/overflow automatically, without programmer opt-in, in tension with FC's "remove real UB"
+stance. The explicit `(T!)` is the general, predictable lever; the peephole was not worth its
+fragility. The `s[i!]` / `a /! b` extension to *operators* (bounds check, divide guards) remains
+a separate, unaddressed design question.
+
+> Origin: rc.4→rc.5 wolf-fc codegen-regression audit (2026-06-19).
+
 ## Generic call as a non-first operand mis-parses (resolved 2026-06-10)
 
 Surfaced while fixing the qualified-type-argument scan (next entry): an explicit-type-argument

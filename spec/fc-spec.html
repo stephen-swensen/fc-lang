@@ -890,6 +890,17 @@ let g = (int32) (0.0 / 0.0) // 0            (nan -> 0)
 
 A `float32` operand is converted as if first promoted to `float64` (which is lossless), so the truncation and the clamping bounds are identical regardless of the source float width.
 
+**Unchecked float-to-integer cast `(T!)`.** The saturating conversion above is the only cast that carries a runtime cost — the range check and `nan` guard run on every conversion, even where the programmer already knows the value is in range. A suffix `!` on the target type, `(int32!) f`, *opts out* of saturation: it emits the bare C truncation, with **no** range check or `nan` guard. For every in-range, finite input the result is identical to `(int32) f`; for an out-of-range or `nan` input the result is **undefined behavior** (exactly C's float-to-integer semantics). The `!` is the programmer asserting the precondition the compiler can't verify — *"this value is in range; don't make me pay for the failure path"* — for hot loops where the saturation never fires but always costs.
+
+```fc
+let n = (int32!) f          // bare truncation; UB if f is out of int32 range or nan
+let p = (uint8!) sample     // hot-path conversion the caller has already clamped
+```
+
+The unchecked `!` is accepted **only** on a float-to-integer cast — the one cast that emits a runtime check to skip. On any other cast (`(int32!) some_int`, `(float64!) i`, `(usize!) ptr`, an identity cast) it is a **compile error** (*"redundant `!`: this cast inserts no runtime check"*), because there it would be silently inert. This mirrors the rule that postfix `!` is rejected on a non-option value: suffix `!` always *means something* wherever it is accepted.
+
+> **Trap vs. UB — a deliberate asymmetry.** Option unwrap `x!` is *checked*: it tests the tag and aborts on `none`. Cast `(T!)` is *unchecked*: it is UB out of range, not a trap. Both read as "I assert the precondition holds," but they fail differently. This is intentional — a *trapping* cast would still have to emit the range comparisons (branching to `abort` instead of saturating) and would be no faster, defeating the entire purpose. The value of `(T!)` is removing the branches, so it must be genuinely unchecked.
+
 **Bool to numeric** — `bool` casts to any numeric type, producing `1` for `true` and `0` for `false`. Useful for bit-packing flags, summing boolean conditions, or formatting bools in string interpolation. The reverse direction (numeric to `bool`) is **not allowed**, even as an explicit cast — unlike bool-to-int, there's no unambiguously correct mapping (C-style `!= 0` vs strict 0/1 only), so FC requires the programmer to write the comparison explicitly (`x != 0`):
 
 ```fc

@@ -1,0 +1,6 @@
+// (T!) is rejected when the target is a float: int→float emits no runtime check.
+let main = (args: str[]) ->
+    let i = 5
+    let x = (float64!) i
+    assert(x == 5.0)
+    0

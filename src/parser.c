@@ -1419,6 +1419,13 @@ static Expr *parse_prefix(Parser *p) {
                 advance_p(p); /* ] */
                 buffer_size = (int)n;
             }
+            /* (T!) — unchecked cast: a suffix ! on the target type opts out of the
+             * fc_f2* saturating helper (float→int only; enforced in pass2). */
+            bool unchecked = false;
+            if (check(p, TOK_BANG)) {
+                advance_p(p); /* ! */
+                unchecked = true;
+            }
             if (check(p, TOK_RPAREN)) {
                 advance_p(p);
                 Expr *operand = parse_expr(p, PREC_PREFIX);
@@ -1426,6 +1433,7 @@ static Expr *parse_prefix(Parser *p) {
                 e->cast.target = target;
                 e->cast.operand = operand;
                 e->cast.buffer_size = buffer_size;
+                e->cast.unchecked = unchecked;
                 return e;
             }
             /* Not a cast — backtrack */

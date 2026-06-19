@@ -4498,6 +4498,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * (struct/union/slice) cannot be cast in C, so they stay rejected. */
         bool same_type = type_eq(from, to) &&
             (from_num || from_ptr || from->kind == TYPE_BOOL || from->kind == TYPE_CHAR);
+        /* (T!) opts out of the saturating float→int helper. It is the *only* cast
+         * that emits a runtime check, so the unchecked `!` is meaningful only there;
+         * anywhere else it would be silently inert, so reject it (mirrors rejecting
+         * `x!` on a non-option). */
+        if (e->cast.unchecked && !(type_is_float(from) && to_int)) {
+            diag_error(e->loc,
+                "redundant '!': this cast inserts no runtime check; '!' is allowed "
+                "only on a float-to-integer cast");
+            e->type = type_error();
+            return e->type;
+        }
         /* A pointer<->integer cast through a fixed-width int gets a targeted
          * diagnostic pointing to the pointer-width types, rather than the
          * generic "invalid cast" below. */

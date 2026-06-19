@@ -2797,10 +2797,12 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->cast.operand, out);
             fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
                     src_const ? "(uint8_t*)" : "", tid, tid);
-        } else if (e->cast.operand->type && type_is_float(e->cast.operand->type) &&
+        } else if (!e->cast.unchecked && e->cast.operand->type &&
+                   type_is_float(e->cast.operand->type) &&
                    float_to_int_info(e->cast.target->kind, &f2i_info)) {
             /* float -> int: saturating conversion (NaN->0, clamp to range, else
-             * truncate toward zero). A raw C cast here is UB out of range. */
+             * truncate toward zero). A raw C cast here is UB out of range.
+             * (T!) opts out — it falls through to the bare cast below. */
             float_to_int_emit(&f2i_info, e->cast.operand, out);
         } else if (e->cast.operand->type &&
                    ((cast_is_ptr_kind(e->cast.operand->type) && type_is_integer(e->cast.target)) ||

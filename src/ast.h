@@ -184,6 +184,9 @@ struct Expr {
             bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...) —
                                  licenses an otherwise illegal unbounded (cstr) str→cstr cast,
                                  whose home (heap/dynamic stack) the wrapping alloc/alloca gives. */
+            bool unchecked;   /* (T!) — emit the bare C cast, skip the fc_f2* saturating
+                                 helper. Legal only float→int (pass2-enforced); UB out of
+                                 range, the programmer's asserted precondition. */
         } cast;
 
         /* EXPR_IF */

@@ -1,0 +1,32 @@
+// (T!) unchecked cast: opts out of the saturating fc_f2* helper, emitting a bare
+// C cast. For in-range values the result is bit-identical to the saturating (T)
+// cast; (T!) is legal only on a float→integer cast. Covers float64 and float32
+// sources across a spread of integer targets, signed and unsigned.
+let main = (args: str[]) ->
+    let f = 3.7         // float64
+    let g = -3.7        // float64, negative
+    let s = 200.9f32    // float32
+
+    // float64 → integer targets, in range: (T!) == literal == (T)
+    assert((int8!) f == 3i8)
+    assert((int8!) f == (int8) f)
+    assert((int16!) f == 3i16)
+    assert((int32!) f == 3)
+    assert((int32!) f == (int32) f)
+    assert((int64!) f == 3i64)
+    assert((uint8!) f == 3u8)
+    assert((uint32!) f == 3u32)
+    assert((uint64!) f == 3u64)
+    assert((isize!) f == 3i)
+    assert((usize!) f == 3u)
+
+    // negative source, signed targets
+    assert((int32!) g == -3)
+    assert((int32!) g == (int32) g)
+    assert((int64!) g == -3i64)
+
+    // float32 source
+    assert((int32!) s == 200)
+    assert((int32!) s == (int32) s)
+    assert((uint8!) s == 200u8)
+    0
