@@ -439,7 +439,7 @@ The guiding principles are:
 - A clean statement / expression divide — top-level declarations are statements, everything inside an expression context is an expression with a type
 - One way to do things — minimize redundant syntax
 - Zero-cost abstractions — generics, modules, and option types produce no runtime representation in the generated C; safety and structure are compile-time concepts
-- Small performance and memory cost acceptable for safety improvements (fat pointers, bounds checking). Where performance is critical and the programmer is willing to take responsibility, escape mechanisms are available — raw pointer arithmetic and pointer-based array iteration opt out of bounds checking without undermining the rest of the type system.
+- Small performance and memory cost acceptable for safety improvements (fat pointers, bounds checking). Where performance is critical and the programmer is willing to take responsibility, escape mechanisms are available: an `unguarded` block opts out of the value-precondition guards (bounds checks, float→int saturation, integer divide/modulo) for a hot region while keeping slices and the rest of the type system intact, and raw pointer arithmetic drops out of the slice abstraction entirely. Neither undermines the rest of the type system.
 
 ### Type inference as a design theorem
 
@@ -2801,7 +2801,7 @@ Both `.ptr` and `.len` are **read-only** — assigning to either field is a comp
 
 The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), which exceeds the addressable memory of any current or foreseeable hardware.
 
-The cost of `int64` on 32-bit and smaller targets is real but acceptable; programmers who need tight inner loops on constrained hardware can drop to raw pointer arithmetic, which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
+The cost of `int64` on 32-bit and smaller targets is real but acceptable. To remove the per-access **bounds check** in a tight inner loop while keeping the slice and its `int64` length, wrap the hot region in an `unguarded` block (§Unguarded blocks). To additionally escape `int64` **index** arithmetic — iterating with a native-width counter, or indexing a buffer whose length never needs 64 bits — drop to raw pointer arithmetic or a raw allocation (`alloc(T, n)` yields a `T*`), which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
 
 Where the generated C must narrow an `int64` length or size to a platform-width type (`size_t` for `malloc`/`memcpy`/etc., `int` for `printf` widths), the emitter routes the cast through `fc_to_size` / `fc_to_int` helpers rather than a plain C cast. The helpers assert that the value fits in the target type before narrowing. On 64-bit hosts the assert is trivially true and compiles to a no-op; on 32-bit and smaller hosts it catches the case where user-derived length math exceeds `SIZE_MAX` or `INT_MAX` before silent truncation corrupts memory. Under `-DNDEBUG` the assertions are elided and the helpers reduce to plain casts. This keeps the `int64`-everywhere policy sound on sub-64-bit targets without requiring explicit guards in user code.
 
@@ -2876,7 +2876,7 @@ Alternatively, `alloc(T[N] { })` creates a slice which the programmer can narrow
 let buf = alloc(uint8[128] { })!.ptr    // uint8* — 128 bytes allocated, slice header discarded
 ```
 
-The underlying heap allocation is identical in both cases — `calloc(128, sizeof(uint8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C.
+The underlying heap allocation is identical in both cases — `calloc(128, sizeof(uint8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C. To keep a bounds-checked slice but drop the check only on a measured hot path, prefer an `unguarded` block (§Unguarded blocks) over discarding the slice for a raw pointer.
 
 Alternatively, take the pointer from a stack slice:
 
