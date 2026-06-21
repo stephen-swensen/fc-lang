@@ -60,6 +60,7 @@ typedef enum {
     EXPR_DEFER,
     EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
     EXPR_ATOMIC_STORE,  /* atomic_store_release(p, v) */
+    EXPR_GUARD,         /* guarded / unguarded <expr> — toggle runtime guard emission */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -184,10 +185,12 @@ struct Expr {
             bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...) —
                                  licenses an otherwise illegal unbounded (cstr) str→cstr cast,
                                  whose home (heap/dynamic stack) the wrapping alloc/alloca gives. */
-            bool unchecked;   /* (T!) — emit the bare C cast, skip the fc_f2* saturating
-                                 helper. Legal only float→int (pass2-enforced); UB out of
-                                 range, the programmer's asserted precondition. */
         } cast;
+
+        /* EXPR_GUARD — guarded / unguarded <body>. Toggles emission of the
+           value-precondition runtime guards (float→int saturation, integer
+           divide/modulo, slice bounds) for the lexically-enclosed body. */
+        struct { Expr *body; bool guarded; } guard;
 
         /* EXPR_IF */
         struct { Expr *cond; Expr *then_body; Expr *else_body; } if_expr;

@@ -1,0 +1,33 @@
+// `unguarded` integer divide/modulo emits a bare C `/` / `%` — no divide-by-zero
+// abort and no signed INT_MIN/-1 wrap branch. For valid divisors the result is
+// identical to the guarded form. Covers signed/unsigned, inline and parenthesized.
+let main = (args: str[]) ->
+    // signed division/modulo
+    let a = unguarded 17 / 5
+    assert(a == 3)
+    assert(a == 17 / 5)
+    let b = unguarded 17 % 5
+    assert(b == 2)
+    assert(b == 17 % 5)
+
+    // negative operands (no INT_MIN/-1 here, just ordinary signed division)
+    let c = unguarded (-17) / 5
+    assert(c == -3)
+    let d = unguarded (-17) % 5
+    assert(d == -2)
+
+    // unsigned
+    let u = 17u32
+    let v = 5u32
+    assert((unguarded u / v) == 3u32)
+    assert((unguarded u % v) == 2u32)
+
+    // runtime divisor (the case the guard normally protects)
+    let xs = int32[2]{40, 6}
+    let q = unguarded (xs[0] / xs[1])
+    assert(q == 6)
+
+    // division nested inside a larger unguarded expression
+    let r = unguarded (100 / 7 + 200 % 9)
+    assert(r == 14 + 2)
+    0

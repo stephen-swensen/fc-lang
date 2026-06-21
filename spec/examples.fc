@@ -216,11 +216,18 @@ let main = (args: str[]) ->
     let fi = (int32) 3.7       // float→int truncates: 3 (saturating, defined for all inputs)
     assert(fi == 3)
 
-    // Unchecked float→int cast: (T!) skips the saturation check, emitting a bare
-    // C truncation. Identical to (int32) for in-range values; UB out of range.
-    // For hot paths where the value is already known in range. Legal float→int only.
-    let fu = (int32!) 3.7      // bare truncation: 3
+    // Unguarded blocks opt out of FC's runtime guards (float→int saturation,
+    // integer divide/modulo, slice bounds) on a hot path. Identical result for
+    // in-range/non-zero operands; UB otherwise. `guarded` re-enables a check.
+    let fu = unguarded (int32) 3.7   // bare truncation, no saturation: 3
     assert(fu == 3)
+    let dq = unguarded 17 / 5        // bare divide, no zero/overflow guard: 3
+    assert(dq == 3)
+    let ns = int32[3]{4, 5, 6}
+    let hot = unguarded
+        let a = ns[0]                // unchecked index
+        a + (guarded ns[2])          // re-checked index inside the unguarded region
+    assert(hot == 10)
 
     // --------------------------------------------------------
     // If expressions — branches produce values

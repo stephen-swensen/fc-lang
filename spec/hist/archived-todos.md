@@ -6,6 +6,14 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ## Unchecked cast `(T!)` — opt out of float→int saturation (resolved 2026-06-19)
 
+> **Superseded 2026-06-21 by `unguarded`/`guarded` blocks.** The suffix-`!` cast
+> overloaded `!` (already checked-unwrap and boolean-not) for the opposite
+> *unchecked* meaning. It was retired in favor of a single general mechanism —
+> `unguarded`/`guarded` block expressions — that govern all three runtime guards
+> (float→int saturation, integer divide/modulo, slice bounds) without touching `!`.
+> See §Unguarded blocks in the spec. The motivation and trap-vs-UB analysis below
+> still hold; only the spelling changed (`(int32!) f` → `unguarded (int32) f`).
+
 The saturating float→int cast (rc.5, audit item 16) is the only UB-fix that carries
 per-operation runtime overhead: `float → int` routes through the `fc_f2*` helper family (NaN
 check + two range branches before the truncate), measured at ~2.5× the bare `cvttsd2si` in a

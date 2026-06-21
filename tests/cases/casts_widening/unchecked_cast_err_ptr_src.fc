@@ -1,8 +1,0 @@
-// (T!) is rejected on a pointer source: pointer→usize is a reinterpret, no
-// runtime check, so the `!` is inert. (Plain (usize) p is allowed.)
-let main = (args: str[]) ->
-    let mut n = 5i
-    let p = &n
-    let x = (usize!) p
-    assert(x == x)
-    0

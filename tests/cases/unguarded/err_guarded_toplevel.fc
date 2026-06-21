@@ -1,0 +1,5 @@
+// `guarded` where guards are already on (top level) does not flip context.
+let main = (args: str[]) ->
+    let xs = int32[2]{1, 2}
+    let z = guarded xs[0]
+    z

@@ -1,0 +1,5 @@
+// Option unwrap is always checked; `unguarded` does not govern it.
+let main = (args: str[]) ->
+    let o = some(5)
+    let z = unguarded o!
+    z

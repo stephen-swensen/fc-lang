@@ -1,1 +1,0 @@
-redundant '!': this cast inserts no runtime check; '!' is allowed only on a float-to-integer cast

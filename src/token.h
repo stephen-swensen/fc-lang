@@ -42,6 +42,8 @@ typedef enum {
     TOK_FALSE,
     TOK_NONE,
     TOK_VOID,
+    TOK_GUARDED,
+    TOK_UNGUARDED,
 
     /* Built-in operators (reserved identifiers) */
     TOK_ALLOC,

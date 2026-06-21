@@ -34,6 +34,14 @@ static int g_file_global_count = 0;
  * expression path, which C11 rejects at file scope. */
 static bool g_const_context = false;
 
+/* Lexical guard context, toggled by EXPR_GUARD (guarded/unguarded). When true,
+ * the three value-precondition guards (float→int saturation, integer
+ * divide/modulo, slice bounds) emit their bare C operation with no runtime
+ * check. A child marker fully overrides its parent, so EXPR_GUARD saves and
+ * restores this around its body; function/lambda bodies reset it to false so a
+ * marker never leaks across a call boundary. */
+static bool g_guards_suppressed = false;
+
 /* Backing arrays for file-scope slice literals.  Collected by
  * a pre-pass over module-member inits (including nested slice lits), emitted
  * as `static T _fc_const_backing_N[] = {...};` ahead of the module-member
@@ -131,6 +139,7 @@ static bool defer_emits_statement(Expr *e) {
     case EXPR_FOR:  return true;
     case EXPR_LOOP:
     case EXPR_IF:   return type_valueless(e->type);
+    case EXPR_GUARD: return defer_emits_statement(e->guard.body);
     default:        return false;
     }
 }
@@ -272,6 +281,9 @@ static void collect_hoisted_bindings(Expr *e) {
         break;
     case EXPR_SOME:
         collect_hoisted_bindings(e->some_expr.value);
+        break;
+    case EXPR_GUARD:
+        collect_hoisted_bindings(e->guard.body);
         break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
@@ -917,6 +929,7 @@ static bool expr_has_side_effects(Expr *e) {
                expr_has_side_effects(e->slice.lo) ||
                expr_has_side_effects(e->slice.hi);
     case EXPR_CAST: return expr_has_side_effects(e->cast.operand);
+    case EXPR_GUARD: return expr_has_side_effects(e->guard.body);
     case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++)
@@ -2372,8 +2385,13 @@ static void emit_expr(Expr *e, FILE *out) {
          *    dividing. The quotient is a wrapping negation through the unsigned
          *    counterpart (correct at every width, including `min`, and
          *    int-width-agnostic). Unsigned division never overflows, so the
-         *    `== -1` arm is signed-only. */
-        if ((op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
+         *    `== -1` arm is signed-only.
+         *  - An enclosing `unguarded` skips this block entirely: control falls
+         *    through to the plain binary emit below (bare `a / b` / `a % b`), so
+         *    both the zero abort and the `min/-1` wrap are dropped — UB on a zero
+         *    or `min/-1` divisor, the programmer's asserted precondition. */
+        if (!g_guards_suppressed &&
+            (op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
             int tid = temp_counter++;
             const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
             int fn_len = (int)strlen(fn);
@@ -2761,6 +2779,17 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_GUARD: {
+        /* Toggle the lexical guard context for the body, then restore. A child
+         * marker fully overrides its parent (unguarded → suppress, guarded →
+         * re-enable), so a plain save/restore is exactly right. */
+        bool saved = g_guards_suppressed;
+        g_guards_suppressed = !e->guard.guarded;
+        emit_expr(e->guard.body, out);
+        g_guards_suppressed = saved;
+        break;
+    }
+
     case EXPR_CAST: {
         F2iInfo f2i_info;
         /* str -> cstr: stack copy with null terminator */
@@ -2797,12 +2826,13 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->cast.operand, out);
             fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
                     src_const ? "(uint8_t*)" : "", tid, tid);
-        } else if (!e->cast.unchecked && e->cast.operand->type &&
+        } else if (!g_guards_suppressed && e->cast.operand->type &&
                    type_is_float(e->cast.operand->type) &&
                    float_to_int_info(e->cast.target->kind, &f2i_info)) {
             /* float -> int: saturating conversion (NaN->0, clamp to range, else
              * truncate toward zero). A raw C cast here is UB out of range.
-             * (T!) opts out — it falls through to the bare cast below. */
+             * An enclosing `unguarded` opts out — it falls through to the bare
+             * cast below. */
             float_to_int_emit(&f2i_info, e->cast.operand, out);
         } else if (e->cast.operand->type &&
                    ((cast_is_ptr_kind(e->cast.operand->type) && type_is_integer(e->cast.target)) ||
@@ -2976,12 +3006,17 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->index.object, out);
             fprintf(out, "; int64_t _i%d = (int64_t)", tid);
             emit_expr(e->index.index, out);
-            fprintf(out, "; if (__builtin_expect((uint64_t)_i%d >= (uint64_t)_s%d.len, 0)) "
-                         "fc_oob(\"", tid, tid);
-            emit_c_escaped(fn, fn_len, out);
-            fprintf(out, "\", %d, (long long)_i%d, (long long)_s%d.len); "
-                         "_s%d.ptr + _i%d; }))",
-                    line, tid, tid, tid, tid);
+            if (g_guards_suppressed) {
+                /* unguarded: bare access, no bounds check (UB out of range). */
+                fprintf(out, "; _s%d.ptr + _i%d; }))", tid, tid);
+            } else {
+                fprintf(out, "; if (__builtin_expect((uint64_t)_i%d >= (uint64_t)_s%d.len, 0)) "
+                             "fc_oob(\"", tid, tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, "\", %d, (long long)_i%d, (long long)_s%d.len); "
+                             "_s%d.ptr + _i%d; }))",
+                        line, tid, tid, tid, tid);
+            }
         } else {
             /* Pointer indexing — no bounds check */
             emit_expr(e->index.object, out);
@@ -3022,14 +3057,19 @@ static void emit_expr(Expr *e, FILE *out) {
         } else {
             fprintf(out, "_s%d.len", tid);
         }
-        fprintf(out, "; if (__builtin_expect("
-                     "(uint64_t)_lo%d > (uint64_t)_hi%d || "
-                     "(uint64_t)_hi%d > (uint64_t)_s%d.len, 0)) "
-                     "fc_oob_sub(\"",
-            tid, tid, tid, tid);
-        emit_c_escaped(fn, fn_len, out);
-        fprintf(out, "\", %d, (long long)_lo%d, (long long)_hi%d, (long long)_s%d.len); ",
-                line, tid, tid, tid);
+        if (g_guards_suppressed) {
+            /* unguarded: no bounds check (UB on reversed/past-end range). */
+            fprintf(out, "; ");
+        } else {
+            fprintf(out, "; if (__builtin_expect("
+                         "(uint64_t)_lo%d > (uint64_t)_hi%d || "
+                         "(uint64_t)_hi%d > (uint64_t)_s%d.len, 0)) "
+                         "fc_oob_sub(\"",
+                tid, tid, tid, tid);
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, "\", %d, (long long)_lo%d, (long long)_hi%d, (long long)_s%d.len); ",
+                    line, tid, tid, tid);
+        }
         fprintf(out, "(");
         emit_type(obj_type, out);
         fprintf(out, "){ .ptr = _s%d.ptr + _lo%d, .len = _hi%d - _lo%d }; })",
@@ -4336,6 +4376,8 @@ static void emit_func_decl(Decl *d, FILE *out) {
     }
 
     indent_level = 1;
+    g_guards_suppressed = false;   /* guards on at a function boundary: an
+                                      `unguarded` marker never reaches a callee */
     begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
     defer_scope_push(false);
     emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
@@ -4705,6 +4747,9 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
         collect_types_in_type(e->cast.target, slices, options, fns);
         collect_types_expr(e->cast.operand, slices, options, fns);
         break;
+    case EXPR_GUARD:
+        collect_types_expr(e->guard.body, slices, options, fns);
+        break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
             collect_types_expr(e->struct_lit.fields[i].value, slices, options, fns);
@@ -4906,6 +4951,9 @@ static void collect_const_backings(Expr *e) {
     case EXPR_CAST:
         collect_const_backings(e->cast.operand);
         break;
+    case EXPR_GUARD:
+        collect_const_backings(e->guard.body);
+        break;
     default:
         /* Leaves: literals, extern-const/no-payload variant EXPR_FIELD, type
          * operators.  Nothing to lift. */
@@ -5012,6 +5060,9 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
         break;
     case EXPR_CAST:
         collect_trampolines_expr(e->cast.operand, ts);
+        break;
+    case EXPR_GUARD:
+        collect_trampolines_expr(e->guard.body, ts);
         break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
@@ -5136,6 +5187,9 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         break;
     case EXPR_CAST:
         collect_lambdas_expr(e->cast.operand, ls);
+        break;
+    case EXPR_GUARD:
+        collect_lambdas_expr(e->guard.body, ls);
         break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
@@ -5635,6 +5689,9 @@ static void detect_features_expr(Expr *e) {
         return;
     case EXPR_CAST:
         detect_features_expr(e->cast.operand);
+        return;
+    case EXPR_GUARD:
+        detect_features_expr(e->guard.body);
         return;
     case EXPR_IF:
         detect_features_expr(e->if_expr.cond);
@@ -6592,6 +6649,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
                 lam->func.capture_count > 0 ? "_ctx" : "NULL");
         }
 
+        g_guards_suppressed = false;   /* lambda body: guards on (function boundary) */
         begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
         defer_scope_push(false);
         emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);
@@ -6653,6 +6711,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "void* _ctx) {\n");
         fprintf(out, "    (void)_ctx;\n");
         indent_level = 1;
+        g_guards_suppressed = false;   /* generic-instance body: guards on (function boundary) */
         begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
         defer_scope_push(false);
         emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);

@@ -1,6 +1,0 @@
-// (T!) is rejected on a bool source: bool→numeric (0/1) emits no runtime check.
-let main = (args: str[]) ->
-    let b = true
-    let x = (int32!) b
-    assert(x == 1)
-    0

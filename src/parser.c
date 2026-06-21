@@ -717,6 +717,32 @@ static Expr **parse_body(Parser *p, int *count) {
     return stmts;
 }
 
+/* Parse a guarded/unguarded expression: the keyword (already consumed) is
+   followed by either an indented block or a single inline expression. The body
+   is wrapped in EXPR_GUARD with the given polarity. The inline operand parses at
+   PREC_NONE+1 (as let-init / if-cond do), so `unguarded a / b` captures the whole
+   `a / b` while parentheses bound it inside a larger expression. */
+static Expr *parse_guard(Parser *p, bool guarded, SrcLoc loc) {
+    Expr *body;
+    if (check(p, TOK_INDENT)) {
+        int count;
+        Expr **stmts = parse_block(p, &count);
+        if (count == 1) {
+            body = stmts[0];
+        } else {
+            body = alloc_expr(p, EXPR_BLOCK, loc);
+            body->block.stmts = stmts;
+            body->block.count = count;
+        }
+    } else {
+        body = parse_expr(p, PREC_NONE + 1);
+    }
+    Expr *e = alloc_expr(p, EXPR_GUARD, loc);
+    e->guard.body = body;
+    e->guard.guarded = guarded;
+    return e;
+}
+
 /* Parse a function literal: (params) -> body */
 static Expr *parse_func_literal(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
@@ -1419,13 +1445,6 @@ static Expr *parse_prefix(Parser *p) {
                 advance_p(p); /* ] */
                 buffer_size = (int)n;
             }
-            /* (T!) — unchecked cast: a suffix ! on the target type opts out of the
-             * fc_f2* saturating helper (float→int only; enforced in pass2). */
-            bool unchecked = false;
-            if (check(p, TOK_BANG)) {
-                advance_p(p); /* ! */
-                unchecked = true;
-            }
             if (check(p, TOK_RPAREN)) {
                 advance_p(p);
                 Expr *operand = parse_expr(p, PREC_PREFIX);
@@ -1433,7 +1452,6 @@ static Expr *parse_prefix(Parser *p) {
                 e->cast.target = target;
                 e->cast.operand = operand;
                 e->cast.buffer_size = buffer_size;
-                e->cast.unchecked = unchecked;
                 return e;
             }
             /* Not a cast — backtrack */
@@ -1548,6 +1566,14 @@ static Expr *parse_prefix(Parser *p) {
         e->loop_expr.body_count = body_count;
         return e;
     }
+
+    case TOK_GUARDED:
+        advance_p(p);
+        return parse_guard(p, true, loc);
+
+    case TOK_UNGUARDED:
+        advance_p(p);
+        return parse_guard(p, false, loc);
 
     case TOK_FOR: {
         advance_p(p);

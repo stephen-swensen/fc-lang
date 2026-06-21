@@ -1,0 +1,5 @@
+// Float divide has no governed guard, so `unguarded` over it is redundant.
+let main = (args: str[]) ->
+    let z = unguarded (1.0 / 2.0)
+    assert(z > 0.4)
+    0

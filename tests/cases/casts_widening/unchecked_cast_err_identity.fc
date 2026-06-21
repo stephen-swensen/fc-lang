@@ -1,6 +1,0 @@
-// (T!) is rejected on an identity cast: same-type casts emit no runtime check.
-let main = (args: str[]) ->
-    let m = 5
-    let x = (int32!) m
-    assert(x == 5)
-    0

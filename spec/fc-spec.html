@@ -890,16 +890,7 @@ let g = (int32) (0.0 / 0.0) // 0            (nan -> 0)
 
 A `float32` operand is converted as if first promoted to `float64` (which is lossless), so the truncation and the clamping bounds are identical regardless of the source float width.
 
-**Unchecked float-to-integer cast `(T!)`.** The saturating conversion above is the only cast that carries a runtime cost — the range check and `nan` guard run on every conversion, even where the programmer already knows the value is in range. A suffix `!` on the target type, `(int32!) f`, *opts out* of saturation: it emits the bare C truncation, with **no** range check or `nan` guard. For every in-range, finite input the result is identical to `(int32) f`; for an out-of-range or `nan` input the result is **undefined behavior** (exactly C's float-to-integer semantics). The `!` is the programmer asserting the precondition the compiler can't verify — *"this value is in range; don't make me pay for the failure path"* — for hot loops where the saturation never fires but always costs.
-
-```fc
-let n = (int32!) f          // bare truncation; UB if f is out of int32 range or nan
-let p = (uint8!) sample     // hot-path conversion the caller has already clamped
-```
-
-The unchecked `!` is accepted **only** on a float-to-integer cast — the one cast that emits a runtime check to skip. On any other cast (`(int32!) some_int`, `(float64!) i`, `(usize!) ptr`, an identity cast) it is a **compile error** (*"redundant `!`: this cast inserts no runtime check"*), because there it would be silently inert. This mirrors the rule that postfix `!` is rejected on a non-option value: suffix `!` always *means something* wherever it is accepted.
-
-> **Trap vs. UB — a deliberate asymmetry.** Option unwrap `x!` is *checked*: it tests the tag and aborts on `none`. Cast `(T!)` is *unchecked*: it is UB out of range, not a trap. Both read as "I assert the precondition holds," but they fail differently. This is intentional — a *trapping* cast would still have to emit the range comparisons (branching to `abort` instead of saturating) and would be no faster, defeating the entire purpose. The value of `(T!)` is removing the branches, so it must be genuinely unchecked.
+The saturating float-to-integer conversion is one of a small set of **runtime guards** FC inserts. The `unguarded` block opts out of it on a hot path — see **Unguarded blocks** below.
 
 **Bool to numeric** — `bool` casts to any numeric type, producing `1` for `true` and `0` for `false`. Useful for bit-packing flags, summing boolean conditions, or formatting bools in string interpolation. The reverse direction (numeric to `bool`) is **not allowed**, even as an explicit cast — unlike bool-to-int, there's no unambiguously correct mapping (C-style `!= 0` vs strict 0/1 only), so FC requires the programmer to write the comparison explicitly (`x != 0`):
 
@@ -964,6 +955,37 @@ let p = (int32*) (usize) raw_u64        // a uint64 address reaches a pointer vi
 **Identity casts** — casting a scalar value to its own type (e.g. `(int32) x` where `x` is already `int32`, or `(bool) b`) is a permitted no-op for any numeric, `bool`, `char`, or pointer type. Aggregate types (structs, unions, slices) cannot be cast at all, so they have no identity-cast form.
 
 Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `float32` as `uint32`) is not supported via cast syntax — use explicit pointer casts through a temporary if needed.
+
+### Unguarded blocks
+
+FC inserts a handful of **runtime guards** to make defined what C leaves undefined: float-to-integer saturation, the integer divide/modulo zero-and-overflow check, and slice bounds checks. On a hot path the programmer often already knows the precondition holds. `unguarded` opts out of these guards for a lexically-scoped expression; `guarded` opts back in. They are expressions with the same two layouts as `loop` and `if … then` — an indented block whose value is its last expression, or a one-line inline form:
+
+```fc
+let n = unguarded (int32) f     // bare truncation, no saturation (UB if f out of range/nan)
+let q = unguarded a / b         // bare divide (UB if b == 0 or a/b overflows)
+
+let total = unguarded           // block form
+    let acc = sum / count       // unchecked divide
+    acc + data[i]               // unchecked index
+```
+
+The governing idea: **the operation's spelling states intent; the guard context states whether the precondition is verified or trusted.** `s[i]` always means "index"; `(int32) f` always means "narrow." Whether each is checked at runtime or taken on faith is decided by the enclosing `guarded`/`unguarded` context.
+
+**`unguarded` governs exactly three guards** — float→int saturation, integer `/` and `%` (zero and signed `min/-1`), and slice bounds (index and subslice). For an in-range, finite, non-zero operand the result is identical to the guarded form; otherwise it is **undefined behavior** (exactly C's semantics). It governs nothing else. In particular, **option unwrap `x!` is always checked** — its tag test is a software invariant, not a range guard, and skipping it would resurrect the null-dereference class that options exist to remove. `unguarded x!` is therefore a redundant-marker error (below), not an unchecked unwrap.
+
+**Guard is not semantic.** `unguarded` removes inserted *branches and helpers*; it never changes *branchless* arithmetic. `unguarded (a + b)` still wraps — FC's signed overflow is defined as modular (§Integer overflow), not C's undefined behavior, and that is unaffected. The one place these pull apart is signed division's `min / -1`, whose defined wrap is upheld *by a branch*; `unguarded` removes that branch, so `min / -1` and `min % -1` become UB along with the zero divisor. Removing the branch is the entire point — a still-branching "unchecked" divide would be no faster.
+
+**Strictly lexical.** A marker affects only the operations written inside it. `unguarded f(x)` suppresses guards while evaluating the arguments and the call, never inside `f`'s body or a nested lambda — a marker never crosses a function boundary.
+
+**Nesting and re-enabling.** Markers nest and a child fully overrides its parent, so inside a large `unguarded` region a `guarded` sub-expression re-checks one access you do not trust (for example an index fed by external input) without restructuring the loop:
+
+```fc
+let v = unguarded
+    let a = buf[head]               // unchecked — head is an internal cursor
+    a + (guarded buf[user_offset])  // re-checked — user_offset is untrusted
+```
+
+**Redundancy is a compile error.** Mirroring the rule that postfix `!` must mean something wherever it appears, a `guarded`/`unguarded` marker is rejected when it would do nothing: either it does not flip the surrounding context (a `guarded` where guards are already on, e.g. at the top level; an `unguarded` directly inside another `unguarded`), or its body contains no governed guard for it to toggle (`unguarded (a + b)`, `unguarded (x / y)` on floats, `unguarded x!`). A marker that is accepted always changes the emitted code.
 
 ---
 

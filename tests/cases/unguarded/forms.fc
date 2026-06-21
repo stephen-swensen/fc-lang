@@ -1,0 +1,38 @@
+// Surface forms: inline one-liner, indented block, nested `guarded` re-enable,
+// and a `guarded` sub-expression embedded in arithmetic inside an unguarded region.
+let main = (args: str[]) ->
+    let xs = int32[4]{10, 20, 30, 40}
+
+    // inline form
+    let i = unguarded 22 / 7
+    assert(i == 3)
+
+    // block form: value is the last expression
+    let bl = unguarded
+        let q = 22 / 7
+        let r = xs[1]
+        q + r
+    assert(bl == 3 + 20)
+
+    // nested re-enable: inner `guarded` restores the bounds check for one access
+    // while the surrounding region stays unguarded.
+    let nested = unguarded
+        let a = xs[0]                  // unchecked index
+        let b = guarded xs[3]          // re-checked index
+        a + b
+    assert(nested == 10 + 40)
+
+    // `guarded z[i]` as a parenthesized sub-expression inside an unguarded region
+    // that also performs its own unchecked work (so the marker has an effect).
+    let sub = unguarded
+        let k = xs[3]                  // unchecked index — the region's own effect
+        k + (guarded xs[2])           // re-checked sub-expression in arithmetic
+    assert(sub == 40 + 30)
+
+    // a `guarded` block re-enabling several ops at once
+    let multi = unguarded
+        let u = xs[0] / 2             // unchecked divide + unchecked index
+        guarded
+            u + xs[1] / 4            // re-checked divide + index
+    assert(multi == 5 + 5)
+    0

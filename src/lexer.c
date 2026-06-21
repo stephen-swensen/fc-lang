@@ -116,6 +116,8 @@ static TokenKind check_keyword(const char *start, int len) {
         {"false",     5,  TOK_FALSE},
         {"none",      4,  TOK_NONE},
         {"void",      4,  TOK_VOID},
+        {"guarded",   7,  TOK_GUARDED},
+        {"unguarded", 9,  TOK_UNGUARDED},
         {"alloc",     5,  TOK_ALLOC},
         {"alloca",    6,  TOK_ALLOCA},
         {"free",      4,  TOK_FREE},
@@ -869,7 +871,8 @@ static Token make_layout_token(TokenKind kind, int line, int col) {
 
 static bool is_always_block_former(TokenKind k) {
     return k == TOK_ARROW || k == TOK_WITH || k == TOK_THEN ||
-           k == TOK_ELSE || k == TOK_LOOP;
+           k == TOK_ELSE || k == TOK_LOOP ||
+           k == TOK_GUARDED || k == TOK_UNGUARDED;
 }
 
 Token *lexer_tokenize(Lexer *l, int *out_count) {

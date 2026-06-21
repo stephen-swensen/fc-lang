@@ -252,6 +252,8 @@ static bool expr_may_yield_stack(Scope *scope, Expr *e) {
         return scope_lookup_prov(scope, e->ident.name) == PROV_STACK;
     case EXPR_CAST:
         return expr_may_yield_stack(scope, e->cast.operand);
+    case EXPR_GUARD:
+        return expr_may_yield_stack(scope, e->guard.body);
     case EXPR_SOME:
         return expr_may_yield_stack(scope, e->some_expr.value);
     case EXPR_UNARY_POSTFIX:           /* option unwrap x! preserves provenance */
@@ -392,6 +394,9 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
     case EXPR_CAST:
         pretaint_walk(scope, e->cast.operand, changed);
         break;
+    case EXPR_GUARD:
+        pretaint_walk(scope, e->guard.body, changed);
+        break;
     case EXPR_SOME:
         pretaint_walk(scope, e->some_expr.value, changed);
         break;
@@ -517,6 +522,11 @@ typedef struct {
        has no loc of its own). Set broadly at each expression and precisely at
        function-parameter resolution; used to attribute "unknown type name". */
     SrcLoc type_loc;
+    /* Lexical guard context: true while checking the body of an `unguarded`
+       marker (guards suppressed), false otherwise (the default, guards on).
+       Mirrors codegen's g_guards_suppressed; used to reject non-flipping markers
+       (a `guarded` where guards are already on, an `unguarded` inside another). */
+    bool guards_suppressed;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -557,6 +567,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
                                    (e->slice.lo && expr_refs_self(e->slice.lo, self)) ||
                                    (e->slice.hi && expr_refs_self(e->slice.hi, self));
     case EXPR_CAST:         return expr_refs_self(e->cast.operand, self);
+    case EXPR_GUARD:        return expr_refs_self(e->guard.body, self);
     case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
     case EXPR_ASSERT:       return expr_refs_self(e->assert_expr.condition, self);
     case EXPR_IF:           return expr_refs_self(e->if_expr.cond, self) ||
@@ -603,6 +614,8 @@ static bool branch_can_anchor(Expr *e, const char *self) {
         return e->block.count > 0
             ? branch_can_anchor(e->block.stmts[e->block.count - 1], self)
             : true;
+    case EXPR_GUARD:
+        return branch_can_anchor(e->guard.body, self);
     default:
         return !expr_refs_self(e, self);
     }
@@ -697,6 +710,9 @@ static int sr_flow(Expr *e, const char *self, Type *ph) {
            still reachable; break/continue stay within the loop. */
         return SR_COMPLETE |
                (sr_flow_block(e->for_expr.body, e->for_expr.body_count, self, ph) & SR_RETURN);
+    case EXPR_GUARD:
+        /* Transparent wrapper: flow through to the guarded body. */
+        return sr_flow(e->guard.body, self, ph);
     default:
         /* Everything else (value expressions, let bindings, lambda definitions,
            assignments) completes for the purpose of this analysis; a self-call buried
@@ -2620,6 +2636,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_LET_DESTRUCT:
         ok &= validate_generic_body(e->let_destruct.init, arena, type_params, bindings, ntp, frame);
         break;
+    case EXPR_GUARD:
+        ok &= validate_generic_body(e->guard.body, arena, type_params, bindings, ntp, frame);
+        break;
 
     /* Leaf nodes — no children to walk */
     default:
@@ -2636,6 +2655,7 @@ static bool is_lvalue_expr(Expr *e) {
     case EXPR_FIELD:       return is_lvalue_expr(e->field.object);   /* chain: s.inner.data */
     case EXPR_DEREF_FIELD: return true;   /* p->field: pointee has own lifetime */
     case EXPR_INDEX:       return true;   /* arr[i] is an lvalue */
+    case EXPR_GUARD:       return is_lvalue_expr(e->guard.body);  /* unguarded s[i] = v */
     default:               return false;  /* function calls, literals, etc. */
     }
 }
@@ -2703,6 +2723,138 @@ static bool expr_contains_control_flow(Expr *e) {
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
             if (expr_contains_control_flow(e->tuple_lit.elems[i])) return true;
         return false;
+    case EXPR_GUARD:
+        return expr_contains_control_flow(e->guard.body);
+    default:
+        return false;
+    }
+}
+
+/* Is this node one of the three value-precondition guards that `unguarded`
+   governs? Checked post-typecheck, so operand/result types are populated.
+   Must stay in lockstep with the three gated sites in codegen. */
+static bool expr_node_is_governed_guard(Expr *e) {
+    switch (e->kind) {
+    case EXPR_CAST:   /* float→int saturation helper */
+        return e->cast.operand->type && type_is_float(e->cast.operand->type) &&
+               e->cast.target && type_is_integer(e->cast.target);
+    case EXPR_BINARY: /* integer divide/modulo: zero + INT_MIN/-1 guard */
+        return (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
+               e->type && type_is_integer(e->type);
+    case EXPR_INDEX:  /* slice bounds check */
+        return e->index.object->type && e->index.object->type->kind == TYPE_SLICE;
+    case EXPR_SLICE:  /* subslice bounds check */
+        return e->slice.object->type && e->slice.object->type->kind == TYPE_SLICE;
+    default:
+        return false;
+    }
+}
+
+/* Does the body of a guard marker contain a governed guard that the marker would
+   actually toggle? Recurses through children but STOPS at nested EXPR_GUARD (a
+   nested marker establishes its own context) and EXPR_FUNC (a lambda body is a
+   function boundary the marker does not reach). Drives the no-op redundancy error. */
+static bool guard_subtree_has_effect(Expr *e) {
+    if (!e) return false;
+    if (e->kind == EXPR_GUARD || e->kind == EXPR_FUNC) return false;
+    if (expr_node_is_governed_guard(e)) return true;
+    switch (e->kind) {
+    case EXPR_BLOCK:
+        for (int i = 0; i < e->block.count; i++)
+            if (guard_subtree_has_effect(e->block.stmts[i])) return true;
+        return false;
+    case EXPR_IF:
+        return guard_subtree_has_effect(e->if_expr.cond) ||
+               guard_subtree_has_effect(e->if_expr.then_body) ||
+               guard_subtree_has_effect(e->if_expr.else_body);
+    case EXPR_MATCH:
+        if (guard_subtree_has_effect(e->match_expr.subject)) return true;
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
+                if (guard_subtree_has_effect(e->match_expr.arms[i].body[j])) return true;
+        return false;
+    case EXPR_LOOP:
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            if (guard_subtree_has_effect(e->loop_expr.body[i])) return true;
+        return false;
+    case EXPR_FOR:
+        if (guard_subtree_has_effect(e->for_expr.iter)) return true;
+        if (e->for_expr.range_end && guard_subtree_has_effect(e->for_expr.range_end)) return true;
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            if (guard_subtree_has_effect(e->for_expr.body[i])) return true;
+        return false;
+    case EXPR_BINARY:
+        return guard_subtree_has_effect(e->binary.left) ||
+               guard_subtree_has_effect(e->binary.right);
+    case EXPR_UNARY_PREFIX:
+        return guard_subtree_has_effect(e->unary_prefix.operand);
+    case EXPR_UNARY_POSTFIX:
+        return guard_subtree_has_effect(e->unary_postfix.operand);
+    case EXPR_CALL:
+        if (guard_subtree_has_effect(e->call.func)) return true;
+        for (int i = 0; i < e->call.arg_count; i++)
+            if (guard_subtree_has_effect(e->call.args[i])) return true;
+        return false;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        return guard_subtree_has_effect(e->field.object);
+    case EXPR_INDEX:
+        return guard_subtree_has_effect(e->index.object) ||
+               guard_subtree_has_effect(e->index.index);
+    case EXPR_SLICE:
+        return guard_subtree_has_effect(e->slice.object) ||
+               guard_subtree_has_effect(e->slice.lo) ||
+               guard_subtree_has_effect(e->slice.hi);
+    case EXPR_CAST:
+        return guard_subtree_has_effect(e->cast.operand);
+    case EXPR_SOME:
+        return guard_subtree_has_effect(e->some_expr.value);
+    case EXPR_ASSERT:
+        return guard_subtree_has_effect(e->assert_expr.condition) ||
+               guard_subtree_has_effect(e->assert_expr.message);
+    case EXPR_ALLOC:
+        return guard_subtree_has_effect(e->alloc_expr.init_expr) ||
+               guard_subtree_has_effect(e->alloc_expr.size_expr);
+    case EXPR_FREE:
+        return guard_subtree_has_effect(e->free_expr.operand);
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            if (guard_subtree_has_effect(e->struct_lit.fields[i].value)) return true;
+        return false;
+    case EXPR_ARRAY_LIT:
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            if (guard_subtree_has_effect(e->array_lit.elems[i])) return true;
+        return false;
+    case EXPR_TUPLE_LIT:
+        for (int i = 0; i < e->tuple_lit.elem_count; i++)
+            if (guard_subtree_has_effect(e->tuple_lit.elems[i])) return true;
+        return false;
+    case EXPR_SLICE_LIT:
+        return guard_subtree_has_effect(e->slice_lit.ptr_expr) ||
+               guard_subtree_has_effect(e->slice_lit.len_expr);
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (!e->interp_string.segments[i].is_literal &&
+                guard_subtree_has_effect(e->interp_string.segments[i].expr)) return true;
+        return false;
+    case EXPR_LET:
+        return guard_subtree_has_effect(e->let_expr.let_init);
+    case EXPR_LET_DESTRUCT:
+        return guard_subtree_has_effect(e->let_destruct.init);
+    case EXPR_RETURN:
+        return guard_subtree_has_effect(e->return_expr.value);
+    case EXPR_BREAK:
+        return guard_subtree_has_effect(e->break_expr.value);
+    case EXPR_DEFER:
+        return guard_subtree_has_effect(e->defer_expr.value);
+    case EXPR_ASSIGN:
+        return guard_subtree_has_effect(e->assign.target) ||
+               guard_subtree_has_effect(e->assign.value);
+    case EXPR_ATOMIC_LOAD:
+        return guard_subtree_has_effect(e->atomic_load.ptr);
+    case EXPR_ATOMIC_STORE:
+        return guard_subtree_has_effect(e->atomic_store.ptr) ||
+               guard_subtree_has_effect(e->atomic_store.value);
     default:
         return false;
     }
@@ -4209,6 +4361,35 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    case EXPR_GUARD: {
+        /* `guarded`/`unguarded` is a transparent wrapper: its type and provenance
+           are the body's. It only toggles the lexical guard context for codegen. */
+        bool want_suppressed = !e->guard.guarded;   /* unguarded → suppress */
+        bool saved_suppressed = ctx->guards_suppressed;
+        ctx->guards_suppressed = want_suppressed;
+        Type *t = check_expr(ctx, e->guard.body);
+        ctx->guards_suppressed = saved_suppressed;
+        e->type = t;
+        e->prov = e->guard.body->prov;
+        /* Strict redundancy: an accepted marker must always change the emitted
+           code. Reject one that doesn't flip the surrounding context, or whose
+           body has no governed guard for it to toggle. Suppress on an erroneous body. */
+        if (!type_is_error(t)) {
+            if (want_suppressed == saved_suppressed) {
+                diag_error(e->loc, e->guard.guarded
+                    ? "redundant 'guarded': guards are already enabled here"
+                    : "redundant 'unguarded': guards are already suppressed here");
+            } else if (!guard_subtree_has_effect(e->guard.body)) {
+                diag_error(e->loc,
+                    "redundant '%s': no guarded operation (float-to-int cast, "
+                    "integer divide/modulo, or slice index) to %s",
+                    e->guard.guarded ? "guarded" : "unguarded",
+                    e->guard.guarded ? "re-enable" : "suppress");
+            }
+        }
+        return e->type;
+    }
+
     case EXPR_LET: {
         if (e->type) return e->type;
 
@@ -4498,17 +4679,6 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * (struct/union/slice) cannot be cast in C, so they stay rejected. */
         bool same_type = type_eq(from, to) &&
             (from_num || from_ptr || from->kind == TYPE_BOOL || from->kind == TYPE_CHAR);
-        /* (T!) opts out of the saturating float→int helper. It is the *only* cast
-         * that emits a runtime check, so the unchecked `!` is meaningful only there;
-         * anywhere else it would be silently inert, so reject it (mirrors rejecting
-         * `x!` on a non-option). */
-        if (e->cast.unchecked && !(type_is_float(from) && to_int)) {
-            diag_error(e->loc,
-                "redundant '!': this cast inserts no runtime check; '!' is allowed "
-                "only on a float-to-integer cast");
-            e->type = type_error();
-            return e->type;
-        }
         /* A pointer<->integer cast through a fixed-width int gets a targeted
          * diagnostic pointing to the pointer-width types, rather than the
          * generic "invalid cast" below. */

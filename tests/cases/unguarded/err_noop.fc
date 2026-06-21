@@ -1,0 +1,4 @@
+// `unguarded` over an expression with no governed guard is redundant.
+let main = (args: str[]) ->
+    let z = unguarded (1 + 2)
+    z

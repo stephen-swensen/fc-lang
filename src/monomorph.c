@@ -515,6 +515,9 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
     case EXPR_DEFAULT:
         discover_in_type(e->default_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
         return;
+    case EXPR_GUARD:
+        discover_in_expr(e->guard.body, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     default: return;
     }
 }
