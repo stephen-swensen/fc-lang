@@ -867,7 +867,7 @@ static Expr *parse_if_expr(Parser *p) {
 
 /* Parse a let-binding: `let [mut] <target> = <init>`.  When an explicit `in`
    follows (mandatory if require_in), `let x = v in body` desugars to a
-   two-statement block `{ let x = v; body }` — EXPR_BLOCK already gives the
+   two-statement block (the `let`, then `body`) — EXPR_BLOCK already gives the
    binding an inner scope, yields body's value, and codegens as a GNU
    statement-expression, so no new pass2/codegen is needed.  Without `in` (the
    offside form) the bare let node is returned; the enclosing block's subsequent
