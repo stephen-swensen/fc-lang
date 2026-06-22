@@ -1,0 +1,8 @@
+// The `in` body sees the new binding; the outer binding is restored afterward
+// (the let-in binding is scoped to its body only).
+let main = (args: str[]) ->
+    let x = 1
+    let y = let x = x + 10 in x * 2
+    assert(x == 1)
+    assert(y == 22)
+    0

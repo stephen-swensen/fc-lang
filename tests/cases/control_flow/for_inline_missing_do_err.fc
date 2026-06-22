@@ -1,0 +1,6 @@
+// An inline `for` body without `do` is rejected (resolves the iterable/body
+// ambiguity): the iterable cannot bleed into an undelimited inline body.
+let main = (args: str[]) ->
+    let mut s = 0
+    for x in 0..3 s = s + x
+    0

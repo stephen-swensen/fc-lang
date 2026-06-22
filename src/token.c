@@ -28,6 +28,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_FOR]          = "'for'",
     [TOK_IN]           = "'in'",
     [TOK_LOOP]         = "'loop'",
+    [TOK_DO]           = "'do'",
     [TOK_BREAK]        = "'break'",
     [TOK_CONTINUE]     = "'continue'",
     [TOK_RETURN]       = "'return'",

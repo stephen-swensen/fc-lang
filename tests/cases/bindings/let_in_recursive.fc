@@ -1,0 +1,6 @@
+// Self-recursion survives the desugar to a two-statement block: the bound
+// lambda is in scope within its own body.
+let main = (args: str[]) ->
+    let r = let fact = (n: int32) -> if n <= 1 then 1 else n * fact(n - 1) in fact(5)
+    assert(r == 120)
+    0

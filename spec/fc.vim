@@ -9,7 +9,7 @@ endif
 
 " Keywords
 syn keyword fcKeyword let mut struct union module namespace import from as
-syn keyword fcKeyword extern private match with if then else for in loop
+syn keyword fcKeyword extern private match with if then else for in loop do
 syn keyword fcKeyword break continue return define
 
 " Built-in operators (reserved identifiers)

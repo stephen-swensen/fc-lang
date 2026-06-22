@@ -1008,6 +1008,25 @@ x = x + 1           // compile error — x is a let binding, cannot be reassigne
 
 Assigning a binding to itself — `x = x` — is a compile error, since it is always a no-op. This is detected for a **bare-identifier** target only; an assignment through a field or index (`p.x = p.x`, `buf[i] = buf[i]`) is not flagged, because the target path may involve a side-effecting subexpression and is not necessarily a no-op.
 
+### `let … in` — the expression form
+
+A `let` binding scopes over the statements that follow it in the same block — which *is* the ML `let … in body` form, with the `in` **implied by layout**: the same-column continuation is the body.
+
+```fc
+let a = 1
+let b = 2
+a + b               // ≡ let a = 1 in (let b = 2 in (a + b))
+```
+
+In expression position — where there is no following block to serve as the body — the `in` is written explicitly. `let x = v in body` binds `x` over `body` only, and the whole construct is an expression yielding `body`'s value:
+
+```fc
+let area = let w = 3 in let h = 4 in w * h     // 12
+let n = f(let t = compute() in t + t)          // bound inside a call argument
+```
+
+The binding is scoped to the `in` body and does not leak past it. The explicit `in` takes an inline body — a single expression, optionally a `;`-sequence; for a multi-statement block body, use the offside form. Destructuring works in either form: `let { a, b } = pair in a + b`.
+
 ### Binding reassignment vs. content mutation
 
 `let` vs `let mut` controls only whether the **binding itself** can be reassigned — whether you can make it refer to a new value entirely. It says nothing about whether the *contents* of the bound value can be mutated.
@@ -1945,6 +1964,33 @@ for i in 0..readings.len
 #### Closures in `for` bodies
 
 Closures created inside a `for` body may capture loop bindings. Since each binding is a fresh `let` per iteration and capture is by copy, each closure receives its own independent copy — there is no aliasing between iterations.
+
+### Inline bodies
+
+Every loop body above is an indented block, but a one-line body can be written inline. The rule is uniform across FC's block constructs and follows a single principle: **the inline-form keyword is a header/body disambiguator, present only where the boundary would otherwise be ambiguous.**
+
+**`for … do`** — the for-header ends in an arbitrary iterable expression, so an inline body must be introduced by `do` to mark where the header ends:
+
+```fc
+for i in 0..n do total = total + i
+for p in points do plot(p.x, p.y)
+```
+
+`do` is required for an inline body and is *only* for the inline body: the offside block form omits it (the indent already delimits the body), and writing `do` before an indented block is a compile error.
+
+**`loop`** — `loop` has no header expression, so there is nothing to disambiguate; its inline body needs no keyword, exactly like `guarded`/`unguarded`:
+
+```fc
+loop if ready() then break else step()
+```
+
+**`;`** — a `;` separates statements on a single line. It is exactly a same-level newline — the values of all but the last statement are discarded, just as in an indented block — and it lets an inline body carry more than one statement:
+
+```fc
+for x in xs do touch(x); count = count + 1
+```
+
+This is the same shape `if … then … else` already uses: a keyword introduces a one-line body, and `;` sequences within it. (`then` is required in *both* the block and inline forms of `if` only because it also pairs with `else`.)
 
 ### Control flow
 

@@ -120,6 +120,13 @@ static void skip_newlines(Parser *p) {
     while (check(p, TOK_NEWLINE)) advance_p(p);
 }
 
+/* Skip statement separators: newlines and explicit `;`. Used only between
+   statements in a block / inline sequence — `;` is a same-level separator
+   semantically equivalent to a newline. */
+static void skip_separators(Parser *p) {
+    while (check(p, TOK_NEWLINE) || check(p, TOK_SEMICOLON)) advance_p(p);
+}
+
 static const char *tok_intern(Parser *p, Token *t) {
     return intern(p->intern, t->start, t->length);
 }
@@ -691,11 +698,11 @@ static Expr **parse_block(Parser *p, int *count) {
 
     expect(p, TOK_INDENT);
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
-        skip_newlines(p);
+        skip_separators(p);
         if (check(p, TOK_DEDENT)) break;
         Expr *e = parse_block_item(p);
         DA_APPEND(stmts, len, cap, e);
-        skip_newlines(p);
+        skip_separators(p);
     }
     expect(p, TOK_DEDENT);
 
@@ -705,16 +712,40 @@ static Expr **parse_block(Parser *p, int *count) {
     return arena_stmts;
 }
 
-/* Parse either a block (if INDENT) or a single statement/expression */
+/* True at a token that terminates an inline statement: a statement separator,
+   a block end, an `else` clause, or EOF.  Governs whether break/return carry a
+   value and where an inline `;`-sequence stops. */
+static bool at_stmt_terminator(Parser *p) {
+    return check(p, TOK_NEWLINE) || check(p, TOK_DEDENT) ||
+           check(p, TOK_SEMICOLON) || check(p, TOK_ELSE) || at_end_p(p);
+}
+
+/* Parse an inline body: one statement, optionally followed by more statements
+   separated by `;` on the same logical line. `;` is a same-level separator
+   equivalent to a newline; redundant/trailing `;` are tolerated.  Returns the
+   statement array, sets *count. */
+static Expr **parse_inline_seq(Parser *p, int *count) {
+    Expr **stmts = NULL;
+    int len = 0, cap = 0;
+    DA_APPEND(stmts, len, cap, parse_block_item(p));
+    while (check(p, TOK_SEMICOLON)) {
+        while (check(p, TOK_SEMICOLON)) advance_p(p);
+        if (at_stmt_terminator(p)) break;
+        DA_APPEND(stmts, len, cap, parse_block_item(p));
+    }
+    *count = len;
+    Expr **arena_stmts = arena_copy_exprs(p, stmts, len);
+    free(stmts);
+    return arena_stmts;
+}
+
+/* Parse either a block (if INDENT) or an inline `;`-separated statement
+   sequence (break, continue, return, let, defer, or expressions). */
 static Expr **parse_body(Parser *p, int *count) {
     if (check(p, TOK_INDENT)) {
         return parse_block(p, count);
     }
-    /* Single statement/expression (may be break, continue, return, let, or expr) */
-    *count = 1;
-    Expr **stmts = arena_alloc(p->arena, sizeof(Expr*));
-    stmts[0] = parse_block_item(p);
-    return stmts;
+    return parse_inline_seq(p, count);
 }
 
 /* Parse a guarded/unguarded expression: the keyword (already consumed) is
@@ -834,31 +865,34 @@ static Expr *parse_if_expr(Parser *p) {
     return e;
 }
 
-/* Parse a single item in a block: let binding or expression */
-static Expr *parse_block_item(Parser *p) {
-    if (check(p, TOK_LET)) {
-        SrcLoc loc = loc_from_token(current(p));
+/* Parse a let-binding: `let [mut] <target> = <init>`.  When an explicit `in`
+   follows (mandatory if require_in), `let x = v in body` desugars to a
+   two-statement block `{ let x = v; body }` — EXPR_BLOCK already gives the
+   binding an inner scope, yields body's value, and codegens as a GNU
+   statement-expression, so no new pass2/codegen is needed.  Without `in` (the
+   offside form) the bare let node is returned; the enclosing block's subsequent
+   statements are its implied-`in` body. */
+static Expr *parse_let_binding(Parser *p, bool require_in) {
+    SrcLoc loc = loc_from_token(current(p));
+    advance_p(p); /* consume 'let' */
+    bool is_mut = false;
+    if (check(p, TOK_MUT)) {
         advance_p(p);
-        bool is_mut = false;
-        if (check(p, TOK_MUT)) {
-            advance_p(p);
-            is_mut = true;
-        }
+        is_mut = true;
+    }
 
-        /* Struct destructuring: let { field = name, ... } = expr */
-        if (check(p, TOK_LBRACE)) {
-            /* Reuse parse_pattern to handle nested destructuring */
-            Pattern *pat = parse_pattern(p);
-            expect(p, TOK_EQ);
-
-            Expr *init = parse_expr(p, PREC_NONE + 1);
-            Expr *e = alloc_expr(p, EXPR_LET_DESTRUCT, loc);
-            e->let_destruct.pattern = pat;
-            e->let_destruct.is_mut = is_mut;
-            e->let_destruct.init = init;
-            return e;
-        }
-
+    Expr *letnode;
+    /* Struct destructuring: let { field = name, ... } = expr */
+    if (check(p, TOK_LBRACE)) {
+        /* Reuse parse_pattern to handle nested destructuring */
+        Pattern *pat = parse_pattern(p);
+        expect(p, TOK_EQ);
+        Expr *init = parse_expr(p, PREC_NONE + 1);
+        letnode = alloc_expr(p, EXPR_LET_DESTRUCT, loc);
+        letnode->let_destruct.pattern = pat;
+        letnode->let_destruct.is_mut = is_mut;
+        letnode->let_destruct.init = init;
+    } else {
         const char *name = tok_intern(p, expect(p, TOK_IDENT));
         expect(p, TOK_EQ);
 
@@ -877,19 +911,41 @@ static Expr *parse_block_item(Parser *p) {
             init = parse_expr(p, PREC_NONE + 1);
         }
 
-        Expr *e = alloc_expr(p, EXPR_LET, loc);
-        e->let_expr.let_name = name;
-        e->let_expr.let_is_mut = is_mut;
-        e->let_expr.let_init = init;
-        return e;
+        letnode = alloc_expr(p, EXPR_LET, loc);
+        letnode->let_expr.let_name = name;
+        letnode->let_expr.let_is_mut = is_mut;
+        letnode->let_expr.let_init = init;
+    }
+
+    if (check(p, TOK_IN)) {
+        advance_p(p);
+        Expr *body = parse_expr(p, PREC_NONE + 1);
+        Expr **stmts = arena_alloc(p->arena, sizeof(Expr *) * 2);
+        stmts[0] = letnode;
+        stmts[1] = body;
+        Expr *blk = alloc_expr(p, EXPR_BLOCK, loc);
+        blk->block.stmts = stmts;
+        blk->block.count = 2;
+        return blk;
+    }
+    if (require_in) {
+        diag_fatal(loc, "expected 'in' after let-binding in expression position");
+    }
+    return letnode;
+}
+
+/* Parse a single item in a block: let binding or expression */
+static Expr *parse_block_item(Parser *p) {
+    if (check(p, TOK_LET)) {
+        return parse_let_binding(p, false);
     }
 
     if (check(p, TOK_RETURN)) {
         SrcLoc loc = loc_from_token(current(p));
         advance_p(p);
         Expr *value = NULL;
-        /* return has a value if not followed by NEWLINE/DEDENT/EOF */
-        if (!check(p, TOK_NEWLINE) && !check(p, TOK_DEDENT) && !at_end_p(p)) {
+        /* return carries a value unless an inline statement terminator follows */
+        if (!at_stmt_terminator(p)) {
             value = parse_expr(p, PREC_NONE + 1);
         }
         Expr *e = alloc_expr(p, EXPR_RETURN, loc);
@@ -901,7 +957,7 @@ static Expr *parse_block_item(Parser *p) {
         SrcLoc loc = loc_from_token(current(p));
         advance_p(p);
         Expr *value = NULL;
-        if (!check(p, TOK_NEWLINE) && !check(p, TOK_DEDENT) && !at_end_p(p)) {
+        if (!at_stmt_terminator(p)) {
             value = parse_expr(p, PREC_NONE + 1);
         }
         Expr *e = alloc_expr(p, EXPR_BREAK, loc);
@@ -1557,10 +1613,18 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_LET:
+        /* A let in expression position must bound its scope with an explicit
+           `in` body (the offside form only exists at statement position). */
+        return parse_let_binding(p, true);
+
     case TOK_LOOP: {
         advance_p(p);
+        /* `loop` has no header expression to disambiguate, so it takes an
+           inline body directly (like guarded/unguarded): INDENT → block,
+           otherwise an inline `;`-separated sequence. No `do` keyword. */
         int body_count;
-        Expr **body = parse_block(p, &body_count);
+        Expr **body = parse_body(p, &body_count);
         Expr *e = alloc_expr(p, EXPR_LOOP, loc);
         e->loop_expr.body = body;
         e->loop_expr.body_count = body_count;
@@ -1604,8 +1668,21 @@ static Expr *parse_prefix(Parser *p) {
             advance_p(p);
             range_end = parse_expr(p, PREC_NONE + 1);
         }
+        /* The for-header ends in an arbitrary iterable expression, so an
+           inline body needs `do` to mark the header/body boundary. The
+           offside block form (INDENT) needs no `do`; `do` is inline-only. */
         int body_count;
-        Expr **body = parse_body(p, &body_count);
+        Expr **body;
+        if (check(p, TOK_INDENT)) {
+            body = parse_block(p, &body_count);
+        } else {
+            expect(p, TOK_DO);
+            if (check(p, TOK_INDENT)) {
+                diag_fatal(loc_from_token(current(p)),
+                    "'do' introduces an inline body; omit it for an indented block");
+            }
+            body = parse_inline_seq(p, &body_count);
+        }
         Expr *e = alloc_expr(p, EXPR_FOR, loc);
         e->for_expr.var = var;
         e->for_expr.var_pattern = var_pattern;

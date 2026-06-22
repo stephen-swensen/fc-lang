@@ -107,6 +107,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"for",       3,  TOK_FOR},
         {"in",        2,  TOK_IN},
         {"loop",      4,  TOK_LOOP},
+        {"do",        2,  TOK_DO},
         {"break",     5,  TOK_BREAK},
         {"continue",  8,  TOK_CONTINUE},
         {"return",    6,  TOK_RETURN},

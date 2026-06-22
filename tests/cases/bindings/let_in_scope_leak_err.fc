@@ -1,0 +1,6 @@
+// A `let ... in` binding is scoped to its body only and must not leak into the
+// enclosing block.
+let main = (args: str[]) ->
+    let q = let x = 1 in x
+    assert(x == 1)
+    0

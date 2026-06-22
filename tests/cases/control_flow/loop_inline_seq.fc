@@ -1,0 +1,8 @@
+// Inline `loop` body with `;`-separated statements.
+let main = (args: str[]) ->
+    let mut i = 0
+    let mut acc = 0
+    loop acc = acc + i; i = i + 1; if i > 3 then break
+    assert(i == 4)
+    assert(acc == 6)
+    0

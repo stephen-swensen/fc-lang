@@ -348,6 +348,29 @@ let main = (args: str[]) ->
         coord_sum = coord_sum + cx + cy
     assert(coord_sum == 10)
 
+    // Inline forms — a one-line body uses a keyword only where the
+    // header/body boundary would otherwise be ambiguous. The for-header ends
+    // in an iterable, so an inline body needs `do`; `loop` has no header, so
+    // its inline body needs no keyword; `;` sequences statements on one line.
+    let mut hsum = 0
+    for i in 0..5 do hsum = hsum + i              // inline for — `do` required
+    assert(hsum == 10)
+
+    let mut acc = 0
+    let mut cnt = 0
+    for n in nums do acc = acc + n; cnt = cnt + 1  // `;` sequences the body
+    assert(acc == 60 && cnt == 3)
+
+    let mut k = 0
+    loop if k >= 3 then break else k = k + 1       // inline loop — no `do`
+    assert(k == 3)
+
+    // let ... in — bind a name scoped to a single inline expression. The
+    // offside form (a let followed by same-column statements) is the same
+    // thing with the `in` implied by layout.
+    let boxed = let w = 3 in let h = 4 in w * h
+    assert(boxed == 12)
+
     // --------------------------------------------------------
     // Functions and closures
     // --------------------------------------------------------

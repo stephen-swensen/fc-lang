@@ -465,8 +465,13 @@ expr_or_block    = expr
                  | INDENT , block , DEDENT
                  ;
 
-(* A block is a sequence of peer items; the last one is the value.     *)
-block            = block_expr_item , { NEWLINE , block_expr_item } ;
+(* A block is a sequence of peer items; the last one is the value.      *)
+(* `;` is a same-level separator equivalent to NEWLINE.                  *)
+block            = block_expr_item , { ( NEWLINE | ";" ) , block_expr_item } ;
+
+(* An inline body: a one-line statement sequence — e.g. after `do`, or   *)
+(* the body of an inline `loop` / `if ... then`. `;` separates on a line.*)
+inline_body      = block_expr_item , { ";" , block_expr_item } ;
 
 block_expr_item  = let_binding
                  | cond_comp_block           (* #if inside a block       *)
@@ -478,6 +483,10 @@ block_expr_item  = let_binding
 (* they may not appear inside a function body.                          *)
 
 let_binding      = "let" , [ "mut" ] , let_target , "=" , expr_or_block ;
+
+(* In expression position a let must bound its scope with an explicit     *)
+(* `in` body: `let x = v in body` (the offside form's implied `in`).      *)
+let_in_expr      = "let" , [ "mut" ] , let_target , "=" , expr , "in" , expr ;
 
 
 (* ------------------------------------------------------------------ *)
@@ -606,6 +615,7 @@ primary_expr     = INT_LIT
                  | match_expr
                  | loop_expr
                  | for_expr
+                 | let_in_expr
                  | return_expr
                  | break_expr
                  | "continue"
@@ -677,10 +687,15 @@ match_arms       = match_arm , { NEWLINE , match_arm } ;
 match_arm        = "|" , pattern , [ "when" , expr ] , "->" , expr_or_block
                  | "|" , pattern ;              (* body-less fall-through arm *)
 
-loop_expr        = "loop" , INDENT , block , DEDENT ;
+(* `loop` has no header expression to disambiguate, so its inline body    *)
+(* needs no keyword (like guarded/unguarded).                             *)
+loop_expr        = "loop" , ( ( INDENT , block , DEDENT ) | inline_body ) ;
 
-for_expr         = "for" , for_binding , "in" , for_iterable
-                 , INDENT , block , DEDENT
+(* The for-header ends in an iterable expression, so an inline body needs  *)
+(* `do` to mark the header/body boundary; the offside block form omits it. *)
+for_expr         = "for" , for_binding , "in" , for_iterable ,
+                   ( ( INDENT , block , DEDENT )
+                   | "do" , inline_body )
                  ;
 
 for_binding      = for_elem                     (* element iteration          *)

@@ -1,0 +1,5 @@
+// `let ... in` nests; each binding is visible in the inner body.
+let main = (args: str[]) ->
+    let area = let w = 3 in let h = 4 in w * h
+    assert(area == 12)
+    0

@@ -1,0 +1,4 @@
+// In expression position a `let` must bound its scope with an explicit `in`.
+let main = (args: str[]) ->
+    let q = (let x = 1)
+    0

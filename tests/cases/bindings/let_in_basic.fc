@@ -1,0 +1,5 @@
+// Explicit ML-style `let x = v in body` as an expression.
+let main = (args: str[]) ->
+    let r = let w = 3 in w * 4
+    assert(r == 12)
+    0

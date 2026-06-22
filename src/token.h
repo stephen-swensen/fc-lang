@@ -33,6 +33,7 @@ typedef enum {
     TOK_FOR,
     TOK_IN,
     TOK_LOOP,
+    TOK_DO,
     TOK_BREAK,
     TOK_CONTINUE,
     TOK_RETURN,

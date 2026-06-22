@@ -1,0 +1,11 @@
+// `loop` has no header, so it takes an inline body directly — no `do` needed
+// (like guarded/unguarded). Inline `loop` still produces a value via `break`.
+let main = (args: str[]) ->
+    let mut i = 0
+    loop if i >= 5 then break else i = i + 1
+    assert(i == 5)
+
+    let mut j = 0
+    let r = loop if j == 3 then break j * 10 else j = j + 1
+    assert(r == 30)
+    0

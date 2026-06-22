@@ -1,0 +1,6 @@
+// A destructuring binding works in `let ... in` form too.
+let main = (args: str[]) ->
+    let pair = { 3, 4 }
+    let s = let { a, b } = pair in a + b
+    assert(s == 7)
+    0
