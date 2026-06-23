@@ -2484,7 +2484,9 @@ static void emit_expr(Expr *e, FILE *out) {
                     fprintf(out, "_nv%d %s _dv%d; })", tid, opc, tid);
                 } else if (op == TOK_PERCENT) {
                     /* signed modulo: a %% -1 == 0, always (representable) */
-                    fprintf(out, "(_dv%d == -1) ? 0 : (", tid);
+                    fprintf(out, "(_dv%d == -1) ? (", tid);
+                    emit_type(rt, out);
+                    fprintf(out, ")0 : (");
                     emit_type(rt, out);
                     fprintf(out, ")(_nv%d %% _dv%d); })", tid, tid);
                 } else if (g_overflow_checked) {
