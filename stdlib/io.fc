@@ -8,7 +8,11 @@ module io =
     private module u from "io.h" =
         extern _access as access: (const cstr, int32) -> int32
 #else
-    private module u from "unistd.h" =
+    // _POSIX_C_SOURCE (hoisted above every #include) keeps access visible
+    // under -std=c11, where glibc otherwise hides POSIX symbols. Declared here
+    // so io.fc compiles standalone, not only when co-compiled with a module
+    // (e.g. sys.fc) that happens to request the macro.
+    private module u from "unistd.h" define "_POSIX_C_SOURCE" "200809L" =
         extern access: (const cstr, int32) -> int32
 #end
 
@@ -65,6 +69,35 @@ module io =
     let flush = (f: any*) ->
         c.fflush(f)
         return
+
+    // sync: flushes buffered output AND forces it all the way to the physical
+    // disk, so the bytes survive a power loss or kernel panic. flush() only
+    // pushes data to the OS page cache, which a power cut discards; sync()
+    // additionally issues fsync (POSIX) / _commit (Windows) on the underlying
+    // file descriptor so the data reaches stable storage. Much slower than
+    // flush — reserve it for durability boundaries (e.g. after writing a save
+    // file you must not lose).
+    // f: any* — opaque FILE* handle.
+    // returns: bool — true if the data reached disk, false on error.
+#if os == "windows"
+    // _fileno (stdio.h, already included) yields the fd; _commit (io.h) is the
+    // platter-flush equivalent of POSIX fsync. Neither needs a feature macro
+    // under UCRT.
+    private module sy from "io.h" =
+        extern _fileno as fileno: (any*) -> int32
+        extern _commit as commit: (int32) -> int32
+#else
+    // fileno lives in stdio.h and fsync in unistd.h; both are POSIX, so the
+    // module opts in to _POSIX_C_SOURCE (hoisted above every #include) to keep
+    // them visible under -std=c11. stdio.h is already pulled in by module c.
+    private module sy from "unistd.h" define "_POSIX_C_SOURCE" "200809L" =
+        extern fileno: (any*) -> int32
+        extern fsync as commit: (int32) -> int32
+#end
+
+    let sync = (f: any*) ->
+        c.fflush(f)
+        sy.commit(sy.fileno(f)) == 0
 
     // seek: repositions the file position indicator.
     // f: any* — opaque FILE* handle.
@@ -140,7 +173,8 @@ module io =
     let mkdir = (path: const str) ->
         d.win_mkdir(alloca((cstr) path)) == 0
 #else
-    private module st from "sys/stat.h" =
+    // POSIX mkdir needs _POSIX_C_SOURCE under -std=c11 (see access above).
+    private module st from "sys/stat.h" define "_POSIX_C_SOURCE" "200809L" =
         extern mkdir: (const cstr, int32) -> int32
 
     let mkdir = (path: const str) ->
@@ -245,7 +279,9 @@ module io =
     // last named field and large enough to hold NAME_MAX+1 bytes). On some
     // platforms d_name is a flexible array member, but declaring a fixed
     // upper bound here is safe because we only read up to the first NUL.
-    private module dir from "dirent.h" =
+    // opendir/readdir/closedir and struct dirent are POSIX — same
+    // _POSIX_C_SOURCE requirement as access/mkdir above.
+    private module dir from "dirent.h" define "_POSIX_C_SOURCE" "200809L" =
         extern struct dirent =
             _d_ino: uint64
             _d_off: int64

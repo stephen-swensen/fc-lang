@@ -1,0 +1,31 @@
+import io from std::
+import sys from std::
+
+let main = (args: str[]) ->
+    let tmp = sys.temp_dir()!
+    let path = alloca("%s{tmp}/fc_test_sync.txt")
+
+    // Write a payload, then force it to stable storage with sync().
+    match io.open(path, "w") with
+    | none -> return 1
+    | some(wf) ->
+        io.write("durable\n", wf)
+        // On a valid handle sync reports success (true).
+        assert(io.sync(wf))
+        // sync leaves the handle open and writable — keep appending.
+        io.write("more\n", wf)
+        assert(io.sync(wf))
+        io.close(wf)
+
+    // sync must not corrupt or truncate: both lines read back intact.
+    match io.read_all(path) with
+    | none -> return 2
+    | some(buf) ->
+        assert(buf.len == 13i64)
+        assert(buf[0] == 'd')
+        assert(buf[7] == '\n')
+        assert(buf[12] == '\n')
+        free(buf)
+
+    io.remove(path)
+    0

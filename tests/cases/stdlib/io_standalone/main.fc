@@ -1,0 +1,26 @@
+import io from std::
+
+// io.fc must compile and run with NO other stdlib dependency. Its POSIX
+// wrappers (access, mkdir, opendir/readdir) need _POSIX_C_SOURCE, which glibc
+// requires under -std=c11 to expose those symbols. io.fc now declares that
+// macro on its own modules, so this test deliberately omits sys.fc to prove it
+// no longer borrows the macro from a co-compiled module. Remove the defines
+// from io.fc and this fails to compile (implicit declaration under -Werror).
+let main = (args: str[]) ->
+    // access path (<unistd.h>) — the current directory always exists/reads.
+    assert(io.exists("."))
+    assert(io.can_read("."))
+
+    // mkdir path (<sys/stat.h>) — "." already exists, so this is a harmless
+    // no-op that returns false but still references the mkdir symbol.
+    assert(!io.mkdir("."))
+
+    // dirent path (<dirent.h>) — listing "." must succeed; free the result.
+    match io.list_dir(".") with
+    | none -> assert(false)
+    | some(names) ->
+        for n in names
+            free(n)
+        free(names)
+
+    0
