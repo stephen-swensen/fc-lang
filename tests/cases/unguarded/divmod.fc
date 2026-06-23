@@ -1,6 +1,8 @@
-// `unguarded` integer divide/modulo emits a bare C `/` / `%` — no divide-by-zero
-// abort and no signed INT_MIN/-1 wrap branch. For valid divisors the result is
-// identical to the guarded form. Covers signed/unsigned, inline and parenthesized.
+// `unguarded` drops only the divide-by-zero precondition check (the guard axis).
+// Signed INT_MIN/-1 overflow lives on the overflow axis, so its wrap is KEPT under
+// `unguarded` — consistent with `unguarded (a + b)` still wrapping. For valid
+// divisors the result is identical to the guarded form. Covers signed/unsigned,
+// inline and parenthesized, plus the INT_MIN/-1 wrap now defined under unguarded.
 let main = (args: str[]) ->
     // signed division/modulo
     let a = unguarded 17 / 5
@@ -30,4 +32,11 @@ let main = (args: str[]) ->
     // division nested inside a larger unguarded expression
     let r = unguarded (100 / 7 + 200 % 9)
     assert(r == 14 + 2)
+
+    // INT_MIN/-1 under `unguarded` (unchecked default): the wrap is kept (defined),
+    // not bare/UB — overflow semantics are governed by the overflow axis, not by
+    // `unguarded`. min / -1 == min, min %% -1 == 0. Runtime operands so it is real.
+    let ms = int8[2]{-128i8, -1i8}
+    assert((unguarded (ms[0] / ms[1])) == -128i8)
+    assert((unguarded (ms[0] % ms[1])) == 0i8)
     0

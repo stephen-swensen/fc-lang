@@ -1,0 +1,5 @@
+// `checked` over an expression with no overflow-capable integer op is redundant.
+// Bitwise AND cannot overflow.
+let main = (args: str[]) ->
+    let z = checked (1i32 & 2i32)
+    z

@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let xs = uint8[1]{200u8}
+    let _ = checked (int8) xs[0]
+    assert(false)   // not reached: the line above aborts
+    0

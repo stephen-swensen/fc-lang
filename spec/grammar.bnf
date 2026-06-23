@@ -567,14 +567,20 @@ prefix_expr      = "-" , prefix_expr                   (* negation       *)
 cast_expr        = "(" , type_expr , ")" , prefix_expr
                  | "(" , "cstr" , "[" , int_lit , "]" , ")" , prefix_expr ;
 
-(* Guard context: `unguarded`/`guarded` toggle emission of the three   *)
-(* value-precondition guards (float->int saturation, integer           *)
-(* divide/modulo, slice bounds) for a lexically-scoped expression. The  *)
-(* body is an indented block or a single inline expression, exactly as  *)
-(* `loop` / `if ... then`. A marker that does not flip the surrounding  *)
-(* guard context, or whose body contains no governed guard, is a        *)
-(* compile error.                                                       *)
-guard_expr       = ( "unguarded" | "guarded" ) , ( block | expr ) ;
+(* Two orthogonal lexical context axes, same surface form. The body is an *)
+(* indented block or a single inline expression, exactly as `loop` /      *)
+(* `if ... then`. A marker that does not flip its axis's surrounding       *)
+(* context, or whose body contains no operation it governs, is a compile   *)
+(* error.                                                                  *)
+(*  - Guard axis: `unguarded`/`guarded` toggle the three value-            *)
+(*    precondition guards (float->int saturation, integer divide-by-zero,  *)
+(*    slice bounds).                                                       *)
+(*  - Overflow axis: `unchecked` (default) / `checked` toggle integer-     *)
+(*    overflow detection on +, -, *, signed / (at INT_MIN/-1), signed      *)
+(*    negation, and lossy integer narrowing casts. unchecked wraps;        *)
+(*    checked aborts. The two axes are independent and freely combinable.  *)
+guard_expr       = ( "unguarded" | "guarded" | "unchecked" | "checked" )
+                 , ( block | expr ) ;
 
 (* Level 1 — postfix (left-associative)                                *)
 postfix_expr     = primary_expr , { postfix_op } ;

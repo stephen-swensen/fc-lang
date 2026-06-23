@@ -45,6 +45,8 @@ typedef enum {
     TOK_VOID,
     TOK_GUARDED,
     TOK_UNGUARDED,
+    TOK_CHECKED,
+    TOK_UNCHECKED,
 
     /* Built-in operators (reserved identifiers) */
     TOK_ALLOC,

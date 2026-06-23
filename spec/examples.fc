@@ -229,6 +229,19 @@ let main = (args: str[]) ->
         a + (guarded ns[2])          // re-checked index inside the unguarded region
     assert(hot == 10)
 
+    // `checked` is the orthogonal overflow axis: integer +, -, *, signed / (at
+    // INT_MIN/-1), signed negation, and lossy narrowing casts ABORT on overflow
+    // instead of wrapping. `unchecked` is the default; use it to restore wrapping
+    // inside a checked region. The two axes combine freely.
+    let sum = checked 100i32 + 200i32        // in range: 300 (would abort on overflow)
+    assert(sum == 300)
+    let mixed = checked unguarded (ns[0] + ns[2])  // overflow-checked AND bounds-trusted
+    assert(mixed == 10)
+    let wrapped = checked
+        let w = unchecked (127i8 + 1i8)      // intentional wrap to -128 inside a checked region
+        w + 0i8                              // a checked op keeps `checked` non-redundant
+    assert(wrapped == -128i8)
+
     // --------------------------------------------------------
     // If expressions — branches produce values
     // --------------------------------------------------------

@@ -1,0 +1,37 @@
+// Surface forms of the overflow axis: inline one-liner, indented block, nested
+// `unchecked` re-enable of wrapping, and free mixing with the guard axis (both
+// nesting orders), demonstrating the two axes are orthogonal.
+let main = (args: str[]) ->
+    let xs = int32[4]{10, 20, 30, 40}
+
+    // inline form
+    let i = checked 100i32 + 200i32
+    assert(i == 300)
+
+    // block form: value is the last expression
+    let bl = checked
+        let p = 100i32 * 3i32
+        let q = xs[1]
+        p + q
+    assert(bl == 300 + 20)
+
+    // nested re-enable: inner `unchecked` restores wrapping for one op while the
+    // surrounding region stays checked (the outer `+ 0` keeps `checked` non-redundant).
+    let nested = checked
+        let wrapped = unchecked (127i8 + 1i8)   // wraps to -128, no abort
+        wrapped + 0i8
+    assert(nested == -128i8)
+
+    // free mixing, order 1: checked outside, unguarded inside
+    let m1 = checked unguarded (xs[0] + xs[2])
+    assert(m1 == 40)
+
+    // free mixing, order 2: unguarded outside, checked inside
+    let m2 = unguarded checked (xs[1] + xs[3])
+    assert(m2 == 60)
+
+    // both axes engaged on a divide: guarded (zero-checked) + checked (min/-1 trapped),
+    // ordinary operands -> ordinary result.
+    let dv = checked (100i32 / 7i32)
+    assert(dv == 14)
+    0

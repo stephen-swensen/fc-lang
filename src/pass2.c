@@ -527,6 +527,11 @@ typedef struct {
        Mirrors codegen's g_guards_suppressed; used to reject non-flipping markers
        (a `guarded` where guards are already on, an `unguarded` inside another). */
     bool guards_suppressed;
+    /* Lexical overflow context: true while checking the body of a `checked`
+       marker (overflow traps), false otherwise (the default, `unchecked`: wrap).
+       Independent of guards_suppressed — the two axes are orthogonal. Mirrors
+       codegen's g_overflow_checked; used to reject non-flipping markers. */
+    bool overflow_checked;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -2750,14 +2755,52 @@ static bool expr_node_is_governed_guard(Expr *e) {
     }
 }
 
-/* Does the body of a guard marker contain a governed guard that the marker would
-   actually toggle? Recurses through children but STOPS at nested EXPR_GUARD (a
-   nested marker establishes its own context) and EXPR_FUNC (a lambda body is a
-   function boundary the marker does not reach). Drives the no-op redundancy error. */
-static bool guard_subtree_has_effect(Expr *e) {
+/* Is this node one of the integer-overflow operations that `checked` governs?
+   Checked post-typecheck, so operand/result types are populated. Must stay in
+   lockstep with the gated codegen sites.
+     - `+ - *`: signed AND unsigned (unsigned wrap is trapped under checked too).
+     - signed `/`: the INT_MIN/-1 case (unsigned `/` never overflows; `%` never).
+     - signed unary `-`: INT_MIN negation.
+     - integer→integer narrowing cast that can lose information (not a lossless
+       widen). float→int is NOT here — it lives on the guard axis (C-UB saturation). */
+static bool expr_node_is_governed_overflow(Expr *e) {
+    switch (e->kind) {
+    case EXPR_BINARY:
+        if (e->binary.op == TOK_PLUS || e->binary.op == TOK_MINUS ||
+            e->binary.op == TOK_STAR)
+            return e->type && type_is_integer(e->type);
+        if (e->binary.op == TOK_SLASH)
+            return e->type && type_is_signed(e->type);
+        return false;
+    case EXPR_UNARY_PREFIX:
+        return e->unary_prefix.op == TOK_MINUS &&
+               e->type && type_is_signed(e->type);
+    case EXPR_CAST: {
+        Type *from = e->cast.operand->type, *to = e->cast.target;
+        return from && to && type_is_integer(from) && type_is_integer(to) &&
+               !type_can_widen(from, to);   /* potentially-lossy narrowing */
+    }
+    default:
+        return false;
+    }
+}
+
+/* Does the body of a marker contain a governed operation that the marker would
+   actually toggle, for the given axis? Recurses through children but STOPS at
+   EXPR_FUNC (a lambda body is a boundary the marker does not reach) and at a
+   nested SAME-axis EXPR_GUARD (which establishes its own context); a nested
+   OTHER-axis EXPR_GUARD is transparent here, so we descend through it. Drives
+   the no-op redundancy error. `overflow_axis` selects which axis's effects count. */
+static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
+#define guard_subtree_has_effect(x) subtree_has_governed_effect((x), overflow_axis)
     if (!e) return false;
-    if (e->kind == EXPR_GUARD || e->kind == EXPR_FUNC) return false;
-    if (expr_node_is_governed_guard(e)) return true;
+    if (e->kind == EXPR_FUNC) return false;
+    if (e->kind == EXPR_GUARD)
+        return e->guard.is_overflow_axis == overflow_axis
+                   ? false                                  /* same axis: stop */
+                   : guard_subtree_has_effect(e->guard.body); /* other axis: descend */
+    if (overflow_axis ? expr_node_is_governed_overflow(e)
+                      : expr_node_is_governed_guard(e)) return true;
     switch (e->kind) {
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
@@ -2858,6 +2901,7 @@ static bool guard_subtree_has_effect(Expr *e) {
     default:
         return false;
     }
+#undef guard_subtree_has_effect
 }
 
 /* Wrapper around the per-kind type checker. Consumes the one-shot
@@ -4362,29 +4406,47 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_GUARD: {
-        /* `guarded`/`unguarded` is a transparent wrapper: its type and provenance
-           are the body's. It only toggles the lexical guard context for codegen. */
-        bool want_suppressed = !e->guard.guarded;   /* unguarded → suppress */
-        bool saved_suppressed = ctx->guards_suppressed;
-        ctx->guards_suppressed = want_suppressed;
+        /* guarded/unguarded (guard axis) and checked/unchecked (overflow axis) are
+           transparent wrappers: type and provenance are the body's. Each only toggles
+           its own lexical context for codegen. The two axes are independent — a marker
+           on one never constrains the other (no cross-axis ban). */
+        bool overflow_axis = e->guard.is_overflow_axis;
+        /* The flag each axis carries: guard axis stores "suppressed" (unguarded),
+           overflow axis stores "checked". `enable` is guarded/checked respectively. */
+        bool want = overflow_axis ? e->guard.enable : !e->guard.enable;
+        bool *slot = overflow_axis ? &ctx->overflow_checked : &ctx->guards_suppressed;
+        bool saved = *slot;
+        *slot = want;
         Type *t = check_expr(ctx, e->guard.body);
-        ctx->guards_suppressed = saved_suppressed;
+        *slot = saved;
         e->type = t;
         e->prov = e->guard.body->prov;
-        /* Strict redundancy: an accepted marker must always change the emitted
-           code. Reject one that doesn't flip the surrounding context, or whose
-           body has no governed guard for it to toggle. Suppress on an erroneous body. */
+        /* Strict redundancy: an accepted marker must always change the emitted code.
+           Reject one that doesn't flip its axis's context, or whose body has no
+           governed operation for it to toggle. Suppress on an erroneous body. */
         if (!type_is_error(t)) {
-            if (want_suppressed == saved_suppressed) {
-                diag_error(e->loc, e->guard.guarded
-                    ? "redundant 'guarded': guards are already enabled here"
-                    : "redundant 'unguarded': guards are already suppressed here");
-            } else if (!guard_subtree_has_effect(e->guard.body)) {
+            if (want == saved) {
                 diag_error(e->loc,
-                    "redundant '%s': no guarded operation (float-to-int cast, "
-                    "integer divide/modulo, or slice index) to %s",
-                    e->guard.guarded ? "guarded" : "unguarded",
-                    e->guard.guarded ? "re-enable" : "suppress");
+                    overflow_axis
+                      ? (e->guard.enable
+                          ? "redundant 'checked': overflow checking is already enabled here"
+                          : "redundant 'unchecked': overflow checking is already disabled here")
+                      : (e->guard.enable
+                          ? "redundant 'guarded': guards are already enabled here"
+                          : "redundant 'unguarded': guards are already suppressed here"));
+            } else if (!subtree_has_governed_effect(e->guard.body, overflow_axis)) {
+                if (overflow_axis)
+                    diag_error(e->loc,
+                        "redundant '%s': no integer operation that can overflow "
+                        "(+, -, *, signed /, signed negation, or lossy narrowing cast) to %s",
+                        e->guard.enable ? "checked" : "unchecked",
+                        e->guard.enable ? "check" : "leave unchecked");
+                else
+                    diag_error(e->loc,
+                        "redundant '%s': no guarded operation (float-to-int cast, "
+                        "integer divide/modulo, or slice index) to %s",
+                        e->guard.enable ? "guarded" : "unguarded",
+                        e->guard.enable ? "re-enable" : "suppress");
             }
         }
         return e->type;

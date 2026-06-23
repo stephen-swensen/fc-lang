@@ -60,7 +60,7 @@ typedef enum {
     EXPR_DEFER,
     EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
     EXPR_ATOMIC_STORE,  /* atomic_store_release(p, v) */
-    EXPR_GUARD,         /* guarded / unguarded <expr> — toggle runtime guard emission */
+    EXPR_GUARD,         /* guarded/unguarded (precondition guards) OR checked/unchecked (overflow) */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -187,10 +187,14 @@ struct Expr {
                                  whose home (heap/dynamic stack) the wrapping alloc/alloca gives. */
         } cast;
 
-        /* EXPR_GUARD — guarded / unguarded <body>. Toggles emission of the
-           value-precondition runtime guards (float→int saturation, integer
-           divide/modulo, slice bounds) for the lexically-enclosed body. */
-        struct { Expr *body; bool guarded; } guard;
+        /* EXPR_GUARD — two orthogonal lexical axes sharing one node:
+           - guard axis (guarded/unguarded): the value-precondition runtime guards
+             (float→int saturation, integer divide/modulo zero check, slice bounds).
+           - overflow axis (checked/unchecked): integer-overflow detection on
+             `+ - *`, signed `/` at INT_MIN/-1, and lossy integer narrowing casts.
+           is_overflow_axis selects which axis; enable is the polarity within it
+           (guard axis: true=guarded; overflow axis: true=checked). */
+        struct { Expr *body; bool is_overflow_axis; bool enable; } guard;
 
         /* EXPR_IF */
         struct { Expr *cond; Expr *then_body; Expr *else_body; } if_expr;

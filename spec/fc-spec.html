@@ -958,22 +958,24 @@ Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `float32`
 
 ### Unguarded blocks
 
-FC inserts a handful of **runtime guards** to make defined what C leaves undefined: float-to-integer saturation, the integer divide/modulo zero-and-overflow check, and slice bounds checks. On a hot path the programmer often already knows the precondition holds. `unguarded` opts out of these guards for a lexically-scoped expression; `guarded` opts back in. They are expressions with the same two layouts as `loop` and `if … then` — an indented block whose value is its last expression, or a one-line inline form:
+FC inserts a handful of **runtime guards** to make defined what C leaves undefined: float-to-integer saturation, the integer divide-by-zero check, and slice bounds checks. On a hot path the programmer often already knows the precondition holds. `unguarded` opts out of these guards for a lexically-scoped expression; `guarded` opts back in. They are expressions with the same two layouts as `loop` and `if … then` — an indented block whose value is its last expression, or a one-line inline form:
 
 ```fc
 let n = unguarded (int32) f     // bare truncation, no saturation (UB if f out of range/nan)
-let q = unguarded a / b         // bare divide (UB if b == 0 or a/b overflows)
+let q = unguarded a / b         // no divide-by-zero check (UB if b == 0)
 
 let total = unguarded           // block form
-    let acc = sum / count       // unchecked divide
-    acc + data[i]               // unchecked index
+    let acc = sum / count       // divide-by-zero trusted
+    acc + data[i]               // bounds trusted
 ```
+
+The guard axis is one of two orthogonal lexical context axes; the overflow axis (`checked`/`unchecked`) is described in [Checked arithmetic](#checked-arithmetic) below.
 
 The governing idea: **the operation's spelling states intent; the guard context states whether the precondition is verified or trusted.** `s[i]` always means "index"; `(int32) f` always means "narrow." Whether each is checked at runtime or taken on faith is decided by the enclosing `guarded`/`unguarded` context.
 
-**`unguarded` governs exactly three guards** — float→int saturation, integer `/` and `%` (zero and signed `min/-1`), and slice bounds (index and subslice). For an in-range, finite, non-zero operand the result is identical to the guarded form; otherwise it is **undefined behavior** (exactly C's semantics). It governs nothing else. In particular, **option unwrap `x!` is always checked** — its tag test is a software invariant, not a range guard, and skipping it would resurrect the null-dereference class that options exist to remove. `unguarded x!` is therefore a redundant-marker error (below), not an unchecked unwrap.
+**`unguarded` governs exactly three guards** — float→int saturation, integer divide-by-zero (`/` and `%`), and slice bounds (index and subslice). For an in-range, finite, non-zero operand the result is identical to the guarded form; otherwise it is **undefined behavior** (exactly C's semantics). It governs nothing else. In particular, **option unwrap `x!` is always checked** — its tag test is a software invariant, not a range guard, and skipping it would resurrect the null-dereference class that options exist to remove. `unguarded x!` is therefore a redundant-marker error (below), not an unchecked unwrap.
 
-**Guard is not semantic.** `unguarded` removes inserted *branches and helpers*; it never changes *branchless* arithmetic. `unguarded (a + b)` still wraps — FC's signed overflow is defined as modular (§Integer overflow), not C's undefined behavior, and that is unaffected. The one place these pull apart is signed division's `min / -1`, whose defined wrap is upheld *by a branch*; `unguarded` removes that branch, so `min / -1` and `min % -1` become UB along with the zero divisor. Removing the branch is the entire point — a still-branching "unchecked" divide would be no faster.
+**Guard is not overflow.** `unguarded` removes *precondition* checks only; it never changes an operation's *result*. `unguarded (a + b)` still wraps, and `unguarded (a / b)` still upholds the defined `min / -1` wrap — integer overflow is governed by the separate overflow axis (`checked`/`unchecked`, [below](#checked-arithmetic)), never by guards. So `unguarded` on a divide drops exactly the divide-by-zero check and nothing else, keeping division consistent with every other operator (the always-correct `min / -1` and `min % -1` results cost one predictable branch, negligible beside the divide itself).
 
 **Strictly lexical.** A marker affects only the operations written inside it. `unguarded f(x)` suppresses guards while evaluating the arguments and the call, never inside `f`'s body or a nested lambda — a marker never crosses a function boundary.
 
@@ -986,6 +988,30 @@ let v = unguarded
 ```
 
 **Redundancy is a compile error.** Mirroring the rule that postfix `!` must mean something wherever it appears, a `guarded`/`unguarded` marker is rejected when it would do nothing: either it does not flip the surrounding context (a `guarded` where guards are already on, e.g. at the top level; an `unguarded` directly inside another `unguarded`), or its body contains no governed guard for it to toggle (`unguarded (a + b)`, `unguarded (x / y)` on floats, `unguarded x!`). A marker that is accepted always changes the emitted code.
+
+### Checked arithmetic
+
+Integer overflow wraps by default (§Integer overflow). `checked` opts a lexically-scoped expression into **overflow detection**: an operation whose true result does not fit its type **aborts** (`file:line: integer overflow in …`) instead of wrapping. `unchecked` opts back into wrapping — it is the default. Same two layouts as `unguarded`, an indented block or an inline form:
+
+```fc
+let s = checked a + b           // aborts if a + b overflows
+let acc = checked               // block form
+    let t = subtotal * rate
+    t + carry
+```
+
+**`checked` governs the integer operations that can silently lose information:** `+`, `-`, `*` (signed *and* unsigned), signed `/` at `INT_MIN / -1`, signed negation `-x` at `INT_MIN`, and **lossy integer narrowing casts** (`(int8) 300`, `(uint8) -1`, `(int8) 200u8`, …). Operations that cannot overflow are not governed — unsigned `/` and `%`, signed `%` (`min % -1 == 0` is representable), shifts (the amount is masked, §Shift semantics), bitwise ops, and lossless widening casts — so a `checked` whose body contains only those is a redundant-marker error.
+
+**Narrowing casts vs. `float→int`.** A lossy *integer* narrowing cast is on the overflow axis (it is defined truncation that may lose a value). A `float→int` conversion is **not** — it is C-undefined out of range and lives on the guard axis as saturation (above). The dividing line between the axes: the overflow axis governs operations that are *already defined* but may silently yield an out-of-range value; the guard axis governs operations that are *undefined in C* unless made safe.
+
+**Orthogonal to guards, freely combined.** `checked`/`unchecked` and `guarded`/`unguarded` are independent axes — a marker on one never constrains the other. `checked unguarded (xs[i] + xs[j])` traps arithmetic overflow while trusting the indices. The lexical-scope, strict-nesting, function-boundary-reset, and redundancy rules are identical to `unguarded`. The four combinations:
+
+| | `unchecked` (default) | `checked` |
+|---|---|---|
+| **`guarded`** (default) | preconditions trap; arithmetic wraps | preconditions trap; overflow traps |
+| **`unguarded`** | preconditions trusted; arithmetic wraps | preconditions trusted; overflow traps |
+
+Overflow detection is **deterministic**, independent of optimization level — FC does not adopt a build-mode-dependent default (e.g. checked in debug, wrapping in release): the same source always means the same thing.
 
 ---
 
@@ -1311,7 +1337,7 @@ Operators are listed from highest to lowest precedence. Operators at the same le
 | `<` `>` `<=` `>=` | integer types, float types, pointer types | `bool` |
 | `&&` `\|\|` | `bool` only | `bool` |
 
-Integer division truncates toward zero. `%` produces the remainder with the sign of the dividend. Division by zero is a hard failure (see *Division by zero*); signed `min / -1` overflows and wraps (see *Integer overflow*).
+Integer division truncates toward zero. `%` produces the remainder with the sign of the dividend. Division by zero is a hard failure (see *Division by zero*); signed `min / -1` overflows and wraps by default, or aborts under `checked` (see *Integer overflow* and *Checked arithmetic*).
 
 ### Evaluation order
 
@@ -1343,7 +1369,9 @@ This is the same guarantee already stated for string-interpolation segments (see
 
 Unsigned integer overflow wraps modulo 2ⁿ — this is C's existing guarantee and FC inherits it directly.
 
-Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`int8`, `int16`, `int32`, `int64`, `isize`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely.
+Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`int8`, `int16`, `int32`, `int64`, `isize`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely: overflow is never undefined, it is *always* one of two defined outcomes.
+
+Wrapping is the **default** outcome. Where a silent wrap would be a bug rather than the intent, a `checked` block makes overflowing `+ - *`, signed `/`, signed negation, and lossy narrowing casts **abort** instead — see [Checked arithmetic](#checked-arithmetic). The rest of this section describes the default (wrapping) behavior.
 
 In generated C, signed arithmetic is emitted as a cast through the unsigned equivalent for each type:
 
@@ -1375,7 +1403,7 @@ The consequences of wrapping are predictable and consistent:
 - `int32.min / -1` → `int32.min`, and `int32.min % -1` → `0` (the same asymmetry: `a / -1` equals `a * -1`)
 
 > **Transpilation**
-> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on all signed integer types and on the sub-`int` unsigned types (`uint8`, `uint16`); wider unsigned types (`uint32`, `uint64`, `usize`) are already modular in C and emitted plain. For the sub-`int` types — which C promotes to `int` — the operands are evaluated in `unsigned` and the result truncated back to the FC type, so a narrow `*` cannot hit `int`-overflow UB and the wrap holds at the operand's own width on any target. Comparison and bitwise operators are unaffected — their signed and unsigned semantics already agree. Division has exactly one overflow case, signed `min / -1` (equivalently `min % -1`), which C leaves undefined and most hardware traps like divide-by-zero; the divisor guard that checks for zero (see *Division by zero*) also detects `-1` and substitutes the wrapped result (`min` for `/`, `0` for `%`) rather than executing the trapping divide. This holds at every signed width and on any `int` width — the trap precedes any result, so a cast-back cannot define it.
+> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on all signed integer types and on the sub-`int` unsigned types (`uint8`, `uint16`); wider unsigned types (`uint32`, `uint64`, `usize`) are already modular in C and emitted plain. For the sub-`int` types — which C promotes to `int` — the operands are evaluated in `unsigned` and the result truncated back to the FC type, so a narrow `*` cannot hit `int`-overflow UB and the wrap holds at the operand's own width on any target. Comparison and bitwise operators are unaffected — their signed and unsigned semantics already agree. Division has exactly one overflow case, signed `min / -1` (equivalently `min % -1`), which C leaves undefined and most hardware traps like divide-by-zero. Its two concerns are split across the two context axes: the divide-by-*zero* check is a precondition on the **guard** axis (dropped by `unguarded`, see *Division by zero*), while the `min / -1` *overflow* is on the **overflow** axis. The `min / -1` handling branch is always emitted to dodge the hardware trap, and its meaning follows checked/unchecked: by default (`unchecked`) it substitutes the wrapped result (`min` for `/`, `0` for `%`); under `checked` the `/` case aborts (`%` stays `0`, which is representable and never an overflow). This holds at every signed width and on any `int` width — the trap precedes any result, so a cast-back cannot define it.
 
 ### Shift semantics
 
@@ -1522,7 +1550,7 @@ All hard failures call `abort()` from the C standard library, which terminates t
 
 There is no exception handling and no recoverable failure path for these operations in this version of FC. All hard failures print a diagnostic to stderr before aborting — source file and line number, the failure kind, and the relevant runtime values (index and slice length for bounds failures; `lo`, `hi`, and length for subslice failures; the operator name for division-by-zero). Option unwrap and assert additionally include the source expression text.
 
-**Division by zero** — integer division (`/`) and remainder (`%`) by zero are hard failures. This diverges from C, where integer division by zero is undefined behavior. FC makes it defined: the program aborts. Float division by zero follows IEEE 754 and produces `inf` or `nan` — it is not a hard failure. The other case C leaves undefined for integer division, signed `min / -1`, is *not* a hard failure in FC — it overflows and wraps like any other signed overflow (see *Integer overflow*), so division aborts only on a zero divisor.
+**Division by zero** — integer division (`/`) and remainder (`%`) by zero are hard failures. This diverges from C, where integer division by zero is undefined behavior. FC makes it defined: the program aborts. Float division by zero follows IEEE 754 and produces `inf` or `nan` — it is not a hard failure. The other case C leaves undefined for integer division, signed `min / -1`, is *not* a hard failure by default in FC — it overflows and wraps like any other signed overflow (see *Integer overflow*), so by default division aborts only on a zero divisor. (Inside a `checked` block, signed `min / -1` aborts as overflow — see *Checked arithmetic*.)
 
 > **Transpilation**
 > Bounds checks emit an unsigned-compare (`(uint64_t)idx >= (uint64_t)len`, which fuses the negative-index and past-end cases into one branch since slice lengths are non-negative by invariant), wrapped in `__builtin_expect(..., 0)` so the fast path is fall-through. On failure the check calls a shared out-of-line helper — `fc_oob` for indexing, `fc_oob_sub` for subslicing — emitted once per translation unit and marked `static __attribute__((cold, noreturn, unused))`; the helper prints the diagnostic and calls `abort()`. Keeping the failure path out of line lets the C compiler schedule it after the function body, avoid keeping state live across a (statically-unreachable) call, and autovectorize loops containing slice accesses. Subslice checks use the same pattern with a two-compare form (`(uint64_t)lo > (uint64_t)hi` and `(uint64_t)hi > (uint64_t)s.len`) that covers all four failure modes including negative operands. Option unwrap emits a tag check before the value read; on failure, it prints a diagnostic to stderr (`file:line: unwrap failed: expr`) before calling `abort()`. Division by zero emits a divisor check before the division; for signed types the same guard also tests the divisor for `-1` and, on a match, substitutes the wrapped result (a wrapping negation for `/`, `0` for `%`) instead of executing the divide that would trap on `min / -1`. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).

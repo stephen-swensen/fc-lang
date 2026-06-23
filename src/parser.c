@@ -748,12 +748,12 @@ static Expr **parse_body(Parser *p, int *count) {
     return parse_inline_seq(p, count);
 }
 
-/* Parse a guarded/unguarded expression: the keyword (already consumed) is
-   followed by either an indented block or a single inline expression. The body
-   is wrapped in EXPR_GUARD with the given polarity. The inline operand parses at
-   PREC_NONE+1 (as let-init / if-cond do), so `unguarded a / b` captures the whole
-   `a / b` while parentheses bound it inside a larger expression. */
-static Expr *parse_guard(Parser *p, bool guarded, SrcLoc loc) {
+/* Parse a guarded/unguarded/checked/unchecked expression: the keyword (already
+   consumed) is followed by either an indented block or a single inline expression.
+   The body is wrapped in EXPR_GUARD on the given axis and polarity. The inline
+   operand parses at PREC_NONE+1 (as let-init / if-cond do), so `unguarded a / b`
+   captures the whole `a / b` while parentheses bound it inside a larger expression. */
+static Expr *parse_guard(Parser *p, bool is_overflow_axis, bool enable, SrcLoc loc) {
     Expr *body;
     if (check(p, TOK_INDENT)) {
         int count;
@@ -770,7 +770,8 @@ static Expr *parse_guard(Parser *p, bool guarded, SrcLoc loc) {
     }
     Expr *e = alloc_expr(p, EXPR_GUARD, loc);
     e->guard.body = body;
-    e->guard.guarded = guarded;
+    e->guard.is_overflow_axis = is_overflow_axis;
+    e->guard.enable = enable;
     return e;
 }
 
@@ -1633,11 +1634,19 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_GUARDED:
         advance_p(p);
-        return parse_guard(p, true, loc);
+        return parse_guard(p, false, true, loc);
 
     case TOK_UNGUARDED:
         advance_p(p);
-        return parse_guard(p, false, loc);
+        return parse_guard(p, false, false, loc);
+
+    case TOK_CHECKED:
+        advance_p(p);
+        return parse_guard(p, true, true, loc);
+
+    case TOK_UNCHECKED:
+        advance_p(p);
+        return parse_guard(p, true, false, loc);
 
     case TOK_FOR: {
         advance_p(p);

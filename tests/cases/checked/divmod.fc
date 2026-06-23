@@ -1,0 +1,27 @@
+// `checked` divide/modulo. Only signed `/` can overflow (the INT_MIN/-1 case),
+// so only it is governed by `checked`; it aborts at min/-1 (see div_min_overflow.fc)
+// and is fine otherwise. Modulo never overflows (`min % -1 == 0` is representable),
+// and unsigned divide never overflows — so `checked` over either alone is redundant.
+// They are observed here inside a `checked` block whose governed signed divide makes
+// the marker non-redundant; their values are correct and nothing aborts.
+let main = (args: str[]) ->
+    // signed divide is governed; in range -> no abort, correct value
+    assert((checked 17i32 / 5i32) == 3)
+    assert((checked (-17i32) / 5i32) == -3)
+    assert((checked (-128i8) / 2i8) == -64i8)
+    // value != min, so `/ -1` is plain negation, no overflow
+    let xs = int8[2]{-127i8, -1i8}
+    assert((checked (xs[0] / xs[1])) == 127i8)
+
+    // modulo (incl. min %% -1) and unsigned divide can't overflow: unaffected by
+    // checked. The leading signed divide gives the block a governed op.
+    let r = checked
+        let governed = 100i32 / 7i32       // signed divide -> gives `checked` an effect
+        assert(governed == 14)
+        assert(17i32 % 5i32 == 2)          // ordinary modulo
+        assert((-128i8) % (-1i8) == 0i8)   // min %% -1 == 0, never an overflow
+        assert(200u8 / 3u8 == 66u8)        // unsigned divide, never overflows
+        assert(200u8 % 3u8 == 2u8)         // unsigned modulo
+        governed
+    assert(r == 14)
+    0

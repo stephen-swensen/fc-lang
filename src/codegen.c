@@ -42,6 +42,15 @@ static bool g_const_context = false;
  * marker never leaks across a call boundary. */
 static bool g_guards_suppressed = false;
 
+/* Lexical overflow context, toggled by EXPR_GUARD on the overflow axis
+ * (checked/unchecked). When true, integer `+ - *`, signed `/` at INT_MIN/-1,
+ * signed negation, and lossy integer narrowing casts abort on overflow instead
+ * of wrapping/truncating. Default false (unchecked: wrap, the FC default).
+ * Independent of g_guards_suppressed — the two axes are orthogonal. Saved and
+ * restored around each marker's body; reset to false at function/lambda
+ * boundaries so a marker never leaks across a call. */
+static bool g_overflow_checked = false;
+
 /* Backing arrays for file-scope slice literals.  Collected by
  * a pre-pass over module-member inits (including nested slice lits), emitted
  * as `static T _fc_const_backing_N[] = {...};` ahead of the module-member
@@ -2145,6 +2154,39 @@ static bool cast_is_ptr_kind(Type *t) {
     return t && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR);
 }
 
+/* Emit a `checked` integer->integer narrowing cast of `operand` (type `from`)
+ * to `to`: abort if the value falls outside the target's range, else the plain
+ * cast. The condition is built per signedness so it stays -Wsign-compare-clean
+ * and width-agnostic (bounds come from resolve_type_prop_codegen; the unsigned
+ * domain handles same-width sign changes and the int64<->uint64 boundary). */
+static void emit_checked_int_narrow(Type *from, Type *to, Expr *operand,
+                                    SrcLoc loc, FILE *out) {
+    int tid = temp_counter++;
+    const char *fn = loc.filename ? loc.filename : "<unknown>";
+    const char *uf = unsigned_counterpart(from);
+    const char *tmin = resolve_type_prop_codegen(to, "min");
+    const char *tmax = resolve_type_prop_codegen(to, "max");
+    fprintf(out, "({ ");
+    emit_type(from, out);
+    fprintf(out, " _cv%d = ", tid);
+    emit_expr(operand, out);
+    fprintf(out, "; if (");
+    if (type_is_signed(from)) {
+        if (type_is_signed(to))
+            fprintf(out, "_cv%d < %s || _cv%d > %s", tid, tmin, tid, tmax);
+        else   /* signed -> unsigned: negatives lost; upper bound in unsigned domain */
+            fprintf(out, "_cv%d < 0 || (%s)_cv%d > (%s)%s", tid, uf, tid, uf, tmax);
+    } else {
+        /* unsigned source (>= 0): only the upper bound, in the unsigned domain */
+        fprintf(out, "_cv%d > (%s)%s", tid, uf, tmax);
+    }
+    fprintf(out, ") fc_overflow(\"");
+    emit_c_escaped(fn, (int)strlen(fn), out);
+    fprintf(out, "\", %d, \"cast\"); (", loc.line);
+    emit_type(to, out);
+    fprintf(out, ")_cv%d; })", tid);
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -2310,6 +2352,25 @@ static void emit_expr(Expr *e, FILE *out) {
         if ((op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR) &&
             rt && type_is_integer(rt)) {
             const char *op_c = op == TOK_PLUS ? "+" : op == TOK_MINUS ? "-" : "*";
+            /* `checked`: trap overflow (signed AND unsigned) instead of wrapping.
+             * __builtin_<op>_overflow computes in infinite precision and reports
+             * whether the result fits _r's type (rt) — width/sign-correct on any
+             * `int` width, so it is safe on 16-bit-int targets. */
+            if (g_overflow_checked) {
+                const char *bi = op == TOK_PLUS ? "add" : op == TOK_MINUS ? "sub" : "mul";
+                const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+                int tid = temp_counter++;
+                fprintf(out, "({ ");
+                emit_type(rt, out);
+                fprintf(out, " _r%d; if (__builtin_%s_overflow(", tid, bi);
+                emit_expr(e->binary.left, out);
+                fprintf(out, ", ");
+                emit_expr(e->binary.right, out);
+                fprintf(out, ", &_r%d)) fc_overflow(\"", tid);
+                emit_c_escaped(fn, (int)strlen(fn), out);
+                fprintf(out, "\", %d, \"%s\"); _r%d; })", e->loc.line, op_c, tid);
+                goto _binary_done;
+            }
             if (type_is_subint(rt)) {
                 const char *ut = unsigned_counterpart(rt);
                 fprintf(out, "(");
@@ -2374,60 +2435,76 @@ static void emit_expr(Expr *e, FILE *out) {
             goto _binary_done;
         }
 
-        /* Integer division/modulo: guard the divisor.
-         *  - divide-by-zero: hard abort (a defined failure, like bounds/unwrap).
-         *  - signed `min / -1` and `min % -1`: two's-complement overflow. C
-         *    leaves it undefined and x86 traps it (SIGFPE) exactly like /0, so a
-         *    plain divide would be UB — and the trap precedes any result, so a
-         *    cast-back cannot fix it. FC defines signed overflow as wrapping (see
-         *    spec "Integer overflow"), and `a / -1 == -a`, `a % -1 == 0` under
-         *    modular arithmetic, so we substitute the wrapped value instead of
-         *    dividing. The quotient is a wrapping negation through the unsigned
-         *    counterpart (correct at every width, including `min`, and
-         *    int-width-agnostic). Unsigned division never overflows, so the
-         *    `== -1` arm is signed-only.
-         *  - An enclosing `unguarded` skips this block entirely: control falls
-         *    through to the plain binary emit below (bare `a / b` / `a % b`), so
-         *    both the zero abort and the `min/-1` wrap are dropped — UB on a zero
-         *    or `min/-1` divisor, the programmer's asserted precondition. */
-        if (!g_guards_suppressed &&
-            (op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
-            int tid = temp_counter++;
-            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
-            int fn_len = (int)strlen(fn);
-            int line = e->loc.line;
-            bool wrap = type_is_signed(rt);
-            /* Evaluate the dividend (lhs) first, then the divisor (rhs):
-             * left-to-right, each exactly once.  Both are hoisted regardless of
-             * the wrap path so the guard and result reference them by name. */
-            fprintf(out, "({ ");
-            emit_type(rt, out);
-            fprintf(out, " _nv%d = ", tid);
-            emit_expr(e->binary.left, out);
-            fprintf(out, "; ");
-            emit_type(rt, out);
-            fprintf(out, " _dv%d = ", tid);
-            emit_expr(e->binary.right, out);
-            fprintf(out, "; if (_dv%d == 0) { fprintf(stderr, \"", tid);
-            emit_c_escaped(fn, fn_len, out);
-            fprintf(out, ":%d: %s by zero\\n\"); FC_ABORT(); } ",
-                    line, op == TOK_SLASH ? "divide" : "modulo");
-            if (wrap) {
-                /* signed min / -1 and min % -1 overflow: substitute the wrapped
-                 * value (a / -1 == -a, a % -1 == 0) instead of trapping. */
-                const char *ut = unsigned_counterpart(rt);
-                fprintf(out, "(_dv%d == -1) ? (", tid);
+        /* Integer division/modulo. Two orthogonal concerns, on two axes:
+         *  - divide-by-zero: a *precondition* → GUARD axis. Aborts when guarded;
+         *    `unguarded` drops the check (bare divide, UB on a zero divisor).
+         *  - signed `min / -1` (and `min % -1`): two's-complement *overflow* (C
+         *    UB; x86 SIGFPEs it like /0) → OVERFLOW axis. The handling branch is
+         *    ALWAYS emitted (to dodge the hardware trap and keep the result
+         *    defined), but its meaning is set by checked/unchecked:
+         *      `/`  unchecked → wrap to `min` (a / -1 == -a, via unsigned negation,
+         *           width-agnostic); checked → abort (min/-1 is unrepresentable).
+         *      `%`  always 0 (a % -1 == 0 is representable — never an overflow, so
+         *           checked does not change it).
+         *    Unsigned division never overflows, so the min/-1 branch is signed-only.
+         *  Decomposing this way makes `unguarded` consistent across operators:
+         *  like `unguarded (a + b)`, `unguarded (a / b)` keeps defined overflow
+         *  semantics (the wrap) and only trusts the precondition (divisor != 0).
+         *  A statement-expr is emitted whenever EITHER concern needs code; an
+         *  unsigned divide under `unguarded` needs neither and falls through to the
+         *  bare binary emit below. */
+        if ((op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt)) {
+            bool is_signed = type_is_signed(rt);
+            bool need_zero  = !g_guards_suppressed;   /* guard axis owns divisor==0 */
+            bool need_minus1 = is_signed;             /* signed min/-1: always handled */
+            if (need_zero || need_minus1) {
+                int tid = temp_counter++;
+                const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+                int fn_len = (int)strlen(fn);
+                int line = e->loc.line;
+                const char *opc = op == TOK_SLASH ? "/" : "%";
+                /* dividend then divisor, left-to-right, each once. */
+                fprintf(out, "({ ");
                 emit_type(rt, out);
-                if (op == TOK_SLASH) fprintf(out, ")(-(%s)_nv%d) : (", ut, tid);
-                else                 fprintf(out, ")0 : (");
+                fprintf(out, " _nv%d = ", tid);
+                emit_expr(e->binary.left, out);
+                fprintf(out, "; ");
                 emit_type(rt, out);
-                fprintf(out, ")(_nv%d %s _dv%d); })",
-                        tid, op == TOK_SLASH ? "/" : "%", tid);
-            } else {
-                fprintf(out, "_nv%d %s _dv%d; })",
-                        tid, op == TOK_SLASH ? "/" : "%", tid);
+                fprintf(out, " _dv%d = ", tid);
+                emit_expr(e->binary.right, out);
+                fprintf(out, "; ");
+                if (need_zero) {
+                    fprintf(out, "if (_dv%d == 0) { fprintf(stderr, \"", tid);
+                    emit_c_escaped(fn, fn_len, out);
+                    fprintf(out, ":%d: %s by zero\\n\"); FC_ABORT(); } ",
+                            line, op == TOK_SLASH ? "divide" : "modulo");
+                }
+                if (!need_minus1) {
+                    /* unsigned: no min/-1 case */
+                    fprintf(out, "_nv%d %s _dv%d; })", tid, opc, tid);
+                } else if (op == TOK_PERCENT) {
+                    /* signed modulo: a %% -1 == 0, always (representable) */
+                    fprintf(out, "(_dv%d == -1) ? 0 : (", tid);
+                    emit_type(rt, out);
+                    fprintf(out, ")(_nv%d %% _dv%d); })", tid, tid);
+                } else if (g_overflow_checked) {
+                    /* checked signed divide: min / -1 overflows → abort */
+                    fprintf(out, "if (_dv%d == -1 && _nv%d == %s) fc_overflow(\"",
+                            tid, tid, resolve_type_prop_codegen(rt, "min"));
+                    emit_c_escaped(fn, fn_len, out);
+                    fprintf(out, "\", %d, \"divide\"); _nv%d / _dv%d; })", line, tid, tid);
+                } else {
+                    /* unchecked signed divide: min / -1 wraps to min (a / -1 == -a) */
+                    const char *ut = unsigned_counterpart(rt);
+                    fprintf(out, "(_dv%d == -1) ? (", tid);
+                    emit_type(rt, out);
+                    fprintf(out, ")(-(%s)_nv%d) : (", ut, tid);
+                    emit_type(rt, out);
+                    fprintf(out, ")(_nv%d / _dv%d); })", tid, tid);
+                }
+                goto _binary_done;
             }
-            goto _binary_done;
+            /* unsigned divide/modulo under `unguarded`: bare op (fall through). */
         }
 
         const char *op_str;
@@ -2463,7 +2540,24 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_UNARY_PREFIX: {
-        /* Signed negation wrapping: (int32_t)(-(uint32_t)x) */
+        /* Signed negation. `checked`: only INT_MIN overflows (−INT_MIN is
+         * unrepresentable), detected with __builtin_sub_overflow(0, x). */
+        if (e->unary_prefix.op == TOK_MINUS && e->type && type_is_signed(e->type) &&
+            g_overflow_checked) {
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            emit_type(e->type, out);
+            fprintf(out, " _r%d; if (__builtin_sub_overflow((", tid);
+            emit_type(e->type, out);
+            fprintf(out, ")0, ");
+            emit_expr(e->unary_prefix.operand, out);
+            fprintf(out, ", &_r%d)) fc_overflow(\"", tid);
+            emit_c_escaped(fn, (int)strlen(fn), out);
+            fprintf(out, "\", %d, \"negation\"); _r%d; })", e->loc.line, tid);
+            break;
+        }
+        /* Signed negation wrapping (unchecked): (int32_t)(-(uint32_t)x) */
         if (e->unary_prefix.op == TOK_MINUS && e->type && type_is_signed(e->type)) {
             const char *ut = unsigned_counterpart(e->type);
             fprintf(out, "(");
@@ -2780,13 +2874,20 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_GUARD: {
-        /* Toggle the lexical guard context for the body, then restore. A child
-         * marker fully overrides its parent (unguarded → suppress, guarded →
-         * re-enable), so a plain save/restore is exactly right. */
-        bool saved = g_guards_suppressed;
-        g_guards_suppressed = !e->guard.guarded;
-        emit_expr(e->guard.body, out);
-        g_guards_suppressed = saved;
+        /* Toggle the relevant lexical context for the body, then restore. A child
+         * marker fully overrides its parent, so a plain save/restore is exactly
+         * right. The two axes are independent globals. */
+        if (e->guard.is_overflow_axis) {
+            bool saved = g_overflow_checked;
+            g_overflow_checked = e->guard.enable;   /* checked → on */
+            emit_expr(e->guard.body, out);
+            g_overflow_checked = saved;
+        } else {
+            bool saved = g_guards_suppressed;
+            g_guards_suppressed = !e->guard.enable;  /* unguarded → suppress */
+            emit_expr(e->guard.body, out);
+            g_guards_suppressed = saved;
+        }
         break;
     }
 
@@ -2834,6 +2935,14 @@ static void emit_expr(Expr *e, FILE *out) {
              * An enclosing `unguarded` opts out — it falls through to the bare
              * cast below. */
             float_to_int_emit(&f2i_info, e->cast.operand, out);
+        } else if (g_overflow_checked && e->cast.operand->type &&
+                   type_is_integer(e->cast.operand->type) &&
+                   type_is_integer(e->cast.target) &&
+                   !type_can_widen(e->cast.operand->type, e->cast.target)) {
+            /* checked: an integer narrowing cast that can lose information aborts
+             * out of range, instead of the bare (truncating) C cast below. */
+            emit_checked_int_narrow(e->cast.operand->type, e->cast.target,
+                                    e->cast.operand, e->loc, out);
         } else if (e->cast.operand->type &&
                    ((cast_is_ptr_kind(e->cast.operand->type) && type_is_integer(e->cast.target)) ||
                     (type_is_integer(e->cast.operand->type) && cast_is_ptr_kind(e->cast.target)))) {
@@ -4378,6 +4487,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
     indent_level = 1;
     g_guards_suppressed = false;   /* guards on at a function boundary: an
                                       `unguarded` marker never reaches a callee */
+    g_overflow_checked = false;    /* unchecked at a function boundary too */
     begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
     defer_scope_push(false);
     emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
@@ -5691,6 +5801,10 @@ static void detect_features_expr(Expr *e) {
         detect_features_expr(e->cast.operand);
         return;
     case EXPR_GUARD:
+        /* A `checked` body emits fc_overflow (stderr) on overflow. pass2 rejects a
+         * checked marker with no governed op, so any that survives will emit one. */
+        if (e->guard.is_overflow_axis && e->guard.enable)
+            g_needs_stdio = true;
         detect_features_expr(e->guard.body);
         return;
     case EXPR_IF:
@@ -6066,6 +6180,11 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "    fprintf(stderr, \"%%s:%%d: some() of a null pointer "
             "(pointer options use null as the none sentinel)\\n\", file, line);\n"
             "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_overflow(const char *file, int line, const char *what) {\n"
+            "    fprintf(stderr, \"%%s:%%d: integer overflow in %%s\\n\", file, line, what);\n"
+            "    FC_ABORT();\n"
             "}\n");
         /* Register the helpers as skip-entries so their frames don't pollute
          * the user-visible backtrace when a bounds check fires. */
@@ -6073,6 +6192,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
         symmap_add("fc_neg_len", NULL, "<runtime>", 0);
         symmap_add("fc_null_some", NULL, "<runtime>", 0);
+        symmap_add("fc_overflow", NULL, "<runtime>", 0);
     }
 
     /* Collect all slice, option, function, and eq types used in the program */
@@ -6650,6 +6770,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         }
 
         g_guards_suppressed = false;   /* lambda body: guards on (function boundary) */
+        g_overflow_checked = false;    /* lambda body: unchecked (function boundary) */
         begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
         defer_scope_push(false);
         emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);
@@ -6712,6 +6833,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "    (void)_ctx;\n");
         indent_level = 1;
         g_guards_suppressed = false;   /* generic-instance body: guards on (function boundary) */
+        g_overflow_checked = false;    /* generic-instance body: unchecked (function boundary) */
         begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
         defer_scope_push(false);
         emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
