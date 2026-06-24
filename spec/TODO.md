@@ -75,4 +75,65 @@ assert). Spec work extends the RMW section from the `fetch_add` item: exchange a
 are acq_rel RMWs in the cell's total modification order; CAS-failure is an acquire load with
 no store.
 
+## Capturing-lambda context outlives its stack scope when the lambda is a block tail
+
+A capturing lambda's environment is emitted as the address of a **stack compound literal**
+(`codegen.c` `EXPR_FUNC`, ~line 4408): `.ctx = &(_ctx_NAME){ .cap = cap, ... }`. A C compound
+literal inside a function has **block-scope lifetime** — it lives only to the end of the
+innermost `{}` enclosing it. That is correct when the lambda is assigned directly at function
+scope (literal and closure value share the function-body block), but **wrong whenever the lambda
+is produced as the tail expression of a nested block** (`let…in`, and by the same mechanism an
+`if`/`match` arm used as a value). FC emits such a block as a GCC statement-expression
+`({ …; closure; })`, so the context literal gets the *inner* block's lifetime; the closure
+struct is copied out into the outer binding, the inner block exits, the literal is destroyed,
+and the surviving `.ctx` now dangles. Any later call through that closure reads freed stack.
+
+Minimal self-contained repro (no euler-fc dependency):
+
+```fc
+let apply = (f: (int32) -> int32, x: int32) ->
+    f(x)
+
+let main = (args: str[]) ->
+    let base = 10
+    let adder =                       // lambda is the TAIL of a let…in block
+        let b = base
+        (x: int32) -> x + b
+    let r = apply(adder, 5)           // .ctx already dangles here
+    assert(r == 15)
+    0
+```
+
+`fcc` emits the context literal inside the statement-expression:
+
+```c
+fc_fn_int32_t__int32_t _l_adder_1 = ({
+    int32_t _l_b_2 = _l_base_0;
+    (fc_fn_int32_t__int32_t){ .fn_ptr = _fn_3, .ctx = &(_ctx__fn_3){ ._l_b_2 = _l_b_2 } };
+});   // inner block ends — _ctx__fn_3 temporary destroyed; _l_adder_1.ctx now dangles
+```
+
+Compiling the generated C with `cc -std=c11 -Wall -Werror -O2` fails:
+`error: using dangling pointer '_l_b_2' to an unnamed temporary [-Werror=dangling-pointer=]`
+(plus a companion `-Werror=uninitialized`, same root cause). The diagnostic only fires at
+`-O2`: it needs inlining to trace the context pointer across the call into the lambda body. At
+`-O0` GCC can't see it and the dead stack slot usually still holds the right bytes, so it
+compiles and "works" by luck. **This is why the suite misses it** — tests default to `-O0`; the
+`make test-*-O2` variants would catch a regression test for this pattern. The flattened form
+(`let b = base` then `let adder = (x) -> x + b` as sibling statements) puts the literal at
+function-body scope and is clean — that is the euler-fc workaround already applied in
+`prelude.fc::nth_prime`.
+
+Note the closure does **not** escape its creating function here (it's only called within the
+same body), so this is purely a too-narrow-lifetime bug, not a true escape — escape analysis is
+not the lever. The fix is in codegen: when a capturing lambda is the tail of a block expression,
+the context must get the lifetime of the binding it flows into, not the inner block's. The
+honest options are (a) **hoist** the `_ctx_NAME` literal to a named local declared at the
+destination binding's scope (out of the statement-expression), or (b) restrict the pattern —
+**not** heap-allocation, which would add a hidden alloc and a leak FC's manual-memory model
+rejects (see "Static costs over runtime machinery"). The design choice is *where* to hoist and
+how to handle deeper nesting (block-tail inside block-tail, lambda passed directly as a call
+argument). Land it with `-O2` regression tests for `let…in`, `if`-arm, and `match`-arm valued
+capturing lambdas.
+
 ---
