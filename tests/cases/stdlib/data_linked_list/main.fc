@@ -1,21 +1,21 @@
 import linked_list from std::data
 
 let main = (args: str[]) ->
-    let mut l = linked_list.make<int32>()
+    let l = linked_list.make<int32>()
     assert(linked_list.is_empty(l))
 
     // prepend / append
-    linked_list.prepend(&l, 2)
-    linked_list.prepend(&l, 1)
-    linked_list.append(&l, 3)
-    linked_list.append(&l, 4)
+    linked_list.prepend(l, 2)
+    linked_list.prepend(l, 1)
+    linked_list.append(l, 3)
+    linked_list.append(l, 4)
     // now: 1, 2, 3, 4
     assert(linked_list.len(l) == 4)
     assert(linked_list.first(l) == 1)
     assert(linked_list.last(l) == 4)
 
     // insert at middle, head, tail
-    linked_list.insert(&l, 2i64, 99)
+    linked_list.insert(l, 2i64, 99)
     // now: 1, 2, 99, 3, 4
     assert(linked_list.len(l) == 5)
     let ins_check = linked_list.to_slice(l)
@@ -26,11 +26,11 @@ let main = (args: str[]) ->
     assert(ins_check[4] == 4)
     free(ins_check)
     // remove the 99 so the rest of the test is unaffected
-    let mut _discard = linked_list.pop_first(&l)
-    _discard = linked_list.pop_first(&l)
-    _discard = linked_list.pop_first(&l) // removes 99
-    linked_list.prepend(&l, 2)
-    linked_list.prepend(&l, 1)
+    let mut _discard = linked_list.pop_first(l)
+    _discard = linked_list.pop_first(l)
+    _discard = linked_list.pop_first(l) // removes 99
+    linked_list.prepend(l, 2)
+    linked_list.prepend(l, 1)
     // back to: 1, 2, 3, 4
 
     // fold / fold_right
@@ -83,9 +83,9 @@ let main = (args: str[]) ->
     free(scanned)
 
     // pop_first / pop_last
-    let f = linked_list.pop_first(&l)
+    let f = linked_list.pop_first(l)
     assert(f == some(1))
-    let b = linked_list.pop_last(&l)
+    let b = linked_list.pop_last(l)
     assert(b == some(4))
     assert(linked_list.len(l) == 2)
     assert(linked_list.first(l) == 2)
@@ -105,25 +105,25 @@ let main = (args: str[]) ->
     free(sl)
 
     // clear
-    linked_list.clear(&l)
+    linked_list.clear(l)
     assert(linked_list.is_empty(l))
-    assert(linked_list.pop_first(&l).is_none)
+    assert(linked_list.pop_first(l).is_none)
 
     // grow beyond initial capacity
     for i in 0..20
-        linked_list.append(&l, i)
+        linked_list.append(l, i)
     assert(linked_list.len(l) == 20)
     assert(linked_list.first(l) == 0)
     assert(linked_list.last(l) == 19)
 
     // sort
-    linked_list.clear(&l)
-    linked_list.append(&l, 5)
-    linked_list.append(&l, 1)
-    linked_list.append(&l, 4)
-    linked_list.append(&l, 2)
-    linked_list.append(&l, 3)
-    linked_list.sort(&l, (a: int32, b: int32) -> a - b)
+    linked_list.clear(l)
+    linked_list.append(l, 5)
+    linked_list.append(l, 1)
+    linked_list.append(l, 4)
+    linked_list.append(l, 2)
+    linked_list.append(l, 3)
+    linked_list.sort(l, (a: int32, b: int32) -> a - b)
     assert(linked_list.first(l) == 1)
     assert(linked_list.last(l) == 5)
     let sorted = linked_list.to_slice(l)
@@ -135,7 +135,7 @@ let main = (args: str[]) ->
     free(sorted)
 
     // reverse
-    linked_list.reverse(&l)
+    linked_list.reverse(l)
     assert(linked_list.first(l) == 5)
     assert(linked_list.last(l) == 1)
     let rev_s = linked_list.to_slice(l)
@@ -144,18 +144,18 @@ let main = (args: str[]) ->
     free(rev_s)
 
     // retain (l is now 5, 4, 3, 2, 1)
-    linked_list.retain(&l, (x: int32) -> x >= 3)
+    linked_list.retain(l, (x: int32) -> x >= 3)
     assert(linked_list.len(l) == 3)
     assert(linked_list.first(l) == 5)
     assert(linked_list.last(l) == 3)
 
     // apply (l is now 5, 4, 3)
-    linked_list.apply(&l, (x: int32) -> x * 2)
+    linked_list.apply(l, (x: int32) -> x * 2)
     assert(linked_list.first(l) == 10)
     assert(linked_list.last(l) == 6)
 
     // applyi (l is now 10, 8, 6)
-    linked_list.applyi(&l, (i: int64, x: int32) -> x + (int32) i)
+    linked_list.applyi(l, (i: int64, x: int32) -> x + (int32) i)
     assert(linked_list.first(l) == 10) // 10 + 0
     assert(linked_list.last(l) == 8)   // 6 + 2
     let ai_s = linked_list.to_slice(l)

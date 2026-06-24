@@ -5085,7 +5085,11 @@ POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `ne
 
 ## std::data
 
-Generic data structures and collection utilities. Lives in the `std::` namespace under `module data`; import individual modules with `import data from std::` then `import <module> from data` (or `import data from std::` and access via the imported module, e.g. `data.array_list.make()`). Each data structure uses the companion pattern — the struct sits alongside its same-named module within `module data`. Contains:
+Generic data structures and collection utilities. Lives in the `std::` namespace under `module data`; import individual modules with `import data from std::` then `import <module> from data` (or `import data from std::` and access via the imported module, e.g. `data.array_list.make()`). Each data structure uses the companion pattern — the struct sits alongside its same-named module within `module data`.
+
+The four container types (`array_list`, `linked_list`, `hash_dict`, `hash_set`) are **reference-semantics handles**: `make` (and `make_with_capacity`) heap-allocates the container header and returns a pointer to it (e.g. `array_list<'a>*`), and every operation — readers and mutators alike — takes that pointer. Because there is only ever one header, a mutation through any alias is observed by all of them, including a grow/rehash that reallocates the backing buffer — there is no by-value copy of the handle to go stale. The handle is a plain `let`, so it captures cleanly in closures (by copy of the pointer) while the pointee stays mutable through it. `destroy` frees both the backing storage and the header; functions that build a new container (`copy`, `map`, `mapi`, `filter`, `scan`, hash_set `filter`) likewise return a pointer the caller must `destroy`. The `slice` module is the exception: it operates directly on built-in `'a[]` values (themselves fat-pointer references), so it takes them by value, not by pointer.
+
+Contains:
 
 - **`array_list`** — Dynamic array with amortized O(1) append. Backed by a growable heap-allocated slice. Supports indexed access, insert, remove, sort, and functional operations (map, filter, fold, scan, reduce, etc.).
 - **`linked_list`** — Doubly-linked list with O(1) prepend/append. Pointer-based nodes, each separately heap-allocated. Supports pop from either end, insert at index, sort, and the same functional operations as array_list.

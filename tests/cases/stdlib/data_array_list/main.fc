@@ -2,14 +2,14 @@ import array_list from std::data
 
 let main = (args: str[]) ->
     // make and basic operations
-    let mut l = array_list.make<int32>()
+    let l = array_list.make<int32>()
     assert(array_list.is_empty(l))
     assert(array_list.len(l) == 0)
 
     // add elements
-    array_list.add(&l, 10)
-    array_list.add(&l, 20)
-    array_list.add(&l, 30)
+    array_list.add(l, 10)
+    array_list.add(l, 20)
+    array_list.add(l, 30)
     assert(array_list.len(l) == 3)
     assert(array_list.get(l, 0i64) == 10)
     assert(array_list.get(l, 1i64) == 20)
@@ -22,22 +22,22 @@ let main = (args: str[]) ->
     assert(array_list.try_last(l) == some(30))
 
     // update
-    array_list.update(&l, 1i64, 25)
+    array_list.update(l, 1i64, 25)
     assert(array_list.get(l, 1i64) == 25)
 
     // insert
-    array_list.insert(&l, 1i64, 15)
+    array_list.insert(l, 1i64, 15)
     assert(array_list.len(l) == 4)
     assert(array_list.get(l, 1i64) == 15)
     assert(array_list.get(l, 2i64) == 25)
 
     // remove_at
-    let removed = array_list.remove_at(&l, 1i64)
+    let removed = array_list.remove_at(l, 1i64)
     assert(removed == 15)
     assert(array_list.len(l) == 3)
 
     // pop
-    let popped = array_list.pop(&l)
+    let popped = array_list.pop(l)
     assert(popped == 30)
     assert(array_list.len(l) == 2)
 
@@ -53,9 +53,9 @@ let main = (args: str[]) ->
     array_list.destroy(l2)
 
     // grow past initial capacity
-    let mut big = array_list.make<int32>()
+    let big = array_list.make<int32>()
     for i in 0..20
-        array_list.add(&big, i)
+        array_list.add(big, i)
     assert(array_list.len(big) == 20)
     assert(array_list.get(big, 19i64) == 19)
 
@@ -68,7 +68,7 @@ let main = (args: str[]) ->
     assert(diff == -35)
 
     // reduce
-    array_list.add(&l, 5)
+    array_list.add(l, 5)
     let r = array_list.reduce(l, (a: int32, b: int32) -> a + b)
     assert(r == 40)
 
@@ -119,53 +119,53 @@ let main = (args: str[]) ->
     array_list.destroy(scanned)
 
     // sort
-    let mut sl = array_list.make<int32>()
-    array_list.add(&sl, 5)
-    array_list.add(&sl, 1)
-    array_list.add(&sl, 4)
-    array_list.add(&sl, 2)
-    array_list.add(&sl, 3)
-    array_list.sort(&sl, (a: int32, b: int32) -> a - b)
+    let sl = array_list.make<int32>()
+    array_list.add(sl, 5)
+    array_list.add(sl, 1)
+    array_list.add(sl, 4)
+    array_list.add(sl, 2)
+    array_list.add(sl, 3)
+    array_list.sort(sl, (a: int32, b: int32) -> a - b)
     assert(array_list.get(sl, 0i64) == 1)
     assert(array_list.get(sl, 1i64) == 2)
     assert(array_list.get(sl, 2i64) == 3)
     assert(array_list.get(sl, 3i64) == 4)
     assert(array_list.get(sl, 4i64) == 5)
     // sort descending
-    array_list.sort(&sl, (a: int32, b: int32) -> b - a)
+    array_list.sort(sl, (a: int32, b: int32) -> b - a)
     assert(array_list.get(sl, 0i64) == 5)
     assert(array_list.get(sl, 4i64) == 1)
     array_list.destroy(sl)
 
     // reverse
-    let mut rv = array_list.make<int32>()
-    array_list.add(&rv, 1)
-    array_list.add(&rv, 2)
-    array_list.add(&rv, 3)
-    array_list.reverse(&rv)
+    let rv = array_list.make<int32>()
+    array_list.add(rv, 1)
+    array_list.add(rv, 2)
+    array_list.add(rv, 3)
+    array_list.reverse(rv)
     assert(array_list.get(rv, 0i64) == 3)
     assert(array_list.get(rv, 1i64) == 2)
     assert(array_list.get(rv, 2i64) == 1)
 
     // retain
-    array_list.retain(&rv, (x: int32) -> x >= 2)
+    array_list.retain(rv, (x: int32) -> x >= 2)
     assert(array_list.len(rv) == 2)
     assert(array_list.get(rv, 0i64) == 3)
     assert(array_list.get(rv, 1i64) == 2)
 
     // apply
-    array_list.apply(&rv, (x: int32) -> x * 10)
+    array_list.apply(rv, (x: int32) -> x * 10)
     assert(array_list.get(rv, 0i64) == 30)
     assert(array_list.get(rv, 1i64) == 20)
 
     // applyi
-    array_list.applyi(&rv, (i: int64, x: int32) -> x + (int32) i)
+    array_list.applyi(rv, (i: int64, x: int32) -> x + (int32) i)
     assert(array_list.get(rv, 0i64) == 30) // 30 + 0
     assert(array_list.get(rv, 1i64) == 21) // 20 + 1
     array_list.destroy(rv)
 
     // clear
-    array_list.clear(&l)
+    array_list.clear(l)
     assert(array_list.is_empty(l))
 
     // cleanup
