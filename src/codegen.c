@@ -381,7 +381,23 @@ static void collect_hoisted_bindings(Expr *e) {
         break;
     }
     case EXPR_FUNC:
-        /* Don't recurse into nested lambdas — they get their own hoisting scope */
+        /* A capturing lambda's context struct is a stack value created in *this*
+         * function's frame; per §"Stack frames and lifetime" it must have
+         * function-frame lifetime, not the lifetime of whatever block-tail it sits
+         * in.  Hoist a named _ctx_<lifted> backing to function entry — same scheme
+         * as slice-literal/interp backings — so the .ctx pointer the closure carries
+         * stays valid for the whole call.  The single slot is reused per loop
+         * iteration (identical to slice-literal reuse semantics).  Don't recurse
+         * into the body: it is its own function/hoisting scope, and any capturing
+         * lambda constructed inside it is hoisted into that frame when it is emitted. */
+        if (e->func.capture_count > 0) {
+            if (!e->func.codegen_ctx_backing_name) {
+                char buf[40];
+                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
+                e->func.codegen_ctx_backing_name = arena_strdup(g_arena, buf, n);
+            }
+            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
+        }
         break;
     default:
         break;
@@ -456,6 +472,9 @@ static void emit_fn_backing_decls(FILE *out) {
         } else if (e->kind == EXPR_CAST) { /* (cstr[N]) */
             fprintf(out, "uint8_t %s[%d];\n",
                     e->cast.codegen_backing_name, e->cast.buffer_size);
+        } else if (e->kind == EXPR_FUNC) { /* capturing-lambda context struct */
+            fprintf(out, "_ctx_%s %s;\n",
+                    e->func.lifted_name, e->func.codegen_ctx_backing_name);
         } else { /* EXPR_INTERP_STRING */
             fprintf(out, "uint8_t %s[%" PRId64 "];\n",
                     e->interp_string.codegen_backing_name,
@@ -4405,8 +4424,29 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_FUNC: {
         /* Lambda in expression position — emit fat pointer */
-        if (e->func.capture_count > 0) {
-            /* Capturing lambda: use compound literal for context (block-scope lifetime) */
+        if (e->func.capture_count > 0 && e->func.codegen_ctx_backing_name) {
+            /* Capturing lambda: write the captures into the function-entry _ctx
+             * backing (hoisted in collect_hoisted_bindings), then yield a fat
+             * pointer whose .ctx addresses it.  &backing has function-frame
+             * lifetime, so the closure stays valid for the whole call even when
+             * this lambda is the tail of a nested block (let…in / if- / match-arm),
+             * where an inline compound literal would get block-scope lifetime and
+             * dangle.  The single slot is reused per loop iteration. */
+            const char *bk = e->func.codegen_ctx_backing_name;
+            fprintf(out, "({ ");
+            for (int i = 0; i < e->func.capture_count; i++)
+                fprintf(out, "%s.%s = %s; ",
+                    bk,
+                    e->func.captures[i].codegen_name,
+                    e->func.captures[i].codegen_name);
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .fn_ptr = %s, .ctx = &%s }; })",
+                e->func.lifted_name, bk);
+        } else if (e->func.capture_count > 0) {
+            /* Fallback: no hoisted backing (e.g. emitted outside a hoisted scope).
+             * Inline compound literal — block-scope lifetime; safe only when the
+             * lambda is consumed within the same block. */
             fprintf(out, "(");
             emit_type(e->type, out);
             fprintf(out, "){ .fn_ptr = %s, .ctx = &(_ctx_%s){ ",

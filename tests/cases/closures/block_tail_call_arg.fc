@@ -1,0 +1,11 @@
+// A capturing lambda constructed directly in call-argument position (the other
+// shape called out in the original TODO). It is consumed synchronously by the
+// callee, but its context still routes through the function-entry backing, so
+// the construction is uniform with the block-tail cases.
+let apply = (f: (int32) -> int32, x: int32) ->
+    f(x)
+
+let main = (args: str[]) ->
+    let cap = 7
+    assert(apply((x: int32) -> x + cap, 5) == 12)
+    0

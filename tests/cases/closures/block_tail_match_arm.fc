@@ -1,0 +1,23 @@
+// A capturing lambda produced as the tail of a `match` arm, then copied out into
+// a binding. The arm body is a block whose tail expression is the closure; its
+// context must outlive the arm's statement-expression to function scope.
+union op =
+    | inc
+    | dec
+
+let apply = (f: (int32) -> int32, x: int32) ->
+    f(x)
+
+let main = (args: str[]) ->
+    let base = 100
+    let k = op.inc
+    let f =
+        match k with
+        | inc ->
+            let amt = base
+            (x: int32) -> x + amt
+        | dec ->
+            let amt = base
+            (x: int32) -> x - amt
+    assert(apply(f, 5) == 105)
+    0

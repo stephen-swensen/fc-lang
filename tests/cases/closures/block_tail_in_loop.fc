@@ -1,0 +1,17 @@
+// A capturing lambda built as a block-tail (let…in) inside a loop body and used
+// within the same iteration. The single hoisted context backing is reused each
+// iteration (identical to slice-literal reuse semantics): every pass writes its
+// own capture into the shared slot and consumes the closure before the next pass
+// overwrites it. Sum = (10+0)+(10+1)+(10+2)+(10+3)+(10+4) = 60.
+let apply = (f: (int32) -> int32, x: int32) ->
+    f(x)
+
+let main = (args: str[]) ->
+    let mut sum = 0
+    for i in 0..5
+        let f =
+            let captured = i
+            (x: int32) -> x + captured
+        sum = sum + apply(f, 10)
+    assert(sum == 60)
+    0

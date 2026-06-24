@@ -232,6 +232,7 @@ struct Expr {
             Capture *captures;      /* filled by pass2, NULL if non-capturing */
             int capture_count;
             const char *lifted_name; /* C function name for lambdas in expression position */
+            const char *codegen_ctx_backing_name; /* hoisted _ctx_<lifted> backing local (capturing lambdas) */
             const char *self_codegen_name; /* non-NULL: self-recursive let binding's codegen name */
             bool self_referenced;          /* set by pass2 if the self name is actually used */
             const char **explicit_type_vars;    /* <'a, 'b> prefix, NULL if implicit-only */

@@ -1,0 +1,18 @@
+// Block-tail inside block-tail: the lambda sits two statement-expression levels
+// deep (a let…in whose tail is an `if` whose then-arm tail is the closure). The
+// hoisted backing is at function scope regardless of nesting depth, so the
+// "where to hoist" question has a single answer no matter how deep the tail is.
+let apply = (f: (int32) -> int32, x: int32) ->
+    f(x)
+
+let main = (args: str[]) ->
+    let base = 10
+    let g =
+        let a = base
+        if a > 0 then
+            let b = a + 5
+            (x: int32) -> x + b
+        else
+            (x: int32) -> x
+    assert(apply(g, 100) == 115)
+    0

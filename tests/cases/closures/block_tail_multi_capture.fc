@@ -1,0 +1,17 @@
+// A block-tail capturing lambda with multiple captures. All captured fields are
+// written into the one hoisted context backing before its address is taken, so
+// the whole context — not just a single field — survives to function scope.
+let apply = (f: (int32) -> int32, x: int32) ->
+    f(x)
+
+let main = (args: str[]) ->
+    let x = 10
+    let y = 20
+    let z = 30
+    let g =
+        let cx = x
+        let cy = y
+        let cz = z
+        (a: int32) -> a + cx + cy + cz
+    assert(apply(g, 5) == 65)
+    0
