@@ -456,7 +456,7 @@ FC's combination is uncommon. Many languages share *one* axis with it; the speci
 - **Koka** and **Roc** are ML-family and can lower to C, but rely on automatic reference counting rather than manual memory.
 - **ATS** and **Cogent** are closest on paper — ML-ish surfaces compiling to C for systems work — but both reach for heavy type theory (dependent and linear types) and are correspondingly hard to use.
 
-FC's bet is narrower and more pragmatic: C's memory model and C's cost model, an ML surface for ergonomics, and *nothing clever in between*. Zig makes the same wager on the cost-transparency half but keeps a C-like surface; FC takes the ML surface too, and the rest of this document is the discipline required to do that without sacrificing the cost model.
+FC's bet is narrower and more pragmatic: C's memory model and C's cost model, an ML surface for ergonomics, and *nothing clever in between*. The rest of this document is the discipline required to take the ML surface without sacrificing the cost model.
 
 ### Type inference as a design theorem
 
