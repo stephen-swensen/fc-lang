@@ -8,6 +8,7 @@
 #include "diag.h"
 #include "platform.h"
 #include "version.h"
+#include "lsp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +53,14 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
             print_version();
             return 0;
+        }
+    }
+
+    /* Language-server mode: speak LSP over stdio and never touch the normal
+     * file-compilation path. */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--lsp") == 0) {
+            return lsp_main();
         }
     }
 
@@ -225,7 +234,7 @@ int main(int argc, char **argv) {
 
     /* Pass 2: type check */
     MonoTable mono = {0};
-    pass2_check(prog, &symtab, &intern_table, &mono, &file_scopes);
+    pass2_check(prog, &symtab, &intern_table, &mono, &file_scopes, &arena);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());

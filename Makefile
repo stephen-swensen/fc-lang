@@ -61,7 +61,11 @@ FCC_BUILD_DATE := $(shell date -u +%Y-%m-%d)
 FCC_BUILD_CC   := $(CC) $(shell $(CC) -dumpfullversion 2>/dev/null || $(CC) -dumpversion 2>/dev/null || echo unknown)
 
 # -I$(BUILD_DIR) so generated fcc_version.h is on the include path.
-CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT) -I$(BUILD_DIR)
+# -DFCC_DATADIR bakes in the install data dir so `fcc --lsp` can locate the
+# installed stdlib (FCC_STDLIB_DIR env overrides; a repo-relative ./stdlib is
+# the final fallback).
+CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT) -I$(BUILD_DIR) \
+         -DFCC_DATADIR='"$(datadir)"'
 
 SRCS     := $(wildcard src/*.c)
 HDRS     := $(wildcard src/*.h)
@@ -138,6 +142,23 @@ uninstall:
 	rm -rf $(DESTDIR)$(datadir)/fcc
 
 
+# === VSCode extension (Linux) ===
+# The extension is dependency-free (it drives `fcc --lsp` with VSCode's built-in
+# Node child_process — no npm, no vscode-languageclient). install.sh packages a
+# .vsix by hand (no vsce) and installs it via the editor CLI (`code
+# --install-extension`), since modern VSCode ignores folders merely copied into
+# the extensions dir. Run WITHOUT sudo — it installs into your own $HOME.
+# Orthogonal to `make install` (which puts fcc on PATH). Override the editor with
+# FC_CODE_CLI=codium (etc.). Reload the VSCode window afterwards.
+VSCODE_SRC := editors/vscode
+
+install-vscode: $(BIN)
+	@bash $(VSCODE_SRC)/install.sh install
+
+uninstall-vscode:
+	@bash $(VSCODE_SRC)/install.sh uninstall
+
+
 # === Tests ===
 
 # `check` is the GNU canonical test target.
@@ -183,6 +204,12 @@ test-all-O2: $(BIN)
 	  printf "Total time: %d.%03ds\n" $$((elapsed_ms / 1000)) $$((elapsed_ms % 1000)); \
 	  if [ $$gcc_rc -ne 0 ] || [ $$clang_rc -ne 0 ]; then exit 1; fi'
 
+# Language-server wire tests. Kept out of `check`/`test-all` (different
+# prereqs — needs python3) so they can never regress the compiler suite.
+test-lsp: $(BIN)
+	@echo "=== Testing LSP server ==="
+	@bash tests/lsp/run_lsp_tests.sh
+
 test-all: $(BIN)
 	@bash -c '\
 	  start=$$(date +%s%N); \
@@ -213,8 +240,10 @@ help:
 	@echo "  make clean        Remove build/ (every OS subdirectory)"
 	@echo ""
 	@echo "Install (PREFIX=$(PREFIX) by default):"
-	@echo "  make install      Install $(BIN_NAME) to \$$bindir and stdlib to \$$datadir/fcc/stdlib"
-	@echo "  make uninstall    Remove installed binary and stdlib"
+	@echo "  make install         Install $(BIN_NAME) to \$$bindir and stdlib to \$$datadir/fcc/stdlib"
+	@echo "  make uninstall       Remove installed binary and stdlib"
+	@echo "  make install-vscode  Install the VSCode extension (Linux, no deps; run without sudo)"
+	@echo "  make uninstall-vscode Remove the installed VSCode extension"
 	@echo "  Override PREFIX, DESTDIR, bindir, or datadir to customize install paths."
 	@echo ""
 	@echo "Test:"
@@ -223,9 +252,11 @@ help:
 	@echo "  make test-gcc     Run tests with gcc only"
 	@echo "  make test-clang   Run tests with clang only"
 	@echo "  make test-{gcc,clang,all}-O2   Same, but compile generated C at -O2"
+	@echo "  make test-lsp     Run the LSP server wire tests (needs python3)"
 	@echo "  ... FILTER=pattern             Run only tests matching pattern"
 
 
-.PHONY: all dev clean install uninstall check test test-parallel \
+.PHONY: all dev clean install uninstall install-vscode uninstall-vscode \
+        check test test-parallel test-lsp \
         test-gcc test-clang test-gcc-O2 test-clang-O2 \
         test-all test-all-O2 help print-bin

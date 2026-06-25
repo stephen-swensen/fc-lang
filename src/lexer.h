@@ -25,6 +25,14 @@ typedef struct Lexer {
     /* Conditional compilation flags (e.g., --flag debug, --flag os=windows) */
     const struct Flag *flags;
     int flag_count;
+
+    /* Optional abort-cleanup hooks (in-process server / LSP mode). When
+     * non-NULL, the lexer publishes its in-progress malloc'd token arrays
+     * through these caller-owned slots, so an analysis that aborts via longjmp
+     * out of a lex fatal (unterminated string, bad indentation, tab, ...) can
+     * free them instead of leaking. Both NULL in the one-shot CLI path. */
+    Token **abort_slot_raw;     /* raw/filtered token array being built */
+    Token **abort_slot_layout;  /* layout-pass output array being built */
 } Lexer;
 
 /* A conditional compilation flag. value is NULL for bare (valueless) flags. */

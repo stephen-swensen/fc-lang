@@ -1,0 +1,52 @@
+{
+  "name": "fc-lang",
+  "displayName": "FC Language",
+  "description": "Syntax highlighting, diagnostics, hover, completion and type CodeLens for the FC language, powered by `fcc --lsp`.",
+  "version": "1.0.0",
+  "publisher": "fc-lang",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:fc"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "fc",
+        "aliases": ["FC", "fc"],
+        "extensions": [".fc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fc",
+        "scopeName": "source.fc",
+        "path": "./syntaxes/fc.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "FC",
+      "properties": {
+        "fc.serverPath": {
+          "type": "string",
+          "default": "fcc",
+          "description": "Path to the fcc binary used as the language server (invoked with --lsp)."
+        },
+        "fc.stdlibPath": {
+          "type": "string",
+          "default": "",
+          "description": "Directory containing the FC stdlib .fc files (sets FCC_STDLIB_DIR for the server). Leave empty to use the installed location."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[fc]": {
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false,
+        "editor.tabSize": 4,
+        "editor.codeLens": true
+      }
+    }
+  }
+}

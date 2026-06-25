@@ -19,6 +19,7 @@ typedef struct {
 typedef struct Scope Scope;
 struct Scope {
     Scope *parent;
+    Arena *arena;            /* owns the locals array (grown arena-side, freed with the AST) */
     LocalBinding *locals;
     int local_count;
     int local_cap;
@@ -51,6 +52,7 @@ struct LambdaCtx {
 static Scope *scope_new(Arena *a, Scope *parent) {
     Scope *s = arena_alloc(a, sizeof(Scope));
     s->parent = parent;
+    s->arena = a;
     return s;
 }
 
@@ -66,7 +68,17 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
 
 static void scope_add_prov(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut, Provenance prov) {
     LocalBinding b = { name, codegen_name, type, is_mut, false, prov };
-    DA_APPEND(s->locals, s->local_count, s->local_cap, b);
+    /* Grow arena-side so the locals array is reclaimed with the AST arena
+     * (a long-running server frees it; the CLI frees it at the end). */
+    if (s->local_count >= s->local_cap) {
+        int nc = s->local_cap ? s->local_cap * 2 : 8;
+        LocalBinding *nl = arena_alloc(s->arena, sizeof(LocalBinding) * (size_t)nc);
+        if (s->local_count)
+            memcpy(nl, s->locals, sizeof(LocalBinding) * (size_t)s->local_count);
+        s->locals = nl;
+        s->local_cap = nc;
+    }
+    s->locals[s->local_count++] = b;
 }
 
 static void scope_add(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut) {
@@ -6921,11 +6933,16 @@ static int collect_head_ctors(Arena *a, PatMatrix *mat, Ctor **out) {
             if (ctor_eq(&(*out)[i], &first->ctor)) { found = true; break; }
         }
         if (!found) {
-            DA_APPEND(*out, count, cap, first->ctor);
+            /* Grow arena-side so this scratch is reclaimed with the AST arena. */
+            if (count >= cap) {
+                cap = cap ? cap * 2 : 8;
+                Ctor *n = arena_alloc(a, sizeof(Ctor) * (size_t)cap);
+                if (count) memcpy(n, *out, sizeof(Ctor) * (size_t)count);
+                *out = n;
+            }
+            (*out)[count++] = first->ctor;
         }
     }
-    /* Allocate into arena and copy if needed */
-    (void)a;
     return count;
 }
 
@@ -8115,8 +8132,10 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
         for (int i = 0; i < pc; i++)
             ptypes[i] = resolve_type(ctx, fn->func.params[i].type);
 
-        recursive_ret = malloc(sizeof(Type));
-        memset(recursive_ret, 0, sizeof(Type));
+        /* Arena-allocated: this placeholder is patched in place and then
+         * referenced by the function type (ft->func.return_type), so it must
+         * outlive pass2 along with the AST. arena_alloc zero-fills. */
+        recursive_ret = arena_alloc(ctx->arena, sizeof(Type));
         recursive_ret->kind = TYPE_UNRESOLVED;  /* placeholder */
 
         Type *ft = arena_alloc(ctx->arena, sizeof(Type));
@@ -8317,17 +8336,14 @@ static void check_infinite_size(Program *prog) {
 }
 
 void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, MonoTable *mono,
-                 FileImportScopes *file_scopes) {
-    Arena arena;
-    arena_init(&arena);
-
-    Scope *root_scope = scope_new(&arena, NULL);
+                 FileImportScopes *file_scopes, Arena *arena) {
+    Scope *root_scope = scope_new(arena, NULL);
     root_scope->is_global = true;
 
     CheckCtx ctx = {
         .symtab = symtab,
         .scope = root_scope,
-        .arena = &arena,
+        .arena = arena,
         .loop_break_type = NULL,
         .in_for = false,
         .module_symtab = NULL,
@@ -8375,7 +8391,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         ctx.import_scope = mod_sym->imports ? &mod_import_scope : (file_tbl ? &file_import_scope : NULL);
 
         ctx.module_symtab = mod_sym->members;
-        ctx.scope = scope_new(&arena, NULL);
+        ctx.scope = scope_new(arena, NULL);
         ctx.scope->is_global = true;
         check_module_members(&ctx, d, mod_sym->members);
         ctx.scope = saved_scope;
@@ -8481,5 +8497,6 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
 
     check_infinite_size(prog);
 
-    /* Don't free arena — types are referenced from AST */
+    /* The arena is the caller's (it owns the AST); types pass2 synthesized are
+     * referenced from the AST, so the caller frees the arena, not us. */
 }

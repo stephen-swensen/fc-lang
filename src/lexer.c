@@ -21,6 +21,8 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern,
     memset(l->interp_brace, 0, sizeof(l->interp_brace));
     l->flags = flags;
     l->flag_count = flag_count;
+    l->abort_slot_raw = NULL;
+    l->abort_slot_layout = NULL;
 }
 
 static char peek(Lexer *l)      { return *l->current; }
@@ -588,6 +590,11 @@ static Token *raw_tokenize(Lexer *l, int *out_count) {
     int len = 0, cap = 0;
 
     for (;;) {
+        /* Publish the latest array pointer so a lex fatal (longjmp) can free it
+         * in server mode. Set before any fatal-capable scan in this iteration;
+         * the previous iteration's DA_APPEND has already settled `tokens`. */
+        if (l->abort_slot_raw) *l->abort_slot_raw = tokens;
+
         /* Skip spaces and comments but not newlines */
         for (;;) {
             if (peek(l) == ' ' || peek(l) == '\r') { advance(l); continue; }
@@ -890,6 +897,9 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     free(raw);
     raw = filtered;
     raw_count = filtered_count;
+    /* raw_tokenize published the pre-filter array; it is now freed. Re-point the
+     * cleanup slot at the filtered array (live until line ~1052). */
+    if (l->abort_slot_raw) *l->abort_slot_raw = raw;
 
     Token *out = NULL;
     int olen = 0, ocap = 0;
@@ -907,6 +917,10 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     int bracket_depth = 0;            /* depth inside () [] {} — suppresses layout */
 
     for (int i = 0; i < raw_count; i++) {
+        /* Publish the layout array so an indentation fatal (longjmp) can free
+         * it in server mode; `out` is re-pointed each iteration after growth. */
+        if (l->abort_slot_layout) *l->abort_slot_layout = out;
+
         Token t = raw[i];
 
         if (t.kind == TOK_NEWLINE) {

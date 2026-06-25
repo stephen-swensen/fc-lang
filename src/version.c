@@ -19,3 +19,7 @@ void print_version(void) {
     printf("Built: %s with %s (%s)\n",
            FCC_BUILD_DATE, FCC_BUILD_OPT, FCC_BUILD_CC);
 }
+
+const char *fcc_version_string(void) {
+    return FCC_VERSION_BASE;
+}

@@ -1,0 +1,3 @@
+*.vsix
+.vsix-stage/
+node_modules/
