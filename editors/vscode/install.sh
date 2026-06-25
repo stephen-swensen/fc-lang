@@ -87,7 +87,9 @@ VSIX="$STAGE/fc-lang-$VERSION.vsix"
 rm -rf "$EXT_DIR/$EXT_ID"
 
 if [ -n "$CLI" ]; then
-    "$CLI" --install-extension "$VSIX" --force
+    # --no-deprecation silences a noisy DEP0169 url.parse() warning emitted by
+    # the editor CLI's own internals (not ours); harmless if the CLI ignores it.
+    NODE_OPTIONS=--no-deprecation "$CLI" --install-extension "$VSIX" --force
     echo ""
     echo "Installed via '$CLI'. Reload the VSCode window (Developer: Reload Window)."
 else
