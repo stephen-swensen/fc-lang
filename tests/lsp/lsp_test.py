@@ -190,5 +190,21 @@ check("multi-file: main.fc resolves sibling 'prelude' module (no errors)",
 check("multi-file: prelude.fc OK (let main provided by sibling)",
       by_file.get("prelude.fc", [["?"]])[-1] == [], str(by_file.get("prelude.fc")))
 
+# --- stdlib feed: every module resolves (regression for the hardcoded list) ---
+sd = tempfile.mkdtemp(prefix="fc_lsp_std_")
+sprog = ("import io from std::\nimport random from std::\nimport text from std::\n\n"
+         "let main = (args: str[]) ->\n    return 0\n")
+sl = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + sd + "/m.fc",
+         "languageId": "fc", "version": 1, "text": sprog}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, sbf, _, _ = run_session(sl)
+check("stdlib feed resolves std::random / io / text",
+      sbf.get("m.fc", [["?"]])[-1] == [], str(sbf.get("m.fc")))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

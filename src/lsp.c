@@ -1238,40 +1238,49 @@ static char *read_whole_file(const char *path, int *out_len) {
     return buf;
 }
 
-/* Load every stdlib .fc file into memory once so std:: imports resolve. The
- * directory is FCC_STDLIB_DIR if set, else the install datadir, else a
- * repo-relative ./stdlib. Missing stdlib is not fatal — analysis still works
- * for files that do not import std::. */
-static void load_stdlib(LspServer *S) {
-    static const char *names[] = {
-        "io", "sys", "math", "text", "net", "data", "types",
-    };
-    const char *dir = getenv("FCC_STDLIB_DIR");
-    char dirbuf[1024];
-    const char *candidates[3];
-    int nc = 0;
-    if (dir && *dir) candidates[nc++] = dir;
-#ifdef FCC_DATADIR
-    candidates[nc++] = FCC_DATADIR "/fcc/stdlib";
-#endif
-    candidates[nc++] = "stdlib";
-
-    for (int ci = 0; ci < nc; ci++) {
-        bool any = false;
-        for (int i = 0; i < (int)(sizeof names / sizeof names[0]); i++) {
-            snprintf(dirbuf, sizeof dirbuf, "%s/%s.fc", candidates[ci], names[i]);
-            int len;
-            char *buf = read_whole_file(dirbuf, &len);
-            if (!buf) continue;
-            any = true;
-            AnalysisSource src;
-            src.filename = dup_cstr(dirbuf);
-            src.text = buf;
-            src.len = len;
-            DA_APPEND(S->stdlib, S->stdlib_count, S->stdlib_cap, src);
-        }
-        if (any) break;   /* first directory that has files wins */
+/* Load every `.fc` file in a directory into the stdlib feed. Returns true if it
+ * loaded at least one. Scans the directory rather than a fixed name list so new
+ * stdlib modules (e.g. random) are picked up automatically. */
+static bool load_stdlib_from_dir(LspServer *S, const char *dir) {
+#if defined(_WIN32)
+    (void)S; (void)dir;
+    return false;
+#else
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    bool any = false;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        const char *nm = e->d_name;
+        size_t l = strlen(nm);
+        if (l < 4 || strcmp(nm + l - 3, ".fc") != 0) continue;
+        char full[4096];
+        if (snprintf(full, sizeof full, "%s/%s", dir, nm) >= (int)sizeof full) continue;
+        struct stat st;
+        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) continue;
+        int len;
+        char *buf = read_whole_file(full, &len);
+        if (!buf) continue;
+        AnalysisSource src = { dup_cstr(full), buf, len };
+        DA_APPEND(S->stdlib, S->stdlib_count, S->stdlib_cap, src);
+        any = true;
     }
+    closedir(d);
+    return any;
+#endif
+}
+
+/* Load the standard library once so std:: imports resolve. The directory is
+ * FCC_STDLIB_DIR if set, else the install datadir, else a repo-relative
+ * ./stdlib. Missing stdlib is not fatal — analysis still works for files that
+ * do not import std::. */
+static void load_stdlib(LspServer *S) {
+    const char *env = getenv("FCC_STDLIB_DIR");
+    if (env && *env && load_stdlib_from_dir(S, env)) return;
+#ifdef FCC_DATADIR
+    if (load_stdlib_from_dir(S, FCC_DATADIR "/fcc/stdlib")) return;
+#endif
+    load_stdlib_from_dir(S, "stdlib");
 }
 
 /* ======================================================================== */
