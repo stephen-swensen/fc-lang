@@ -427,11 +427,11 @@
 
 FC is a systems language with an ML surface and a C core. You write expression-oriented code with type inference, options instead of null, and pattern matching — and it compiles to readable C11 with manual memory management: no garbage collector, no reference counting, no borrow checker, no runtime support library. The reading is high-level; the cost model is the one you already know from C.
 
-FC's C backend makes it highly compatible with existing C code and toolchains, while cleaning up C's syntax and fixing well-known footguns. It supports parametric polymorphism through monomorphized generics — generic functions and types are resolved entirely at compile time, producing concrete C output with no runtime overhead.
+FC's C backend makes it compatible with existing C code and toolchains, while cleaning up C's syntax and fixing well-known footguns. It supports parametric polymorphism through monomorphized generics — generic functions and types are resolved entirely at compile time, producing concrete C output with no runtime overhead.
 
 Every feature in FC must transpile to readable C with predictable, C-like cost and no hidden runtime machinery (targeting the GNU C dialect — see §Why C as a target). This is a core design constraint. When a feature cannot be expressed without a runtime support layer or opaque codegen state, that is a signal to reconsider the feature.
 
-This rule is not merely a design constraint — it is the value proposition. A line of FC should read like the C you would have wanted to write: every allocation visible, every copy explicit, the generated code something you could have authored by hand. If a clean-looking line ever hid a surprising allocation or a non-obvious copy, FC would forfeit the one thing that makes it worth choosing over either C or a higher-level language. The restrictions throughout this document — no global inference, no overloading, no implicit numeric coercion, explicit `alloca` — all exist to keep that contract intact.
+This constraint is central to the design: a line of FC corresponds to C with predictable cost — every allocation visible, every copy explicit, the generated code something a C programmer could have written by hand. A clean-looking line does not hide a surprising allocation or a non-obvious copy. The restrictions throughout this document — no global inference, no overloading, no implicit numeric coercion, explicit `alloca` — all exist to keep that correspondence intact.
 
 The guiding principles are:
 
@@ -460,7 +460,7 @@ FC's bet is narrower and more pragmatic: C's memory model and C's cost model, an
 
 ### Type inference as a design theorem
 
-FC's "no explicit type annotations on bindings" principle is not merely an ergonomic choice — it is a theorem about the language, and the rest of the design is carefully shaped to make that theorem hold.
+FC's "no explicit type annotations on bindings" principle functions as a theorem about the language: the rest of the design is shaped to make that theorem hold.
 
 FC uses local, directional type inference. Every expression's type is derived bottom-up from its sub-expressions: the type of a binary expression follows from the types of its operands, the type of a function call follows from the function's parameter types and its body, and so on. This is a deterministic tree walk — there is no global constraint solving, no unification, and no backtracking. The compiler never needs to look at how a value is *used* to determine what *type* it has.
 
@@ -475,13 +475,13 @@ This works because of four mutually reinforcing design decisions:
 
 Other languages with more powerful type systems — Haskell, ML, Rust — require global inference or bidirectional checking because features like type classes, trait resolution, and lifetime inference create dependencies that flow *downward* from context as well as upward from structure. FC is deliberately designed to avoid those features, not because inference power is undesirable but because the language is more predictable, more understandable, and easier to implement correctly when the inference algorithm is a single directional pass.
 
-The one nuance is mutually recursive top-level functions: since the first compiler pass collects names without evaluating bodies, two functions that call each other must be type-checked as a system. In practice the base cases anchor the types and the mutual calls are consistent with them — the compiler resolves mutually recursive groups together. This is a bounded technical complexity, not a crack in the model.
+The one nuance is mutually recursive top-level functions: since the first compiler pass collects names without evaluating bodies, two functions that call each other must be type-checked as a system. In practice the base cases anchor the types and the mutual calls are consistent with them — the compiler resolves mutually recursive groups together. This is a bounded technical complexity, not an exception to the model.
 
 ---
 
 ### Why C as a target
 
-Targeting C is a deliberate strength of the design, not a limitation. Every platform that matters already has a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets. By targeting C, FC inherits all of these backends for free, including niche embedded toolchains that have no LLVM backend. The generated C is also human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
+Targeting C is a deliberate design choice. Most platforms already have a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets — and by targeting C, FC inherits all of these backends, including niche embedded toolchains that have no LLVM backend. The generated C is human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
 
 FC targets **C11** specifically, plus a small set of GNU extensions supported by GCC and Clang. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output), compound literals, and designated initializers. (`_Static_assert` is *not* emitted by the compiler; it appears only in programmer-authored extern C headers — see §C Interop.)
 
