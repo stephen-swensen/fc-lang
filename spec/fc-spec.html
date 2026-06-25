@@ -425,9 +425,13 @@
 
 ## Philosophy
 
+FC is a systems language with an ML surface and a C core. You write expression-oriented code with type inference, options instead of null, and pattern matching — and it compiles to readable C11 with manual memory management: no garbage collector, no reference counting, no borrow checker, no runtime support library. The reading is high-level; the cost model is the one you already know from C.
+
 FC compiles directly to C as its backend, making it highly compatible with existing C code and toolchains. The language follows C's memory management philosophy — manual, no garbage collector, no borrow checker — while cleaning up C's syntax and fixing well-known footguns. FC supports parametric polymorphism through monomorphized generics — generic functions and types are resolved entirely at compile time, producing concrete C output with no runtime overhead.
 
 Every feature in FC must transpile to readable C with predictable, C-like cost and no hidden runtime machinery (targeting the GNU C dialect — see §Why C as a target). This is a core design constraint. When a feature cannot be expressed without a runtime support layer or opaque codegen state, that is a signal to reconsider the feature.
+
+This "predictable, C-like cost, no hidden runtime machinery" rule is not merely an implementation note — it is the value proposition. A line of FC should read like the C you would have wanted to write: every allocation visible, every copy explicit, the generated code something you could have authored by hand. If a clean-looking line ever hid a surprising allocation or a non-obvious copy, FC would forfeit the one thing that makes it worth choosing over either C or a higher-level language. The restrictions throughout this document — no global inference, no overloading, no implicit numeric coercion, explicit `alloca` — all exist to keep that contract intact.
 
 The guiding principles are:
 
@@ -440,6 +444,19 @@ The guiding principles are:
 - One way to do things — minimize redundant syntax
 - Zero-cost abstractions — generics, modules, and option types produce no runtime representation in the generated C; safety and structure are compile-time concepts
 - Small performance and memory cost acceptable for safety improvements (fat pointers, bounds checking). Where performance is critical and the programmer is willing to take responsibility, escape mechanisms are available: an `unguarded` block opts out of the value-precondition guards (bounds checks, float→int saturation, integer divide/modulo) for a hot region while keeping slices and the rest of the type system intact, and raw pointer arithmetic drops out of the slice abstraction entirely. Neither undermines the rest of the type system.
+
+### Where FC sits
+
+FC's combination is uncommon. Many languages share *one* axis with it; the specific pairing of an offside-rule ML surface with a C11 target and fully manual memory is rare:
+
+- **ML-family** languages (OCaml, SML, Haskell, F#) give the surface but assume a garbage collector and are not systems languages.
+- **Rust** shares expression-orientation, `match`, options, and inference, but adds a borrow checker, a curly-brace surface, and an LLVM backend.
+- **Zig** is closest on FC's transparency ethos — manual memory, explicit allocators, no hidden allocations or hidden control flow — but its surface is imperative and C-like rather than ML/expression-oriented, and it leans on `comptime` rather than an ML-style type system with inference.
+- **Nim** shares the offside rule and the transpile-to-C, but comes from a GC/ARC, Pascal/Python lineage rather than ML.
+- **Koka** and **Roc** are ML-family and can lower to C, but rely on automatic reference counting rather than manual memory.
+- **ATS** and **Cogent** are closest on paper — ML-ish surfaces compiling to C for systems work — but both reach for heavy type theory (dependent and linear types) and are correspondingly hard to use.
+
+FC's bet is narrower and more pragmatic: C's memory model and C's cost model, an ML surface for ergonomics, and *nothing clever in between*. Zig makes the same wager on the cost-transparency half but keeps a C-like surface; FC takes the ML surface too, and the rest of this document is the discipline required to do that without sacrificing the cost model.
 
 ### Type inference as a design theorem
 
