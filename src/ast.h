@@ -167,6 +167,9 @@ struct Expr {
             bool is_variant_constructor; /* true when this is union variant construction, not field access */
             bool is_extern_const;       /* true when this is an extern constant (not a function) */
             bool is_type_property;      /* true for static type properties (int32.min, float64.nan, ...) */
+            struct Symbol *resolved_member; /* for module-member access (mod.member): the resolved
+                                               member Symbol, set in pass2; used by editor queries
+                                               (go-to-definition). NULL for plain struct-field access. */
         } field;
 
         /* EXPR_INDEX */

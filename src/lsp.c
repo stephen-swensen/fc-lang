@@ -348,13 +348,20 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_expr(e->field.object, c);
             /* Best-effort: when the object is a simple identifier on one line,
              * the field name's position is computable, so the field's resolved
-             * type can be hovered precisely. */
+             * type can be hovered precisely. A go-to-definition symbol is offered
+             * for module members (mod.member -> the member's declaration) and for
+             * union variant constructors (shape.circle -> the union declaration);
+             * plain struct-field access has no per-field declaration site. */
             if (e->field.object && e->field.object->kind == EXPR_IDENT) {
                 int sep = (e->kind == EXPR_DEREF_FIELD) ? 2 : 1;  /* "->" vs "." */
                 int col = e->field.object->loc.col +
                           (int)strlen(e->field.object->ident.name) + sep;
+                Symbol *def = e->field.resolved_member;
+                if (!def && e->field.is_variant_constructor &&
+                    e->type && e->type->kind == TYPE_UNION)
+                    def = e->type->unio.resolved_sym;
                 consider(c, e->field.object->loc.line, col,
-                         (int)strlen(e->field.name), e->type, e->field.name, NULL);
+                         (int)strlen(e->field.name), e->type, e->field.name, def);
             }
             break;
         case EXPR_BINARY:
@@ -409,6 +416,11 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_exprs(e->func.body, e->func.body_count, c);
             break;
         case EXPR_STRUCT_LIT:
+            /* The type name (at the node's loc) goes to the struct declaration. */
+            if (e->struct_lit.type_name)
+                consider(c, e->loc.line, e->loc.col,
+                         (int)strlen(e->struct_lit.type_name), e->type,
+                         e->struct_lit.type_name, e->struct_lit.resolved_sym);
             for (int i = 0; i < e->struct_lit.field_count; i++)
                 find_in_expr(e->struct_lit.fields[i].value, c);
             break;

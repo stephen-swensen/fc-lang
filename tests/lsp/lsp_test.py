@@ -301,5 +301,52 @@ _, _, nbf, _, _ = run_session(nm)
 check("own file named like a stdlib module: `import data from std::` still resolves",
       nbf.get("main.fc", [["?"]])[-1] == [], str(nbf.get("main.fc")))
 
+# --- go-to-definition beyond plain identifiers: module members, struct-literal
+# type names, and union variant constructors all resolve to their declarations.
+gd = tempfile.mkdtemp(prefix="fc_lsp_gotodef_")
+GOTODEF = (
+    "module mathx =\n"                          # line 0
+    "    let twice = (n: int32) ->\n"           # line 1: def of twice
+    "        n * 2\n"                            # line 2
+    "struct point =\n"                          # line 3: def of point
+    "    x: int32\n"                            # line 4
+    "    y: int32\n"                            # line 5
+    "union shape =\n"                           # line 6: def of shape
+    "    | circle(int32)\n"                     # line 7
+    "    | empty\n"                             # line 8
+    "let main = (args: str[]) ->\n"             # line 9
+    "    let a = mathx.twice(21)\n"             # line 10: 'mathx' col 12, 'twice' col 18
+    "    let p = point{x = 1, y = 2}\n"         # line 11: 'point' col 12
+    "    let s = shape.circle(3)\n"             # line 12: 'shape' col 12, 'circle' col 18
+    "    return a\n"                            # line 13
+)
+guri = "file://" + os.path.join(gd, "doc.fc")
+def gdef(i, l, c): return req(i, "textDocument/definition",
+    {"textDocument": {"uri": guri}, "position": {"line": l, "character": c}})
+gm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": guri, "languageId": "fc",
+         "version": 1, "text": GOTODEF}}),
+    gdef(2, 10, 19),   # 'twice'  -> module member decl, line 1
+    gdef(3, 11, 13),   # 'point'  -> struct decl, line 3
+    gdef(4, 12, 20),   # 'circle' -> union decl, line 6
+    gdef(5, 10, 13),   # 'mathx'  -> module decl, line 0 (regression guard)
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+gresp, _, _, _, _ = run_session(gm)
+def def_line(iid):
+    r = gresp.get(iid, {}).get("result")
+    return r.get("range", {}).get("start", {}).get("line") if isinstance(r, dict) else None
+check("go-to-def on module member 'mathx.twice' -> member declaration (line 1)",
+      def_line(2) == 1, str(gresp.get(2, {}).get("result")))
+check("go-to-def on struct-literal type 'point' -> struct declaration (line 3)",
+      def_line(3) == 3, str(gresp.get(3, {}).get("result")))
+check("go-to-def on variant constructor 'shape.circle' -> union declaration (line 6)",
+      def_line(4) == 6, str(gresp.get(4, {}).get("result")))
+check("go-to-def on module name 'mathx' -> module declaration (line 0)",
+      def_line(5) == 0, str(gresp.get(5, {}).get("result")))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

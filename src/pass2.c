@@ -5159,6 +5159,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
+            /* Record the resolved member so editor queries (go-to-definition) can
+             * reach its declaration. Set for every member kind below (submodule,
+             * struct/union, extern, let). */
+            e->field.resolved_member = member;
             /* Submodule access: return void sentinel for further chaining */
             if (member->kind == DECL_MODULE) {
                 e->type = type_void();
