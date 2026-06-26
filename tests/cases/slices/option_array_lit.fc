@@ -3,7 +3,7 @@ let main = (args: str[]) ->
     let opts = int32?[4] { some(10), none(int32), some(3), some(9) }
     let mut sum = 0
     let mut nones = 0
-    for o in opts
+    for o in opts do
         match o with
         | some(v) -> sum = sum + v
         | none    -> nones = nones + 1

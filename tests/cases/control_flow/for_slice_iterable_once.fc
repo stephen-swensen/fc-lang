@@ -8,14 +8,14 @@ let tap = (s: int32[]) ->
 let main = (args: str[]) ->
     let data = int32[3] { 10, 20, 30 }
     let mut total = 0i32
-    for x in tap(data)
+    for x in tap(data) do
         total = total + x
     assert(total == 60)
     assert(calls == 1)
 
     // Index form reads the same hoisted temp.
     let mut isum = 0i32
-    for i, x in tap(data)
+    for i, x in tap(data) do
         isum = isum + (int32) i + x
     assert(isum == 63)
     assert(calls == 2)

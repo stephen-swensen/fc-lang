@@ -9,12 +9,12 @@ let main = (args: str[]) ->
     assert(e3.len == 0)
 
     let mut touched = 0
-    for x in e1
+    for x in e1 do
         touched = touched + x
     assert(touched == 0)
 
     let mut entered = false
-    for i, x in e2
+    for i, x in e2 do
         entered = true
         touched = touched + x + (int32) i
     assert(!entered)

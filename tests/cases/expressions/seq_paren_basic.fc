@@ -1,0 +1,8 @@
+// `(a; b)` is a sequence expression: every item is evaluated (for effect), and
+// the value is the last item — exactly like a block on one line.
+let main = (args: str[]) ->
+    let mut sink = 0
+    let r = (sink = 3; sink + 4)
+    assert(sink == 3)
+    assert(r == 7)
+    0

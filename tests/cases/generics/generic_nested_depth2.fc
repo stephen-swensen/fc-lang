@@ -18,7 +18,7 @@ module outer =
 
         let fold = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
             let mut acc = init
-            for e in s
+            for e in s do
                 acc = f(acc, e)
             acc
 

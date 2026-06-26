@@ -16,7 +16,7 @@ let main = (args: str[]) ->
     let mut buckets = alloc(int32[10] { })!
     defer free(buckets)
 
-    for i in 0..n
+    for i in 0..n do
         let val = pcg_random.next_bounded_uint32(&r1, (uint32) num_buckets)
         let idx = (int32) val
         buckets[idx] = buckets[idx] + 1
@@ -25,7 +25,7 @@ let main = (args: str[]) ->
     // Each bucket should be within 5% of expected (100000 +/- 5000)
     let expected = n / num_buckets
     let tolerance = expected / 20
-    for i in 0..num_buckets
+    for i in 0..num_buckets do
         assert(buckets[i] > expected - tolerance)
         assert(buckets[i] < expected + tolerance)
 
@@ -38,7 +38,7 @@ let main = (args: str[]) ->
     // ================================================================
     let mut chi_sq = 0.0
     let expected_f = (float64) expected
-    for i in 0..num_buckets
+    for i in 0..num_buckets do
         let diff = (float64) buckets[i] - expected_f
         chi_sq = chi_sq + (diff * diff) / expected_f
     assert(chi_sq < 50.0)
@@ -51,9 +51,9 @@ let main = (args: str[]) ->
     let mut bit_counts = alloc(int32[32] { })!
     defer free(bit_counts)
 
-    for i in 0..n
+    for i in 0..n do
         let val = pcg_random.next_uint32(&r2)
-        for j in 0..32
+        for j in 0..32 do
             if (val >> (uint32) j) & 1u32 == 1u32 then
                 bit_counts[j] = bit_counts[j] + 1
         assert(i >= 0)
@@ -61,7 +61,7 @@ let main = (args: str[]) ->
     // Each bit position should be set ~500000 times (+/- 2%)
     let bit_expected = n / 2
     let bit_tol = bit_expected / 50
-    for i in 0..32
+    for i in 0..32 do
         assert(bit_counts[i] > bit_expected - bit_tol)
         assert(bit_counts[i] < bit_expected + bit_tol)
 
@@ -72,7 +72,7 @@ let main = (args: str[]) ->
     // ================================================================
     let bit_expected_f = (float64) bit_expected
     let mut bit_chi_sq = 0.0
-    for i in 0..32
+    for i in 0..32 do
         let diff = (float64) bit_counts[i] - bit_expected_f
         bit_chi_sq = bit_chi_sq + (diff * diff) / bit_expected_f
     assert(bit_chi_sq < 100.0)
@@ -84,7 +84,7 @@ let main = (args: str[]) ->
     // ================================================================
     let mut r3 = pcg_random.make(11111u64)
     let mut prev = pcg_random.next_uint32(&r3)
-    for i in 1..n
+    for i in 1..n do
         let curr = pcg_random.next_uint32(&r3)
         assert(curr != prev)
         prev = curr

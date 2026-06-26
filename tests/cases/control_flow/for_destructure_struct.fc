@@ -6,13 +6,13 @@ struct point =
 let main = (args: str[]) ->
     let pts = point[2] { point { x = 10, y = 20 }, point { x = 30, y = 40 } }
     let mut tot = 0
-    for { x = px, y = py } in pts
+    for { x = px, y = py } in pts do
         tot = tot + px + py
     assert(tot == 100)
 
     // Omitted fields are simply not bound.
     let mut xs = 0
-    for { x = px } in pts
+    for { x = px } in pts do
         xs = xs + px
     assert(xs == 40)
     0

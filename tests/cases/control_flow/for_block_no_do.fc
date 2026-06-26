@@ -1,9 +1,0 @@
-// Block-form `for` takes NO `do` — the offside indent delimits the body.
-// `do` is the inline-only disambiguator; here the body is an indented block.
-let main = (args: str[]) ->
-    let xs = int32[4] { 1, 2, 3, 4 }
-    let mut sum = 0
-    for i, x in xs
-        if i > 0 then sum = sum + x
-    assert(sum == 9)
-    0

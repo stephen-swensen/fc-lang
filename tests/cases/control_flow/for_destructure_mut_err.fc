@@ -2,6 +2,6 @@
 // bindings — reassignment is a compile error.
 let main = (args: str[]) ->
     let pairs = {int32, int32}[1] { { 1, 2 } }
-    for { a, b } in pairs
+    for { a, b } in pairs do
         a = a + b
     0

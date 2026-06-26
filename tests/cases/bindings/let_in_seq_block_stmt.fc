@@ -1,0 +1,10 @@
+// The greedy `let ... in` form works as a block statement (not only in
+// expression position): `x` scopes over both assignments of the in-body, and
+// the statement's value is simply discarded like any other block peer.
+let main = (args: str[]) ->
+    let mut sink = 0
+    let mut last = 0
+    let x = 9 in sink = x; last = x + 1
+    assert(sink == 9)
+    assert(last == 10)
+    0

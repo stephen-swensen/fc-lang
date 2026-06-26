@@ -2,7 +2,7 @@
 // is not on every path — the function can complete (e.g. when the range is empty) and is
 // accepted. Called with an empty range so it terminates and the program exits 0.
 let f = (n: int32) ->
-    for i in 0..n
+    for i in 0..n do
         f(n)
 
 let main = (args: str[]) ->

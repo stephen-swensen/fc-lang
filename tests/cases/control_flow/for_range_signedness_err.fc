@@ -4,6 +4,6 @@
 // running ~4 billion iterations when the int32 end was negative.
 let main = (args: str[]) ->
     let m = -1i32
-    for i in 0u32..m
+    for i in 0u32..m do
         assert(i < 10u32)
     0

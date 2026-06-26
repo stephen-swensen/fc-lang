@@ -4,7 +4,7 @@ let mut count = 0
 let main = (args: str[]) ->
     let items = int32[3] { 10, 20, 30 }
     let mut sum = 0
-    for x in items
+    for x in items do
         defer count = count + 1
         sum = sum + x
     assert(count == 3)

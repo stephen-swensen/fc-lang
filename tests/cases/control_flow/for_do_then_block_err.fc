@@ -1,6 +1,0 @@
-// `do` introduces an inline body only; a block body omits `do`.
-let main = (args: str[]) ->
-    let mut s = 0
-    for x in 0..3 do
-        s = s + x
-    0

@@ -1,0 +1,11 @@
+// Greedy `let ... in`: the in-body is an inline `;`-sequence, so the binding
+// scopes over EVERY statement up to the enclosing boundary, not just the first.
+// `x` is visible in both `sink = x` and `x * 2`, and the value is the last
+// statement.  (Under a non-greedy in-body the trailing `x * 2` would be a peer
+// of the outer `let r`, where `x` is out of scope — a compile error.)
+let main = (args: str[]) ->
+    let mut sink = 0
+    let r = let x = 7 in sink = x; x * 2
+    assert(sink == 7)
+    assert(r == 14)
+    0

@@ -30,7 +30,7 @@ module opl2 =
     let init = (sample_rate: float64) ->
         let c = alloc(chip)!
         c->rate = sample_rate
-        for i in 0..18
+        for i in 0..18 do
             c->op_tl[i] = 63
             c->op_mult[i] = 1
         c
@@ -144,7 +144,7 @@ module opl2 =
 
     let sample = (c: chip*) ->
         let mut out = 0.0
-        for ch in 0..9
+        for ch in 0..9 do
             let fnum = c->ch_fnum[ch]
             let block = c->ch_block[ch]
             let base_freq = (float64) fnum * math.pow(2.0, (float64) (block - 1)) * 49716.0 / 1048576.0

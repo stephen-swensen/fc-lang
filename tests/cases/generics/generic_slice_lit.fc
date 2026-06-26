@@ -15,7 +15,7 @@ let count_len = (x: 'a) ->
 let sum_iter = (x: 'a) ->
     let buf = 'a[3] { x, x, x }
     let mut acc = x
-    for e in buf
+    for e in buf do
         acc = acc + e
     acc
 

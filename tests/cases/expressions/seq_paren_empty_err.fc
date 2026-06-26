@@ -1,0 +1,5 @@
+// An empty `()` is not a valid expression — a paren sequence needs at least
+// one item.  (The void value is written `void()`, handled separately.)
+let main = (args: str[]) ->
+    let x = ()
+    0

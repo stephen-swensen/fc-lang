@@ -548,11 +548,11 @@ A **block** is a sequence of peer expressions at the same column, introduced aft
 - The value of the block is its last expression. All preceding expressions are evaluated for their side effects — non-void values may be discarded without warning. FC is a systems language where side effects are not discouraged.
 - A `let` binding is visible to all subsequent expressions in the same block and in any nested blocks within those expressions. It is not visible before its declaration or outside the enclosing block. **Exception:** when the binding's value is a lambda (`let f = (…) -> …`), the binding *is* visible inside that lambda's own body, so a nested function may call itself recursively. This applies only to immutable `let` bindings whose initializer is written directly as a lambda; `let mut` bindings and lambdas produced by other expressions do not get this self-visibility.
 
-These rules make explicit sequencing and scoping syntax *optional* rather than required: a block sequences its peers with no separator, and a `let` scopes over the block that follows it with no `in` keyword. The ML-style spellings exist as the **inline** forms of these same two concepts — `;` is a same-level separator (an explicit newline) for putting peers on one line, and `let x = v in body` writes the scope-over-body explicitly when there is no following block to serve as it (see §Inline bodies and §`let … in` — the expression form). Both are sugar over the block model, not additions to it: `a; b` is `a` then `b` on consecutive lines, and `let x = v in body` binds `x` over `body` exactly as the offside `let x = v` with `body` on the following line.
+These rules make explicit sequencing and scoping syntax *optional* rather than required: a block sequences its peers with no separator, and a `let` scopes over the block that follows it with no `in` keyword. The ML-style spellings are the **inline** forms of these same two concepts, and are equally valid in either position — `;` is a same-level separator (an explicit newline) for putting peers on one line, and `let x = v in body` writes the scope-over-body explicitly (required only in expression position, where there is no following block to serve as the body — see §Inline bodies and §`let … in` — the expression form). Both are sugar over the block model, not additions to it: `a; b` is `a` then `b` on consecutive lines, and `let x = v in body` binds `x` over `body` exactly as the offside `let x = v` with `body` on the following line.
 
 ### New Blocks
 
-After a block-forming construct (`->`, `=` in let/module/struct/union bodies, `with`, `loop`, `for`, `then`, `else`), if the next token is on a new line, a new block is established at that token's column. All tokens at that column are peers — statements or expressions in the same scope. The final expression in the block is the block's value.
+After a block-forming construct (`->`, `=` in let/module/struct/union bodies, `with`, `loop`, `do`, `then`, `else`), if the next token is on a new line, a new block is established at that token's column. All tokens at that column are peers — statements or expressions in the same scope. The final expression in the block is the block's value.
 
 ```fc
 let f = (x: int32) ->
@@ -1068,7 +1068,13 @@ let area = let w = 3 in let h = 4 in w * h     // 12
 let n = f(let t = compute() in t + t)          // bound inside a call argument
 ```
 
-The binding is scoped to the `in` body and does not leak past it. The explicit `in` takes an inline body — a single expression, optionally a `;`-sequence; for a multi-statement block body, use the offside form. Destructuring works in either form: `let { a, b } = pair in a + b`.
+The `in` body is **greedy**, exactly as in ML/F#: it is an inline `;`-sequence that extends to the enclosing boundary (a dedent, `)`, `,`, `else`, or end of input), so the binding scopes over the *whole* sequence, not just the first expression. `let x = v in a; b` binds `x` over both `a` and `b`, and the construct yields the last item's value:
+
+```fc
+let r = let x = 7 in use(x); x * 2     // x scopes over both; value is x * 2
+```
+
+The binding is still scoped to the `in` body and does not leak past the boundary. Both spellings — the offside bare `let` and the explicit `in` — are fully interchangeable; `in` is *required* only in expression position (no following block to serve as the body). Destructuring works in either form: `let { a, b } = pair in a + b`.
 
 ### Binding reassignment vs. content mutation
 
@@ -1944,14 +1950,14 @@ Three forms are supported:
 **Element iteration** — iterates over a slice, binding each element as a `let` binding:
 
 ```fc
-for p in points
+for p in points do
     process(p)
 ```
 
 **Range iteration** — iterates over an integer range, exclusive of the upper bound:
 
 ```fc
-for i in 0..10
+for i in 0..10 do
     process(data[i])
 ```
 
@@ -1966,7 +1972,7 @@ The `..` syntax is only valid in `for` position and slice indexing position — 
 **Index-element iteration** — iterates over a slice, binding both the index and the element:
 
 ```fc
-for i, p in points
+for i, p in points do
     if p.x == 0.0 then io.write("zero at index %d{i}\n", stdout)
 ```
 
@@ -1978,18 +1984,18 @@ When the element is a tuple or struct, the element binding may be a destructurin
 
 ```fc
 // positional destructuring of a tuple slice
-for { x, y } in points
+for { x, y } in points do
     plot(x, y)
 
 // named destructuring of a struct slice (omitted fields are not bound)
-for { x = px } in points
+for { x = px } in points do
     sum = sum + px
 ```
 
 Destructuring composes with index-element iteration — the index stays a plain identifier, the element is destructured — and patterns may nest and use wildcards:
 
 ```fc
-for i, { a, _ } in pairs
+for i, { a, _ } in pairs do
     io.write("pairs[%d{i}].0 = %d{a}\n", stdout)
 ```
 
@@ -2001,7 +2007,7 @@ Element iteration and index-element iteration copy the current element into the 
 
 ```fc
 // range iteration — no element copy
-for i in 0..readings.len
+for i in 0..readings.len do
     if readings[i].flags == 0u32 then continue
     process(readings[i])
 ```
@@ -2012,30 +2018,31 @@ Closures created inside a `for` body may capture loop bindings. Since each bindi
 
 ### Inline bodies
 
-Every loop body above is an indented block, but a one-line body can be written inline. The rule is uniform across FC's block constructs and follows a single principle: **the inline-form keyword is a header/body disambiguator, present only where the boundary would otherwise be ambiguous.**
+Every loop body above is an indented block, but a one-line body can be written inline.
 
-**`for … do`** — the for-header ends in an arbitrary iterable expression, so an inline body must be introduced by `do` to mark where the header ends:
+**`for … do`** — `do` introduces the for-loop body and is **required in both forms**, uniform with `then`/`with`: it marks where the iterable header ends and the body begins, then takes either an offside-indented block or an inline body.
 
 ```fc
-for i in 0..n do total = total + i
-for p in points do plot(p.x, p.y)
+for i in 0..n do total = total + i           // inline body
+for p in points do plot(p.x, p.y)            // inline body
+for p in points do                           // offside block body
+    plot(p.x, p.y)
 ```
 
-`do` is required for an inline body and is *only* for the inline body: the offside block form omits it (the indent already delimits the body), and writing `do` before an indented block is a compile error.
-
-**`loop`** — `loop` has no header expression, so there is nothing to disambiguate; its inline body needs no keyword, exactly like `guarded`/`unguarded`:
+**`loop`** — `loop` has no header expression, so its inline body needs no keyword, exactly like `guarded`/`unguarded`:
 
 ```fc
 loop if ready() then break else step()
 ```
 
-**`;`** — a `;` separates statements on a single line. It is exactly a same-level newline — the values of all but the last statement are discarded, just as in an indented block — and it lets an inline body carry more than one statement:
+**`;`** — a `;` separates items on a single line. It is exactly a same-level newline — the values of all but the last item are discarded, just as in an indented block — so it is the sequence operator's explicit spelling. It carries more than one item in any inline body, and inside grouping parens `(a; b)` is a sequence expression yielding the last item's value:
 
 ```fc
-for x in xs do touch(x); count = count + 1
+for x in xs do touch(x); count = count + 1   // inline body of two items
+let n = (warm_cache(); lookup(key))          // (a; b) sequence — yields lookup(key)
 ```
 
-This is the same shape `if … then … else` already uses: a keyword introduces a one-line body, and `;` sequences within it. (`then` is required in *both* the block and inline forms of `if` only because it also pairs with `else`.)
+This is the same shape `if … then … else` already uses: a keyword introduces a one-line body, and `;` sequences within it. (`then` is required in *both* the block and inline forms of `if` because it also pairs with `else` — and `do`, `with`, etc. are likewise required in both forms.)
 
 ### Control flow
 
@@ -2058,7 +2065,7 @@ loop
 
 // break and continue in for
 let mut result = default(point?)
-for p in points
+for p in points do
     if p.x < 0.0 then continue       // skip negative x
     if p.x == 0.0 then
         result = some(p)
@@ -2095,20 +2102,20 @@ loop
 > (or range end) is hoisted into a temporary first, so it is evaluated exactly
 > once even when it is a side-effecting expression:
 > ```c
-> // for p in points (element iteration)
+> // for p in points do (element iteration)
 > fc_slice_point _s = points;          // iterable evaluated once
 > for (int64_t _i = 0; _i < _s.len; _i++) {
 >     point p = _s.ptr[_i];
 >     // body
 > }
 >
-> // for i in 0..n (range iteration)
+> // for i in 0..n do (range iteration)
 > int32_t _end = n;                    // end evaluated once
 > for (int32_t i = 0; i < _end; i++) {
 >     // body
 > }
 >
-> // for i, p in points (index-element iteration)
+> // for i, p in points do (index-element iteration)
 > fc_slice_point _s = points;
 > for (int64_t i = 0; i < _s.len; i++) {
 >     point p = _s.ptr[i];
@@ -2158,7 +2165,7 @@ defer free(b)
 Defer in a loop body runs at the end of each iteration, not at function exit. This makes per-iteration cleanup correct without extracting a helper function:
 
 ```fc
-for i in 0..n
+for i in 0..n do
     let f = open(paths[i])!
     defer close(f)       // closes at end of EACH iteration
     process(f)
@@ -3023,7 +3030,7 @@ let p = packet { len = 0 }
 p.data.len        // always 256
 p.data[0]         // bounds-checked element access
 p.data[10..20]    // subslicing
-for b in p.data   // iteration
+for b in p.data do   // iteration
     use(b)
 p.data.ptr        // raw uint8* to the start of the inline array
 ```
@@ -3301,7 +3308,7 @@ This keeps the explicit syntax minimal — it only appears when genuinely necess
 ```fc
 let map = (l: arraylist<'a>, f: ('a) -> 'b) ->
     let mut result = arraylist.make<'b>()    // 'b is in scope — explicit but no concrete type needed
-    for x in l.data[..l.len]
+    for x in l.data[..l.len] do
         arraylist.add(&result, f(x))
     result
 ```
@@ -4297,7 +4304,7 @@ Reassigning a `let mut` binding merges the assigned value's provenance into the 
 ```fc
 let bad = () ->
     let mut p = default(int32*)
-    for i in 0..2
+    for i in 0..2 do
         if i > 0 then return p else void()   // compile error: iteration 2 returns iteration 1's &x
         let mut x = 5
         p = &x

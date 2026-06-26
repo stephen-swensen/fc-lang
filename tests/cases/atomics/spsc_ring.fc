@@ -40,17 +40,17 @@ let main = (args: str[]) ->
     assert(dequeue(r) == -1)
 
     // fill to capacity, then overflow is rejected
-    for v in 1..5
+    for v in 1..5 do
         assert(enqueue(r, v))
     assert(!enqueue(r, 99))
 
     // drain in FIFO order
-    for v in 1..5
+    for v in 1..5 do
         assert(dequeue(r) == v)
     assert(dequeue(r) == -1)
 
     // wrap the ring: interleaved enqueue/dequeue across 3 laps
-    for v in 10..22
+    for v in 10..22 do
         assert(enqueue(r, v))
         assert(enqueue(r, v * 100))
         assert(dequeue(r) == v)

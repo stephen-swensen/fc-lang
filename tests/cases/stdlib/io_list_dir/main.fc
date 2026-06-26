@@ -57,13 +57,13 @@ let main = (args: str[]) ->
         let mut saw_a = false
         let mut saw_b = false
         let mut saw_c = false
-        for n in names
+        for n in names do
             if str_eq(n, "a.txt") then saw_a = true
             else if str_eq(n, "b.txt") then saw_b = true
             else if str_eq(n, "c.txt") then saw_c = true
             else return 4
         assert(saw_a && saw_b && saw_c)
-        for n in names
+        for n in names do
             free(n)
         free(names)
 

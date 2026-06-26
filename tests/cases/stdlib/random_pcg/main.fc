@@ -48,7 +48,7 @@ let main = (args: str[]) ->
 
     // multiple bounded calls stay in range
     let mut r7 = pcg_random.make(123u64)
-    for i in 0..100
+    for i in 0..100 do
         let val = pcg_random.next_bounded_uint32(&r7, 10u32)
         assert(val < 10u32)
         assert(i >= 0)

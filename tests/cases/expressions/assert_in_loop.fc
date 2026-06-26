@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-    for i in 0..10
+    for i in 0..10 do
         assert(i >= 0)
         assert(i < 10)
 

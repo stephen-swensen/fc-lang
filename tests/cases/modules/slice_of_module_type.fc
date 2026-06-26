@@ -11,7 +11,7 @@ let main = (args: str[]) ->
             m.pair { a = 3, b = 4 }
         }
         let mut sum = 0
-        for i in arr
+        for i in arr do
             sum = sum + i.a + i.b
         sum
     assert(_result == 40)

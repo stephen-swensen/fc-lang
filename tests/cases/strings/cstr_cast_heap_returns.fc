@@ -14,7 +14,7 @@ let main = (args: str[]) ->
     free(h)
 
     // freed per iteration → bounded heap use across a loop
-    for i in 0..4
+    for i in 0..4 do
         let t = dup_cstr("loop")
         assert(c.strlen(t) == 4u)
         free(t)

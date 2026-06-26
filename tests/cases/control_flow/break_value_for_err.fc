@@ -3,6 +3,6 @@ let main = (args: str[]) ->
     buf.ptr[0] = 1
     buf.ptr[1] = 2
     buf.ptr[2] = 3
-    for x in buf
+    for x in buf do
         break 5
     0

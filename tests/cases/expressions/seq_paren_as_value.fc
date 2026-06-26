@@ -1,0 +1,8 @@
+// A `(a; b)` sequence is a first-class value usable as an operand inside a
+// larger expression (it desugars to a statement-expression).
+let main = (args: str[]) ->
+    let mut c = 0
+    let r = 1 + (c = c + 10; c)
+    assert(c == 10)
+    assert(r == 11)
+    0

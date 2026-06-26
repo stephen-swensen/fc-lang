@@ -1,6 +1,6 @@
 // The element pattern must match the tuple's arity.
 let main = (args: str[]) ->
     let pairs = {int32, int32}[1] { { 1, 2 } }
-    for { a, b, c } in pairs
+    for { a, b, c } in pairs do
         assert(a + b + c > 0)
     0

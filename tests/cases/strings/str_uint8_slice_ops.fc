@@ -16,7 +16,7 @@ let main = (args: str[]) ->
         let pv = *p
 
         let mut total = 0u8
-        for x in buf
+        for x in buf do
             total = total + x
 
         let result = (int32) len + (int32) v + (int32) sub_len + (int32) sub_v + (int32) pv + (int32) total

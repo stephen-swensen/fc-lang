@@ -1,0 +1,9 @@
+// A `(a; b)` sequence passed as a call argument: the inner parens form the
+// sequence, distinct from the outer call argument list.
+let id = (n: int32) -> n
+let main = (args: str[]) ->
+    let mut k = 0
+    let r = id((k = k + 5; k + 1))
+    assert(k == 5)
+    assert(r == 6)
+    0

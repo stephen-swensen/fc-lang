@@ -6,7 +6,7 @@ let main = (args: str[]) ->
     let arr = p?[3] { some(p { x = 10 }), none(p), some(p { x = 5 }) }
     let mut sum = 0
     let mut nones = 0
-    for o in arr
+    for o in arr do
         match o with
         | some(v) -> sum = sum + v.x
         | none    -> nones = nones + 1

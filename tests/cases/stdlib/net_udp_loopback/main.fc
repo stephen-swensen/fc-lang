@@ -22,7 +22,7 @@ let main = (args: str[]) ->
 
     // Verify data matches
     let mut i = 0
-    for c in buf
+    for c in buf do
         if i < (int32) received then
             assert(c == msg[i])
             i = i + 1

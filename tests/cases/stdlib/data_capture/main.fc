@@ -24,7 +24,7 @@ let main = (args: str[]) ->
     assert(is_composite(7))
 
     // Force a rehash (reallocates buckets) while aliases are live.
-    for k in 0..40
+    for k in 0..40 do
         hash_set.add(sieve, (int64) k * 2 + 100)
     assert(is_composite(102))       // still consistent after rehash
     hash_set.destroy(sieve)
@@ -34,7 +34,7 @@ let main = (args: str[]) ->
     let xs = array_list.make<int32>()
     let size = () -> array_list.len(xs)
     let total = () -> array_list.fold_left(xs, 0, (a: int32, b: int32) -> a + b)
-    for i in 1..21
+    for i in 1..21 do
         array_list.add(xs, i)
     assert(size() == 20)
     assert(total() == 210)          // 1 + 2 + ... + 20

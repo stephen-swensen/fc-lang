@@ -7,7 +7,7 @@ let main = (args: str[]) ->
         buf.ptr[3] = 40u8
 
         let mut total = 0i32
-        for x in buf
+        for x in buf do
             total = total + (int32) x
 
         total

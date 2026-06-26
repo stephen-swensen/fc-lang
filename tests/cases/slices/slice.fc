@@ -1,6 +1,6 @@
 let sum_slice = (s: int32[]) ->
     let mut total = 0
-    for x in s
+    for x in s do
         total = total + x
     total
 

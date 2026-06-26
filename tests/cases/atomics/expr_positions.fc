@@ -30,7 +30,7 @@ let main = (args: str[]) ->
 
     // loop interplay: producer-style counter publish
     let mut published = 0
-    for i in 1..4
+    for i in 1..4 do
         atomic_store_release(&published, i)
     assert(atomic_load_acquire(&published) == 3)
 

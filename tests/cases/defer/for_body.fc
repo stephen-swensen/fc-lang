@@ -2,7 +2,7 @@
 let mut count = 0
 
 let main = (args: str[]) ->
-    for i in 0..5
+    for i in 0..5 do
         defer count = count + 1
     assert(count == 5)
     0

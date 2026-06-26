@@ -2,7 +2,7 @@
 // sibling value, so the binding takes that value's type on the non-diverging path.
 let main = (args: str[]) ->
     let mut total = 0
-    for i in 0..6
+    for i in 0..6 do
         // skip odd indices via the diverging branch; even ones contribute i
         let x = if i % 2 == 1 then continue else i
         total = total + x

@@ -110,7 +110,7 @@ let main = (args: str[]) ->
     assert(linked_list.pop_first(l).is_none)
 
     // grow beyond initial capacity
-    for i in 0..20
+    for i in 0..20 do
         linked_list.append(l, i)
     assert(linked_list.len(l) == 20)
     assert(linked_list.first(l) == 0)

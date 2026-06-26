@@ -6,7 +6,7 @@ module m =
     let sort_range = (s: 'a[], lo: int64, hi: int64, cmp: ('a, 'a) -> int32) ->
         if lo >= hi then return
         let mut i = lo
-        for j in lo..hi
+        for j in lo..hi do
             if cmp(s[j], s[hi]) < 0 then
                 let tmp = s[i]
                 s[i] = s[j]

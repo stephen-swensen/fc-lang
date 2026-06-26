@@ -3,7 +3,7 @@
 let bad = () ->
     let mut p = default(int32*)
     let mut saved = default(int32*)
-    for i in 0..2
+    for i in 0..2 do
         saved = p
         let mut x = 5
         p = &x

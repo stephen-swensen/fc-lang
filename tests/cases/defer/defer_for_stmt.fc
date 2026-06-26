@@ -5,7 +5,7 @@ let mut trace = 0
 let main = (args: str[]) ->
     let x = 5
     if x > 3 then
-        defer for i in 0..5
+        defer for i in 0..5 do
             trace = trace + i
         trace = trace + 100
     // The deferred `for` runs at if-block exit: 100 + (0+1+2+3+4) = 110.

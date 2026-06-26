@@ -54,7 +54,7 @@ let main = (args: str[]) ->
 
     // grow past initial capacity
     let big = array_list.make<int32>()
-    for i in 0..20
+    for i in 0..20 do
         array_list.add(big, i)
     assert(array_list.len(big) == 20)
     assert(array_list.get(big, 19i64) == 19)

@@ -2,7 +2,7 @@
 let mut trace = 0
 
 let main = (args: str[]) ->
-    for i in 0..1
+    for i in 0..1 do
         defer trace = trace * 10 + 1
         defer trace = trace * 10 + 2
         defer trace = trace * 10 + 3

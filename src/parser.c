@@ -920,13 +920,18 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
 
     if (check(p, TOK_IN)) {
         advance_p(p);
-        Expr *body = parse_expr(p, PREC_NONE + 1);
-        Expr **stmts = arena_alloc(p->arena, sizeof(Expr *) * 2);
+        /* The `in` body is greedy: an inline `;`-sequence that extends to the
+           enclosing boundary (dedent / `)` / `,` / `else` / EOF), exactly as in
+           ML/F#.  `let x = v in a; b` binds `x` over both `a` and `b`.  A single
+           expression yields the same two-statement block as before. */
+        int body_count;
+        Expr **body = parse_inline_seq(p, &body_count);
+        Expr **stmts = arena_alloc(p->arena, sizeof(Expr *) * (size_t)(body_count + 1));
         stmts[0] = letnode;
-        stmts[1] = body;
+        memcpy(&stmts[1], body, sizeof(Expr *) * (size_t)body_count);
         Expr *blk = alloc_expr(p, EXPR_BLOCK, loc);
         blk->block.stmts = stmts;
-        blk->block.count = 2;
+        blk->block.count = body_count + 1;
         return blk;
     }
     if (require_in) {
@@ -1515,10 +1520,30 @@ static Expr *parse_prefix(Parser *p) {
             restore_pos(p, save);
         }
         } /* end try_cast block */
-        /* Parenthesized expression */
+        /* Parenthesized expression, optionally a `;`-sequence: `(a; b)` is a
+           sequence expression yielding the last item's value, the others
+           evaluated for effect (same as a block).  A single item is plain
+           grouping: `(a)` ≡ `a`.  Layout is suppressed inside brackets, so `;`
+           is the only separator and `)` bounds the sequence. */
         advance_p(p);
-        Expr *e = parse_bracketed_expr(p, PREC_NONE + 1);
+        Expr **stmts = NULL;
+        int len = 0, cap = 0;
+        DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
+        while (check(p, TOK_SEMICOLON)) {
+            while (check(p, TOK_SEMICOLON)) advance_p(p);
+            if (check(p, TOK_RPAREN)) break;
+            DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
+        }
         expect(p, TOK_RPAREN);
+        Expr *e;
+        if (len == 1) {
+            e = stmts[0];
+        } else {
+            e = alloc_expr(p, EXPR_BLOCK, loc);
+            e->block.stmts = arena_copy_exprs(p, stmts, len);
+            e->block.count = len;
+        }
+        free(stmts);
         return e;
     }
 
@@ -1677,21 +1702,12 @@ static Expr *parse_prefix(Parser *p) {
             advance_p(p);
             range_end = parse_expr(p, PREC_NONE + 1);
         }
-        /* The for-header ends in an arbitrary iterable expression, so an
-           inline body needs `do` to mark the header/body boundary. The
-           offside block form (INDENT) needs no `do`; `do` is inline-only. */
+        /* `do` is required and marks the header/body boundary, uniformly with
+           `then`/`with`. As a block-former it admits either an indented block
+           or an inline body, so `parse_body` handles both forms. */
+        expect(p, TOK_DO);
         int body_count;
-        Expr **body;
-        if (check(p, TOK_INDENT)) {
-            body = parse_block(p, &body_count);
-        } else {
-            expect(p, TOK_DO);
-            if (check(p, TOK_INDENT)) {
-                diag_fatal(loc_from_token(current(p)),
-                    "'do' introduces an inline body; omit it for an indented block");
-            }
-            body = parse_inline_seq(p, &body_count);
-        }
+        Expr **body = parse_body(p, &body_count);
         Expr *e = alloc_expr(p, EXPR_FOR, loc);
         e->for_expr.var = var;
         e->for_expr.var_pattern = var_pattern;

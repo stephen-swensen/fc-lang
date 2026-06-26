@@ -3,7 +3,7 @@
 let main = (args: str[]) ->
     let mut data = int32[3] { 7, 8, 9 }
     let mut total = 0i32
-    for i in 0..1000
+    for i in 0..1000 do
         let len = (int64) (i % 3) + 1i64    // 1..3, runtime, non-negative
         let s = int32[] { ptr = data.ptr, len = len }
         total = total + s[0]

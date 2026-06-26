@@ -230,7 +230,7 @@ module io =
         let plen = path.len
         let pat = alloc(uint8[plen + 3] {})!
         defer free(pat)
-        for j in 0..plen
+        for j in 0..plen do
             pat[j] = path[j]
         pat[plen] = '\\'
         pat[plen + 1] = '*'
@@ -258,19 +258,19 @@ module io =
                     if count >= cap then
                         let new_cap = cap * 2
                         let new_names = alloc(str[new_cap] {})!
-                        for j in 0..count
+                        for j in 0..count do
                             new_names[j] = names[j]
                         free(names)
                         names = new_names
                         cap = new_cap
                     let name_buf = alloc(uint8[nlen] {})!
-                    for j in 0..nlen
+                    for j in 0..nlen do
                         name_buf[j] = fd.cFileName[j]
                     names[count] = name_buf
                     count = count + 1
                 if win.find_next(h, &fd) == 0 then break
             let result = alloc(str[count] {})!
-            for j in 0..count
+            for j in 0..count do
                 result[j] = names[j]
             free(names)
             some(result)
@@ -318,18 +318,18 @@ module io =
                         if count >= cap then
                             let new_cap = cap * 2
                             let new_names = alloc(str[new_cap] {})!
-                            for j in 0..count
+                            for j in 0..count do
                                 new_names[j] = names[j]
                             free(names)
                             names = new_names
                             cap = new_cap
                         let name_buf = alloc(uint8[nlen] {})!
-                        for j in 0..nlen
+                        for j in 0..nlen do
                             name_buf[j] = e->d_name[j]
                         names[count] = name_buf
                         count = count + 1
             let result = alloc(str[count] {})!
-            for j in 0..count
+            for j in 0..count do
                 result[j] = names[j]
             free(names)
             some(result)

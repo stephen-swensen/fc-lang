@@ -2,7 +2,7 @@
 let main = (args: str[]) ->
     let xs = {int32, const str}[2] { { 1, "a" }, { 2, "bb" } }
     let mut total = 0
-    for i, x in xs
+    for i, x in xs do
         total = total + (int32) i + x[0] + (int32) x[1].len
     // (0+1+1) + (1+2+2) = 7
     assert(total == 7)

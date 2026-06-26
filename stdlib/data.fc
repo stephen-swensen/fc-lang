@@ -21,7 +21,7 @@ module data =
         private let grow = (l: array_list<'a>*) ->
             let new_cap = l->data.len * 2
             let mut new_data = alloc('a[new_cap] { })!
-            for i, e in l->data[0..l->len]
+            for i, e in l->data[0..l->len] do
                 new_data[i] = e
             free(l->data)
             l->data = new_data
@@ -43,7 +43,7 @@ module data =
         // copy: returns a deep copy. Caller must destroy.
         let copy = (l: array_list<'a>*) ->
             let new_data = alloc('a[l->data.len] { })!
-            for i, e in l->data[0..l->len]
+            for i, e in l->data[0..l->len] do
                 new_data[i] = e
             alloc(array_list { data = new_data, len = l->len })!
 
@@ -127,7 +127,7 @@ module data =
         // fold_left: left fold (first to last).
         let fold_left = (l: array_list<'a>*, init: 'b, f: ('b, 'a) -> 'b) ->
             let mut acc = init
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 acc = f(acc, e)
             acc
 
@@ -145,7 +145,7 @@ module data =
             if l->len == 0 then default('a?)
             else
                 let mut acc = l->data[0]
-                for e in l->data[1..l->len]
+                for e in l->data[1..l->len] do
                     acc = f(acc, e)
                 some(acc)
 
@@ -159,7 +159,7 @@ module data =
             let result = array_list.make_with_capacity<'b>(l->len + 1)
             let mut acc = init
             array_list.add(result, acc)
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 acc = f(acc, e)
                 array_list.add(result, acc)
             result
@@ -167,49 +167,49 @@ module data =
         // map: transforms each element. Returns new array_list. Caller must destroy.
         let map = (l: array_list<'a>*, f: ('a) -> 'b) ->
             let result = array_list.make_with_capacity<'b>(l->len)
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 array_list.add(result, f(e))
             result
 
         // mapi: transforms each element with index. Caller must destroy.
         let mapi = (l: array_list<'a>*, f: (int64, 'a) -> 'b) ->
             let result = array_list.make_with_capacity<'b>(l->len)
-            for i, e in l->data[0..l->len]
+            for i, e in l->data[0..l->len] do
                 array_list.add(result, f(i, e))
             result
 
         // filter: returns new array_list with matching elements. Caller must destroy.
         let filter = (l: array_list<'a>*, pred: ('a) -> bool) ->
             let result = array_list.make<'a>()
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 if pred(e) then array_list.add(result, e)
             result
 
         // iter: applies f to each element for side effects.
         let iter = (l: array_list<'a>*, f: ('a) -> 'b) ->
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 f(e)
 
         // iteri: applies f to each (index, element) for side effects.
         let iteri = (l: array_list<'a>*, f: (int64, 'a) -> 'b) ->
-            for i, e in l->data[0..l->len]
+            for i, e in l->data[0..l->len] do
                 f(i, e)
 
         // any: true if any element matches predicate.
         let any = (l: array_list<'a>*, pred: ('a) -> bool) ->
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 if pred(e) then return true
             false
 
         // all: true if all elements match predicate.
         let all = (l: array_list<'a>*, pred: ('a) -> bool) ->
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 if !pred(e) then return false
             true
 
         // try_find: returns first element matching predicate, or none.
         let try_find = (l: array_list<'a>*, pred: ('a) -> bool) ->
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 if pred(e) then return some(e)
             default('a?)
 
@@ -220,7 +220,7 @@ module data =
         // count: number of elements matching predicate.
         let count = (l: array_list<'a>*, pred: ('a) -> bool) ->
             let mut n = 0i64
-            for e in l->data[0..l->len]
+            for e in l->data[0..l->len] do
                 if pred(e) then n = n + 1
             n
 
@@ -237,7 +237,7 @@ module data =
         // Compacts matching elements to the front and updates len.
         let retain = (l: array_list<'a>*, pred: ('a) -> bool) ->
             let mut j = 0i64
-            for i in 0..l->len
+            for i in 0..l->len do
                 if pred(l->data[i]) then
                     if j != i then l->data[j] = l->data[i]
                     j = j + 1
@@ -245,12 +245,12 @@ module data =
 
         // apply: transforms each element in place. Same type in and out.
         let apply = (l: array_list<'a>*, f: ('a) -> 'a) ->
-            for i in 0..l->len
+            for i in 0..l->len do
                 l->data[i] = f(l->data[i])
 
         // applyi: transforms each element in place with index.
         let applyi = (l: array_list<'a>*, f: (int64, 'a) -> 'a) ->
-            for i in 0..l->len
+            for i in 0..l->len do
                 l->data[i] = f(i, l->data[i])
 
     // =========================================================================
@@ -267,7 +267,7 @@ module data =
         // fold_left: left fold (first to last).
         let fold_left = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
             let mut acc = init
-            for e in s
+            for e in s do
                 acc = f(acc, e)
             acc
 
@@ -285,7 +285,7 @@ module data =
             if s.len == 0 then default('a?)
             else
                 let mut acc = s[0]
-                for e in s[1..s.len]
+                for e in s[1..s.len] do
                     acc = f(acc, e)
                 some(acc)
 
@@ -299,7 +299,7 @@ module data =
             let mut acc = init
             result[0] = acc
             let mut j = 1i64
-            for e in s
+            for e in s do
                 acc = f(acc, e)
                 result[j] = acc
                 j = j + 1
@@ -308,25 +308,25 @@ module data =
         // map: transforms each element. Caller must free.
         let map = (s: const 'a[], f: ('a) -> 'b) ->
             let result = alloc('b[s.len] { })!
-            for i, e in s
+            for i, e in s do
                 result[i] = f(e)
             result
 
         // mapi: transforms each element with index. Caller must free.
         let mapi = (s: const 'a[], f: (int64, 'a) -> 'b) ->
             let result = alloc('b[s.len] { })!
-            for i, e in s
+            for i, e in s do
                 result[i] = f(i, e)
             result
 
         // filter: returns elements matching predicate. Caller must free.
         let filter = (s: const 'a[], pred: ('a) -> bool) ->
             let mut n = 0i64
-            for e in s
+            for e in s do
                 if pred(e) then n = n + 1
             let result = alloc('a[n] { })!
             let mut j = 0i64
-            for e in s
+            for e in s do
                 if pred(e) then
                     result[j] = e
                     j = j + 1
@@ -334,29 +334,29 @@ module data =
 
         // iter: applies f to each element for side effects.
         let iter = (s: const 'a[], f: ('a) -> 'b) ->
-            for e in s
+            for e in s do
                 f(e)
 
         // iteri: applies f to each (index, element) for side effects.
         let iteri = (s: const 'a[], f: (int64, 'a) -> 'b) ->
-            for i, e in s
+            for i, e in s do
                 f(i, e)
 
         // any: true if any element matches predicate.
         let any = (s: const 'a[], pred: ('a) -> bool) ->
-            for e in s
+            for e in s do
                 if pred(e) then return true
             false
 
         // all: true if all elements match predicate.
         let all = (s: const 'a[], pred: ('a) -> bool) ->
-            for e in s
+            for e in s do
                 if !pred(e) then return false
             true
 
         // try_find: returns first element matching predicate, or none.
         let try_find = (s: const 'a[], pred: ('a) -> bool) ->
-            for e in s
+            for e in s do
                 if pred(e) then return some(e)
             default('a?)
 
@@ -385,7 +385,7 @@ module data =
         // count: number of elements matching predicate.
         let count = (s: const 'a[], pred: ('a) -> bool) ->
             let mut n = 0i64
-            for e in s
+            for e in s do
                 if pred(e) then n = n + 1
             n
 
@@ -404,7 +404,7 @@ module data =
         // copy: returns a heap-allocated copy. Caller must free.
         let copy = (s: const 'a[]) ->
             let result = alloc('a[s.len] { })!
-            for i, e in s
+            for i, e in s do
                 result[i] = e
             result
 
@@ -413,7 +413,7 @@ module data =
         // Elements past the returned subslice length are stale.
         let retain = (s: 'a[], pred: ('a) -> bool) ->
             let mut j = 0i64
-            for i in 0..s.len
+            for i in 0..s.len do
                 if pred(s[i]) then
                     if j != i then s[j] = s[i]
                     j = j + 1
@@ -421,12 +421,12 @@ module data =
 
         // apply: transforms each element in place. Same type in and out.
         let apply = (s: 'a[], f: ('a) -> 'a) ->
-            for i in 0..s.len
+            for i in 0..s.len do
                 s[i] = f(s[i])
 
         // applyi: transforms each element in place with index.
         let applyi = (s: 'a[], f: (int64, 'a) -> 'a) ->
-            for i in 0..s.len
+            for i in 0..s.len do
                 s[i] = f(i, s[i])
 
         // sort_range: sorts s[lo..hi] (inclusive) in place using quicksort.
@@ -434,7 +434,7 @@ module data =
             if lo >= hi then return
             let pivot = s[hi]
             let mut i = lo
-            for j in lo..hi
+            for j in lo..hi do
                 if cmp(s[j], pivot) < 0 then
                     let tmp = s[i]
                     s[i] = s[j]
@@ -902,7 +902,7 @@ module data =
             let new_cap = old_cap * 2
             d->buckets = alloc(hd_entry<'a, 'b>[new_cap] { })!
             d->len = 0
-            for i in 0..old_cap
+            for i in 0..old_cap do
                 let entry = old[i]
                 if entry.state == 1 then
                     let h = d->hash(entry.key)
@@ -994,7 +994,7 @@ module data =
         // fold: folds over all (key, value) pairs.
         let fold = (d: hash_dict<'a, 'b>*, init: 'c, f: ('c, 'a, 'b) -> 'c) ->
             let mut acc = init
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 then
                     acc = f(acc, entry.key, entry.value)
@@ -1002,7 +1002,7 @@ module data =
 
         // iter: applies f to each (key, value) pair for side effects.
         let iter = (d: hash_dict<'a, 'b>*, f: ('a, 'b) -> 'c) ->
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 then
                     f(entry.key, entry.value)
@@ -1011,7 +1011,7 @@ module data =
         let keys = (d: hash_dict<'a, 'b>*) ->
             let result = alloc('a[d->len] { })!
             let mut j = 0i64
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 then
                     result[j] = entry.key
@@ -1022,7 +1022,7 @@ module data =
         let values = (d: hash_dict<'a, 'b>*) ->
             let result = alloc('b[d->len] { })!
             let mut j = 0i64
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 then
                     result[j] = entry.value
@@ -1032,7 +1032,7 @@ module data =
         // count: number of entries matching predicate.
         let count = (d: hash_dict<'a, 'b>*, pred: ('a, 'b) -> bool) ->
             let mut n = 0i64
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 && pred(entry.key, entry.value) then
                     n = n + 1
@@ -1040,7 +1040,7 @@ module data =
 
         // any: true if any entry matches predicate.
         let any = (d: hash_dict<'a, 'b>*, pred: ('a, 'b) -> bool) ->
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 && pred(entry.key, entry.value) then
                     return true
@@ -1048,7 +1048,7 @@ module data =
 
         // all: true if all entries match predicate.
         let all = (d: hash_dict<'a, 'b>*, pred: ('a, 'b) -> bool) ->
-            for i in 0..d->buckets.len
+            for i in 0..d->buckets.len do
                 let entry = d->buckets[i]
                 if entry.state == 1 && !pred(entry.key, entry.value) then
                     return false
@@ -1094,7 +1094,7 @@ module data =
             let new_cap = old_cap * 2
             s->buckets = alloc(hs_entry<'a>[new_cap] { })!
             s->len = 0
-            for i in 0..old_cap
+            for i in 0..old_cap do
                 let entry = old[i]
                 if entry.state == 1 then
                     let h = s->hash(entry.key)
@@ -1168,14 +1168,14 @@ module data =
 
         // clear: removes all elements.
         let clear = (s: hash_set<'a>*) ->
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 s->buckets[i].state = 0
             s->len = 0
 
         // fold: folds over all elements.
         let fold = (s: hash_set<'a>*, init: 'b, f: ('b, 'a) -> 'b) ->
             let mut acc = init
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 then
                     acc = f(acc, entry.key)
@@ -1183,7 +1183,7 @@ module data =
 
         // iter: applies f to each element for side effects.
         let iter = (s: hash_set<'a>*, f: ('a) -> 'b) ->
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 then
                     f(entry.key)
@@ -1191,7 +1191,7 @@ module data =
         // filter: returns new hash_set with matching elements. Caller must destroy.
         let filter = (s: hash_set<'a>*, pred: ('a) -> bool) ->
             let result = hash_set.make(s->hash, s->eq)
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 && pred(entry.key) then
                     hash_set.add(result, entry.key)
@@ -1201,7 +1201,7 @@ module data =
         let to_slice = (s: hash_set<'a>*) ->
             let result = alloc('a[s->len] { })!
             let mut j = 0i64
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 then
                     result[j] = entry.key
@@ -1210,14 +1210,14 @@ module data =
 
         // any: true if any element matches predicate.
         let any = (s: hash_set<'a>*, pred: ('a) -> bool) ->
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 && pred(entry.key) then return true
             false
 
         // all: true if all elements match predicate.
         let all = (s: hash_set<'a>*, pred: ('a) -> bool) ->
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 && !pred(entry.key) then return false
             true
@@ -1225,7 +1225,7 @@ module data =
         // count: number of elements matching predicate.
         let count = (s: hash_set<'a>*, pred: ('a) -> bool) ->
             let mut n = 0i64
-            for i in 0..s->buckets.len
+            for i in 0..s->buckets.len do
                 let entry = s->buckets[i]
                 if entry.state == 1 && pred(entry.key) then
                     n = n + 1

@@ -11,7 +11,7 @@ let ptr_elems = (x: 'a) ->
 let opt_elems = (x: 'a) ->
     let buf = 'a?[3] { some(x), none('a), some(x) }
     let mut n = 0
-    for o in buf
+    for o in buf do
         match o with
         | some(_) -> n = n + 1
         | none -> n = n + 0

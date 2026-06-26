@@ -53,7 +53,7 @@ let main = (args: str[]) ->
     assert(hash_set.is_empty(s))
 
     // rehash: add many entries
-    for i in 0..30
+    for i in 0..30 do
         hash_set.add(s, i)
     assert(hash_set.len(s) == 30)
     assert(hash_set.has(s, 0))

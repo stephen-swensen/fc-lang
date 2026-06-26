@@ -7,7 +7,7 @@ let main = (args: str[]) ->
     assert(add(mul(2, 3), 4) == 10)
 
     let mut total = 0
-    for i in 1..5
+    for i in 1..5 do
         total = total + i
     assert(total == 10, "sum of 1..4")
 

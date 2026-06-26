@@ -4,7 +4,7 @@
 // stack if a fresh alloca were emitted each pass.
 let main = (args: str[]) ->
     let mut acc = 0
-    for i in 0..200000
+    for i in 0..200000 do
         let f = (float64)(i % 100) / 10.0
         let s = "%.1f{f}"
         // every formatted string is non-empty and bounded

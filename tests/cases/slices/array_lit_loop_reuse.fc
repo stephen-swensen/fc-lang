@@ -6,7 +6,7 @@
 // stack and the accumulated value is exact.
 let main = (args: str[]) ->
     let mut acc = 0i64
-    for i in 0..100000
+    for i in 0..100000 do
         let buf = int32[512] { }
         buf[0] = i
         buf[511] = i

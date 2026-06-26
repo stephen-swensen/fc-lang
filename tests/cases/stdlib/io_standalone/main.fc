@@ -19,7 +19,7 @@ let main = (args: str[]) ->
     match io.list_dir(".") with
     | none -> assert(false)
     | some(names) ->
-        for n in names
+        for n in names do
             free(n)
         free(names)
 

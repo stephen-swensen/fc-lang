@@ -142,7 +142,7 @@ let main = (args: str[]) ->
     if verbose then io.write("> Connection: close\n", stderr)
 
     // Custom headers
-    for hi in 0..num_hdrs
+    for hi in 0..num_hdrs do
         let hdr = custom_hdrs[hi]
         let hdr_line = alloc("%s{hdr}\r\n")!
         defer free(hdr_line)
@@ -187,7 +187,7 @@ let main = (args: str[]) ->
 
         if in_headers then
             // Accumulate into header buffer
-            for j in 0..n
+            for j in 0..n do
                 if header_len < 8192 then
                     header_buf[header_len] = recv_buf[j]
                     header_len = header_len + 1
@@ -204,7 +204,7 @@ let main = (args: str[]) ->
                     let headers = header_buf[0..sep_pos]
                     let lines = text.split(headers, "\r\n")
                     defer free(lines)
-                    for line in lines
+                    for line in lines do
                         if line.len > 0 then
                             if verbose then io.write(alloca("< %s{line}\n"), stderr)
                             if head_only then io.write(alloca("%s{line}\n"), out)

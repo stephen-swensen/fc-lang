@@ -4,7 +4,7 @@ let main = (args: str[]) ->
     let s = int32?[] { ptr = buf.ptr, len = 3i64 }
     assert(s.len == 3i64)
     let mut sum = 0
-    for o in s
+    for o in s do
         match o with
         | some(v) -> sum = sum + v
         | none    -> sum = sum + 100

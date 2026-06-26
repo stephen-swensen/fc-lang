@@ -6,7 +6,7 @@ let get_end = () ->
 
 let main = (args: str[]) ->
     let mut iters = 0i32
-    for i in 0..get_end()
+    for i in 0..get_end() do
         iters = iters + 1
     assert(iters == 5)
     assert(calls == 1)

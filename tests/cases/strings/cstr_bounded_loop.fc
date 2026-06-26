@@ -8,7 +8,7 @@ module c from "string.h" =
 let main = (args: str[]) ->
     let s = "abcdef"
     let mut acc = 0i64
-    for i in 0..200000
+    for i in 0..200000 do
         let cs = (cstr[8]) s
         acc = acc + (int64) c.strlen(cs)
     assert(acc == 200000i64 * 6i64)

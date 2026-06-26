@@ -8,7 +8,7 @@ let main = (args: str[]) ->
 
     let mut sum = 0
     let mut skipped = 0
-    for e in xs
+    for e in xs do
         match e with
         | num(v) -> sum = sum + v
         | skip   -> skipped = skipped + 1

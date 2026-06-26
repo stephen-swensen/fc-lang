@@ -2,7 +2,7 @@ let main = (args: str[]) ->
     let _result =
         let data = int32[3] { 10, 20, 30 }
         let mut sum = 0i64
-        for i, x in data
+        for i, x in data do
             sum = sum + i + (int64) x
         (int32) sum
     assert(_result == 63)

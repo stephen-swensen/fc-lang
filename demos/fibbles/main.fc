@@ -75,15 +75,15 @@ let glyph = (ch: uint8) ->
 
 let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
     let g = glyph(ch)
-    for row in 0..5
+    for row in 0..5 do
         let bits = (g >> (row * 3)) & 7
-        for col in 0..3
+        for col in 0..3 do
             if (bits >> (2 - col)) & 1 == 1 then
                 draw_cell(r, ox + col, oy + row, cr, cg, cb)
 
 let draw_text = (r: any*, text: const str, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
     let mut x = ox
-    for ch in text
+    for ch in text do
         if ch != ' ' then
             draw_char(r, ch, x, oy, cr, cg, cb)
         x = x + 4
@@ -194,7 +194,7 @@ let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
 
 let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
     let mut found = false
-    for i in 0..len
+    for i in 0..len do
         let seg = body_at(body, head, len, i)
         if seg.x == x && seg.y == y then
             found = true
@@ -227,7 +227,7 @@ let gen_tone = (freq: int32, duration_ms: int32) ->
     let buf = alloc(int16, (usize) num_samples)!
     let period = 44100 / freq
     let half = period / 2
-    for i in 0..num_samples
+    for i in 0..num_samples do
         if (i % period) < half then
             buf[i] = 8000i16
         else
@@ -238,7 +238,7 @@ let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
     let num_samples = samples_ms(duration_ms)
     let period = 44100 / freq
     let half = period / 2
-    for i in 0..num_samples
+    for i in 0..num_samples do
         if (i % period) < half then
             buf[offset + i] = 8000i16
         else
@@ -291,7 +291,7 @@ let render_splash = (r: any*) ->
     draw_text(r, "FIBBLES", 2, 1, 0u8, 220u8, 0u8)
 
     // Decorative snake at row 7
-    for sx in 4..22
+    for sx in 4..22 do
         draw_cell(r, sx, 7, 0u8, 140u8, 0u8)
     draw_cell(r, 22, 7, 0u8, 255u8, 0u8)
     draw_face(r, 22, 7, 1, 0, false)
@@ -302,7 +302,7 @@ let render_splash = (r: any*) ->
     draw_text(r, "STEER", 6, 16, 140u8, 140u8, 180u8)
 
     // Space bar visual
-    for bx in 10..22
+    for bx in 10..22 do
         draw_cell(r, bx, 22, 80u8, 80u8, 100u8)
 
     sdl2.present(r)
@@ -577,7 +577,7 @@ let main = (args: str[]) ->
                 draw_hamburger(ren, bonus.x, bonus.y)
 
             // Snake
-            for i in 0..length
+            for i in 0..length do
                 let seg = body_at(body, head_idx, length, i)
                 if i == length - 1 then
                     if state == game_state.over then
@@ -620,10 +620,10 @@ let main = (args: str[]) ->
                 let sox = 16 - dcount * 2
                 let mut digits = int32[8] { }
                 let mut dtmp = score
-                for si in 0..dcount
+                for si in 0..dcount do
                     digits[dcount - 1 - si] = dtmp % 10
                     dtmp = dtmp / 10
-                for di in 0..dcount
+                for di in 0..dcount do
                     draw_char(ren, '0' + (uint8) digits[di], sox + di * 4, 13, 255u8, 255u8, 255u8)
 
             sdl2.present(ren)

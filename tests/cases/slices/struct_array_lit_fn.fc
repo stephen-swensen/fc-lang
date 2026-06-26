@@ -5,7 +5,7 @@ struct point =
 
 let sum_x = (pts: point[]) ->
     let mut total = 0
-    for p in pts
+    for p in pts do
         total = total + p.x
     total
 

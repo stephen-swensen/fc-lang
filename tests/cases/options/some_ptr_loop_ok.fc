@@ -4,7 +4,7 @@ let main = (args: str[]) ->
     let mut x = 1
     let p = &x
     let mut count = 0
-    for i in 0..100000
+    for i in 0..100000 do
         let o = some(p)          // guarded each iter (p is ident); p non-null → passes
         if o.is_some then
             count = count + 1

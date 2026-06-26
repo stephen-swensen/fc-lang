@@ -8,7 +8,7 @@ let apply = (f: (int32) -> int32, x: int32) ->
 
 let main = (args: str[]) ->
     let mut sum = 0
-    for i in 0..5
+    for i in 0..5 do
         let f =
             let captured = i
             (x: int32) -> x + captured

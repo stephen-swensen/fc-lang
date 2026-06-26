@@ -3,7 +3,7 @@
 let pick = (n: int32) ->
     let mut best = alloc(int32)!
     *best = 0
-    for i in 1..n
+    for i in 1..n do
         let cur = alloc(int32)!
         *cur = i
         free(best)

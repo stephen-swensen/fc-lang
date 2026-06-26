@@ -103,7 +103,7 @@ let main = (args: str[]) ->
     let mut max_us = 0i64
     let mut total_us = 0i64
 
-    for seq in 0..count
+    for seq in 0..count do
 
         let mut pkt = uint8[64] {}
         build_echo_request(pkt, id, (uint16) seq)

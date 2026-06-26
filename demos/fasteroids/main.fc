@@ -229,9 +229,9 @@ let glyph = (ch: uint8) ->
 let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, scale: int32,
                  cr: uint8, cg: uint8, cb: uint8) ->
     let g = glyph(ch)
-    for row in 0..5
+    for row in 0..5 do
         let bits = (g >> (row * 3)) & 7
-        for col in 0..3
+        for col in 0..3 do
             if (bits >> (2 - col)) & 1 == 1 then
                 fill(r, ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb, 255u8)
 
@@ -241,7 +241,7 @@ let text_width = (s: const str, scale: int32) ->
 let draw_text = (r: any*, s: const str, ox: int32, oy: int32, scale: int32,
                  cr: uint8, cg: uint8, cb: uint8) ->
     let mut x = ox
-    for ch in s
+    for ch in s do
         if ch != ' ' then
             draw_char(r, ch, x, oy, scale, cr, cg, cb)
         x = x + 4 * scale
@@ -278,7 +278,7 @@ let wrap_dist = (a: float64, b: float64, span: float64) ->
 // ============================================================
 
 let init_stars = (w: world*, rng: pcg_random*) ->
-    for i in 0..max_stars
+    for i in 0..max_stars do
         w->stars[i].x = pcg_random.next_float64(rng) * (float64) logical_w
         w->stars[i].y = pcg_random.next_float64(rng) * (float64) logical_h
         let t = pcg_random.next_float64(rng)
@@ -287,13 +287,13 @@ let init_stars = (w: world*, rng: pcg_random*) ->
         w->stars[i].brightness = (uint8) b
 
 let update_stars = (w: world*) ->
-    for i in 0..max_stars
+    for i in 0..max_stars do
         w->stars[i].y = w->stars[i].y + w->stars[i].speed
         if w->stars[i].y >= (float64) logical_h then
             w->stars[i].y = 0.0
 
 let draw_stars = (w: world*, r: any*) ->
-    for i in 0..max_stars
+    for i in 0..max_stars do
         let b = w->stars[i].brightness
         let x = (int32) w->stars[i].x
         let y = (int32) w->stars[i].y
@@ -309,7 +309,7 @@ let draw_stars = (w: world*, r: any*) ->
 let spawn_burst = (w: world*, rng: pcg_random*, cx: float64, cy: float64, count: int32,
                    cr: uint8, cg: uint8, cb: uint8) ->
     let mut spawned = 0
-    for i in 0..max_particles
+    for i in 0..max_particles do
         if spawned >= count then break
         if w->particles[i].life <= 0 then
             let angle = pcg_random.next_float64(rng) * two_pi
@@ -327,7 +327,7 @@ let spawn_burst = (w: world*, rng: pcg_random*, cx: float64, cy: float64, count:
             spawned = spawned + 1
 
 let update_particles = (w: world*) ->
-    for i in 0..max_particles
+    for i in 0..max_particles do
         if w->particles[i].life > 0 then
             w->particles[i].x = w->particles[i].x + w->particles[i].vx
             w->particles[i].y = w->particles[i].y + w->particles[i].vy
@@ -336,7 +336,7 @@ let update_particles = (w: world*) ->
             w->particles[i].life = w->particles[i].life - 1
 
 let draw_particles = (w: world*, r: any*) ->
-    for i in 0..max_particles
+    for i in 0..max_particles do
         if w->particles[i].life > 0 then
             let t = (float64) w->particles[i].life / (float64) w->particles[i].max_life
             let alpha = (uint8) (t * 255.0)
@@ -364,12 +364,12 @@ let init_asteroid = (a: asteroid*, rng: pcg_random*, px: float64, py: float64,
                else if size == 1 then asteroid_radius_medium
                else asteroid_radius_small
     a->base_radius = base
-    for i in 0..asteroid_vert_count
+    for i in 0..asteroid_vert_count do
         a->verts[i] = base * (0.7 + pcg_random.next_float64(rng) * 0.6)
 
 let find_free_asteroid = (w: world*) ->
     let mut result = -1
-    for i in 0..max_asteroids
+    for i in 0..max_asteroids do
         if !w->asteroids[i].alive && result < 0 then
             result = i
     result
@@ -390,7 +390,7 @@ let draw_asteroid = (w: world*, r: any*, idx: int32) ->
     let mut first_sx = 0
     let mut first_sy = 0
 
-    for i in 0..asteroid_vert_count
+    for i in 0..asteroid_vert_count do
         let theta = a->angle + two_pi * (float64) i / (float64) asteroid_vert_count
         let vr = a->verts[i]
         let sx = (int32) (a->x + math.cos(theta) * vr)
@@ -405,7 +405,7 @@ let draw_asteroid = (w: world*, r: any*, idx: int32) ->
     glow_line(r, prev_sx, prev_sy, first_sx, first_sy, cr, cg, cb)
 
 let spawn_wave_asteroids = (w: world*, rng: pcg_random*, count: int32) ->
-    for n in 0..count
+    for n in 0..count do
         let idx = find_free_asteroid(w)
         if idx >= 0 then
             let angle = pcg_random.next_float64(rng) * two_pi
@@ -427,7 +427,7 @@ let split_asteroid = (w: world*, rng: pcg_random*, idx: int32) ->
     let new_size = a->size - 1
     let px = a->x
     let py = a->y
-    for k in 0..2
+    for k in 0..2 do
         let ci = find_free_asteroid(w)
         if ci >= 0 then
             let angle = pcg_random.next_float64(rng) * two_pi
@@ -436,7 +436,7 @@ let split_asteroid = (w: world*, rng: pcg_random*, idx: int32) ->
                           math.cos(angle) * speed, math.sin(angle) * speed, new_size)
 
 let update_asteroids = (w: world*) ->
-    for i in 0..max_asteroids
+    for i in 0..max_asteroids do
         if w->asteroids[i].alive then
             w->asteroids[i].x = wrap_x(w->asteroids[i].x + w->asteroids[i].vx)
             w->asteroids[i].y = wrap_y(w->asteroids[i].y + w->asteroids[i].vy)
@@ -444,7 +444,7 @@ let update_asteroids = (w: world*) ->
 
 let count_alive_asteroids = (w: world*) ->
     let mut n = 0
-    for i in 0..max_asteroids
+    for i in 0..max_asteroids do
         if w->asteroids[i].alive then
             n = n + 1
     n
@@ -501,11 +501,11 @@ let draw_ship = (w: world*, r: any*, blink: bool, frame_count: int32) ->
                  else 100u8
         let sb = 255u8
         let thickness = w->game.shield * 2
-        for layer in 0..thickness
+        for layer in 0..thickness do
             let lr = shield_r + (float64) layer - (float64) thickness * 0.5 + 0.5
             let mut prev_hx = 0
             let mut prev_hy = 0
-            for i in 0..segments + 1
+            for i in 0..segments + 1 do
                 let theta = two_pi * (float64) i / (float64) segments
                 let hx = (int32) (cx + math.cos(theta) * lr)
                 let hy = (int32) (cy + math.sin(theta) * lr)
@@ -521,7 +521,7 @@ let draw_ship = (w: world*, r: any*, blink: bool, frame_count: int32) ->
 
 let fire_bullet = (w: world*) ->
     if w->game.cooldown > 0 then return
-    for i in 0..max_bullets
+    for i in 0..max_bullets do
         if !w->bullets[i].alive then
             let a = w->game.ship_angle
             w->bullets[i].x = w->game.ship_x + math.cos(a) * 20.0
@@ -535,7 +535,7 @@ let fire_bullet = (w: world*) ->
             return
 
 let update_bullets = (w: world*) ->
-    for i in 0..max_bullets
+    for i in 0..max_bullets do
         if w->bullets[i].alive then
             w->bullets[i].x = wrap_x(w->bullets[i].x + w->bullets[i].vx)
             w->bullets[i].y = wrap_y(w->bullets[i].y + w->bullets[i].vy)
@@ -544,7 +544,7 @@ let update_bullets = (w: world*) ->
                 w->bullets[i].alive = false
 
 let draw_bullets = (w: world*, r: any*) ->
-    for i in 0..max_bullets
+    for i in 0..max_bullets do
         if w->bullets[i].alive then
             let bx = (int32) w->bullets[i].x
             let by = (int32) w->bullets[i].y
@@ -578,7 +578,7 @@ let spawn_ufo = (w: world*, rng: pcg_random*) ->
         w->ufo.vx = 0.0 - ufo_speed
 
 let fire_ufo_bullet = (w: world*, rng: pcg_random*) ->
-    for i in 0..max_bullets
+    for i in 0..max_bullets do
         if !w->bullets[i].alive then
             let aim_angle = if w->ufo.is_small then
                 let dx = wrap_dist(w->game.ship_x, w->ufo.x, (float64) logical_w)
@@ -671,9 +671,9 @@ let process_collisions = (w: world*, rng: pcg_random*,
                           audio_dev: uint32, hit_snd: sound,
                           shield_snd: sound, die_snd: sound) ->
     // Bullets vs asteroids (both player and UFO bullets destroy asteroids)
-    for bi in 0..max_bullets
+    for bi in 0..max_bullets do
         if w->bullets[bi].alive then
-            for ai in 0..max_asteroids
+            for ai in 0..max_asteroids do
                 if w->asteroids[ai].alive && w->bullets[bi].alive then
                     if circle_overlap(w->bullets[bi].x, w->bullets[bi].y, 4.0,
                                       w->asteroids[ai].x, w->asteroids[ai].y,
@@ -692,7 +692,7 @@ let process_collisions = (w: world*, rng: pcg_random*,
                             sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
 
     // Player bullets vs UFO
-    for bi in 0..max_bullets
+    for bi in 0..max_bullets do
         if w->bullets[bi].alive && w->bullets[bi].from_player && w->ufo.alive then
             let ur = if w->ufo.is_small then 18.0 else 28.0
             if circle_overlap(w->bullets[bi].x, w->bullets[bi].y, 4.0,
@@ -708,7 +708,7 @@ let process_collisions = (w: world*, rng: pcg_random*,
 
     // Ship vs asteroids (skip during invulnerability)
     if w->game.invuln <= 0 then
-        for ai in 0..max_asteroids
+        for ai in 0..max_asteroids do
             if w->asteroids[ai].alive then
                 if circle_overlap(w->game.ship_x, w->game.ship_y, ship_radius,
                                   w->asteroids[ai].x, w->asteroids[ai].y,
@@ -720,7 +720,7 @@ let process_collisions = (w: world*, rng: pcg_random*,
 
     // Ship vs UFO bullets (only non-player bullets can hit the ship)
     if w->game.invuln <= 0 then
-        for bi in 0..max_bullets
+        for bi in 0..max_bullets do
             if w->bullets[bi].alive && !w->bullets[bi].from_player then
                 if circle_overlap(w->game.ship_x, w->game.ship_y, ship_radius,
                                   w->bullets[bi].x, w->bullets[bi].y, 4.0) then
@@ -743,7 +743,7 @@ let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32, am
     let num_samples = samples_ms(duration_ms)
     let period = if freq > 0 then 44100 / freq else 44100
     let half = period / 2
-    for i in 0..num_samples
+    for i in 0..num_samples do
         let fade = if i < num_samples / 4
                    then (i * 4) * 256 / num_samples
                    else if i > num_samples * 3 / 4
@@ -838,15 +838,15 @@ let save_high_score = (score: int32) ->
 // ============================================================
 
 let clear_bullets = (w: world*) ->
-    for i in 0..max_bullets
+    for i in 0..max_bullets do
         w->bullets[i].alive = false
 
 let clear_asteroids = (w: world*) ->
-    for i in 0..max_asteroids
+    for i in 0..max_asteroids do
         w->asteroids[i].alive = false
 
 let clear_particles = (w: world*) ->
-    for i in 0..max_particles
+    for i in 0..max_particles do
         w->particles[i].life = 0
 
 let respawn_ship = (w: world*) ->
@@ -899,7 +899,7 @@ let draw_hud = (w: world*, r: any*) ->
     draw_text_centered(r, (const str) hi_str, logical_w / 2, 30, 3, 200u8, 200u8, 220u8)
 
     // Lives as small ship icons
-    for i in 0..w->game.lives
+    for i in 0..w->game.lives do
         let lx = 30 + i * 30
         let ly = 60
         sdl2.set_color(r, 100u8, 220u8, 255u8, 255u8)
@@ -979,7 +979,7 @@ let render = (w: world*, r: any*, frame_count: int32) ->
     draw_stars(w, r)
 
     // Asteroids
-    for i in 0..max_asteroids
+    for i in 0..max_asteroids do
         if w->asteroids[i].alive then
             draw_asteroid(w, r, i)
 

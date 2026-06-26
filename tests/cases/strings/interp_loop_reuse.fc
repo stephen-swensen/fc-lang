@@ -6,7 +6,7 @@
 // that the full loop completes.
 let main = (args: str[]) ->
     let mut count = 0
-    for i in 0..200000
+    for i in 0..200000 do
         let s = "value=%d{i} hex=%x{i}"
         if i == 12345 then
             assert(s == "value=12345 hex=3039")

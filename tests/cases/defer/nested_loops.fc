@@ -3,9 +3,9 @@ let mut inner_count = 0
 let mut outer_count = 0
 
 let main = (args: str[]) ->
-    for i in 0..3
+    for i in 0..3 do
         defer outer_count = outer_count + 1
-        for j in 0..2
+        for j in 0..2 do
             defer inner_count = inner_count + 1
     assert(outer_count == 3)
     assert(inner_count == 6)  // 3 outer * 2 inner

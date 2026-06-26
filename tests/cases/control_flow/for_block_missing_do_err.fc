@@ -1,0 +1,7 @@
+// Block-form `for` without `do` is rejected: `do` is now required in both the
+// block and inline forms (uniform with `then`/`with`).
+let main = (args: str[]) ->
+    let mut s = 0
+    for x in 0..3
+        s = s + x
+    0

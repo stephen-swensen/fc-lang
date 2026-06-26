@@ -6,7 +6,7 @@ let main = (args: str[]) ->
     let mut acc = 0
 
     // 1. for-range body
-    for i in 0..3
+    for i in 0..3 do
         let s = alloc("x")!
         defer free(s)
         acc = acc + 1
@@ -17,7 +17,7 @@ let main = (args: str[]) ->
     data.ptr[0] = 1
     data.ptr[1] = 2
     data.ptr[2] = 3
-    for x in data
+    for x in data do
         let s = alloc("x")!
         defer free(s)
         acc = acc + x

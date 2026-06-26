@@ -242,9 +242,9 @@ let glyph = (ch: uint8) ->
 let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, scale: int32,
                  cr: uint8, cg: uint8, cb: uint8) ->
     let g = glyph(ch)
-    for row in 0..5
+    for row in 0..5 do
         let bits = (g >> (row * 3)) & 7
-        for col in 0..3
+        for col in 0..3 do
             if (bits >> (2 - col)) & 1 == 1 then
                 fill(r, ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb, 255u8)
 
@@ -254,7 +254,7 @@ let text_width = (s: const str, scale: int32) ->
 let draw_text = (r: any*, s: const str, ox: int32, oy: int32, scale: int32,
                  cr: uint8, cg: uint8, cb: uint8) ->
     let mut x = ox
-    for ch in s
+    for ch in s do
         if ch != ' ' then
             draw_char(r, ch, x, oy, scale, cr, cg, cb)
         x = x + 4 * scale
@@ -394,9 +394,9 @@ let draw_enemy = (r: any*, kind: int32, px: int32, py: int32, frame: int32) ->
         cg = 90u8
         cb = 120u8
 
-    for row in 0..11
+    for row in 0..11 do
         let bits = enemy_bit(kind, frame, row)
-        for col in 0..15
+        for col in 0..15 do
             if (bits >> (14 - col)) & 1 == 1 then
                 fill(r, px + col * ps, py + row * ps, ps, ps, cr, cg, cb, 255u8)
 
@@ -467,7 +467,7 @@ let draw_bullet = (r: any*, b: bullet*) ->
 // ============================================================
 
 let init_stars = (w: world*, rng: pcg_random*) ->
-    for i in 0..120
+    for i in 0..120 do
         w->stars[i].x = pcg_random.next_float64(rng) * (float64) logical_w
         w->stars[i].y = pcg_random.next_float64(rng) * (float64) logical_h
         let t = pcg_random.next_float64(rng)
@@ -476,14 +476,14 @@ let init_stars = (w: world*, rng: pcg_random*) ->
         w->stars[i].brightness = (uint8) b
 
 let update_stars = (w: world*) ->
-    for i in 0..120
+    for i in 0..120 do
         w->stars[i].y = w->stars[i].y + w->stars[i].speed
         if w->stars[i].y >= (float64) logical_h then
             w->stars[i].y = 0.0
             // x stays the same — looks like streaks, which is fine
 
 let draw_stars = (w: world*, r: any*) ->
-    for i in 0..120
+    for i in 0..120 do
         let b = w->stars[i].brightness
         let x = (int32) w->stars[i].x
         let y = (int32) w->stars[i].y
@@ -502,7 +502,7 @@ let draw_stars = (w: world*, r: any*) ->
 let spawn_burst = (w: world*, rng: pcg_random*, cx: float64, cy: float64, count: int32,
                    cr: uint8, cg: uint8, cb: uint8) ->
     let mut spawned = 0
-    for i in 0..256
+    for i in 0..256 do
         if spawned >= count then break
         if w->particles[i].life <= 0 then
             let angle = pcg_random.next_float64(rng) * 6.2831853
@@ -520,7 +520,7 @@ let spawn_burst = (w: world*, rng: pcg_random*, cx: float64, cy: float64, count:
             spawned = spawned + 1
 
 let update_particles = (w: world*) ->
-    for i in 0..256
+    for i in 0..256 do
         if w->particles[i].life > 0 then
             w->particles[i].x = w->particles[i].x + w->particles[i].vx
             w->particles[i].y = w->particles[i].y + w->particles[i].vy
@@ -529,7 +529,7 @@ let update_particles = (w: world*) ->
             w->particles[i].life = w->particles[i].life - 1
 
 let draw_particles = (w: world*, r: any*) ->
-    for i in 0..256
+    for i in 0..256 do
         if w->particles[i].life > 0 then
             let t = (float64) w->particles[i].life / (float64) w->particles[i].max_life
             let alpha = (uint8) (t * 255.0)
@@ -564,8 +564,8 @@ let enemy_screen_y = (w: world*, idx: int32) ->
 
 let reset_formation = (w: world*) ->
     let mut i = 0
-    for row in 0..5
-        for col in 0..11
+    for row in 0..5 do
+        for col in 0..11 do
             w->enemies[i].col = col
             w->enemies[i].row = row
             w->enemies[i].alive = true
@@ -585,11 +585,11 @@ let reset_formation = (w: world*) ->
         w->game.fire_interval = 15
 
 let clear_bullets = (w: world*) ->
-    for i in 0..64
+    for i in 0..64 do
         w->bullets[i].alive = false
 
 let clear_particles = (w: world*) ->
-    for i in 0..256
+    for i in 0..256 do
         w->particles[i].life = 0
 
 // ============================================================
@@ -611,8 +611,8 @@ let bunker_row_template = (row: int32) ->
     | _ -> 0xF00F                // XXXX........XXXX
 
 let reset_bunkers = (w: world*) ->
-    for b in 0..bunker_count
-        for row in 0..bunker_rows
+    for b in 0..bunker_count do
+        for row in 0..bunker_rows do
             w->bunker_bitmaps[b * bunker_rows + row] = bunker_row_template(row)
 
 // Evenly spaces 4 bunkers across a 960-wide central strip: x = 160, 448, 736, 1024.
@@ -631,7 +631,7 @@ let bullet_hits_bunker = (w: world*, bi: int32) ->
     let bx = (int32) w->bullets[bi].x
     let by = (int32) w->bullets[bi].y
     let mut hit = false
-    for b in 0..bunker_count
+    for b in 0..bunker_count do
         if !hit then
             let bx0 = bunker_screen_x(b)
             let lx = bx - bx0
@@ -653,15 +653,15 @@ let bullet_hits_bunker = (w: world*, bi: int32) ->
 // formation descent — faithful to the arcade, where invaders eat through
 // the shields as they reach them.
 let erode_bunkers_by_formation = (w: world*) ->
-    for b in 0..bunker_count
+    for b in 0..bunker_count do
         let bx0 = bunker_screen_x(b)
-        for row in 0..bunker_rows
-            for col in 0..bunker_cols
+        for row in 0..bunker_rows do
+            for col in 0..bunker_cols do
                 if bunker_cell_alive(w, b, row, col) then
                     let cx = bx0 + col * bunker_cell_px + bunker_cell_px / 2
                     let cy = bunker_y + row * bunker_cell_px + bunker_cell_px / 2
                     let mut touched = false
-                    for ei in 0..55
+                    for ei in 0..55 do
                         if !touched && w->enemies[ei].alive then
                             let ex = (int32) enemy_screen_x(w, ei)
                             let ey = (int32) enemy_screen_y(w, ei)
@@ -672,10 +672,10 @@ let erode_bunkers_by_formation = (w: world*) ->
                         clear_bunker_cell(w, b, row, col)
 
 let draw_bunkers = (w: world*, r: any*) ->
-    for b in 0..bunker_count
+    for b in 0..bunker_count do
         let bx0 = bunker_screen_x(b)
-        for row in 0..bunker_rows
-            for col in 0..bunker_cols
+        for row in 0..bunker_rows do
+            for col in 0..bunker_cols do
                 if bunker_cell_alive(w, b, row, col) then
                     let cx = bx0 + col * bunker_cell_px
                     let cy = bunker_y + row * bunker_cell_px
@@ -781,7 +781,7 @@ let reset_game = (w: world*, rng: pcg_random*) ->
 
 let fire_player_bullet = (w: world*) ->
     if w->game.cooldown > 0 then return
-    for i in 0..64
+    for i in 0..64 do
         if !w->bullets[i].alive then
             w->bullets[i].x = w->game.player_x + (float64) (player_w / 2)
             w->bullets[i].y = (float64) (player_y - 4)
@@ -796,12 +796,12 @@ let fire_enemy_bullet = (w: world*, rng: pcg_random*) ->
     // Pick a random column, then fire from its bottom-most alive enemy.
     let col = (int32) pcg_random.next_bounded_uint32(rng, (uint32) enemy_cols)
     let mut chosen = -1
-    for i in 0..55
+    for i in 0..55 do
         if w->enemies[i].alive && w->enemies[i].col == col then
             if chosen == -1 || w->enemies[i].row > w->enemies[chosen].row then
                 chosen = i
     if chosen < 0 then return
-    for bi in 0..64
+    for bi in 0..64 do
         if !w->bullets[bi].alive then
             w->bullets[bi].x = enemy_screen_x(w, chosen) + (float64) (enemy_w / 2)
             w->bullets[bi].y = enemy_screen_y(w, chosen) + (float64) enemy_h
@@ -815,7 +815,7 @@ let fire_enemy_bullet = (w: world*, rng: pcg_random*) ->
 // ============================================================
 
 let update_bullets = (w: world*) ->
-    for i in 0..64
+    for i in 0..64 do
         if w->bullets[i].alive then
             w->bullets[i].y = w->bullets[i].y + w->bullets[i].vy
             if w->bullets[i].y < -20.0 || w->bullets[i].y > (float64) (logical_h + 20) then
@@ -826,7 +826,7 @@ let formation_bounds = (w: world*) ->
     let mut min_col = enemy_cols
     let mut max_col = -1
     let mut max_row = -1
-    for i in 0..55
+    for i in 0..55 do
         if w->enemies[i].alive then
             if w->enemies[i].col < min_col then min_col = w->enemies[i].col
             if w->enemies[i].col > max_col then max_col = w->enemies[i].col
@@ -881,7 +881,7 @@ let bullet_hits_enemy = (w: world*, bi: int32) ->
     let bx = w->bullets[bi].x
     let by = w->bullets[bi].y
     let mut hit = -1
-    for ei in 0..55
+    for ei in 0..55 do
         if w->enemies[ei].alive && hit < 0 then
             let ex = enemy_screen_x(w, ei)
             let ey = enemy_screen_y(w, ei)
@@ -901,7 +901,7 @@ let bullet_hits_player = (w: world*, bi: int32) ->
 
 let process_collisions = (w: world*, rng: pcg_random*, audio_dev: uint32,
                           hit_snd: sound, die_snd: sound) ->
-    for bi in 0..64
+    for bi in 0..64 do
         if w->bullets[bi].alive then
             if bullet_hits_bunker(w, bi) then
                 w->bullets[bi].alive = false
@@ -993,7 +993,7 @@ let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32, am
     let num_samples = samples_ms(duration_ms)
     let period = if freq > 0 then 44100 / freq else 44100
     let half = period / 2
-    for i in 0..num_samples
+    for i in 0..num_samples do
         let fade = if i < num_samples / 4
                    then (i * 4) * 256 / num_samples
                    else if i > num_samples * 3 / 4
@@ -1109,7 +1109,7 @@ let draw_hud = (w: world*, r: any*) ->
 
     // LIVES (far right — draw as small ship icons)
     let mut lx = logical_w - 30
-    for i in 0..w->game.lives
+    for i in 0..w->game.lives do
         lx = lx - 40
         // small 32x12 ship icon
         fill(r, lx, 30, 32, 6, 80u8, 220u8, 240u8, 255u8)
@@ -1170,7 +1170,7 @@ let render = (w: world*, r: any*, frame_count: int32) ->
     sdl2.set_color(r, 4u8, 6u8, 18u8, 255u8)
     sdl2.clear(r)
     // Gradient bands
-    for band in 0..16
+    for band in 0..16 do
         let y = band * (logical_h / 16)
         let h = logical_h / 16
         let v = (uint8) (4 + band)
@@ -1192,13 +1192,13 @@ let render = (w: world*, r: any*, frame_count: int32) ->
         draw_ufo_popup(w, r)
 
     // Bullets
-    for i in 0..64
+    for i in 0..64 do
         if w->bullets[i].alive then
             draw_bullet(r, &w->bullets[i])
 
     // Enemies
     let frame = (frame_count / 30) % 2
-    for i in 0..55
+    for i in 0..55 do
         if w->enemies[i].alive then
             let kind = enemy_kind_for_row(w->enemies[i].row)
             draw_enemy(r, kind, (int32) enemy_screen_x(w, i), (int32) enemy_screen_y(w, i), frame)

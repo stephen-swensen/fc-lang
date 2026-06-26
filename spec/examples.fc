@@ -337,36 +337,36 @@ let main = (args: str[]) ->
 
     // for — range iteration
     let mut total = 0
-    for i in 0..5              // 0, 1, 2, 3, 4
+    for i in 0..5 do              // 0, 1, 2, 3, 4
         total = total + i
     assert(total == 10)
 
     // for — element iteration over a slice
     let nums = int32[3] { 10, 20, 30 }
     let mut elem_sum = 0
-    for n in nums
+    for n in nums do
         elem_sum = elem_sum + n
     assert(elem_sum == 60)
 
     // for — index + element iteration
     let mut index_sum = 0
-    for i, v in nums
+    for i, v in nums do
         index_sum = index_sum + (int32) i + v * 0
     assert(index_sum == 3)     // 0 + 1 + 2
 
     // for — destructuring the element (tuples or structs, same patterns as let)
     let coords = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }
     let mut coord_sum = 0
-    for { cx, cy } in coords
+    for { cx, cy } in coords do
         coord_sum = coord_sum + cx + cy
     assert(coord_sum == 10)
 
-    // Inline forms — a one-line body uses a keyword only where the
-    // header/body boundary would otherwise be ambiguous. The for-header ends
-    // in an iterable, so an inline body needs `do`; `loop` has no header, so
-    // its inline body needs no keyword; `;` sequences statements on one line.
+    // Inline forms — a one-line body. `do` introduces the for body (required
+    // in both the block and inline forms, like `then`/`with`); `loop` has no
+    // header, so its inline body needs no keyword; `;` sequences items on one
+    // line (the explicit spelling of a same-level newline).
     let mut hsum = 0
-    for i in 0..5 do hsum = hsum + i              // inline for — `do` required
+    for i in 0..5 do hsum = hsum + i              // inline for body
     assert(hsum == 10)
 
     let mut acc = 0
@@ -378,11 +378,22 @@ let main = (args: str[]) ->
     loop if k >= 3 then break else k = k + 1       // inline loop — no `do`
     assert(k == 3)
 
-    // let ... in — bind a name scoped to a single inline expression. The
-    // offside form (a let followed by same-column statements) is the same
-    // thing with the `in` implied by layout.
+    // (a; b) is a sequence expression — every item runs, the value is the last.
+    let mut warmed = 0
+    let cached = (warmed = 7; warmed + 1)
+    assert(warmed == 7 && cached == 8)
+
+    // let ... in — bind a name scoped to its body. The offside form (a let
+    // followed by same-column statements) is the same thing with the `in`
+    // implied by layout.
     let boxed = let w = 3 in let h = 4 in w * h
     assert(boxed == 12)
+
+    // The `in` body is greedy (an inline `;`-sequence, as in ML/F#): the
+    // binding scopes over every item, and the value is the last.
+    let mut probe = 0
+    let doubled = let v = 21 in probe = v; v * 2
+    assert(probe == 21 && doubled == 42)
 
     // --------------------------------------------------------
     // Functions and closures

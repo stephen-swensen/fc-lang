@@ -1,0 +1,8 @@
+// A single-item paren is plain grouping — `(a)` is exactly `a` (no sequence
+// wrapper), so ordinary precedence grouping is unaffected.
+let main = (args: str[]) ->
+    let a = (42)
+    assert(a == 42)
+    let b = (1 + 2) * 3
+    assert(b == 9)
+    0

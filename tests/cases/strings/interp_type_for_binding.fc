@@ -7,14 +7,14 @@ let main = (args: str[]) ->
 
     // Plain element binding used only in %T
     let mut e = ""
-    for x in xs[0..3]
+    for x in xs[0..3] do
         e = "%T{x}"
     assert(e == "int32")
 
     // Index + element bindings, both used only in %T
     let mut it = ""
     let mut et = ""
-    for i, y in xs[0..3]
+    for i, y in xs[0..3] do
         it = "%T{i}"
         et = "%T{y}"
     assert(it == "int64")
@@ -23,7 +23,7 @@ let main = (args: str[]) ->
     // Destructured tuple element used only in %T
     let pairs = {int32, bool}[2] { { 1, true }, { 2, false } }
     let mut dt = ""
-    for { a, b } in pairs
+    for { a, b } in pairs do
         dt = "%T{a}/%T{b}"
     assert(dt == "int32/bool")
     0

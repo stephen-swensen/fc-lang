@@ -881,7 +881,7 @@ static Token make_layout_token(TokenKind kind, int line, int col) {
 
 static bool is_always_block_former(TokenKind k) {
     return k == TOK_ARROW || k == TOK_WITH || k == TOK_THEN ||
-           k == TOK_ELSE || k == TOK_LOOP ||
+           k == TOK_ELSE || k == TOK_LOOP || k == TOK_DO ||
            k == TOK_GUARDED || k == TOK_UNGUARDED ||
            k == TOK_CHECKED || k == TOK_UNCHECKED;
 }
@@ -911,8 +911,6 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     is_match_block[indent_depth] = false;
 
     bool saw_decl_keyword = false;    /* let, struct, union, module on current line */
-    bool saw_for = false;             /* for on current line (before in) */
-    bool saw_for_in = false;          /* saw 'for ... in' — line is block-former */
     TokenKind last_kind = TOK_EOF;    /* last non-NEWLINE token emitted */
     int bracket_depth = 0;            /* depth inside () [] {} — suppresses layout */
 
@@ -944,13 +942,9 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
             bool block_former = is_always_block_former(last_kind);
             if (!block_former && last_kind == TOK_EQ && saw_decl_keyword)
                 block_former = true;
-            if (!block_former && saw_for_in)
-                block_former = true;
 
             /* Reset line-local state */
             saw_decl_keyword = false;
-            saw_for = false;
-            saw_for_in = false;
 
             /* Close same-level match blocks when next line doesn't start with | */
             while (indent_depth > 0 && is_match_block[indent_depth] &&
@@ -1039,16 +1033,10 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
         DA_APPEND(out, olen, ocap, t);
         last_kind = t.kind;
 
-        /* Track context for = and in block-former detection */
+        /* Track context for the `=` block-former detection */
         if (t.kind == TOK_LET || t.kind == TOK_STRUCT ||
             t.kind == TOK_UNION || t.kind == TOK_MODULE) {
             saw_decl_keyword = true;
-        }
-        if (t.kind == TOK_FOR) {
-            saw_for = true;
-        }
-        if (t.kind == TOK_IN && saw_for) {
-            saw_for_in = true;
         }
     }
 

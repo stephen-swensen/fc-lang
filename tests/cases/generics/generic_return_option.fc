@@ -1,7 +1,7 @@
 // Idiomatic find pattern: generic function returns option of type variable,
 // with early `return some(x)` on hit and `none('a)` as the fallthrough tail.
 let first_match = (xs: 'a[], target: 'a) ->
-    for x in xs
+    for x in xs do
         if x == target then return some(x)
     none('a)
 
