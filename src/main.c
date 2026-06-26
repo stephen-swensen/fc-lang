@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
     SymbolTable symtab = {0};
     symtab_init(&symtab);
     FileImportScopes file_scopes = { .scopes = NULL, .count = 0, .capacity = 0 };
-    pass1_collect(prog, &symtab, &intern_table, &file_scopes);
+    pass1_collect(prog, &symtab, &intern_table, &file_scopes, /*require_main=*/true);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());

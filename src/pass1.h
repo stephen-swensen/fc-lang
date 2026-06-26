@@ -67,6 +67,12 @@ Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
 Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix);
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
 
-/* Run pass 1: collect top-level declarations into symbol table */
+/* Run pass 1: collect top-level declarations into symbol table.
+ *
+ * `require_main` gates the entry-point requirement: when true (the CLI), a
+ * program with no `let main` is an error. When false (the in-process LSP, which
+ * analyzes library code like the stdlib that has no entry point), the missing
+ * `main` is tolerated and the entry-point-file restriction on top-level `let`
+ * is skipped. */
 void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
-                   FileImportScopes *file_scopes);
+                   FileImportScopes *file_scopes, bool require_main);

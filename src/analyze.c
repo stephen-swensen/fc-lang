@@ -147,7 +147,10 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
          * primary document (stdlib is presumed clean and is filtered out). */
         diag_set_filename(r->filename);
 
-        pass1_collect(r->program, &r->symtab, &r->intern, &r->file_scopes);
+        /* Server mode tolerates library code with no entry point (e.g. editing
+         * a stdlib module), so the missing-`main` diagnostic is suppressed. */
+        pass1_collect(r->program, &r->symtab, &r->intern, &r->file_scopes,
+                      /*require_main=*/false);
         if (diag_error_count() == 0)
             pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
                         &r->arena);

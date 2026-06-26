@@ -1011,7 +1011,7 @@ static void resolve_nested_module_imports(SymbolTable *members,
 }
 
 void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
-                   FileImportScopes *file_scopes) {
+                   FileImportScopes *file_scopes, bool require_main) {
     /* Phase 0: Validate that file-level imports come before other declarations.
      * Namespace declarations are exempt (they must come first). */
     {
@@ -1143,11 +1143,15 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             break;
         }
     }
-    if (!entry_file) {
+    if (!entry_file && require_main) {
         diag_error((SrcLoc){0}, "no entry point: program must contain 'let main'");
     }
+    /* The entry-point-file restriction on top-level 'let' only has meaning when
+     * an entry-point file exists. In library mode (require_main == false, no
+     * main), there is no entry file to anchor the rule, so top-level 'let' is
+     * permitted anywhere — skip the check rather than flag every binding. */
     current_ns = NULL;
-    for (int i = 0; i < prog->decl_count; i++) {
+    for (int i = 0; entry_file && i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
         if (d->kind == DECL_NAMESPACE) { current_ns = d->ns.name; continue; }
         if (current_ns) continue; /* non-global namespace — checked below */

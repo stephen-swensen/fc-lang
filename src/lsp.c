@@ -1,3 +1,7 @@
+/* Expose POSIX/BSD extensions (notably realpath) under -std=c11, which would
+ * otherwise hide them via __STRICT_ANSI__. Must precede every #include. */
+#define _DEFAULT_SOURCE
+
 #include "lsp.h"
 #include "json.h"
 #include "analyze.h"
@@ -74,6 +78,15 @@ static char *dup_cstr(const char *s) {
     char *p = malloc(n);
     memcpy(p, s, n);
     return p;
+}
+
+/* Canonical absolute path (resolves symlinks, `..`, and relative spellings) so
+ * two paths to the SAME on-disk file compare equal. Falls back to a plain copy
+ * when the path can't be resolved (e.g. an unsaved/virtual document). Caller
+ * frees. */
+static char *canon_path(const char *path) {
+    char *rp = realpath(path, NULL);
+    return rp ? rp : dup_cstr(path);
 }
 
 static int hexval(int c) {
@@ -602,14 +615,33 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
         }
     }
 
-    /* stdlib feed (skip any already present by path, e.g. when editing in the
-     * stdlib directory itself). */
+    /* stdlib feed. Drop any feed file that is the SAME on-disk file as the open
+     * document or a sibling — most commonly because you followed Go To Definition
+     * into a stdlib module, so the editor opened the very file the feed already
+     * provides. Without this it is analyzed twice => pass1 "redefinition" => pass2
+     * never runs (no diagnostics AND no hover/CodeLens; the error is attributed to
+     * the feed copy and filtered out, so nothing surfaces).
+     *
+     * The key is the canonical absolute path (realpath), so the same file dedups
+     * regardless of how its path was spelled, while two DIFFERENT files that merely
+     * share a basename — a project's own `data.fc` vs the stdlib's — are correctly
+     * kept (basename-matching would wrongly shadow `std::data`). */
+    int sib_n = n;                              /* siblings precede any feed entries */
+    char **have = malloc(sizeof *have * (size_t)(sib_n + 1));
+    int have_n = 0;
+    have[have_n++] = canon_path(doc->path);
+    for (int j = 0; j < sib_n; j++) have[have_n++] = canon_path(extra[j].filename);
+
     for (int i = 0; i < S->stdlib_count; i++) {
+        char *feed_real = canon_path(S->stdlib[i].filename);
         bool dup = false;
-        for (int j = 0; j < n; j++)
-            if (strcmp(extra[j].filename, S->stdlib[i].filename) == 0) { dup = true; break; }
+        for (int j = 0; j < have_n; j++)
+            if (strcmp(have[j], feed_real) == 0) { dup = true; break; }
+        free(feed_real);
         if (!dup) DA_APPEND(extra, n, cap, S->stdlib[i]);
     }
+    for (int j = 0; j < have_n; j++) free(have[j]);
+    free(have);
 
     doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n);
 

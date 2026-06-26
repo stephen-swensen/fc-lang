@@ -206,5 +206,100 @@ _, _, sbf, _, _ = run_session(sl)
 check("stdlib feed resolves std::random / io / text",
       sbf.get("m.fc", [["?"]])[-1] == [], str(sbf.get("m.fc")))
 
+# --- library mode: a document with no `let main` is tolerated (no entry point) ---
+# The CLI requires `let main`, but the server analyzes library code (e.g. a stdlib
+# module being edited) that has no entry point. It must not be flagged.
+libns = tempfile.mkdtemp(prefix="fc_lsp_libns_")
+LIBNS = (
+    "namespace mylib::\n\n"
+    "module util =\n"
+    "    let triple = (n: int32) ->\n"
+    "        n * 3\n"
+)
+ln = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + libns + "/util.fc",
+         "languageId": "fc", "version": 1, "text": LIBNS}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, lnbf, _, _ = run_session(ln)
+check("library module (no `let main`) is not flagged as missing entry point",
+      lnbf.get("util.fc", [["?"]])[-1] == [], str(lnbf.get("util.fc")))
+
+# A global file with top-level `let` bindings and no main: the entry-point-file
+# restriction can't apply (there is no entry file), so it must be suppressed too,
+# rather than flagging every top-level `let`.
+libg = tempfile.mkdtemp(prefix="fc_lsp_libg_")
+LIBG = (
+    "let answer = 42\n"
+    "let greet = (name: str) ->\n"
+    "    name\n"
+)
+lg = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + libg + "/lib.fc",
+         "languageId": "fc", "version": 1, "text": LIBG}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, lgbf, _, _ = run_session(lg)
+check("library globals (top-level `let`, no main) are not flagged",
+      lgbf.get("lib.fc", [["?"]])[-1] == [], str(lgbf.get("lib.fc")))
+
+# --- opening a stdlib file the feed already provides (the Go To Definition case) ---
+# The server merges the installed stdlib into every analysis. Following Go To
+# Definition into a stdlib symbol opens the very file the feed provides, so the
+# same module would be analyzed twice -> pass1 "redefinition" -> pass2 never runs
+# -> no diagnostics AND no type info (hover / CodeLens silently empty). The feed
+# must drop the entry that is the SAME on-disk file as the open document.
+import glob
+std_dir = os.path.abspath("stdlib")
+cand = next((f for f in sorted(glob.glob(os.path.join(std_dir, "*.fc")))
+             if "let " in open(f).read()), None)
+check("found a stdlib file to open", cand is not None, std_dir)
+if cand:
+    curi = "file://" + cand
+    se = [
+        req(1, "initialize", {"capabilities": {}}),
+        note("initialized", {}),
+        note("textDocument/didOpen", {"textDocument": {"uri": curi, "languageId": "fc",
+             "version": 1, "text": open(cand).read()}}),
+        req(2, "textDocument/codeLens", {"textDocument": {"uri": curi}}),
+        req(9, "shutdown", None),
+        note("exit", None),
+    ]
+    resp_se, _, sebf, _, _ = run_session(se)
+    name = os.path.basename(cand)
+    check("opening a feed-provided stdlib file: no spurious redefinition diagnostics",
+          sebf.get(name, [["?"]])[-1] == [], str(sebf.get(name)))
+    lenses = resp_se.get(2, {}).get("result") or []
+    check("opening a feed-provided stdlib file: type CodeLens still provided",
+          isinstance(lenses, list) and len(lenses) > 0,
+          str(len(lenses) if isinstance(lenses, list) else lenses))
+
+# --- a project file named like a stdlib module must NOT shadow that std:: module ---
+# Dedup keys on canonical path, not basename: a workspace `data.fc` is a DIFFERENT
+# on-disk file than the stdlib's `data.fc`, so the feed's `std::data` must survive.
+# (Basename dedup would drop it and break `import data from std::`.)
+ns = tempfile.mkdtemp(prefix="fc_lsp_ownname_")
+with open(os.path.join(ns, "data.fc"), "w") as f:        # same basename as std's data.fc
+    f.write("module mydata =\n    let f = (x: int32) ->\n        x\n")
+with open(os.path.join(ns, "main.fc"), "w") as f:
+    f.write("import data from std::\n\nlet main = (args: str[]) ->\n    return 0\n")
+nm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + os.path.join(ns, "main.fc"),
+         "languageId": "fc", "version": 1, "text": open(os.path.join(ns, "main.fc")).read()}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, nbf, _, _ = run_session(nm)
+check("own file named like a stdlib module: `import data from std::` still resolves",
+      nbf.get("main.fc", [["?"]])[-1] == [], str(nbf.get("main.fc")))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
