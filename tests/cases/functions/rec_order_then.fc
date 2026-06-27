@@ -1,7 +1,7 @@
 // Recursive return-type inference is order-independent: the recursive call may
 // precede the base case. Here the recursive branch is the then-branch (checked
 // first) and the base case is the else-branch — the mirror of recursion.fc.
-let fac = (n: int32) ->
+let fac = (n: i32) ->
     if n > 1 then n * fac(n - 1) else 1
 
 let main = (args: str[]) ->

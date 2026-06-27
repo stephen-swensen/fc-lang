@@ -1,8 +1,8 @@
 // Loop-carried taint through a second mut binding: saved = p reads the stack
 // pointer p held from a previous iteration.
 let bad = () ->
-    let mut p = default(int32*)
-    let mut saved = default(int32*)
+    let mut p = default(i32*)
+    let mut saved = default(i32*)
     for i in 0..2 do
         saved = p
         let mut x = 5

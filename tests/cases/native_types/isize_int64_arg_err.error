@@ -1,1 +1,1 @@
-expected int64, got isize
+expected i64, got isize

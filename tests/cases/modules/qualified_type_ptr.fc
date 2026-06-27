@@ -1,10 +1,10 @@
 // Test: module-qualified struct type as pointer type
 module geometry =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
-let set_x = (p: geometry.point*, val: int32) ->
+let set_x = (p: geometry.point*, val: i32) ->
     p->x = val
 
 let main = (args: str[]) ->

@@ -1,6 +1,6 @@
 // A wildcard alternative absorbs everything; other alts are
 // redundant but not an error.
-let classify = (x: int32) ->
+let classify = (x: i32) ->
     match x with
     | 1 | _ -> 42
 

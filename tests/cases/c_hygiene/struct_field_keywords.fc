@@ -2,11 +2,11 @@
 // must be escaped in the struct definition, construction, field access,
 // partial/default construction, and the generated equality function.
 struct flags =
-    register: int32
-    volatile: int32
+    register: i32
+    volatile: i32
     static: bool
-    signed: int32
-    double: float64
+    signed: i32
+    double: f64
 
 let main = (args: str[]) ->
     let a = flags { register = 3, volatile = 4, static = true, signed = -2, double = 1.5 }

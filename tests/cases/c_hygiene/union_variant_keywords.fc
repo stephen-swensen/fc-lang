@@ -3,15 +3,15 @@
 // C union member, which must be escaped in construction, matching, and the
 // generated equality function). Variant tags themselves stay composed.
 union time_t =
-    | switch(int32)
-    | volatile(float64)
+    | switch(i32)
+    | volatile(f64)
     | static
-    | register(int32)
+    | register(i32)
 
 let classify = (t: time_t) ->
     match t with
     | switch(n) -> n
-    | volatile(f) -> (int32) f
+    | volatile(f) -> (i32) f
     | static -> -1
     | register(n) -> n * 2
 

@@ -1,5 +1,5 @@
-let add_one = (x: int32) -> x + 1
-let add_two = (x: int32) -> x + 2
+let add_one = (x: i32) -> x + 1
+let add_two = (x: i32) -> x + 2
 
 let main = (args: str[]) ->
     let _result =

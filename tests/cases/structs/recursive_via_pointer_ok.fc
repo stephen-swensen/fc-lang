@@ -1,11 +1,11 @@
 // Recursion through a pointer (or slice) is finite and must compile: the
 // classic linked-list / tree shapes.
 struct node =
-    value: int32
+    value: i32
     next: node*?
 
 struct tree =
-    label: int32
+    label: i32
     children: tree[]
 
 let main = (args: str[]) ->

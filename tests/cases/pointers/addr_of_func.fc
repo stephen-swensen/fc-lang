@@ -1,6 +1,6 @@
 // &f on a non-capturing function yields a raw C function pointer
 // (typed as any* in FC — opaque, C-interop only).
-let double = (x: int32) -> x * 2
+let double = (x: i32) -> x * 2
 
 let greet = () ->
     0
@@ -9,7 +9,7 @@ let main = (args: str[]) ->
     // Top-level named function
     let p = &double
     // Non-capturing inline lambda
-    let q = &((x: int32, y: int32) -> x + y)
+    let q = &((x: i32, y: i32) -> x + y)
     // Zero-arg function
     let r = &greet
     // Function pointers must be non-null

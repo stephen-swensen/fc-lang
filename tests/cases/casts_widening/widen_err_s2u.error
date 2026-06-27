@@ -1,1 +1,1 @@
-type mismatch: int32 vs uint32
+type mismatch: i32 vs u32

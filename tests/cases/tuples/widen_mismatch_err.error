@@ -1,1 +1,1 @@
-expected {int64, int64}
+expected {i64, i64}

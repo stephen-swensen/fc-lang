@@ -1,6 +1,6 @@
 // Two recursive calls before the base case: the then-branch sums two recursive
 // calls and the base case sits in the else-branch.
-let fib = (n: int32) ->
+let fib = (n: i32) ->
     if n >= 2 then fib(n - 1) + fib(n - 2) else n
 
 let main = (args: str[]) ->

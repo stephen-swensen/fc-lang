@@ -1,5 +1,5 @@
 struct holder =
-    data: int32[4]
+    data: i32[4]
 
 let main = (args: str[]) ->
     let mut h = holder { }

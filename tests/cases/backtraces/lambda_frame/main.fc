@@ -1,7 +1,7 @@
-let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
 
 let main = (args: str[]) ->
-    let check = (n: int32) ->
+    let check = (n: i32) ->
         assert(n > 0)
         n
     let _r = apply(check, 0)

@@ -1,6 +1,6 @@
 import point as pt from geometry
 
-let make = (x: int32, y: int32) -> pt { x = x, y = y }
+let make = (x: i32, y: i32) -> pt { x = x, y = y }
 
 let main = (args: str[]) ->
     let p = make(10, 20)

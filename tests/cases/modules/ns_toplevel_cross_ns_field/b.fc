@@ -7,7 +7,7 @@ struct segment =
     end: point
 
 module segment =
-    let make = (sx: int32, sy: int32, ex: int32, ey: int32) ->
+    let make = (sx: i32, sy: i32, ex: i32, ey: i32) ->
         segment {
             start = point { x = sx, y = sy },
             end   = point { x = ex, y = ey },

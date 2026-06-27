@@ -1,7 +1,7 @@
 // Item 6: a slice literal of a generic struct instance inside a generic body.
 // discover_in_expr had no EXPR_ARRAY_LIT case at all, so neither the element
-// expressions (the box {...} struct literals) nor the element type box<int64>
-// were walked during transitive discovery -> undefined `box__5_int64`. The
+// expressions (the box {...} struct literals) nor the element type box<i64>
+// were walked during transitive discovery -> undefined `box__5_i64`. The
 // array element type appears only inside total's body. Two instantiations.
 struct box =
     v: 'a
@@ -12,5 +12,5 @@ let total = (x: 'a) ->
 
 let main = (args: str[]) ->
     assert(total(7i64) == 21i64)
-    assert(total(2i16) == 6i16)   // distinct instantiation: box<int16>
+    assert(total(2i16) == 6i16)   // distinct instantiation: box<i16>
     0

@@ -7,7 +7,7 @@ module outer =
         let use_fn = () -> parent_fn(10)
 
     let parent_val = 42
-    let parent_fn = (x: int32) -> x * 2
+    let parent_fn = (x: i32) -> x * 2
 
     // Also test grandchild -> grandparent forward ref
     module mid =

@@ -23,7 +23,7 @@ URI = "file://" + tempfile.mkdtemp(prefix="fc_lsp_") + "/doc.fc"
 
 # Programs (0-based lines noted where used by positions below).
 CLEAN = (
-    "let helper = (n: int32) ->\n"      # line 0
+    "let helper = (n: i32) ->\n"      # line 0
     "    n + 1\n"                        # line 1
     "let main = (args: str[]) ->\n"     # line 2
     "    let x = helper(41)\n"           # line 3   ('x' col 8, 'helper' col 12)
@@ -57,7 +57,7 @@ msgs = [
     req(1, "initialize", {"capabilities": {}}),
     note("initialized", {}),
     open_doc(1, CLEAN),                                                  # diag[0] = clean
-    hover(2, 3, 8),                                                      # x -> int32
+    hover(2, 3, 8),                                                      # x -> i32
     hover(3, 3, 13),                                                     # helper -> func
     req(4, "textDocument/definition", {"textDocument": {"uri": URI}, "position": {"line": 3, "character": 13}}),
     req(5, "textDocument/codeLens", {"textDocument": {"uri": URI}}),
@@ -117,8 +117,8 @@ check("clean document has no diagnostics",
       len(diags) >= 1 and diags[0] == [], str(diags[0] if diags else None))
 
 hx = responses.get(2, {}).get("result") or {}
-check("hover 'x' shows int32",
-      "int32" in json.dumps(hx), json.dumps(hx))
+check("hover 'x' shows i32",
+      "i32" in json.dumps(hx), json.dumps(hx))
 
 hh = responses.get(3, {}).get("result") or {}
 check("hover 'helper' shows a function type",
@@ -167,7 +167,7 @@ if stderr.strip():
 import os
 proj = tempfile.mkdtemp(prefix="fc_lsp_proj_")
 with open(os.path.join(proj, "prelude.fc"), "w") as f:
-    f.write("module prelude =\n    let double = (n: int32) ->\n        n * 2\n")
+    f.write("module prelude =\n    let double = (n: i32) ->\n        n * 2\n")
 with open(os.path.join(proj, "main.fc"), "w") as f:
     f.write("import double from prelude\n\nlet main = (args: str[]) ->\n    let y = double(21)\n    return y\n")
 
@@ -213,7 +213,7 @@ libns = tempfile.mkdtemp(prefix="fc_lsp_libns_")
 LIBNS = (
     "namespace mylib::\n\n"
     "module util =\n"
-    "    let triple = (n: int32) ->\n"
+    "    let triple = (n: i32) ->\n"
     "        n * 3\n"
 )
 ln = [
@@ -286,7 +286,7 @@ if cand:
 # (Basename dedup would drop it and break `import data from std::`.)
 ns = tempfile.mkdtemp(prefix="fc_lsp_ownname_")
 with open(os.path.join(ns, "data.fc"), "w") as f:        # same basename as std's data.fc
-    f.write("module mydata =\n    let f = (x: int32) ->\n        x\n")
+    f.write("module mydata =\n    let f = (x: i32) ->\n        x\n")
 with open(os.path.join(ns, "main.fc"), "w") as f:
     f.write("import data from std::\n\nlet main = (args: str[]) ->\n    return 0\n")
 nm = [
@@ -306,13 +306,13 @@ check("own file named like a stdlib module: `import data from std::` still resol
 gd = tempfile.mkdtemp(prefix="fc_lsp_gotodef_")
 GOTODEF = (
     "module mathx =\n"                          # line 0
-    "    let twice = (n: int32) ->\n"           # line 1: def of twice
+    "    let twice = (n: i32) ->\n"           # line 1: def of twice
     "        n * 2\n"                            # line 2
     "struct point =\n"                          # line 3: def of point
-    "    x: int32\n"                            # line 4
-    "    y: int32\n"                            # line 5
+    "    x: i32\n"                            # line 4
+    "    y: i32\n"                            # line 5
     "union shape =\n"                           # line 6: def of shape
-    "    | circle(int32)\n"                     # line 7
+    "    | circle(i32)\n"                     # line 7
     "    | empty\n"                             # line 8
     "let main = (args: str[]) ->\n"             # line 9
     "    let a = mathx.twice(21)\n"             # line 10: 'mathx' col 12, 'twice' col 18

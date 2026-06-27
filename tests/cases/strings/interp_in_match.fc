@@ -1,12 +1,12 @@
 // interpolation inside match arms, heap-promoted so it outlives the arm scope
-let describe = (x: int32?) ->
+let describe = (x: i32?) ->
     match x with
     | some(v) -> alloc("got=%d{v}")!
     | none    -> alloc("empty=%d{0}")!
 
 let main = (args: str[]) ->
     let a = describe(some(42))
-    let b = describe(none(int32))
+    let b = describe(none(i32))
     let mut ok = 0
     if a == "got=42" then ok = ok + 1
     if b == "empty=0" then ok = ok + 2

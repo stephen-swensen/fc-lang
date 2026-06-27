@@ -1,7 +1,7 @@
 // Realistic pattern: alloc + defer free
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let p = alloc(point { x = 10, y = 20 })!
@@ -9,7 +9,7 @@ let main = (args: str[]) ->
     assert(p->x == 10)
     assert(p->y == 20)
 
-    let buf = alloc(int32[3] { 1, 2, 3 })!
+    let buf = alloc(i32[3] { 1, 2, 3 })!
     defer free(buf)
     assert(buf[0] == 1)
     assert(buf[2] == 3)

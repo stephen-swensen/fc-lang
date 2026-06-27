@@ -1,7 +1,7 @@
 // Module-level slice literal — lifted to a static backing array in C
 module nums =
-    let triples = int32[3] { 10, 20, 30 }
-    let empty = int32[0] {}
+    let triples = i32[3] { 10, 20, 30 }
+    let empty = i32[0] {}
 
 let main = (args: str[]) ->
     assert(nums.triples.len == 3)

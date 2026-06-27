@@ -1,6 +1,6 @@
 module c from "fcntl.h" =
-    extern O_RDONLY: int64
-    extern O_WRONLY: int64
+    extern O_RDONLY: i64
+    extern O_WRONLY: i64
 
 let main = (args: str[]) ->
     let rd = c.O_RDONLY

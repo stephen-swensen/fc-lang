@@ -1,5 +1,5 @@
 // Error: returning a stack-allocated interpolated string
-let bad = (n: int32) ->
+let bad = (n: i32) ->
     "%d{n}"
 
 let main = (args: str[]) ->

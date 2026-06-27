@@ -4,8 +4,8 @@ union color =
     | blue
 
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
 
 let c = color.green
 let s = shape.circle(10)

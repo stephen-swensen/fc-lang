@@ -1,6 +1,6 @@
-let map_int = (f: (int32) -> int32, x: int32) -> f(x)
+let map_int = (f: (i32) -> i32, x: i32) -> f(x)
 
-let negate = (x: int32) -> 0 - x
+let negate = (x: i32) -> 0 - x
 
 let main = (args: str[]) ->
     let result = map_int(negate, -42)

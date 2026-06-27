@@ -3,15 +3,15 @@ let main = (args: str[]) ->
     let a = (isize) 42
     let b = (usize) 42
     // cast from isize/usize to fixed
-    let c = (int32) a
-    let d = (int64) a
-    let e = (uint64) b
-    let f = (int32) b
+    let c = (i32) a
+    let d = (i64) a
+    let e = (u64) b
+    let f = (i32) b
     // cast between isize and usize
     let g = (usize) a
     let h = (isize) b
     // cast from/to float requires going through int
-    let i = (int32) a
-    let j = (float64) i
+    let i = (i32) a
+    let j = (f64) i
     assert(c + f == 84)
     0

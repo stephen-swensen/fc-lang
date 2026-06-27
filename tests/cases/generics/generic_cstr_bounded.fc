@@ -7,12 +7,12 @@ module c from "string.h" =
 let describe = (xs: 'a[]) ->
     let label = "len"
     let cs = (cstr[8]) label          // hoisted backing, per monomorph
-    let msg = alloca("%s{label}=%d{(int32) xs.len}")
-    (int64) c.strlen(cs) + (int64) msg.len
+    let msg = alloca("%s{label}=%d{(i32) xs.len}")
+    (i64) c.strlen(cs) + (i64) msg.len
 
 let main = (args: str[]) ->
-    let ints = int32[2] { 5, 6 }
-    let longs = int64[3] { 5i64, 6i64, 7i64 }
-    assert(describe(ints) == 3i64 + 5i64)    // "len" + "len=2"  ('a = int32)
-    assert(describe(longs) == 3i64 + 5i64)   // "len" + "len=3"  ('a = int64)
+    let ints = i32[2] { 5, 6 }
+    let longs = i64[3] { 5i64, 6i64, 7i64 }
+    assert(describe(ints) == 3i64 + 5i64)    // "len" + "len=2"  ('a = i32)
+    assert(describe(longs) == 3i64 + 5i64)   // "len" + "len=3"  ('a = i64)
     0

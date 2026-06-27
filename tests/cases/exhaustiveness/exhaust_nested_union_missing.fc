@@ -1,6 +1,6 @@
 // Missing union variant even though inner patterns are detailed
 union entry =
-    | found(int32?)
+    | found(i32?)
     | missing
 
 let check = (e: entry) ->

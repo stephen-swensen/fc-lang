@@ -4,10 +4,10 @@ struct box =
     v: 'a
 
 struct holder =
-    b: box<box<int32>>
+    b: box<box<i32>>
 
 union maybe_box =
-    | present(box<box<int32>>)
+    | present(box<box<i32>>)
     | absent
 
 let main = (args: str[]) ->

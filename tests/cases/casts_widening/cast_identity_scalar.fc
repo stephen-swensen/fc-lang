@@ -4,6 +4,6 @@ let main = (args: str[]) ->
     let b = true
     let b2 = (bool) b
     assert(b2)
-    let n = (int32) 5i32
+    let n = (i32) 5i32
     assert(n == 5)
     0

@@ -1,5 +1,5 @@
 // C7: an unknown type name produces a clean FC diagnostic instead of leaking
 // the name verbatim into the generated C. `option` is not a type (use `T?`).
-let f = (x: option<int32>) -> x
+let f = (x: option<i32>) -> x
 let main = (args: str[]) ->
     0

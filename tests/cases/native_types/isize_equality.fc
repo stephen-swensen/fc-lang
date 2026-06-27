@@ -1,12 +1,12 @@
 let main = (args: str[]) ->
-    let a = 42i
-    let b = 42i
-    let c = 99i
+    let a = 42isize
+    let b = 42isize
+    let c = 99isize
     let r1 = if a == b then 1 else 0
     let r2 = if a != c then 1 else 0
-    let d = 10u
-    let e = 10u
-    let f = 20u
+    let d = 10usize
+    let e = 10usize
+    let f = 20usize
     let r3 = if d == e then 1 else 0
     let r4 = if d != f then 1 else 0
     assert(r1 + r2 + r3 + r4 == 4)

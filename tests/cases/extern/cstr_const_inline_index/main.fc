@@ -1,8 +1,8 @@
 // Regression (A9): inline indexing of a `cstr` extern constant.
 //
-// `c.my_str` emits a `char* -> uint8_t*` boundary cast. Without outer parens,
-// `(int32) c.my_str[0]` lowered to `(uint8_t*)(MY_STR)[0]`, i.e.
-// `(uint8_t*)((MY_STR)[0])` — the `[0]` indexed the raw #define first, then an
+// `c.my_str` emits a `char* -> u8_t*` boundary cast. Without outer parens,
+// `(i32) c.my_str[0]` lowered to `(u8_t*)(MY_STR)[0]`, i.e.
+// `(u8_t*)((MY_STR)[0])` — the `[0]` indexed the raw #define first, then an
 // int->pointer cast, failing the C compile under -Werror. The cast must be
 // parenthesized so `[0]` binds to the cast result.
 module c from "mystr.h" =
@@ -10,8 +10,8 @@ module c from "mystr.h" =
 
 let main = (args: str[]) ->
     // Inline (no intermediate `let`): index directly off the boundary cast.
-    let first = (int32) c.my_str[0]
+    let first = (i32) c.my_str[0]
     assert(first == 104)   // 'h'
-    let third = (int32) c.my_str[2]
+    let third = (i32) c.my_str[2]
     assert(third == 108)   // 'l'
     0

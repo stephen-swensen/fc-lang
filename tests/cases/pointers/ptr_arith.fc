@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-    let mut buf = int32[4] { }
+    let mut buf = i32[4] { }
     buf.ptr[0] = 10
     buf.ptr[1] = 20
     buf.ptr[2] = 30

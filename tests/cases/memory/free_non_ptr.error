@@ -1,1 +1,1 @@
-free requires pointer or slice, got int32
+free requires pointer or slice, got i32

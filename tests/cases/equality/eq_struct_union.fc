@@ -1,9 +1,9 @@
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
 
 struct drawing =
-    name: int32
+    name: i32
     s: shape
 
 let main = (args: str[]) ->

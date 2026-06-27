@@ -2,8 +2,8 @@
 module outer =
     module inner =
         struct point =
-            x: int32
-            y: int32
+            x: i32
+            y: i32
 
 let main = (args: str[]) ->
     let p = outer.inner.point { x = 3, y = 7 }

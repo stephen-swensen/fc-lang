@@ -1,7 +1,7 @@
 // Mix of single-line and multiline struct literals in same function
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let _result =

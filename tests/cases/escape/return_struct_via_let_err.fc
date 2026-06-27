@@ -1,6 +1,6 @@
 // Error: stack provenance propagates through let binding to return
 struct holder =
-    p: int32*
+    p: i32*
 
 let bad = () ->
     let mut x = 42

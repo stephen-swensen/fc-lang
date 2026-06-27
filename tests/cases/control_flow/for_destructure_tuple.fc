@@ -1,6 +1,6 @@
 // Element destructuring of a tuple slice in a for loop.
 let main = (args: str[]) ->
-    let pairs = {int32, int32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+    let pairs = {i32, i32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
     let mut sum = 0
     for { a, b } in pairs do
         sum = sum + a + b

@@ -1,4 +1,4 @@
-let classify = (n: int32) ->
+let classify = (n: i32) ->
     match n with
     | 0 -> 0i8
     | x when x < 0 -> -1i8

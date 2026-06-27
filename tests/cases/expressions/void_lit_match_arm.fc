@@ -7,7 +7,7 @@ union phase =
     | running
     | stopped
 
-let act = (p: phase, counter: int32*) ->
+let act = (p: phase, counter: i32*) ->
     match p with
     | running -> *counter = *counter + 1
     | _ -> void()

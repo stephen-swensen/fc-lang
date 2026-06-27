@@ -1,5 +1,5 @@
 // Binary operands are evaluated left-to-right, each exactly once.
-let bump = (c: int32*) ->
+let bump = (c: i32*) ->
     *c = *c + 1
     *c
 

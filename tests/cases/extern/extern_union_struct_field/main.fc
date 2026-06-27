@@ -1,16 +1,16 @@
 // Test: extern union with struct-typed fields
 module ev from "test_union.h" =
     extern struct key_event as key_event =
-        type: uint32
-        timestamp: uint32
-        keycode: int32
+        type: u32
+        timestamp: u32
+        keycode: i32
     extern struct mouse_event as mouse_event =
-        type: uint32
-        timestamp: uint32
-        x: int32
-        y: int32
+        type: u32
+        timestamp: u32
+        x: i32
+        y: i32
     extern union event as event =
-        type: uint32
+        type: u32
         key: key_event
         mouse: mouse_event
 

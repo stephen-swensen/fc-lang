@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-    let mut buf = uint8[3] { }
+    let mut buf = u8[3] { }
     buf.ptr[0] = 65u8
     buf.ptr[1] = 66u8
     buf.ptr[2] = 67u8
@@ -7,7 +7,7 @@ let main = (args: str[]) ->
     let copy = alloc(buf)!
     buf.ptr[0] = 0u8
 
-    let result = (int32) copy[0] + (int32) copy[1] + (int32) copy[2]
+    let result = (i32) copy[0] + (i32) copy[1] + (i32) copy[2]
     free(copy)
     assert(result == 198)
     0

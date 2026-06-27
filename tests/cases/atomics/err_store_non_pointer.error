@@ -1,1 +1,1 @@
-atomic_store_release requires a pointer operand, got int32
+atomic_store_release requires a pointer operand, got i32

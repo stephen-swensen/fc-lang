@@ -1,5 +1,5 @@
 // Tuples don't implicitly widen, so give elements their target widths.
-let f = (p: {int64, int64}) -> p[0] + p[1]
+let f = (p: {i64, i64}) -> p[0] + p[1]
 let main = (args: str[]) ->
     assert(f({ 4i64, 5i64 }) == 9i64)
     0

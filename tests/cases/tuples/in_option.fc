@@ -4,6 +4,6 @@ let main = (args: str[]) ->
     assert(o![0] == 9)
     assert(o![1] == 10)
 
-    let n = none({int32, int32})
+    let n = none({i32, i32})
     assert(n.is_none)
     0

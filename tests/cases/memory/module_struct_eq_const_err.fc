@@ -2,8 +2,8 @@
 // codegen emits generated comparison function call
 module m =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
     let same = point { x = 1, y = 2 } == point { x = 1, y = 2 }
 
 let main = (args: str[]) ->

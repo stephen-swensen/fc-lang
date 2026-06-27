@@ -13,15 +13,15 @@ import io from std::
 
 // Extra C bindings not in std::net
 module sock_ext from "sys/socket.h" define "_POSIX_C_SOURCE" "200809L" =
-    extern setsockopt: (int32, int32, int32, const any*, uint32) -> int32
-    extern SOL_SOCKET as sol_socket: int32
-    extern SO_RCVTIMEO as so_rcvtimeo: int32
+    extern setsockopt: (i32, i32, i32, const any*, u32) -> i32
+    extern SOL_SOCKET as sol_socket: i32
+    extern SO_RCVTIMEO as so_rcvtimeo: i32
 
 module time_ext from "sys/time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timeval =
-        tv_sec: int64
-        tv_usec: int64
-    extern gettimeofday: (timeval*, any*?) -> int32
+        tv_sec: i64
+        tv_usec: i64
+    extern gettimeofday: (timeval*, any*?) -> i32
 
 // now_usec: current time in microseconds.
 let now_usec = () ->
@@ -30,33 +30,33 @@ let now_usec = () ->
     tv.tv_sec * 1000000 + tv.tv_usec
 
 // icmp_checksum: compute the ICMP ones-complement checksum over a byte buffer.
-let icmp_checksum = (buf: uint8[]) ->
+let icmp_checksum = (buf: u8[]) ->
     let mut sum = 0u32
-    let len = (int32) buf.len
+    let len = (i32) buf.len
     let mut i = 0
     loop
         if i + 1 >= len then break
-        sum = sum + (((uint32) buf[i] << 8u32) | (uint32) buf[i + 1])
+        sum = sum + (((u32) buf[i] << 8u32) | (u32) buf[i + 1])
         i = i + 2
     if len % 2 == 1 then
-        sum = sum + ((uint32) buf[len - 1] << 8u32)
+        sum = sum + ((u32) buf[len - 1] << 8u32)
     sum = (sum >> 16u32) + (sum & 0xFFFFu32)
     sum = sum + (sum >> 16u32)
-    (uint16) (~sum & 0xFFFFu32)
+    (u16) (~sum & 0xFFFFu32)
 
 // build_echo_request: fill buf with an ICMP echo request packet.
-let build_echo_request = (buf: uint8[], id: uint16, seq: uint16) ->
+let build_echo_request = (buf: u8[], id: u16, seq: u16) ->
     buf.ptr[0] = 8u8          // type: echo request
     buf.ptr[1] = 0u8          // code
     buf.ptr[2] = 0u8          // checksum (zeroed for computation)
     buf.ptr[3] = 0u8
-    buf.ptr[4] = (uint8) (id >> 8u16)
-    buf.ptr[5] = (uint8) (id & 0xFFu16)
-    buf.ptr[6] = (uint8) (seq >> 8u16)
-    buf.ptr[7] = (uint8) (seq & 0xFFu16)
+    buf.ptr[4] = (u8) (id >> 8u16)
+    buf.ptr[5] = (u8) (id & 0xFFu16)
+    buf.ptr[6] = (u8) (seq >> 8u16)
+    buf.ptr[7] = (u8) (seq & 0xFFu16)
     let cksum = icmp_checksum(buf)
-    buf.ptr[2] = (uint8) (cksum >> 8u16)
-    buf.ptr[3] = (uint8) (cksum & 0xFFu16)
+    buf.ptr[2] = (u8) (cksum >> 8u16)
+    buf.ptr[3] = (u8) (cksum & 0xFFu16)
     return
 
 let main = (args: str[]) ->
@@ -75,10 +75,10 @@ let main = (args: str[]) ->
     let ip = ip_opt!
 
     // Extract IP octets for display (from network byte order)
-    let ip_a = (int32) (ip & 0xFFu32)
-    let ip_b = (int32) ((ip >> 8u32) & 0xFFu32)
-    let ip_c = (int32) ((ip >> 16u32) & 0xFFu32)
-    let ip_d = (int32) ((ip >> 24u32) & 0xFFu32)
+    let ip_a = (i32) (ip & 0xFFu32)
+    let ip_b = (i32) ((ip >> 8u32) & 0xFFu32)
+    let ip_c = (i32) ((ip >> 16u32) & 0xFFu32)
+    let ip_d = (i32) ((ip >> 24u32) & 0xFFu32)
 
     // Open ICMP socket
     let fd_opt = net.open_icmp()
@@ -93,7 +93,7 @@ let main = (args: str[]) ->
     sock_ext.setsockopt(fd, sock_ext.sol_socket, sock_ext.so_rcvtimeo, (const any*) &timeout, 16u32)
 
     let addr = net.make_addr(net.net_to_host32(ip), 0u16)
-    let id = (uint16) (sys.get_pid() & 0xFFFF)
+    let id = (u16) (sys.get_pid() & 0xFFFF)
 
     io.write(alloca("FING %s{host} (%d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d})\n"), stdout)
 
@@ -105,8 +105,8 @@ let main = (args: str[]) ->
 
     for seq in 0..count do
 
-        let mut pkt = uint8[64] {}
-        build_echo_request(pkt, id, (uint16) seq)
+        let mut pkt = u8[64] {}
+        build_echo_request(pkt, id, (u16) seq)
 
         let start = now_usec()
         let n_sent = net.send_to(fd, pkt, addr)
@@ -114,13 +114,13 @@ let main = (args: str[]) ->
             io.write("send failed for icmp_seq=%d{seq}\n", stderr)
         else
             sent = sent + 1
-            let mut reply = uint8[128] {}
+            let mut reply = u8[128] {}
             let n_recv = net.recv_from(fd, reply, 128)
             let elapsed = now_usec() - start
             // SOCK_RAW: reply has IP header + ICMP packet
-            let ihl = (int32) (reply[0] & 0x0Fu8) * 4
-            if n_recv >= (int64) (ihl + 8) then
-                let ttl = (int32) reply[8]
+            let ihl = (i32) (reply[0] & 0x0Fu8) * 4
+            if n_recv >= (i64) (ihl + 8) then
+                let ttl = (i32) reply[8]
                 let icmp_type = reply[ihl]
                 if icmp_type == 0u8 then
                     received = received + 1
@@ -129,7 +129,7 @@ let main = (args: str[]) ->
                     total_us = total_us + elapsed
                     let ms = elapsed / 1000
                     let frac = (elapsed % 1000) / 100
-                    let nbytes = (int32) n_recv - ihl
+                    let nbytes = (i32) n_recv - ihl
                     io.write("%d{nbytes} bytes from %d{ip_a}.%d{ip_b}.%d{ip_c}.%d{ip_d}: icmp_seq=%d{seq} ttl=%d{ttl} time=%d{ms}.%d{frac} ms\n", stdout)
                 else
                     io.write("unexpected ICMP type=%d{icmp_type}\n", stdout)
@@ -143,7 +143,7 @@ let main = (args: str[]) ->
     let loss = if sent > 0 then (sent - received) * 100 / sent else 0
     io.write("%d{sent} packets transmitted, %d{received} received, %d{loss}%% packet loss\n", stdout)
     if received > 0 then
-        let avg_us = total_us / (int64) received
+        let avg_us = total_us / (i64) received
         io.write("rtt min/avg/max = %d{min_us / 1000}.%d{(min_us % 1000) / 100}/%d{avg_us / 1000}.%d{(avg_us % 1000) / 100}/%d{max_us / 1000}.%d{(max_us % 1000) / 100} ms\n", stdout)
 
     if received == 0 then 1 else 0

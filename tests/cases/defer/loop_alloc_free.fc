@@ -2,7 +2,7 @@
 let main = (args: str[]) ->
     let mut total = 0
     for i in 0..3 do
-        let p = alloc(int32[1] { i })!
+        let p = alloc(i32[1] { i })!
         defer free(p)
         total = total + p[0]
     assert(total == 3)  // 0 + 1 + 2

@@ -1,8 +1,8 @@
 // Test: equality on module-qualified struct type
 module geometry =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 let main = (args: str[]) ->
     let a = geometry.point { x = 1, y = 2 }

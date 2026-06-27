@@ -1,10 +1,10 @@
 // A heap accumulator reassigned each iteration must NOT be over-tainted by the
 // loop pre-taint — heap/unknown values never taint.
-let pick = (n: int32) ->
-    let mut best = alloc(int32)!
+let pick = (n: i32) ->
+    let mut best = alloc(i32)!
     *best = 0
     for i in 1..n do
-        let cur = alloc(int32)!
+        let cur = alloc(i32)!
         *cur = i
         free(best)
         best = cur

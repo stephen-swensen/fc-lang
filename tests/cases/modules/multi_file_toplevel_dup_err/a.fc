@@ -1,2 +1,2 @@
 struct shared =
-    n: int32
+    n: i32

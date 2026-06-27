@@ -1,4 +1,4 @@
-let check = (x: int32??) ->
+let check = (x: i32??) ->
     match x with
     | some(some(v)) -> v
     | none -> 0

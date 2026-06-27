@@ -10,7 +10,7 @@ let make4 = (x: 'a) ->
 
 let count_len = (x: 'a) ->
     let buf = 'a[4] { x, x, x, x }
-    (int32) buf.len
+    (i32) buf.len
 
 let sum_iter = (x: 'a) ->
     let buf = 'a[3] { x, x, x }
@@ -24,10 +24,10 @@ let pick_second = (a: 'a, b: 'a) ->
     'a[2] { a, b }[1]
 
 let main = (args: str[]) ->
-    assert(make4(5) == 20)            // 'a = int32
-    assert(make4(3i64) == 12i64)      // 'a = int64, distinct monomorph
+    assert(make4(5) == 20)            // 'a = i32
+    assert(make4(3i64) == 12i64)      // 'a = i64, distinct monomorph
     assert(count_len(0i16) == 4)      // result is a slice: .len is known
-    assert(sum_iter(2i16) == 8i16)    // 'a = int16, iterate the slice
+    assert(sum_iter(2i16) == 8i16)    // 'a = i16, iterate the slice
     assert(pick_second(7, 8) == 8)
     assert(pick_second(7i64, 8i64) == 8i64)
     0

@@ -2,14 +2,14 @@
 // and through a keyword-named fixed-array field (slice-view read, element
 // index assignment, and whole-array slice assignment with its memcpy path).
 struct node =
-    volatile: int32
-    register: int32[4]
+    volatile: i32
+    register: i32[4]
 
 let bump = (p: node*) ->
     p->volatile = p->volatile + 1   // pointer field write to a keyword field
 
 let main = (args: str[]) ->
-    let mut n = node { volatile = 41, register = int32[4] { 1, 2, 3, 4 } }
+    let mut n = node { volatile = 41, register = i32[4] { 1, 2, 3, 4 } }
 
     // Pointer read/write of a keyword-named scalar field.
     let ptr = &n
@@ -24,7 +24,7 @@ let main = (args: str[]) ->
 
     // Whole fixed-array assignment from a slice (exercises the field memcpy /
     // zero-fill path keyed on the escaped member name).
-    let src = int32[2] { 7, 8 }
+    let src = i32[2] { 7, 8 }
     n.register = src
     assert(n.register[0] == 7)
     assert(n.register[1] == 8)

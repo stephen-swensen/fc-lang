@@ -1,6 +1,6 @@
-let twice = (x: int32) -> x * 2
+let twice = (x: i32) -> x * 2
 
-let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
 
 let main = (args: str[]) ->
     assert(apply(twice, 21) == 42)

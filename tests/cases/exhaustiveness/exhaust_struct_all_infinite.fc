@@ -1,7 +1,7 @@
 // Struct where all fields are infinite types — needs wildcard
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let check = (p: point) ->
     match p with

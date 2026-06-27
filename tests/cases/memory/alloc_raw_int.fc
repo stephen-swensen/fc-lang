@@ -1,12 +1,12 @@
 let main = (args: str[]) ->
     let _result =
-        let buf = alloc(int32, 4)
+        let buf = alloc(i32, 4)
         let mut r = 0
         match buf with
         | some(p) ->
             r = r + 1
             *p = 100
-            let p1 = p + 1i
+            let p1 = p + 1isize
             *p1 = 200
             if *p == 100 then r = r + 1
             if *p1 == 200 then r = r + 1

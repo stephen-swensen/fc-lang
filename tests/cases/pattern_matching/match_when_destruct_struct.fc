@@ -1,6 +1,6 @@
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 // Pattern bindings from struct destructuring are visible in the guard.
 let kind = (p: point) ->

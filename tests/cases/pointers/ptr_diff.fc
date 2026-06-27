@@ -1,12 +1,12 @@
 // C6: `ptr - ptr` yields an isize element count (C ptrdiff_t semantics, scaled
 // by element size), and `int + ptr` is the commutative form of `ptr + int`.
 let main = (args: str[]) ->
-    let mut buf = int32[8] { }
+    let mut buf = i32[8] { }
     let p = buf.ptr
     let q = p + 3
     let d = q - p
-    assert(d == 3i)            // element count, not byte count
+    assert(d == 3isize)            // element count, not byte count
     let r = 2 + p              // commutative int + ptr
     let d2 = r - p
-    assert(d2 == 2i)
+    assert(d2 == 2isize)
     0

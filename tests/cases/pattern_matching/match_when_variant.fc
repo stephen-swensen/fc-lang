@@ -1,9 +1,9 @@
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 union shape =
-    | circle(int32)
+    | circle(i32)
     | rect(point)
     | empty
 

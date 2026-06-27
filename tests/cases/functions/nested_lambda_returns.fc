@@ -1,9 +1,9 @@
 // Each function's `return` statements are checked against its own inferred return
-// type, not the enclosing function's. The outer function returns int32; the inner
-// lambda returns bool — `return 0` in the outer must match int32, while
+// type, not the enclosing function's. The outer function returns i32; the inner
+// lambda returns bool — `return 0` in the outer must match i32, while
 // `return false` in the inner must match bool.
 let main = (args: str[]) ->
-    let is_pos = (x: int32) ->
+    let is_pos = (x: i32) ->
         if x < 0 then return false
         true
     assert(is_pos(5))

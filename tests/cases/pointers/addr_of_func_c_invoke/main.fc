@@ -3,12 +3,12 @@
 // storing in a C struct field.
 module cb from "cb_invoke.h" =
     extern struct cb_box =
-        tag: int32
+        tag: i32
         fn: any*
-    extern cb_invoke: (any*, int32) -> int32
-    extern cb_box_invoke: (cb_box*, int32) -> int32
+    extern cb_invoke: (any*, i32) -> i32
+    extern cb_box_invoke: (cb_box*, i32) -> i32
 
-let triple = (x: int32) -> x * 3
+let triple = (x: i32) -> x * 3
 
 let main = (args: str[]) ->
     // Pass &fn through a plain any* parameter
@@ -21,7 +21,7 @@ let main = (args: str[]) ->
     assert(r2 == 21)
 
     // Reassign the struct field with a non-capturing inline lambda
-    box.fn = &((x: int32) -> x + 100)
+    box.fn = &((x: i32) -> x + 100)
     let r3 = cb.cb_box_invoke(&box, 5)
     assert(r3 == 105)
     0

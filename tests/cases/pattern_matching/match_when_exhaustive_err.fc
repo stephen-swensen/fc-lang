@@ -1,4 +1,4 @@
-let f = (n: int32) ->
+let f = (n: i32) ->
     match n with
     | 0 -> 0
     | x when x < 0 -> -1

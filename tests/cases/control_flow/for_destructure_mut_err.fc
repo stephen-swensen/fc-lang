@@ -1,7 +1,7 @@
 // Destructured for-loop bindings are immutable, like all for-loop element
 // bindings — reassignment is a compile error.
 let main = (args: str[]) ->
-    let pairs = {int32, int32}[1] { { 1, 2 } }
+    let pairs = {i32, i32}[1] { { 1, 2 } }
     for { a, b } in pairs do
         a = a + b
     0

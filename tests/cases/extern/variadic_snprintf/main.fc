@@ -1,14 +1,14 @@
 module c from "stdio.h" =
-    extern snprintf: (any*, usize, const cstr, ...) -> int32
+    extern snprintf: (any*, usize, const cstr, ...) -> i32
 
 module mem from "string.h" =
     extern strlen: (const cstr) -> usize
 
 let main = (args: str[]) ->
     // snprintf into a stack buffer
-    let mut buf = uint8[64] { }
-    let n = c.snprintf(buf.ptr, 64u, c"%d plus %d is %d", 10, 20, 30)
+    let mut buf = u8[64] { }
+    let n = c.snprintf(buf.ptr, 64usize, c"%d plus %d is %d", 10, 20, 30)
     // verify length — "10 plus 20 is 30" = 16 chars
     let len = mem.strlen(buf.ptr)
-    assert((int32) len == 16)
+    assert((i32) len == 16)
     0

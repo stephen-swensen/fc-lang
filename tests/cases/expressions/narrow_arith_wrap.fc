@@ -1,4 +1,4 @@
-// Narrow-width (int8/uint8/int16/uint16) arithmetic must wrap/truncate to the
+// Narrow-width (i8/u8/i16/u16) arithmetic must wrap/truncate to the
 // FC result type even when the result is consumed directly, not stored through
 // a binding. C integer promotion widens these operands to `int`, so the emitted
 // code must cast the result back (and route narrow multiply through `unsigned`
@@ -7,10 +7,10 @@
 // The opaque identity helpers defeat constant folding so the assertions
 // exercise the emitted runtime arithmetic rather than compile-time evaluation.
 
-let o_u8  = (x: uint8)  -> x
-let o_u16 = (x: uint16) -> x
-let o_i8  = (x: int8)   -> x
-let o_i16 = (x: int16)  -> x
+let o_u8  = (x: u8)  -> x
+let o_u16 = (x: u16) -> x
+let o_i8  = (x: i8)   -> x
+let o_i16 = (x: i16)  -> x
 
 let main = (args: str[]) ->
     // --- unsigned add wraps when consumed directly ---
@@ -49,7 +49,7 @@ let main = (args: str[]) ->
     // Narrow signed `min / -1` wraps to min (audit item 15, resolved as wrap):
     // the divisor guard substitutes the wrapped value rather than dividing, so
     // this holds at the operand's own width on any target — including a 16-bit
-    // `int` where int16.min/-1 would otherwise be a genuine SIGFPE. Full
+    // `int` where i16.min/-1 would otherwise be a genuine SIGFPE. Full
     // cross-width coverage lives in expressions/div_overflow_wrap.fc.
     assert(o_i8(-128i8) / o_i8(-1i8) == -128i8)
     assert(o_i16(-32768i16) / o_i16(-1i16) == -32768i16)

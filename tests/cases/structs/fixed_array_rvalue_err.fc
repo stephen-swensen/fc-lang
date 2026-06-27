@@ -1,7 +1,7 @@
 struct holder =
-    data: int32[4]
+    data: i32[4]
 
-let make = () -> holder { data = int32[4] { 1, 2, 3, 4 } }
+let make = () -> holder { data = i32[4] { 1, 2, 3, 4 } }
 
 let main = (args: str[]) ->
     let _s = make().data

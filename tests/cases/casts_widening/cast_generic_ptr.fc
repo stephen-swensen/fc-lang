@@ -5,17 +5,17 @@ struct pair =
 let main = (args: str[]) ->
     let _result =
         // Allocate and initialize via pointer write
-        let p = alloc(pair<int32, int64>)!
+        let p = alloc(pair<i32, i64>)!
         p->fst = 42
         p->snd = 99i64
         let raw = (any*) p
         // Cast any* back to generic struct pointer
-        let restored = (pair<int32, int64>*) raw
+        let restored = (pair<i32, i64>*) raw
         let mut r = 0
         if restored->fst == 42 then r = r + 1
         if restored->snd == 99i64 then r = r + 1
         // Const cast variant
-        let c = (const pair<int32, int64>*) raw
+        let c = (const pair<i32, i64>*) raw
         if c->fst == 42 then r = r + 1
         free(raw)
         r

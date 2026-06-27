@@ -25,7 +25,7 @@ let main = (args: str[]) ->
         assert(io.tell(rf) == 5i64)
 
         // read 3 bytes from position 5 -> "fgh"
-        let mut buf = uint8[3] {}
+        let mut buf = u8[3] {}
         let n = io.read(buf, 3, rf)
         assert(n == 3i64)
         assert(io.tell(rf) == 8i64)

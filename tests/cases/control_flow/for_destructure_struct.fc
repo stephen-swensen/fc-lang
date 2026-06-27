@@ -1,7 +1,7 @@
 // Named-struct destructuring (the `{ field = name }` form) of a struct slice.
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let pts = point[2] { point { x = 10, y = 20 }, point { x = 30, y = 40 } }

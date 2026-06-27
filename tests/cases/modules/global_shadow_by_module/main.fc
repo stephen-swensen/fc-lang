@@ -1,13 +1,13 @@
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
-    // global point has int32 fields
+    // global point has i32 fields
     let gp = point { x = 1, y = 2 }
     assert(gp.x == 1)
 
-    // helper.make uses its own local point (float64 fields)
+    // helper.make uses its own local point (f64 fields)
     let hp = helper.make()
     assert(hp.a == 100)
 

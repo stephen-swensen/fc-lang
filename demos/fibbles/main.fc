@@ -23,16 +23,16 @@ union game_state =
     | over
 
 struct vec2 =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 // --- Drawing helpers ---
 
 // --- 3x5 pixel font ---
-// Each glyph is packed into an int32: row0 in bits 0-2, row1 in bits 3-5, etc.
+// Each glyph is packed into an i32: row0 in bits 0-2, row1 in bits 3-5, etc.
 // Each row is 3 bits wide (bit 2 = leftmost pixel).
 
-let glyph = (ch: uint8) ->
+let glyph = (ch: u8) ->
     match ch with
     | 'A' -> 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
     | 'B' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
@@ -73,7 +73,7 @@ let glyph = (ch: uint8) ->
     | '!' -> 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
     | _ -> 0
 
-let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
+let draw_char = (r: any*, ch: u8, ox: i32, oy: i32, cr: u8, cg: u8, cb: u8) ->
     let g = glyph(ch)
     for row in 0..5 do
         let bits = (g >> (row * 3)) & 7
@@ -81,26 +81,26 @@ let draw_char = (r: any*, ch: uint8, ox: int32, oy: int32, cr: uint8, cg: uint8,
             if (bits >> (2 - col)) & 1 == 1 then
                 draw_cell(r, ox + col, oy + row, cr, cg, cb)
 
-let draw_text = (r: any*, text: const str, ox: int32, oy: int32, cr: uint8, cg: uint8, cb: uint8) ->
+let draw_text = (r: any*, text: const str, ox: i32, oy: i32, cr: u8, cg: u8, cb: u8) ->
     let mut x = ox
     for ch in text do
         if ch != ' ' then
             draw_char(r, ch, x, oy, cr, cg, cb)
         x = x + 4
 
-let draw_cell = (r: any*, gx: int32, gy: int32, red: uint8, green: uint8, blue: uint8) ->
+let draw_cell = (r: any*, gx: i32, gy: i32, red: u8, green: u8, blue: u8) ->
     let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
     sdl2.set_color(r, red, green, blue, 255u8)
     sdl2.fill_rect(r, &rc)
     return
 
-let draw_small_rect = (r: any*, x: int32, y: int32, w: int32, h: int32, red: uint8, green: uint8, blue: uint8) ->
+let draw_small_rect = (r: any*, x: i32, y: i32, w: i32, h: i32, red: u8, green: u8, blue: u8) ->
     let mut rc = rect { x = x, y = y, w = w, h = h }
     sdl2.set_color(r, red, green, blue, 255u8)
     sdl2.fill_rect(r, &rc)
     return
 
-let draw_face = (r: any*, hx: int32, hy: int32, dx: int32, dy: int32, dead: bool) ->
+let draw_face = (r: any*, hx: i32, hy: i32, dx: i32, dy: i32, dead: bool) ->
     let px = hx * cell
     let py = hy * cell
 
@@ -145,7 +145,7 @@ let draw_face = (r: any*, hx: int32, hy: int32, dx: int32, dy: int32, dead: bool
             draw_small_rect(r, px + 7, py + 26, 2, 3, 220u8, 0u8, 0u8)
             draw_small_rect(r, px + 11, py + 26, 2, 3, 220u8, 0u8, 0u8)
 
-let draw_strawberry = (r: any*, gx: int32, gy: int32) ->
+let draw_strawberry = (r: any*, gx: i32, gy: i32) ->
     let px = gx * cell
     let py = gy * cell
     // Red body
@@ -167,7 +167,7 @@ let draw_strawberry = (r: any*, gx: int32, gy: int32) ->
     draw_small_rect(r, px + 7, py + 12, 2, 1, 255u8, 220u8, 0u8)
     draw_small_rect(r, px + 11, py + 12, 2, 1, 255u8, 220u8, 0u8)
 
-let draw_hamburger = (r: any*, gx: int32, gy: int32) ->
+let draw_hamburger = (r: any*, gx: i32, gy: i32) ->
     let px = gx * cell
     let py = gy * cell
     // Top bun
@@ -189,10 +189,10 @@ let draw_hamburger = (r: any*, gx: int32, gy: int32) ->
 
 // --- Game helpers ---
 
-let body_at = (body: vec2[], head: int32, len: int32, i: int32) ->
+let body_at = (body: vec2[], head: i32, len: i32, i: i32) ->
     body[(head - len + 1 + i + max_body) % max_body]
 
-let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
+let on_snake = (body: vec2[], head: i32, len: i32, x: i32, y: i32) ->
     let mut found = false
     for i in 0..len do
         let seg = body_at(body, head, len, i)
@@ -201,10 +201,10 @@ let on_snake = (body: vec2[], head: int32, len: int32, x: int32, y: int32) ->
             break
     found
 
-let place_food = (pcg_state: pcg_random*, body: vec2[], head: int32, len: int32) ->
+let place_food = (pcg_state: pcg_random*, body: vec2[], head: i32, len: i32) ->
     loop
-        let x = (int32) pcg_random.next_bounded_uint32(pcg_state, (uint32) grid_w)
-        let y = (int32) pcg_random.next_bounded_uint32(pcg_state, (uint32) grid_h)
+        let x = (i32) pcg_random.next_bounded_u32(pcg_state, (u32) grid_w)
+        let y = (i32) pcg_random.next_bounded_u32(pcg_state, (u32) grid_h)
         if !on_snake(body, head, len, x, y) then
             break vec2 { x = x, y = y }
 
@@ -217,14 +217,14 @@ let clear_screen = (r: any*) ->
 
 struct sound =
     data: any*
-    bytes: uint32
+    bytes: u32
 
-let samples_ms = (ms: int32) ->
+let samples_ms = (ms: i32) ->
     44100 * ms / 1000
 
-let gen_tone = (freq: int32, duration_ms: int32) ->
+let gen_tone = (freq: i32, duration_ms: i32) ->
     let num_samples = samples_ms(duration_ms)
-    let buf = alloc(int16, (usize) num_samples)!
+    let buf = alloc(i16, (usize) num_samples)!
     let period = 44100 / freq
     let half = period / 2
     for i in 0..num_samples do
@@ -232,9 +232,9 @@ let gen_tone = (freq: int32, duration_ms: int32) ->
             buf[i] = 8000i16
         else
             buf[i] = -8000i16
-    sound { data = (any*) buf, bytes = (uint32) (num_samples * 2) }
+    sound { data = (any*) buf, bytes = (u32) (num_samples * 2) }
 
-let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
+let fill_tone = (buf: i16*, offset: i32, freq: i32, duration_ms: i32) ->
     let num_samples = samples_ms(duration_ms)
     let period = 44100 / freq
     let half = period / 2
@@ -245,7 +245,7 @@ let fill_tone = (buf: int16*, offset: int32, freq: int32, duration_ms: int32) ->
             buf[offset + i] = -8000i16
     offset + num_samples
 
-let play_sound = (dev: uint32, s: sound) ->
+let play_sound = (dev: u32, s: sound) ->
     sdl2.clear_audio(dev)
     sdl2.queue_audio(dev, s.data, s.bytes)
     return
@@ -255,16 +255,16 @@ let load_high_score = () ->
     | some(hd) ->
         match io.open(alloca("%s{hd}/.fibbles/highscore.txt"), "r") with
         | some(fp) ->
-            let mut buf = uint8[32] { }
+            let mut buf = u8[32] { }
             io.read(buf, 32, fp)
             io.close(fp)
-            match text.parse_int32((const str) buf) with
+            match text.parse_i32((const str) buf) with
             | some(v) -> v
             | none -> 0
         | none -> 0
     | none -> 0
 
-let save_high_score = (score: int32) ->
+let save_high_score = (score: i32) ->
     match sys.home_dir() with
     | some(hd) ->
         io.mkdir(alloca("%s{hd}/.fibbles"))
@@ -332,7 +332,7 @@ let main = (args: str[]) ->
     sdl2.set_resizable(win, 0)
     let ren = sdl2.create_renderer(win, -1, sdl2.renderer_sw)
     sdl2.set_logical_size(ren, grid_w * cell, grid_h * cell)
-    let mut pcg_state = pcg_random.make((uint64) sys.time())
+    let mut pcg_state = pcg_random.make((u64) sys.time())
 
     // Init audio (square wave sound effects)
     let mut desired = default(audio_spec)
@@ -340,10 +340,10 @@ let main = (args: str[]) ->
     desired.format = sdl2.audio_s16sys
     desired.channels = 1u8
     desired.samples = 1024u16
-    desired.callback = (any*) 0u
-    desired.userdata = (any*) 0u
+    desired.callback = (any*) 0usize
+    desired.userdata = (any*) 0usize
     let mut obtained = default(audio_spec)
-    let audio_dev = sdl2.open_audio((any*) 0u, 0, &desired, &obtained, 0)
+    let audio_dev = sdl2.open_audio((any*) 0usize, 0, &desired, &obtained, 0)
     if audio_dev > 0u32 then
         sdl2.pause_audio(audio_dev, 0)
 
@@ -351,19 +351,19 @@ let main = (args: str[]) ->
     let eat_snd = gen_tone(880, 60)
 
     let bonus_n = samples_ms(60) + samples_ms(60) + samples_ms(80)
-    let bonus_mem = alloc(int16, (usize) bonus_n)!
+    let bonus_mem = alloc(i16, (usize) bonus_n)!
     let mut boff = fill_tone(bonus_mem, 0, 587, 60)
     boff = fill_tone(bonus_mem, boff, 784, 60)
     fill_tone(bonus_mem, boff, 1047, 80)
-    let bonus_snd = sound { data = (any*) bonus_mem, bytes = (uint32) (bonus_n * 2) }
+    let bonus_snd = sound { data = (any*) bonus_mem, bytes = (u32) (bonus_n * 2) }
 
     let death_n = samples_ms(120) + samples_ms(120) + samples_ms(150) + samples_ms(250)
-    let death_mem = alloc(int16, (usize) death_n)!
+    let death_mem = alloc(i16, (usize) death_n)!
     let mut doff = fill_tone(death_mem, 0, 440, 120)
     doff = fill_tone(death_mem, doff, 330, 120)
     doff = fill_tone(death_mem, doff, 220, 150)
     fill_tone(death_mem, doff, 110, 250)
-    let death_snd = sound { data = (any*) death_mem, bytes = (uint32) (death_n * 2) }
+    let death_snd = sound { data = (any*) death_mem, bytes = (u32) (death_n * 2) }
 
     // Load high score
     let mut high_score = load_high_score()
@@ -374,8 +374,8 @@ let main = (args: str[]) ->
     let mut length = 3
     let mut dir_x = 1
     let mut dir_y = 0
-    let mut q_dx = int32[2] { }
-    let mut q_dy = int32[2] { }
+    let mut q_dx = i32[2] { }
+    let mut q_dy = i32[2] { }
     let mut q_len = 0
     let mut score = 0
     let mut speed = 300
@@ -405,11 +405,11 @@ let main = (args: str[]) ->
             let has = sdl2.poll_event(&event)
             if has == 0 then break
 
-            if (int32) event.type == sdl2.quit_event then
+            if (i32) event.type == sdl2.quit_event then
                 running = false
                 break
 
-            if (int32) event.type == sdl2.keydown_event then
+            if (i32) event.type == sdl2.keydown_event then
                 let ekey = event.key.keysym.sym
                 if ekey == sdl2.key_escape then
                     running = false
@@ -493,7 +493,7 @@ let main = (args: str[]) ->
         // --- Update ---
         if state == game_state.playing then
             let now = sdl2.get_ticks()
-            if force_tick || now - last_tick >= (uint32) speed then
+            if force_tick || now - last_tick >= (u32) speed then
                 force_tick = false
                 last_tick = now
 
@@ -548,7 +548,7 @@ let main = (args: str[]) ->
                                 speed = speed - 3
                             food = place_food(&pcg_state, body, head_idx, length)
                             // 25% chance to spawn bonus food
-                            if !bonus_active && pcg_random.next_bounded_uint32(&pcg_state, 4u32) == 0u32 then
+                            if !bonus_active && pcg_random.next_bounded_u32(&pcg_state, 4u32) == 0u32 then
                                 bonus = place_food(&pcg_state, body, head_idx, length)
                                 bonus_active = true
                             sdl2.set_title(win, c"Fibbles - Score: %d{score} (High: %d{high_score}) Level %d{score / 100 + 1}")
@@ -618,13 +618,13 @@ let main = (args: str[]) ->
                         dcount = dcount + 1
                         tmp = tmp / 10
                 let sox = 16 - dcount * 2
-                let mut digits = int32[8] { }
+                let mut digits = i32[8] { }
                 let mut dtmp = score
                 for si in 0..dcount do
                     digits[dcount - 1 - si] = dtmp % 10
                     dtmp = dtmp / 10
                 for di in 0..dcount do
-                    draw_char(ren, '0' + (uint8) digits[di], sox + di * 4, 13, 255u8, 255u8, 255u8)
+                    draw_char(ren, '0' + (u8) digits[di], sox + di * 4, 13, 255u8, 255u8, 255u8)
 
             sdl2.present(ren)
 

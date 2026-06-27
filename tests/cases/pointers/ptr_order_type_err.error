@@ -1,1 +1,1 @@
-comparison type mismatch: int32* vs float64*
+comparison type mismatch: i32* vs f64*

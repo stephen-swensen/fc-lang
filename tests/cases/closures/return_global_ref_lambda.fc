@@ -1,9 +1,9 @@
 let scale = 2
 
-let make_scaler = (n: int32) ->
-    (x: int32) -> x * scale
+let make_scaler = (n: i32) ->
+    (x: i32) -> x * scale
 
-let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
 
 let main = (args: str[]) ->
     let f = make_scaler(0)

@@ -10,7 +10,7 @@ let main = (args: str[]) ->
     assert((checked (-17i32) / 5i32) == -3)
     assert((checked (-128i8) / 2i8) == -64i8)
     // value != min, so `/ -1` is plain negation, no overflow
-    let xs = int8[2]{-127i8, -1i8}
+    let xs = i8[2]{-127i8, -1i8}
     assert((checked (xs[0] / xs[1])) == 127i8)
 
     // modulo (incl. min %% -1) and unsigned divide can't overflow: unaffected by

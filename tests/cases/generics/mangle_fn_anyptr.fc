@@ -4,15 +4,15 @@
 struct box =
     value: 'a
 
-let bump = (x: int32) -> x + 1
+let bump = (x: i32) -> x + 1
 
 let main = (args: str[]) ->
     let mut n = 5
     let p = (any*) &n
-    let bf = box { value = bump }     // box<(int32) -> int32>
+    let bf = box { value = bump }     // box<(i32) -> i32>
     let by = box { value = p }        // box<any*>
     assert(bf.value(10) == 11)
-    let q = (int32*) by.value
+    let q = (i32*) by.value
     assert(q == &n)
     assert(*q == 5)
     0

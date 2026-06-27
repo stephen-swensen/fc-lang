@@ -7,21 +7,21 @@ struct counters =
 
 let main = (args: str[]) ->
     // Stack struct: field address via &r.field
-    let mut r = counters { head = 0u, tail = 0u }
-    atomic_store_release(&r.tail, 3u)
-    atomic_store_release(&r.head, 1u)
-    assert(atomic_load_acquire(&r.tail) == 3u)
-    assert(atomic_load_acquire(&r.head) == 1u)
-    assert(atomic_load_acquire(&r.tail) - atomic_load_acquire(&r.head) == 2u)
+    let mut r = counters { head = 0usize, tail = 0usize }
+    atomic_store_release(&r.tail, 3usize)
+    atomic_store_release(&r.head, 1usize)
+    assert(atomic_load_acquire(&r.tail) == 3usize)
+    assert(atomic_load_acquire(&r.head) == 1usize)
+    assert(atomic_load_acquire(&r.tail) - atomic_load_acquire(&r.head) == 2usize)
 
     // Heap struct: field address through a pointer, &p->field
     let p = alloc(counters)!
-    atomic_store_release(&p->tail, 10u)
-    assert(atomic_load_acquire(&p->tail) == 10u)
+    atomic_store_release(&p->tail, 10usize)
+    assert(atomic_load_acquire(&p->tail) == 10usize)
 
     // Mixed plain and atomic access from the same (single) thread is defined
-    p->head = 4u
-    assert(atomic_load_acquire(&p->head) == 4u)
+    p->head = 4usize
+    assert(atomic_load_acquire(&p->head) == 4usize)
 
     free(p)
     0

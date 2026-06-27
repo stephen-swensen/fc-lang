@@ -1,6 +1,6 @@
 struct point2d =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     0

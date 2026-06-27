@@ -1,6 +1,6 @@
 // `;` sequences multiple statements in an inline `for ... do` body.
 let main = (args: str[]) ->
-    let xs = int32[3] { 10, 20, 30 }
+    let xs = i32[3] { 10, 20, 30 }
     let mut sum = 0
     let mut count = 0
     for x in xs do sum = sum + x; count = count + 1

@@ -1,8 +1,8 @@
 // A statically-negative slice-literal length is rejected at compile time.
 // A negative len defeats the unsigned-compare bounds-check fusion
-// ((uint64_t)idx >= (uint64_t)len), so every later access would slip through.
+// ((u64_t)idx >= (u64_t)len), so every later access would slip through.
 let main = (args: str[]) ->
     let mut x = 42i32
     let p = &x
-    let s = int32[] { ptr = p, len = -1 }
+    let s = i32[] { ptr = p, len = -1 }
     s[0]

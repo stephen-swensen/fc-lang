@@ -21,7 +21,7 @@ let main = (args: str[]) ->
     assert("%+f{x}" == "+3.141590")
     assert("%-10.2f{x}" == "3.14      ")  // left-align within width 10
 
-    // Bare %f on a float32 operand (promotes to double for formatting).
+    // Bare %f on a f32 operand (promotes to double for formatting).
     assert("%f{2.5f32}" == "2.500000")
 
     // Large magnitude with bare %f: the integer part is not capped by any width.

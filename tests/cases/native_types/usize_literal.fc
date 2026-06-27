@@ -1,13 +1,13 @@
 let main = (args: str[]) ->
-    let a = 42u
-    let b = 10u
+    let a = 42usize
+    let b = 10usize
     let sum = a + b
-    assert((int32) (sum) == 52)
+    assert((i32) (sum) == 52)
     let diff = a - b
-    assert((int32) (diff) == 32)
+    assert((i32) (diff) == 32)
     let prod = a * b
-    assert((int32) (prod) == 420)
-    let zero = 0u
-    assert((int32) (zero) == 0)
-    assert((int32) (sum + diff + prod + zero) == 504)
+    assert((i32) (prod) == 420)
+    let zero = 0usize
+    assert((i32) (zero) == 0)
+    assert((i32) (sum + diff + prod + zero) == 504)
     0

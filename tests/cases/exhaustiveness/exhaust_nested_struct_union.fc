@@ -1,7 +1,7 @@
 // Struct destructure with nested union match via wildcard
 struct container =
-    label: int32
-    value: int32
+    label: i32
+    value: i32
 
 union wrapped =
     | boxed(container)

@@ -2,7 +2,7 @@
 // Tests that Maranget recurses through multiple struct layers
 union status =
     | ok
-    | err(int32)
+    | err(i32)
 
 struct header =
     code: status
@@ -10,7 +10,7 @@ struct header =
 
 struct packet =
     hdr: header
-    size: int32
+    size: i32
 
 let classify = (p: packet) ->
     match p with

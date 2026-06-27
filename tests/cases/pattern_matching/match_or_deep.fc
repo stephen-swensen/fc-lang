@@ -1,6 +1,6 @@
 struct tile =
-    kind: int32
-    size: int32
+    kind: i32
+    size: i32
 
 let is_small_kind = (o: tile?) ->
     match o with

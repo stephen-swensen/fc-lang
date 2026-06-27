@@ -7,27 +7,27 @@ let main = (args: str[]) ->
     // typed pointer -> usize -> typed pointer (round-trip preserves address)
     let p = &x
     let addr = (usize) p
-    let p2 = (int32*) addr
+    let p2 = (i32*) addr
     assert(*p2 == 42)
 
     // signed pointer-width: isize
     let saddr = (isize) p
-    assert(saddr != 0i)
+    assert(saddr != 0isize)
 
     // any* participates the same way
     let ap = (any*) &x
     let aaddr = (usize) ap
-    let bp = (int32*) aaddr
+    let bp = (i32*) aaddr
     assert(*bp == 42)
     assert(aaddr == addr)
 
     // a fixed-width int reaches a pointer by chaining through usize
-    let made = (int32*)(usize) addr
+    let made = (i32*)(usize) addr
     assert(*made == 42)
 
     // and an address reaches a fixed-width int the same way (narrowing is
     // explicit); the low bits survive the round trip back through usize
-    let narrow = (uint32)(usize) p
+    let narrow = (u32)(usize) p
     let widened = (usize) narrow
     assert(widened == (addr & (usize) 0xffffffffu64))
     0

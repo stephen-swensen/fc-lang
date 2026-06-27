@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let x = default(int32?)
+        let x = default(i32?)
         match x with
         | none -> 50
         | some(v) -> v

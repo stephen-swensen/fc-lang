@@ -3,7 +3,7 @@ struct box =
     value: 'a
 
 module inventory =
-    let ints = box<int32>[2] {
+    let ints = box<i32>[2] {
         box { value = 1 },
         box { value = 2 }
     }

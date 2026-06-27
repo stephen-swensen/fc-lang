@@ -1,13 +1,13 @@
 // Function and lambda parameters named after C keywords must be escaped in
 // the parameter declaration and at every reference inside the body. The FC
 // lookup name stays the source spelling, so references still resolve.
-let compute = (register: int32, volatile: int32, signed: int32) ->
+let compute = (register: i32, volatile: i32, signed: i32) ->
     register * volatile + signed
 
 // A keyword-named parameter referenced through nested expressions and a
 // closure capture.
-let scale = (double: int32) ->
-    let f = (short: int32) -> short * double   // capture keyword-named param
+let scale = (double: i32) ->
+    let f = (short: i32) -> short * double   // capture keyword-named param
     f(3)
 
 let main = (args: str[]) ->
@@ -15,6 +15,6 @@ let main = (args: str[]) ->
     assert(scale(4) == 12)
 
     // Lambda with keyword params, invoked directly.
-    let g = (static: int32, auto: int32) -> static - auto
+    let g = (static: i32, auto: i32) -> static - auto
     assert(g(10, 3) == 7)
     0

@@ -90,7 +90,7 @@ let main = (args: str[]) ->
     if colon_opt.is_some then
         host = authority[0..colon_opt!]
         let port_str = authority[colon_opt! + 1..authority.len]
-        let p = text.parse_int32(port_str)
+        let p = text.parse_i32(port_str)
         if p.is_none then
             io.write("furl: invalid port\n", stderr)
             sys.exit(1)
@@ -115,7 +115,7 @@ let main = (args: str[]) ->
     let fd = fd_opt!
     defer net.close(fd)
 
-    let addr = net.make_addr(net.net_to_host32(ip), (uint16) port)
+    let addr = net.make_addr(net.net_to_host32(ip), (u16) port)
     if !net.connect_addr(fd, addr) then
         io.write(alloca("furl: connection to %s{host} port %d{port} failed\n"), stderr)
         sys.exit(1)
@@ -165,10 +165,10 @@ let main = (args: str[]) ->
         net.send_bytes(fd, body_data)
 
     // --- Read response ---
-    let mut header_buf = uint8[8192] {}
+    let mut header_buf = u8[8192] {}
     let mut header_len = 0i64
     let mut in_headers = true
-    let mut recv_buf = uint8[4096] {}
+    let mut recv_buf = u8[4096] {}
 
     // Output handle
     let mut out = stdout

@@ -1,1 +1,1 @@
-expected any*, got const int32*
+expected any*, got const i32*

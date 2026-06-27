@@ -1,1 +1,1 @@
-format specifier %s expects str or cstr, got int32
+format specifier %s expects str or cstr, got i32

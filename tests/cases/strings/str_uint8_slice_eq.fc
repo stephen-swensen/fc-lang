@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
     let _result =
         let s = "ABC"
-        let mut buf = uint8[3] { }
+        let mut buf = u8[3] { }
         buf.ptr[0] = 65u8
         buf.ptr[1] = 66u8
         buf.ptr[2] = 67u8

@@ -208,33 +208,30 @@ static Token scan_number(Lexer *l) {
                 }
                 return make_token(l, TOK_FLOAT_LIT);
             }
-            if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+            /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
+            if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
                 advance(l);
-                while (isdigit((unsigned char)peek(l))) advance(l);
-            } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
-                advance(l);
+                while (isalnum((unsigned char)peek(l))) advance(l);
             }
             return make_token(l, TOK_INT_LIT);
         }
         if (peek(l) == 'b' || peek(l) == 'B') {
             advance(l); /* consume b */
             while (peek(l) == '0' || peek(l) == '1' || (peek(l) == '_' && (peek_next(l) == '0' || peek_next(l) == '1'))) advance(l);
-            if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+            /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
+            if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
                 advance(l);
-                while (isdigit((unsigned char)peek(l))) advance(l);
-            } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
-                advance(l);
+                while (isalnum((unsigned char)peek(l))) advance(l);
             }
             return make_token(l, TOK_INT_LIT);
         }
         if (peek(l) == 'o' || peek(l) == 'O') {
             advance(l); /* consume o */
             while ((peek(l) >= '0' && peek(l) <= '7') || (peek(l) == '_' && peek_next(l) >= '0' && peek_next(l) <= '7')) advance(l);
-            if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+            /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
+            if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
                 advance(l);
-                while (isdigit((unsigned char)peek(l))) advance(l);
-            } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
-                advance(l);
+                while (isalnum((unsigned char)peek(l))) advance(l);
             }
             return make_token(l, TOK_INT_LIT);
         }
@@ -268,11 +265,10 @@ static Token scan_number(Lexer *l) {
         }
         return make_token(l, TOK_FLOAT_LIT);
     }
-    if ((peek(l) == 'i' || peek(l) == 'u') && isdigit((unsigned char)peek_next(l))) {
+    /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
+    if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
         advance(l);
-        while (isdigit((unsigned char)peek(l))) advance(l);
-    } else if ((peek(l) == 'i' || peek(l) == 'u') && !isalnum((unsigned char)peek_next(l)) && peek_next(l) != '_') {
-        advance(l);
+        while (isalnum((unsigned char)peek(l))) advance(l);
     }
     return make_token(l, TOK_INT_LIT);
 }

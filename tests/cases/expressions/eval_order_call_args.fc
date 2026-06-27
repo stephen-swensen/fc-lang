@@ -1,12 +1,12 @@
 // Function-call arguments are evaluated left-to-right, each exactly once.
-let bump = (c: int32*) ->
+let bump = (c: i32*) ->
     *c = *c + 1
     *c
 
-let three = (a: int32, b: int32, c: int32) ->
+let three = (a: i32, b: i32, c: i32) ->
     a * 100 + b * 10 + c
 
-let combine = (a: int32, b: int32) ->
+let combine = (a: i32, b: i32) ->
     a * 10 + b
 
 let main = (args: str[]) ->

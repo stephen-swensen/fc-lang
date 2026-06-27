@@ -3,7 +3,7 @@
 // evaluation order is unspecified in C (right-to-left under gcc).
 let mut seq = 0
 
-let mark = (slot: int32*) ->
+let mark = (slot: i32*) ->
     *slot = seq
     seq = seq + 1
     0

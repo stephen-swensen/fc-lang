@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
     // runtime-sized heap allocation with empty initializer
     let n = 5
-    let buf = alloc(int32[n] { })!
+    let buf = alloc(i32[n] { })!
 
     // zero-initialized
     assert(buf[0] == 0)

@@ -1,5 +1,5 @@
 // Returning a pointer param is fine (PROV_UNKNOWN)
-let passthrough = (p: int32*) ->
+let passthrough = (p: i32*) ->
     p
 
 let main = (args: str[]) ->

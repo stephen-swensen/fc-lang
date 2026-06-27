@@ -4,10 +4,10 @@ union result =
 
 let main = (args: str[]) ->
     let _result =
-        let r = result<int32, bool>.ok(42)
+        let r = result<i32, bool>.ok(42)
         let s = "%T{r}"
         let mut ret = 0
-        if s == "result<int32, bool>" then ret = ret + 1
+        if s == "result<i32, bool>" then ret = ret + 1
         ret
     assert(_result == 1)
     0

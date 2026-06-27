@@ -1,7 +1,7 @@
 // Test: passing struct array to function
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let sum_x = (pts: point[]) ->
     let mut total = 0

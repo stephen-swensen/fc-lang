@@ -1,12 +1,12 @@
 // Regression: a variadic extern and a non-variadic extern that share the same
 // base signature must not collide in the generated function-type typedef name.
-// Before the fix, `(const cstr, ...) -> int32` and `(const cstr) -> int32`
-// both mangled to fc_fn_uint8_t_ptr__int32_t and emitted a duplicate typedef,
+// Before the fix, `(const cstr, ...) -> i32` and `(const cstr) -> i32`
+// both mangled to fc_fn_u8_t_ptr__i32_t and emitted a duplicate typedef,
 // breaking compilation under -Wall -Werror (the spec's canonical printf example
 // fails this way in any program that also links stdlib's `remove`).
 module c from "stdio.h" =
-    extern printf: (const cstr, ...) -> int32
-    extern remove: (const cstr) -> int32
+    extern printf: (const cstr, ...) -> i32
+    extern remove: (const cstr) -> i32
 
 let main = (args: str[]) ->
     c.printf(c"variadic ok: %d\n", 7)

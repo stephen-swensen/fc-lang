@@ -1,7 +1,7 @@
 module c from "stdlib.h" =
-    extern atoi: (const cstr) -> int32
+    extern atoi: (const cstr) -> i32
 
-let parse_num = (p: uint8*) ->
+let parse_num = (p: u8*) ->
     c.atoi(p)
 
 let main = (args: str[]) ->

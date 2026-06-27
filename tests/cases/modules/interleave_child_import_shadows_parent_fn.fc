@@ -1,13 +1,13 @@
 // Child's imported function shadows a parent module's function.
 module src =
-    let double = (x: int32) -> x * 2
+    let double = (x: i32) -> x * 2
 
 module parent =
-    let double = (x: int32) -> x * 3
+    let double = (x: i32) -> x * 3
 
     module child =
         import double from src
-        let apply = (x: int32) -> double(x)
+        let apply = (x: i32) -> double(x)
 
 let main = (args: str[]) ->
     assert(parent.child.apply(5) == 10)

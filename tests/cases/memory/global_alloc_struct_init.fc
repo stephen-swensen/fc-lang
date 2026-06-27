@@ -1,7 +1,7 @@
 // File-level alloc with struct initializer expression
 struct pair =
-    a: int32
-    b: int32
+    a: i32
+    b: i32
 
 let p = alloc(pair { a = 10, b = 20 })!
 

@@ -6,8 +6,8 @@ import double from helpers
 
 module helpers =
     let value = 42
-    let double = (x: int32) -> x * 2
+    let double = (x: i32) -> x * 2
 
 module consumer =
     let get = () -> value
-    let apply = (x: int32) -> double(x)
+    let apply = (x: i32) -> double(x)

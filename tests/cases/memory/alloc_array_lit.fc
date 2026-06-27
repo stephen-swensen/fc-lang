@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let arr = alloc(int32[4] { 10, 20, 30, 40 })
+        let arr = alloc(i32[4] { 10, 20, 30, 40 })
         let mut r = 0
         match arr with
         | some(v) ->

@@ -1,1 +1,1 @@
-cannot destructure non-struct type int32
+cannot destructure non-struct type i32

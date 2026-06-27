@@ -1,6 +1,6 @@
 // Union variant with option payload, all variants covered
 union entry =
-    | found(int32?)
+    | found(i32?)
     | missing
 
 let check = (e: entry) ->

@@ -1,4 +1,4 @@
-let divmod = (a: int32, b: int32) ->
+let divmod = (a: i32, b: i32) ->
     { a / b, a % b }
 
 let main = (args: str[]) ->

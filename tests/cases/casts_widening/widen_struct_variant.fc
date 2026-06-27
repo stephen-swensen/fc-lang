@@ -1,22 +1,22 @@
 struct point =
-    x: int64
-    y: int64
+    x: i64
+    y: i64
 
 union holder =
-    | val(int64)
+    | val(i64)
     | empty
 
 let main = (args: str[]) ->
     let _result =
-        // struct field widening: int32 -> int64
+        // struct field widening: i32 -> i64
         let p = point { x = 10, y = 20 }
-        // variant payload widening: int32 -> int64
+        // variant payload widening: i32 -> i64
         let h = holder.val(42)
         let v = 
             match h with
-            | val(n) -> (int32) n
+            | val(n) -> (i32) n
             | empty -> 0
         // 10 + 20 + 42 = 72
-        (int32) (p.x + p.y) + v
+        (i32) (p.x + p.y) + v
     assert(_result == 72)
     0

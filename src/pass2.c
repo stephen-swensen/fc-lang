@@ -1360,31 +1360,31 @@ static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
     switch (type->kind) {
     case TYPE_INT8:
         if (value > 127 && value < (uint64_t)(int64_t)-128)
-            diag_error(loc, "integer literal %" PRId64 " out of range for int8 (-128..127)", (int64_t)value);
+            diag_error(loc, "integer literal %" PRId64 " out of range for i8 (-128..127)", (int64_t)value);
         return;
     case TYPE_INT16:
         if (value > 32767 && value < (uint64_t)(int64_t)-32768)
-            diag_error(loc, "integer literal %" PRId64 " out of range for int16 (-32768..32767)", (int64_t)value);
+            diag_error(loc, "integer literal %" PRId64 " out of range for i16 (-32768..32767)", (int64_t)value);
         return;
     case TYPE_INT32:
         if (value > 2147483647ULL && value < (uint64_t)(int64_t)-2147483648LL)
-            diag_error(loc, "integer literal %" PRId64 " out of range for int32 (-2147483648..2147483647)", (int64_t)value);
+            diag_error(loc, "integer literal %" PRId64 " out of range for i32 (-2147483648..2147483647)", (int64_t)value);
         return;
     case TYPE_INT64:
         if (value > 9223372036854775807ULL && value < (uint64_t)INT64_MIN)
-            diag_error(loc, "integer literal out of range for int64");
+            diag_error(loc, "integer literal out of range for i64");
         return;
     case TYPE_UINT8:
         if (value > 255)
-            diag_error(loc, "integer literal %" PRIu64 " out of range for uint8 (0..255)", value);
+            diag_error(loc, "integer literal %" PRIu64 " out of range for u8 (0..255)", value);
         return;
     case TYPE_UINT16:
         if (value > 65535)
-            diag_error(loc, "integer literal %" PRIu64 " out of range for uint16 (0..65535)", value);
+            diag_error(loc, "integer literal %" PRIu64 " out of range for u16 (0..65535)", value);
         return;
     case TYPE_UINT32:
         if (value > 4294967295ULL)
-            diag_error(loc, "integer literal %" PRIu64 " out of range for uint32 (0..4294967295)", value);
+            diag_error(loc, "integer literal %" PRIu64 " out of range for u32 (0..4294967295)", value);
         return;
     case TYPE_UINT64:
         return; /* always fits in uint64_t storage */
@@ -1398,16 +1398,16 @@ static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
 static void check_float_literal_range(Type *type, bool out_of_range, bool underflow, SrcLoc loc) {
     if (out_of_range) {
         if (type->kind == TYPE_FLOAT32)
-            diag_error(loc, "float literal out of range for float32 (max ~3.4e38)");
+            diag_error(loc, "float literal out of range for f32 (max ~3.4e38)");
         else
-            diag_error(loc, "float literal out of range for float64 (max ~1.8e308)");
+            diag_error(loc, "float literal out of range for f64 (max ~1.8e308)");
         return;
     }
     if (underflow) {
         if (type->kind == TYPE_FLOAT32)
-            diag_error(loc, "float literal underflows to zero in float32");
+            diag_error(loc, "float literal underflows to zero in f32");
         else
-            diag_error(loc, "float literal underflows to zero in float64");
+            diag_error(loc, "float literal underflows to zero in f64");
     }
 }
 
@@ -2253,7 +2253,7 @@ static bool gen_seen_add(Arena *arena, const Symbol *sym, const char *desc) {
  * call). Frames are stack-allocated during the validate_generic_body recursion,
  * so their lifetime is exactly the descent that built them. */
 typedef struct InstFrame {
-    const char *desc;               /* "inner(int32)" — fmt_generic_inst output */
+    const char *desc;               /* "inner(i32)" — fmt_generic_inst output */
     SrcLoc site;                    /* the call expression that triggered this instantiation */
     const struct InstFrame *parent; /* enclosing instantiation, NULL at the entry */
 } InstFrame;
@@ -3523,19 +3523,19 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 Type *lt = operand->int_lit.lit_type;
                 /* Reject negation of unsigned types */
                 if (lt->kind == TYPE_UINT8) {
-                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint8 (0..255)", operand->int_lit.value);
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for u8 (0..255)", operand->int_lit.value);
                     e->type = type_error(); return e->type;
                 }
                 if (lt->kind == TYPE_UINT16) {
-                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint16 (0..65535)", operand->int_lit.value);
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for u16 (0..65535)", operand->int_lit.value);
                     e->type = type_error(); return e->type;
                 }
                 if (lt->kind == TYPE_UINT32) {
-                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint32 (0..4294967295)", operand->int_lit.value);
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for u32 (0..4294967295)", operand->int_lit.value);
                     e->type = type_error(); return e->type;
                 }
                 if (lt->kind == TYPE_UINT64) {
-                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for uint64 (0..18446744073709551615)", operand->int_lit.value);
+                    diag_error(e->loc, "integer literal -%" PRIu64 " out of range for u64 (0..18446744073709551615)", operand->int_lit.value);
                     e->type = type_error(); return e->type;
                 }
                 if (lt->kind == TYPE_USIZE) {
@@ -5656,7 +5656,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->slice_lit.len_expr = wrap_widen(ctx->arena, e->slice_lit.len_expr, len_type);
             } else {
                 diag_error(e->slice_lit.len_expr->loc,
-                    "slice len field: expected int64, got %s", type_name(lt));
+                    "slice len field: expected i64, got %s", type_name(lt));
                 len_type_ok = false;
             }
         }
@@ -8482,7 +8482,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         /* Check return type is int32 */
         if (ft->func.return_type && !type_is_error(ft->func.return_type) &&
             !type_eq(ft->func.return_type, type_int32())) {
-            diag_error(d->loc, "main must return int32");
+            diag_error(d->loc, "main must return i32");
         }
         /* Check exactly one parameter of type str[] (slice of str = slice of uint8[]) */
         if (fn->func.param_count != 1) {

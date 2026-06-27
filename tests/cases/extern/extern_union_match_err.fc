@@ -1,8 +1,8 @@
 // Test: pattern matching on extern union is an error
 module u from "stdint.h" =
     extern union dummy =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 let main = (args: str[]) ->
     let d = default(u.dummy)

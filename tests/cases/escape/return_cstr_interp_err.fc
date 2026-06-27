@@ -1,4 +1,4 @@
-let make = (x: int32) ->
+let make = (x: i32) ->
     c"val: %d{x}"
 
 let main = (args: str[]) ->

@@ -2,7 +2,7 @@
 // the bare pointer is a valid C file-scope initializer, no guard needed.
 module m =
     let g = some(c"const")
-    let h = some((uint8*) 4096u)   // usize address literal — int->ptr via usize
+    let h = some((u8*) 4096usize)   // usize address literal — int->ptr via usize
 
 let main = (args: str[]) ->
     assert(m.g.is_some)

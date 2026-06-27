@@ -11,29 +11,29 @@ module m =
         | just('a)
         | nothing
 
-    let is_just = (x: maybe<int32>) ->
+    let is_just = (x: maybe<i32>) ->
         match x with
         | just(v) -> true
         | nothing -> false
 
-    let from_just = (x: maybe<int32>) ->
+    let from_just = (x: maybe<i32>) ->
         match x with
         | just(v) -> v
         | nothing -> 0
 
 let main = (args: str[]) ->
     // Module-qualified no-payload variant with generic type args
-    let n = m.maybe<int32>.nothing
+    let n = m.maybe<i32>.nothing
     assert(!m.is_just(n))
     assert(m.from_just(n) == 0)
 
     // Module-qualified payload variant (for comparison)
-    let s = m.maybe<int32>.just(42)
+    let s = m.maybe<i32>.just(42)
     assert(m.is_just(s))
     assert(m.from_just(s) == 42)
 
     // Qualified no-payload variant (regression check)
-    let n2 = m.maybe<int32>.nothing
+    let n2 = m.maybe<i32>.nothing
     assert(!m.is_just(n2))
 
     // Non-generic module-qualified variant (should still work)

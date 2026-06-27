@@ -1,4 +1,4 @@
-let classify = (p: {int32, int32}) ->
+let classify = (p: {i32, i32}) ->
     match p with
     | { 0, 0 } -> 0
     | { 0, _ } -> 1

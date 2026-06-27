@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let ps = sizeof(int32*)
+        let ps = sizeof(i32*)
         if ps == 8i64 || ps == 4i64 then 1 else 0
     assert(_result == 1)
     0

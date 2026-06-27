@@ -1,7 +1,7 @@
 // Positive: a plain data struct with no pointer fields can be returned freely
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let make = () -> point { x = 3, y = 4 }
 

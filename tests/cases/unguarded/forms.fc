@@ -1,7 +1,7 @@
 // Surface forms: inline one-liner, indented block, nested `guarded` re-enable,
 // and a `guarded` sub-expression embedded in arithmetic inside an unguarded region.
 let main = (args: str[]) ->
-    let xs = int32[4]{10, 20, 30, 40}
+    let xs = i32[4]{10, 20, 30, 40}
 
     // inline form
     let i = unguarded 22 / 7

@@ -1,5 +1,5 @@
 // `unguarded` directly inside another `unguarded` does not flip context.
 let main = (args: str[]) ->
-    let xs = int32[2]{1, 2}
+    let xs = i32[2]{1, 2}
     let z = unguarded (xs[0] + unguarded xs[1])
     z

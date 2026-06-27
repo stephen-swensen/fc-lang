@@ -1,9 +1,9 @@
 // Heap pointer in heap struct is fine
 struct node =
-    data: int32*
+    data: i32*
 
 let main = (args: str[]) ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 42
     let n = alloc(node { data = p })!
     let result = *(n->data)

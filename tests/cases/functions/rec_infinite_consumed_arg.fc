@@ -2,9 +2,9 @@
 // argument) with no base case to give it a return type is the same non-termination
 // fault as a body that always recurses — reported with the same message, not by
 // leaking the internal placeholder type into an argument-mismatch error.
-let g = (x: int32) -> x
+let g = (x: i32) -> x
 
-let f = (n: int32) -> g(f(n))
+let f = (n: i32) -> g(f(n))
 
 let main = (args: str[]) ->
     if args.len > 99 then f(1)

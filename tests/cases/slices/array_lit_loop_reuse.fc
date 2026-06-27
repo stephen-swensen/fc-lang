@@ -7,10 +7,10 @@
 let main = (args: str[]) ->
     let mut acc = 0i64
     for i in 0..100000 do
-        let buf = int32[512] { }
+        let buf = i32[512] { }
         buf[0] = i
         buf[511] = i
-        acc = acc + (int64) (buf[0] + buf[511])
+        acc = acc + (i64) (buf[0] + buf[511])
     // sum over i in [0, 100000) of (i + i) = 2 * (99999 * 100000 / 2)
     assert(acc == 9999900000i64)
     0

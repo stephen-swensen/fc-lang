@@ -1,9 +1,9 @@
 // Variant constructor whose payload requires alloc is not const at module scope
 module bad =
     union wrap =
-        | ptr(int32*)
+        | ptr(i32*)
 
-    let x = wrap.ptr(alloc(int32, 4)!)
+    let x = wrap.ptr(alloc(i32, 4)!)
 
 let main = (args: str[]) ->
     0

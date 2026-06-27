@@ -1,6 +1,6 @@
 union result =
     | ok('a)
-    | err(int32)
+    | err(i32)
 
 let make_ok = (x: 'a) -> result<'a>.ok(x)
 

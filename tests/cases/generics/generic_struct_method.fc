@@ -2,8 +2,8 @@ struct pair =
     first: 'a
     second: 'b
 
-let get_first = (p: pair<int32, bool>) -> p.first
-let get_second = (p: pair<int32, bool>) -> p.second
+let get_first = (p: pair<i32, bool>) -> p.first
+let get_second = (p: pair<i32, bool>) -> p.second
 
 let main = (args: str[]) ->
     let _result =

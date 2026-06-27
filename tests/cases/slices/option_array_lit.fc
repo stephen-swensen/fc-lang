@@ -1,6 +1,6 @@
-// stack slice literal of option-typed elements: int32?[N] { ... }
+// stack slice literal of option-typed elements: i32?[N] { ... }
 let main = (args: str[]) ->
-    let opts = int32?[4] { some(10), none(int32), some(3), some(9) }
+    let opts = i32?[4] { some(10), none(i32), some(3), some(9) }
     let mut sum = 0
     let mut nones = 0
     for o in opts do

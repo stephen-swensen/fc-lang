@@ -1,1 +1,1 @@
-format specifier %d expects integer type, got float64
+format specifier %d expects integer type, got f64

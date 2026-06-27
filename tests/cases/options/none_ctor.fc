@@ -1,18 +1,18 @@
 // `none(T)` constructs an empty option of inner type T — sugar for `default(T?)`.
 
 struct box =
-    val: int32?
+    val: i32?
 
-let first_or = (xs: int32[], fallback: int32) ->
-    if xs.len > 0 then some(xs[0]) else none(int32)
+let first_or = (xs: i32[], fallback: i32) ->
+    if xs.len > 0 then some(xs[0]) else none(i32)
 
 let pick = (b: bool) ->
-    if b then some(7) else none(int32)
+    if b then some(7) else none(i32)
 
 let main = (args: str[]) ->
     // basic construction and equivalence with default(T?)
-    let a = none(int32)
-    let b = default(int32?)
+    let a = none(i32)
+    let b = default(i32?)
     assert(a.is_none)
     assert(b.is_none)
     assert(!a.is_some)
@@ -25,24 +25,24 @@ let main = (args: str[]) ->
     // various inner types
     let s = none(str)
     assert(s.is_none)
-    let f = none(float64)
+    let f = none(f64)
     assert(f.is_none)
     let bo = none(bool)
     assert(bo.is_none)
-    let p = none(int32*)      // pointer inner → null-sentinel option
+    let p = none(i32*)      // pointer inner → null-sentinel option
     assert(p.is_none)
 
-    // nesting: none(int32?) is int32?? (a missing int32?)
-    let d = none(int32?)
+    // nesting: none(i32?) is i32?? (a missing i32?)
+    let d = none(i32?)
     assert(d.is_none)
 
-    // some wrapping none: some(none(int32)) is int32??, present, inner empty
-    let e = some(none(int32))
+    // some wrapping none: some(none(i32)) is i32??, present, inner empty
+    let e = some(none(i32))
     assert(e.is_some)
     assert(e!.is_none)
 
     // pattern matching against a none(T) scrutinee
-    let r = match none(int32) with
+    let r = match none(i32) with
     | some(v) -> v
     | none -> 99
     assert(r == 99)
@@ -50,11 +50,11 @@ let main = (args: str[]) ->
     // none(T) flowing out of a function and as a branch result
     assert(pick(true)! == 7)
     assert(pick(false).is_none)
-    let empty = default(int32[])
+    let empty = default(i32[])
     assert(first_or(empty, 0).is_none)
 
     // none(T) as a struct field initializer
-    let bx = box { val = none(int32) }
+    let bx = box { val = none(i32) }
     assert(bx.val.is_none)
 
     0

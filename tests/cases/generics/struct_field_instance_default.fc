@@ -3,8 +3,8 @@
 struct box =
     value: 'a
 struct holder =
-    b: box<int64>
-    tag: int32
+    b: box<i64>
+    tag: i32
 let main = (args: str[]) ->
     let h = default(holder)
     assert(h.b.value == 0i64 && h.tag == 0)

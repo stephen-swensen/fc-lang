@@ -1,6 +1,6 @@
 // Test: extern constants with define annotation on module
 module c from "time.h" define "_POSIX_C_SOURCE" "200809L" =
-    extern CLOCKS_PER_SEC as clocks_per_sec: int64
+    extern CLOCKS_PER_SEC as clocks_per_sec: i64
 
 let main = (args: str[]) ->
     let cps = c.clocks_per_sec

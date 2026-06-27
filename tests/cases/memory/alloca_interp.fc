@@ -13,10 +13,10 @@ let main = (args: str[]) ->
 
     // alloca cstr interpolation
     let g = alloca(c"hi %s{name}!")
-    assert(c.strlen(g) == 9u)
+    assert(c.strlen(g) == 9usize)
     assert(((str) g) == "hi world!")
 
     // alloca is the dynamic-stack home for a str->cstr copy
     let cs = alloca(c"%s{name}")
-    assert(c.strlen(cs) == 5u)
+    assert(c.strlen(cs) == 5usize)
     0

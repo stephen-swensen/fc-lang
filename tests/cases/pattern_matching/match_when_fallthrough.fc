@@ -1,6 +1,6 @@
 // Multiple guarded arms with the same pattern shape: earlier guard false
 // must fall through to later arms (guarded or unguarded).
-let bucket = (n: int32) ->
+let bucket = (n: i32) ->
     match n with
     | x when x < 0 -> 0
     | x when x < 10 -> 1

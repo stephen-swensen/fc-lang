@@ -1,6 +1,6 @@
 // A nested `if` whose both branches diverge is itself bottom-typed, so it is
 // absorbed by the value-producing sibling arm of the enclosing match.
-let pick = (o: int32?, flag: bool) ->
+let pick = (o: i32?, flag: bool) ->
     let v = match o with
     | some(w) -> w
     | none ->
@@ -9,6 +9,6 @@ let pick = (o: int32?, flag: bool) ->
 
 let main = (args: str[]) ->
     assert(pick(some(3), true) == 30)
-    assert(pick(none(int32), true) == 1)
-    assert(pick(none(int32), false) == 2)
+    assert(pick(none(i32), true) == 1)
+    assert(pick(none(i32), false) == 2)
     0

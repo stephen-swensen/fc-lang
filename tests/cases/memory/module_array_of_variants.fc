@@ -1,9 +1,9 @@
 // Array of variant values — mix of payload and no-payload variants
 module events =
     union event =
-        | tick(int32)
+        | tick(i32)
         | pause
-        | resume(int32)
+        | resume(i32)
 
     let queue = event[4] {
         event.tick(1),

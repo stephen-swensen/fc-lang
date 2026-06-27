@@ -18,8 +18,8 @@ let opt_elems = (x: 'a) ->
     n
 
 let main = (args: str[]) ->
-    assert(ptr_elems(5) == 1)        // 'a = int32
-    assert(ptr_elems(9i64) == 1)     // 'a = int64
+    assert(ptr_elems(5) == 1)        // 'a = i32
+    assert(ptr_elems(9i64) == 1)     // 'a = i64
     assert(opt_elems(1) == 2)        // two some, one none
     assert(opt_elems(1i64) == 2)
     0

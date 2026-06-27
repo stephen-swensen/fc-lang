@@ -1,7 +1,7 @@
 // Test: parenthesized field access is not misparsed as a cast
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let mut p = point { x = 3, y = 4 }

@@ -1,7 +1,7 @@
 // x->y->z.a.b.c->e chain: mix of deref and value field access
 
 struct e_node =
-    val: int32
+    val: i32
 
 struct b_node =
     c: e_node*

@@ -1,7 +1,7 @@
 module shapes =
     union shape =
-        | circle(int32)
-        | rect(int32)
+        | circle(i32)
+        | rect(i32)
 
     module shape_ops =
         let area_approx = (s: shape) ->

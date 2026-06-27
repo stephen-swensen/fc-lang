@@ -6,15 +6,15 @@ let is_null = (p: any*) -> p == default(any*)
 
 let main = (args: str[]) ->
     let n = default(any*)
-    let tn = default(int32*)
+    let tn = default(i32*)
     assert(n == default(any*))
-    assert(tn == default(int32*))
+    assert(tn == default(i32*))
     assert(is_null(n))
 
     // a real address is not null, and (any*) of a pointer is a pointer->pointer
     // cast (allowed) — only the int-literal cast is rejected.
     let mut x = 7
     let px = &x
-    assert(px != default(int32*))
+    assert(px != default(i32*))
     assert(!is_null((any*) px))
     0

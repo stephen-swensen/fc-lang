@@ -1,3 +1,3 @@
-let twice = (n: int32) -> n * 2
+let twice = (n: i32) -> n * 2
 let main = (args: str[]) ->
-    twice(uint8)
+    twice(u8)

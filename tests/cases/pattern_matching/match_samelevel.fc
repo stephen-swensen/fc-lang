@@ -1,10 +1,10 @@
-let classify = (x: int32) ->
+let classify = (x: i32) ->
     match x with
     | 0 -> 0
     | 1 -> 10
     | _ -> 99
 
-let multiline_arm = (x: int32) ->
+let multiline_arm = (x: i32) ->
     match x with
     | 0 ->
         let a = 1
@@ -12,7 +12,7 @@ let multiline_arm = (x: int32) ->
         a + b
     | _ -> 0
 
-let match_then_code = (x: int32) ->
+let match_then_code = (x: i32) ->
     let r = match x with
     | 0 -> 100
     | _ -> 200

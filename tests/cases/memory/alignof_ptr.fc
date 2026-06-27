@@ -1,11 +1,11 @@
 let main = (args: str[]) ->
-    let ap = alignof(int32*)
+    let ap = alignof(i32*)
     // pointer alignment is platform-dependent but at least 4
     assert(ap >= 4i64)
 
     // all pointer types have the same alignment
-    assert(alignof(int8*) == alignof(int64*))
-    assert(alignof(int32*) == alignof(bool*))
-    assert(alignof(int32*) == alignof(any*))
+    assert(alignof(i8*) == alignof(i64*))
+    assert(alignof(i32*) == alignof(bool*))
+    assert(alignof(i32*) == alignof(any*))
 
     0

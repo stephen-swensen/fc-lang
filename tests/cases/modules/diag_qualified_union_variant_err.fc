@@ -1,8 +1,8 @@
 // Error diagnostic should show qualified name "m.shape", not mangled "m__shape"
 module m =
     union shape =
-        | circle(int32)
-        | rect(int32)
+        | circle(i32)
+        | rect(i32)
 
 let main = (args: str[]) ->
     let s = m.shape.circle(5)

@@ -1,12 +1,12 @@
 // Test: extern constant passed as argument to extern function
 module c from "stdlib.h" =
-    extern EXIT_SUCCESS: int64
-    extern EXIT_FAILURE: int64
-    extern abs: (int32) -> int32
+    extern EXIT_SUCCESS: i64
+    extern EXIT_FAILURE: i64
+    extern abs: (i32) -> i32
 
 let main = (args: str[]) ->
     // Use extern constant in expression passed to extern function
-    let val = c.abs((int32) (0 - c.EXIT_FAILURE))
+    let val = c.abs((i32) (0 - c.EXIT_FAILURE))
     assert(val >= 0)
 
     // Verify EXIT_SUCCESS is 0 on all POSIX platforms

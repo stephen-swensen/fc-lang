@@ -8,11 +8,11 @@ module outer =
     // ---- companion struct + module (one level deep) ----
 
     struct inner =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     module inner =
-        let make = (x: int32, y: int32) ->
+        let make = (x: i32, y: i32) ->
             inner { x = x, y = y }
 
         // Self-qualified call within companion module
@@ -32,10 +32,10 @@ module outer =
     module deeper =
 
         struct widget =
-            val: int32
+            val: i32
 
         module widget =
-            let make = (v: int32) ->
+            let make = (v: i32) ->
                 widget { val = v }
 
             // Access grandparent constant via parent chain
@@ -47,7 +47,7 @@ module outer =
 
         // Access sibling companion struct from another nested module
         module utils =
-            let make_pair = (a: int32, b: int32) ->
+            let make_pair = (a: i32, b: i32) ->
                 widget.add(widget.make(a), widget.make(b))
 
             // Use grandparent type (inner) from a deeply nested module
@@ -63,10 +63,10 @@ module outer =
         let scale = 100i32
 
         struct item =
-            n: int32
+            n: i32
 
         module item =
-            let make = (n: int32) ->
+            let make = (n: i32) ->
                 item { n = n }
 
             // Should use shadow_test.scale (100), not outer.scale (10)

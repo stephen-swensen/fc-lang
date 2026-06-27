@@ -1,6 +1,6 @@
 module shapes =
     union holder =
-        | val(int32)
+        | val(i32)
         | empty
 
 let main = (args: str[]) ->

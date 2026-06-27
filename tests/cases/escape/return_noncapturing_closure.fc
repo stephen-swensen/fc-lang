@@ -1,6 +1,6 @@
 // Non-capturing closures are safe to return — no context to dangle
 let make_doubler = () ->
-    (x: int32) -> x * 2
+    (x: i32) -> x * 2
 
 let main = (args: str[]) ->
     let f = make_doubler()

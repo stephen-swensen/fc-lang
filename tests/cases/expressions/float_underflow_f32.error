@@ -1,1 +1,1 @@
-float literal underflows to zero in float32
+float literal underflows to zero in f32

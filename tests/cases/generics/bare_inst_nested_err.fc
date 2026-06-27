@@ -5,5 +5,5 @@ struct box =
 let make = <'a>() -> default('a)
 
 let main = (args: str[]) ->
-    let f = make<box<int32>>
+    let f = make<box<i32>>
     0

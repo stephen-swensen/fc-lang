@@ -4,10 +4,10 @@
 // covers a module-level let whose name is a C keyword/libc symbol.
 module m =
     struct flags =
-        register: int32
+        register: i32
         static: bool
     union tag =
-        | switch(int32)
+        | switch(i32)
         | volatile
 
     let log = 7   // module-level constant named like a libc symbol

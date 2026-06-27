@@ -1,6 +1,6 @@
 // The classic "forgot the base case" accumulator: the recursive result is consumed by
 // `+` before any base case anchors a return type. Reported as non-termination.
-let sum = (n: int32) -> sum(n - 1) + n
+let sum = (n: i32) -> sum(n - 1) + n
 
 let main = (args: str[]) ->
     if args.len > 99 then

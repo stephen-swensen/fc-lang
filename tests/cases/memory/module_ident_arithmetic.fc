@@ -5,7 +5,7 @@ module m =
     let offset = 5
     let sum = base + offset
     let doubled = base + base
-    let arr = int32[3] { base + 1, base + offset, doubled }
+    let arr = i32[3] { base + 1, base + offset, doubled }
 
 let main = (args: str[]) ->
     assert(m.sum == 15)

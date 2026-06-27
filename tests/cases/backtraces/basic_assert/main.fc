@@ -1,4 +1,4 @@
-let helper = (n: int32) ->
+let helper = (n: i32) ->
     assert(n > 0)
     n
 

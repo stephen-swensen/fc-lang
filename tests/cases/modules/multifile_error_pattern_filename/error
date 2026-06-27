@@ -1,1 +1,1 @@
-main.fc:4:7: error: bool pattern on non-bool type int32
+main.fc:4:7: error: bool pattern on non-bool type i32

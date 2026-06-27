@@ -1,6 +1,6 @@
 // Forward reference: the array is declared before the lets it references.
 module m =
-    let arr = int32[3] { a, b, c }
+    let arr = i32[3] { a, b, c }
     let a = 1
     let b = 2
     let c = 3

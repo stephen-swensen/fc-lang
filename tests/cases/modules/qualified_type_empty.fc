@@ -1,7 +1,7 @@
 // Test: empty module-qualified struct literal
 module data =
     struct empty =
-        _dummy: int32
+        _dummy: i32
 
 let main = (args: str[]) ->
     let e = data.empty { }

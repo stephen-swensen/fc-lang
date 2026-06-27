@@ -1,5 +1,5 @@
 // Multiline function call arguments
-let add3 = (a: int32, b: int32, c: int32) -> a + b + c
+let add3 = (a: i32, b: i32, c: i32) -> a + b + c
 
 let main = (args: str[]) ->
     let _result =

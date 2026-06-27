@@ -1,5 +1,5 @@
 module math from "stdlib.h" =
-    private extern abs: (int32) -> int32
+    private extern abs: (i32) -> i32
 
 let main = (args: str[]) ->
     math.abs(0 - 5)

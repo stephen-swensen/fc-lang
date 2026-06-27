@@ -81,12 +81,12 @@ let main = (args: str[]) ->
         return 18
 
     // isize/usize suffixes with separators
-    let s = 1_000i
-    if s != 1000i then
+    let s = 1_000isize
+    if s != 1000isize then
         return 19
 
-    let t = 1_000u
-    if t != 1000u then
+    let t = 1_000usize
+    if t != 1000usize then
         return 20
 
     // Arithmetic with separator literals

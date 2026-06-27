@@ -1,6 +1,6 @@
 // When the non-diverging branch is itself void (here an assignment), unifying with
 // a `return` branch keeps the `if` void — `return` does not force it to a value.
-let act = (x: int32) ->
+let act = (x: i32) ->
     let mut hits = 0
     if x > 0 then hits = hits + 1 else return -1
     hits

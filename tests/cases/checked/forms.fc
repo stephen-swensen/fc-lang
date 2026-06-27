@@ -2,7 +2,7 @@
 // `unchecked` re-enable of wrapping, and free mixing with the guard axis (both
 // nesting orders), demonstrating the two axes are orthogonal.
 let main = (args: str[]) ->
-    let xs = int32[4]{10, 20, 30, 40}
+    let xs = i32[4]{10, 20, 30, 40}
 
     // inline form
     let i = checked 100i32 + 200i32

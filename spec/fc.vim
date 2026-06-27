@@ -20,8 +20,8 @@ syn keyword fcBoolean true false
 syn keyword fcConstant none void
 
 " Built-in type names
-syn keyword fcType int8 int16 int32 int64 uint8 uint16 uint32 uint64
-syn keyword fcType isize usize float32 float64 bool char str cstr any
+syn keyword fcType i8 i16 i32 i64 u8 u16 u32 u64
+syn keyword fcType isize usize f32 f64 bool char str cstr any
 syn keyword fcType const
 
 " Built-in globals
@@ -36,8 +36,8 @@ syn match fcTypeVar "'\a\w*"
 " behind "\<0" so the alternation is only walked after a leading zero; decimal
 " stays separate. Folding cuts per-line attempt overhead without slowing the
 " common case (an alternation gated behind a rare anchor char stays cheap).
-syn match fcNumber "\<0\%([xX][0-9a-fA-F_]\+\|[bB][01_]\+\|[oO][0-7_]\+\)\%([iu]\%(8\|16\|32\|64\)\=\)\=\>"
-syn match fcNumber "\<[0-9][0-9_]*\%([iu]\%(8\|16\|32\|64\)\=\)\=\>"
+syn match fcNumber "\<0\%([xX][0-9a-fA-F_]\+\|[bB][01_]\+\|[oO][0-7_]\+\)\%([iu]\%(8\|16\|32\|64\|size\)\)\=\>"
+syn match fcNumber "\<[0-9][0-9_]*\%([iu]\%(8\|16\|32\|64\|size\)\)\=\>"
 
 " Float literals
 syn match fcFloat "\<[0-9][0-9_]*\.[0-9][0-9_]*\%(f32\|f64\)\=\>"

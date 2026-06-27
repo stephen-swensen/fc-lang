@@ -2,8 +2,8 @@
 let get_bits = <'a>() -> 'a.bits
 
 let main = (args: str[]) ->
-    let a = get_bits<uint8>()
-    let b = get_bits<int32>()
+    let a = get_bits<u8>()
+    let b = get_bits<i32>()
     // 8 + 32 = 40
     assert(a + b == 40)
     0

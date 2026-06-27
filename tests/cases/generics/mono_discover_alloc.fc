@@ -1,7 +1,7 @@
 // Item 6 (same class): alloc whose type operand is a generic struct instance
 // used only inside a generic body. discover_in_expr walked alloc's size/init
-// sub-expressions but not its alloc_type, so box<int64> went unregistered ->
-// undefined `box__5_int64` in the calloc/sizeof emission. A heap slice of the
+// sub-expressions but not its alloc_type, so box<i64> went unregistered ->
+// undefined `box__5_i64` in the calloc/sizeof emission. A heap slice of the
 // generic struct exercises alloc + index field write/read + free.
 struct box =
     v: 'a

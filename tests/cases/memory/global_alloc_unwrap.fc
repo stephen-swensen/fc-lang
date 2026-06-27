@@ -1,4 +1,4 @@
-let p = alloc(int32)!
+let p = alloc(i32)!
 
 let main = (args: str[]) ->
     *p = 42

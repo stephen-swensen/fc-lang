@@ -25,7 +25,7 @@ let main = (args: str[]) ->
     assert((unguarded u % v) == 2u32)
 
     // runtime divisor (the case the guard normally protects)
-    let xs = int32[2]{40, 6}
+    let xs = i32[2]{40, 6}
     let q = unguarded (xs[0] / xs[1])
     assert(q == 6)
 
@@ -36,7 +36,7 @@ let main = (args: str[]) ->
     // INT_MIN/-1 under `unguarded` (unchecked default): the wrap is kept (defined),
     // not bare/UB — overflow semantics are governed by the overflow axis, not by
     // `unguarded`. min / -1 == min, min %% -1 == 0. Runtime operands so it is real.
-    let ms = int8[2]{-128i8, -1i8}
+    let ms = i8[2]{-128i8, -1i8}
     assert((unguarded (ms[0] / ms[1])) == -128i8)
     assert((unguarded (ms[0] % ms[1])) == 0i8)
     0

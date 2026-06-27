@@ -1,5 +1,5 @@
 struct node =
-    value: int32
+    value: i32
 
 // Pointer-field access (p->x) in a guard requires parentheses because the
 // match-arm `->` would otherwise win tokenisation.

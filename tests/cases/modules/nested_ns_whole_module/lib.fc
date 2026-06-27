@@ -2,7 +2,7 @@ namespace mylib::
 
 module helpers =
     let value = 42
-    let inc = (x: int32) -> x + 1
+    let inc = (x: i32) -> x + 1
 
 module outer =
     // Nested module accesses namespace sibling directly (no import needed)

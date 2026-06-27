@@ -3,7 +3,7 @@ module m =
     let a = 10
     let b = a
     let c = b
-    let arr = int32[3] { a, b, c }
+    let arr = i32[3] { a, b, c }
 
 let main = (args: str[]) ->
     assert(m.a == 10)

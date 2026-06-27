@@ -1,6 +1,6 @@
 // `let ... in` is a real expression: usable as a call argument and as an
 // operand inside a larger expression (it desugars to a statement-expression).
-let twice = (n: int32) -> n * 2
+let twice = (n: i32) -> n * 2
 let main = (args: str[]) ->
     assert(twice(let x = 5 in x + 1) == 12)
     assert(1 + (let x = 2 in x * 3) == 7)

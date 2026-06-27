@@ -2,15 +2,15 @@
 // sizes, some(), and union variant payloads.
 module m =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     union box =
-        | val(int32)
+        | val(i32)
         | empty
 
     let p = point { x = 100 / 4, y = 50 % 7 }   // { 25, 1 }
-    let arr = int32[2] { 12 / 3, 17 % 5 }         // { 4, 2 }
+    let arr = i32[2] { 12 / 3, 17 % 5 }         // { 4, 2 }
     let boxed = some(81 / 9)                        // some(9)
     let v = box.val(64 >> 2)                        // val(16)
 

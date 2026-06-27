@@ -1,7 +1,7 @@
 // Test: zero-initialized stack array of structs
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let arr = point[3] { }

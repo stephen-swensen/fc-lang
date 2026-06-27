@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let mut data = int32[3] { }
+        let mut data = i32[3] { }
         data.ptr[0] = 10
         data.ptr[1] = 20
         data.ptr[2] = 30

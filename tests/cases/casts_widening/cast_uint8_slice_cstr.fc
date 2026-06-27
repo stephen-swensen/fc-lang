@@ -1,8 +1,8 @@
 module c from "stdlib.h" =
-    extern atoi: (const cstr) -> int32
+    extern atoi: (const cstr) -> i32
 
 let main = (args: str[]) ->
-    let mut buf = uint8[3] { }
+    let mut buf = u8[3] { }
     buf.ptr[0] = 55u8
     buf.ptr[1] = 55u8
     buf.ptr[2] = 0u8

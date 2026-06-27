@@ -1,8 +1,8 @@
 // Module-level struct literal — emits compound literal at C file scope
 module config =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
     let origin = point { x = 0, y = 0 }
     let offset = point { x = 10, y = 20 }
 

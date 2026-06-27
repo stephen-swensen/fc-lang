@@ -1,7 +1,7 @@
 module geometry =
     struct vec2 =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     module vec2 =
         let zero = vec2 { x = 0, y = 0 }

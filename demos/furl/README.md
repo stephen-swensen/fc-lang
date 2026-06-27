@@ -86,9 +86,9 @@ $ cat /tmp/page.html
 
 - **TCP client networking** via `std::net`: Uses `open_tcp`, `connect_addr`, `send_bytes`, and `recv_bytes` for a full HTTP request/response cycle.
 - **DNS resolution** via `net.resolve`: Hostname-to-IP lookup using the stdlib's `std::net` module (which wraps `gethostbyname` and `inet_addr` internally).
-- **String parsing with `std::text`**: URL parsing uses `starts_with`, `index_of`, and `parse_int32` to extract host, port, and path components via subslicing (zero-copy).
+- **String parsing with `std::text`**: URL parsing uses `starts_with`, `index_of`, and `parse_i32` to extract host, port, and path components via subslicing (zero-copy).
 - **Heap-allocated interpolated strings**: HTTP request lines are built dynamically with `alloc("%s{method} %s{path} HTTP/1.0\r\n...")!` and freed after sending.
-- **Option types for error handling**: Socket creation (`int32?`), DNS resolution (`uint32?`), file open (`any*?`), and string search (`int64?`) all use option types with `.is_none` checks and `!` unwrap.
+- **Option types for error handling**: Socket creation (`i32?`), DNS resolution (`u32?`), file open (`any*?`), and string search (`i64?`) all use option types with `.is_none` checks and `!` unwrap.
 - **Streaming I/O**: Response is read in 4KB chunks and streamed directly to output, with header accumulation limited to 8KB — handles responses of any size.
 - **File I/O with `std::io`**: Supports `-o` flag via `io.open`/`io.write`/`io.close` for writing response body to a file.
 - **String interpolation**: Formatted output with `%s{}` and `%d{}` for verbose headers, error messages, and dynamic request construction.

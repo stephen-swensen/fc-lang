@@ -3,13 +3,13 @@
 // type, not its value, so it emits no runtime use of the C variable.
 // Pre-fix the plain-element and index forms failed to compile.
 let main = (args: str[]) ->
-    let xs = int32[3] { 10, 20, 30 }
+    let xs = i32[3] { 10, 20, 30 }
 
     // Plain element binding used only in %T
     let mut e = ""
     for x in xs[0..3] do
         e = "%T{x}"
-    assert(e == "int32")
+    assert(e == "i32")
 
     // Index + element bindings, both used only in %T
     let mut it = ""
@@ -17,13 +17,13 @@ let main = (args: str[]) ->
     for i, y in xs[0..3] do
         it = "%T{i}"
         et = "%T{y}"
-    assert(it == "int64")
-    assert(et == "int32")
+    assert(it == "i64")
+    assert(et == "i32")
 
     // Destructured tuple element used only in %T
-    let pairs = {int32, bool}[2] { { 1, true }, { 2, false } }
+    let pairs = {i32, bool}[2] { { 1, true }, { 2, false } }
     let mut dt = ""
     for { a, b } in pairs do
         dt = "%T{a}/%T{b}"
-    assert(dt == "int32/bool")
+    assert(dt == "i32/bool")
     0

@@ -5,6 +5,6 @@
 let main = (args: str[]) ->
     let mut x = 42i32
     let p = &x
-    let n = (int64) args.len - 5i64
-    let s = int32[] { ptr = p, len = n }   // aborts here at construction
-    (int32) s.len                          // never reached
+    let n = (i64) args.len - 5i64
+    let s = i32[] { ptr = p, len = n }   // aborts here at construction
+    (i32) s.len                          // never reached

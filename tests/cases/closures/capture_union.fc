@@ -1,10 +1,10 @@
 // closure captures a union value and matches on it
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
     | nothing
 
-let apply = (f: () -> int32) -> f()
+let apply = (f: () -> i32) -> f()
 
 let main = (args: str[]) ->
     let s = shape.circle(6)

@@ -1,10 +1,10 @@
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
     | dot
 
 struct drawing =
-    x: int32
+    x: i32
     shape: shape
 
 let main = (args: str[]) ->

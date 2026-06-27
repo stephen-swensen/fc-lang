@@ -1,9 +1,9 @@
 // Returning a slice param is fine (PROV_UNKNOWN)
-let first_two = (s: int32[]) ->
+let first_two = (s: i32[]) ->
     s[0..2]
 
 let main = (args: str[]) ->
-    let arr = int32[4] { 5, 10, 15, 20 }
+    let arr = i32[4] { 5, 10, 15, 20 }
     let sub = first_two(arr)
     assert(sub[0] + sub[1] == 15)
     0

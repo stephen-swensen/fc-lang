@@ -4,7 +4,7 @@ let main = (args: str[]) ->
     for i in 0..5 do sum = sum + i
     assert(sum == 10)
 
-    let xs = int32[3] { 10, 20, 30 }
+    let xs = i32[3] { 10, 20, 30 }
     let mut total = 0
     for x in xs do total = total + x
     assert(total == 60)

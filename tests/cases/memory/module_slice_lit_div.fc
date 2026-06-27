@@ -1,7 +1,7 @@
 // Integer division inside a slice-literal element is evaluated to a literal
 // at compile time, so the slice literal is a valid const initializer.
 module m =
-    let arr = int32[1] { 10 / 3 }
+    let arr = i32[1] { 10 / 3 }
 
 let main = (args: str[]) ->
     assert(m.arr[0] == 3)

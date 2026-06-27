@@ -1,6 +1,6 @@
 struct frame =
-    data: uint8[32]
-    len: int32
+    data: u8[32]
+    len: i32
 
 let main = (args: str[]) ->
     let f = default(frame)

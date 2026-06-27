@@ -2,9 +2,9 @@
 // match subjects, loop bodies, and as a function argument.
 // atomic_store_release is void — usable as a statement and in defer.
 
-let double_it = (n: int32) -> n * 2
+let double_it = (n: i32) -> n * 2
 
-let bump_deferred = (p: int32*) ->
+let bump_deferred = (p: i32*) ->
     defer atomic_store_release(p, atomic_load_acquire(p) + 1)
     atomic_store_release(p, 10)
 

@@ -1,6 +1,6 @@
-// Writing a stack address through a heap int32** escapes
+// Writing a stack address through a heap i32** escapes
 let leak = () ->
-    let hp = alloc(int32*)!
+    let hp = alloc(i32*)!
     let mut x = 42
     *hp = &x
     free(hp)

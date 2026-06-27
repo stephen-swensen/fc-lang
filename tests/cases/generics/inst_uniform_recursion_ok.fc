@@ -5,7 +5,7 @@ struct cell =
     next: cell<'a>*?
 
 let main = (args: str[]) ->
-    let mut tail = cell { val = 2, next = none(cell<int32>*) }
+    let mut tail = cell { val = 2, next = none(cell<i32>*) }
     let head = cell { val = 1, next = some(&tail) }
     assert(head.val + head.next!->val == 3)
     0

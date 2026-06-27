@@ -1,19 +1,19 @@
 // Each subexpression is evaluated exactly once, even where codegen lowers a
 // construct into several uses of an operand.
 struct holder =
-    buf: int32[3]
+    buf: i32[3]
 
-let bump = (c: int32*) ->
+let bump = (c: i32*) ->
     *c = *c + 1
     *c
 
 let main = (args: str[]) ->
     // Fixed-array field assignment lowers to a bounds check + memcpy + memset;
     // the destination object must be evaluated only once.
-    let mut hs = holder[2] { holder { buf = int32[3]{0,0,0} },
-                             holder { buf = int32[3]{0,0,0} } }
+    let mut hs = holder[2] { holder { buf = i32[3]{0,0,0} },
+                             holder { buf = i32[3]{0,0,0} } }
     let mut idx = 0
-    let src = int32[3] { 7, 8, 9 }
+    let src = i32[3] { 7, 8, 9 }
     hs[bump(&idx)].buf = src
     assert(idx == 1)             // object index ran once, not 2+ times
     assert(hs[1].buf[0] == 7 && hs[1].buf[1] == 8 && hs[1].buf[2] == 9)
@@ -21,7 +21,7 @@ let main = (args: str[]) ->
 
     // Slice index target lowers to a bounds check + store; index runs once.
     let mut j = 0
-    let mut a = int32[4] { 0, 0, 0, 0 }
+    let mut a = i32[4] { 0, 0, 0, 0 }
     a[bump(&j)] = 5
     assert(j == 1)
     assert(a[1] == 5)

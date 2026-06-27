@@ -437,7 +437,7 @@ The guiding principles are:
 
 - No null keyword in the language — there is no `null` literal; option types replace all intentionally nullable values. Raw pointer fields in zero-initialized structs may physically contain null if the programmer does not initialize them, and `default(T*)` yields a null raw pointer — FC does not prevent this; it simply omits a dedicated `null` keyword.
 - No uninitialized bindings — all bindings must be initialized at declaration
-- No explicit type annotations on bindings — types are always inferred; the same principle extends to generics, where type variables are implicit (any `'a` in a signature makes the declaration generic) and instantiation is inferred from arguments at the call site. Explicit type arguments (`f<int32>()`, `make_pair<int32, bool>()`) are available for the cases inference can't reach — see §Generic Functions.
+- No explicit type annotations on bindings — types are always inferred; the same principle extends to generics, where type variables are implicit (any `'a` in a signature makes the declaration generic) and instantiation is inferred from arguments at the call site. Explicit type arguments (`f<i32>()`, `make_pair<i32, bool>()`) are available for the cases inference can't reach — see §Generic Functions.
 - Explicit numeric widths throughout — implicit widening conversions are allowed only where no information can be lost (see §Operators & Access)
 - Indentation-based lexical scoping
 - A clean statement / expression divide — top-level declarations are statements, everything inside an expression context is an expression with a type
@@ -469,9 +469,9 @@ This works because of four mutually reinforcing design decisions:
 - **Explicit parameter types** are the anchor. Every function has a fully specified input signature, so the body can always be type-checked directionally from the leaves upward. Return types follow from bodies; they never need to be declared.
 - **No function overloading** means a name always resolves to exactly one function. The type at any call site is always unambiguous. If multiple candidates existed for a name, the compiler would need to resolve the ambiguity by examining context — introducing exactly the kind of global constraint solving the inference model is designed to avoid.
 - **No implicit coercions beyond safe widening** means an expression's type is never context-dependent. The type flows up; context never changes it.
-- **Monomorphized generics** means type variables are pinned at call sites by concrete arguments, not resolved by global unification. A call to `map` with a `(int32) -> float64` function argument immediately determines both type variables — no constraint propagation required.
+- **Monomorphized generics** means type variables are pinned at call sites by concrete arguments, not resolved by global unification. A call to `map` with a `(i32) -> f64` function argument immediately determines both type variables — no constraint propagation required.
 
-**A note on numeric operators** — `+`, `*`, and friends work across all numeric types, which might appear to be a form of overloading. It is not. When the compiler encounters `a + b`, both `a` and `b` are already fully typed by their own bottom-up inference before the operator is consulted. Operator resolution is a post-inference step — a type-indexed dispatch table, not a constraint to be solved. The implicit widening rule (`int32 + int64` widens the narrower operand) is the one bounded exception: it is applied after both operands are independently typed, flows only in one direction (narrow to wide), and never reinterprets a literal. The type of `42` is always `int32` regardless of what it is added to. This is why integer-to-float conversion is always an explicit cast in FC — allowing `42` to silently become `float64` based on context would be a genuine violation of the directional model.
+**A note on numeric operators** — `+`, `*`, and friends work across all numeric types, which might appear to be a form of overloading. It is not. When the compiler encounters `a + b`, both `a` and `b` are already fully typed by their own bottom-up inference before the operator is consulted. Operator resolution is a post-inference step — a type-indexed dispatch table, not a constraint to be solved. The implicit widening rule (`i32 + i64` widens the narrower operand) is the one bounded exception: it is applied after both operands are independently typed, flows only in one direction (narrow to wide), and never reinterprets a literal. The type of `42` is always `i32` regardless of what it is added to. This is why integer-to-float conversion is always an explicit cast in FC — allowing `42` to silently become `f64` based on context would be a genuine violation of the directional model.
 
 Other languages with more powerful type systems — Haskell, ML, Rust — require global inference or bidirectional checking because features like type classes, trait resolution, and lifetime inference create dependencies that flow *downward* from context as well as upward from structure. FC is deliberately designed to avoid those features, not because inference power is undesirable but because the language is more predictable, more understandable, and easier to implement correctly when the inference algorithm is a single directional pass.
 
@@ -519,7 +519,7 @@ FC requires a **libc providing `malloc`, `free`, `abort`, `memcmp`, `strlen`, an
 
 FC does not provide first-class SIMD or vector types (e.g., `float32x4`, `int32x8`) at this time. Two escape hatches exist for code that needs vectorization:
 
-1. **Rely on the C compiler's auto-vectorizer.** GCC and Clang already vectorize many straight-line numeric loops automatically, so plain FC `for` loops over `float32[]` / `int32[]` slices often get SIMD codegen for free with no source changes.
+1. **Rely on the C compiler's auto-vectorizer.** GCC and Clang already vectorize many straight-line numeric loops automatically, so plain FC `for` loops over `f32[]` / `i32[]` slices often get SIMD codegen for free with no source changes.
 2. **Push the vectorized kernel into a C helper and call it via `extern`.** Note that the vector types themselves (`__m128`, `__m256`, `vector_size`-typed aliases) are opaque compiler primitives, not C structs, so they cannot cross the FC/C boundary via `extern struct` — and even if they could, per-intrinsic FFI calls would defeat inlining and dwarf the speedup. The workable pattern is to write a C function that takes plain pointers or lengths and does the entire vectorized loop internally using intrinsics, then declare that function as an `extern` in FC and call it with slices. The vector type never appears in FC; only the bulk kernel boundary does.
 
 A future revision may add language-level vector types backed by GCC/Clang's `__attribute__((vector_size(N)))`, but this is out of scope for this version.
@@ -555,7 +555,7 @@ These rules make explicit sequencing and scoping syntax *optional* rather than r
 After a block-forming construct (`->`, `=` in let/module/struct/union bodies, `with`, `loop`, `do`, `then`, `else`), if the next token is on a new line, a new block is established at that token's column. All tokens at that column are peers — statements or expressions in the same scope. The final expression in the block is the block's value.
 
 ```fc
-let f = (x: int32) ->
+let f = (x: i32) ->
     let a = x + 1       // block column = 4, peer 1
     let b = a * 2       // block column = 4, peer 2
     b                   // block column = 4, peer 3 — value of f
@@ -602,7 +602,7 @@ let result = some_function(
 )
 
 // Multiline slice literal — elements can wrap freely inside {}
-let data = int32[6] {
+let data = i32[6] {
     1, 2, 3,
     4, 5, 6
 }
@@ -678,7 +678,7 @@ The following are **built-in globals** — predefined identifiers typed `any*` t
 
 The following are **built-in type names**. Unlike reserved identifiers, they are not enforced keywords — the compiler permits shadowing them as binding or user-defined type names — but doing so is strongly discouraged and unsupported, since it obscures the built-in type and (for some names, such as `str` and `char`) interacts badly with code generation:
 
-`int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `isize`, `usize`, `float32`, `float64`, `bool`, `char`, `any`, `str`, `cstr`
+`i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `isize`, `usize`, `f32`, `f64`, `bool`, `char`, `any`, `str`, `cstr`
 
 ---
 
@@ -688,50 +688,50 @@ The following are **built-in type names**. Unlike reserved identifiers, they are
 
 | Type | Description | C equivalent |
 |------|-------------|--------------|
-| int8 | Signed 8-bit integer | int8_t |
-| int16 | Signed 16-bit integer | int16_t |
-| int32 | Signed 32-bit integer (default integer) | int32_t |
-| int64 | Signed 64-bit integer | int64_t |
-| uint8 | Unsigned 8-bit integer | uint8_t |
-| uint16 | Unsigned 16-bit integer | uint16_t |
-| uint32 | Unsigned 32-bit integer | uint32_t |
-| uint64 | Unsigned 64-bit integer | uint64_t |
+| i8 | Signed 8-bit integer | i8_t |
+| i16 | Signed 16-bit integer | i16_t |
+| i32 | Signed 32-bit integer (default integer) | i32_t |
+| i64 | Signed 64-bit integer | i64_t |
+| u8 | Unsigned 8-bit integer | u8_t |
+| u16 | Unsigned 16-bit integer | u16_t |
+| u32 | Unsigned 32-bit integer | u32_t |
+| u64 | Unsigned 64-bit integer | u64_t |
 | isize | Signed pointer-width integer — width matches the target's pointer size | ptrdiff_t |
 | usize | Unsigned pointer-width integer — width matches the target's pointer size | size_t |
-| float32 | 32-bit IEEE 754 float | float |
-| float64 | 64-bit IEEE 754 float (default float) | double |
+| f32 | 32-bit IEEE 754 float | float |
+| f64 | 64-bit IEEE 754 float (default float) | double |
 | bool | Boolean — true or false | bool (stdbool.h) |
-| char | Alias for `uint8`. Represents a single ASCII/UTF-8 byte. Supports character literal syntax. | uint8_t |
+| char | Alias for `u8`. Represents a single ASCII/UTF-8 byte. Supports character literal syntax. | u8_t |
 | void | Non-instantiable type. Used by the compiler for type inference and control flow analysis. May appear in function type signatures (`() -> void`) but never as a value in expression positions — `void` cannot be assigned to a let binding or passed as an argument. | void |
 | any* | Opaque pointer — a raw address with no associated type. Cannot be dereferenced. Used for C interop — wrapping opaque C handles (file handles, database connections, etc.) and pointer casts. See §any* — opaque pointers. | void* |
-| str | Alias for `uint8[]`. An FC string — fat pointer with length. | — |
-| cstr | Alias for `uint8*`. A null-terminated C string pointer. Use for C interop only. | char* |
+| str | Alias for `u8[]`. An FC string — fat pointer with length. | — |
+| cstr | Alias for `u8*`. A null-terminated C string pointer. Use for C interop only. | char* |
 
 Implicit widening conversions are allowed in binary expressions and comparisons where no information can be lost — see §Operators & Access. All other numeric conversions require an explicit cast. `if` conditions must be `bool` typed — numeric values do not implicitly coerce to bool.
 
-**Platform-width types (`isize`, `usize`)** have no implicit widening to or from fixed-width types. Since their width varies by target (32-bit or 64-bit), no fixed-width conversion is guaranteed lossless on all platforms. All conversions require explicit casts: `(isize) x`, `(int64) y`, etc. FC's default types (`int32` for integers, `int64` for `sizeof` and slice `.len`) remain fixed-width — `isize`/`usize` are opt-in for C interop and embedded targets where matching the platform's native size types matters.
+**Platform-width types (`isize`, `usize`)** have no implicit widening to or from fixed-width types. Since their width varies by target (32-bit or 64-bit), no fixed-width conversion is guaranteed lossless on all platforms. All conversions require explicit casts: `(isize) x`, `(i64) y`, etc. FC's default types (`i32` for integers, `i64` for `sizeof` and slice `.len`) remain fixed-width — `isize`/`usize` are opt-in for C interop and embedded targets where matching the platform's native size types matters.
 
 ### Literals
 
 | Literal | Type |
 |---------|------|
-| 42 | int32 (default) |
-| 42i8, 42i16, 42i64 | int8, int16, int64 |
-| 42u8, 42u16, 42u32, 42u64 | uint8, uint16, uint32, uint64 |
-| 42i | isize (platform-width signed) |
-| 42u | usize (platform-width unsigned) |
-| 42i32 | int32 (explicit, same as default) |
-| 0xFF, 0x1A2B | int32 (hexadecimal; suffixes allowed, e.g. `0xFFu64`) |
-| 0b1010 | int32 (binary; suffixes allowed) |
-| 0o17 | int32 (octal; suffixes allowed) |
-| 3.14 | float64 (default) |
-| 3.14f32, 3.14f64 | float32, float64 |
-| 1e9, 1.5e-3, 1E+18 | float64 (scientific notation) |
-| 2.5e10f32 | float32 (scientific notation, suffixed) |
-| 0x1.8p+1, 0x1p-3 | float64 (hex float — mantissa in hex, `p` exponent in decimal) |
-| 0x1.fffffep+127f32 | float32 (hex float, suffixed) |
+| 42 | i32 (default) |
+| 42i8, 42i16, 42i64 | i8, i16, i64 |
+| 42u8, 42u16, 42u32, 42u64 | u8, u16, u32, u64 |
+| 42isize | isize (platform-width signed) |
+| 42usize | usize (platform-width unsigned) |
+| 42i32 | i32 (explicit, same as default) |
+| 0xFF, 0x1A2B | i32 (hexadecimal; suffixes allowed, e.g. `0xFFu64`) |
+| 0b1010 | i32 (binary; suffixes allowed) |
+| 0o17 | i32 (octal; suffixes allowed) |
+| 3.14 | f64 (default) |
+| 3.14f32, 3.14f64 | f32, f64 |
+| 1e9, 1.5e-3, 1E+18 | f64 (scientific notation) |
+| 2.5e10f32 | f32 (scientific notation, suffixed) |
+| 0x1.8p+1, 0x1p-3 | f64 (hex float — mantissa in hex, `p` exponent in decimal) |
+| 0x1.fffffep+127f32 | f32 (hex float, suffixed) |
 | true, false | bool |
-| 'a', '\\n', '\\x41' | char (alias for uint8) |
+| 'a', '\\n', '\\x41' | char (alias for u8) |
 | "hello" | str |
 | c"hello" | cstr — null-terminated C string pointer |
 
@@ -753,15 +753,15 @@ Float literals may also use **hex float** form — a hex mantissa scaled by a po
 
 ```fc
 let half = 0x1.0p-1               // exactly 0.5
-let pi_bits = 0x1.921fb54442d18p+1 // float64 representation of π
-let max_f32 = 0x1.fffffep+127f32   // largest finite float32
+let pi_bits = 0x1.921fb54442d18p+1 // f64 representation of π
+let max_f32 = 0x1.fffffep+127f32   // largest finite f32
 ```
 
 Suffixed integer literals are range-checked at compile time. A literal whose value does not fit in the specified type is a compile error:
 
 ```fc
-let a = 999i8       // compile error — 999 exceeds int8 range (-128..127)
-let b = 256u8       // compile error — 256 exceeds uint8 range (0..255)
+let a = 999i8       // compile error — 999 exceeds i8 range (-128..127)
+let b = 256u8       // compile error — 256 exceeds u8 range (0..255)
 let c = 127i8       // ok
 let d = 255u8       // ok
 ```
@@ -769,17 +769,17 @@ let d = 255u8       // ok
 Float literals are likewise range-checked. Overflow to ±infinity and underflow to zero from a nonzero source are FC compile errors — the FC compiler catches these directly so they never surface as confusing C-level errors:
 
 ```fc
-let a = 1e400          // compile error — overflows float64 (max ~1.8e308)
-let b = 1e40f32        // compile error — overflows float32 (max ~3.4e38)
-let c = 1e-400         // compile error — underflows to zero in float64
+let a = 1e400          // compile error — overflows f64 (max ~1.8e308)
+let b = 1e40f32        // compile error — overflows f32 (max ~3.4e38)
+let c = 1e-400         // compile error — underflows to zero in f64
 let d = -1e400         // compile error — overflow with signed value reported
-let e = 5e-324         // ok — rounds to a representable float64 subnormal
+let e = 5e-324         // ok — rounds to a representable f64 subnormal
 let f = 0e500          // ok — mantissa is exactly zero
 ```
 
 Integer literals that exceed 64-bit unsigned range (`> 18446744073709551615`) are also caught at compile time rather than silently truncating.
 
-The same rule applies to `char` literals, which are aliases for `uint8`.
+The same rule applies to `char` literals, which are aliases for `u8`.
 
 ### Escape Sequences
 
@@ -820,16 +820,16 @@ The compiler validates that each format specifier is compatible with the express
 | `%u` | all integer types | unsigned decimal |
 | `%x`, `%X` | all integer types | hexadecimal |
 | `%o` | all integer types | octal |
-| `%f` | `float32`, `float64` | fixed-point |
-| `%e`, `%E` | `float32`, `float64` | scientific notation |
-| `%g`, `%G` | `float32`, `float64` | shortest representation |
+| `%f` | `f32`, `f64` | fixed-point |
+| `%e`, `%E` | `f32`, `f64` | scientific notation |
+| `%g`, `%G` | `f32`, `f64` | shortest representation |
 | `%s` | `str`, `cstr` | string |
 | `%c` | `char` | single character |
 | `%p` | any pointer type | pointer address |
 | `%T` | any type | compile-time type name |
 | `%%` | — | literal `%`, no expression |
 
-The `%T` format emits the compile-time type name of the expression as a string literal. The expression is type-checked but **not evaluated** at runtime — only its static type is used. This is useful for debugging inferred types. For example, `"%T{x}"` where `x` is an `int32` produces `"int32"`. Since the type name is a compile-time constant, `%T` segments always contribute a fixed number of bytes to the buffer size.
+The `%T` format emits the compile-time type name of the expression as a string literal. The expression is type-checked but **not evaluated** at runtime — only its static type is used. This is useful for debugging inferred types. For example, `"%T{x}"` where `x` is an `i32` produces `"i32"`. Since the type name is a compile-time constant, `%T` segments always contribute a fixed number of bytes to the buffer size.
 
 Width, precision, and flag modifiers are allowed: `%04d{x}`, `%8.2f{pi}`, `%20s{name}`.
 
@@ -868,7 +868,7 @@ let c = alloca("hello %s{name}")     // dynamic stack: dies at function return
 
 #### cstr Interpolation
 
-The `c"..."` prefix produces a **null-terminated cstr** instead of a `str` slice. All the same format specifiers and interpolation rules apply — the only difference is that the result is a `uint8*` (cstr) with a null terminator appended, rather than a `uint8[]` (str) with an explicit length.
+The `c"..."` prefix produces a **null-terminated cstr** instead of a `str` slice. All the same format specifiers and interpolation rules apply — the only difference is that the result is a `u8*` (cstr) with a null terminator appended, rather than a `u8[]` (str) with an explicit length.
 
 ```fc
 let name = "world"
@@ -888,24 +888,24 @@ Explicit casts use C-style prefix cast syntax: `(T) expr`. All conversions not c
 **Numeric casts** — any numeric type to any other numeric type:
 
 ```fc
-let x = (float64) 32        // int32 to float64
-let y = (int32) 3.14        // float64 to int32, truncates toward zero -> 3
-let z = (uint8) some_int32  // narrowing cast, programmer responsible
+let x = (f64) 32        // i32 to f64
+let y = (i32) 3.14        // f64 to i32, truncates toward zero -> 3
+let z = (u8) some_i32  // narrowing cast, programmer responsible
 ```
 
 **Float-to-integer casts saturate.** Converting a float to an integer type is *defined* for every input — there is no undefined behavior and no platform-dependent result. The value is truncated toward zero; an input that lies beyond the target type's range clamps to that type's minimum or maximum, and `nan` converts to `0`. This matches Rust's `as` and WebAssembly's saturating-truncation conversions, and differs from C, where an out-of-range or `nan` float-to-integer conversion is undefined behavior.
 
 ```fc
-let a = (int32) 3.9         // 3            (truncates toward zero)
-let b = (int32) (-3.9)      // -3           (toward zero, not floor)
-let c = (int32) 1e30        // 2147483647   (clamps to int32.max)
-let d = (int32) (-1e30)     // -2147483648  (clamps to int32.min)
-let e = (uint8) (-5.0)      // 0            (clamps to uint8.min)
-let f = (uint8) 999.0       // 255          (clamps to uint8.max)
-let g = (int32) (0.0 / 0.0) // 0            (nan -> 0)
+let a = (i32) 3.9         // 3            (truncates toward zero)
+let b = (i32) (-3.9)      // -3           (toward zero, not floor)
+let c = (i32) 1e30        // 2147483647   (clamps to i32.max)
+let d = (i32) (-1e30)     // -2147483648  (clamps to i32.min)
+let e = (u8) (-5.0)      // 0            (clamps to u8.min)
+let f = (u8) 999.0       // 255          (clamps to u8.max)
+let g = (i32) (0.0 / 0.0) // 0            (nan -> 0)
 ```
 
-A `float32` operand is converted as if first promoted to `float64` (which is lossless), so the truncation and the clamping bounds are identical regardless of the source float width.
+A `f32` operand is converted as if first promoted to `f64` (which is lossless), so the truncation and the clamping bounds are identical regardless of the source float width.
 
 The saturating float-to-integer conversion is one of a small set of **runtime guards** FC inserts. The `unguarded` block opts out of it on a hot path — see **Unguarded blocks** below.
 
@@ -914,8 +914,8 @@ The saturating float-to-integer conversion is one of a small set of **runtime gu
 ```fc
 let a = true
 let b = false
-let bits = ((int32) a) | ((int32) b << 1)   // pack flags into bits
-let s = "flag=%d{(int32) a}"                // renders "flag=1"
+let bits = ((i32) a) | ((i32) b << 1)   // pack flags into bits
+let s = "flag=%d{(i32) a}"                // renders "flag=1"
 let c = (bool) 5                            // compile error — use `5 != 0`
 ```
 
@@ -924,10 +924,10 @@ let c = (bool) 5                            // compile error — use `5 != 0`
 ```fc
 let p = (any*) &my_state         // T* to any* — erase type for C interop
 let q = (my_state*) some_any_ptr // any* to T* — recover type, programmer responsible
-let r = (uint8*) some_int32_ptr  // T* to U* — reinterpret pointer type
+let r = (u8*) some_i32_ptr  // T* to U* — reinterpret pointer type
 ```
 
-Pointer-to-pointer casts include const changes: `(const int32*) ptr` freezes a pointer (safe), `(int32*) const_ptr` strips const (unsafe). For slices, `(const str) s` and `(str) const_s` work similarly. See §The const qualifier.
+Pointer-to-pointer casts include const changes: `(const i32*) ptr` freezes a pointer (safe), `(i32*) const_ptr` strips const (unsafe). For slices, `(const str) s` and `(str) const_s` work similarly. See §The const qualifier.
 
 **str to cstr** — converting a runtime-length `str` to a null-terminated `cstr` requires a copy, whose size depends on `str.len`. As with interpolation, FC does not allocate that copy implicitly. There is exactly one *cast* form, the **bounded** `(cstr[N])`, which copies into a fixed `N`-byte stack buffer (hoisted to function entry, so it is loop-safe):
 
@@ -955,30 +955,30 @@ let c = alloca((cstr) path)       // dynamic stack: dies at function return
 let s = (str) c"hello"   // shares backing; len computed via strlen → 5
 ```
 
-**Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe, and restricted to the **pointer-width** integer types `usize`/`isize` (the `u`/`i` literal suffixes):
+**Pointer-to-integer and integer-to-pointer** — for embedded work and memory-mapped I/O. Unsafe, and restricted to the **pointer-width** integer types `usize`/`isize` (the `usize`/`isize` literal suffixes):
 
 ```fc
 let addr = (usize) some_ptr           // pointer to integer — raw address value
-let reg = (uint32*) 0x40001000u       // integer to pointer — memory-mapped register
+let reg = (u32*) 0x40001000usize       // integer to pointer — memory-mapped register
 ```
 
-A pointer may only be cast to or from `usize`/`isize`, never a fixed-width int (`int32`, `uint64`, …): a fixed width does not match the target's pointer size, so the conversion would be lossy on some targets and is rejected with *"pointer↔integer cast must go through usize/isize."* This mirrors the rule that `usize`/`isize` have no implicit widening to or from fixed-width types (§Platform-width types) — pointer width is target-defined, so FC never reinterprets it at a guessed fixed width. To reach a fixed-width int, cast explicitly through `usize`/`isize`; the second cast names the (lossy) narrowing:
+A pointer may only be cast to or from `usize`/`isize`, never a fixed-width int (`i32`, `u64`, …): a fixed width does not match the target's pointer size, so the conversion would be lossy on some targets and is rejected with *"pointer↔integer cast must go through usize/isize."* This mirrors the rule that `usize`/`isize` have no implicit widening to or from fixed-width types (§Platform-width types) — pointer width is target-defined, so FC never reinterprets it at a guessed fixed width. To reach a fixed-width int, cast explicitly through `usize`/`isize`; the second cast names the (lossy) narrowing:
 
 ```fc
-let low32 = (uint32) (usize) some_ptr   // address truncated to 32 bits — explicit
-let p = (int32*) (usize) raw_u64        // a uint64 address reaches a pointer via usize
+let low32 = (u32) (usize) some_ptr   // address truncated to 32 bits — explicit
+let p = (i32*) (usize) raw_u64        // a u64 address reaches a pointer via usize
 ```
 
-**Identity casts** — casting a scalar value to its own type (e.g. `(int32) x` where `x` is already `int32`, or `(bool) b`) is a permitted no-op for any numeric, `bool`, `char`, or pointer type. Aggregate types (structs, unions, slices) cannot be cast at all, so they have no identity-cast form.
+**Identity casts** — casting a scalar value to its own type (e.g. `(i32) x` where `x` is already `i32`, or `(bool) b`) is a permitted no-op for any numeric, `bool`, `char`, or pointer type. Aggregate types (structs, unions, slices) cannot be cast at all, so they have no identity-cast form.
 
-Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `float32` as `uint32`) is not supported via cast syntax — use explicit pointer casts through a temporary if needed.
+Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `f32` as `u32`) is not supported via cast syntax — use explicit pointer casts through a temporary if needed.
 
 ### Unguarded blocks
 
 FC inserts a handful of **runtime guards** to make defined what C leaves undefined: float-to-integer saturation, the integer divide-by-zero check, and slice bounds checks. On a hot path the programmer often already knows the precondition holds. `unguarded` opts out of these guards for a lexically-scoped expression; `guarded` opts back in. They are expressions with the same two layouts as `loop` and `if … then` — an indented block whose value is its last expression, or a one-line inline form:
 
 ```fc
-let n = unguarded (int32) f     // bare truncation, no saturation (UB if f out of range/nan)
+let n = unguarded (i32) f     // bare truncation, no saturation (UB if f out of range/nan)
 let q = unguarded a / b         // no divide-by-zero check (UB if b == 0)
 
 let total = unguarded           // block form
@@ -988,7 +988,7 @@ let total = unguarded           // block form
 
 The guard axis is one of two orthogonal lexical context axes; the overflow axis (`checked`/`unchecked`) is described in [Checked arithmetic](#checked-arithmetic) below.
 
-The governing idea: **the operation's spelling states intent; the guard context states whether the precondition is verified or trusted.** `s[i]` always means "index"; `(int32) f` always means "narrow." Whether each is checked at runtime or taken on faith is decided by the enclosing `guarded`/`unguarded` context.
+The governing idea: **the operation's spelling states intent; the guard context states whether the precondition is verified or trusted.** `s[i]` always means "index"; `(i32) f` always means "narrow." Whether each is checked at runtime or taken on faith is decided by the enclosing `guarded`/`unguarded` context.
 
 **`unguarded` governs exactly three guards** — float→int saturation, integer divide-by-zero (`/` and `%`), and slice bounds (index and subslice). For an in-range, finite, non-zero operand the result is identical to the guarded form; otherwise it is **undefined behavior** (exactly C's semantics). It governs nothing else. In particular, **option unwrap `x!` is always checked** — its tag test is a software invariant, not a range guard, and skipping it would resurrect the null-dereference class that options exist to remove. `unguarded x!` is therefore a redundant-marker error (below), not an unchecked unwrap.
 
@@ -1017,7 +1017,7 @@ let acc = checked               // block form
     t + carry
 ```
 
-**`checked` governs the integer operations that can silently lose information:** `+`, `-`, `*` (signed *and* unsigned), signed `/` at `INT_MIN / -1`, signed negation `-x` at `INT_MIN`, and **lossy integer narrowing casts** (`(int8) 300`, `(uint8) -1`, `(int8) 200u8`, …). Operations that cannot overflow are not governed — unsigned `/` and `%`, signed `%` (`min % -1 == 0` is representable), shifts (the amount is masked, §Shift semantics), bitwise ops, and lossless widening casts — so a `checked` whose body contains only those is a redundant-marker error.
+**`checked` governs the integer operations that can silently lose information:** `+`, `-`, `*` (signed *and* unsigned), signed `/` at `INT_MIN / -1`, signed negation `-x` at `INT_MIN`, and **lossy integer narrowing casts** (`(i8) 300`, `(u8) -1`, `(i8) 200u8`, …). Operations that cannot overflow are not governed — unsigned `/` and `%`, signed `%` (`min % -1 == 0` is representable), shifts (the amount is masked, §Shift semantics), bitwise ops, and lossless widening casts — so a `checked` whose body contains only those is a redundant-marker error.
 
 **Narrowing casts vs. `float→int`.** A lossy *integer* narrowing cast is on the overflow axis (it is defined truncation that may lose a value). A `float→int` conversion is **not** — it is C-undefined out of range and lives on the guard axis as saturation (above). The dividing line between the axes: the overflow axis governs operations that are *already defined* but may silently yield an out-of-range value; the guard axis governs operations that are *undefined in C* unless made safe.
 
@@ -1086,7 +1086,7 @@ Struct field assignment and slice element assignment are valid on both `let` and
 let p = point { x = 1.0, y = 2.0 }
 p.x = 3.0               // ok — mutating a field, not reassigning p
 
-let buf = int32[4] { 0, 1, 2, 3 }
+let buf = i32[4] { 0, 1, 2, 3 }
 buf[2] = 99             // ok — mutating an element, not reassigning buf
 
 let mut q = point { x = 1.0, y = 2.0 }
@@ -1107,14 +1107,14 @@ This is consistent with the pointer rule — writing through a `let` binding poi
 `const` is a prefix on pointer, slice, and `any*` types:
 
 ```fc
-const int32*     // pointer to read-only int32
-const int32[]    // slice with read-only elements
-const str        // read-only string (alias for const uint8[])
-const cstr       // read-only C string (alias for const uint8*)
+const i32*     // pointer to read-only i32
+const i32[]    // slice with read-only elements
+const str        // read-only string (alias for const u8[])
+const cstr       // read-only C string (alias for const u8*)
 const any*       // read-only opaque pointer (maps to const void* in C)
 ```
 
-`const` is not valid on bare value types — `const int32` is a compile error. Value-level immutability is handled by `let`.
+`const` is not valid on bare value types — `const i32` is a compile error. Value-level immutability is handled by `let`.
 
 #### Const sources
 
@@ -1133,13 +1133,13 @@ Non-const implicitly widens to const (the safe direction). Const to non-const re
 ```fc
 let f = (s: const str) -> s.len
 
-let mut buf = alloc(uint8[100] { })!
+let mut buf = alloc(u8[100] { })!
 f(buf)                     // ok — str widens to const str
 ```
 
 Typed pointers implicitly widen to `any*`, respecting const: `T*` widens to `any*`, and `const T*` widens to `const any*`. However, `const T*` does **not** widen to `any*` — that would silently drop the const guarantee.
 
-An option type widens only when its inner type widens **representation-preservingly** — that is, by one of the conversions just described (adding `const`, or `T*` → `any*`), which change no bits. So `int32*?` widens to `const int32*?` and to `any*?`, and `int32[]?` widens to `const int32[]?`. A *numeric* option does **not** widen, even though its inner type would: `int32?` does not widen to `int64?`, because the two are distinct option representations and the conversion would have to rebuild the option rather than reinterpret it. To bridge numeric options, unwrap and re-wrap explicitly: `if x.is_some then some((int64) x!) else none(int64)`. As with all widening, this applies only in the asymmetric anchor positions (call arguments, assignment, struct-literal fields, option payloads); `if`/`match`/`loop`/`return` joins require an exact match either way.
+An option type widens only when its inner type widens **representation-preservingly** — that is, by one of the conversions just described (adding `const`, or `T*` → `any*`), which change no bits. So `i32*?` widens to `const i32*?` and to `any*?`, and `i32[]?` widens to `const i32[]?`. A *numeric* option does **not** widen, even though its inner type would: `i32?` does not widen to `i64?`, because the two are distinct option representations and the conversion would have to rebuild the option rather than reinterpret it. To bridge numeric options, unwrap and re-wrap explicitly: `if x.is_some then some((i64) x!) else none(i64)`. As with all widening, this applies only in the asymmetric anchor positions (call arguments, assignment, struct-literal fields, option payloads); `if`/`match`/`loop`/`return` joins require an exact match either way.
 
 #### Explicit casts
 
@@ -1147,8 +1147,8 @@ Both directions are available via regular cast syntax:
 
 ```fc
 let mut x = 42
-let cp = (const int32*) &x    // freeze — non-const to const (safe)
-let mp = (int32*) cp           // strip const (unsafe, for C interop escape hatches)
+let cp = (const i32*) &x    // freeze — non-const to const (safe)
+let mp = (i32*) cp           // strip const (unsafe, for C interop escape hatches)
 ```
 
 Slice const casts also work: `(const str) s` to freeze, `(str) const_s` to strip.
@@ -1159,17 +1159,17 @@ Accessing a field through a const pointer preserves const on pointer and slice f
 
 ```fc
 struct node =
-    data: int32
+    data: i32
     next: node*?
 
 let f = (n: const node*) ->
-    n->data              // int32 — readable, not writable
+    n->data              // i32 — readable, not writable
     n->next              // const node*? — deep const propagated
 ```
 
 Deep const chains naturally: `const_ptr->a->b.c.d->e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
 
-`.ptr` on a const slice gives a const pointer: if `s` is `const int32[]`, then `s.ptr` is `const int32*`.
+`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`.
 
 #### Write rejection
 
@@ -1177,7 +1177,7 @@ The compiler rejects these operations through const:
 
 ```fc
 let mut x = 42
-let cp = (const int32*) &x
+let cp = (const i32*) &x
 *cp = 10                 // compile error: cannot assign through const pointer/slice
 cp->field = 10           // compile error (for struct pointers)
 const_slice[0] = 10      // compile error
@@ -1194,7 +1194,7 @@ Type variables can bind to const types. `const` composes with type variable synt
 ```fc
 let deref = (p: const 'a*) -> *p    // works for any T — const preserved through monomorphization
 
-deref(&x)                            // 'a = int32, param is const int32*
+deref(&x)                            // 'a = i32, param is const i32*
 ```
 
 `alloc` always returns non-const, even when the input is const — it creates a fresh mutable heap copy:
@@ -1208,9 +1208,9 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
 
-**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`int32.min`, `float64.nan`, `isize.bits`, …), struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
+**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`i32.min`, `f64.nan`, `isize.bits`, …), struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
 
-**Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine. Static type properties follow the same split: a fixed-width integer `.min`, `.max`, or `.bits` is folded to its literal value (so it can take part in const division/modulo and comparisons, e.g. `int32.min / 2`), while float properties and the target-defined `isize`/`usize` `.min`/`.max`/`.bits` are emitted as their C macro and left to the C compiler.
+**Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine. Static type properties follow the same split: a fixed-width integer `.min`, `.max`, or `.bits` is folded to its literal value (so it can take part in const division/modulo and comparisons, e.g. `i32.min / 2`), while float properties and the target-defined `isize`/`usize` `.min`/`.max`/`.bits` are emitted as their C macro and left to the C compiler.
 
 **File-level** non-function `let` bindings — those at the top level of the entry-point file, the only place a top-level `let` may appear (see §Top-level declarations and the entry-point file) — accept all module-level constant-expression *forms* plus runtime forms: `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. The one thing they are stricter about is references: a file-level initializer may not reference other bindings (unlike module level, where const-expr members may reference each other), and function calls are not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
 
@@ -1220,18 +1220,18 @@ let max_size = 1024             // ok — integer literal
 let mask = 0xFF & 0x0F          // ok — constant arithmetic
 let scale = 2 * 3 + 1           // ok — constant arithmetic
 let half = max_size / 2         // ok — integer division, evaluated to a literal
-let lo = int32.min              // ok — static type property (folds to a literal)
-let span = int32.max / 2 + 1    // ok — type property in const arithmetic
-let nan64 = float64.nan         // ok — float property (emitted as its C macro)
+let lo = i32.min              // ok — static type property (folds to a literal)
+let span = i32.max / 2 + 1    // ok — type property in const arithmetic
+let nan64 = f64.nan         // ok — float property (emitted as its C macro)
 // let bad = 1 / 0              // ERROR — division by zero in constant expression
 let origin = point { x = 0, y = 0 }       // ok — struct literal with constant fields
-let primes = int32[3] { 2, 3, 5 }         // ok — slice literal with constant elements
+let primes = i32[3] { 2, 3, 5 }         // ok — slice literal with constant elements
 let answer = some(42)                     // ok — some wrapping a constant
 let flag = color.green                    // ok — no-payload variant constructor
 let tagged = shape.circle(5)              // ok — variant with constant payload
 
 // file-level only — not allowed in modules
-let buf = alloc(int32[100] { })!  // ok — alloc + unwrap
+let buf = alloc(i32[100] { })!  // ok — alloc + unwrap
 let p = alloc(point2d)!           // ok — alloc + unwrap
 
 let x = 10
@@ -1242,7 +1242,7 @@ module music =
     let getthem = 3
     let searchn = 11
     let pacman  = 26
-    let songs = int32[5] { getthem, searchn, getthem, searchn, pacman }
+    let songs = i32[5] { getthem, searchn, getthem, searchn, pacman }
 ```
 
 Inside any expression context, `let` and `let mut` introduce bindings within a block. The binding is visible to all subsequent expressions in the same block — scoping and sequencing both follow directly from the block model:
@@ -1283,7 +1283,7 @@ let { center = { x = cx, y = cy }, radius = r } = green_circle
 Any binding can shadow any other binding of the same name, regardless of mutability:
 
 ```fc
-let x = default(int32?)
+let x = default(i32?)
 let x = some(32)       // let shadows let
 
 let mut y = 42
@@ -1307,10 +1307,10 @@ FC uses simple right-to-left (inside-out) inference. The type of a binding is al
 - Binding types are always inferred — never annotated
 
 ```fc
-let double = (x: int32) -> x * 2    // return type inferred as int32
+let double = (x: i32) -> x * 2    // return type inferred as i32
 let n = alloc(node)!                 // inferred as node*
-let x = default(int32?)              // inferred as int32?
-let x = some(42)                     // inferred as int32?
+let x = default(i32?)              // inferred as i32?
+let x = some(42)                     // inferred as i32?
 ```
 
 ### Two-Pass Compilation
@@ -1374,7 +1374,7 @@ Within an expression, subexpressions are evaluated **left-to-right**, and each i
 The two short-circuiting operators are the deliberate exception to *evaluate-once*-per-position: `&&` evaluates its right operand only when the left is `true`, and `||` only when the left is `false`. When the right operand is skipped, its side effects do not occur.
 
 ```fc
-let bump = (c: int32*) ->     // increments *c and returns the new value
+let bump = (c: i32*) ->     // increments *c and returns the new value
     *c = *c + 1
     *c
 
@@ -1392,41 +1392,41 @@ This is the same guarantee already stated for string-interpolation segments (see
 
 Unsigned integer overflow wraps modulo 2ⁿ — this is C's existing guarantee and FC inherits it directly.
 
-Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`int8`, `int16`, `int32`, `int64`, `isize`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely: overflow is never undefined, it is *always* one of two defined outcomes.
+Signed integer overflow is also defined as two's complement wrapping for all signed integer types (`i8`, `i16`, `i32`, `i64`, `isize`). This diverges from C, where signed overflow is undefined behavior and the compiler is permitted to optimize on the assumption it never occurs — a source of subtle, dangerous bugs. FC eliminates this class of bug entirely: overflow is never undefined, it is *always* one of two defined outcomes.
 
 Wrapping is the **default** outcome. Where a silent wrap would be a bug rather than the intent, a `checked` block makes overflowing `+ - *`, signed `/`, signed negation, and lossy narrowing casts **abort** instead — see [Checked arithmetic](#checked-arithmetic). The rest of this section describes the default (wrapping) behavior.
 
 In generated C, signed arithmetic is emitted as a cast through the unsigned equivalent for each type:
 
 ```c
-// FC: let x = a + b   (a, b: int32)
-int32_t x = (int32_t) ((uint32_t) a + (uint32_t) b);
+// FC: let x = a + b   (a, b: i32)
+i32_t x = (i32_t) ((u32_t) a + (u32_t) b);
 
-// FC: let x = a + b   (a, b: int64)
-int64_t x = (int64_t) ((uint64_t) a + (uint64_t) b);
+// FC: let x = a + b   (a, b: i64)
+i64_t x = (i64_t) ((u64_t) a + (u64_t) b);
 ```
 
-Each signed type casts through its same-width unsigned counterpart — `int8` through `uint8_t`, `int16` through `uint16_t`, and so on. All signed integer types share the same two's complement layout as their unsigned counterparts — the cast is a reinterpretation of bits, not a computation. Unsigned addition is guaranteed to wrap in C, so the result is fully defined behavior on any C11 compiler with no additional flags required.
+Each signed type casts through its same-width unsigned counterpart — `i8` through `u8_t`, `i16` through `u16_t`, and so on. All signed integer types share the same two's complement layout as their unsigned counterparts — the cast is a reinterpretation of bits, not a computation. Unsigned addition is guaranteed to wrap in C, so the result is fully defined behavior on any C11 compiler with no additional flags required.
 
-**Sub-`int` widths.** C's integer-promotion rules widen `int8`, `uint8`, `int16`, and `uint16` operands to `int` before `+`, `-`, `*`, or `<<`. A naive `a + b` would therefore leave a value wider than the FC type visible to the surrounding expression (`200u8 + 100u8` would read as `300`, not `44`), and a narrow *signed* multiply would overflow `int` — reintroducing the very undefined behavior the cast-through-unsigned pattern exists to eliminate (`-1i16 * -1i16` would compute `65535 * 65535`). For these four types each of `+ - * <<` is performed in `unsigned` and the result truncated back to the FC type. Because `unsigned` arithmetic is modular and only the low bits are kept, this is correct for *any* conforming `int` width — including 16-bit-`int` embedded targets (where `unsigned` is 16 bits and the truncation is simply a no-op). This applies to both signed and unsigned sub-`int` types:
+**Sub-`int` widths.** C's integer-promotion rules widen `i8`, `u8`, `i16`, and `u16` operands to `int` before `+`, `-`, `*`, or `<<`. A naive `a + b` would therefore leave a value wider than the FC type visible to the surrounding expression (`200u8 + 100u8` would read as `300`, not `44`), and a narrow *signed* multiply would overflow `int` — reintroducing the very undefined behavior the cast-through-unsigned pattern exists to eliminate (`-1i16 * -1i16` would compute `65535 * 65535`). For these four types each of `+ - * <<` is performed in `unsigned` and the result truncated back to the FC type. Because `unsigned` arithmetic is modular and only the low bits are kept, this is correct for *any* conforming `int` width — including 16-bit-`int` embedded targets (where `unsigned` is 16 bits and the truncation is simply a no-op). This applies to both signed and unsigned sub-`int` types:
 
 ```c
-// FC: let x = a * b   (a, b: int16)
-int16_t x = (int16_t)(uint16_t)((unsigned)(uint16_t) a * (unsigned)(uint16_t) b);
+// FC: let x = a * b   (a, b: i16)
+i16_t x = (i16_t)(u16_t)((unsigned)(u16_t) a * (unsigned)(u16_t) b);
 
-// FC: let x = a + b   (a, b: uint8)
-uint8_t x = (uint8_t)((unsigned)(uint8_t) a + (unsigned)(uint8_t) b);
+// FC: let x = a + b   (a, b: u8)
+u8_t x = (u8_t)((unsigned)(u8_t) a + (unsigned)(u8_t) b);
 ```
 
 The consequences of wrapping are predictable and consistent:
 
-- `int32.max + 1` → `int32.min`
-- `int32.min - 1` → `int32.max`
-- `int32.min * -1` → `int32.min` (the one asymmetry of two's complement)
-- `int32.min / -1` → `int32.min`, and `int32.min % -1` → `0` (the same asymmetry: `a / -1` equals `a * -1`)
+- `i32.max + 1` → `i32.min`
+- `i32.min - 1` → `i32.max`
+- `i32.min * -1` → `i32.min` (the one asymmetry of two's complement)
+- `i32.min / -1` → `i32.min`, and `i32.min % -1` → `0` (the same asymmetry: `a / -1` equals `a * -1`)
 
 > **Transpilation**
-> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on all signed integer types and on the sub-`int` unsigned types (`uint8`, `uint16`); wider unsigned types (`uint32`, `uint64`, `usize`) are already modular in C and emitted plain. For the sub-`int` types — which C promotes to `int` — the operands are evaluated in `unsigned` and the result truncated back to the FC type, so a narrow `*` cannot hit `int`-overflow UB and the wrap holds at the operand's own width on any target. Comparison and bitwise operators are unaffected — their signed and unsigned semantics already agree. Division has exactly one overflow case, signed `min / -1` (equivalently `min % -1`), which C leaves undefined and most hardware traps like divide-by-zero. Its two concerns are split across the two context axes: the divide-by-*zero* check is a precondition on the **guard** axis (dropped by `unguarded`, see *Division by zero*), while the `min / -1` *overflow* is on the **overflow** axis. The `min / -1` handling branch is always emitted to dodge the hardware trap, and its meaning follows checked/unchecked: by default (`unchecked`) it substitutes the wrapped result (`min` for `/`, `0` for `%`); under `checked` the `/` case aborts (`%` stays `0`, which is representable and never an overflow). This holds at every signed width and on any `int` width — the trap precedes any result, so a cast-back cannot define it.
+> The cast-through-unsigned pattern is applied to `+`, `-`, `*`, and `<<` on all signed integer types and on the sub-`int` unsigned types (`u8`, `u16`); wider unsigned types (`u32`, `u64`, `usize`) are already modular in C and emitted plain. For the sub-`int` types — which C promotes to `int` — the operands are evaluated in `unsigned` and the result truncated back to the FC type, so a narrow `*` cannot hit `int`-overflow UB and the wrap holds at the operand's own width on any target. Comparison and bitwise operators are unaffected — their signed and unsigned semantics already agree. Division has exactly one overflow case, signed `min / -1` (equivalently `min % -1`), which C leaves undefined and most hardware traps like divide-by-zero. Its two concerns are split across the two context axes: the divide-by-*zero* check is a precondition on the **guard** axis (dropped by `unguarded`, see *Division by zero*), while the `min / -1` *overflow* is on the **overflow** axis. The `min / -1` handling branch is always emitted to dodge the hardware trap, and its meaning follows checked/unchecked: by default (`unchecked`) it substitutes the wrapped result (`min` for `/`, `0` for `%`); under `checked` the `/` case aborts (`%` stays `0`, which is representable and never an overflow). This holds at every signed width and on any `int` width — the trap precedes any result, so a cast-back cannot define it.
 
 ### Shift semantics
 
@@ -1466,7 +1466,7 @@ The unifying principle is that each type is compared by what it *represents* to 
 
 The compiler emits a comparison function for each struct and union type where `==` is used. For slices this is O(n) in the number of elements — equality on slice-containing types is not free.
 
-**Float equality** — `==` on `float32` and `float64` follows IEEE 754 semantics: `NaN != NaN` (even for identical bit patterns) and `+0.0 == -0.0` (despite different bit patterns). This applies transitively — a struct containing a `float64` field uses IEEE 754 comparison for that field. As a consequence, equality for types containing float fields cannot be implemented as raw byte comparison; the compiler generates field-by-field comparison functions that use C's `==` for each primitive field.
+**Float equality** — `==` on `f32` and `f64` follows IEEE 754 semantics: `NaN != NaN` (even for identical bit patterns) and `+0.0 == -0.0` (despite different bit patterns). This applies transitively — a struct containing a `f64` field uses IEEE 754 comparison for that field. As a consequence, equality for types containing float fields cannot be implemented as raw byte comparison; the compiler generates field-by-field comparison functions that use C's `==` for each primitive field.
 
 **Pointer fields** — a `T*` field inside a struct is compared by address. Two structs whose `T*` fields point to different allocations containing identical data will compare as not-equal. This is intentional — following pointers arbitrarily would be untenable for circular structures. If you need deep equality across pointer boundaries, write an explicit comparison function.
 
@@ -1507,24 +1507,24 @@ FC allows implicit widening conversions in binary expressions and comparisons wh
 
 | From | To |
 |------|----|
-| `int8` | `int16`, `int32`, `int64` |
-| `int16` | `int32`, `int64` |
-| `int32` | `int64` |
-| `uint8` | `uint16`, `uint32`, `uint64`, `int16`, `int32`, `int64` |
-| `uint16` | `uint32`, `uint64`, `int32`, `int64` |
-| `uint32` | `uint64`, `int64` |
-| `float32` | `float64` |
+| `i8` | `i16`, `i32`, `i64` |
+| `i16` | `i32`, `i64` |
+| `i32` | `i64` |
+| `u8` | `u16`, `u32`, `u64`, `i16`, `i32`, `i64` |
+| `u16` | `u32`, `u64`, `i32`, `i64` |
+| `u32` | `u64`, `i64` |
+| `f32` | `f64` |
 
-All other mixed-type expressions require an explicit cast. Integer-to-float conversions are always explicit — `int32` to `float64` is safe in range but can lose precision for large values. Float-to-integer conversions are likewise explicit and **saturate** rather than invoking undefined behavior at the range edges (see §Casting).
+All other mixed-type expressions require an explicit cast. Integer-to-float conversions are always explicit — `i32` to `f64` is safe in range but can lose precision for large values. Float-to-integer conversions are likewise explicit and **saturate** rather than invoking undefined behavior at the range edges (see §Casting).
 
 ```fc
 let x = 42i32
 let y = 100i64
-let z = x + y           // x widened to int64, z is int64
+let z = x + y           // x widened to i64, z is i64
 
 let a = 10u8
 let b = 200i32
-let c = a + b           // a widened to int32, c is int32
+let c = a + b           // a widened to i32, c is i32
 
 let p = 1000000i32
 let q = 3.14f64
@@ -1538,7 +1538,7 @@ Widening applies only where there is a single anchor type that other values are 
 - `loop` `break value` expressions must all have the same type
 - `return value` expressions must match the function's inferred return type exactly (the function return type is itself inferred from the body's tail expression, so explicit `return`s are symmetric contributors, not values being passed to a declared slot)
 
-In these positions an explicit cast is required to bridge types: `if cond then (int64) x else y`, `return (int64) x`, etc.
+In these positions an explicit cast is required to bridge types: `if cond then (i64) x else y`, `return (i64) x`, etc.
 
 ### Overloaded Tokens
 
@@ -1546,7 +1546,7 @@ Several tokens have multiple meanings distinguished by context:
 
 | Token | Context | Meaning |
 |-------|---------|---------|
-| `*` | type context (suffix) | pointer type — `int32*` |
+| `*` | type context (suffix) | pointer type — `i32*` |
 | `*` | expression context (prefix) | dereference — `*px` |
 | `*` | expression context (binary) | multiplication — `a * b` |
 | `&` | expression context (prefix) | address-of — `&x` |
@@ -1554,7 +1554,7 @@ Several tokens have multiple meanings distinguished by context:
 | `!` | expression context (prefix) | boolean not — `!flag` |
 | `!` | expression context (postfix) | option unwrap — `val!` |
 | `->` | expression context | pointer field access — `ptr->field` |
-| `->` | type context | function type arrow — `(int32) -> int32` |
+| `->` | type context | function type arrow — `(i32) -> i32` |
 | `->` | match arm | match arm separator — `\| some(x) -> ...` |
 | `..` | slice indexing | sub-slice range — `s[i..j]` |
 | `..` | `for` range | iteration range — `for i in 0..n` |
@@ -1576,7 +1576,7 @@ There is no exception handling and no recoverable failure path for these operati
 **Division by zero** — integer division (`/`) and remainder (`%`) by zero are hard failures. This diverges from C, where integer division by zero is undefined behavior. FC makes it defined: the program aborts. Float division by zero follows IEEE 754 and produces `inf` or `nan` — it is not a hard failure. The other case C leaves undefined for integer division, signed `min / -1`, is *not* a hard failure by default in FC — it overflows and wraps like any other signed overflow (see *Integer overflow*), so by default division aborts only on a zero divisor. (Inside a `checked` block, signed `min / -1` aborts as overflow — see *Checked arithmetic*.)
 
 > **Transpilation**
-> Bounds checks emit an unsigned-compare (`(uint64_t)idx >= (uint64_t)len`, which fuses the negative-index and past-end cases into one branch since slice lengths are non-negative by invariant), wrapped in `__builtin_expect(..., 0)` so the fast path is fall-through. On failure the check calls a shared out-of-line helper — `fc_oob` for indexing, `fc_oob_sub` for subslicing — emitted once per translation unit and marked `static __attribute__((cold, noreturn, unused))`; the helper prints the diagnostic and calls `abort()`. Keeping the failure path out of line lets the C compiler schedule it after the function body, avoid keeping state live across a (statically-unreachable) call, and autovectorize loops containing slice accesses. Subslice checks use the same pattern with a two-compare form (`(uint64_t)lo > (uint64_t)hi` and `(uint64_t)hi > (uint64_t)s.len`) that covers all four failure modes including negative operands. Option unwrap emits a tag check before the value read; on failure, it prints a diagnostic to stderr (`file:line: unwrap failed: expr`) before calling `abort()`. Division by zero emits a divisor check before the division; for signed types the same guard also tests the divisor for `-1` and, on a match, substitutes the wrapped result (a wrapping negation for `/`, `0` for `%`) instead of executing the divide that would trap on `min / -1`. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).
+> Bounds checks emit an unsigned-compare (`(u64_t)idx >= (u64_t)len`, which fuses the negative-index and past-end cases into one branch since slice lengths are non-negative by invariant), wrapped in `__builtin_expect(..., 0)` so the fast path is fall-through. On failure the check calls a shared out-of-line helper — `fc_oob` for indexing, `fc_oob_sub` for subslicing — emitted once per translation unit and marked `static __attribute__((cold, noreturn, unused))`; the helper prints the diagnostic and calls `abort()`. Keeping the failure path out of line lets the C compiler schedule it after the function body, avoid keeping state live across a (statically-unreachable) call, and autovectorize loops containing slice accesses. Subslice checks use the same pattern with a two-compare form (`(u64_t)lo > (u64_t)hi` and `(u64_t)hi > (u64_t)s.len`) that covers all four failure modes including negative operands. Option unwrap emits a tag check before the value read; on failure, it prints a diagnostic to stderr (`file:line: unwrap failed: expr`) before calling `abort()`. Division by zero emits a divisor check before the division; for signed types the same guard also tests the divisor for `-1` and, on a match, substitutes the wrapped result (a wrapping negation for `/`, `0` for `%`) instead of executing the divide that would trap on `min / -1`. The compiler may elide checks it can prove unnecessary at compile time (constant indices within known bounds, divisors provably non-zero).
 
 ### Backtraces (`--backtraces`)
 
@@ -1609,7 +1609,7 @@ This is "observed under the configurations we test" rather than a hard guarantee
 **Names rendered in frames.**
 
 - Top-level functions: the FC short name, e.g. `helper`.
-- Monomorphized generics: `name<T1, T2>`, e.g. `check<int32>`.
+- Monomorphized generics: `name<T1, T2>`, e.g. `check<i32>`.
 - Lifted lambdas: `<lambda>`. The trailing `defined at file:line` column carries the location.
 - Frames the compiler did not emit (libc, the C runtime entry point, etc.) appear with their raw symbol name; the walk halts at `main` or `fc_main` to avoid runtime noise.
 
@@ -1636,7 +1636,7 @@ let win =
 For `return expr` and `break expr`, which carry a value, the carried value determines the type of the *outer* construct they transfer control to (the enclosing function or loop), not the type at the point where they appear:
 
 ```fc
-let f = (x: int32) ->
+let f = (x: i32) ->
     if x > 0 then return "early exit"    // no else required — the branch diverges
     do_something(x)
     "normal exit"
@@ -1645,9 +1645,9 @@ let f = (x: int32) ->
 Here the `then` branch diverges, so it produces no value and the `if` needs no `else` (it is a void statement). The string `"early exit"` determines the return type of `f`. A function body may also end directly in `return expr`; the return type is taken from the `return`, since the tail itself yields no value:
 
 ```fc
-let g = (x: int32) ->
+let g = (x: i32) ->
     if x > 0 then return 1
-    return 2          // body ends in a return; g returns int32
+    return 2          // body ends in a return; g returns i32
 ```
 
 The same principle applies to `break value` in loops — the carried value types the `loop` expression, while the `break` itself diverges within the body:
@@ -1932,7 +1932,7 @@ loop
 // loop as expression — type inferred from break value
 let mut i = 0
 let result = loop
-    if i >= data.len then break default(int32?)
+    if i >= data.len then break default(i32?)
     if matches(data[i]) then break some(i)
     i = i + 1
 ```
@@ -1961,7 +1961,7 @@ for i in 0..10 do
     process(data[i])
 ```
 
-The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is the common type of the two endpoints under the standard widening rules, and that single type is used for the binding, the bound test, and the increment alike. `0..10` gives `int32` (both default). `0..points.len` gives `int64` (`int32` widens to `int64`). Both endpoints must be integer types — float ranges are a compile error — and they must share a common type: a pair with no lossless widening between them (`0u32..m` where `m` is `int32`, or any implicit `isize`/`usize` mix such as `0..n` where `n` is `usize`) is rejected, exactly as the same operands would be rejected under `+` or `<`. Make both endpoints the same width to fix it — `0u..n` for a `usize` end.
+The range `a..b` iterates from `a` up to but not including `b` — the same convention as sub-slice syntax `s[i..j]`. The type of the loop binding is the common type of the two endpoints under the standard widening rules, and that single type is used for the binding, the bound test, and the increment alike. `0..10` gives `i32` (both default). `0..points.len` gives `i64` (`i32` widens to `i64`). Both endpoints must be integer types — float ranges are a compile error — and they must share a common type: a pair with no lossless widening between them (`0u32..m` where `m` is `i32`, or any implicit `isize`/`usize` mix such as `0..n` where `n` is `usize`) is rejected, exactly as the same operands would be rejected under `+` or `<`. Make both endpoints the same width to fix it — `0usize..n` for a `usize` end.
 
 Both endpoints are evaluated exactly once, in left-to-right order, before the loop begins — a side-effecting bound such as `for i in 0..next()` calls `next()` once, not once per iteration.
 
@@ -1976,7 +1976,7 @@ for i, p in points do
     if p.x == 0.0 then io.write("zero at index %d{i}\n", stdout)
 ```
 
-The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `int64`. The element is a copy, same as plain element iteration. As with a range bound, the slice iterable is evaluated exactly once before the loop — `for x in next_batch()` calls `next_batch()` once, not once per element.
+The index type is inferred from the implicit range `0..slice.len`, following the same widening rules as explicit ranges — in practice this is always `i64`. The element is a copy, same as plain element iteration. As with a range bound, the slice iterable is evaluated exactly once before the loop — `for x in next_batch()` calls `next_batch()` once, not once per element.
 
 #### Destructuring the element
 
@@ -2088,7 +2088,7 @@ loop
     if done() then break
 
 // non-uniform step — for only supports step-by-one
-let buf = alloc(uint8[256] { })!
+let buf = alloc(u8[256] { })!
 let mut i = 0
 loop
     if i >= buf.len then break
@@ -2104,25 +2104,25 @@ loop
 > ```c
 > // for p in points do (element iteration)
 > fc_slice_point _s = points;          // iterable evaluated once
-> for (int64_t _i = 0; _i < _s.len; _i++) {
+> for (i64_t _i = 0; _i < _s.len; _i++) {
 >     point p = _s.ptr[_i];
 >     // body
 > }
 >
 > // for i in 0..n do (range iteration)
-> int32_t _end = n;                    // end evaluated once
-> for (int32_t i = 0; i < _end; i++) {
+> i32_t _end = n;                    // end evaluated once
+> for (i32_t i = 0; i < _end; i++) {
 >     // body
 > }
 >
 > // for i, p in points do (index-element iteration)
 > fc_slice_point _s = points;
-> for (int64_t i = 0; i < _s.len; i++) {
+> for (i64_t i = 0; i < _s.len; i++) {
 >     point p = _s.ptr[i];
 >     // body
 > }
 > ```
-> For element iteration, `int64_t` is used for the internal loop counter, matching the slice `.len` type. This does not affect FC semantics. For range and index-element iteration, the counter is the user-visible binding `i`, typed according to the widening rules.
+> For element iteration, `i64_t` is used for the internal loop counter, matching the slice `.len` type. This does not affect FC semantics. For range and index-element iteration, the counter is the user-visible binding `i`, typed according to the widening rules.
 > `loop` transpiles to a C `while(1)` with `break` and `continue` mapping directly.
 
 ## Defer
@@ -2153,9 +2153,9 @@ defer free(p)
 Multiple defers in one scope run in reverse order of registration:
 
 ```fc
-let a = alloc(int32[8] {})!
+let a = alloc(i32[8] {})!
 defer free(a)
-let b = alloc(int32[8] {})!
+let b = alloc(i32[8] {})!
 defer free(b)
 // at scope exit: free(b) runs first, then free(a)
 ```
@@ -2201,10 +2201,10 @@ A lambda is written as `(params) ->` followed by a body expression. For multi-li
 
 ```fc
 // single line — body follows -> on same line
-let double = (x: int32) -> x * 2
+let double = (x: i32) -> x * 2
 
 // multi-line — body is the indented block following ->
-let abs = (x: int32) ->
+let abs = (x: i32) ->
     if x < 0 then -x else x
 
 // match body
@@ -2215,7 +2215,7 @@ let describe = (s: shape) ->
     | point        -> "point"
 
 // sequence of let bindings — final expression is the return value
-let hypotenuse = (a: float64, b: float64) ->
+let hypotenuse = (a: f64, b: f64) ->
     let a2 = a * a
     let b2 = b * b
     sqrt(a2 + b2)
@@ -2226,7 +2226,7 @@ let hypotenuse = (a: float64, b: float64) ->
 Function parameters are let bindings — immutable and non-addressable within the function body. If you need a mutable local copy of a parameter, shadow it with a mutable let binding:
 
 ```fc
-let factorial = (n: int32) ->
+let factorial = (n: i32) ->
     let mut n = n          // shadow parameter with mutable let binding
     let mut result = 1
     loop
@@ -2247,18 +2247,18 @@ let find = (haystack: str, needle: str) ->
 
 let log_nop = (msg: str) -> return     // void — does nothing
 
-let validate = (data: uint8[]) ->      // void — early exit on error
+let validate = (data: u8[]) ->      // void — early exit on error
     if data.len == 0 then return
     process(data)
 ```
 
 In all cases `return` is only needed for early exits — the normal return value of a value-returning function is the final expression of the body. A void function with no early exit needs no `return` at all; the body just ends.
 
-Every `return` in a function body must agree with the function's inferred return type — exactly, with no implicit widening. A `return expr` requires `expr`'s type to equal the function's return type; a bare `return` requires a void-returning function. The return type is inferred from the body's tail expression, or — when the tail itself diverges (e.g. the body ends in `return expr`, or in a `match` whose every arm returns) — from the `return` statements themselves. This matches the rule for `if`/`else` branches, `match` arms, and `loop` `break` values (see §Implicit Widening). To bridge types use an explicit cast: `return (int64) x`.
+Every `return` in a function body must agree with the function's inferred return type — exactly, with no implicit widening. A `return expr` requires `expr`'s type to equal the function's return type; a bare `return` requires a void-returning function. The return type is inferred from the body's tail expression, or — when the tail itself diverges (e.g. the body ends in `return expr`, or in a `match` whose every arm returns) — from the `return` statements themselves. This matches the rule for `if`/`else` branches, `match` arms, and `loop` `break` values (see §Implicit Widening). To bridge types use an explicit cast: `return (i64) x`.
 
 **Recursive functions.** A recursive function's return type is inferred from its *base cases* — the paths that produce a value without calling back into the function. The base case may sit in any branch position: `if n > 1 then n * fac(n - 1) else 1` and `if n <= 1 then 1 else n * fac(n - 1)` are equally valid, as are `match` arms in any order. A self-recursive call takes whatever return type the base cases establish, so it can be consumed freely in the recursive branch (multiplied, compared, passed along) regardless of where it appears relative to the base case. This applies identically to top-level functions and self-recursive local lambdas (see §Blocks).
 
-A function with *no* base case — one whose **every** path makes a recursive call into itself before it can return — never terminates, and is rejected at its definition: *"this function never returns: it calls itself on every path with no base case."* This covers a bare tail call (`let spin = (n: int32) -> spin(n)`), recursion in every branch of an `if`/`match`, an unconditional self-call in a non-tail statement, recursion inside a breakless `loop` body, and a self-recursive result consumed as a value (`f(n) + 1`, `g(f(n))`) before any base case has established a return type — all the same fault, reported with the same message. The check is conservative: any base case reachable on *some* path keeps the function accepted, so a guard-clause early return (`if n <= 0 then return 0`) or a value-producing branch is enough. Two related forms are deliberately *not* rejected: an intentional infinite **loop**, written `loop …`, which makes no self-call (it compiles to `while (1)`); and **mutual** recursion between distinct functions (`a` calls `b`, `b` calls `a`), which is a normal — if non-terminating without base cases — pattern. The restriction is specifically on a function that unconditionally recurses into *itself*, whose only honest meaning is an infinite loop better written with `loop`.
+A function with *no* base case — one whose **every** path makes a recursive call into itself before it can return — never terminates, and is rejected at its definition: *"this function never returns: it calls itself on every path with no base case."* This covers a bare tail call (`let spin = (n: i32) -> spin(n)`), recursion in every branch of an `if`/`match`, an unconditional self-call in a non-tail statement, recursion inside a breakless `loop` body, and a self-recursive result consumed as a value (`f(n) + 1`, `g(f(n))`) before any base case has established a return type — all the same fault, reported with the same message. The check is conservative: any base case reachable on *some* path keeps the function accepted, so a guard-clause early return (`if n <= 0 then return 0`) or a value-producing branch is enough. Two related forms are deliberately *not* rejected: an intentional infinite **loop**, written `loop …`, which makes no self-call (it compiles to `while (1)`); and **mutual** recursion between distinct functions (`a` calls `b`, `b` calls `a`), which is a normal — if non-terminating without base cases — pattern. The restriction is specifically on a function that unconditionally recurses into *itself*, whose only honest meaning is an infinite loop better written with `loop`.
 
 ### Entry point
 
@@ -2270,18 +2270,18 @@ let main = (args: str[]) ->
     0
 ```
 
-`main` at the top level is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `int32`. Every program must have exactly one `let main`, and it must live in `global::`. The file containing `let main` is the **entry-point file** — it is the only file that may have top-level `let` bindings (see §Module System & Visibility).
+`main` at the top level is the program entry point, equivalent to C's `main`. It takes `args: str[]` — a slice of command-line arguments where `args[0]` is the program name (matching C's `argv[0]`). It must return `i32`. Every program must have exactly one `let main`, and it must live in `global::`. The file containing `let main` is the **entry-point file** — it is the only file that may have top-level `let` bindings (see §Module System & Visibility).
 
 > **Transpilation**
 > The compiler generates a C `main` wrapper that converts `argc`/`argv` into a `str[]` slice:
 > ```c
 > int main(int argc, char** argv) {
->     fc_slice_uint8* _args = (fc_slice_uint8*) alloca(argc * sizeof(fc_slice_uint8));
+>     fc_slice_u8* _args = (fc_slice_u8*) alloca(argc * sizeof(fc_slice_u8));
 >     for (int i = 0; i < argc; i++) {
->         _args[i].ptr = (uint8_t*) argv[i];
->         _args[i].len = (int64_t) strlen(argv[i]);
+>         _args[i].ptr = (u8_t*) argv[i];
+>         _args[i].len = (i64_t) strlen(argv[i]);
 >     }
->     fc_slice_slice_uint8 args = { .ptr = _args, .len = (int64_t) argc };
+>     fc_slice_slice_u8 args = { .ptr = _args, .len = (i64_t) argc };
 >     return fc_main(args);
 > }
 > ```
@@ -2316,7 +2316,7 @@ Lambdas may capture immutable `let` bindings from the enclosing *local* scope by
 ```fc
 let demo = () ->
     let threshold = 10
-    let above = (x: int32) -> x > threshold    // captures threshold by copy (threshold is local)
+    let above = (x: i32) -> x > threshold    // captures threshold by copy (threshold is local)
     let mut counter = 0
     let f = () -> counter + 1                  // compile error — cannot capture mutable let binding
     above(20)
@@ -2326,7 +2326,7 @@ Capture only happens across a *local* lambda boundary, as above. In contrast, a 
 
 ```fc
 let mut total = 0
-let add = (n: int32) ->                    // not a closure — total is a global, not a capture
+let add = (n: i32) ->                    // not a closure — total is a global, not a capture
     total = total + n
     total
 ```
@@ -2337,7 +2337,7 @@ If you want to mutate a mutable let binding from another function, there are two
 
 ```fc
 let mut x = 3
-let modify = (px: int32*) ->
+let modify = (px: i32*) ->
     *px = 4
 
 modify(&x)
@@ -2356,7 +2356,7 @@ modify()
 // x is now 4
 ```
 
-Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. The copied pointer still points at `x`, and writing through it mutates `x`. The programmer is responsible for ensuring `x` remains live for the lifetime of the closure.
+Here `px` is a `let` binding holding an `i32*`, so it is capturable by copy. The copied pointer still points at `x`, and writing through it mutates `x`. The programmer is responsible for ensuring `x` remains live for the lifetime of the closure.
 
 > **Transpilation**
 > All function values in FC use a uniform **fat-pointer representation** — a two-word struct containing a C function pointer and a `void*` context pointer. The general form for a function type `(A) -> R` is:
@@ -2366,26 +2366,26 @@ Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. T
 >     void* ctx;
 > } fc_fn_A_R;
 > ```
-> Every function value of a given function type has the same size and layout, regardless of what it captures. This uniformity is what makes function values composable — an `arraylist<() -> int32>` works correctly because every element is the same two-word struct.
+> Every function value of a given function type has the same size and layout, regardless of what it captures. This uniformity is what makes function values composable — an `arraylist<() -> i32>` works correctly because every element is the same two-word struct.
 >
 > **Capturing lambdas** — the compiler generates a context struct containing copies of the captured values and allocates it on the **stack frame of the function that creates the lambda**. For example, given this FC code:
 > ```fc
 > let threshold = 10
-> let above = (x: int32) -> x > threshold
+> let above = (x: i32) -> x > threshold
 > ```
 > The compiler emits:
 > ```c
 > // context struct — one field per captured value
-> typedef struct { int32_t threshold; } _ctx_above;
+> typedef struct { i32_t threshold; } _ctx_above;
 >
 > // generated function — receives context as void*
-> bool _above_impl(int32_t x, void* _ctx) {
+> bool _above_impl(i32_t x, void* _ctx) {
 >     return x > ((_ctx_above*)_ctx)->threshold;
 > }
 >
 > // in the creating function's body:
 > _ctx_above _above_ctx = { .threshold = threshold };
-> fc_fn_int32_bool above = { .fn_ptr = _above_impl, .ctx = &_above_ctx };
+> fc_fn_i32_bool above = { .fn_ptr = _above_impl, .ctx = &_above_ctx };
 > ```
 >
 > **Non-capturing lambdas** set the context pointer to null. No context struct is generated.
@@ -2415,11 +2415,11 @@ Here `px` is a `let` binding holding an `int32*`, so it is capturable by copy. T
 
 ```fc
 struct point =
-    x: float64
-    y: float64
+    x: f64
+    y: f64
 
 struct node =
-    value: int32
+    value: i32
     next: node*?       // self-referential via pointer
 ```
 
@@ -2427,7 +2427,7 @@ Mutually recursive struct definitions are allowed — two structs may reference 
 
 ```fc
 struct tree_node =
-    value: int32
+    value: i32
     parent: tree_node*?
     children: child_list*?
 
@@ -2485,11 +2485,11 @@ Union types are tagged unions — each value carries a variant tag and an option
 
 ```fc
 union parse_outcome =
-    | success(int32)
+    | success(i32)
     | failure(str)
 
 union shape =
-    | circle(float64)
+    | circle(f64)
     | rectangle(rect_dims)   // multi-field variants use a struct
     | point                  // no payload
 ```
@@ -2524,15 +2524,15 @@ let r = parse_outcome.success(42)
 
 ## Tuples
 
-A **tuple** is an anonymous, positional product type — a lightweight way to group or return several values without declaring a named struct for the occasion. Tuples are *synthesized structs*: semantically and at runtime they behave exactly like a `struct`, and they inherit structural equality, `default`, by-value copy, and nesting from the struct machinery. They are not a distinct kind of type — `{int32, str}` is just a struct the compiler writes for you.
+A **tuple** is an anonymous, positional product type — a lightweight way to group or return several values without declaring a named struct for the occasion. Tuples are *synthesized structs*: semantically and at runtime they behave exactly like a `struct`, and they inherit structural equality, `default`, by-value copy, and nesting from the struct machinery. They are not a distinct kind of type — `{i32, str}` is just a struct the compiler writes for you.
 
 ### Tuple values
 
-A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and slice literals always carry a type prefix (`point { … }`, `int32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
+A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and slice literals always carry a type prefix (`point { … }`, `i32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
 
 ```fc
-let t = { 4, "hello" }     // type {int32, str}
-let p = { 1, 2, 3 }        // type {int32, int32, int32}
+let t = { 4, "hello" }     // type {i32, str}
+let p = { 1, 2, 3 }        // type {i32, i32, i32}
 ```
 
 A tuple has **at least two elements**. `{}` and `{ x }` are compile errors — a one-element tuple is pointless, and FC has no unit type.
@@ -2542,12 +2542,12 @@ A tuple has **at least two elements**. `{}` and `{ x }` are compile errors — a
 A tuple type mirrors the value: `{T1, T2, …}`. It can appear anywhere a type can, and composes with the usual suffixes:
 
 ```fc
-let f = (x: {int32, str}) -> x[0]   // tuple parameter
+let f = (x: {i32, str}) -> x[0]   // tuple parameter
 let g = () -> { 1, "a" }            // tuple return (inferred)
 
-{int32, str}[]      // slice of tuples
-{int32, str}?       // optional tuple
-{int32, str}*       // pointer to tuple
+{i32, str}[]      // slice of tuples
+{i32, str}?       // optional tuple
+{i32, str}*       // pointer to tuple
 ```
 
 Errors and inferred signatures display tuples in this same `{…}` form — never an internal mangled name.
@@ -2558,12 +2558,12 @@ Tuple elements are read with a postfix index, **0-based**, where the index must 
 
 ```fc
 let t = { 4, "hello" }
-t[0]          // 4        (int32)
+t[0]          // 4        (i32)
 t[1]          // "hello"  (str)
 t[1].len      // 5
 ```
 
-The literal requirement is deliberate and complete, not a restriction awaiting relaxation. A tuple is heterogeneous — each position has its own type (`t[0]` is `int32`, `t[1]` is `str`) — so the index is not a computed offset into uniform storage the way an array index is, but a *static selection of one field*, resolved during type checking. An index that merely happens to be constant (`t[1 + 1]`, a `let`-bound value) would gain nothing: there is no single element type for a runtime index to land on, so there is nothing to compute and nothing const-folding could recover. Wanting a computed index is precisely the signal that you want an **array** (homogeneous, runtime `[expr]`, bounds-checked) rather than a tuple — the two readings of `[…]` are how FC draws that line. Because the position is fixed at compile time, the bound is checked then and no runtime bounds check is emitted.
+The literal requirement is deliberate and complete, not a restriction awaiting relaxation. A tuple is heterogeneous — each position has its own type (`t[0]` is `i32`, `t[1]` is `str`) — so the index is not a computed offset into uniform storage the way an array index is, but a *static selection of one field*, resolved during type checking. An index that merely happens to be constant (`t[1 + 1]`, a `let`-bound value) would gain nothing: there is no single element type for a runtime index to land on, so there is nothing to compute and nothing const-folding could recover. Wanting a computed index is precisely the signal that you want an **array** (homogeneous, runtime `[expr]`, bounds-checked) rather than a tuple — the two readings of `[…]` are how FC draws that line. Because the position is fixed at compile time, the bound is checked then and no runtime bounds check is emitted.
 
 There is no `.field` access on a tuple — `t[0]`, not `t.e0`. Indexing is the only accessor.
 
@@ -2571,7 +2571,7 @@ Because `t[N]` *is* a field selection on a synthesized struct, it carries no tup
 
 ```fc
 let mut p = point { x = 3, y = 4 }
-let t = { &p, 99 }        // type {point*, int32}
+let t = { &p, 99 }        // type {point*, i32}
 
 t[0]->x                   // read a field through a pointer element
 t[0]->x = 10              // write through it  → mutates p (the pointee)
@@ -2604,7 +2604,7 @@ let { { x = px, y = py }, tag } = { point { x = 4, y = 5 }, 6 }
 The same positional pattern works in `match` arms, with literals, wildcards, bindings, nesting, and or-patterns in any position. Matches over tuples are checked for exhaustiveness exactly like structs — a tuple of finite types can be covered without a wildcard:
 
 ```fc
-let classify = (p: {int32, int32}) ->
+let classify = (p: {i32, i32}) ->
     match p with
     | { 0, 0 }      -> 0
     | { 0, _ }      -> 1
@@ -2625,8 +2625,8 @@ A tuple element may be a type variable. Such a tuple is generic and is monomorph
 ```fc
 let flip = (p: {'a, 'b}) -> { p[1], p[0] }
 
-flip({ 7, "world" })   // {str, int32}
-flip({ true, 9 })      // {int32, bool}
+flip({ 7, "world" })   // {str, i32}
+flip({ true, 9 })      // {i32, bool}
 ```
 
 ### Inherited behavior
@@ -2635,7 +2635,7 @@ Because a tuple is a struct, the following all work without anything tuple-speci
 
 ```fc
 { 1, 2 } == { 1, 2 }              // structural equality (recurses into nested tuples)
-default({int32, int32})           // zero-initialized: {0, 0}
+default({i32, i32})           // zero-initialized: {0, 0}
 let a = { 1, 2 }; let mut b = a   // b is an independent copy
 b[0] = 99                         // element mutation on a let mut binding
 ```
@@ -2643,12 +2643,12 @@ b[0] = 99                         // element mutation on a let mut binding
 Tuples also work where structs do: as struct fields and union variant payloads, as the element type of a slice literal, in `option`, and as module- or file-level constants — all subject to the same rules as named structs.
 
 ```fc
-let xs = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }   // array of tuples
+let xs = {i32, i32}[2] { { 1, 2 }, { 3, 4 } }   // array of tuples
 let origin = { 0, 0 }                               // module-level constant
 ```
 
 > **Transpilation**
-> Each distinct tuple type is emitted as an ordinary C struct with positional fields `e0, e1, …`. `{int32, str}` becomes roughly `typedef struct { int32_t e0; fc_str e1; } fc_tuple2_int32_str;`, indexing becomes `.e0`/`.e1`, and the generated structural `==` and zero-`default` are shared with every other struct.
+> Each distinct tuple type is emitted as an ordinary C struct with positional fields `e0, e1, …`. `{i32, str}` becomes roughly `typedef struct { i32_t e0; fc_str e1; } fc_tuple2_i32_str;`, indexing becomes `.e0`/`.e1`, and the generated structural `==` and zero-`default` are shared with every other struct.
 
 ---
 
@@ -2657,7 +2657,7 @@ let origin = { 0, 0 }                               // module-level constant
 Option is a built-in generic type (see §Generics). Null is not expressible in FC — option is the only way to intentionally express the absence of a value. The `?` suffix creates an option type.
 
 ```fc
-int32?      // optional int32
+i32?      // optional i32
 str?        // optional string
 node*?      // optional pointer to node
 ```
@@ -2666,19 +2666,19 @@ node*?      // optional pointer to node
 
 ```fc
 some(x)            // wrap a value — type inferred from x
-none(int32)        // int32? with no value
+none(i32)        // i32? with no value
 none(node*)        // node*? with no value
-default(int32?)    // int32? with no value — identical to none(int32)
+default(i32?)    // i32? with no value — identical to none(i32)
 ```
 
-`some` is a built-in operator that infers the option type from its argument expression. The symmetric partner `none(T)` constructs an empty option whose **inner** type is `T` (so `none(int32)` has type `int32?`, mirroring how `some(v)` of an `int32` has type `int32?`). It is exact sugar for `default(T?)` — the two produce identical code — and exists because `none(int32)` reads more naturally alongside `some(3)` than `default(int32?)` does. `none` requires the type argument and the parentheses; a bare `none` in expression position is rejected (use `.is_none` or a `none` match arm to test an option). The general `default(T?)` form is retained and generalizes to any default value — conceptually, `none` is the first variant of the option type, so its default value is none (see §Default Values).
+`some` is a built-in operator that infers the option type from its argument expression. The symmetric partner `none(T)` constructs an empty option whose **inner** type is `T` (so `none(i32)` has type `i32?`, mirroring how `some(v)` of an `i32` has type `i32?`). It is exact sugar for `default(T?)` — the two produce identical code — and exists because `none(i32)` reads more naturally alongside `some(3)` than `default(i32?)` does. `none` requires the type argument and the parentheses; a bare `none` in expression position is rejected (use `.is_none` or a `none` match arm to test an option). The general `default(T?)` form is retained and generalizes to any default value — conceptually, `none` is the first variant of the option type, so its default value is none (see §Default Values).
 
 **`some` of a null pointer.** A pointer option (`T*?`, `any*?`, `cstr?`) represents `none` as a null pointer (see the Transpilation note below), so a `some` wrapping a null pointer would be indistinguishable from `none`. To keep `some(p)` honest — what you construct is what you observe — `some` rejects a null payload:
 
-- a **provably-null** payload is a compile error: `some(default(T*))` and `some((T*) 0u)` are rejected outright;
+- a **provably-null** payload is a compile error: `some(default(T*))` and `some((T*) 0usize)` are rejected outright;
 - any other pointer payload is **guarded at construction**: if it is null at runtime, the program aborts with a diagnostic (`file.fc:N: some() of a null pointer`), exactly as unwrapping a `none` aborts. The guard is elided when the payload is provably non-null (`some(&x)`, `some(alloc(T)!)`, `some(c"…")`, `some((T*) <nonzero usize literal>)`), so the common cases pay nothing.
 
-The guard is a runtime check, so a `some()` of a not-provably-non-null pointer cannot appear in a constant initializer (a module-member `let` emitted at C file scope) — wrap a provably non-null pointer there, or initialize at runtime. Value options (`int32?`, `point?`, …) carry an explicit tag and have no such restriction. This applies only to `some`: a `T*?` *returned from C* still maps null → `none` directly (the intended ABI encoding), and `default(T*)` / a zero-initialized raw pointer field are still physically null (see §Pointers).
+The guard is a runtime check, so a `some()` of a not-provably-non-null pointer cannot appear in a constant initializer (a module-member `let` emitted at C file scope) — wrap a provably non-null pointer there, or initialize at runtime. Value options (`i32?`, `point?`, …) carry an explicit tag and have no such restriction. This applies only to `some`: a `T*?` *returned from C* still maps null → `none` directly (the intended ABI encoding), and `default(T*)` / a zero-initialized raw pointer field are still physically null (see §Pointers).
 
 ### Checking options
 
@@ -2686,7 +2686,7 @@ Option types have two synthetic read-only fields that return `bool`:
 
 ```fc
 let x = some(42)
-let y = default(int32?)
+let y = default(i32?)
 
 x.is_some    // true
 x.is_none    // false
@@ -2694,7 +2694,7 @@ y.is_some    // false
 y.is_none    // true
 ```
 
-These fields cannot be assigned to. They work with both pointer options (`T*?`) and value options (`int32?`, `str?`, etc.).
+These fields cannot be assigned to. They work with both pointer options (`T*?`) and value options (`i32?`, `str?`, etc.).
 
 ### Unwrapping
 
@@ -2713,11 +2713,11 @@ For safe unwrapping, use a `match` expression.
 > **Transpilation**
 > Option types transpile differently depending on whether the underlying type is a pointer:
 >
-> **Pointer options** (`T*?`) transpile to a plain C pointer `T*`. Null represents `none`, any non-null pointer represents `some`. No struct or tag is needed, which makes `T*?` directly ABI-compatible with C functions that return nullable pointers. A null raw pointer *is* physically reachable in FC (`default(T*)`, `(T*) 0u`, a zero-initialized pointer field, a C return) — so to keep this representation unambiguous, `some(p)` itself refuses a null payload (compile error when provably null, runtime abort otherwise; see §Constructing options). The sentinel is thus reserved for `none` at the one point that could violate it, rather than assumed never to occur.
+> **Pointer options** (`T*?`) transpile to a plain C pointer `T*`. Null represents `none`, any non-null pointer represents `some`. No struct or tag is needed, which makes `T*?` directly ABI-compatible with C functions that return nullable pointers. A null raw pointer *is* physically reachable in FC (`default(T*)`, `(T*) 0usize`, a zero-initialized pointer field, a C return) — so to keep this representation unambiguous, `some(p)` itself refuses a null payload (compile error when provably null, runtime abort otherwise; see §Constructing options). The sentinel is thus reserved for `none` at the one point that could violate it, rather than assumed never to occur.
 >
-> **All other options** (`int32?`, `float64?`, `str?`, `point?`, etc.) transpile to a C struct with a value field and a boolean tag:
+> **All other options** (`i32?`, `f64?`, `str?`, `point?`, etc.) transpile to a C struct with a value field and a boolean tag:
 > ```c
-> typedef struct { int32_t value; bool has_value; } fc_option_int32;
+> typedef struct { i32_t value; bool has_value; } fc_option_i32;
 > ```
 > Non-pointer types have no spare bit pattern that can safely serve as a sentinel — every bit pattern is a valid value — so an explicit tag is required.
 
@@ -2730,8 +2730,8 @@ Pointers in FC are intended to always be valid — a value of type `T*` should a
 This is a convention enforced by the language surface, not a hard guarantee at the memory level. A struct with a raw `T*` field that is zero-initialized will physically contain a zero pointer. Dereferencing it will crash. FC trusts the programmer to initialize raw pointer fields before use — the same responsibility as in C, but with the `null` keyword removed so an accidental null is harder to introduce through normal code paths.
 
 ```fc
-int32*       // pointer to int32, always valid
-int32*?      // optional pointer, may be none
+i32*       // pointer to i32, always valid
+i32*?      // optional pointer, may be none
 node**       // pointer to pointer to node
 ```
 
@@ -2739,13 +2739,13 @@ Multi-level pointers (`T**`, `T***`, etc.) compose naturally. In practice, `T**`
 
 ```fc
 // T** out-parameter pattern — function writes a heap pointer through T**
-let create = (out: int32**) ->
-    let p = alloc(int32)!
+let create = (out: i32**) ->
+    let p = alloc(i32)!
     *p = 99
     *out = p
 
-let mut result = default(int32*)
-create(&result)        // &result is int32** — create writes through it
+let mut result = default(i32*)
+create(&result)        // &result is i32** — create writes through it
 let v = *result        // 99
 free(result)
 ```
@@ -2762,7 +2762,7 @@ Only `let mut` bindings have addresses. You cannot take the address of a `let` b
 
 ```fc
 let mut x = 42
-let px = &x    // ok — x is a mutable let binding, px inferred as int32*
+let px = &x    // ok — x is a mutable let binding, px inferred as i32*
 
 let y = 42
 let py = &y    // compile error — y is a let binding
@@ -2776,7 +2776,7 @@ The main remaining use case for `&f` is a C struct that contains a function poin
 
 ```fc
 // storing a function pointer into a C struct field directly
-let mut handler = (x: int32) -> process(x)
+let mut handler = (x: i32) -> process(x)
 some_c_struct->callback = &handler
 ```
 
@@ -2784,7 +2784,7 @@ Taking the address of a capturing lambda is always a compile error:
 
 ```fc
 let threshold = 10
-let mut above = (x: int32) -> x > threshold   // captures threshold
+let mut above = (x: i32) -> x > threshold   // captures threshold
 let p = &above    // compile error — capturing lambda
 ```
 
@@ -2835,12 +2835,12 @@ A slice is a fat pointer — a struct containing a raw pointer and a length. It 
 The slice type suffix `[]` follows the element type:
 
 ```fc
-uint8[]     // slice of uint8
-int32[]     // slice of int32
-int32?[]    // slice of optional int32
-int32[]?    // optional slice of int32
-int32?[]?   // optional slice of optional int32
-str         // built-in alias for uint8[]
+u8[]     // slice of u8
+i32[]     // slice of i32
+i32?[]    // slice of optional i32
+i32[]?    // optional slice of i32
+i32?[]?   // optional slice of optional i32
+str         // built-in alias for u8[]
 ```
 
 ### Representation
@@ -2848,7 +2848,7 @@ str         // built-in alias for uint8[]
 A slice transpiles to a C struct with two fields:
 
 ```c
-typedef struct { int32_t* ptr; int64_t len; } fc_slice_int32;
+typedef struct { i32_t* ptr; i64_t len; } fc_slice_i32;
 ```
 
 The struct is two words. Passing a slice to a function copies those two words — cheap, and no heap involvement.
@@ -2858,10 +2858,10 @@ The struct is two words. Passing a slice to a function copies those two words �
 Slices can be stack-allocated using literal initialization syntax, or heap-allocated with `alloc`. See §Memory Management for the full treatment. Slice-specific forms:
 
 ```fc
-let mut buf = int32[128] { }          // stack slice — zero-initialized
-let rgb = uint8[3] { 255u8, 0u8, 128u8 }   // stack slice — exhaustive element list (element literals must already be uint8)
-let buf = alloc(int32[128] { })       // heap slice — returns int32[]?
-let buf = alloc(int32[128] { })!     // heap slice — unwrap, crash on failure
+let mut buf = i32[128] { }          // stack slice — zero-initialized
+let rgb = u8[3] { 255u8, 0u8, 128u8 }   // stack slice — exhaustive element list (element literals must already be u8)
+let buf = alloc(i32[128] { })       // heap slice — returns i32[]?
+let buf = alloc(i32[128] { })!     // heap slice — unwrap, crash on failure
 ```
 
 Two initialization forms for stack slices:
@@ -2871,7 +2871,7 @@ Two initialization forms for stack slices:
 
 There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
 
-The element type may be any type — a primitive, struct, union, tuple (`{int32, int32}[2] { … }`), or a parenthesized function type (`((int32) -> int32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
+The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
 
 The backing storage for a stack slice literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
 
@@ -2886,7 +2886,7 @@ free(buf.ptr)   // equivalent, explicit
 
 ```fc
 s.ptr       // raw pointer to first element
-s.len       // number of elements — int64
+s.len       // number of elements — i64
 s[i]        // bounds-checked index — compile error if i is not an integer type
 s[i..j]     // sub-slice from i up to but not including j
 s[..j]      // sub-slice from start up to but not including j
@@ -2895,13 +2895,13 @@ s[i..]      // sub-slice from i to end
 
 Both `.ptr` and `.len` are **read-only** — assigning to either field is a compile error. Independent mutation of these fields would break the slice invariant (that `.ptr` points to at least `.len` valid elements). To reshape a slice, use sub-slicing (`s[i..j]`) or construct a new slice from raw parts using struct literal syntax (see §Slice construction from raw pointer).
 
-`s.len` is always `int64`. This is a deliberate design choice with two motivations. First, a platform-native length type would leak the target architecture into the type system, making struct layouts, arithmetic, and stored lengths all implicitly platform-dependent — reintroducing one of the footguns FC is designed to eliminate. Second, a signed length means `int32` — the default integer type — widens to `int64` naturally, so common patterns like `0..slice.len`, `i < slice.len`, and `slice.len - 1` all work without explicit casts. An unsigned `uint64` length would not widen from `int32` (since negative values would change meaning), forcing casts at nearly every slice boundary. A signed length also avoids the well-known C bug class where `a.len - b.len` underflows to a huge positive number — signed subtraction produces a negative result, which is almost always what the programmer intended.
+`s.len` is always `i64`. This is a deliberate design choice with two motivations. First, a platform-native length type would leak the target architecture into the type system, making struct layouts, arithmetic, and stored lengths all implicitly platform-dependent — reintroducing one of the footguns FC is designed to eliminate. Second, a signed length means `i32` — the default integer type — widens to `i64` naturally, so common patterns like `0..slice.len`, `i < slice.len`, and `slice.len - 1` all work without explicit casts. An unsigned `u64` length would not widen from `i32` (since negative values would change meaning), forcing casts at nearly every slice boundary. A signed length also avoids the well-known C bug class where `a.len - b.len` underflows to a huge positive number — signed subtraction produces a negative result, which is almost always what the programmer intended.
 
 The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), which exceeds the addressable memory of any current or foreseeable hardware.
 
-The cost of `int64` on 32-bit and smaller targets is real but acceptable. To remove the per-access **bounds check** in a tight inner loop while keeping the slice and its `int64` length, wrap the hot region in an `unguarded` block (§Unguarded blocks). To additionally escape `int64` **index** arithmetic — iterating with a native-width counter, or indexing a buffer whose length never needs 64 bits — drop to raw pointer arithmetic or a raw allocation (`alloc(T, n)` yields a `T*`), which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
+The cost of `i64` on 32-bit and smaller targets is real but acceptable. To remove the per-access **bounds check** in a tight inner loop while keeping the slice and its `i64` length, wrap the hot region in an `unguarded` block (§Unguarded blocks). To additionally escape `i64` **index** arithmetic — iterating with a native-width counter, or indexing a buffer whose length never needs 64 bits — drop to raw pointer arithmetic or a raw allocation (`alloc(T, n)` yields a `T*`), which FC supports as an explicit escape hatch. The compiler may use narrower types such as `size_t` internally in generated C where provably safe — for example, loop counters in `for` transpilation — but this is an implementation detail that does not affect FC semantics.
 
-Where the generated C must narrow an `int64` length or size to a platform-width type (`size_t` for `malloc`/`memcpy`/etc., `int` for `printf` widths), the emitter routes the cast through `fc_to_size` / `fc_to_int` helpers rather than a plain C cast. The helpers assert that the value fits in the target type before narrowing. On 64-bit hosts the assert is trivially true and compiles to a no-op; on 32-bit and smaller hosts it catches the case where user-derived length math exceeds `SIZE_MAX` or `INT_MAX` before silent truncation corrupts memory. Under `-DNDEBUG` the assertions are elided and the helpers reduce to plain casts. This keeps the `int64`-everywhere policy sound on sub-64-bit targets without requiring explicit guards in user code.
+Where the generated C must narrow an `i64` length or size to a platform-width type (`size_t` for `malloc`/`memcpy`/etc., `int` for `printf` widths), the emitter routes the cast through `fc_to_size` / `fc_to_int` helpers rather than a plain C cast. The helpers assert that the value fits in the target type before narrowing. On 64-bit hosts the assert is trivially true and compiles to a no-op; on 32-bit and smaller hosts it catches the case where user-derived length math exceeds `SIZE_MAX` or `INT_MAX` before silent truncation corrupts memory. Under `-DNDEBUG` the assertions are elided and the helpers reduce to plain casts. This keeps the `i64`-everywhere policy sound on sub-64-bit targets without requiring explicit guards in user code.
 
 Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
@@ -2921,7 +2921,7 @@ let s = "hello"          // s: const str — points to static read-only memory
 s[0] = 72u8              // compile error: cannot assign through const pointer/slice
 free(s)                  // compile error: cannot free const pointer/slice
 
-let mut buf = alloc(uint8[5] { })!
+let mut buf = alloc(u8[5] { })!
 buf[0] = 72u8            // ok — heap-allocated, mutable (non-const str)
 free(buf)                // ok — heap-allocated
 ```
@@ -2931,16 +2931,16 @@ free(buf)                // ok — heap-allocated
 When interoperating with C, a slice can be constructed from a raw pointer and a known length using struct literal syntax:
 
 ```fc
-let s = str { ptr = cs, len = (int64) libc.strlen(cs) }   // strlen returns usize; str.len is int64, so cast explicitly
-let buf = uint8[] { ptr = some_ptr, len = 128 }
+let s = str { ptr = cs, len = (i64) libc.strlen(cs) }   // strlen returns usize; str.len is i64, so cast explicitly
+let buf = u8[] { ptr = some_ptr, len = 128 }
 ```
 
 The resulting slice shares memory with the original pointer — no allocation occurs. The programmer is responsible for ensuring the pointer remains live for the lifetime of the slice.
 
-A slice's length must be **non-negative**. The bounds checks for indexing and sub-slicing fuse the negative-index test into a single unsigned comparison (`(uint64_t) idx >= (uint64_t) len`), which relies on `len ≥ 0` — a negative length casts to an enormous unsigned value and would silently disable every later bounds check. A statically-negative length is therefore a **compile error**:
+A slice's length must be **non-negative**. The bounds checks for indexing and sub-slicing fuse the negative-index test into a single unsigned comparison (`(u64_t) idx >= (u64_t) len`), which relies on `len ≥ 0` — a negative length casts to an enormous unsigned value and would silently disable every later bounds check. A statically-negative length is therefore a **compile error**:
 
 ```fc
-let bad = int32[] { ptr = p, len = -1 }   // error: slice literal length cannot be negative
+let bad = i32[] { ptr = p, len = -1 }   // error: slice literal length cannot be negative
 ```
 
 When the length is computed at runtime, it is checked at construction: a negative value aborts immediately (like a failed bounds check) rather than producing a slice that defeats later checks. The guard is elided when the compiler can prove the length is non-negative (an unsigned-typed length, or a non-negative constant).
@@ -2960,32 +2960,32 @@ For C functions that take a pointer and length (e.g. `fwrite`), pass `.ptr` and 
 
 ### Embedded targets and raw pointer arrays
 
-On memory-constrained embedded targets, the slice fat pointer — a pointer plus an `int64` length — may be undesirable. `int64` arithmetic is expensive on 8-bit and 16-bit hardware, and bounds checking adds overhead that may be unacceptable in tight loops.
+On memory-constrained embedded targets, the slice fat pointer — a pointer plus an `i64` length — may be undesirable. `i64` arithmetic is expensive on 8-bit and 16-bit hardware, and bounds checking adds overhead that may be unacceptable in tight loops.
 
 The `alloc(T, N)` form allocates a raw buffer directly without constructing a slice:
 
 ```fc
-let buf = alloc(uint8, 128)!        // uint8* — raw buffer, no slice overhead
+let buf = alloc(u8, 128)!        // u8* — raw buffer, no slice overhead
 ```
 
 Alternatively, `alloc(T[N] { })` creates a slice which the programmer can narrow to a raw pointer:
 
 ```fc
-let buf = alloc(uint8[128] { })!.ptr    // uint8* — 128 bytes allocated, slice header discarded
+let buf = alloc(u8[128] { })!.ptr    // u8* — 128 bytes allocated, slice header discarded
 ```
 
-The underlying heap allocation is identical in both cases — `calloc(128, sizeof(uint8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C. To keep a bounds-checked slice but drop the check only on a measured hot path, prefer an `unguarded` block (§Unguarded blocks) over discarding the slice for a raw pointer.
+The underlying heap allocation is identical in both cases — `calloc(128, sizeof(u8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C. To keep a bounds-checked slice but drop the check only on a measured hot path, prefer an `unguarded` block (§Unguarded blocks) over discarding the slice for a raw pointer.
 
 Alternatively, take the pointer from a stack slice:
 
 ```fc
-let mut arr = uint8[128] { }
-let buf = arr.ptr               // uint8* into stack memory — no fat pointer, no bounds checking
+let mut arr = u8[128] { }
+let buf = arr.ptr               // u8* into stack memory — no fat pointer, no bounds checking
 ```
 
 From this point the programmer is responsible for tracking the length and staying within bounds — the same responsibility as in C.
 
-For full control over allocation, `isize` and `usize` allow direct use of C's `malloc`/`memcpy`/etc. with platform-correct types — no `int64` overhead on smaller targets:
+For full control over allocation, `isize` and `usize` allow direct use of C's `malloc`/`memcpy`/etc. with platform-correct types — no `i64` overhead on smaller targets:
 
 ```fc
 module c from "stdlib.h" =
@@ -2994,18 +2994,18 @@ module c from "stdlib.h" =
 
 module mem from "string.h" =
     extern memcpy: (any*, any*, usize) -> any*
-    extern memset: (any*, int32, usize) -> any*
+    extern memset: (any*, i32, usize) -> any*
     extern strlen: (cstr) -> usize
 
 let main = (args: str[]) ->
-    let size = 256u                           // usize — matches C's size_t exactly
-    let buf = (uint8*) c.malloc(size)!         // raw pointer, no slice overhead
+    let size = 256usize                           // usize — matches C's size_t exactly
+    let buf = (u8*) c.malloc(size)!         // raw pointer, no slice overhead
     mem.memset((any*) buf, 0, size)            // zero-fill with platform-native size
     // ... use buf with pointer arithmetic ...
     c.c_free((any*) buf)
 ```
 
-This compiles to the same C you would write by hand — `malloc(256)`, `memset(buf, 0, 256)` — with no intermediate slice construction and no `int64` arithmetic. The `usize` type emits `size_t` in the generated C, so on an 8-bit AVR it is 16 bits, on a 32-bit ARM it is 32 bits, and on a 64-bit host it is 64 bits — matching the target's native address width in every case.
+This compiles to the same C you would write by hand — `malloc(256)`, `memset(buf, 0, 256)` — with no intermediate slice construction and no `i64` arithmetic. The `usize` type emits `size_t` in the generated C, so on an 8-bit AVR it is 16 bits, on a 32-bit ARM it is 32 bits, and on a 64-bit host it is 64 bits — matching the target's native address width in every case.
 
 ---
 
@@ -3015,11 +3015,11 @@ A struct field declared with `T[N]` stores `N` elements of type `T` inline in th
 
 ```fc
 struct packet =
-    data: uint8[256]
-    len: int32
+    data: u8[256]
+    len: i32
 ```
 
-This produces the C struct `struct packet { uint8_t data[256]; int32_t len; };`.
+This produces the C struct `struct packet { u8_t data[256]; i32_t len; };`.
 
 ### Access
 
@@ -3032,7 +3032,7 @@ p.data[0]         // bounds-checked element access
 p.data[10..20]    // subslicing
 for b in p.data do   // iteration
     use(b)
-p.data.ptr        // raw uint8* to the start of the inline array
+p.data.ptr        // raw u8* to the start of the inline array
 ```
 
 The object must be an lvalue (a named binding, not a temporary). Accessing a fixed-array field on a function return value or struct literal is a compile error — bind the struct first.
@@ -3046,7 +3046,7 @@ Assigning a slice to a fixed-array field copies data via `memcpy`:
 
 ```fc
 let mut p = packet { len = 0 }
-let msg = uint8[4] { 0x48u8, 0x45u8, 0x4Cu8, 0x4Fu8 }
+let msg = u8[4] { 0x48u8, 0x45u8, 0x4Cu8, 0x4Fu8 }
 p.data = msg   // copies 4 bytes, zeros remaining 252
 p.len = 4
 ```
@@ -3056,7 +3056,7 @@ p.len = 4
 Fixed-array fields in struct literals accept slice values. The data is copied inline:
 
 ```fc
-let src = uint8[8] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
+let src = u8[8] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
 let p = packet { data = src, len = 8 }
 ```
 
@@ -3070,38 +3070,38 @@ Omitted fields are zero-initialized (the entire inline array is zeroed).
 
 ### sizeof
 
-`sizeof(T[N])` returns `N * sizeof(T)` as `int64`. A struct containing inline arrays includes them in its size:
+`sizeof(T[N])` returns `N * sizeof(T)` as `i64`. A struct containing inline arrays includes them in its size:
 
 ```fc
-sizeof(int32[4])     // 16
+sizeof(i32[4])     // 16
 sizeof(packet)       // >= 257 (256 bytes of data + 4 bytes of len, plus padding)
 ```
 
 ### alignof
 
-`alignof(T)` returns the alignment requirement of type `T` in bytes as `int64`. Like `sizeof`, it is a constant expression and works with type variables in generic functions.
+`alignof(T)` returns the alignment requirement of type `T` in bytes as `i64`. Like `sizeof`, it is a constant expression and works with type variables in generic functions.
 
 ```fc
-alignof(int8)        // 1
-alignof(int32)       // 4 (on most platforms)
-alignof(int64)       // 8 (on most platforms)
+alignof(i8)        // 1
+alignof(i32)       // 4 (on most platforms)
+alignof(i64)       // 8 (on most platforms)
 ```
 
 For fixed arrays, `alignof(T[N])` returns the alignment of the element type `T`, not the array — matching C11 semantics.
 
 ```fc
-alignof(int32[4])    // same as alignof(int32)
+alignof(i32[4])    // same as alignof(i32)
 ```
 
 In generic functions, `alignof('a)` is resolved at monomorphization time:
 
 ```fc
 let get_align = <'a>() -> alignof('a)
-get_align<int32>()   // 4
-get_align<int64>()   // 8
+get_align<i32>()   // 4
+get_align<i64>()   // 8
 ```
 
-Transpiles to `(int64_t) _Alignof(...)` in C11.
+Transpiles to `(i64_t) _Alignof(...)` in C11.
 
 ### Equality
 
@@ -3114,10 +3114,10 @@ Extern structs can declare fixed-array fields to match C struct layouts:
 ```fc
 module net from "netinet/in.h" =
     extern struct in6_addr =
-        s6_addr: uint8[16]
+        s6_addr: u8[16]
 ```
 
-The field maps directly to `uint8_t s6_addr[16]` in the C header.
+The field maps directly to `u8_t s6_addr[16]` in the C header.
 
 ### Generics
 
@@ -3128,26 +3128,26 @@ struct buffer =
     data: 'a[256]
 ```
 
-Each monomorphized instance (e.g. `buffer<int32>`) produces a concrete C struct with the appropriate inline array.
+Each monomorphized instance (e.g. `buffer<i32>`) produces a concrete C struct with the appropriate inline array.
 
 ---
 
 ## Function Types
 
 ```fc
-(int32, int32) -> int32           // takes two int32, returns int32
+(i32, i32) -> i32           // takes two i32, returns i32
 (str) -> bool                     // takes str, returns bool
 () -> void                        // no parameters, returns void
-(int32) -> (int32) -> int32       // returns a function
+(i32) -> (i32) -> i32       // returns a function
 ```
 
 A postfix type modifier (`?`, `*`, `[]`) binds to the type immediately to its left, which for a function type is the **return** type — so parenthesize the function type to apply a modifier to the whole thing:
 
 ```fc
-(int32) -> int32?                 // function returning int32?
-((int32) -> int32)?               // optional function
-((int32) -> int32)*               // pointer to a function
-((int32) -> int32)[]              // slice of functions
+(i32) -> i32?                 // function returning i32?
+((i32) -> i32)?               // optional function
+((i32) -> i32)*               // pointer to a function
+((i32) -> i32)[]              // slice of functions
 ```
 
 Function types transpile to C function pointers. When the function type appears in a position that may receive a closure (such as a function parameter), the compiler uses a fat function pointer — a function pointer paired with a `void*` context pointer. See §Closures & Capture for the full transpilation treatment.
@@ -3171,7 +3171,7 @@ The dot notation `T.something` is not a special "static property" feature — it
 
 A **type alias** is a symbolic stand-in for another type — it is not a new type. Because an alias is just another name for the same underlying type, it inherits all static properties, built-in module members, operators, and inference rules of that type without any additional specification. Should any further alias syntax be added in future, this same rule applies: an alias always fully impersonates the aliased type at every level.
 
-The built-in aliases `str` and `cstr` are the canonical examples: `str` is `uint8[]` and `cstr` is `uint8*`. Import aliases (§Importing) extend this mechanism to user-defined types — `import point as pt from geometry` makes `pt` a type alias for `point`. The alias name is preserved in diagnostics and function signatures, but the underlying type identity is unchanged: `pt` and `point` are the same type, values are freely interchangeable, and `==` works across them.
+The built-in aliases `str` and `cstr` are the canonical examples: `str` is `u8[]` and `cstr` is `u8*`. Import aliases (§Importing) extend this mechanism to user-defined types — `import point as pt from geometry` makes `pt` a type alias for `point`. The alias name is preserved in diagnostics and function signatures, but the underlying type identity is unchanged: `pt` and `point` are the same type, values are freely interchangeable, and `==` works across them.
 
 ### Type-specific built-ins
 
@@ -3179,24 +3179,24 @@ Available only on the types where they make sense — using them on other types 
 
 | Types | `.min` | `.max` | `.bits` | `.nan` | `.inf` | `.neg_inf` | `.epsilon` |
 |-------|--------|--------|---------|--------|--------|------------|------------|
-| int8–int64 | yes | yes | yes | — | — | — | — |
-| uint8–uint64 | yes | yes | yes | — | — | — | — |
+| i8–i64 | yes | yes | yes | — | — | — | — |
+| u8–u64 | yes | yes | yes | — | — | — | — |
 | isize, usize | yes | yes | yes | — | — | — | — |
-| float32, float64 | yes | yes | yes | yes | yes | yes | yes |
+| f32, f64 | yes | yes | yes | yes | yes | yes | yes |
 
 ```fc
-int32.min       // minimum representable value
-int32.max       // maximum representable value
-int32.bits      // 32
-uint8.min       // 0
-uint8.max       // 255
-float64.nan     // not-a-number
-float64.inf     // positive infinity
-float64.neg_inf // negative infinity
-float64.min     // smallest positive normal value
-float64.max     // largest finite value
-float64.epsilon // machine epsilon
-float64.bits    // 64
+i32.min       // minimum representable value
+i32.max       // maximum representable value
+i32.bits      // 32
+u8.min       // 0
+u8.max       // 255
+f64.nan     // not-a-number
+f64.inf     // positive infinity
+f64.neg_inf // negative infinity
+f64.min     // smallest positive normal value
+f64.max     // largest finite value
+f64.epsilon // machine epsilon
+f64.bits    // 64
 ```
 
 - **Integer `.min`/`.max`**: range bounds (`INT32_MIN`/`INT32_MAX` etc.)
@@ -3205,10 +3205,10 @@ float64.bits    // 64
 - **Float `.epsilon`**: smallest x such that 1.0 + x ≠ 1.0 (`FLT_EPSILON`/`DBL_EPSILON`)
 - **Float `.inf`/`.neg_inf`**: positive/negative infinity
 - **Float `.nan`**: not-a-number
-- **`.bits`**: bit width of the type as `int32` (8, 16, 32, or 64; for `isize`/`usize`, the platform pointer width — 64 on a 64-bit target, 32 on a 32-bit target)
+- **`.bits`**: bit width of the type as `i32` (8, 16, 32, or 64; for `isize`/`usize`, the platform pointer width — 64 on a 64-bit target, 32 on a 32-bit target)
 
 > **Transpilation**
-> Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `int32.max` becomes `INT32_MAX`, `float64.nan` becomes `((double) NAN)`. Because each is a constant expression, type properties may be used in module-level and file-level constant initializers (see §Statements vs. expressions); fixed-width integer properties additionally fold to a literal so they can take part in const division/modulo.
+> Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `i32.max` becomes `INT32_MAX`, `f64.nan` becomes `((double) NAN)`. Because each is a constant expression, type properties may be used in module-level and file-level constant initializers (see §Statements vs. expressions); fixed-width integer properties additionally fold to a literal so they can take part in const division/modulo.
 
 # PART 5 — Generics
 
@@ -3264,8 +3264,8 @@ Return types are always inferred — if the body expression resolves to a concre
 In the normal case, type variables are resolved entirely from the function's arguments — no explicit type annotation is needed at the call site:
 
 ```fc
-let x = identity(42)                          // 'a = int32, inferred from argument
-let z = map(points, (p: point) -> p.x)        // 'a = point, 'b = float64, inferred
+let x = identity(42)                          // 'a = i32, inferred from argument
+let z = map(points, (p: point) -> p.x)        // 'a = point, 'b = f64, inferred
 ```
 
 However, some functions introduce type variables that do not appear in any parameter. The most common case is a constructor or factory function where the element type is not given by any argument:
@@ -3279,7 +3279,7 @@ let make = <'a>() ->
 The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
 
 ```fc
-let mut nums = arraylist.make<int32>()
+let mut nums = arraylist.make<i32>()
 let mut strs = arraylist.make<str>()
 ```
 
@@ -3291,7 +3291,7 @@ Multiple explicit type variables are separated by commas:
 let make_pair = <'a, 'b>() ->
     pair { first = default('a), second = default('b) }
 
-let p = make_pair<int32, str>()
+let p = make_pair<i32, str>()
 ```
 
 **The rule:** a type variable belongs in `<>` if and only if it does not appear in any parameter type. If a type variable appears in a parameter, it is always inferred from the argument — declaring it in `<>` as well is a compile error:
@@ -3333,7 +3333,7 @@ The wrapper is a plain concrete `() -> str` — no new language mechanism requir
 
 **Rank-2 polymorphism is not supported** — a function parameter typed as "a generic function that works for any type" (e.g. `f: <'a>() -> 'a`) would require the callee to invoke `f` at multiple different types, which implies runtime type information or a constraint system. FC has neither, and this pattern is explicitly out of scope. The wrapper lambda approach covers all realistic cases without it.
 
-**Parsing** — `name<type>()` is always parsed as a generic call, never as a comparison expression. Type arguments may be any type spelling: built-in names (`int32`, `str`), type variables (`'a`), user-defined names (`point`), module-qualified names (`m.point`), and suffixed forms (`point*`, `m.point?`, `m.point[]`). When the tokens between `<` and `>` form a valid type spelling and the `>` is followed by `(` (or `.` for generic variant construction like `maybe<m.point>.just(v)`), the generic-call reading wins — so `a < m.b > (c)` is a generic call, never a chained comparison. This costs nothing in practice: a chained ordering comparison would compare a `bool` and is a type error anyway. No disambiguation sigil (such as Rust's `::<>` turbofish) is required. A generic call is a call, so it binds at call precedence in any operand position — `1 + size_of<int32>()` and `!is_big<int32>()` parse the same way `1 + f()` and `!g()` do. Nested type arguments need no space between the closing angle brackets: a `>>` token is split into two closers in type-argument position, so `box<box<int32>>` and `zero<box<int32>>()` parse like their spaced equivalents (this applies to all type-argument positions — parameter, field, and return types, generic calls, struct literals, and variant construction). As in C++11, Java, and Rust, the split is confined to type-argument context; in expression position `>>` remains the right-shift operator, so `a < b >> c` is `a < (b >> c)`.
+**Parsing** — `name<type>()` is always parsed as a generic call, never as a comparison expression. Type arguments may be any type spelling: built-in names (`i32`, `str`), type variables (`'a`), user-defined names (`point`), module-qualified names (`m.point`), and suffixed forms (`point*`, `m.point?`, `m.point[]`). When the tokens between `<` and `>` form a valid type spelling and the `>` is followed by `(` (or `.` for generic variant construction like `maybe<m.point>.just(v)`), the generic-call reading wins — so `a < m.b > (c)` is a generic call, never a chained comparison. This costs nothing in practice: a chained ordering comparison would compare a `bool` and is a type error anyway. No disambiguation sigil (such as Rust's `::<>` turbofish) is required. A generic call is a call, so it binds at call precedence in any operand position — `1 + size_of<i32>()` and `!is_big<i32>()` parse the same way `1 + f()` and `!g()` do. Nested type arguments need no space between the closing angle brackets: a `>>` token is split into two closers in type-argument position, so `box<box<i32>>` and `zero<box<i32>>()` parse like their spaced equivalents (this applies to all type-argument positions — parameter, field, and return types, generic calls, struct literals, and variant construction). As in C++11, Java, and Rust, the split is confined to type-argument context; in expression position `>>` remains the right-shift operator, so `a < b >> c` is `a < (b >> c)`.
 
 ---
 
@@ -3359,15 +3359,15 @@ The compiler treats `pair` as implicitly parameterized over `'a` and `'b`, `box`
 For generic structs, type arguments are inferred from the struct literal fields:
 
 ```fc
-let p = pair { first = 42, second = "hello" }    // pair<int32, str>
-let b = box { value = 3.14 }                     // box<float64>
+let p = pair { first = 42, second = "hello" }    // pair<i32, str>
+let b = box { value = 3.14 }                     // box<f64>
 ```
 
 For generic unions, type arguments must be provided explicitly at the construction site using `name<types>.variant(args)` syntax. This is required because a variant's payload may not constrain all type parameters — for example, `result.err(32)` cannot determine `'a`:
 
 ```fc
-let r = result<int32, const str>.ok(42)          // result<int32, const str>
-let e = result<int32, const str>.err("fail")     // result<int32, const str>
+let r = result<i32, const str>.ok(42)          // result<i32, const str>
+let e = result<i32, const str>.err("fail")     // result<i32, const str>
 ```
 
 Type variables in a struct or union propagate through — a function accepting a `pair<'a, 'b>` introduces those variables into its own signature:
@@ -3425,28 +3425,28 @@ The pointer optimization is preserved as a special compiler rule applied during 
 For each unique combination of concrete types a generic function or type is used with, the compiler produces a distinct concrete instantiation. This happens entirely before C code is emitted — the generated C contains no type variables, no generic machinery, and no runtime type information.
 
 ```fc
-let x = identity(42)        // produces: identity instantiated at int32
-let y = identity(3.14)      // produces: identity instantiated at float64
+let x = identity(42)        // produces: identity instantiated at i32
+let y = identity(3.14)      // produces: identity instantiated at f64
 let z = identity("hello")   // produces: identity instantiated at str
 
-let p1 = pair { first = 1,     second = true  }   // produces: pair<int32, bool>
-let p2 = pair { first = "hi",  second = 3.14  }   // produces: pair<str, float64>
+let p1 = pair { first = 1,     second = true  }   // produces: pair<i32, bool>
+let p2 = pair { first = "hi",  second = 3.14  }   // produces: pair<str, f64>
 ```
 
-Each instantiation becomes a distinct C type or function. The compiler derives C names from the generic name and the concrete type arguments — for example, `pair<int32, bool>` might emit as `pair_int32_bool` and `identity` at `int32` as `identity_int32`. The exact naming scheme is a compiler implementation detail; what matters is that names are unique, derived deterministically from the types, and human-readable enough to be identifiable in debugger output and compiler errors.
+Each instantiation becomes a distinct C type or function. The compiler derives C names from the generic name and the concrete type arguments — for example, `pair<i32, bool>` might emit as `pair_i32_bool` and `identity` at `i32` as `identity_i32`. The exact naming scheme is a compiler implementation detail; what matters is that names are unique, derived deterministically from the types, and human-readable enough to be identifiable in debugger output and compiler errors.
 
 Two uses of the same generic at the same concrete types share a single instantiation — the compiler deduplicates across the entire build.
 
 > **Transpilation**
 > A generic struct transpiles to a C struct per instantiation:
 > ```c
-> typedef struct { int32_t first; bool second; } pair_int32_bool;
-> typedef struct { fc_slice_uint8 first; double second; } pair_str_float64;
+> typedef struct { i32_t first; bool second; } pair_i32_bool;
+> typedef struct { fc_slice_u8 first; double second; } pair_str_f64;
 > ```
 > A generic function transpiles to a C function per unique call signature:
 > ```c
-> int32_t identity_int32(int32_t x) { return x; }
-> double  identity_float64(double x) { return x; }
+> i32_t identity_i32(i32_t x) { return x; }
+> double  identity_f64(double x) { return x; }
 > ```
 > Option types (`T?`) follow the existing option transpilation rules per instantiation — pointer types use the null-sentinel form, all others use the tagged struct form.
 
@@ -3459,8 +3459,8 @@ This means generic functions work naturally across numeric types without any ann
 ```fc
 let add = (a: 'a, b: 'a) -> a + b
 
-add(1, 2)           // ok — int32 supports +
-add(1.0, 2.0)       // ok — float64 supports +
+add(1, 2)           // ok — i32 supports +
+add(1.0, 2.0)       // ok — f64 supports +
 add("x", "y")       // compile error at this call site — str does not support +
 ```
 
@@ -3581,13 +3581,13 @@ Modules are the primary organizational unit. All reusable code lives in modules.
 ```fc
 module geometry =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     let manhattan = (p: point) -> p.x + p.y
 
     module transforms =
-        let scale = (p: point, factor: int32) ->
+        let scale = (p: point, factor: i32) ->
             point { x = p.x * factor, y = p.y * factor }
 ```
 
@@ -3614,11 +3614,11 @@ Namespaces are purely a compile-time disambiguation mechanism. They have no pres
 ```fc
 // main.fc — the entry-point file
 module utils =
-    let double = (x: int32) -> x * 2
+    let double = (x: i32) -> x * 2
 
 struct config =                           // OK — struct at global:: top level
-    width: int32
-    height: int32
+    width: i32
+    height: i32
 
 let main = (args: str[]) ->               // entry-point 'let' — must be in global::
     utils.double(21)
@@ -3629,8 +3629,8 @@ let main = (args: str[]) ->               // entry-point 'let' — must be in gl
 namespace geometry::
 
 struct point =                            // OK — struct at namespace top level
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 module geom =                             // modules coexist with types
     let origin = () -> point { x = 0, y = 0 }
@@ -3647,8 +3647,8 @@ Types and modules declared at the top level of a file reside in that file's **na
 ```fc
 // main.fc — entry-point file
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let mut origin = point { x = 0, y = 0 }
 
@@ -3682,13 +3682,13 @@ module vendor =
 
 ```fc
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 module shapes =
     struct point =               // shadows global point within this module
-        x: float64
-        y: float64
+        x: f64
+        y: f64
     let make = () -> point { x = 1.0, y = 2.0 }   // uses shapes.point
 ```
 
@@ -3700,9 +3700,9 @@ Everything inside a module is public by default. Use `private` to hide a symbol 
 
 ```fc
 module math =
-    let add = (a: int32, b: int32) -> a + b            // public
+    let add = (a: i32, b: i32) -> a + b            // public
 
-    private let clamp = (x: int32, lo: int32, hi: int32) ->
+    private let clamp = (x: i32, lo: i32, hi: i32) ->
         if x < lo then lo
         else if x > hi then hi
         else x
@@ -3774,7 +3774,7 @@ module parent =
     import double from helpers          // visible to parent and children
 
     module child =
-        let quad = (x: int32) -> double(double(x))   // sees parent's import
+        let quad = (x: i32) -> double(double(x))   // sees parent's import
 ```
 
 If a child module imports a name that shadows a parent's import, the child's import takes precedence within the child. The parent's declarations still see the parent's original import, even when type-checked on-demand from within the child.
@@ -3846,8 +3846,8 @@ A module may share a name with a struct or union in the same scope — the idiom
 ```fc
 module geometry =
     struct vec2 =
-        x: float64
-        y: float64
+        x: f64
+        y: f64
 
     module vec2 =
         let zero = vec2 { x = 0.0, y = 0.0 }
@@ -3861,8 +3861,8 @@ The same pattern works with unions:
 ```fc
 module game =
     union shape =
-        | circle(int32)
-        | rect(int32)
+        | circle(i32)
+        | rect(i32)
 
     module shape =
         let area = (s: shape) ->
@@ -3870,7 +3870,7 @@ module game =
             | circle(r) -> r * r
             | rect(w) -> w * w
 
-        let make_circle = (r: int32) -> shape.circle(r)
+        let make_circle = (r: i32) -> shape.circle(r)
 ```
 
 When a module and union share a name, **module members take priority**. If a name is not found in the module, the compiler falls through to check if it matches a variant of the companion union. This means `shape.area(s)` resolves to the module function, while `shape.circle(5)` resolves to variant construction (since there is no module member named `circle`). If a module member and a variant share the same name, the module member wins.
@@ -3880,7 +3880,7 @@ When a module and union share a name, **module members take priority**. If a nam
 Types defined inside modules display with their fully qualified path in error messages:
 
 ```
-error: comparison type mismatch: std::types.tuple2<int32, uint8> vs local.tuple2<int32, uint8>
+error: comparison type mismatch: std::types.tuple2<i32, u8> vs local.tuple2<i32, u8>
 ```
 
 The format is `[namespace::]module.name`. Top-level types (outside any module) display without qualification.
@@ -4037,7 +4037,7 @@ let log = (msg: str) -> return
 Expression-level usage — conditionally including statements inside a function body:
 
 ```fc
-let process = (data: uint8[]) ->
+let process = (data: u8[]) ->
 #if debug
     io.write("processing\n", stdout)
 #end
@@ -4085,7 +4085,7 @@ The compiler emits a small set of C headers in the generated output. These are o
 
 | Header | Provides |
 |--------|----------|
-| `<stdint.h>` | Fixed-width integer types (`int8_t`, `uint64_t`, etc.) |
+| `<stdint.h>` | Fixed-width integer types (`i8_t`, `u64_t`, etc.) |
 | `<stddef.h>` | `ptrdiff_t`, `size_t`, `NULL` |
 | `<stdbool.h>` | `bool` |
 | `<stdlib.h>` | `malloc`, `free`, `abort` |
@@ -4122,8 +4122,8 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 | `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
 | `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
-| `sizeof(T)` | Return the size in bytes of type `T` as an `int64`. |
-| `alignof(T)` | Return the alignment in bytes of type `T` as an `int64`. For fixed arrays `T[N]`, returns alignment of element type `T`. |
+| `sizeof(T)` | Return the size in bytes of type `T` as an `i64`. |
+| `alignof(T)` | Return the alignment in bytes of type `T` as an `i64`. For fixed arrays `T[N]`, returns alignment of element type `T`. |
 | `assert(cond)` | Check that `cond` (a `bool` expression) is true at runtime. If false, prints a diagnostic message to stderr and calls `abort()`. |
 | `assert(cond, msg)` | Same as `assert(cond)`, but additionally includes the string `msg` (type `str`) in the diagnostic output. |
 
@@ -4149,14 +4149,14 @@ defer free(p)
 Every FC type has a well-defined default value, produced by zero-initializing its memory. This is what both `default(T)` on the stack and `alloc(T)` on the heap produce.
 
 ```fc
-let x = default(int32)     // 0
-let f = default(float64)   // 0.0
+let x = default(i32)     // 0
+let f = default(f64)   // 0.0
 let b = default(bool)      // false
 let s = default(str)       // empty slice — { ptr = null, len = 0 }
 let p = default(point)     // point { x = 0.0, y = 0.0 }
-let o = default(int32?)    // int32? with no value
-let n = sizeof(int32)      // 4 — int64
-let a = alignof(int64)     // 8 — int64 (on most platforms)
+let o = default(i32?)    // i32? with no value
+let n = sizeof(i32)      // 4 — i64
+let a = alignof(i64)     // 8 — i64 (on most platforms)
 ```
 
 Default values by type category:
@@ -4224,11 +4224,11 @@ The expression text is captured at compile time from the source code. The filena
 Stack memory is allocated implicitly when a binding is declared. All stack bindings must be initialized at declaration — FC never emits an uninitialized C local variable.
 
 ```fc
-let x = 42                           // stack int32, initialized to 42
+let x = 42                           // stack i32, initialized to 42
 let p = point { x = 1.0, y = 2.0 }  // stack struct, explicitly initialized
 let p = default(point)               // stack struct, zero-initialized
-let buf = int32[128] { }             // stack slice, zero-initialized
-let rgb = uint8[3] { 255u8, 0u8, 128u8 }  // stack slice, exhaustive element list
+let buf = i32[128] { }             // stack slice, zero-initialized
+let rgb = u8[3] { 255u8, 0u8, 128u8 }  // stack slice, exhaustive element list
 ```
 
 Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
@@ -4236,7 +4236,7 @@ Stack slices are backed by a compiler-generated C array. The slice binding is th
 `N` in `T[N] { }` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
 
 > **Transpilation**
-> `int32[128] { }` transpiles to `int32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
+> `i32[128] { }` transpiles to `i32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
 
 #### Dynamic stack (`alloca`)
 
@@ -4245,8 +4245,8 @@ When a stack temporary's size is only known at runtime, the `alloca` operator al
 ```fc
 let n = parse(arg)                   // runtime length
 
-let buf = alloca(uint8, n)           // uint8*  — raw runtime-sized buffer (unchecked)
-let sl  = alloca(uint8[n] { })       // uint8[] — zeroed, bounds-checked slice
+let buf = alloca(u8, n)           // u8*  — raw runtime-sized buffer (unchecked)
+let sl  = alloca(u8[n] { })       // u8[] — zeroed, bounds-checked slice
 let msg = alloca("status: %s{name}") // str     — unbounded interpolation on the stack
 let cs  = alloca((cstr) path)        // cstr    — runtime str→cstr copy on the stack
 ```
@@ -4268,10 +4268,10 @@ The compiler tracks the **provenance** of every pointer and slice expression —
 ```fc
 let bad = () ->
     let mut x = 42
-    &x                              // compile error: cannot return stack-allocated int32*
+    &x                              // compile error: cannot return stack-allocated i32*
 
 let also_bad = () ->
-    int32[4] { 1, 2, 3, 4 }        // compile error: cannot return stack-allocated int32[]
+    i32[4] { 1, 2, 3, 4 }        // compile error: cannot return stack-allocated i32[]
 ```
 
 - **Freeing non-heap memory** — calling `free` on a string literal (static memory) or stack-allocated memory:
@@ -4286,38 +4286,38 @@ free(&x)                            // compile error: cannot free stack-allocate
 
 ```fc
 struct node =
-    data: int32*
+    data: i32*
 
 let mut x = 42
-let n = alloc(node { data = &x })   // compile error: cannot store stack-allocated int32* in heap struct
+let n = alloc(node { data = &x })   // compile error: cannot store stack-allocated i32* in heap struct
 
-let h = alloc(node { data = default(int32*) })!
-h->data = &x                        // compile error: cannot store stack-allocated int32* in heap-allocated struct field
+let h = alloc(node { data = default(i32*) })!
+h->data = &x                        // compile error: cannot store stack-allocated i32* in heap-allocated struct field
 ```
 
 The destination is judged by its **root** storage: a local stack binding is exempt (it shares the frame), while a heap or static root is rejected. A write *through* a pointer of unknown provenance (a function parameter, an extern result) is not rejected — see the intraprocedural limitation below.
 
-Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, `.ptr` on slices, and implicit widening conversions. The last point matters: adding `const` (`cstr` → `const cstr`, `int32[]` → `const int32[]`) or any other lossless widen inserted at an assignment, call argument, struct-literal field, option payload, or branch join carries the operand's provenance through to the widened value — so widening a stack value never launders away its stack taint, and the sinks above still fire on the result. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
+Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, `.ptr` on slices, and implicit widening conversions. The last point matters: adding `const` (`cstr` → `const cstr`, `i32[]` → `const i32[]`) or any other lossless widen inserted at an assignment, call argument, struct-literal field, option payload, or branch join carries the operand's provenance through to the widened value — so widening a stack value never launders away its stack taint, and the sinks above still fire on the result. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
 
 Reassigning a `let mut` binding merges the assigned value's provenance into the binding: once a binding has held a stack value on any path, it is treated as stack-derived for every later read, so the sinks above fire even when the binding originally came from a parameter or a heap pointer. The merge is conservative and monotone — it never clears a stack taint, so a binding reassigned back to a heap value is still rejected at a later sink, and a stack assignment in one `if` arm taints the binding for code after the join. Loop bodies are analyzed so a read that precedes the tainting assignment textually but follows it across an iteration is also caught:
 
 ```fc
 let bad = () ->
-    let mut p = default(int32*)
+    let mut p = default(i32*)
     for i in 0..2 do
         if i > 0 then return p else void()   // compile error: iteration 2 returns iteration 1's &x
         let mut x = 5
         p = &x
-    return default(int32*)
+    return default(i32*)
 ```
 
 The analysis is **intraprocedural** — function parameters and call return values have unknown provenance. A function that receives a pointer (or a struct/union carrying one) may use it freely inside its body, including storing it in globals or heap-reachable structures; the compiler does not propagate stack-provenance across call boundaries. The caller is responsible for ensuring that any stack-derived value passed into a function does not outlive the frame that produced it. In particular, this pattern is accepted by the compiler but produces a dangling pointer:
 
 ```fc
 struct holder =
-    p: int32*
+    p: i32*
 
-let mut gh = holder { p = default(int32*) }
+let mut gh = holder { p = default(i32*) }
 
 let stash = (h: holder) ->
     gh = h                          // allowed: h has unknown provenance inside stash
@@ -4333,7 +4333,7 @@ The same limitation applies to indirect calls (function pointers, callbacks, clo
 
 ```fc
 let make_slice = () ->
-    let arr = int32[3] { 10, 20, 30 }
+    let arr = i32[3] { 10, 20, 30 }
     alloc(arr)!                     // OK — deep copy to heap, safe to return
 ```
 
@@ -4345,7 +4345,7 @@ let make_slice = () ->
 let n = alloc(node)              // returns node*? — may fail
 let n = alloc(node)!             // unwrap — crash on failure
 let buf = alloc(node[128] { })   // heap-allocated slice of 128 nodes, returns node[]?
-let raw = alloc(uint8, 256)      // raw buffer of 256 bytes, returns uint8*?
+let raw = alloc(u8, 256)      // raw buffer of 256 bytes, returns u8*?
 free(ptr)                        // free a heap-allocated pointer
 free(buf)                        // free a heap-allocated slice — compiler emits free(buf.ptr)
 ```
@@ -4376,14 +4376,14 @@ The slice deep-copy form is the idiomatic way to promote a stack slice or string
 let s = "hello %d{n}"       // stack-allocated (alloca) — unsafe to return
 let owned = alloc(s)!        // heap copy — safe to return, caller must free
 
-let mut buf = int32[3] { }
+let mut buf = i32[3] { }
 buf.ptr[0] = 10
 let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
 ```
 
 #### alloc with string and cstr literals
 
-`alloc("hello")` creates a heap copy of the string literal, returning `str?`. `alloc(c"hello")` creates a heap copy of the cstr literal including the null terminator, returning `cstr?` (= `uint8*?`). The caller must free the result.
+`alloc("hello")` creates a heap copy of the string literal, returning `str?`. `alloc(c"hello")` creates a heap copy of the cstr literal including the null terminator, returning `cstr?` (= `u8*?`). The caller must free the result.
 
 ```fc
 let s = alloc("hello")!         // str? — heap copy of literal
@@ -4399,7 +4399,7 @@ When `alloc` wraps a literal expression — string literals, cstr literals, inte
 `alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N] { })`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
 
 ```fc
-let buf = alloc(uint8, 256)!    // uint8*? — raw buffer, no length tracking
+let buf = alloc(u8, 256)!    // u8*? — raw buffer, no length tracking
 ```
 
 `alloc(T, N)` transpiles to `calloc(N, sizeof(T))`. Like all alloc forms, the memory is zero-initialized.
@@ -4427,14 +4427,14 @@ let r = alloc(parse_outcome.success(42))!
 **Slice literal** — same rules as stack slice initialization. Length is always required and the element count must match exactly:
 
 ```fc
-let buf = alloc(int32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
-let buf = alloc(int32[4] { })!               // heap slice, all zeros (the `{ }` is required)
+let buf = alloc(i32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
+let buf = alloc(i32[4] { })!               // heap slice, all zeros (the `{ }` is required)
 ```
 
 In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
-> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(int32[4] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(int32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the empty slice-literal form `alloc(int32[4] { })` use `calloc` instead.) All are conditional on the allocation succeeding.
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(i32[4] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(i32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the empty slice-literal form `alloc(i32[4] { })` use `calloc` instead.) All are conditional on the allocation succeeding.
 
 ### Initialization after alloc
 
@@ -4471,7 +4471,7 @@ let v = atomic_load_acquire(p)      // atomic load with acquire ordering
 atomic_store_release(p, v)          // atomic store with release ordering
 ```
 
-Both builtins operate **through a pointer to a plain object** — there is no atomic type. The pointee must be an integer type (`int8`–`int64`, `uint8`–`uint64`, `isize`, `usize`) or `bool`. Any other pointee — floats, structs, pointers, `any*`, type variables — is a compile error. `atomic_load_acquire(p)` returns the pointee type; `atomic_store_release(p, v)` is void, and `v` widens implicitly to the pointee type under the standard lossless-widening rules. Loading through a `const` pointer is permitted (a load is a read); storing through one is a compile error.
+Both builtins operate **through a pointer to a plain object** — there is no atomic type. The pointee must be an integer type (`i8`–`i64`, `u8`–`u64`, `isize`, `usize`) or `bool`. Any other pointee — floats, structs, pointers, `any*`, type variables — is a compile error. `atomic_load_acquire(p)` returns the pointee type; `atomic_store_release(p, v)` is void, and `v` widens implicitly to the pointee type under the standard lossless-widening rules. Loading through a `const` pointer is permitted (a load is a read); storing through one is a compile error.
 
 ### Ordering semantics
 
@@ -4508,7 +4508,7 @@ let enqueue = (r: ring*, c: command) ->
     if t - h == (usize) r->buf.len then false
     else
         r->buf[t % (usize) r->buf.len] = c          // plain write to the slot
-        atomic_store_release(&r->tail, t + 1u)      // publish it
+        atomic_store_release(&r->tail, t + 1usize)      // publish it
         true
 
 let dequeue = (r: ring*) ->
@@ -4517,7 +4517,7 @@ let dequeue = (r: ring*) ->
     if t == h then none(command)
     else
         let c = r->buf[h % (usize) r->buf.len]      // plain read of the slot
-        atomic_store_release(&r->head, h + 1u)      // release the slot
+        atomic_store_release(&r->head, h + 1usize)      // release the slot
         some(c)
 ```
 
@@ -4540,9 +4540,9 @@ C library bindings are declared using `extern` inside a module with a `from` cla
 > ```fc
 > module io =
 >     private module c from "stdio.h" =
->         extern fwrite: (any*, uint64, uint64, any*) -> uint64
+>         extern fwrite: (any*, u64, u64, any*) -> u64
 >     let write = (s: const str, f: any*) ->
->         (int64) c.fwrite((any*) s.ptr, 1u64, (uint64) s.len, f)
+>         (i64) c.fwrite((any*) s.ptr, 1u64, (u64) s.len, f)
 > ```
 
 ```fc
@@ -4559,7 +4559,7 @@ module c_string from "string.h" =
 ```
 
 > **Note on the examples above**
-> Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `usize` parameters for `malloc`, `memcpy`, and `strlen` map directly to C's `size_t` — the generated C uses `size_t` at the call boundary, matching the real C prototypes exactly on every target. Using `int64` here also works (the C compiler narrows it via the real header prototypes) but `usize` is more precise and avoids unnecessary 64-bit arithmetic on smaller targets.
+> Each `from` module corresponds to one C header — the compiler emits `#include <header>` for each. `free` is declared as `c_free` because `free` is a reserved identifier in FC — see §Reserved identifiers and `extern as`. `any*` is used where C uses `void*` — see §any* — opaque pointers. The `usize` parameters for `malloc`, `memcpy`, and `strlen` map directly to C's `size_t` — the generated C uses `size_t` at the call boundary, matching the real C prototypes exactly on every target. Using `i64` here also works (the C compiler narrows it via the real header prototypes) but `usize` is more precise and avoids unnecessary 64-bit arithmetic on smaller targets.
 
 ### Feature-test macro defines
 
@@ -4567,8 +4567,8 @@ Some C headers require feature-test macros (e.g., `_POSIX_C_SOURCE`, `_GNU_SOURC
 
 ```fc
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
-    extern clock_gettime: (int32, any*) -> int32
-    extern nanosleep:     (any*, any*?) -> int32
+    extern clock_gettime: (i32, any*) -> i32
+    extern nanosleep:     (any*, any*?) -> i32
 ```
 
 The compiler emits `#define _POSIX_C_SOURCE 200809L` before all `#include` lines in the generated C output. This follows the POSIX requirement that feature-test macros must precede any header inclusion.
@@ -4587,9 +4587,9 @@ C constants defined as `#define` macros can be imported using the same `extern` 
 
 ```fc
 module c from "fcntl.h" =
-    extern O_RDONLY: int64
-    extern O_WRONLY: int64
-    extern O_CREAT: int64
+    extern O_RDONLY: i64
+    extern O_WRONLY: i64
+    extern O_CREAT: i64
 ```
 
 The compiler emits the C macro name directly into the generated code. Since the `#include` for the header is emitted in the preamble, the C preprocessor expands the macro at C compilation time. No intermediate variable or declaration is needed — the macro name appears inline wherever the constant is used.
@@ -4598,8 +4598,8 @@ The compiler emits the C macro name directly into the generated code. Since the 
 
 ```fc
 module sdl from "SDL2/SDL.h" =
-    extern SDL_INIT_VIDEO as sdl_init_video: int64
-    extern SDL_INIT_AUDIO as sdl_init_audio: int64
+    extern SDL_INIT_VIDEO as sdl_init_video: i64
+    extern SDL_INIT_AUDIO as sdl_init_audio: i64
 ```
 
 The `as` clause follows the same convention as `extern ... as` for functions: `SDL_INIT_VIDEO` is the C name (emitted in generated code), `sdl_init_video` is the FC name (used in FC source). Without `as`, the C name and FC name are the same.
@@ -4613,8 +4613,8 @@ let flags = sdl_init_video | sdl_init_audio    // bitwise OR of C constants
 ```
 
 **Valid types** — extern constants may have:
-- Integer types: `int8` through `uint64`, `isize`, `usize`
-- Float types: `float32`, `float64`
+- Integer types: `i8` through `u64`, `isize`, `usize`
+- Float types: `f32`, `f64`
 - `bool`
 - Pointer types: `any*`, `T*`
 - String type: `cstr` (with `const` qualifier for string literal defines)
@@ -4625,9 +4625,9 @@ let flags = sdl_init_video | sdl_init_audio    // bitwise OR of C constants
 - Struct and union types — C `#define` values are scalar or pointer, not aggregate.
 - `void` — meaningless for a constant.
 
-**Programmer responsibility** — the programmer must declare the correct FC type. The compiler does not verify the declared type against the actual C macro value — that responsibility falls to the C compiler at the next stage. As a guideline, choose the widest FC type that is safely convertible from the C value. For example, declare a POSIX `int` constant as `int64` rather than `int32`, since C `int` width varies but `int64_t` always holds it.
+**Programmer responsibility** — the programmer must declare the correct FC type. The compiler does not verify the declared type against the actual C macro value — that responsibility falls to the C compiler at the next stage. As a guideline, choose the widest FC type that is safely convertible from the C value. For example, declare a POSIX `int` constant as `i64` rather than `i32`, since C `int` width varies but `i64_t` always holds it.
 
-**Boundary casts** — for `cstr`-typed constants, the compiler emits a cast from `char*` (C's string literal type) to `uint8_t*` (FC's `cstr` representation). For other types, C's implicit conversions handle the boundary.
+**Boundary casts** — for `cstr`-typed constants, the compiler emits a cast from `char*` (C's string literal type) to `u8_t*` (FC's `cstr` representation). For other types, C's implicit conversions handle the boundary.
 
 > **Note on function-like macros**
 > Only value-producing macros can be imported. Function-like macros (`#define MAX(a,b) ...`) are code transformations, not constant values, and cannot be imported as extern constants. To use a function-like macro from FC, wrap it in a C helper function or reimplement the logic in FC.
@@ -4639,8 +4639,8 @@ C struct types can be imported using `extern struct` inside a `from` module. Thi
 ```fc
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
-        tv_sec: int64
-        tv_nsec: int64
+        tv_sec: i64
+        tv_nsec: i64
 ```
 
 The generated C uses `struct timespec` (the real C type) wherever the FC type is referenced. No `typedef` or `struct` definition is emitted — the header's definition is used directly. The C compiler validates field names at C compilation time.
@@ -4650,10 +4650,10 @@ The generated C uses `struct timespec` (the real C type) wherever the FC type is
 ```fc
 module sdl from "SDL2/SDL.h" =
     extern struct SDL_Rect as sdl_rect =
-        x: int32
-        y: int32
-        w: int32
-        h: int32
+        x: i32
+        y: i32
+        w: i32
+        h: i32
 ```
 
 The `as` clause follows the same convention as `extern ... as` for functions: `SDL_Rect` is the C name (emitted in generated code as `struct SDL_Rect`), `sdl_rect` is the FC name (used in FC source code). Without `as`, the C name and FC name are the same.
@@ -4688,11 +4688,11 @@ FC has no native `packed struct` keyword. Packed layouts (no padding between fie
 // my_proto.h
 #include <stdint.h>
 struct __attribute__((packed)) tcp_header {
-    uint16_t src_port;
-    uint16_t dst_port;
-    uint32_t seq;
-    uint32_t ack;
-    uint8_t  flags;
+    u16_t src_port;
+    u16_t dst_port;
+    u32_t seq;
+    u32_t ack;
+    u8_t  flags;
 };
 _Static_assert(sizeof(struct tcp_header) == 13, "tcp_header must be 13 bytes");
 ```
@@ -4700,11 +4700,11 @@ _Static_assert(sizeof(struct tcp_header) == 13, "tcp_header must be 13 bytes");
 ```fc
 module proto from "my_proto.h" =
     extern struct tcp_header =
-        src_port: uint16
-        dst_port: uint16
-        seq: uint32
-        ack: uint32
-        flags: uint8
+        src_port: u16
+        dst_port: u16
+        seq: u32
+        ack: u32
+        flags: u8
 
 let h = proto.tcp_header { src_port = 80u16, seq = 1u32, ... }
 let n = sizeof(proto.tcp_header)            // 13, not 16
@@ -4744,10 +4744,10 @@ struct reg {
 ```fc
 module r from "reg.h" =
     extern struct reg =
-        enable: uint32
-        mode: uint32
-        priority: uint32
-        reserved: uint32
+        enable: u32
+        mode: u32
+        priority: u32
+        reserved: u32
 
 let mut reg = default(r.reg)
 reg.enable = 1u32
@@ -4755,7 +4755,7 @@ reg.mode = 5u32        // masked to 3 bits by the C compiler
 reg.priority = 12u32   // masked to 4 bits
 ```
 
-The FC field type should be the underlying C integer type of the bit field (`unsigned int` → `uint32`, `unsigned char` → `uint8`, and so on). The declared FC type is the type of the *value* the C compiler yields on read and accepts on write — the fact that only a few bits are actually stored is invisible from FC's side.
+The FC field type should be the underlying C integer type of the bit field (`unsigned int` → `u32`, `unsigned char` → `u8`, and so on). The declared FC type is the type of the *value* the C compiler yields on read and accepts on write — the fact that only a few bits are actually stored is invisible from FC's side.
 
 All extern struct features work: `default`, designated-initializer construction, field read/write, whole-struct copy, structural equality (FC's per-struct comparison does field-by-field reads, and each bit field read goes through the C compiler correctly). Bit fields can be mixed freely with ordinary fields in the same struct, nested inside other extern structs, and passed by value or by `T*`.
 
@@ -4774,8 +4774,8 @@ C union types (untagged, overlapping memory) can be imported using `extern union
 ```fc
 module u from "test_union.h" =
     extern union int_or_float =
-        i: int32
-        f: float32
+        i: i32
+        f: f32
 ```
 
 The generated C uses `union int_or_float` wherever the FC type is referenced.
@@ -4785,7 +4785,7 @@ The generated C uses `union int_or_float` wherever the FC type is referenced.
 ```fc
 module sdl from "SDL2/SDL.h" =
     extern union SDL_Event as sdl_event =
-        type: uint32
+        type: u32
         key: sdl_keyboard_event
         motion: sdl_mouse_motion_event
 ```
@@ -4839,7 +4839,7 @@ The `extern as` form is shown here for completeness and is more relevant when a 
 C functions that can return null must be declared with a `?` return type. This keeps null out of FC's type system — the programmer is forced to handle the absent case explicitly before using the value:
 
 ```fc
-let buf = libc.malloc(1024u)   // type is any*? — usize argument matches C's size_t
+let buf = libc.malloc(1024usize)   // type is any*? — usize argument matches C's size_t
 let ptr = buf!                 // unwrap — crash on null
 // or
 match buf with
@@ -4853,7 +4853,7 @@ For C functions that signal failure via a sentinel integer value (such as `-1`),
 
 ```fc
 module posix from "fcntl.h" =
-    extern open: (const cstr, int32) -> int32    // returns -1 on failure, not null; const cstr accepts c"..." literals
+    extern open: (const cstr, i32) -> i32    // returns -1 on failure, not null; const cstr accepts c"..." literals
 
 let fd = posix.open(c"file.txt", 0)
 if fd == -1 then handle_error()
@@ -4865,7 +4865,7 @@ If a C function accepts null for a pointer parameter, declare it as `T*?` and pa
 
 ```fc
 module pthreads from "pthread.h" =
-    extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> int32
+    extern pthread_create: (any*?, any*?, (any*) -> any*?, any*?) -> i32
     // thread function: (any*) -> any*? — receives and returns the user-data pointer
 ```
 
@@ -4884,18 +4884,18 @@ The compiler automatically inserts C-level casts at extern call boundaries to br
 
 | FC parameter type | C cast inserted | Reason |
 |---|---|---|
-| `const cstr` (`const uint8*`) | `(const char*)` | C read-only string functions expect `const char*` |
-| `cstr` (`uint8*`) | `(char*)` | C mutable string functions expect `char*` |
-| `cstr*` (`uint8**`) | `(char**)` | Out-parameter variant (e.g. `strtol`'s `endptr`) |
+| `const cstr` (`const u8*`) | `(const char*)` | C read-only string functions expect `const char*` |
+| `cstr` (`u8*`) | `(char*)` | C mutable string functions expect `char*` |
+| `cstr*` (`u8**`) | `(char**)` | Out-parameter variant (e.g. `strtol`'s `endptr`) |
 | `any**` (`void**`) | `(void*)` | `void**` doesn't implicitly convert to `T**` in C; `void*` does |
 
 The `const cstr` / `cstr` distinction maps directly to C's `const char*` / `char*`. Use `const cstr` for C functions that read a string (most of them), and `cstr` for C functions that write into a char buffer. Typed pointers (`T*`, `const T*`) implicitly widen to `any*` / `const any*` at extern boundaries, matching C's implicit `T*` → `void*` conversion.
 
 ```fc
 module c from "stdlib.h" =
-    extern strtol: (const cstr, cstr*, int32) -> int64
+    extern strtol: (const cstr, cstr*, i32) -> i64
 
-let mut end = default(uint8*)
+let mut end = default(u8*)
 let val = c.strtol((cstr) s, &end, 10)   // const cstr → (const char*), &end → (char**)
 ```
 
@@ -4903,7 +4903,7 @@ The `any**` cast covers opaque handle APIs where a C function writes a handle th
 
 ```fc
 module sqlite from "sqlite3.h" =
-    extern sqlite3_open: (const cstr, any**) -> int32
+    extern sqlite3_open: (const cstr, any**) -> i32
 
 let mut db = default(any*)
 let rc = sqlite.sqlite3_open(c"test.db", &db)   // const cstr → (const char*), &db → (void*)
@@ -4915,20 +4915,20 @@ C functions that accept a variable number of arguments (`printf`, `snprintf`, `o
 
 ```fc
 module c from "stdio.h" =
-    extern printf: (const cstr, ...) -> int32
-    extern fprintf: (any*, const cstr, ...) -> int32
-    extern snprintf: (cstr, usize, const cstr, ...) -> int32
+    extern printf: (const cstr, ...) -> i32
+    extern fprintf: (any*, const cstr, ...) -> i32
+    extern snprintf: (cstr, usize, const cstr, ...) -> i32
 ```
 
 Note: `snprintf`'s first param is `cstr` (mutable output buffer), format string is `const cstr` (read-only).
 
 The compiler type-checks the fixed parameters normally — the `const cstr` format string, the `any*` file handle, the `usize` buffer size — but variadic arguments beyond the fixed parameters are not type-checked. The programmer is responsible for matching format specifiers to argument types, the same as in C.
 
-**Argument promotion.** C's default argument promotions apply to variadic arguments: sub-`int` types (`int8`, `int16`, `uint8`, `uint16`) are promoted to `int`, and `float32` is promoted to `double`. The compiler inserts these casts automatically in the generated C. Boundary casts also apply — `cstr` variadic arguments are cast to `const char*` at the C boundary.
+**Argument promotion.** C's default argument promotions apply to variadic arguments: sub-`int` types (`i8`, `i16`, `u8`, `u16`) are promoted to `int`, and `f32` is promoted to `double`. The compiler inserts these casts automatically in the generated C. Boundary casts also apply — `cstr` variadic arguments are cast to `const char*` at the C boundary.
 
 ```fc
 module c from "stdio.h" =
-    extern fprintf: (any*, const cstr, ...) -> int32
+    extern fprintf: (any*, const cstr, ...) -> i32
 
 let val = 42i8
 c.fprintf(stdout, c"value: %d name: %s\n", val, c"hello")
@@ -4941,7 +4941,7 @@ c.fprintf(stdout, c"value: %d name: %s\n", val, c"hello")
 
 ### Mapping C enums
 
-C enums are integer constants. In pure FC, use union types for sum types. When interoperating with a C API that uses an enum, model it as a module of `int32` constants and declare the extern function with an `int32` parameter:
+C enums are integer constants. In pure FC, use union types for sum types. When interoperating with a C API that uses an enum, model it as a module of `i32` constants and declare the extern function with an `i32` parameter:
 
 ```fc
 module af =                    // address family constants (from sys/socket.h)
@@ -4954,7 +4954,7 @@ module sock =                  // socket type constants
     let raw    = 3
 
 module c_socket from "sys/socket.h" =
-    extern socket: (int32, int32, int32) -> int32    // returns fd or -1
+    extern socket: (i32, i32, i32) -> i32    // returns fd or -1
 
 let fd = c_socket.socket(af.inet, sock.stream, 0)
 if fd == -1 then handle_error()
@@ -4985,22 +4985,22 @@ FC code that receives `any*` handles never constructs or inspects them; it passe
 
 ```fc
 module sqlite from "sqlite3.h" =
-    extern sqlite3_open:  (const cstr, any*?) -> int32
-    extern sqlite3_exec:  (any*, const cstr, (any*, int32, any*, any*) -> int32, any*?, any*?) -> int32
-    extern sqlite3_close: (any*) -> int32
+    extern sqlite3_open:  (const cstr, any*?) -> i32
+    extern sqlite3_exec:  (any*, const cstr, (any*, i32, any*, any*) -> i32, any*?, any*?) -> i32
+    extern sqlite3_close: (any*) -> i32
 
 module c_stdio from "stdio.h" =
     extern fopen:  (const cstr, const cstr) -> any*?
-    extern fclose: (any*) -> int32
-    extern fread:  (any*, int64, int64, any*) -> int64
-    extern fwrite: (any*, int64, int64, any*) -> int64
+    extern fclose: (any*) -> i32
+    extern fread:  (any*, i64, i64, any*) -> i64
+    extern fwrite: (any*, i64, i64, any*) -> i64
 
 module c_stdlib from "stdlib.h" =
     extern malloc: (usize) -> any*?
     extern free:   (any*) -> void
 ```
 
-Note that `fread` and `fwrite` take `any*` for both the data buffer and the `FILE*` handle — both are `void*` in C. `int64` maps C's `size_t` parameters — a reasonable signed upper bound. For exact platform matching, use `usize` instead (see §Embedded targets and raw pointer arrays).
+Note that `fread` and `fwrite` take `any*` for both the data buffer and the `FILE*` handle — both are `void*` in C. `i64` maps C's `size_t` parameters — a reasonable signed upper bound. For exact platform matching, use `usize` instead (see §Embedded targets and raw pointer arrays).
 
 The programmer is responsible for passing handles to the correct functions — FC's type system does not distinguish a `sqlite3*` from a `FILE*` at the `any*` level. This is an acceptable tradeoff: opaque handles are passed to a small number of known functions, and mixing them up is no more likely than passing the wrong integer argument.
 
@@ -5010,24 +5010,24 @@ FC functions internally carry an extra `void* _ctx` parameter for closure suppor
 
 ```fc
 module libc from "stdlib.h" =
-    extern qsort: (any*, usize, usize, (const any*, const any*) -> int32) -> void
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
 
 // Named top-level comparator — non-capturing, so the compiler generates a trampoline
 let int_compare = (a: const any*, b: const any*) ->
-    let ia = *((const int32*) a)
-    let ib = *((const int32*) b)
+    let ia = *((const i32*) a)
+    let ib = *((const i32*) b)
     ia - ib
 
 let main = (args: str[]) ->
-    let mut nums = int32[5] { 5, 2, 8, 1, 9 }
+    let mut nums = i32[5] { 5, 2, 8, 1, 9 }
 
     // Pass a named function — trampoline bridges FC's (a, b, _ctx) to C's (a, b)
-    libc.qsort(nums.ptr, 5u, (usize) sizeof(int32), int_compare)
+    libc.qsort(nums.ptr, 5usize, (usize) sizeof(i32), int_compare)
 
     // Pass a non-capturing lambda directly — same trampoline mechanism
-    libc.qsort(nums.ptr, 5u, (usize) sizeof(int32),
+    libc.qsort(nums.ptr, 5usize, (usize) sizeof(i32),
         (a: const any*, b: const any*) ->
-            *((const int32*) b) - *((const int32*) a))
+            *((const i32*) b) - *((const i32*) a))
 ```
 
 **What can be passed to extern function parameters:**
@@ -5057,7 +5057,7 @@ FC avoids the problem entirely: `void` means what it always means, and `any*` is
 In C, `void*` is frequently used for patterns that FC handles at the language level. FC programmers should reach for these before `any*`:
 
 - **Heterogeneous collections** — in C, a `void*[]` holds mixed types. In FC, use a tagged union: `union shape = | circle(circle) | rect(rect)`. The type system tracks what's in each slot; no unsafe cast required.
-- **Generic algorithms** — in C, `qsort` takes `void*` because it cannot be parameterized by element type. In FC, generic functions handle this directly: `let sort = (arr: 'a[], cmp: ('a, 'a) -> int32) -> ...`.
+- **Generic algorithms** — in C, `qsort` takes `void*` because it cannot be parameterized by element type. In FC, generic functions handle this directly: `let sort = (arr: 'a[], cmp: ('a, 'a) -> i32) -> ...`.
 - **Stateful callbacks** — in C, a `void*` user_data accompanies every callback to carry context. In FC, closures capture their environment as a fat pointer internally — no manual user_data threading needed.
 - **Opaque types within FC** — in C, hiding a struct's internals requires forward-declaring it in a header and exposing only `void*`. In FC, module-level `private` fields achieve the same thing with a typed pointer — the caller holds a `connection*` but cannot access its fields. No type erasure needed.
 
@@ -5078,7 +5078,7 @@ The cast emits an `alloca`+`memcpy` to create a null-terminated copy on the stac
 `cstr` to `str` — construct a slice from the raw pointer and length:
 
 ```fc
-let s = str { ptr = cs, len = (int64) libc.strlen(cs) }   // strlen returns usize; str.len is int64, so cast explicitly
+let s = str { ptr = cs, len = (i64) libc.strlen(cs) }   // strlen returns usize; str.len is i64, so cast explicitly
 ```
 
 The resulting `str` shares memory with the original C string — no allocation occurs. The programmer is responsible for ensuring the C string remains live for the lifetime of the FC slice.
@@ -5097,15 +5097,15 @@ Environment variables, process control, wall-clock time, and sleep. Mostly pure 
 
 ## std::math
 
-Common mathematical functions wrapping C11 `math.h`, all operating on `float64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
+Common mathematical functions wrapping C11 `math.h`, all operating on `f64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
 
 ## std::text
 
-String parsing and manipulation. Numeric parsing (`parse_int32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
+String parsing and manipulation. Numeric parsing (`parse_i32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
 
 ## std::net
 
-POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `netdb.h`. IPv4 only. Provides socket lifecycle (`open_tcp`, `open_udp`, `open_icmp`, `close`, `shutdown`), address construction (`make_addr`, `make_addr_str`), TCP operations (`bind_addr`, `listen`, `accept`, `connect_addr`), data transfer (`send_bytes`, `recv_bytes`, `send_to`, `recv_from`), byte order conversion (`host_to_net16`, `host_to_net32`, `net_to_host16`, `net_to_host32`), DNS resolution (`resolve`), socket options (`set_reuse_addr`), and local address inspection (`local_port`). Exported constants (`af_inet`, `sock_stream`, `sock_dgram`, `shut_rd`/`shut_wr`/`shut_rdwr`, `inaddr_any`/`inaddr_loopback`, and friends) mirror the underlying POSIX values. Socket creation functions return `int32?`; callers check for failure with option handling. Requires POSIX sockets (Linux, macOS, Windows via MinGW).
+POSIX networking wrapping `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`, and `netdb.h`. IPv4 only. Provides socket lifecycle (`open_tcp`, `open_udp`, `open_icmp`, `close`, `shutdown`), address construction (`make_addr`, `make_addr_str`), TCP operations (`bind_addr`, `listen`, `accept`, `connect_addr`), data transfer (`send_bytes`, `recv_bytes`, `send_to`, `recv_from`), byte order conversion (`host_to_net16`, `host_to_net32`, `net_to_host16`, `net_to_host32`), DNS resolution (`resolve`), socket options (`set_reuse_addr`), and local address inspection (`local_port`). Exported constants (`af_inet`, `sock_stream`, `sock_dgram`, `shut_rd`/`shut_wr`/`shut_rdwr`, `inaddr_any`/`inaddr_loopback`, and friends) mirror the underlying POSIX values. Socket creation functions return `i32?`; callers check for failure with option handling. Requires POSIX sockets (Linux, macOS, Windows via MinGW).
 
 ## std::data
 
@@ -5125,7 +5125,7 @@ All sequential collections (array_list, linked_list, slice) share a consistent f
 
 ## std::random
 
-Pseudo-random number generators with explicit state (no hidden globals). Two generators are provided: `lcg_random` (Knuth LCG, fast and compact) and `pcg_random` (PCG-XSH-RR, higher statistical quality). Both expose `next_uint32` / `next_uint64`, `next_float32` / `next_float64` in `[0.0, 1.0)`, and a bounded-integer form (`next_bounded_uint32`). `pcg_random` additionally supports multiple independent streams via `make_with_channel`. Callers own the generator state and thread it through explicitly.
+Pseudo-random number generators with explicit state (no hidden globals). Two generators are provided: `lcg_random` (Knuth LCG, fast and compact) and `pcg_random` (PCG-XSH-RR, higher statistical quality). Both expose `next_u32` / `next_u64`, `next_f32` / `next_f64` in `[0.0, 1.0)`, and a bounded-integer form (`next_bounded_u32`). `pcg_random` additionally supports multiple independent streams via `make_with_channel`. Callers own the generator state and thread it through explicitly.
 
 ---
 
@@ -5196,11 +5196,11 @@ Struct and union declarations place the body on the next line, indented one leve
 
 ```fc
 struct point =
-    x: float64
-    y: float64
+    x: f64
+    y: f64
 
 union shape =
-    | circle(float64)
+    | circle(f64)
     | rectangle(dims)
     | point
 ```
@@ -5209,8 +5209,8 @@ No space between field name and colon in struct fields and function parameters:
 
 ```fc
 struct rect =
-    w: int32
-    h: int32
+    w: i32
+    h: i32
 
 let area = (r: rect) -> r.w * r.h
 ```
@@ -5220,9 +5220,9 @@ let area = (r: rect) -> r.w * r.h
 Short functions may be written on a single line. Longer functions place the body on the next line:
 
 ```fc
-let double = (x: int32) -> x * 2
+let double = (x: i32) -> x * 2
 
-let abs = (x: int32) ->
+let abs = (x: i32) ->
     if x < 0 then -x else x
 ```
 

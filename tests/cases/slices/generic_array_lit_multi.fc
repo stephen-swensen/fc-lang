@@ -1,4 +1,4 @@
-// stack slice literal with multi-param generic struct: pair<int32, bool>[N] { ... }
+// stack slice literal with multi-param generic struct: pair<i32, bool>[N] { ... }
 struct pair =
     a: 'a
     b: 'b
@@ -6,7 +6,7 @@ struct pair =
 let main = (args: str[]) ->
     let p1 = pair { a = 1, b = true }
     let p2 = pair { a = 2, b = false }
-    let arr = pair<int32, bool>[2] { p1, p2 }
+    let arr = pair<i32, bool>[2] { p1, p2 }
     let mut tc = 0
     if arr[0].b then tc = tc + 1
     if arr[1].b then tc = tc + 1

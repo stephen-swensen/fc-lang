@@ -2,4 +2,4 @@ module client =
     import rng from acme::
 
     let roll = (r: rng.pcg*) ->
-        (int32) (rng.pcg.next(r) & 0xFFu32)
+        (i32) (rng.pcg.next(r) & 0xFFu32)

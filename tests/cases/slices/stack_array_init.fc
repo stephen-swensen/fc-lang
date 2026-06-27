@@ -1,4 +1,4 @@
 let main = (args: str[]) ->
-    let s = int32[3] { 10, 20, 30 }
+    let s = i32[3] { 10, 20, 30 }
     assert(s[0] + s[1] + s[2] == 60)
     0

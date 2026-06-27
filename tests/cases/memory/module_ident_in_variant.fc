@@ -1,9 +1,9 @@
 // Ident ref inside a variant constructor payload at module scope.
 module m =
     union color =
-        | rgb(int32)
+        | rgb(i32)
         | black
-        | named(int32)
+        | named(i32)
 
     let r = 200
     let tag = 7

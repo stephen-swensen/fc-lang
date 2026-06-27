@@ -10,7 +10,7 @@ let apply_combine = (p: processor<'a>*, x: 'a, y: 'a) ->
     p->combine(x, y)
 
 let main = (args: str[]) ->
-    let p = alloc(processor { transform = (x: int32) -> x * 2, combine = (a: int32, b: int32) -> a + b })!
+    let p = alloc(processor { transform = (x: i32) -> x * 2, combine = (a: i32, b: i32) -> a + b })!
     assert(apply_transform(p, 5) == 10)
     assert(apply_combine(p, 3, 4) == 7)
     free(p)

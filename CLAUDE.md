@@ -61,7 +61,7 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - **`pass2.c/h`** — Second pass (type checker). Walks expressions with a scope chain, infers types bottom-up, resolves identifiers, checks type compatibility, validates casts and widening. Assigns unique codegen names to local bindings for shadowing support. Registers monomorphized generic instances. Uses `ModuleScopeChain` for arbitrary-depth parent module symbol lookup with interleaved import/parent resolution: at each module level, members are checked then that level's imports before moving to the parent, so a child's import can shadow a parent's member. `scope_lookup_capture` stops at the current module boundary (first `is_global` scope); parent resolution is handled by the interleaved loop. `resolve_symbol`/`resolve_symbol_kind` encode this interleaved order as the canonical lookup for all name resolution. **Single-resolution invariant:** EXPR_IDENT stores `resolved_sym` (the Symbol it resolved to) and `companion_module` (for struct/union names with a companion module) directly on the AST node. EXPR_FIELD, EXPR_CALL, and `find_callee_symbol` read these stored pointers instead of re-resolving — this is the architectural guarantee that prevents name shadowing bugs where a parameter/local shares a name with a module or type. Performs intraprocedural escape analysis: tags pointer/slice expressions with provenance (stack/heap/static/unknown) and rejects returning stack pointers, freeing non-heap memory, or storing stack pointers in heap structs. Uses `diag_error` (not `diag_fatal`) so multiple type errors are reported in a single compilation; erroneous expressions receive the poison type `TYPE_ERROR` which propagates silently to suppress cascading false positives.
 - **`monomorph.c/h`** — Monomorphization table and utilities. Tracks generic instantiations (functions, structs, unions) with their mangled names and concrete types. Three phases run after pass2: (1) `mono_discover_transitive()` finds all transitive instantiations (generic functions calling other generic functions) via a fixpoint AST walk, using `resolved_callee`/`resolved_sym` from pass2 for module-scoped symbol lookup. (2) `mono_finalize_types()` discovers nested struct types referenced only in field types (not directly constructed), resolves all type names via `mono_resolve_type_names()`, and topologically sorts entries so by-value struct dependencies are emitted before their dependents. (3) `mono_resolve_type_names()` canonicalizes generic struct/union names in a type tree to mangled C identifiers, using the global symtab to resolve module-scoped names.
 - **`codegen.c/h`** — C code emitter. Walks the typed AST and emits C11 source. Handles typedef generation for slices/options, function declarations, struct/union definitions, and expression emission. Emits monomorphized copies of generic functions/structs using a substitution context (`SubstCtx`) that replaces type variables with concrete types at emit time.
-- **`types.c/h`** — Type representation and utilities. Defines `Type` (int8–uint64, isize, usize, float32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
+- **`types.c/h`** — Type representation and utilities. Defines `Type` (i8–u64, isize, usize, f32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
 - **`diag.c/h`** — Diagnostics. `diag_error()` reports an error with source location and continues (used by pass2 for error accumulation); `diag_fatal()` reports and exits immediately (used by lexer/parser for unrecoverable errors). `diag_error_count()` gates progression to later pipeline stages. **No warnings:** FC has exactly one diagnostic severity — error. Don't add a warning channel, a `-W…` family, or an opt-in advisory pass. Style/hygiene checks (unused bindings, shadowed names, unused imports) are deliberately out of scope for the compiler; they belong to the programmer (and possibly to a future LSP/editor integration). A diagnostic is either important enough to fail the build or it isn't emitted. **Server mode:** `diag_set_sink()` redirects diagnostics to a collector (vs. stderr) and `diag_set_abort_jmp()` makes `diag_fatal*` `longjmp` (vs. `exit(1)`) so the in-process LSP survives mid-typing fatals; both default off, leaving the CLI path byte-for-byte unchanged.
 - **`common.c/h`** — Shared utilities. Arena allocator, dynamic array macro (`DA_APPEND`).
 - **`analyze.c/h`**, **`json.c/h`**, **`lsp.c/h`** — The in-process language server (`fcc --lsp`), independent of the normal compile path. `analyze()` runs lexer→parser→pass1→pass2 over an in-memory source (merging the installed stdlib so `std::` resolves), collecting diagnostics and keeping the typed AST alive for queries; `json.c` is a minimal JSON-RPC value model; `lsp.c` is the stdio message loop + handlers (diagnostics, hover, definition, completion, and a type-above CodeLens). See **Editor integration** below. **Note:** `pass2_check` now takes the AST `Arena*` (the type nodes it synthesizes are AST-referenced and freed with that arena) — this fixed a latent leak and is what lets a long-running server reclaim each analysis.
@@ -72,10 +72,10 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - No explicit type annotations on bindings — always inferred from RHS
 - Function parameter types are always required (they anchor inference)
 - No function overloading — names always resolve to exactly one function
-- Implicit widening only where lossless (e.g., `int32` → `int64`, NOT int → float) — applies in binary expressions, comparisons, function call arguments, slice indices, and for-range endpoints. An `int32` literal like `0` widens to `int64` when compared to `.len` or used as a slice bound.
+- Implicit widening only where lossless (e.g., `i32` → `i64`, NOT int → float) — applies in binary expressions, comparisons, function call arguments, slice indices, and for-range endpoints. An `i32` literal like `0` widens to `i64` when compared to `.len` or used as a slice bound.
 - Integer-to-float always requires an explicit cast
 - No `null` in the language — option types (`T?`) replace nullable values
-- **Type aliases are true aliases**: `str` and `cstr` are desugared to their underlying types (`uint8[]` and `uint8*`) internally with a `const char *alias` field on `Type` for display purposes. They are fully interchangeable with their underlying types — `str` and `uint8[]` are the same type, `cstr` and `uint8*` are the same type. The alias only affects `type_name()` output in diagnostics, never type equality or semantics. C interop details (e.g., `const char*` for C string functions) are handled only at extern call boundaries in codegen, not in the type system.
+- **Type aliases are true aliases**: `str` and `cstr` are desugared to their underlying types (`u8[]` and `u8*`) internally with a `const char *alias` field on `Type` for display purposes. They are fully interchangeable with their underlying types — `str` and `u8[]` are the same type, `cstr` and `u8*` are the same type. The alias only affects `type_name()` output in diagnostics, never type equality or semantics. C interop details (e.g., `const char*` for C string functions) are handled only at extern call boundaries in codegen, not in the type system.
 
 ### Compilation Model
 - **Two-pass**: First pass collects top-level names/types/layouts; second pass type-checks expressions
@@ -93,12 +93,12 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - Struct/union equality emits generated comparison functions
 
 ### Types and Literals
-- Default integer: `int32`; default float: `float64`
+- Default integer: `i32`; default float: `f64`
 - Suffixed literals: `42i8`, `42u64`, `3.14f32`
-- Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42i`, `42u`
+- Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42isize`, `42usize`
 - No implicit widening to/from `isize`/`usize` — explicit casts required
-- String types: `str` = `uint8[]` (fat pointer), `cstr` = `uint8*` (null-terminated, C interop)
-- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(int32) buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width/precision optional), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
+- String types: `str` = `u8[]` (fat pointer), `cstr` = `u8*` (null-terminated, C interop)
+- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(i32) buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width/precision optional), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
 - `any*` = opaque pointer (`void*`), cannot be dereferenced
 
 ### Control Flow
@@ -110,13 +110,13 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - `defer <expr>` schedules an expression to run at block scope exit (LIFO order). Block-scoped: runs when the enclosing function body, loop/for body, if/else block, match arm, or nested block exits. `return` unwinds all defers to function scope; `break`/`continue` unwind to loop boundary. Each loop iteration gets a fresh defer queue. Return value of deferred expression is discarded.
 
 ### Union Syntax
-- Variant declarations require `|` before each variant: `| circle(int32)`, not `circle(int32)`
+- Variant declarations require `|` before each variant: `| circle(i32)`, not `circle(i32)`
 - Variant **construction** requires the union type name: `shape.circle(5)`, `shape.empty`
 - Variant **pattern matching** uses bare names: `| circle(r) -> ...`, `| empty -> ...`
 - Each variant carries zero or one payload (not multiple — use a struct for compound data)
 ```fc
 union shape =
-    | circle(int32)       // one payload
+    | circle(i32)       // one payload
     | rect(point)         // struct payload for compound data
     | empty               // no payload
 
@@ -130,11 +130,11 @@ match s with
 ### Function Syntax
 - Functions/lambdas do **not** have return type annotations — the return type is always inferred
 - `->` introduces the function **body**, never a return type — this applies to all functions including void-returning ones
-- Correct: `let f = (x: int32) -> x * 2` or with a block body: `let f = (x: int32) ->\n    x * 2`
+- Correct: `let f = (x: i32) -> x * 2` or with a block body: `let f = (x: i32) ->\n    x * 2`
 - Correct void function: `let greet = (name: str) ->\n    print(name)`
-- **Wrong**: `let f = (x: int32) -> int32 = x * 2` — this is not valid FC syntax
-- **Wrong**: `let f = (x: int32) -> void` — `void` is not a return type annotation; what follows `->` is the body
-- The `->` token introduces the function body (or separates param types in function type syntax like `(int32) -> int32`)
+- **Wrong**: `let f = (x: i32) -> i32 = x * 2` — this is not valid FC syntax
+- **Wrong**: `let f = (x: i32) -> void` — `void` is not a return type annotation; what follows `->` is the body
+- The `->` token introduces the function body (or separates param types in function type syntax like `(i32) -> i32`)
 
 ### Bindings
 - `let`: immutable binding, not addressable, capturable in closures (by copy)
@@ -160,7 +160,7 @@ match x with
 ### Naming Conventions (FC code)
 - All user-defined names use **lowercase snake_case**: `let my_func`, `struct my_point`, `union my_shape`, `module my_module`
 - This applies to struct names, union names, variant names, function names, module names, variable names
-- Type keywords are lowercase: `int32`, `float64`, `bool`, `str`
+- Type keywords are lowercase: `i32`, `f64`, `bool`, `str`
 - Test `.fc` files must follow these conventions
 
 ## Testing

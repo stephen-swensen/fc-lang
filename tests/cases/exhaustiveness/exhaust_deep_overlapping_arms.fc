@@ -1,8 +1,8 @@
 // Overlapping but collectively exhaustive arms
 // No single arm covers a full variant — coverage comes from combinations
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
 
 struct styled =
     shape: shape

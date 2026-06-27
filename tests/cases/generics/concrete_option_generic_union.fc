@@ -6,10 +6,10 @@ union maybe =
     | absent
 
 struct holder =
-    u: maybe<int32>?
+    u: maybe<i32>?
 
 let main = (args: str[]) ->
-    let h = holder { u = some(maybe<int32>.present(42)) }
+    let h = holder { u = some(maybe<i32>.present(42)) }
     let r = match h.u! with
         | present(x) -> x
         | absent -> 0

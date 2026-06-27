@@ -1,7 +1,7 @@
 // Writing through a const pointer field in a struct should fail
 
 struct holder =
-    data: const int32*
+    data: const i32*
 
 let main = (args: str[]) ->
     let mut x = 10

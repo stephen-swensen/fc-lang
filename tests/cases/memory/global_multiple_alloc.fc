@@ -1,6 +1,6 @@
 // Multiple file-level globals with alloc — tests init ordering
-let a = alloc(int32)!
-let b = alloc(int32)!
+let a = alloc(i32)!
+let b = alloc(i32)!
 
 let main = (args: str[]) ->
     *a = 10

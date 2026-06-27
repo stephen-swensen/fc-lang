@@ -1,7 +1,7 @@
 // Variable reference inside struct literal should be rejected
 struct pair =
-    a: int32
-    b: int32
+    a: i32
+    b: i32
 
 let x = 10
 let p = pair { a = x, b = 0 }

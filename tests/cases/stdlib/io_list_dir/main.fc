@@ -81,8 +81,8 @@ let main = (args: str[]) ->
 
 #if os == "windows"
 module c from "direct.h" =
-    extern _rmdir as rmdir: (const cstr) -> int32
+    extern _rmdir as rmdir: (const cstr) -> i32
 #else
 module c from "unistd.h" =
-    extern rmdir: (const cstr) -> int32
+    extern rmdir: (const cstr) -> i32
 #end

@@ -1,5 +1,5 @@
 struct leaf =
-    val: int32
+    val: i32
 
 struct branch =
     leaf: leaf

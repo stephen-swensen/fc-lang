@@ -2,11 +2,11 @@ union result =
     | ok('a)
     | err('b)
 
-let check = (r: result<int32, int32>) ->
+let check = (r: result<i32, i32>) ->
     match r with
     | ok(v) -> v
     | err(e) -> e
 
 let main = (args: str[]) ->
-    assert(check(result<int32, int32>.ok(42)) == 42)
+    assert(check(result<i32, i32>.ok(42)) == 42)
     0

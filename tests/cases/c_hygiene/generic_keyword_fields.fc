@@ -3,13 +3,13 @@
 // their equality functions must escape the keyword member names too.
 struct box =
     register: 'a
-    volatile: int32
+    volatile: i32
 
 union opt =
     | static('a)
     | switch
 
-let get = (o: opt<int32>) ->
+let get = (o: opt<i32>) ->
     match o with
     | static(v) -> v
     | switch -> 0
@@ -26,9 +26,9 @@ let main = (args: str[]) ->
     assert(bi != box { register = 8, volatile = 1 })
 
     // Generic union instances with keyword-named payload.
-    assert(get(opt<int32>.static(99)) == 99)
-    assert(get(opt<int32>.switch) == 0)
-    let oi = opt<int32>.static(99)
-    assert(oi == opt<int32>.static(99))
-    assert(oi != opt<int32>.switch)
+    assert(get(opt<i32>.static(99)) == 99)
+    assert(get(opt<i32>.switch) == 0)
+    let oi = opt<i32>.static(99)
+    assert(oi == opt<i32>.static(99))
+    assert(oi != opt<i32>.switch)
     0

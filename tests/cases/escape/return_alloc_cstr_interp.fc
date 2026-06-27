@@ -1,13 +1,13 @@
 module c from "string.h" =
     extern strlen: (const cstr) -> usize
 
-let make = (x: int32) ->
+let make = (x: i32) ->
     alloc(c"value: %d{x}")!
 
 let main = (args: str[]) ->
     let s = make(42)
     let len = c.strlen(s)
     free(s)
-    let r = (int32) (usize) len
+    let r = (i32) (usize) len
     assert(r == 9)
     0

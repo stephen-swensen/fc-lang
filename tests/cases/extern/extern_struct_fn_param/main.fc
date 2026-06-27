@@ -1,10 +1,10 @@
 // Test: extern struct as function parameter and return value
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
-        tv_sec: int64
-        tv_nsec: int64
+        tv_sec: i64
+        tv_nsec: i64
 
-let make_ts = (sec: int64, nsec: int64) ->
+let make_ts = (sec: i64, nsec: i64) ->
     t.timespec { tv_sec = sec, tv_nsec = nsec }
 
 let get_sec = (ts: t.timespec) ->

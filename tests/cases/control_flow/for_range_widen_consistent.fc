@@ -1,14 +1,14 @@
 // The loop variable's type is the unified (widened) endpoint type, applied
 // consistently to the C loop variable, the `<` test, and the `++`. A narrow
 // start with a wider end must NOT clamp the loop variable to the narrow type
-// (which previously overflowed: an int8 loop var can't represent 200).
+// (which previously overflowed: an i8 loop var can't represent 200).
 let main = (args: str[]) ->
     let mut sum = 0i64
     for i in 0i8..200 do
-        sum = sum + (int64) i
+        sum = sum + (i64) i
     assert(sum == 19900)
 
-    // uint8 start, int32 end: common type is int32, so i reaches 200.
+    // u8 start, i32 end: common type is i32, so i reaches 200.
     let mut count = 0i32
     for i in 0u8..200 do
         count = count + 1

@@ -30,10 +30,10 @@ let main = (args: str[]) ->
 
     // index_of
     assert(text.index_of("hello world", "world") == some(6i64))
-    assert(text.index_of("hello world", "xyz") == none(int64))
+    assert(text.index_of("hello world", "xyz") == none(i64))
     assert(text.index_of("abcabc", "bc") == some(1i64))
     assert(text.index_of("hello", "") == some(0i64))
-    assert(text.index_of("", "x") == none(int64))
+    assert(text.index_of("", "x") == none(i64))
     assert(text.index_of("abc", "abc") == some(0i64))
 
     // trim (returns subslice, no allocation)

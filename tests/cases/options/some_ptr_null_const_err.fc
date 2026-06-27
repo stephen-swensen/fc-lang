@@ -5,7 +5,7 @@ module c from "stdlib.h" =
     extern environ: any*
 
 module m =
-    let g = some((int32*) c.environ)
+    let g = some((i32*) c.environ)
 
 let main = (args: str[]) ->
     match m.g with

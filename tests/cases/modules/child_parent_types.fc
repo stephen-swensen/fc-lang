@@ -1,10 +1,10 @@
 module geometry =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     module transforms =
-        let translate = (p: point, dx: int32, dy: int32) ->
+        let translate = (p: point, dx: i32, dy: i32) ->
             point { x = p.x + dx, y = p.y + dy }
 
 let main = (args: str[]) ->

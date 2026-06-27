@@ -34,7 +34,7 @@ let main = (args: str[]) ->
     let f3 = io.open(dst, "r")
     match f3 with
     | some(rf) ->
-        let mut buf = uint8[16] {}
+        let mut buf = u8[16] {}
         let n = io.read(buf, 16, rf)
         assert(n == 4i64)
         io.close(rf)

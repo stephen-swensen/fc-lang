@@ -1,8 +1,8 @@
-let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
 
 let main = (args: str[]) ->
     let val = 10
-    let add_val = (n: int32) -> n + val
+    let add_val = (n: i32) -> n + val
     let result = apply(add_val, 32)
     assert(result == 42)
     0

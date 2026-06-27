@@ -1,6 +1,6 @@
 module c from "string.h" =
     extern strlen: (const cstr) -> usize
-    extern strcmp: (const cstr, const cstr) -> int32
+    extern strcmp: (const cstr, const cstr) -> i32
 
 let main = (args: str[]) ->
     let _result =
@@ -11,7 +11,7 @@ let main = (args: str[]) ->
         | some(v) ->
             if c.strcmp(v, c"value: 42") == 0 then r = r + 1
             let len = c.strlen(v)
-            if len == 9u then r = r + 2
+            if len == 9usize then r = r + 2
             free(v)
         | none -> assert(false)
         let name = c"world"

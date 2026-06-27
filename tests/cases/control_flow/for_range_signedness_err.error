@@ -1,1 +1,1 @@
-range endpoints have incompatible types: uint32 and int32
+range endpoints have incompatible types: u32 and i32

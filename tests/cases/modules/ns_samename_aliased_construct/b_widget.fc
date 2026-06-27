@@ -1,8 +1,8 @@
 namespace widget::
 
 struct point =
-    y: int32
+    y: i32
 
 union shape =
-    | a(int32)
-    | b(int32)
+    | a(i32)
+    | b(i32)

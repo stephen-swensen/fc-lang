@@ -3,9 +3,9 @@ let identity = (x: 'a) -> x
 let add_them = (a: 'a, b: 'a) -> a + b
 
 let main = (args: str[]) ->
-    let a = identity(42i)
-    let b = identity(10u)
-    let c = add_them(20i, 22i)
-    let d = add_them(5u, 7u)
-    assert((int32) a + (int32) b + (int32) c + (int32) d == 106)
+    let a = identity(42isize)
+    let b = identity(10usize)
+    let c = add_them(20isize, 22isize)
+    let d = add_them(5usize, 7usize)
+    assert((i32) a + (i32) b + (i32) c + (i32) d == 106)
     0

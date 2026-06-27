@@ -13,11 +13,11 @@ let main = (args: str[]) ->
             let f2 = io.open(path, "r")
             match f2 with
             | some(rf) ->
-                let mut buf = uint8[256] {}
+                let mut buf = u8[256] {}
                 let n = io.read(buf, 256, rf)
                 io.close(rf)
                 if n == 6i64 then 42
-                else (int32) n
+                else (i32) n
             | none -> 2
         | none -> 1
     assert(_result == 42)

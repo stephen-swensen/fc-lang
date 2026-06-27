@@ -1,12 +1,12 @@
 // Item 8a (union side): a concrete union whose variant payload names a nested
 // generic instance must canonicalize the payload stub the same way a struct
-// field does. Re-instantiating box<int32> at a different arg (bool) confirms the
+// field does. Re-instantiating box<i32> at a different arg (bool) confirms the
 // in-place stub canonicalization of one decl doesn't corrupt a shared subtree.
 struct box =
     v: 'a
 
 union holder =
-    | wrap(box<box<int32> >)
+    | wrap(box<box<i32> >)
     | flag(box<bool>)
     | empty
 

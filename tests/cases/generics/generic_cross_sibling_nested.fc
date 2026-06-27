@@ -24,11 +24,11 @@ module parent =
             helpers.identity(helpers.identity(x))
 
         // Cross-sibling with multi-type-var generic
-        let sum = (s: const int32[]) ->
-            helpers.fold(s, 0, (acc: int32, x: int32) -> acc + x)
+        let sum = (s: const i32[]) ->
+            helpers.fold(s, 0, (acc: i32, x: i32) -> acc + x)
 
 let main = (args: str[]) ->
-    let s = int32[3] { 10, 20, 30 }
+    let s = i32[3] { 10, 20, 30 }
     assert(parent.api.first(s) == 10)
     assert(parent.api.apply_twice(42) == 42)
     assert(parent.api.sum(s) == 60)

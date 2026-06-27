@@ -1,5 +1,5 @@
 union shape =
-    | dot({int32, int32})
+    | dot({i32, i32})
     | empty
 
 let area = (s: shape) ->

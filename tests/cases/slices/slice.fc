@@ -1,11 +1,11 @@
-let sum_slice = (s: int32[]) ->
+let sum_slice = (s: i32[]) ->
     let mut total = 0
     for x in s do
         total = total + x
     total
 
 let main = (args: str[]) ->
-    let mut buf = int32[4] { }
+    let mut buf = i32[4] { }
     buf.ptr[0] = 1
     buf.ptr[1] = 2
     buf.ptr[2] = 3

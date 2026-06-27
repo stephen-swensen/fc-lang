@@ -1,8 +1,8 @@
 // Positive: heap pointer can be assigned to a global pointer variable
-let mut gp = default(int32*)
+let mut gp = default(i32*)
 
 let main = (args: str[]) ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 99
     gp = p
     let v = *gp

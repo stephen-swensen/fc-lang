@@ -3,7 +3,7 @@ let mut closed = false
 
 let fake_close = () ->
     closed = true
-    42  // returns int32, but defer discards it
+    42  // returns i32, but defer discards it
 
 let main = (args: str[]) ->
     defer fake_close()

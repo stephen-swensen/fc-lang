@@ -1,10 +1,10 @@
 // int->int casts fold with C truncation / sign-extension semantics.
 module m =
-    let narrow = (int8) 300          // 300 & 0xFF => 44
-    let narrow_neg = (int8) 200      // 200 => -56 as int8
-    let to_unsigned = (uint8) -1     // 255
-    let widen = (int64) 5i32         // 5
-    let widen_neg = (int64) -5i32    // -5
+    let narrow = (i8) 300          // 300 & 0xFF => 44
+    let narrow_neg = (i8) 200      // 200 => -56 as i8
+    let to_unsigned = (u8) -1     // 255
+    let widen = (i64) 5i32         // 5
+    let widen_neg = (i64) -5i32    // -5
 
 let main = (args: str[]) ->
     assert(m.narrow == 44i8)

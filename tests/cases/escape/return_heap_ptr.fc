@@ -1,6 +1,6 @@
 // Returning a heap pointer is fine
-let make_ptr = (x: int32) ->
-    let p = alloc(int32)!
+let make_ptr = (x: i32) ->
+    let p = alloc(i32)!
     *p = x
     p
 

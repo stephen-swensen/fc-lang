@@ -1,7 +1,7 @@
 // Verify defers run on every return path
 let mut trace = 0
 
-let run = (n: int32) ->
+let run = (n: i32) ->
     defer trace = trace + 100
     if n == 1 then return
     if n == 2 then return

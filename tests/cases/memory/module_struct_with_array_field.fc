@@ -1,11 +1,11 @@
 // Struct with a fixed-array field initialized from a slice literal at module scope
 module bufs =
     struct buf4 =
-        data: int32[4]
-        len: int32
+        data: i32[4]
+        len: i32
 
     let header = buf4 {
-        data = int32[4] { 1, 2, 3, 4 },
+        data = i32[4] { 1, 2, 3, 4 },
         len = 4
     }
 

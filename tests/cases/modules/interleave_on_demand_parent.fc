@@ -2,10 +2,10 @@
 // interleaved resolution.  The parent's binding uses a name from its
 // own import scope (not the child's).
 module lib_x =
-    let helper = (x: int32) -> x * 2
+    let helper = (x: i32) -> x * 2
 
 module lib_y =
-    let helper = (x: int32) -> x * 3
+    let helper = (x: i32) -> x * 3
 
 module outer =
     import helper from lib_x
@@ -17,7 +17,7 @@ module outer =
         let use_parent = () -> parent_fn(10)
         let use_own = () -> helper(10)
 
-    let parent_fn = (x: int32) -> helper(x)
+    let parent_fn = (x: i32) -> helper(x)
 
 let main = (args: str[]) ->
     assert(outer.inner.use_parent() == 20)  // parent's helper: 10 * 2

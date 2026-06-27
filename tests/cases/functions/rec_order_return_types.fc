@@ -1,12 +1,12 @@
 // Order-independent recursion anchors the return type from the base case for
 // any return type — bool, float, and struct — with the recursive call first.
 struct pt =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
-let always_true = (n: int32) -> if n > 0 then always_true(n - 1) else true
-let half_life = (n: int32) -> if n > 0 then half_life(n - 1) else 1.5
-let make_pt = (n: int32) -> if n > 0 then make_pt(n - 1) else pt { x = 3, y = 4 }
+let always_true = (n: i32) -> if n > 0 then always_true(n - 1) else true
+let half_life = (n: i32) -> if n > 0 then half_life(n - 1) else 1.5
+let make_pt = (n: i32) -> if n > 0 then make_pt(n - 1) else pt { x = 3, y = 4 }
 
 let main = (args: str[]) ->
     assert(always_true(5))

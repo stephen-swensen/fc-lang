@@ -4,4 +4,4 @@ module outer =
     // Nested module does a cross-namespace import
     module inner =
         import add from alpha::math
-        let sum3 = (a: int32, b: int32, c: int32) -> add(a, add(b, c))
+        let sum3 = (a: i32, b: i32, c: i32) -> add(a, add(b, c))

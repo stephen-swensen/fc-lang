@@ -3,7 +3,7 @@
 let main = (args: str[]) ->
     let mut a = 1
     let mut b = 2
-    let mut arr = int32*[2] { default(int32*), default(int32*) }
+    let mut arr = i32*[2] { default(i32*), default(i32*) }
     arr[0] = &a
     arr[1] = &b
     assert(*arr[0] + *arr[1] == 3)

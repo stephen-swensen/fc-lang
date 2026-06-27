@@ -2,8 +2,8 @@ namespace geo::
 
 module types =
     struct vec2 =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 module shapes =
     // Nested module imports struct from namespace sibling
@@ -11,11 +11,11 @@ module shapes =
     import vec2 from types
 
     struct rect =
-        w: int32
-        h: int32
+        w: i32
+        h: i32
 
     module rect =
-        let square = (s: int32) -> rect { w = s, h = s }
+        let square = (s: i32) -> rect { w = s, h = s }
         let area = (r: rect) -> r.w * r.h
 
     // Deeply nested module also imports from namespace sibling

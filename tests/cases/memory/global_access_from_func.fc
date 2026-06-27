@@ -1,7 +1,7 @@
 // File-level alloc global accessed from another function
-let p = alloc(int32)!
+let p = alloc(i32)!
 
-let set_value = (v: int32) ->
+let set_value = (v: i32) ->
     *p = v
 
 let get_value = () ->

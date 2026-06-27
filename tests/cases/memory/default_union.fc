@@ -1,6 +1,6 @@
 union shape =
-    | circle(int32)
-    | rect(int32)
+    | circle(i32)
+    | rect(i32)
 
 let main = (args: str[]) ->
     let _result =

@@ -1,6 +1,6 @@
 // Struct with bool field — both cases covered
 struct toggle =
-    value: int32
+    value: i32
     on: bool
 
 let check = (t: toggle) ->

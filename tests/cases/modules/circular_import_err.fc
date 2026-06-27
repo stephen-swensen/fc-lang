@@ -1,10 +1,10 @@
 module a =
     import foo from b
-    let bar = (x: int32) -> foo(x)
+    let bar = (x: i32) -> foo(x)
 
 module b =
     import bar from a
-    let foo = (x: int32) -> bar(x)
+    let foo = (x: i32) -> bar(x)
 
 let main = (args: str[]) ->
     a.bar(5)

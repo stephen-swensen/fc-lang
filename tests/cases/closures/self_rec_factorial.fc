@@ -1,6 +1,6 @@
 // Non-capturing nested function calls itself by name (self-recursion).
 let main = (args: str[]) ->
-    let fac = (n: int32) ->
+    let fac = (n: i32) ->
         if n <= 1 then 1
         else n * fac(n - 1)
     assert(fac(0) == 1)

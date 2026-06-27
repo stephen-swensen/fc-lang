@@ -1,8 +1,8 @@
 // Test: module-qualified struct slice literal
 module m =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 let main = (args: str[]) ->
     let arr = m.point[2] { m.point { x = 10, y = 0 }, m.point { x = 20, y = 0 } }

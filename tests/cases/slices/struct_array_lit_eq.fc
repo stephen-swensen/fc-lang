@@ -2,8 +2,8 @@
 // This test previously failed at default optimization due to VLA
 // block-scope lifetime — the optimizer reused stack slots.
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let a = point[2] { point { x = 1, y = 2 }, point { x = 3, y = 4 } }

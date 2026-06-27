@@ -1,10 +1,10 @@
 module helper =
-    let double = (x: int32) -> x * 2
+    let double = (x: i32) -> x * 2
 
 module broken =
     import double from helper
 
-    let use_it = (x: int32) -> double(x)
+    let use_it = (x: i32) -> double(x)
 
 let main = (args: str[]) ->
     assert(broken.use_it(5) == 10)

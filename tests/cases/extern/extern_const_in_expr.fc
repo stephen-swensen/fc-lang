@@ -1,8 +1,8 @@
 // Test: extern constants used in arithmetic and bitwise expressions (SDL flags pattern)
 module c from "fcntl.h" =
-    extern O_RDONLY: int64
-    extern O_WRONLY: int64
-    extern O_CREAT: int64
+    extern O_RDONLY: i64
+    extern O_WRONLY: i64
+    extern O_CREAT: i64
 
 let main = (args: str[]) ->
     // Bitwise OR — the SDL/POSIX flags pattern

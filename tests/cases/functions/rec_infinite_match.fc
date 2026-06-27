@@ -1,6 +1,6 @@
 // All arms of an exhaustive match recurse with no base case: the function never
 // returns no matter which arm is selected. Rejected.
-let spin = (n: int32) ->
+let spin = (n: i32) ->
     match n > 0 with
     | true -> spin(n - 1)
     | false -> spin(n + 1)

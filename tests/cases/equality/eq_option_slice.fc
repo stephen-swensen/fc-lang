@@ -1,18 +1,18 @@
 let main = (args: str[]) ->
     let _result =
-        let buf1 = alloc(int32[2] { })!
+        let buf1 = alloc(i32[2] { })!
         buf1[0] = 1
         buf1[1] = 2
-        let buf2 = alloc(int32[2] { })!
+        let buf2 = alloc(i32[2] { })!
         buf2[0] = 1
         buf2[1] = 2
-        let buf3 = alloc(int32[2] { })!
+        let buf3 = alloc(i32[2] { })!
         buf3[0] = 9
         buf3[1] = 9
         let a = some(buf1)
         let b = some(buf2)
         let c = some(buf3)
-        let d = none(int32[])
+        let d = none(i32[])
         let mut r = 0
         if a == b then r = r + 1
         if a != c then r = r + 2

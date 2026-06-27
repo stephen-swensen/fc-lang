@@ -3,4 +3,4 @@ module client =
     // with a namespace-access error, not leak through as an unresolved stub
     // or type-mismatch cascade.
     let roll = (r: rng.pcg*) ->
-        (int32) (rng.pcg.next(r) & 0xFFu32)
+        (i32) (rng.pcg.next(r) & 0xFFu32)

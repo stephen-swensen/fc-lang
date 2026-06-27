@@ -1,4 +1,4 @@
-let write_val = (p: int32*, val: int32) ->
+let write_val = (p: i32*, val: i32) ->
     *p = val
     return
 

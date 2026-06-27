@@ -1,6 +1,6 @@
 // An arm-column body-less arm whose own pattern is an inline OR
 // merges with the next arm, producing a single flat OR.
-let classify = (x: int32) ->
+let classify = (x: i32) ->
     match x with
     | 1 | 2
     | 3 -> 10

@@ -1,13 +1,13 @@
 let main = (args: str[]) ->
     let _result =
-        let buf = alloc(uint8, 64)
+        let buf = alloc(u8, 64)
         let mut r = 0
         match buf with
         | some(p) ->
             r = r + 1
             // Write and read back
             *p = 42u8
-            let p1 = p + 1i
+            let p1 = p + 1isize
             *p1 = 99u8
             if *p == 42u8 then r = r + 1
             if *p1 == 99u8 then r = r + 1

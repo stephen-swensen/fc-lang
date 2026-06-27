@@ -2,7 +2,7 @@
 // same way the runtime path does: wrap (the fold guards `ra == -1` so fcc itself
 // never executes the UB divide). Runtime coverage is in
 // expressions/div_overflow_wrap.fc; this pins the folded values to match.
-// (The `int32.min`-via-type-property spelling of the same wrap is covered in
+// (The `i32.min`-via-type-property spelling of the same wrap is covered in
 // type_property_fold.fc.)
 module m =
     let q8  = -128i8 / -1i8

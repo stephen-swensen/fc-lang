@@ -1,9 +1,9 @@
 // Expressions in multiline struct field values
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
-let double = (n: int32) -> n * 2
+let double = (n: i32) -> n * 2
 
 let main = (args: str[]) ->
     let _result =

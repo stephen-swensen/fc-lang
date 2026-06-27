@@ -20,7 +20,7 @@ let main = (args: str[]) ->
         assert(io.eof(rf) == false)
 
         // Read all content
-        let mut buf = uint8[16] {}
+        let mut buf = u8[16] {}
         io.read(buf, 16, rf)
 
         // After reading past end, eof should be true

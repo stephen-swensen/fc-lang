@@ -22,16 +22,16 @@ module outer =
                 acc = f(acc, e)
             acc
 
-        // Two type-var sets: 'a from the slice, 'b = int32 from init
-        let sum = (s: const int32[]) ->
-            inner.fold(s, 0, (acc: int32, x: int32) -> acc + x)
+        // Two type-var sets: 'a from the slice, 'b = i32 from init
+        let sum = (s: const i32[]) ->
+            inner.fold(s, 0, (acc: i32, x: i32) -> acc + x)
 
 let main = (args: str[]) ->
-    let s = int32[3] { 10, 20, 30 }
+    let s = i32[3] { 10, 20, 30 }
     assert(outer.inner.first(s) == 10)
     assert(outer.inner.apply_identity(42) == 42)
     assert(outer.inner.sum(s) == 60)
 
-    let empty = int32[0] {}
+    let empty = i32[0] {}
     assert(outer.inner.try_first(empty).is_none)
     0

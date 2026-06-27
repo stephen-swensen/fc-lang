@@ -1,4 +1,4 @@
-let pick = (a: int32, b: bool) ->
+let pick = (a: i32, b: bool) ->
     if b then return true
     a
 

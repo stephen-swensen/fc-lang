@@ -4,9 +4,9 @@
 // the direct form leaked C's promoted `int`, so `a + b == c` and
 // `let s = a + b; s == c` could disagree. This pins them together.
 
-let o_u8  = (x: uint8)  -> x
-let o_u16 = (x: uint16) -> x
-let o_i16 = (x: int16)  -> x
+let o_u8  = (x: u8)  -> x
+let o_u16 = (x: u16) -> x
+let o_i16 = (x: i16)  -> x
 
 let main = (args: str[]) ->
     // unsigned, every wrapping operator

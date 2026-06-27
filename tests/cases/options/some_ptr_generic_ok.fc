@@ -1,5 +1,5 @@
 // A non-null pointer round-trips through a generic null-sentinel option: wrap's
-// some(p) is guarded once 'a = int32*, and a non-null payload passes.
+// some(p) is guarded once 'a = i32*, and a non-null payload passes.
 let wrap = (p: 'a) -> some(p)
 
 let main = (args: str[]) ->

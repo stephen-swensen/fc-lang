@@ -1,12 +1,12 @@
 // C out-parameter pattern: function creates a heap value
 // and writes the pointer back through T**
-let create = (out: int32**) ->
-    let p = alloc(int32)!
+let create = (out: i32**) ->
+    let p = alloc(i32)!
     *p = 99
     *out = p
 
 let main = (args: str[]) ->
-    let mut result = default(int32*)
+    let mut result = default(i32*)
     create(&result)
     let v = *result
     free(result)

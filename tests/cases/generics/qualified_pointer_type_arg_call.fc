@@ -1,10 +1,10 @@
 // Pointer, option, and slice forms of a qualified explicit type argument:
 // make<m.cmd*>(...) previously died with "unexpected token '>' in expression"
 // because the dotted name failed the <> scan and the * then mis-parsed as
-// multiplication. Bare pointer args (size_of<int32*>) always worked — guard both.
+// multiplication. Bare pointer args (size_of<i32*>) always worked — guard both.
 module m =
     struct cmd =
-        x: int32
+        x: i32
 
 let size_of = <'a>() -> sizeof('a)
 
@@ -12,7 +12,7 @@ let main = (args: str[]) ->
     // qualified pointer type arg
     let qp = size_of<m.cmd*>()
     // bare pointer type arg (regression guard — worked before the fix)
-    let bp = size_of<int32*>()
+    let bp = size_of<i32*>()
     assert(qp == bp)
     // qualified option type arg
     let qo = size_of<m.cmd?>()
@@ -20,6 +20,6 @@ let main = (args: str[]) ->
     assert(qo >= qv)
     // qualified slice type arg
     let qs = size_of<m.cmd[]>()
-    let bs = size_of<int32[]>()
+    let bs = size_of<i32[]>()
     assert(qs == bs)
     0

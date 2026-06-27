@@ -1,10 +1,10 @@
 // Positive: a union variant with a heap-pointer payload can be returned
 union maybe =
-    | ptr(int32*)
+    | ptr(i32*)
     | empty
 
 let make = () ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 7
     maybe.ptr(p)
 

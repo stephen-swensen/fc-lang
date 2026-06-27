@@ -6,7 +6,7 @@ union color =
     | blue
 
 struct widget =
-    id: int32
+    id: i32
     tint: color?
 
 let classify = (w: widget) ->

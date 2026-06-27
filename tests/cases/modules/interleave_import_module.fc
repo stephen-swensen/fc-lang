@@ -1,11 +1,11 @@
 // Child's imported module shadows a parent's module with the same name.
 module impl_a =
     module util =
-        let f = (x: int32) -> x + 1
+        let f = (x: i32) -> x + 1
 
 module impl_b =
     module util =
-        let f = (x: int32) -> x + 100
+        let f = (x: i32) -> x + 100
 
 module parent =
     import util from impl_a

@@ -1,6 +1,6 @@
 // Freeing heap memory is fine
 let main = (args: str[]) ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 99
     let val = *p
     free(p)

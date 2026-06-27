@@ -4,19 +4,19 @@
 // slot = index % capacity. Wraps the ring several times.
 
 struct ring =
-    buf: int32[]
+    buf: i32[]
     head: usize
     tail: usize
 
-let cap = 4u
+let cap = 4usize
 
-let enqueue = (r: ring*, v: int32) ->
+let enqueue = (r: ring*, v: i32) ->
     let t = atomic_load_acquire(&r->tail)
     let h = atomic_load_acquire(&r->head)
     if t - h == cap then false
     else
         r->buf[t % cap] = v
-        atomic_store_release(&r->tail, t + 1u)
+        atomic_store_release(&r->tail, t + 1usize)
         true
 
 // Returns -1 when empty (test values are all positive)
@@ -26,15 +26,15 @@ let dequeue = (r: ring*) ->
     if t == h then -1
     else
         let v = r->buf[h % cap]
-        atomic_store_release(&r->head, h + 1u)
+        atomic_store_release(&r->head, h + 1usize)
         v
 
 let main = (args: str[]) ->
-    let buf = alloc(int32[4] { })!
+    let buf = alloc(i32[4] { })!
     let r = alloc(ring)!
     r->buf = buf
-    r->head = 0u
-    r->tail = 0u
+    r->head = 0usize
+    r->tail = 0usize
 
     // empty: dequeue fails
     assert(dequeue(r) == -1)

@@ -1,8 +1,8 @@
 // Module-level variant constructor with payload
 module shapes =
     union shape =
-        | circle(int32)
-        | square(int32)
+        | circle(i32)
+        | square(i32)
         | nothing
 
     let c = shape.circle(5)

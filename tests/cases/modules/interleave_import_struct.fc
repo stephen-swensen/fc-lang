@@ -1,14 +1,14 @@
 // Child's imported struct type shadows a parent's struct with the same name.
 module types_a =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 module types_b =
     struct point =
-        x: int32
-        y: int32
-        z: int32
+        x: i32
+        y: i32
+        z: i32
 
 module parent =
     import point from types_a

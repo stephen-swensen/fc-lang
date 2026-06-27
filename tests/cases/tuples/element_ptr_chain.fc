@@ -3,8 +3,8 @@
 // postfix selection — tuple index, arrow-deref, struct field, tuple index —
 // with no special-casing for tuples at any link. Reading and writing both work.
 struct box =
-    pair: {int32, int32}
-    tag: int32
+    pair: {i32, i32}
+    tag: i32
 
 let main = (args: str[]) ->
     let mut b = box { pair = { 3, 4 }, tag = 9 }

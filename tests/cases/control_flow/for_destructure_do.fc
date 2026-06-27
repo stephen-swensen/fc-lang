@@ -1,6 +1,6 @@
 // A destructuring header composes with the inline `do` body.
 let main = (args: str[]) ->
-    let pairs = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }
+    let pairs = {i32, i32}[2] { { 1, 2 }, { 3, 4 } }
     let mut total = 0
     for { a, b } in pairs do total = total + a + b
     assert(total == 10)

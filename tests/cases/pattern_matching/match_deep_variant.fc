@@ -1,13 +1,13 @@
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 union shape =
     | circle(point)
     | line(point)
 
 struct canvas =
-    bg: int32
+    bg: i32
     shape: shape
 
 let extract = (c: canvas) ->

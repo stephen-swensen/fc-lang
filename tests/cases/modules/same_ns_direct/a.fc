@@ -1,4 +1,4 @@
 namespace test::
 
 module helper =
-    let double = (x: int32) -> x * 2
+    let double = (x: i32) -> x * 2

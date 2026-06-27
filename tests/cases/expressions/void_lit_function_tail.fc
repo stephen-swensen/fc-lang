@@ -1,8 +1,8 @@
 // void() as the last expression of a function body makes the function
 // return void.  Useful when the preceding expression happens to be
-// non-void (e.g. an SDL call returning int32) and you want to drop it.
+// non-void (e.g. an SDL call returning i32) and you want to drop it.
 
-let side_effect = (counter: int32*) ->
+let side_effect = (counter: i32*) ->
     *counter = *counter + 1
     42                    // non-void tail
     void()                // explicit void result

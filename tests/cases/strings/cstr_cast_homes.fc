@@ -10,22 +10,22 @@ let main = (args: str[]) ->
 
     // dynamic-stack home: full-length copy, NUL-terminated
     let cs = alloca((cstr) s)
-    assert(c.strlen(cs) == 11u)
+    assert(c.strlen(cs) == 11usize)
     assert(((str) cs) == "hello world")
 
     // heap home: option result, unwrap then free
     let hp = alloc((cstr) s)!
-    assert(c.strlen(hp) == 11u)
+    assert(c.strlen(hp) == 11usize)
     assert(((str) hp) == "hello world")
     free(hp)
 
     // empty source → empty cstr (NUL only)
     let e = ""
     let ce = alloca((cstr) e)
-    assert(c.strlen(ce) == 0u)
+    assert(c.strlen(ce) == 0usize)
 
     // a const str (string literal) is a valid source for both homes
     let chp = alloc((cstr) "abc")!
-    assert(c.strlen(chp) == 3u)
+    assert(c.strlen(chp) == 3usize)
     free(chp)
     0

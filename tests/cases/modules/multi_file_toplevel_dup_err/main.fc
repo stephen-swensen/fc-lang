@@ -1,4 +1,4 @@
 struct shared =
-    n: int32
+    n: i32
 
 let main = (args: str[]) -> 0

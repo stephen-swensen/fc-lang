@@ -11,20 +11,20 @@
 // ============================================================
 
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 struct color =
-    r: uint8
-    g: uint8
-    b: uint8
+    r: u8
+    g: u8
+    b: u8
 
 // ============================================================
 // Unions — tagged sum types with exhaustive matching
 // ============================================================
 
 union shape =
-    | circle(int32)
+    | circle(i32)
     | rect(point)
     | empty
 
@@ -74,10 +74,10 @@ module point =
     // a static backing array at C file scope.  Const-expr lets may reference
     // other const-expr lets by name (order-independent, including imports).
     let zero = point { x = 0, y = 0 }
-    let steps = int32[4] { 1, 2, 4, 8 }
+    let steps = i32[4] { 1, 2, 4, 8 }
     let first = some(0)
     let base = 10
-    let offsets = int32[3] { base, base + 1, base + 2 }     // refs `base`
+    let offsets = i32[3] { base, base + 1, base + 2 }     // refs `base`
     // Fixed-width integer arithmetic is evaluated at compile time, so integer
     // division/modulo/shift fold to literals (div-by-zero is a compile error).
     let half = base / 2                                     // folds to 5
@@ -85,9 +85,9 @@ module point =
     let shifted = base << 2                                 // folds to 40
     // Static type properties are constant expressions too; fixed-width integer
     // .min/.max/.bits fold to literals (float and isize/usize emit their macro).
-    let lo = int32.min                                      // folds to -2147483648
-    let mid = int32.max / 2 + 1                             // type prop in const div
-    let nbits = int64.bits                                  // folds to 64
+    let lo = i32.min                                      // folds to -2147483648
+    let mid = i32.max / 2 + 1                             // type prop in const div
+    let nbits = i64.bits                                  // folds to 64
 
 // ============================================================
 // Higher-order functions
@@ -104,25 +104,25 @@ let apply = (x: 'a, f: ('a) -> 'b) -> f(x)
 // ============================================================
 
 module c_stdlib from "stdlib.h" =
-    extern abs: (int32) -> int32       // extern function
-    extern EXIT_SUCCESS: int32         // extern constant
-    extern EXIT_FAILURE: int32
+    extern abs: (i32) -> i32       // extern function
+    extern EXIT_SUCCESS: i32         // extern constant
+    extern EXIT_FAILURE: i32
 
 // Feature-test macros — define is emitted before the #include
 module c_time from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =           // extern struct
-        tv_sec: int64
-        tv_nsec: int64
+        tv_sec: i64
+        tv_nsec: i64
 
 // Extern unions — C's untagged unions (fields overlap, no tag)
 module c_signal from "signal.h" define "_POSIX_C_SOURCE" "200809L" =
     extern union sigval =              // extern union
-        sival_int: int32
+        sival_int: i32
         sival_ptr: any*
 
 // Variadic functions — ... for untyped trailing args
 module c_stdio from "stdio.h" =
-    extern snprintf: (cstr, usize, const cstr, ...) -> int32
+    extern snprintf: (cstr, usize, const cstr, ...) -> i32
 
 // ============================================================
 // Entry point — main receives command-line args as str[]
@@ -135,19 +135,19 @@ let main = (args: str[]) ->
     // Primitive types and literals
     // --------------------------------------------------------
 
-    let i = 42                  // int32 (default integer)
-    let f = 3.14                // float64 (default float)
+    let i = 42                  // i32 (default integer)
+    let f = 3.14                // f64 (default float)
     let b = true                // bool
-    let c = 'A'                 // char (alias for uint8)
-    let s = "hello"             // str (alias for uint8[], a fat pointer)
-    let cs = c"hello"           // cstr (alias for uint8*, null-terminated)
+    let c = 'A'                 // char (alias for u8)
+    let s = "hello"             // str (alias for u8[], a fat pointer)
+    let cs = c"hello"           // cstr (alias for u8*, null-terminated)
 
     // Suffixed literals for explicit types
-    let i8  = 127i8             // int8
-    let u64 = 1000u64           // uint64
-    let f32 = 2.5f32            // float32
-    let isz = 42i               // isize (ptrdiff_t)
-    let usz = 42u               // usize (size_t)
+    let i8  = 127i8             // i8
+    let u64 = 1000u64           // u64
+    let f32 = 2.5f32            // f32
+    let isz = 42isize               // isize (ptrdiff_t)
+    let usz = 42usize               // usize (size_t)
 
     // Numeric bases and underscores
     let hex = 0xFF
@@ -155,16 +155,16 @@ let main = (args: str[]) ->
     let oct = 0o77
 
     // Scientific notation for floats (mantissa may omit '.')
-    let billion = 1e9                    // float64
-    let micro = 1.5e-6                   // float64
+    let billion = 1e9                    // f64
+    let micro = 1.5e-6                   // f64
     let avo = 6.022_140_76e23            // separators allowed everywhere
-    let mass = 9.109e-31f32              // float32 with exponent
+    let mass = 9.109e-31f32              // f32 with exponent
 
     // Hex float literals — hex mantissa * 2^exponent (binary exponent in decimal).
     // Because 'e' is a hex digit, the exponent uses 'p' and is mandatory.
     let half = 0x1.0p-1                  // exactly 0.5 (bit-exact)
     let three = 0x1.8p+1                 // 1.5 * 2 = 3.0
-    let max_f32 = 0x1.fffffep+127f32     // largest finite float32
+    let max_f32 = 0x1.fffffep+127f32     // largest finite f32
     assert(half == 0.5)
     assert(three == 3.0)
 
@@ -209,21 +209,21 @@ let main = (args: str[]) ->
     assert(!(1 > 2))
 
     // Implicit widening (lossless only, never int→float)
-    let wide = 1i8 + 1000i32   // int8 widens to int32
+    let wide = 1i8 + 1000i32   // i8 widens to i32
     assert(wide == 1001)
 
     // Explicit casts
-    let fi = (int32) 3.7       // float→int truncates: 3 (saturating, defined for all inputs)
+    let fi = (i32) 3.7       // float→int truncates: 3 (saturating, defined for all inputs)
     assert(fi == 3)
 
     // Unguarded blocks opt out of FC's runtime guards (float→int saturation,
     // integer divide/modulo, slice bounds) on a hot path. Identical result for
     // in-range/non-zero operands; UB otherwise. `guarded` re-enables a check.
-    let fu = unguarded (int32) 3.7   // bare truncation, no saturation: 3
+    let fu = unguarded (i32) 3.7   // bare truncation, no saturation: 3
     assert(fu == 3)
     let dq = unguarded 17 / 5        // bare divide, no zero/overflow guard: 3
     assert(dq == 3)
-    let ns = int32[3]{4, 5, 6}
+    let ns = i32[3]{4, 5, 6}
     let hot = unguarded
         let a = ns[0]                // unchecked index
         a + (guarded ns[2])          // re-checked index inside the unguarded region
@@ -267,7 +267,7 @@ let main = (args: str[]) ->
     assert(describe(shape.empty) == 0)
 
     // Patterns: literals, wildcards, nested, struct destructuring
-    let classify = (n: int32) ->
+    let classify = (n: i32) ->
         match n with
         | 0     -> 0
         | 1     -> 1
@@ -288,7 +288,7 @@ let main = (args: str[]) ->
     // pattern matches. Pattern bindings are visible in the guard. Guarded
     // arms do NOT count toward exhaustiveness, so an unguarded catch-all
     // (or otherwise complete unguarded coverage) is still required.
-    let sign = (n: int32) ->
+    let sign = (n: i32) ->
         match n with
         | 0            -> 0i8
         | x when x < 0 -> -1i8
@@ -342,7 +342,7 @@ let main = (args: str[]) ->
     assert(total == 10)
 
     // for — element iteration over a slice
-    let nums = int32[3] { 10, 20, 30 }
+    let nums = i32[3] { 10, 20, 30 }
     let mut elem_sum = 0
     for n in nums do
         elem_sum = elem_sum + n
@@ -351,11 +351,11 @@ let main = (args: str[]) ->
     // for — index + element iteration
     let mut index_sum = 0
     for i, v in nums do
-        index_sum = index_sum + (int32) i + v * 0
+        index_sum = index_sum + (i32) i + v * 0
     assert(index_sum == 3)     // 0 + 1 + 2
 
     // for — destructuring the element (tuples or structs, same patterns as let)
-    let coords = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }
+    let coords = {i32, i32}[2] { { 1, 2 }, { 3, 4 } }
     let mut coord_sum = 0
     for { cx, cy } in coords do
         coord_sum = coord_sum + cx + cy
@@ -400,39 +400,39 @@ let main = (args: str[]) ->
     // --------------------------------------------------------
 
     // Functions are values — defined with (params) -> body
-    let double = (n: int32) -> n * 2
+    let double = (n: i32) -> n * 2
     assert(double(21) == 42)
 
     // A nested function is in scope within its own body, so it can be self-recursive
     // (mutual recursion of locals is not supported — only the function itself)
-    let fac = (n: int32) ->
+    let fac = (n: i32) ->
         if n <= 1 then 1
         else n * fac(n - 1)
     assert(fac(5) == 120)
 
     // Multi-line body — last expression is the return value
-    let clamp = (val: int32, lo: int32, hi: int32) ->
+    let clamp = (val: i32, lo: i32, hi: i32) ->
         if val < lo then lo
         else if val > hi then hi
         else val
     assert(clamp(150, 0, 100) == 100)
 
     // Early return
-    let first_positive = (a: int32, b: int32) ->
+    let first_positive = (a: i32, b: i32) ->
         if a > 0 then return a
         if b > 0 then return b
         0
     assert(first_positive(-1, 5) == 5)
 
     // return is a diverging expression — use it to bail out in an else branch
-    let check_positive = (x: int32) ->
+    let check_positive = (x: i32) ->
         if x > 0 then assert(true) else return
         assert(x == 5)  // only reached when x > 0
     check_positive(5)
 
     // A diverging branch (return/break/continue) carries no value, so it unifies
     // with a value-producing sibling — the binding takes that branch's type:
-    let abs_or_bail = (x: int32) ->
+    let abs_or_bail = (x: i32) ->
         let y = if x >= 0 then x else return -1
         y + 1
     assert(abs_or_bail(9) == 10)
@@ -441,7 +441,7 @@ let main = (args: str[]) ->
     // void() is the void-typed expression — use it as a fall-through arm in
     // statement-level matches so every arm has the same (void) type without
     // needing a `| _ -> return` that would exit the enclosing function.
-    let log_phase = (p: shape, counter: int32*) ->
+    let log_phase = (p: shape, counter: i32*) ->
         match p with
         | circle(_) -> *counter = *counter + 1
         | _ -> void()
@@ -453,17 +453,17 @@ let main = (args: str[]) ->
 
     // Evaluation order is left-to-right, each subexpression exactly once —
     // for operands, call arguments, assignment, and aggregate fields alike.
-    let bump = (c: int32*) ->
+    let bump = (c: i32*) ->
         *c = *c + 1
         *c
-    let pack = (a: int32, b: int32) -> a * 10 + b
+    let pack = (a: i32, b: i32) -> a * 10 + b
     let mut tick = 0
     assert(pack(bump(&tick), bump(&tick)) == 12)  // args run 1 then 2, not 2 then 1
     assert(bump(&tick) - bump(&tick) == -1)       // lhs(3) before rhs(4)
 
     // Closures capture let bindings by copy (let mut cannot be captured)
     let threshold = 50
-    let above = (n: int32) -> n > threshold
+    let above = (n: i32) -> n > threshold
     assert(above(60))
     assert(!above(40))
 
@@ -471,7 +471,7 @@ let main = (args: str[]) ->
     assert(apply(21, double) == 42)
 
     // Closures can be passed as arguments (not returned)
-    let inc = (n: int32) -> n + 1
+    let inc = (n: i32) -> n + 1
     assert(apply(41, inc) == 42)
 
     // --------------------------------------------------------
@@ -502,7 +502,7 @@ let main = (args: str[]) ->
     // --------------------------------------------------------
 
     // A tuple is a synthesized struct: bare braces, no type name, >= 2 elements.
-    // Type and value share the same shape: value { 4, "hi" } has type {int32, str}.
+    // Type and value share the same shape: value { 4, "hi" } has type {i32, str}.
     let t = { 4, "hello" }
     assert(t[0] == 4)              // 0-based; index is a literal — it selects a field, not an offset
     assert(t[1].len == 5i64)
@@ -513,14 +513,14 @@ let main = (args: str[]) ->
     assert(s.len == 5i64)
 
     // The headline use case: return several values without declaring a struct
-    let divmod = (a: int32, b: int32) -> { a / b, a % b }
+    let divmod = (a: i32, b: i32) -> { a / b, a % b }
     let { q, r } = divmod(17, 5)
     assert(q == 3 && r == 2)
 
     // Tuples are values: structural equality, default, copy, and nesting all
     // fall out of the struct machinery.
     assert({ 1, 2 } == { 1, 2 })
-    assert(default({int32, int32})[0] == 0)
+    assert(default({i32, i32})[0] == 0)
     let nested = { { 1, 2 }, 3 }
     assert(nested[0][1] == 2)     // chained indexing
 
@@ -530,7 +530,7 @@ let main = (args: str[]) ->
     assert(tuple_flip({ true, 9 })[0] == 9)
 
     // Tuples match positionally in match arms (with literals, wildcards, binds)
-    let quadrant = (pt: {int32, int32}) ->
+    let quadrant = (pt: {i32, i32}) ->
         match pt with
         | { 0, 0 } -> 0
         | { 0, _ } -> 1
@@ -538,7 +538,7 @@ let main = (args: str[]) ->
     assert(quadrant({ 0, 0 }) == 0 && quadrant({ 3, 4 }) == 7)
 
     // Tuples work as array elements and module-level constants, like structs
-    let grid = {int32, int32}[2] { { 1, 2 }, { 3, 4 } }
+    let grid = {i32, i32}[2] { { 1, 2 }, { 3, 4 } }
     assert(grid[1][0] == 3)
 
     // --------------------------------------------------------
@@ -558,11 +558,11 @@ let main = (args: str[]) ->
     // Option types — T? replaces null
     // --------------------------------------------------------
 
-    let some_val = some(42)           // int32?
-    let no_val = none(int32)          // int32? with no value
+    let some_val = some(42)           // i32?
+    let no_val = none(i32)          // i32? with no value
     // none(T) is sugar for default(T?) — the symmetric partner to some(v).
     // default(T?) still works and generalizes to any default value.
-    let no_val2 = default(int32?)     // identical to none(int32)
+    let no_val2 = default(i32?)     // identical to none(i32)
 
     // Check via .is_some / .is_none
     assert(some_val.is_some)
@@ -577,7 +577,7 @@ let main = (args: str[]) ->
     // inlining, so use it only for diagnostic builds).
 
     // Pattern matching on options
-    let unwrap_or = (opt: int32?, fallback: int32) ->
+    let unwrap_or = (opt: i32?, fallback: i32) ->
         match opt with
         | some(v) -> v
         | none    -> fallback
@@ -595,7 +595,7 @@ let main = (args: str[]) ->
 
     // &x requires let mut — gives T*
     let mut n = 42
-    let np = &n                // int32*
+    let np = &n                // i32*
     assert(*np == 42)          // dereference with *
     *np = 100                  // mutate through pointer
     assert(n == 100)
@@ -612,7 +612,7 @@ let main = (args: str[]) ->
     // --------------------------------------------------------
 
     // Stack slice — T[N] { elements }
-    let buf = int32[4] { 10, 20, 30, 40 }
+    let buf = i32[4] { 10, 20, 30, 40 }
     assert(buf.len == 4i64)
     assert(buf[0] == 10)
     assert(buf[3] == 40)
@@ -622,7 +622,7 @@ let main = (args: str[]) ->
     assert(mid.len == 2i64)
     assert(mid[0] == 20)
 
-    // String literals are const str (const uint8[])
+    // String literals are const str (const u8[])
     let greeting = "hello"
     assert(greeting.len == 5i64)
     assert(greeting[0] == 104u8)   // 'h'
@@ -652,7 +652,7 @@ let main = (args: str[]) ->
     assert(((str) cs_heap) == "world")
 
     // Slice construction from raw pointer
-    let raw = int32[] { ptr = buf.ptr, len = buf.len }
+    let raw = i32[] { ptr = buf.ptr, len = buf.len }
     assert(raw[2] == 30)
 
     // --------------------------------------------------------
@@ -665,12 +665,12 @@ let main = (args: str[]) ->
     free(hp)
 
     // Heap slice
-    let hs = alloc(int32[4] { 1, 2, 3, 4 })!
+    let hs = alloc(i32[4] { 1, 2, 3, 4 })!
     assert(hs[0] == 1)
     free(hs)
 
     // Raw buffer (pointer, not slice)
-    let rb = alloc(uint8, 64u)!
+    let rb = alloc(u8, 64usize)!
     free(rb)
 
     // defer — schedule cleanup to run at block scope exit (LIFO order)
@@ -679,22 +679,22 @@ let main = (args: str[]) ->
     assert(dp->x == 7)
     // dp is freed automatically — no manual free needed
 
-    // sizeof and alignof (return int64)
-    assert(sizeof(int32) == 4i64)
+    // sizeof and alignof (return i64)
+    assert(sizeof(i32) == 4i64)
     assert(sizeof(point) == 8i64)
-    assert(alignof(int64) == 8i64)
+    assert(alignof(i64) == 8i64)
 
     // default — zero value for any type
-    assert(default(int32) == 0)
+    assert(default(i32) == 0)
     assert(default(bool) == false)
-    assert(default(int32?).is_none)
+    assert(default(i32?).is_none)
 
     // Atomics — load-acquire / store-release through a pointer to a plain
     // integer or bool. For publishing data to threads created by C libraries
     // (FC itself has no threads). See spec §Atomics & Memory Model.
-    let mut shared = 0u
-    atomic_store_release(&shared, 42u)              // release: publishes prior writes
-    assert(atomic_load_acquire(&shared) == 42u)     // acquire: sees published writes
+    let mut shared = 0usize
+    atomic_store_release(&shared, 42usize)              // release: publishes prior writes
+    assert(atomic_load_acquire(&shared) == 42usize)     // acquire: sees published writes
     let mut ready = false
     atomic_store_release(&ready, true)
     assert(atomic_load_acquire(&ready))
@@ -717,15 +717,15 @@ let main = (args: str[]) ->
     assert(identity(3.14) == 3.14)
 
     // Generic unions — type args required (variant may not constrain all params)
-    let ok_val = result<int32, bool>.ok(42)
-    let err_val = result<int32, bool>.err(true)
+    let ok_val = result<i32, bool>.ok(42)
+    let err_val = result<i32, bool>.err(true)
     let got = match ok_val with
     | ok(v)  -> v
     | err(_) -> -1
     assert(got == 42)
 
     // Explicit type args — for functions where types can't be inferred from args
-    let dp = make_pair<int32, bool>()
+    let dp = make_pair<i32, bool>()
     assert(dp.first == 0)
     assert(dp.second == false)
 
@@ -734,7 +734,7 @@ let main = (args: str[]) ->
     // --------------------------------------------------------
 
     let mut v = 42
-    let cp = (const int32*) &v    // freeze: int32* → const int32*
+    let cp = (const i32*) &v    // freeze: i32* → const i32*
     assert(*cp == 42)             // reading through const is fine
     // *cp = 10                   // would be a compile error
 
@@ -743,10 +743,10 @@ let main = (args: str[]) ->
     // on plain `let` (let mut is only needed to rebind the variable).
     // Const-ness is a type-level property (const T[]), independent
     // of the let / let mut binding distinction.
-    let mbuf = int32[2] { 1, 2 }
+    let mbuf = i32[2] { 1, 2 }
     mbuf[0] = 99
     assert(mbuf[0] == 99)
-    let cmbuf = (const int32[]) mbuf
+    let cmbuf = (const i32[]) mbuf
     // cmbuf[0] = 7              // would be a compile error
     assert(cmbuf[0] == 99)
 
@@ -793,8 +793,8 @@ let main = (args: str[]) ->
     assert(sv2.sival_int == 99)
 
     // Variadic extern functions
-    let mut strbuf = uint8[64] {}
-    c_stdio.snprintf(strbuf.ptr, 64u, c"value=%d", 42)
+    let mut strbuf = u8[64] {}
+    c_stdio.snprintf(strbuf.ptr, 64usize, c"value=%d", 42)
 
     // Aliases: extern abs as c_abs renames C's abs to c_abs in FC
     // Useful when C names collide with FC builtins (alloc, free, sizeof)

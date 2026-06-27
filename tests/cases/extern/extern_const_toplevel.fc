@@ -1,7 +1,7 @@
 // Test: extern constants are valid top-level initializers
 module c from "fcntl.h" =
-    extern O_RDONLY: int64
-    extern O_WRONLY: int64
+    extern O_RDONLY: i64
+    extern O_WRONLY: i64
 
 let flags = c.O_RDONLY
 let combined = c.O_RDONLY | c.O_WRONLY

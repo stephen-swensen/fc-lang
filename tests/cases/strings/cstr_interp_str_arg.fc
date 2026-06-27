@@ -7,11 +7,11 @@ let main = (args: str[]) ->
         let s = alloca(c"hello %s{name}!")
         let len = c.strlen(s)
         let mut r = 0
-        if len == 12u then r = r + 1
+        if len == 12usize then r = r + 1
         let empty = ""
         let s2 = alloca(c"[%s{empty}]")
         let len2 = c.strlen(s2)
-        if len2 == 2u then r = r + 2
+        if len2 == 2usize then r = r + 2
         r
     assert(_result == 3)
     0

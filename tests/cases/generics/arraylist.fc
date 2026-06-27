@@ -1,6 +1,6 @@
 struct arraylist =
     data: 'a[]
-    len:  int64
+    len:  i64
 
 module arraylist =
 
@@ -26,13 +26,13 @@ module arraylist =
         l->data[l->len] = value
         l->len = l->len + 1
 
-    let get = (l: arraylist<'a>, index: int64) ->
+    let get = (l: arraylist<'a>, index: i64) ->
         l.data[index]
 
-    let update = (l: arraylist<'a>*, index: int64, value: 'a) ->
+    let update = (l: arraylist<'a>*, index: i64, value: 'a) ->
         l->data[index] = value
 
-    let insert = (l: arraylist<'a>*, index: int64, value: 'a) ->
+    let insert = (l: arraylist<'a>*, index: i64, value: 'a) ->
         if l->len == l->data.len then arraylist.grow(l)
         let mut i = l->len
         loop
@@ -59,7 +59,7 @@ module arraylist =
             i = i + 1
 
 let main = (args: str[]) ->
-    let mut nums = arraylist.make<int32>()
+    let mut nums = arraylist.make<i32>()
     arraylist.add(&nums, 10)
     arraylist.add(&nums, 20)
     arraylist.add(&nums, 30)
@@ -71,10 +71,10 @@ let main = (args: str[]) ->
     arraylist.update(&nums, 0, 15)
     // nums = [15, 20, 99, 30, 40, 50]
 
-    let sum = arraylist.fold(nums, 0, (acc: int32, x: int32) -> acc + x)
+    let sum = arraylist.fold(nums, 0, (acc: i32, x: i32) -> acc + x)
     // sum = 15+20+99+30+40+50 = 254
 
-    let doubled = arraylist.map(nums, (x: int32) -> x * 2)
+    let doubled = arraylist.map(nums, (x: i32) -> x * 2)
     let dv = arraylist.get(doubled, 0)
     // dv = 30
 

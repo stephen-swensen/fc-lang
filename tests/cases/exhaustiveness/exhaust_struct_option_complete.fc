@@ -1,7 +1,7 @@
 // Struct with option field, exhaustive without wildcard
 struct item =
-    name: int32
-    count: int32?
+    name: i32
+    count: i32?
 
 let main = (args: str[]) ->
     let _result =

@@ -3,7 +3,7 @@
 // scan, which shares the <> type-arg token predicate with the call scan.
 module m =
     struct cmd =
-        x: int32
+        x: i32
 
 struct slot =
     item: 'a

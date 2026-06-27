@@ -1,1 +1,1 @@
-non-exhaustive match: missing variant 'err' of union 'result<int32, int32>'
+non-exhaustive match: missing variant 'err' of union 'result<i32, i32>'

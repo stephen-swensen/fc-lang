@@ -1,5 +1,5 @@
 // File-level slice literal — backed by alloca in C main
-let arr = int32[3] { 10, 20, 30 }
+let arr = i32[3] { 10, 20, 30 }
 
 let main = (args: str[]) ->
     assert(arr[0] == 10)

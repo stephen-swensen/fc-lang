@@ -1,6 +1,6 @@
 // Error: stack provenance propagates through nested struct literals
 struct inner =
-    p: int32*
+    p: i32*
 
 struct outer =
     inr: inner

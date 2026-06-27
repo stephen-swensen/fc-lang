@@ -1,7 +1,7 @@
 // Range endpoints with no common numeric type are rejected (a signed/unsigned
 // mix that neither `+` nor `<` would accept). Previously the loop variable's
-// type was chosen by TypeKind ordinal, silently accepting uint32..int32 and
-// running ~4 billion iterations when the int32 end was negative.
+// type was chosen by TypeKind ordinal, silently accepting u32..i32 and
+// running ~4 billion iterations when the i32 end was negative.
 let main = (args: str[]) ->
     let m = -1i32
     for i in 0u32..m do

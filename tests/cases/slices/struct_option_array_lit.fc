@@ -1,6 +1,6 @@
 // stack slice literal of option-of-struct elements: T?[N] { ... }
 struct p =
-    x: int32
+    x: i32
 
 let main = (args: str[]) ->
     let arr = p?[3] { some(p { x = 10 }), none(p), some(p { x = 5 }) }

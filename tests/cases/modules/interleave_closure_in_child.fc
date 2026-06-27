@@ -4,8 +4,8 @@ module parent =
     let val = 100
 
     module child =
-        let apply = (n: int32) ->
-            let f = (x: int32) -> x + n
+        let apply = (n: i32) ->
+            let f = (x: i32) -> x + n
             f(7)
 
 let main = (args: str[]) ->

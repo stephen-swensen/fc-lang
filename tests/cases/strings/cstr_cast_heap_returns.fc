@@ -9,13 +9,13 @@ let dup_cstr = (path: const str) ->
 
 let main = (args: str[]) ->
     let h = dup_cstr("greetings")
-    assert(c.strlen(h) == 9u)
+    assert(c.strlen(h) == 9usize)
     assert(((str) h) == "greetings")
     free(h)
 
     // freed per iteration → bounded heap use across a loop
     for i in 0..4 do
         let t = dup_cstr("loop")
-        assert(c.strlen(t) == 4u)
+        assert(c.strlen(t) == 4usize)
         free(t)
     0

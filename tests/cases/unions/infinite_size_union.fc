@@ -4,7 +4,7 @@ struct pair =
     left: expr
     right: expr
 union expr =
-    | num(int32)
+    | num(i32)
     | add(pair)
 
 let main = (args: str[]) ->

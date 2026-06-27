@@ -20,7 +20,7 @@ module a =
             let wrap = (x: 'a) -> x
 
 let main = (args: str[]) ->
-    let s = int32[3] { 10, 20, 30 }
+    let s = i32[3] { 10, 20, 30 }
 
     // Two-level qualified generic call
     assert(outer.inner.first(s) == 10)

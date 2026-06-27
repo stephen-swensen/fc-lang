@@ -2,7 +2,7 @@
 // binding, so not statically rejected) aborts at construction via fc_null_some,
 // rather than silently producing a value that observes as none.
 let main = (args: str[]) ->
-    let p = default(int32*)
+    let p = default(i32*)
     let o = some(p)             // aborts here: p is null
     match o with               // never reached
     | some(_) -> 0

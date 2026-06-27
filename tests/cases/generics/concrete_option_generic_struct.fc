@@ -1,17 +1,17 @@
-// Item 8b: a by-value option-of-generic-struct field (box<int32>?) in a concrete
-// struct. The C struct embeds fc_option_box__5_int32 by value, which embeds
-// box__5_int32 by value — so the enclosing struct must be emitted AFTER both, or
+// Item 8b: a by-value option-of-generic-struct field (box<i32>?) in a concrete
+// struct. The C struct embeds fc_option_box__5_i32 by value, which embeds
+// box__5_i32 by value — so the enclosing struct must be emitted AFTER both, or
 // gcc reports "field 'b' has incomplete type". Options weren't dependency nodes
 // in the def-ordering topo, so the holder emitted first. Fixed by treating a
 // by-value option-of-aggregate as a dependency on its inner (the option body is
 // interleaved right after the inner def). Also exercises a nested inner
-// (box<box<int32>>?) and the previously-duplicated option typedef.
+// (box<box<i32>>?) and the previously-duplicated option typedef.
 struct box =
     v: 'a
 
 struct holder =
-    flat: box<int32>?
-    nested: box<box<int32> >?
+    flat: box<i32>?
+    nested: box<box<i32> >?
 
 let main = (args: str[]) ->
     let h = holder {
@@ -24,8 +24,8 @@ let main = (args: str[]) ->
     // A field declared as the option type, never constructed via some(): exercises
     // option-body emission driven purely by the field type, plus none handling.
     let e = holder {
-        flat = none(box<int32>),
-        nested = none(box<box<int32> >)
+        flat = none(box<i32>),
+        nested = none(box<box<i32> >)
     }
     let r = match e.flat with
         | some(b) -> b.v

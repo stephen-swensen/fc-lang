@@ -1,1 +1,1 @@
-integer literal 32768 out of range for int16 (-32768..32767)
+integer literal 32768 out of range for i16 (-32768..32767)

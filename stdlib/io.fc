@@ -6,28 +6,28 @@ module io =
     // Same mode flags (0=exists, 2=write, 4=read); execute-bit (X_OK) is
     // not supported on Windows, but we don't expose it.
     private module u from "io.h" =
-        extern _access as access: (const cstr, int32) -> int32
+        extern _access as access: (const cstr, i32) -> i32
 #else
     // _POSIX_C_SOURCE (hoisted above every #include) keeps access visible
     // under -std=c11, where glibc otherwise hides POSIX symbols. Declared here
     // so io.fc compiles standalone, not only when co-compiled with a module
     // (e.g. sys.fc) that happens to request the macro.
     private module u from "unistd.h" define "_POSIX_C_SOURCE" "200809L" =
-        extern access: (const cstr, int32) -> int32
+        extern access: (const cstr, i32) -> i32
 #end
 
     private module c from "stdio.h" =
         extern fwrite: (const any*, usize, usize, any*) -> usize
         extern fread: (any*, usize, usize, any*) -> usize
         extern fopen: (const cstr, const cstr) -> any*?
-        extern fclose: (any*) -> int32
-        extern fflush: (any*) -> int32
-        extern fseek: (any*, isize, int32) -> int32
+        extern fclose: (any*) -> i32
+        extern fflush: (any*) -> i32
+        extern fseek: (any*, isize, i32) -> i32
         extern ftell: (any*) -> isize
-        extern feof: (any*) -> int32
-        extern remove: (const cstr) -> int32
-        extern rename: (const cstr, const cstr) -> int32
-        extern fgetc: (any*) -> int32
+        extern feof: (any*) -> i32
+        extern remove: (const cstr) -> i32
+        extern rename: (const cstr, const cstr) -> i32
+        extern fgetc: (any*) -> i32
 
     // Seek origin constants for use with seek().
     let seek_set = 0
@@ -37,17 +37,17 @@ module io =
     // write: writes the bytes of s to file handle f.
     // s: const str — the data to write; const because write does not modify the buffer.
     // f: any* — opaque FILE* handle (e.g. stdout, or from open).
-    // returns: int64 — number of bytes actually written.
+    // returns: i64 — number of bytes actually written.
     let write = (s: const str, f: any*) ->
-        (int64) c.fwrite(s.ptr, 1u, (usize) s.len, f)
+        (i64) c.fwrite(s.ptr, 1usize, (usize) s.len, f)
 
     // read: reads up to n bytes from file handle f into buf.
-    // buf: uint8[] — mutable destination buffer; non-const because read fills it.
-    // n: int64 — maximum number of bytes to read.
+    // buf: u8[] — mutable destination buffer; non-const because read fills it.
+    // n: i64 — maximum number of bytes to read.
     // f: any* — opaque FILE* handle.
-    // returns: int64 — number of bytes actually read, or 0 on EOF/error.
-    let read = (buf: uint8[], n: int64, f: any*) ->
-        (int64) c.fread(buf.ptr, 1u, (usize) n, f)
+    // returns: i64 — number of bytes actually read, or 0 on EOF/error.
+    let read = (buf: u8[], n: i64, f: any*) ->
+        (i64) c.fread(buf.ptr, 1usize, (usize) n, f)
 
     // open: opens a file at path with the given mode (e.g. "r", "w", "rb").
     // path: const str — file path; const because open only reads it.
@@ -84,15 +84,15 @@ module io =
     // platter-flush equivalent of POSIX fsync. Neither needs a feature macro
     // under UCRT.
     private module sy from "io.h" =
-        extern _fileno as fileno: (any*) -> int32
-        extern _commit as commit: (int32) -> int32
+        extern _fileno as fileno: (any*) -> i32
+        extern _commit as commit: (i32) -> i32
 #else
     // fileno lives in stdio.h and fsync in unistd.h; both are POSIX, so the
     // module opts in to _POSIX_C_SOURCE (hoisted above every #include) to keep
     // them visible under -std=c11. stdio.h is already pulled in by module c.
     private module sy from "unistd.h" define "_POSIX_C_SOURCE" "200809L" =
-        extern fileno: (any*) -> int32
-        extern fsync as commit: (int32) -> int32
+        extern fileno: (any*) -> i32
+        extern fsync as commit: (i32) -> i32
 #end
 
     let sync = (f: any*) ->
@@ -101,17 +101,17 @@ module io =
 
     // seek: repositions the file position indicator.
     // f: any* — opaque FILE* handle.
-    // offset: int64 — byte offset relative to whence.
-    // whence: int32 — seek_set (start), seek_cur (current), or seek_end (end).
-    // returns: int32 — 0 on success, nonzero on error.
-    let seek = (f: any*, offset: int64, whence: int32) ->
+    // offset: i64 — byte offset relative to whence.
+    // whence: i32 — seek_set (start), seek_cur (current), or seek_end (end).
+    // returns: i32 — 0 on success, nonzero on error.
+    let seek = (f: any*, offset: i64, whence: i32) ->
         c.fseek(f, (isize) offset, whence)
 
     // tell: returns the current file position indicator.
     // f: any* — opaque FILE* handle.
-    // returns: int64 — byte offset from start, or -1 on error.
+    // returns: i64 — byte offset from start, or -1 on error.
     let tell = (f: any*) ->
-        (int64) c.ftell(f)
+        (i64) c.ftell(f)
 
     // eof: tests end-of-file indicator on a file handle.
     // f: any* — opaque FILE* handle.
@@ -151,31 +151,31 @@ module io =
             seek(handle, 0i64, seek_end)
             let size = tell(handle)
             seek(handle, 0i64, seek_set)
-            let buf = alloc(uint8[size] {})!
+            let buf = alloc(u8[size] {})!
             read(buf, size, handle)
             some(buf)
 
     // read_char: reads a single byte from a file handle.
     // f: any* — opaque FILE* handle (e.g. stdin, or from open).
-    // returns: uint8? — the byte read, or none on EOF.
+    // returns: u8? — the byte read, or none on EOF.
     let read_char = (f: any*) ->
         let ch = c.fgetc(f)
-        if ch == -1 then default(uint8?)
-        else some((uint8) ch)
+        if ch == -1 then default(u8?)
+        else some((u8) ch)
 
     // mkdir: creates a directory at the given path.
     // path: const str — directory path to create.
     // returns: bool — true on success, false if it already exists or on error.
 #if os == "windows"
     private module d from "direct.h" =
-        extern _mkdir as win_mkdir: (const cstr) -> int32
+        extern _mkdir as win_mkdir: (const cstr) -> i32
 
     let mkdir = (path: const str) ->
         d.win_mkdir(alloca((cstr) path)) == 0
 #else
     // POSIX mkdir needs _POSIX_C_SOURCE under -std=c11 (see access above).
     private module st from "sys/stat.h" define "_POSIX_C_SOURCE" "200809L" =
-        extern mkdir: (const cstr, int32) -> int32
+        extern mkdir: (const cstr, i32) -> i32
 
     let mkdir = (path: const str) ->
         st.mkdir(alloca((cstr) path), 493) == 0
@@ -210,25 +210,25 @@ module io =
     // struct layout correct for FindFirstFileA / FindNextFileA to populate.
     private module win from "windows.h" define "WIN32_LEAN_AND_MEAN" "1" =
         extern struct _WIN32_FIND_DATAA as WIN32_FIND_DATAA =
-            _dwFileAttributes: uint32
-            _ftCreationTime: uint8[8]
-            _ftLastAccessTime: uint8[8]
-            _ftLastWriteTime: uint8[8]
-            _nFileSizeHigh: uint32
-            _nFileSizeLow: uint32
-            _dwReserved0: uint32
-            _dwReserved1: uint32
-            cFileName: uint8[260]
-            _cAlternateFileName: uint8[14]
+            _dwFileAttributes: u32
+            _ftCreationTime: u8[8]
+            _ftLastAccessTime: u8[8]
+            _ftLastWriteTime: u8[8]
+            _nFileSizeHigh: u32
+            _nFileSizeLow: u32
+            _dwReserved0: u32
+            _dwReserved1: u32
+            cFileName: u8[260]
+            _cAlternateFileName: u8[14]
         extern FindFirstFileA as find_first: (const cstr, WIN32_FIND_DATAA*) -> any*
-        extern FindNextFileA as find_next: (any*, WIN32_FIND_DATAA*) -> int32
-        extern FindClose as find_close: (any*) -> int32
+        extern FindNextFileA as find_next: (any*, WIN32_FIND_DATAA*) -> i32
+        extern FindClose as find_close: (any*) -> i32
 
     let list_dir = (path: const str) ->
         // FindFirstFileA wants a search pattern, not a directory path.
         // Build "<path>\*" as a NUL-terminated buffer.
         let plen = path.len
-        let pat = alloc(uint8[plen + 3] {})!
+        let pat = alloc(u8[plen + 3] {})!
         defer free(pat)
         for j in 0..plen do
             pat[j] = path[j]
@@ -239,7 +239,7 @@ module io =
         let mut fd = default(win.WIN32_FIND_DATAA)
         let h = win.find_first((cstr) pat.ptr, &fd)
         // FindFirstFileA returns INVALID_HANDLE_VALUE (-1) on failure.
-        if (isize) h == -1i then default(str[]?)
+        if (isize) h == -1isize then default(str[]?)
         else
             defer win.find_close(h)
             let mut cap = 16i64
@@ -263,7 +263,7 @@ module io =
                         free(names)
                         names = new_names
                         cap = new_cap
-                    let name_buf = alloc(uint8[nlen] {})!
+                    let name_buf = alloc(u8[nlen] {})!
                     for j in 0..nlen do
                         name_buf[j] = fd.cFileName[j]
                     names[count] = name_buf
@@ -283,14 +283,14 @@ module io =
     // _POSIX_C_SOURCE requirement as access/mkdir above.
     private module dir from "dirent.h" define "_POSIX_C_SOURCE" "200809L" =
         extern struct dirent =
-            _d_ino: uint64
-            _d_off: int64
-            _d_reclen: uint16
-            _d_type: uint8
-            d_name: uint8[256]
+            _d_ino: u64
+            _d_off: i64
+            _d_reclen: u16
+            _d_type: u8
+            d_name: u8[256]
         extern opendir: (const cstr) -> any*?
         extern readdir: (any*) -> dirent*?
-        extern closedir: (any*) -> int32
+        extern closedir: (any*) -> i32
 
     let list_dir = (path: const str) ->
         match dir.opendir(alloca((cstr) path)) with
@@ -323,7 +323,7 @@ module io =
                             free(names)
                             names = new_names
                             cap = new_cap
-                        let name_buf = alloc(uint8[nlen] {})!
+                        let name_buf = alloc(u8[nlen] {})!
                         for j in 0..nlen do
                             name_buf[j] = e->d_name[j]
                         names[count] = name_buf

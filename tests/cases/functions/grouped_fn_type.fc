@@ -1,27 +1,27 @@
 // A parenthesized (grouped) function type lets a postfix `?` attach to the whole
-// function type — `((int32) -> int32)?` is option-of-fn, not the parse error
+// function type — `((i32) -> i32)?` is option-of-fn, not the parse error
 // `expected '->', got '?'`. Without grouping there is no way to spell an option
 // of a function type. Grammar: a type_atom may be `"(" type_param_list ")"`,
 // which is a type_primary that a postfix modifier applies to. The same grouping
 // also parses for `*` and `[]` postfixes (pointer/slice of a function type).
 struct holder =
-    opt: ((int32) -> int32)?
+    opt: ((i32) -> i32)?
 
-let dbl = (x: int32) -> x * 2
+let dbl = (x: i32) -> x * 2
 
 // Grouped function type as a parameter type, and as the type argument to none().
-let apply_opt = (f: ((int32) -> int32)?, n: int32) ->
+let apply_opt = (f: ((i32) -> i32)?, n: i32) ->
     match f with
     | some(g) -> g(n)
     | none -> -1
 
 let main = (args: str[]) ->
     assert(apply_opt(some(dbl), 21) == 42)
-    assert(apply_opt(none((int32) -> int32), 21) == -1)
+    assert(apply_opt(none((i32) -> i32), 21) == -1)
 
     let h = holder { opt = some(dbl) }
     assert(h.opt!(20) == 40)
 
-    let e = holder { opt = none((int32) -> int32) }
+    let e = holder { opt = none((i32) -> i32) }
     assert(e.opt.is_none)
     0

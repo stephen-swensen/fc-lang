@@ -1,9 +1,9 @@
 // Storing a stack address into a heap slice element escapes
 struct holder =
-    buf: int32*[]
+    buf: i32*[]
 
 let leak = () ->
-    let h = alloc(holder { buf = alloc(int32*[2] { default(int32*), default(int32*) })! })!
+    let h = alloc(holder { buf = alloc(i32*[2] { default(i32*), default(i32*) })! })!
     let mut x = 42
     h->buf[0] = &x
     free(h)

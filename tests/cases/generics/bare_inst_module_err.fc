@@ -4,5 +4,5 @@ module m =
     let identity = (x: 'a) -> x
 
 let main = (args: str[]) ->
-    let f = m.identity<int32>
+    let f = m.identity<i32>
     0

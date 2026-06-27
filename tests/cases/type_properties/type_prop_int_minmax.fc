@@ -1,43 +1,43 @@
 // Test static type properties: integer min/max
 let main = (args: str[]) ->
-    // int8
-    let a = int8.min
-    let b = int8.max
-    // int32
-    let e = int32.min
-    let f = int32.max
-    // int64
-    let g = int64.min
-    let h = int64.max
-    // uint8
-    let i = uint8.min
-    let j = uint8.max
-    // uint32
-    let m = uint32.min
-    // uint64
-    let o = uint64.min
+    // i8
+    let a = i8.min
+    let b = i8.max
+    // i32
+    let e = i32.min
+    let f = i32.max
+    // i64
+    let g = i64.min
+    let h = i64.max
+    // u8
+    let i = u8.min
+    let j = u8.max
+    // u32
+    let m = u32.min
+    // u64
+    let o = u64.min
 
     // Verify known values
-    let sum8 = (int32) a + (int32) b   // -128 + 127 = -1
-    let check = (int32) j   // 255
-    if (int32) i != 0 then return 1
+    let sum8 = (i32) a + (i32) b   // -128 + 127 = -1
+    let check = (i32) j   // 255
+    if (i32) i != 0 then return 1
     if check != 255 then return 2
     if sum8 != -1 then return 3
     if e >= 0 then return 4
     if f <= 0 then return 5
     if o != 0u64 then return 6
     if m != 0u32 then return 7
-    if h <= (int64) f then return 8
-    // int16 min/max
-    if int16.min >= 0i16 then return 9
-    if int16.max <= 0i16 then return 10
-    // uint16 min/max
-    if uint16.min != 0u16 then return 11
-    if uint16.max <= 0u16 then return 12
-    // uint32.max
-    if uint32.max <= 0u32 then return 13
-    // uint64.max
-    if uint64.max <= 0u64 then return 14
-    // int64.min is negative
+    if h <= (i64) f then return 8
+    // i16 min/max
+    if i16.min >= 0i16 then return 9
+    if i16.max <= 0i16 then return 10
+    // u16 min/max
+    if u16.min != 0u16 then return 11
+    if u16.max <= 0u16 then return 12
+    // u32.max
+    if u32.max <= 0u32 then return 13
+    // u64.max
+    if u64.max <= 0u64 then return 14
+    // i64.min is negative
     if g >= 0i64 then return 15
     0

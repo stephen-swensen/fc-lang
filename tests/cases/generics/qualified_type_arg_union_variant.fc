@@ -3,13 +3,13 @@
 // generic calls (the > is followed by '.' instead of '(').
 module m =
     struct cmd =
-        x: int32
+        x: i32
 
 union maybe =
     | just('a)
     | nothing
 
-let val_of = (mb: maybe<m.cmd>, fallback: int32) ->
+let val_of = (mb: maybe<m.cmd>, fallback: i32) ->
     match mb with
     | just(c) -> c.x
     | nothing -> fallback

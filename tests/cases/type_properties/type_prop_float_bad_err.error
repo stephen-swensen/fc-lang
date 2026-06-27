@@ -1,1 +1,1 @@
-type 'float64' has no property 'foo'
+type 'f64' has no property 'foo'

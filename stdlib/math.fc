@@ -2,109 +2,109 @@ namespace std::
 
 module math =
     private module c from "math.h" =
-        extern sqrt: (float64) -> float64
-        extern fabs: (float64) -> float64
-        extern pow: (float64, float64) -> float64
-        extern fmin: (float64, float64) -> float64
-        extern fmax: (float64, float64) -> float64
-        extern floor: (float64) -> float64
-        extern ceil: (float64) -> float64
-        extern round: (float64) -> float64
-        extern sin: (float64) -> float64
-        extern cos: (float64) -> float64
-        extern tan: (float64) -> float64
-        extern asin: (float64) -> float64
-        extern acos: (float64) -> float64
-        extern atan: (float64) -> float64
-        extern atan2: (float64, float64) -> float64
-        extern fmod: (float64, float64) -> float64
-        extern hypot: (float64, float64) -> float64
-        extern trunc: (float64) -> float64
-        extern exp: (float64) -> float64
-        extern log: (float64) -> float64
-        extern log2: (float64) -> float64
-        extern log10: (float64) -> float64
+        extern sqrt: (f64) -> f64
+        extern fabs: (f64) -> f64
+        extern pow: (f64, f64) -> f64
+        extern fmin: (f64, f64) -> f64
+        extern fmax: (f64, f64) -> f64
+        extern floor: (f64) -> f64
+        extern ceil: (f64) -> f64
+        extern round: (f64) -> f64
+        extern sin: (f64) -> f64
+        extern cos: (f64) -> f64
+        extern tan: (f64) -> f64
+        extern asin: (f64) -> f64
+        extern acos: (f64) -> f64
+        extern atan: (f64) -> f64
+        extern atan2: (f64, f64) -> f64
+        extern fmod: (f64, f64) -> f64
+        extern hypot: (f64, f64) -> f64
+        extern trunc: (f64) -> f64
+        extern exp: (f64) -> f64
+        extern log: (f64) -> f64
+        extern log2: (f64) -> f64
+        extern log10: (f64) -> f64
 
     // Constants
     let pi = 3.14159265358979323846
     let e = 2.71828182845904523536
 
     // sqrt: square root of x.
-    let sqrt = (x: float64) -> c.sqrt(x)
+    let sqrt = (x: f64) -> c.sqrt(x)
 
     // abs: absolute value of x.
-    let abs = (x: float64) -> c.fabs(x)
+    let abs = (x: f64) -> c.fabs(x)
 
     // pow: x raised to the power y.
-    let pow = (x: float64, y: float64) -> c.pow(x, y)
+    let pow = (x: f64, y: f64) -> c.pow(x, y)
 
     // min: smaller of x and y.
-    let min = (x: float64, y: float64) -> c.fmin(x, y)
+    let min = (x: f64, y: f64) -> c.fmin(x, y)
 
     // max: larger of x and y.
-    let max = (x: float64, y: float64) -> c.fmax(x, y)
+    let max = (x: f64, y: f64) -> c.fmax(x, y)
 
     // floor: largest integer value <= x.
-    let floor = (x: float64) -> c.floor(x)
+    let floor = (x: f64) -> c.floor(x)
 
     // ceil: smallest integer value >= x.
-    let ceil = (x: float64) -> c.ceil(x)
+    let ceil = (x: f64) -> c.ceil(x)
 
     // round: nearest integer value, rounding halfway cases away from zero.
-    let round = (x: float64) -> c.round(x)
+    let round = (x: f64) -> c.round(x)
 
     // sin: sine of x (radians).
-    let sin = (x: float64) -> c.sin(x)
+    let sin = (x: f64) -> c.sin(x)
 
     // cos: cosine of x (radians).
-    let cos = (x: float64) -> c.cos(x)
+    let cos = (x: f64) -> c.cos(x)
 
     // tan: tangent of x (radians).
-    let tan = (x: float64) -> c.tan(x)
+    let tan = (x: f64) -> c.tan(x)
 
     // asin: inverse sine of x. Result in radians [-pi/2, pi/2].
-    let asin = (x: float64) -> c.asin(x)
+    let asin = (x: f64) -> c.asin(x)
 
     // acos: inverse cosine of x. Result in radians [0, pi].
-    let acos = (x: float64) -> c.acos(x)
+    let acos = (x: f64) -> c.acos(x)
 
     // atan: inverse tangent of x. Result in radians [-pi/2, pi/2].
-    let atan = (x: float64) -> c.atan(x)
+    let atan = (x: f64) -> c.atan(x)
 
     // atan2: arc tangent of y/x, using signs to determine quadrant.
-    let atan2 = (y: float64, x: float64) -> c.atan2(y, x)
+    let atan2 = (y: f64, x: f64) -> c.atan2(y, x)
 
     // fmod: floating-point remainder of x/y.
-    let fmod = (x: float64, y: float64) -> c.fmod(x, y)
+    let fmod = (x: f64, y: f64) -> c.fmod(x, y)
 
     // hypot: sqrt(x*x + y*y), computed without intermediate overflow.
-    let hypot = (x: float64, y: float64) -> c.hypot(x, y)
+    let hypot = (x: f64, y: f64) -> c.hypot(x, y)
 
     // trunc: round toward zero (strip fractional part).
-    let trunc = (x: float64) -> c.trunc(x)
+    let trunc = (x: f64) -> c.trunc(x)
 
     // exp: e raised to the power x.
-    let exp = (x: float64) -> c.exp(x)
+    let exp = (x: f64) -> c.exp(x)
 
     // log: natural logarithm of x.
-    let log = (x: float64) -> c.log(x)
+    let log = (x: f64) -> c.log(x)
 
     // log2: base-2 logarithm of x.
-    let log2 = (x: float64) -> c.log2(x)
+    let log2 = (x: f64) -> c.log2(x)
 
     // log10: base-10 logarithm of x.
-    let log10 = (x: float64) -> c.log10(x)
+    let log10 = (x: f64) -> c.log10(x)
 
     // is_nan: true if x is NaN.
-    let is_nan = (x: float64) -> x != x
+    let is_nan = (x: f64) -> x != x
 
     // is_inf: true if x is positive or negative infinity.
-    let is_inf = (x: float64) ->
-        if x == float64.inf then true
-        else x == float64.neg_inf
+    let is_inf = (x: f64) ->
+        if x == f64.inf then true
+        else x == f64.neg_inf
 
     // is_finite: true if x is neither NaN nor infinity.
-    let is_finite = (x: float64) ->
+    let is_finite = (x: f64) ->
         if x != x then false
-        else if x == float64.inf then false
-        else x != float64.neg_inf
+        else if x == f64.inf then false
+        else x != f64.neg_inf

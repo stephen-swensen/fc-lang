@@ -3,7 +3,7 @@ union color =
     | blue
 
 union shape =
-    | circle(int32)
+    | circle(i32)
 
 let main = (args: str[]) ->
     let a = color.red

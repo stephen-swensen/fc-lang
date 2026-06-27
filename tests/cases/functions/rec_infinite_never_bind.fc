@@ -3,7 +3,7 @@
 // would otherwise trip the C compiler's -Winfinite-recursion). The error fires on the
 // definition line, before the result is ever bound.
 let main = (args: str[]) ->
-    let spin = (n: int32) -> spin(n)
+    let spin = (n: i32) -> spin(n)
     let x = spin(3)
     assert(x == 0)
     0

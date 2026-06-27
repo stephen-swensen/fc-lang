@@ -4,12 +4,12 @@
 // the tuple *binding* is irrelevant — writing goes through the pointer, not the
 // tuple, so an immutable `let` tuple still mutates the pointee.
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let mut p = point { x = 3, y = 4 }
-    let t = { &p, 99 }              // type {point*, int32}, immutable binding
+    let t = { &p, 99 }              // type {point*, i32}, immutable binding
 
     // read a field through the pointer stored in the tuple element
     assert(t[0]->x == 3)

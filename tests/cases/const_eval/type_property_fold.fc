@@ -1,48 +1,48 @@
-// Static integer type properties (int32.min, uint8.max, int16.bits, ...) fold to
+// Static integer type properties (i32.min, u8.max, i16.bits, ...) fold to
 // host literals in module-level initializers, so they participate in the same
 // compile-time evaluation as integer literals: arithmetic, division/modulo
 // (whose codegen is a runtime zero-check that is not a valid C file-scope
 // initializer), comparisons, and reuse from later module-lets.
 module m =
     // Bare properties fold to their literal value.
-    let i32_min = int32.min
-    let i32_max = int32.max
-    let u8_max  = uint8.max
-    let i8_min  = int8.min
-    let i64_min = int64.min
-    let u64_max = uint64.max
-    let bits32  = int32.bits     // 32
-    let bits8   = uint8.bits     // 8
+    let i32_min = i32.min
+    let i32_max = i32.max
+    let u8_max  = u8.max
+    let i8_min  = i8.min
+    let i64_min = i64.min
+    let u64_max = u64.max
+    let bits32  = i32.bits     // 32
+    let bits8   = u8.bits     // 8
 
     // Division / modulo force host evaluation — only possible once the property
     // folds to a literal.
-    let half_min = int32.min / 2          // -1073741824
-    let mod7     = int32.max % 7          // 2147483647 % 7 = 1
+    let half_min = i32.min / 2          // -1073741824
+    let mod7     = i32.max % 7          // 2147483647 % 7 = 1
     // Signed min / -1 and min % -1 wrap (matches the runtime path).
-    let wrap_q   = int32.min / (0 - 1)    // -2147483648
-    let wrap_r   = int32.min % (0 - 1)    // 0
+    let wrap_q   = i32.min / (0 - 1)    // -2147483648
+    let wrap_r   = i32.min % (0 - 1)    // 0
 
     // Arithmetic and comparisons.
-    let near_max = int32.max - 1                    // 2147483646
-    let span     = (int32) int8.max - (int32) int8.min  // 127 - (-128) = 255
-    let is_neg   = int32.min < 0                    // true
-    let max_pos  = uint64.max > 0u64                // true
+    let near_max = i32.max - 1                    // 2147483646
+    let span     = (i32) i8.max - (i32) i8.min  // 127 - (-128) = 255
+    let is_neg   = i32.min < 0                    // true
+    let max_pos  = u64.max > 0u64                // true
 
     // Reuse a folded property from a later module-let.
     let derived  = i32_max / 2 + 1        // 1073741824
 
 let main = (args: str[]) ->
-    assert(m.i32_min == int32.min)
-    assert(m.i32_max == int32.max)
+    assert(m.i32_min == i32.min)
+    assert(m.i32_max == i32.max)
     assert(m.u8_max == 255u8)
-    assert(m.i8_min == int8.min)
-    assert(m.i64_min == int64.min)
-    assert(m.u64_max == uint64.max)
+    assert(m.i8_min == i8.min)
+    assert(m.i64_min == i64.min)
+    assert(m.u64_max == u64.max)
     assert(m.bits32 == 32)
     assert(m.bits8 == 8)
     assert(m.half_min == -1073741824)
     assert(m.mod7 == 1)
-    assert(m.wrap_q == int32.min)
+    assert(m.wrap_q == i32.min)
     assert(m.wrap_r == 0)
     assert(m.near_max == 2147483646)
     assert(m.span == 255)

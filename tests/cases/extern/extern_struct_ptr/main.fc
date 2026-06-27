@@ -1,9 +1,9 @@
 // Test: extern struct passed by typed pointer to extern function
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
-        tv_sec: int64
-        tv_nsec: int64
-    extern clock_gettime: (int32, timespec*) -> int32
+        tv_sec: i64
+        tv_nsec: i64
+    extern clock_gettime: (i32, timespec*) -> i32
 
 let main = (args: str[]) ->
     let mut ts = default(t.timespec)

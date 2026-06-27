@@ -1,1 +1,1 @@
-dereference requires pointer operand, got int32
+dereference requires pointer operand, got i32

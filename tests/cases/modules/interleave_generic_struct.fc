@@ -2,7 +2,7 @@
 module types_a =
     struct box =
         val: 'a
-        tag: int32
+        tag: i32
 
 module types_b =
     struct box =

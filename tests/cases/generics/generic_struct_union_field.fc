@@ -7,14 +7,14 @@ union option_val =
 
 struct container =
     item: option_val<'a>
-    label: int32
+    label: i32
 
-let make = (x: 'a, label: int32) ->
+let make = (x: 'a, label: i32) ->
     container { item = option_val<'a>.present(x), label = label }
 
-let get_label = (c: container<int32>) -> c.label
+let get_label = (c: container<i32>) -> c.label
 
-let get_item = (c: container<int32>) ->
+let get_item = (c: container<i32>) ->
     match c.item with
     | present(v) -> v
     | absent -> 0
@@ -37,10 +37,10 @@ module m =
     struct holder =
         item: wrapped<'a>
 
-    let make = (x: 'a, label: int32) ->
+    let make = (x: 'a, label: i32) ->
         holder { item = wrapped<'a>.val(x) }
 
-    let get = (h: holder<int32>) ->
+    let get = (h: holder<i32>) ->
         match h.item with
         | val(v) -> v
         | empty -> 0

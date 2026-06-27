@@ -1,7 +1,7 @@
-// int32? must not implicitly widen to int64? as a call argument:
+// i32? must not implicitly widen to i64? as a call argument:
 // the two options are distinct fc_option_<T> structs, so the widen
 // would emit an invalid struct-to-struct C cast.
-let take = (x: int64?) ->
+let take = (x: i64?) ->
     match x with
     | some(v) -> v
     | none -> 0i64

@@ -1,7 +1,7 @@
 // A `return` in an if-branch carries the bottom type and is absorbed by the value
 // produced by the sibling branch, so the `if` is typed by that value. Exercises
 // both the value path and the diverging path.
-let clamp_or_bail = (x: int32) ->
+let clamp_or_bail = (x: i32) ->
     let y = if x >= 0 then x else return -1
     y + 100
 

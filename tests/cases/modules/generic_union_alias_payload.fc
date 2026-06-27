@@ -1,13 +1,13 @@
 module lib =
     union result =
         | ok('a)
-        | err(int32)
+        | err(i32)
 
 let main = (args: str[]) ->
     let _result =
-        let r1 = lib.result<int32>.ok(42)
-        let r2 = lib.result<int32>.ok(10)
-        let r3 = lib.result<int32>.err(0)
+        let r1 = lib.result<i32>.ok(42)
+        let r2 = lib.result<i32>.ok(10)
+        let r3 = lib.result<i32>.err(0)
         match r1 with
         | ok(v) -> match r2 with
             | ok(w) -> v + w

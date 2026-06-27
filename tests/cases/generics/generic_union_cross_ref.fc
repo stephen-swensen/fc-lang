@@ -13,7 +13,7 @@ module m =
     let wrap = (x: 'a, y: 'a) ->
         wrapped<'a>.val(inner { x = x, y = y })
 
-    let unwrap_x = (w: wrapped<int32>) ->
+    let unwrap_x = (w: wrapped<i32>) ->
         match w with
         | val(i) -> i.x
         | empty -> 0
@@ -26,7 +26,7 @@ module m =
     let nest = (x: 'a, y: 'a) ->
         maybe<'a>.some_wrapped(wrapped<'a>.val(inner { x = x, y = y }))
 
-    let unnest_x = (n: maybe<int32>) ->
+    let unnest_x = (n: maybe<i32>) ->
         match n with
         | some_wrapped(w) ->
             match w with

@@ -1,9 +1,9 @@
 module config =
     let factor = 7
 
-let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
 
 let main = (args: str[]) ->
-    let scale = (n: int32) -> n * config.factor
+    let scale = (n: i32) -> n * config.factor
     assert(apply(scale, 6) == 42)
     0

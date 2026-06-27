@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let p = alloc(int32)
+        let p = alloc(i32)
         match p with
         | some(ptr) ->
             *ptr = 99

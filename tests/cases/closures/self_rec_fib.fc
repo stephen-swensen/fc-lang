@@ -1,6 +1,6 @@
 // Self-recursion with two recursive calls per invocation.
 let main = (args: str[]) ->
-    let fib = (n: int32) ->
+    let fib = (n: i32) ->
         if n < 2 then n
         else fib(n - 1) + fib(n - 2)
     assert(fib(0) == 0)

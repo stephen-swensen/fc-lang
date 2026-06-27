@@ -2,7 +2,7 @@
 // context pointer through every recursive call.
 let main = (args: str[]) ->
     let step = 2
-    let sum = (n: int32) ->
+    let sum = (n: i32) ->
         if n <= 0 then 0
         else step + sum(n - 1)
     assert(sum(0) == 0)

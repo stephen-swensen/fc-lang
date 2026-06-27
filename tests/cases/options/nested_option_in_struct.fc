@@ -1,5 +1,5 @@
 struct wrapper =
-    val: int32??
+    val: i32??
 
 let check = (w: wrapper) ->
     match w.val with
@@ -9,7 +9,7 @@ let check = (w: wrapper) ->
 
 let main = (args: str[]) ->
     let a = wrapper { val = some(some(10)) }
-    let b = wrapper { val = some(none(int32)) }
-    let c = wrapper { val = none(int32?) }
+    let b = wrapper { val = some(none(i32)) }
+    let c = wrapper { val = none(i32?) }
     assert(check(a) + check(b) + check(c) == 9)
     0

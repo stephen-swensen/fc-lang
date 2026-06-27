@@ -1,20 +1,20 @@
 // Item 8a: a CONCRETE (non-generic) struct whose fields name generic instances.
 // Concrete decls are excluded from the mono discovery/ordering machinery, so the
 // field stubs (box<...>) were never canonicalized to their mangled C names. The
-// single-level case (box<int32>) happened to resolve, but a NESTED instance
-// (box<box<int32>>) emitted the raw template name `box` -> "unknown type name".
+// single-level case (box<i32>) happened to resolve, but a NESTED instance
+// (box<box<i32>>) emitted the raw template name `box` -> "unknown type name".
 // Root cause: mangle_type_name dropped a STUB's type_args, so the nested stub
 // arg mangled to the bare base name and the mono lookup missed. Fixed by making
 // mangle_type_name recurse into stub type_args (base "__" lp(arg)*), matching the
-// instance's own mangling. int32 vs int64 fields prove the names stay injective.
+// instance's own mangling. i32 vs i64 fields prove the names stay injective.
 struct box =
     v: 'a
 
 struct holder =
-    a: box<int32>
-    b: box<box<int32> >
-    c: box<box<int64> >
-    d: box<box<box<int32> > >
+    a: box<i32>
+    b: box<box<i32> >
+    c: box<box<i64> >
+    d: box<box<box<i32> > >
 
 let main = (args: str[]) ->
     let h = holder {

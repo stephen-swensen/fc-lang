@@ -1,8 +1,8 @@
 // Test: extern struct basic usage — literal, field access, default, mutation
 module t from "time.h" define "_POSIX_C_SOURCE" "200809L" =
     extern struct timespec =
-        tv_sec: int64
-        tv_nsec: int64
+        tv_sec: i64
+        tv_nsec: i64
 
 let main = (args: str[]) ->
     // Struct literal

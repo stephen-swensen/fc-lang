@@ -1,7 +1,7 @@
 // Missing none case even with recursive inner patterns
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
 
 let check = (s: shape?) ->
     match s with

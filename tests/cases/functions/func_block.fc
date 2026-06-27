@@ -1,4 +1,4 @@
-let compute = (x: int32, y: int32) ->
+let compute = (x: i32, y: i32) ->
     let a = x + y
     let b = a * 2
     b - 1

@@ -5726,7 +5726,7 @@ static bool g_backtraces;
  * _fc_symtab[] in the preamble so fc_dump_backtrace() can render FC-level names. */
 typedef struct {
     const char *c_name;   /* mangled C identifier as emitted */
-    const char *fc_name;  /* display name (e.g. "foo<int32>", "<lambda at f.fc:N>") */
+    const char *fc_name;  /* display name (e.g. "foo<i32>", "<lambda at f.fc:N>") */
     const char *file;     /* FC source file of the definition */
     int line;             /* FC source line of the definition */
 } FcSymEntry;
@@ -5744,7 +5744,7 @@ static void symmap_reset(void) {
 /* Add a function to the symbol table for --backtraces.  Pass fc_name=NULL to
  * mark an internal helper (fc_oob, fc_oob_sub) whose backtrace frames should
  * be skipped from the printed backtrace.  Otherwise fc_name is the FC display
- * name (e.g. "foo<int32>", "<lambda at f.fc:N>"). */
+ * name (e.g. "foo<i32>", "<lambda at f.fc:N>"). */
 static void symmap_add(const char *c_name, const char *fc_name,
                        const char *file, int line) {
     if (!g_backtraces || !c_name) return;

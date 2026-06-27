@@ -1,11 +1,11 @@
-let sum_first = (xs: {int32, int32}[]) ->
+let sum_first = (xs: {i32, i32}[]) ->
     let mut acc = 0
     for x in xs do
         acc = acc + x[0]
     acc
 
 let main = (args: str[]) ->
-    let xs = {int32, int32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+    let xs = {i32, i32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
     assert(xs.len == 3i64)
     assert(xs[0][0] == 1)
     assert(xs[1][1] == 4)
@@ -15,7 +15,7 @@ let main = (args: str[]) ->
     assert({ 10, 20 }[1] == 20)
 
     // nested tuple element type
-    let ys = {{int32, int32}, int32}[2] { { { 1, 2 }, 3 }, { { 4, 5 }, 6 } }
+    let ys = {{i32, i32}, i32}[2] { { { 1, 2 }, 3 }, { { 4, 5 }, 6 } }
     assert(ys[1][0][1] == 5)
     assert(ys[1][1] == 6)
     0

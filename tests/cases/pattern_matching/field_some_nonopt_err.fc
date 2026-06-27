@@ -1,6 +1,6 @@
 struct item =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let i = item { x = 1, y = 2 }

@@ -1,10 +1,10 @@
-let describe = (t: {int32, bool}) ->
+let describe = (t: {i32, bool}) ->
     match t with
     | { 1 | 2 | 3, true } -> 100
     | { _, false } -> 200
     | { n, _ } -> n
 
-let deep = (t: {{int32, int32}, int32}) ->
+let deep = (t: {{i32, i32}, i32}) ->
     match t with
     | { { 1, y }, z } -> y + z
     | { _, z } -> z

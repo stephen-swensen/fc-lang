@@ -2,7 +2,7 @@
 // argument it absorbs the `;`-sequence up to the argument-separating `,`/`)`,
 // not beyond.  `let t = 5 in sink = t; t * 2` is the first argument (value 10);
 // `100` is the second.
-let add = (a: int32, b: int32) -> a + b
+let add = (a: i32, b: i32) -> a + b
 let main = (args: str[]) ->
     let mut sink = 0
     let r = add(let t = 5 in sink = t; t * 2, 100)

@@ -2,7 +2,7 @@
 // For in-range indices the result matches the guarded form. Also covers an
 // unguarded store (`unguarded s[i] = v`) and unguarded subslicing.
 let main = (args: str[]) ->
-    let mut xs = int32[5]{10, 20, 30, 40, 50}
+    let mut xs = i32[5]{10, 20, 30, 40, 50}
 
     // unguarded read
     let a = unguarded xs[0]

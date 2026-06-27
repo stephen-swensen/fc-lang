@@ -2,7 +2,7 @@ import array_list from std::data
 
 let main = (args: str[]) ->
     // make and basic operations
-    let l = array_list.make<int32>()
+    let l = array_list.make<i32>()
     assert(array_list.is_empty(l))
     assert(array_list.len(l) == 0)
 
@@ -53,64 +53,64 @@ let main = (args: str[]) ->
     array_list.destroy(l2)
 
     // grow past initial capacity
-    let big = array_list.make<int32>()
+    let big = array_list.make<i32>()
     for i in 0..20 do
         array_list.add(big, i)
     assert(array_list.len(big) == 20)
     assert(array_list.get(big, 19i64) == 19)
 
     // fold
-    let sum = array_list.fold_left(l, 0, (acc: int32, x: int32) -> acc + x)
+    let sum = array_list.fold_left(l, 0, (acc: i32, x: i32) -> acc + x)
     assert(sum == 35) // 10 + 25
 
     // fold_right
-    let diff = array_list.fold_right(l, 0, (acc: int32, x: int32) -> acc - x)
+    let diff = array_list.fold_right(l, 0, (acc: i32, x: i32) -> acc - x)
     assert(diff == -35)
 
     // reduce
     array_list.add(l, 5)
-    let r = array_list.reduce(l, (a: int32, b: int32) -> a + b)
+    let r = array_list.reduce(l, (a: i32, b: i32) -> a + b)
     assert(r == 40)
 
     // try_reduce on empty
-    let empty = array_list.make<int32>()
-    assert(array_list.try_reduce(empty, (a: int32, b: int32) -> a + b).is_none)
+    let empty = array_list.make<i32>()
+    assert(array_list.try_reduce(empty, (a: i32, b: i32) -> a + b).is_none)
     array_list.destroy(empty)
 
     // map
-    let doubled = array_list.map(l, (x: int32) -> x * 2)
+    let doubled = array_list.map(l, (x: i32) -> x * 2)
     assert(array_list.get(doubled, 0i64) == 20)
     assert(array_list.get(doubled, 1i64) == 50)
     assert(array_list.get(doubled, 2i64) == 10)
     array_list.destroy(doubled)
 
     // mapi
-    let indexed = array_list.mapi(l, (i: int64, x: int32) -> (int32) i + x)
+    let indexed = array_list.mapi(l, (i: i64, x: i32) -> (i32) i + x)
     assert(array_list.get(indexed, 0i64) == 10)
     assert(array_list.get(indexed, 1i64) == 26)
     assert(array_list.get(indexed, 2i64) == 7)
     array_list.destroy(indexed)
 
     // filter
-    let big_ones = array_list.filter(l, (x: int32) -> x > 8)
+    let big_ones = array_list.filter(l, (x: i32) -> x > 8)
     assert(array_list.len(big_ones) == 2)
     array_list.destroy(big_ones)
 
     // any / all
-    assert(array_list.any(l, (x: int32) -> x == 25))
-    assert(!array_list.any(l, (x: int32) -> x == 99))
-    assert(array_list.all(l, (x: int32) -> x > 0))
-    assert(!array_list.all(l, (x: int32) -> x > 10))
+    assert(array_list.any(l, (x: i32) -> x == 25))
+    assert(!array_list.any(l, (x: i32) -> x == 99))
+    assert(array_list.all(l, (x: i32) -> x > 0))
+    assert(!array_list.all(l, (x: i32) -> x > 10))
 
     // find / try_find
-    assert(array_list.find(l, (x: int32) -> x > 20) == 25)
-    assert(array_list.try_find(l, (x: int32) -> x > 100).is_none)
+    assert(array_list.find(l, (x: i32) -> x > 20) == 25)
+    assert(array_list.try_find(l, (x: i32) -> x > 100).is_none)
 
     // count
-    assert(array_list.count(l, (x: int32) -> x >= 10) == 2)
+    assert(array_list.count(l, (x: i32) -> x >= 10) == 2)
 
     // scan
-    let scanned = array_list.scan(l, 0, (acc: int32, x: int32) -> acc + x)
+    let scanned = array_list.scan(l, 0, (acc: i32, x: i32) -> acc + x)
     assert(array_list.len(scanned) == 4)
     assert(array_list.get(scanned, 0i64) == 0)
     assert(array_list.get(scanned, 1i64) == 10)
@@ -119,26 +119,26 @@ let main = (args: str[]) ->
     array_list.destroy(scanned)
 
     // sort
-    let sl = array_list.make<int32>()
+    let sl = array_list.make<i32>()
     array_list.add(sl, 5)
     array_list.add(sl, 1)
     array_list.add(sl, 4)
     array_list.add(sl, 2)
     array_list.add(sl, 3)
-    array_list.sort(sl, (a: int32, b: int32) -> a - b)
+    array_list.sort(sl, (a: i32, b: i32) -> a - b)
     assert(array_list.get(sl, 0i64) == 1)
     assert(array_list.get(sl, 1i64) == 2)
     assert(array_list.get(sl, 2i64) == 3)
     assert(array_list.get(sl, 3i64) == 4)
     assert(array_list.get(sl, 4i64) == 5)
     // sort descending
-    array_list.sort(sl, (a: int32, b: int32) -> b - a)
+    array_list.sort(sl, (a: i32, b: i32) -> b - a)
     assert(array_list.get(sl, 0i64) == 5)
     assert(array_list.get(sl, 4i64) == 1)
     array_list.destroy(sl)
 
     // reverse
-    let rv = array_list.make<int32>()
+    let rv = array_list.make<i32>()
     array_list.add(rv, 1)
     array_list.add(rv, 2)
     array_list.add(rv, 3)
@@ -148,18 +148,18 @@ let main = (args: str[]) ->
     assert(array_list.get(rv, 2i64) == 1)
 
     // retain
-    array_list.retain(rv, (x: int32) -> x >= 2)
+    array_list.retain(rv, (x: i32) -> x >= 2)
     assert(array_list.len(rv) == 2)
     assert(array_list.get(rv, 0i64) == 3)
     assert(array_list.get(rv, 1i64) == 2)
 
     // apply
-    array_list.apply(rv, (x: int32) -> x * 10)
+    array_list.apply(rv, (x: i32) -> x * 10)
     assert(array_list.get(rv, 0i64) == 30)
     assert(array_list.get(rv, 1i64) == 20)
 
     // applyi
-    array_list.applyi(rv, (i: int64, x: int32) -> x + (int32) i)
+    array_list.applyi(rv, (i: i64, x: i32) -> x + (i32) i)
     assert(array_list.get(rv, 0i64) == 30) // 30 + 0
     assert(array_list.get(rv, 1i64) == 21) // 20 + 1
     array_list.destroy(rv)

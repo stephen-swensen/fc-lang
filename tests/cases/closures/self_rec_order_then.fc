@@ -1,7 +1,7 @@
 // Local self-recursion is order-independent too: the recursive call is in the
 // then-branch and the base case in the else-branch (mirror of self_rec_factorial.fc).
 let main = (args: str[]) ->
-    let fac = (n: int32) ->
+    let fac = (n: i32) ->
         if n > 1 then n * fac(n - 1) else 1
     assert(fac(0) == 1)
     assert(fac(5) == 120)

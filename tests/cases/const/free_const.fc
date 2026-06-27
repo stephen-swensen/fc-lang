@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-    let p = alloc(int32)!
-    let cp = (const int32*) p
+    let p = alloc(i32)!
+    let cp = (const i32*) p
     free(cp)
     0

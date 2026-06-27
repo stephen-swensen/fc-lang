@@ -1,21 +1,21 @@
-// Item 9: a user struct named exactly like a structural mangling (ptr_int32,
-// opt_int32) collided with the mangling of the corresponding structural type
-// (int32*, int32?). Structural manglings now carry a "__" tag that a user
-// identifier can never contain, so box<int32*> and box<ptr_int32> are distinct.
-struct ptr_int32 =
-    p: int32
-struct opt_int32 =
-    o: int32
+// Item 9: a user struct named exactly like a structural mangling (ptr_i32,
+// opt_i32) collided with the mangling of the corresponding structural type
+// (i32*, i32?). Structural manglings now carry a "__" tag that a user
+// identifier can never contain, so box<i32*> and box<ptr_i32> are distinct.
+struct ptr_i32 =
+    p: i32
+struct opt_i32 =
+    o: i32
 
 struct box =
     value: 'a
 
 let main = (args: str[]) ->
     let mut n = 7
-    let real_ptr = box { value = &n }                   // box<int32*>
-    let fake_ptr = box { value = ptr_int32 { p = 11 } } // box<ptr_int32>
-    let real_opt = box { value = some(99) }             // box<int32?>
-    let fake_opt = box { value = opt_int32 { o = 22 } } // box<opt_int32>
+    let real_ptr = box { value = &n }                   // box<i32*>
+    let fake_ptr = box { value = ptr_i32 { p = 11 } } // box<ptr_i32>
+    let real_opt = box { value = some(99) }             // box<i32?>
+    let fake_opt = box { value = opt_i32 { o = 22 } } // box<opt_i32>
     assert(*(real_ptr.value) == 7)
     assert(fake_ptr.value.p == 11)
     assert(real_opt.value! == 99)

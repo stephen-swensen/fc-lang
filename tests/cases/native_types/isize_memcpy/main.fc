@@ -7,17 +7,17 @@ module libc from "stdlib.h" =
 
 let main = (args: str[]) ->
     // allocate with usize — matches C's malloc(size_t)
-    let size = 6u
+    let size = 6usize
     let buf = libc.malloc(size)
 
     // memcpy with usize length
     let src = c"hello"
     let len = c.strlen(src)
-    c.memcpy(buf, src, len + 1u)
+    c.memcpy(buf, src, len + 1usize)
 
     // verify the copy worked
     let result = (cstr) buf
     let rlen = c.strlen(result)
-    free((int32*) buf)
-    assert((int32) rlen == 5)
+    free((i32*) buf)
+    assert((i32) rlen == 5)
     0

@@ -1,7 +1,7 @@
 struct box =
     value: 'a
 
-let get_value = (b: box<int32>) -> b.value
+let get_value = (b: box<i32>) -> b.value
 
 let main = (args: str[]) ->
     let b = box { value = 42 }

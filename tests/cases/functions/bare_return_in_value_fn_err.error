@@ -1,1 +1,1 @@
-return type mismatch: expected int32, got void
+return type mismatch: expected i32, got void

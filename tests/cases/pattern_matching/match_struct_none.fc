@@ -1,10 +1,10 @@
 struct item =
-    name: int32
-    count: int32?
+    name: i32
+    count: i32?
 
 let main = (args: str[]) ->
     let _result =
-        let i = item { name = 42, count = none(int32) }
+        let i = item { name = 42, count = none(i32) }
         match i with
         | { count = some(c) } -> c
         | { name = n, count = none } -> n

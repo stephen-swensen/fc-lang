@@ -1,8 +1,8 @@
 // Test: qualified type in pointer, slice, and option param positions
 module m =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 let use_ptr = (p: m.point*) -> p->x
 let use_slice = (pts: m.point[]) -> pts[0].x

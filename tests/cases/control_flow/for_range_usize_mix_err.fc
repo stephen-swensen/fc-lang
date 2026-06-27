@@ -1,8 +1,8 @@
-// No implicit widening to/from isize/usize: a default-int32 start with a usize
+// No implicit widening to/from isize/usize: a default-i32 start with a usize
 // end has no common type and is rejected. The fix is to make the start usize
-// too (`for i in 0u..n`), matching the rule that `+`/`<` enforce elsewhere.
+// too (`for i in 0usize..n`), matching the rule that `+`/`<` enforce elsewhere.
 let main = (args: str[]) ->
-    let n = 5u
+    let n = 5usize
     for i in 0..n do
-        assert(i < 10u)
+        assert(i < 10usize)
     0

@@ -1,10 +1,10 @@
-let inner = (x: int32?) ->
+let inner = (x: i32?) ->
     x!
 
-let outer = (x: int32?) ->
+let outer = (x: i32?) ->
     inner(x)
 
 let main = (args: str[]) ->
-    let none_val = none(int32)
+    let none_val = none(i32)
     let _r = outer(none_val)
     0

@@ -1,8 +1,8 @@
 // Ident ref inside a struct literal at module scope.
 module m =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     let default_x = 10
     let default_y = 20

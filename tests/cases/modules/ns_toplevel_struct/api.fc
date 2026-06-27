@@ -4,7 +4,7 @@ module geom =
     let origin = () ->
         point { x = 0, y = 0 }
 
-    let make = (x: int32, y: int32) ->
+    let make = (x: i32, y: i32) ->
         point { x = x, y = y }
 
     let manhattan = (p: point) ->

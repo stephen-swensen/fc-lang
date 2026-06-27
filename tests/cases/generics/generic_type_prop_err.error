@@ -1,1 +1,1 @@
-in get_nan(int32) at 1:28: type 'int32' has no property 'nan'
+in get_nan(i32) at 1:28: type 'i32' has no property 'nan'

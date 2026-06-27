@@ -2,69 +2,69 @@ namespace std::
 
 module text =
     private module c from "stdlib.h" =
-        extern strtoll: (const cstr, cstr*, int32) -> int64
-        extern strtod: (const cstr, cstr*) -> float64
-        extern strtof: (const cstr, cstr*) -> float32
+        extern strtoll: (const cstr, cstr*, i32) -> i64
+        extern strtod: (const cstr, cstr*) -> f64
+        extern strtof: (const cstr, cstr*) -> f32
 
     // Numeric parsing converts s to a null-terminated cstr, which copies it
     // onto the stack (an alloca of s.len + 1). An unbounded length would risk a
     // stack overflow — undefined behavior, not a clean failure — so inputs
     // longer than this cap parse as none. 512 bytes comfortably holds any real
-    // numeric token (int64 is at most 20 digits; even full-decimal float64
+    // numeric token (i64 is at most 20 digits; even full-decimal f64
     // extremes fit), so only pathological/corrupt input is ever rejected.
     private let max_parse_len = 512i64
 
-    // parse_int32: parses a string as a 32-bit signed integer (base 10).
-    // returns: int32? — some(value) on success, none if the string is not a
+    // parse_i32: parses a string as a 32-bit signed integer (base 10).
+    // returns: i32? — some(value) on success, none if the string is not a
     // valid integer or is longer than max_parse_len.
-    let parse_int32 = (s: const str) ->
-        if s.len > max_parse_len then default(int32?)
+    let parse_i32 = (s: const str) ->
+        if s.len > max_parse_len then default(i32?)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtoll(cs, &endptr, 10)
-            if endptr == cs then default(int32?)
-            else some((int32) val)
+            if endptr == cs then default(i32?)
+            else some((i32) val)
 
-    // parse_int64: parses a string as a 64-bit signed integer (base 10).
-    // returns: int64? — some(value) on success, none if the string is not a
+    // parse_i64: parses a string as a 64-bit signed integer (base 10).
+    // returns: i64? — some(value) on success, none if the string is not a
     // valid integer or is longer than max_parse_len.
-    let parse_int64 = (s: const str) ->
-        if s.len > max_parse_len then default(int64?)
+    let parse_i64 = (s: const str) ->
+        if s.len > max_parse_len then default(i64?)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtoll(cs, &endptr, 10)
-            if endptr == cs then default(int64?)
+            if endptr == cs then default(i64?)
             else some(val)
 
-    // parse_float32: parses a string as a 32-bit float.
-    // returns: float32? — some(value) on success, none if the string is not a
+    // parse_f32: parses a string as a 32-bit float.
+    // returns: f32? — some(value) on success, none if the string is not a
     // valid number or is longer than max_parse_len.
-    let parse_float32 = (s: const str) ->
-        if s.len > max_parse_len then default(float32?)
+    let parse_f32 = (s: const str) ->
+        if s.len > max_parse_len then default(f32?)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtof(cs, &endptr)
-            if endptr == cs then default(float32?)
+            if endptr == cs then default(f32?)
             else some(val)
 
-    // parse_float64: parses a string as a 64-bit float.
-    // returns: float64? — some(value) on success, none if the string is not a
+    // parse_f64: parses a string as a 64-bit float.
+    // returns: f64? — some(value) on success, none if the string is not a
     // valid number or is longer than max_parse_len.
-    let parse_float64 = (s: const str) ->
-        if s.len > max_parse_len then default(float64?)
+    let parse_f64 = (s: const str) ->
+        if s.len > max_parse_len then default(f64?)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let val = c.strtod(cs, &endptr)
-            if endptr == cs then default(float64?)
+            if endptr == cs then default(f64?)
             else some(val)
 
     // copy: returns a heap-allocated copy of a string. Caller must free.
     let copy = (s: const str) ->
-        let buf = alloc(uint8[s.len] {})!
+        let buf = alloc(u8[s.len] {})!
         let mut i = 0i64
         loop
             if i >= s.len then break
@@ -97,10 +97,10 @@ module text =
         else s[s.len - suffix.len..s.len] == suffix
 
     // index_of: returns the position of the first occurrence of needle in haystack.
-    // returns: int64? — some(index) if found, none if not found.
+    // returns: i64? — some(index) if found, none if not found.
     let index_of = (haystack: const str, needle: const str) ->
         if needle.len == 0i64 then some(0i64)
-        else if needle.len > haystack.len then default(int64?)
+        else if needle.len > haystack.len then default(i64?)
         else
             let limit = haystack.len - needle.len + 1i64
             let mut i = 0i64
@@ -108,7 +108,7 @@ module text =
                 if i >= limit then break
                 if haystack[i..i + needle.len] == needle then return some(i)
                 i = i + 1i64
-            default(int64?)
+            default(i64?)
 
     // trim: strips leading and trailing ASCII whitespace. Returns a subslice of s (no allocation).
     let trim = (s: const str) ->
@@ -147,19 +147,19 @@ module text =
         s[0i64..end]
 
     // to_upper_char: converts an ASCII lowercase byte to uppercase.
-    let to_upper_char = (b: uint8) ->
+    let to_upper_char = (b: u8) ->
         if b >= 97u8 && b <= 122u8 then b - 32u8
         else b
 
     // to_lower_char: converts an ASCII uppercase byte to lowercase.
-    let to_lower_char = (b: uint8) ->
+    let to_lower_char = (b: u8) ->
         if b >= 65u8 && b <= 90u8 then b + 32u8
         else b
 
     // to_upper: returns a heap-allocated copy with ASCII lowercase converted to uppercase.
     // Caller must free the returned string.
     let to_upper = (s: const str) ->
-        let result = alloc(uint8[s.len] {})!
+        let result = alloc(u8[s.len] {})!
         let mut i = 0i64
         loop
             if i >= s.len then break
@@ -170,7 +170,7 @@ module text =
     // to_lower: returns a heap-allocated copy with ASCII uppercase converted to lowercase.
     // Caller must free the returned string.
     let to_lower = (s: const str) ->
-        let result = alloc(uint8[s.len] {})!
+        let result = alloc(u8[s.len] {})!
         let mut i = 0i64
         loop
             if i >= s.len then break
@@ -218,7 +218,7 @@ module text =
             if pi > 0i64 then total = total + delim.len
             total = total + parts[pi].len
             pi = pi + 1i64
-        let result = alloc(uint8[total] {})!
+        let result = alloc(u8[total] {})!
         let mut pos = 0i64
         let mut pi = 0i64
         loop

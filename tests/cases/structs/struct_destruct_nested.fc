@@ -1,10 +1,10 @@
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 struct circle =
     center: point
-    radius: int32
+    radius: i32
 
 let main = (args: str[]) ->
     let c = circle { center = point { x = 10, y = 20 }, radius = 5 }

@@ -1,6 +1,6 @@
 module math =
-    private let helper = (x: int32) -> x * 10
-    let compute = (x: int32) -> math.helper(x) + 5
+    private let helper = (x: i32) -> x * 10
+    let compute = (x: i32) -> math.helper(x) + 5
 
 let main = (args: str[]) ->
     assert(math.compute(4) == 45)

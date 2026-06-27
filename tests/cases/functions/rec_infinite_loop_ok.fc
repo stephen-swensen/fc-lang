@@ -1,7 +1,7 @@
 // An intentional infinite loop is written with `loop` and makes no self-call, so it is
 // accepted (it compiles to `while (1)`, which the C compiler does not flag). Guarded so
 // it is never entered at runtime; the point is that it compiles and the program exits 0.
-let serve = (counter: int32*) ->
+let serve = (counter: i32*) ->
     loop
         counter[0] = counter[0] + 1
 

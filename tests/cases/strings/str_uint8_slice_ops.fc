@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let mut buf = uint8[5] { }
+        let mut buf = u8[5] { }
         buf.ptr[0] = 10u8
         buf.ptr[1] = 20u8
         buf.ptr[2] = 30u8
@@ -19,7 +19,7 @@ let main = (args: str[]) ->
         for x in buf do
             total = total + x
 
-        let result = (int32) len + (int32) v + (int32) sub_len + (int32) sub_v + (int32) pv + (int32) total
+        let result = (i32) len + (i32) v + (i32) sub_len + (i32) sub_v + (i32) pv + (i32) total
         result
     assert(_result == 217)
     0

@@ -1,35 +1,35 @@
 // `unguarded (T) f` opts out of the saturating fc_f2* helper, emitting a bare C
 // truncation. For in-range values the result is identical to the checked (T) cast.
-// Covers float64 and float32 sources across a spread of integer targets.
+// Covers f64 and f32 sources across a spread of integer targets.
 let main = (args: str[]) ->
-    let f = 3.7         // float64
-    let g = -3.7        // float64, negative
-    let s = 200.9f32    // float32
+    let f = 3.7         // f64
+    let g = -3.7        // f64, negative
+    let s = 200.9f32    // f32
 
-    // float64 -> integer targets, in range: unguarded == literal == checked
-    let a8 = unguarded (int8) f
+    // f64 -> integer targets, in range: unguarded == literal == checked
+    let a8 = unguarded (i8) f
     assert(a8 == 3i8)
-    assert(a8 == (int8) f)
-    assert((unguarded (int16) f) == 3i16)
-    let a32 = unguarded (int32) f
+    assert(a8 == (i8) f)
+    assert((unguarded (i16) f) == 3i16)
+    let a32 = unguarded (i32) f
     assert(a32 == 3)
-    assert(a32 == (int32) f)
-    assert((unguarded (int64) f) == 3i64)
-    assert((unguarded (uint8) f) == 3u8)
-    assert((unguarded (uint32) f) == 3u32)
-    assert((unguarded (uint64) f) == 3u64)
-    assert((unguarded (isize) f) == 3i)
-    assert((unguarded (usize) f) == 3u)
+    assert(a32 == (i32) f)
+    assert((unguarded (i64) f) == 3i64)
+    assert((unguarded (u8) f) == 3u8)
+    assert((unguarded (u32) f) == 3u32)
+    assert((unguarded (u64) f) == 3u64)
+    assert((unguarded (isize) f) == 3isize)
+    assert((unguarded (usize) f) == 3usize)
 
     // negative source, signed targets
-    let n = unguarded (int32) g
+    let n = unguarded (i32) g
     assert(n == -3)
-    assert(n == (int32) g)
-    assert((unguarded (int64) g) == -3i64)
+    assert(n == (i32) g)
+    assert((unguarded (i64) g) == -3i64)
 
-    // float32 source
-    let p = unguarded (int32) s
+    // f32 source
+    let p = unguarded (i32) s
     assert(p == 200)
-    assert(p == (int32) s)
-    assert((unguarded (uint8) s) == 200u8)
+    assert(p == (i32) s)
+    assert((unguarded (u8) s) == 200u8)
     0

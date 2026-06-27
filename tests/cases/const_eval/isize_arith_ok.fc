@@ -1,14 +1,14 @@
 // isize/usize +,-,* still compile at module scope: they emit plain C infix,
 // which is a valid constant initializer (only div/mod stays blocked).
 module m =
-    let x = 20i
-    let sum = x + 1i
-    let prod = x * 2i
-    let u = 7u
-    let usum = u + 3u
+    let x = 20isize
+    let sum = x + 1isize
+    let prod = x * 2isize
+    let u = 7usize
+    let usum = u + 3usize
 
 let main = (args: str[]) ->
-    assert(m.sum == 21i)
-    assert(m.prod == 40i)
-    assert(m.usum == 10u)
+    assert(m.sum == 21isize)
+    assert(m.prod == 40isize)
+    assert(m.usum == 10usize)
     0

@@ -1,5 +1,5 @@
 struct node =
-    data: int32
+    data: i32
     next: node*?
 
 let get_data = (n: const node*) ->

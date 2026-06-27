@@ -299,25 +299,15 @@ static bool bare_inst_scan(Parser *p, int start) {
 }
 
 static bool is_type_name(const char *s, int len) {
-    struct { const char *n; int l; } names[] = {
-        {"int8",2+2}, {"int16",2+3}, {"int32",2+3}, {"int64",2+3},
-        {"uint8",3+1+1}, {"uint16",3+2+1}, {"uint32",3+2+1}, {"uint64",3+2+1},
-        {"float32",5+2}, {"float64",5+2},
-        {"bool",4}, {"char",4},
-        {"str",3}, {"cstr",4},
-        {"any",3},
-    };
-    /* Actually compute lengths correctly */
     static const struct { const char *n; int l; } types[] = {
-        {"int8",4}, {"int16",5}, {"int32",5}, {"int64",5},
-        {"uint8",5}, {"uint16",6}, {"uint32",6}, {"uint64",6},
-        {"float32",7}, {"float64",7},
+        {"i8",2}, {"i16",3}, {"i32",3}, {"i64",3},
+        {"u8",2}, {"u16",3}, {"u32",3}, {"u64",3},
+        {"f32",3}, {"f64",3},
         {"bool",4}, {"char",4},
         {"str",3}, {"cstr",4},
         {"any",3},
         {"isize",5}, {"usize",5},
     };
-    (void)names;
     for (int i = 0; i < (int)(sizeof(types)/sizeof(types[0])); i++) {
         if (types[i].l == len && memcmp(s, types[i].n, (size_t)len) == 0) return true;
     }

@@ -2,14 +2,14 @@
 // Access through union -> struct -> struct without importing intermediate types
 module ev from "test_event.h" =
     extern struct keysym as keysym =
-        scancode: int32
-        sym: int32
+        scancode: i32
+        sym: i32
     extern struct key_event as key_event =
-        type: uint32
-        timestamp: uint32
+        type: u32
+        timestamp: u32
         keysym: keysym
     extern union event as event =
-        type: uint32
+        type: u32
         key: key_event
 
 let main = (args: str[]) ->

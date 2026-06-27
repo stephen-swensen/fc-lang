@@ -4,9 +4,9 @@
 // variable bound to a pointer — signatures, some/none construction, match,
 // and unwrap all have to agree on the representation.
 struct point =
-    x: int32
+    x: i32
 
-let pick = (s: 'a[], i: int64, ok: bool) ->
+let pick = (s: 'a[], i: i64, ok: bool) ->
     if ok then some(s[i]) else none('a)
 
 let unwrap_or = (o: 'a?, d: 'a) ->
@@ -50,7 +50,7 @@ let main = (args: str[]) ->
 
     // non-pointer instantiation of the same generics still uses the
     // struct representation
-    let iv = pick(int32[2] { 7, 8 }, 0, true)
+    let iv = pick(i32[2] { 7, 8 }, 0, true)
     assert(unwrap_or(iv, 0) == 7)
-    assert(!has(none_of<int32>()))
+    assert(!has(none_of<i32>()))
     0

@@ -1,1 +1,1 @@
-in cmp(box<int32>, box<int32>) at 4:31: ordering comparison requires numeric or pointer types, got box<int32> and box<int32>
+in cmp(box<i32>, box<i32>) at 4:31: ordering comparison requires numeric or pointer types, got box<i32> and box<i32>

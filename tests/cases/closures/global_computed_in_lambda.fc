@@ -1,8 +1,8 @@
 let offset = 21
 
-let apply = (f: (int32) -> int32, x: int32) -> f(x)
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
 
 let main = (args: str[]) ->
-    let add_offset = (n: int32) -> n + offset
+    let add_offset = (n: i32) -> n + offset
     assert(apply(add_offset, 21) == 42)
     0

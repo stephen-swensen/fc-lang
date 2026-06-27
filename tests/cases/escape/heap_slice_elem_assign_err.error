@@ -1,1 +1,1 @@
-cannot store stack-allocated int32* in heap-allocated memory
+cannot store stack-allocated i32* in heap-allocated memory

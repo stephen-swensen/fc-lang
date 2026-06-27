@@ -1,9 +1,9 @@
 // Item 6: generic-union variant construction inside a generic body. The union
-// instance maybe<int64> exists ONLY inside roundtrip's body — the function's
-// result type is 'a (int64), so the union never appears in a concrete signature
+// instance maybe<i64> exists ONLY inside roundtrip's body — the function's
+// result type is 'a (i64), so the union never appears in a concrete signature
 // or in main. Transitive mono discovery must register the union from the variant
 // constructor expression, else the emitted C references an undefined
-// `maybe__5_int64`. Covers a payload variant (just) and a no-payload variant
+// `maybe__5_i64`. Covers a payload variant (just) and a no-payload variant
 // (nothing), and two distinct instantiations to prove per-type registration.
 union maybe =
     | just('a)
@@ -22,5 +22,5 @@ let roundtrip = (x: 'a) ->
 
 let main = (args: str[]) ->
     assert(roundtrip(21i64) == 21i64)
-    assert(roundtrip(5i16) == 5i16)   // distinct instantiation: maybe<int16>
+    assert(roundtrip(5i16) == 5i16)   // distinct instantiation: maybe<i16>
     0

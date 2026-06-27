@@ -1,7 +1,7 @@
 module helper =
     struct local_point =
-        a: int32
-        b: int32
+        a: i32
+        b: i32
 
     let make = () -> local_point { a = 100, b = 200 }
 

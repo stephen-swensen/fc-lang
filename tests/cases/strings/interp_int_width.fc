@@ -1,13 +1,13 @@
 // Integer interpolation must be int-width-agnostic. Every integer-number
 // conversion (%d %i %u %x %X %o) is passed as (unsigned) long long with an `ll`
-// length modifier, so a full-width int32/uint32 value is never truncated on a
-// 16-bit-`int` target (where int32_t is `long`, not `int`). On a 32-bit-`int`
+// length modifier, so a full-width i32/u32 value is never truncated on a
+// 16-bit-`int` target (where i32_t is `long`, not `int`). On a 32-bit-`int`
 // host these values are unchanged; the test pins format/argument agreement and
 // guards against reverting to a width-dependent (int)/%d form.
 let main = (args: str[]) ->
     let _result =
         let mut r = 0
-        let a = 2000000000          // near int32 max
+        let a = 2000000000          // near i32 max
         if "%d{a}" == "2000000000" then r = r + 1
         if "%x{a}" == "77359400" then r = r + 2
         if "%u{a}" == "2000000000" then r = r + 4

@@ -1,9 +1,9 @@
 // Positive: returning an option to a heap struct (non-escape)
 struct holder =
-    p: int32*
+    p: i32*
 
 let make = () ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 42
     alloc(holder { p = p })
 

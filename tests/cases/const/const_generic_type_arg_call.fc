@@ -3,6 +3,6 @@
 let make = <'a>() -> default('a)
 
 let main = (args: str[]) ->
-    let x = make<const int32*>()
-    assert(x == (const int32*) 0i)
+    let x = make<const i32*>()
+    assert(x == (const i32*) 0isize)
     0

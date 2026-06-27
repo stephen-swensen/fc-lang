@@ -1,6 +1,6 @@
 // Passing a generic function directly as an argument is likewise rejected.
 let identity = (x: 'a) -> x
-let apply_it = (f: (int32) -> int32, n: int32) -> f(n)
+let apply_it = (f: (i32) -> i32, n: i32) -> f(n)
 
 let main = (args: str[]) ->
     apply_it(identity, 5)

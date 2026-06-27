@@ -8,13 +8,13 @@
 struct optbox =
     v: 'a?
 
-let dbl = (x: int32) -> x * 2
+let dbl = (x: i32) -> x * 2
 
 let main = (args: str[]) ->
     let h = optbox { v = some(dbl) }
     assert(h.v!(21) == 42)
 
-    let e = optbox { v = none((int32) -> int32) }
+    let e = optbox { v = none((i32) -> i32) }
     let r = match e.v with
         | some(_) -> -1
         | none -> 7

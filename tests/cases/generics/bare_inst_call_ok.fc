@@ -7,7 +7,7 @@ let make = <'a>() ->
 
 let main = (args: str[]) ->
     // explicit type-argument call still works
-    let v = make<int32>()
+    let v = make<i32>()
     assert(v == 0)
 
     // comparison chain `a < b > c` is unaffected (parses as (a < b) and (> c))

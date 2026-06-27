@@ -34,13 +34,13 @@ let main = (args: str[]) ->
     atomic_store_release(&h, 18000000000000000000u64)
     assert(atomic_load_acquire(&h) == 18000000000000000000u64)
 
-    let mut i = 0i
-    atomic_store_release(&i, -42i)
-    assert(atomic_load_acquire(&i) == -42i)
+    let mut i = 0isize
+    atomic_store_release(&i, -42isize)
+    assert(atomic_load_acquire(&i) == -42isize)
 
-    let mut j = 0u
-    atomic_store_release(&j, 42u)
-    assert(atomic_load_acquire(&j) == 42u)
+    let mut j = 0usize
+    atomic_store_release(&j, 42usize)
+    assert(atomic_load_acquire(&j) == 42usize)
 
     let mut k = false
     atomic_store_release(&k, true)

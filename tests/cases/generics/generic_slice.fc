@@ -1,8 +1,8 @@
 let length = (s: 'a[]) -> s.len
 
 let main = (args: str[]) ->
-    let arr = alloc(int32[3] { })!
+    let arr = alloc(i32[3] { })!
     let n = length(arr)
     free(arr)
-    assert((int32) n == 3)
+    assert((i32) n == 3)
     0

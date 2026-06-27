@@ -1,8 +1,8 @@
 struct node =
-    value: int32
+    value: i32
     next: node*?
 
-let push = (head: node*?, val: int32) ->
+let push = (head: node*?, val: i32) ->
     let n = alloc(node)!
     n->value = val
     n->next = head

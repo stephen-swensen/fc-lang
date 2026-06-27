@@ -1,16 +1,16 @@
 // Test: module-qualified struct type in function parameter and return
 module geometry =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
-let make = (x: int32, y: int32) ->
+let make = (x: i32, y: i32) ->
     geometry.point { x = x, y = y }
 
 let manhattan = (p: geometry.point) ->
     p.x + p.y
 
-let scale = (p: geometry.point, factor: int32) ->
+let scale = (p: geometry.point, factor: i32) ->
     geometry.point { x = p.x * factor, y = p.y * factor }
 
 let main = (args: str[]) ->

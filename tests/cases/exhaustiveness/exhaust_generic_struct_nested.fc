@@ -7,7 +7,7 @@ struct holder =
     val: 'a
     tag: tag
 
-let check = (h: holder<int32>) ->
+let check = (h: holder<i32>) ->
     match h with
     | { tag = x } -> 1
     | { tag = y } -> 2

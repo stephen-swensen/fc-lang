@@ -28,7 +28,7 @@ let main = (args: str[]) ->
 
     // signed negation (non-min). Runtime operand: `-(literal)` would constant-fold
     // to a literal, leaving `checked` with no governed op.
-    let ns = int8[1]{100i8}
+    let ns = i8[1]{100i8}
     let n = checked -(ns[0])
     assert(n == -100i8)
 
@@ -39,25 +39,25 @@ let main = (args: str[]) ->
     assert(r == -14)
 
     // narrowing casts, in range, all signedness combos
-    assert((checked (int8) 100i32) == 100i8)        // signed -> signed
-    assert((checked (uint8) 100i32) == 100u8)       // signed -> unsigned
-    assert((checked (int8) 100u32) == 100i8)        // unsigned -> signed
-    assert((checked (uint8) 200u32) == 200u8)       // unsigned -> unsigned
-    assert((checked (int32) 1000000i64) == 1000000) // 64-bit -> 32-bit signed
-    assert((checked (uint32) 1000000u64) == 1000000u32)
-    assert((checked (uint64) 5i32) == 5u64)         // signed -> wider unsigned (only negatives lost)
-    assert((checked (int8) (-100i32)) == -100i8)    // signed negative in range
+    assert((checked (i8) 100i32) == 100i8)        // signed -> signed
+    assert((checked (u8) 100i32) == 100u8)       // signed -> unsigned
+    assert((checked (i8) 100u32) == 100i8)        // unsigned -> signed
+    assert((checked (u8) 200u32) == 200u8)       // unsigned -> unsigned
+    assert((checked (i32) 1000000i64) == 1000000) // 64-bit -> 32-bit signed
+    assert((checked (u32) 1000000u64) == 1000000u32)
+    assert((checked (u64) 5i32) == 5u64)         // signed -> wider unsigned (only negatives lost)
+    assert((checked (i8) (-100i32)) == -100i8)    // signed negative in range
 
     // platform-width types (isize/usize): bounds via PTRDIFF_*/SIZE_MAX, width-agnostic
-    let i64s = int64[1]{100i64}
-    assert((int64)(checked (isize) i64s[0]) == 100i64)   // -> isize, in range
-    let us = usize[1]{50u}
-    assert((checked (uint8) us[0]) == 50u8)              // usize -> uint8, in range
+    let i64s = i64[1]{100i64}
+    assert((i64)(checked (isize) i64s[0]) == 100i64)   // -> isize, in range
+    let us = usize[1]{50usize}
+    assert((checked (u8) us[0]) == 50u8)              // usize -> u8, in range
 
     // a widening cast is not trapped: pair it with a governed op so `checked`
     // has an effect, and confirm the widened value is exact.
     let w = checked
-        let x = (int64) 2000000000i32
+        let x = (i64) 2000000000i32
         x + 2000000000i64
     assert(w == 4000000000i64)
     0

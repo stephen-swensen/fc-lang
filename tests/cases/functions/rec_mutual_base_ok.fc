@@ -1,9 +1,9 @@
 // Mutual recursion is never flagged as infinite self-recursion (a call to a sibling is
 // not a self-call). With base cases it terminates and runs normally.
-let is_even = (n: int32) ->
+let is_even = (n: i32) ->
     if n == 0 then true else is_odd(n - 1)
 
-let is_odd = (n: int32) ->
+let is_odd = (n: i32) ->
     if n == 0 then false else is_even(n - 1)
 
 let main = (args: str[]) ->

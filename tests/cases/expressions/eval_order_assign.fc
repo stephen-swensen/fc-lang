@@ -1,16 +1,16 @@
 // Assignment evaluates the target's lvalue subexpressions left-to-right, then
 // the value, each exactly once.
 struct cell =
-    x: int32
+    x: i32
 
-let bump = (c: int32*) ->
+let bump = (c: i32*) ->
     *c = *c + 1
     *c
 
 let main = (args: str[]) ->
     // s[f()] = g(): the index f() runs first (1), then the value g() (2).
     let mut a = 0
-    let mut buf = int32[4] { 0, 0, 0, 0 }
+    let mut buf = i32[4] { 0, 0, 0, 0 }
     buf[bump(&a)] = bump(&a)
     assert(buf[1] == 2)
     assert(buf[0] == 0 && buf[2] == 0 && buf[3] == 0)
@@ -26,7 +26,7 @@ let main = (args: str[]) ->
 
     // Target index evaluated exactly once.
     let mut d = 0
-    let mut buf2 = int32[4] { 0, 0, 0, 0 }
+    let mut buf2 = i32[4] { 0, 0, 0, 0 }
     buf2[bump(&d)] = 7
     assert(buf2[1] == 7)
     assert(d == 1)   // index ran once, not twice

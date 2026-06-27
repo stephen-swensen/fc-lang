@@ -1,7 +1,7 @@
 // A module with a private submodule named "c" that wraps stdio.h
 module io_wrapper =
     private module c from "stdio.h" =
-        extern fflush: (any*) -> int32
+        extern fflush: (any*) -> i32
 
     let flush = (f: any*) ->
         c.fflush(f)

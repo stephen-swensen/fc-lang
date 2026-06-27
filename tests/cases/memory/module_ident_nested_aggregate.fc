@@ -1,8 +1,8 @@
 // Nested aggregate: an ident inside a struct inside a slice lit.
 module m =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     let x1 = 1
     let y1 = 2

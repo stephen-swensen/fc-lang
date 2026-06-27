@@ -6,4 +6,4 @@
 namespace acme::
 
 struct point =
-    x: int32
+    x: i32

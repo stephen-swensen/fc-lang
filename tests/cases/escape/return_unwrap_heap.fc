@@ -1,6 +1,6 @@
 // Unwrapping a heap option preserves heap provenance
 let make = () ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 99
     p
 

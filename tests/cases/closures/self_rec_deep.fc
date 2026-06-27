@@ -2,7 +2,7 @@
 // recursive frames.
 let main = (args: str[]) ->
     let acc = 1
-    let count = (n: int32) ->
+    let count = (n: i32) ->
         if n <= 0 then 0
         else acc + count(n - 1)
     assert(count(1000) == 1000)   // acc (1) added 1000 times

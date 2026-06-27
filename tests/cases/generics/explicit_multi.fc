@@ -4,6 +4,6 @@ let size_sum = <'a, 'b>() ->
     a + b
 
 let main = (args: str[]) ->
-    let s = size_sum<int32, int64>()
-    assert((int32) s == 12)
+    let s = size_sum<i32, i64>()
+    assert((i32) s == 12)
     0

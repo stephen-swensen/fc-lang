@@ -1,5 +1,5 @@
 union wrapper =
-    | val(int32)
+    | val(i32)
 
 let main = (args: str[]) ->
     let _result =

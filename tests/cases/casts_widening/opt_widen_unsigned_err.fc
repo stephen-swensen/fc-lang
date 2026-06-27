@@ -1,5 +1,5 @@
-// uint8? must not widen to uint32? (unsigned numeric option widening).
-let take = (x: uint32?) ->
+// u8? must not widen to u32? (unsigned numeric option widening).
+let take = (x: u32?) ->
     match x with
     | some(v) -> v
     | none -> 0u32
@@ -7,4 +7,4 @@ let take = (x: uint32?) ->
 let main = (args: str[]) ->
     let a = some(7u8)
     let r = take(a)
-    (int32) r
+    (i32) r

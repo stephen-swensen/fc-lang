@@ -4,24 +4,24 @@ module m =
     struct entry =
         key: 'a
         value: 'b
-        state: int32
+        state: i32
 
     struct table =
         buckets: entry<'a, 'b>[]
-        count: int32
+        count: i32
 
-    let make = <'a, 'b>(cap: int64) ->
+    let make = <'a, 'b>(cap: i64) ->
         table { buckets = alloc(entry<'a, 'b>[cap] { })!, count = 0 }
 
-    let set_entry = (t: table<'a, 'b>*, idx: int64, k: 'a, v: 'b) ->
+    let set_entry = (t: table<'a, 'b>*, idx: i64, k: 'a, v: 'b) ->
         t->buckets[idx] = entry { key = k, value = v, state = 1 }
 
-    let get_key = (t: table<'a, 'b>, idx: int64) ->
+    let get_key = (t: table<'a, 'b>, idx: i64) ->
         let e = t.buckets[idx]
         e.key
 
 let main = (args: str[]) ->
-    let mut t = m.make<int32, int32>(4)
+    let mut t = m.make<i32, i32>(4)
     m.set_entry(&t, 0, 10, 100)
     m.set_entry(&t, 1, 20, 200)
     assert(m.get_key(t, 0) == 10)

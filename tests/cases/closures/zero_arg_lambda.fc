@@ -1,4 +1,4 @@
-let call_it = (f: () -> int32) -> f()
+let call_it = (f: () -> i32) -> f()
 
 let main = (args: str[]) ->
     let answer = () -> 42

@@ -1,6 +1,6 @@
 // Item 6 (same class as sizeof/alignof): default(T) whose type operand is a
 // generic struct instance used only inside a generic body. The EXPR_DEFAULT
-// operand box<int64> was never registered -> undefined `box__5_int64`.
+// operand box<i64> was never registered -> undefined `box__5_i64`.
 struct box =
     v: 'a
 

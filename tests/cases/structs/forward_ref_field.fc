@@ -2,10 +2,10 @@
 // declared later in source order. Codegen must emit `inner` first (topo-sort).
 struct outer =
     i: inner
-    tag: int32
+    tag: i32
 
 struct inner =
-    x: int32
+    x: i32
 
 let main = (args: str[]) ->
     let o = outer { i = inner { x = 7 }, tag = 42 }

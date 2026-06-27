@@ -3,8 +3,8 @@
 // companion module) and external (from outside) access must work.
 module outer =
     union shape =
-        | circle(int32)
-        | rect(int32)
+        | circle(i32)
+        | rect(i32)
         | empty
 
     module shape =
@@ -15,14 +15,14 @@ module outer =
             | empty -> 0
 
         // Internal: variant construction from within the companion module
-        let make_circle = (r: int32) -> shape.circle(r)
-        let make_rect = (w: int32) -> shape.rect(w)
+        let make_circle = (r: i32) -> shape.circle(r)
+        let make_rect = (w: i32) -> shape.rect(w)
         let make_empty = () -> shape.empty
 
     // Also test that module members still take priority over variants
     module priority =
         union test_u =
-            | foo(int32)
+            | foo(i32)
 
         module test_u =
             let bar = () -> 99

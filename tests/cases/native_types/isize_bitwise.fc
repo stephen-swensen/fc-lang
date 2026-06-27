@@ -1,15 +1,15 @@
 let main = (args: str[]) ->
-    let a = 0xFFi
-    let b = 0x0Fi
-    let r1 = (int32) (a & b)
-    let r2 = (int32) (a | b)
-    let r3 = (int32) (a ^ b)
-    let r4 = (int32) (1i << 4i)
-    let r5 = (int32) (32i >> 2i)
+    let a = 0xFFisize
+    let b = 0x0Fisize
+    let r1 = (i32) (a & b)
+    let r2 = (i32) (a | b)
+    let r3 = (i32) (a ^ b)
+    let r4 = (i32) (1isize << 4isize)
+    let r5 = (i32) (32isize >> 2isize)
     // usize bitwise
-    let c = 0xFFu
-    let d = 0x0Fu
-    let r6 = (int32) (c & d)
-    let r7 = (int32) (1u << 4u)
+    let c = 0xFFusize
+    let d = 0x0Fusize
+    let r6 = (i32) (c & d)
+    let r7 = (i32) (1usize << 4usize)
     assert(r1 + r4 + r5 + r6 + r7 == 70)
     0

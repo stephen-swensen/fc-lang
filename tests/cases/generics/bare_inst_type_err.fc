@@ -4,5 +4,5 @@ struct box =
     v: 'a
 
 let main = (args: str[]) ->
-    let f = box<int32>
+    let f = box<i32>
     0

@@ -1,6 +1,6 @@
 // Error: union variant with a stack pointer payload cannot be returned
 union maybe =
-    | ptr(int32*)
+    | ptr(i32*)
     | empty
 
 let bad = () ->

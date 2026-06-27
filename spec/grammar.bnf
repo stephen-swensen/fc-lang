@@ -127,10 +127,10 @@ reserved_ident = "alloc" | "alloca" | "free" | "sizeof" | "alignof" | "default" 
 builtin_global = "stdin" | "stdout" | "stderr" ;
 
 (* Built-in type names — may not be used as user-defined names.        *)
-builtin_type = "int8" | "int16" | "int32" | "int64"
-             | "uint8" | "uint16" | "uint32" | "uint64"
+builtin_type = "i8" | "i16" | "i32" | "i64"
+             | "u8" | "u16" | "u32" | "u64"
              | "isize" | "usize"
-             | "float32" | "float64"
+             | "f32" | "f64"
              | "bool" | "char"
              | "str" | "cstr" ;
 
@@ -143,7 +143,7 @@ builtin_type = "int8" | "int16" | "int32" | "int64"
 
 int_suffix    = "i8" | "i16" | "i32" | "i64"
               | "u8" | "u16" | "u32" | "u64"
-              | "i"  | "u" ;                   (* isize / usize suffixes *)
+              | "isize" | "usize" ;            (* isize / usize suffixes *)
 bin_digit     = '0' | '1' ;
 oct_digit     = '0' | '1' | ... | '7' ;
 dec_int       = digit , { [ '_' ] , digit } ;
@@ -427,7 +427,7 @@ func_type        = type_primary , "->" , func_type
 (* After resolving a base type, apply postfix type modifiers.          *)
 (* The "const" prefix marks a pointer or slice as read-only.           *)
 (* Only valid on pointer, slice, and any* types — bare value types     *)
-(* like "const int32" are a parse error.                               *)
+(* like "const i32" are a parse error.                               *)
 type_primary     = [ "const" ] , type_atom , { type_postfix } ;
 
 type_postfix     = "*"                           (* pointer type:  T*     *)
@@ -436,12 +436,12 @@ type_postfix     = "*"                           (* pointer type:  T*     *)
                  | "?"                           (* option type:   T?     *)
                  ;
 
-type_atom        = builtin_type                  (* int32, str, cstr, ... *)
+type_atom        = builtin_type                  (* i32, str, cstr, ... *)
                  | "void"
                  | "any" , "*"                   (* any*  — opaque pointer *)
                  | IDENT , [ "<" , type_arg_list , ">" ]   (* user-defined, possibly generic *)
                  | TYPE_VAR                       (* 'a, 'b, 'elem, ...   *)
-                 | tuple_type                     (* {int32, str}  — anonymous tuple *)
+                 | tuple_type                     (* {i32, str}  — anonymous tuple *)
                  | "(" , type_param_list , ")"   (* tuple-like param list for function types *)
                  ;
 
@@ -739,9 +739,9 @@ alloc_expr       = ( "alloc" | "alloca" ) , "(" , alloc_arg , ")" ;
 
 (* alloc accepts:                                                      *)
 (*   - a bare type name:               alloc(node)                     *)
-(*   - a slice literal (empty):        alloc(int32[128] { })           *)
-(*   - a slice literal (with values):  alloc(int32[4] { 1,2,3,4 })   *)
-(*   - a raw buffer:                   alloc(int32, n)                 *)
+(*   - a slice literal (empty):        alloc(i32[128] { })           *)
+(*   - a slice literal (with values):  alloc(i32[4] { 1,2,3,4 })   *)
+(*   - a raw buffer:                   alloc(i32, n)                 *)
 (*   - a value expression:             alloc(point { x = 1 })         *)
 (*   - a variant:                      alloc(shape.circle(3.14))      *)
 (*   - an interpolated string:         alloc(c"%d{x}")                *)
@@ -793,20 +793,20 @@ field_init_list  = field_init , { "," , field_init } ;
 
 field_init       = IDENT , "=" , expr ;
 
-(* Stack slice literal: int32[4] { 0, 1, 2, 3 }  or  int32[128] { }  *)
+(* Stack slice literal: i32[4] { 0, 1, 2, 3 }  or  i32[128] { }  *)
 (* The type name is a built-in type or user-defined type.              *)
 slice_literal    = type_expr , "[" , expr , "]" , "{" , [ expr_list ] , "}" ;
 
 expr_list        = expr , { "," , expr } ;
 
 (* Variant construction: shape.circle(3.14)  or  result.ok(42)        *)
-(* Also covers type property access: int32.max, node<'b>.min          *)
+(* Also covers type property access: i32.max, node<'b>.min          *)
 variant_construction = IDENT , [ "<" , type_arg_list , ">" ]
                      , "." , IDENT , [ "(" , [ arg_list ] , ")" ]
                      ;
 
 (* Type property access covers:                                        *)
-(*   - built-in type properties:   int32.max, float64.nan              *)
+(*   - built-in type properties:   i32.max, f64.nan              *)
 (*   - type variable properties:   'a.min, 'a.max                     *)
 (*   - parameterized type props:   node<'b>.min                       *)
 (* Also covers module.member access: math.add, io.stdout               *)
@@ -894,7 +894,7 @@ tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}
 (*                                                                     *)
 (*   name<Type>() is always parsed as a generic call, never as a       *)
 (*   comparison expression.  This is unambiguous because type names    *)
-(*   (int32, str, point, 'a, etc.) are syntactically distinct from     *)
+(*   (i32, str, point, 'a, etc.) are syntactically distinct from     *)
 (*   value expressions in all positions where they may appear inside   *)
 (*   the angle brackets.  No turbofish (::< >) syntax is needed.      *)
 (*                                                                     *)
@@ -912,7 +912,7 @@ tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}
 (*   Otherwise, it is a parenthesized expression: (expr).              *)
 (*                                                                     *)
 (*   This works because type expressions and value expressions are     *)
-(*   syntactically distinct — a bare type name like int32 or float64   *)
+(*   syntactically distinct — a bare type name like i32 or f64   *)
 (*   cannot appear as an expression, and type-forming tokens like *    *)
 (*   (postfix), [], and ? after a type name have no expression         *)
 (*   interpretation in that position.                                  *)
@@ -930,8 +930,8 @@ tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}
 (*   When closing a type_arg_list, a '>>' token (OP_RSHIFT) is split   *)
 (*   into two '>' closers: the inner list consumes the first, the      *)
 (*   enclosing list the second.  So nested instantiations need no      *)
-(*   space between the angle brackets — box<box<int32>> and            *)
-(*   zero<box<int32>>() are valid, as are deeper '>>>' nests.  As in   *)
+(*   space between the angle brackets — box<box<i32>> and            *)
+(*   zero<box<i32>>() are valid, as are deeper '>>>' nests.  As in   *)
 (*   C++11, Java, and Rust, this split applies only in type-argument   *)
 (*   context (parameter/field/return types, generic calls, struct      *)
 (*   literals, variant construction); in expression context '>>' is    *)

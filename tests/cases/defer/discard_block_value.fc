@@ -13,7 +13,7 @@ let main = (args: str[]) ->
         returns_int()
 
     // 2. for-slice body
-    let mut data = int32[3] { }
+    let mut data = i32[3] { }
     data.ptr[0] = 1
     data.ptr[1] = 2
     data.ptr[2] = 3

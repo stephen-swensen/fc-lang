@@ -33,7 +33,7 @@ module node =
 
 let main = (args: str[]) ->
     // build list: 3 -> 2 -> 1
-    let n1 = node.prepend(none(node<int32>*), 1)
+    let n1 = node.prepend(none(node<i32>*), 1)
     let n2 = node.prepend(some(n1), 2)
     let n3 = node.prepend(some(n2), 3)
     let list = some(n3)
@@ -44,7 +44,7 @@ let main = (args: str[]) ->
     let v1 = n1->value    // 1
 
     // map: double each value -> 6 -> 4 -> 2
-    let doubled = node.map(list, (x: int32) -> x * 2)
+    let doubled = node.map(list, (x: i32) -> x * 2)
 
     // extract doubled head
     let dv = doubled!->value    // 6

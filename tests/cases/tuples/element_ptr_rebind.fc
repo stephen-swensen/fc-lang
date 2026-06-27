@@ -3,8 +3,8 @@
 // rebind, `t[0]->field` reads/writes the new pointee. This exercises tuple
 // element assignment (`t[0] = …`) and arrow-deref (`t[0]->…`) together.
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let mut a = point { x = 1, y = 2 }

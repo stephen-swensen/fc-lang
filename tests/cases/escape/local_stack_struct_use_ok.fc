@@ -1,6 +1,6 @@
 // Positive: a stack struct with a stack-pointer field is fine for local use
 struct holder =
-    p: int32*
+    p: i32*
 
 let main = (args: str[]) ->
     let mut x = 42

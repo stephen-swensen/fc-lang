@@ -3,14 +3,14 @@
 // lifetime (hoisted), not the inner block's lifetime, or .ctx dangles once the
 // let…in block exits. Regression: only observable at -O2 (-Werror=dangling-pointer
 // / use of dead stack), so this must be run under the test-*-O2 variants too.
-let apply = (f: (int32) -> int32, x: int32) ->
+let apply = (f: (i32) -> i32, x: i32) ->
     f(x)
 
 let main = (args: str[]) ->
     let base = 10
     let adder =
         let b = base
-        (x: int32) -> x + b
+        (x: i32) -> x + b
     let r = apply(adder, 5)
     assert(r == 15)
     0

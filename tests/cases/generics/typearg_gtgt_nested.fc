@@ -1,7 +1,7 @@
 // Audit item 10: '>>' is split into two type-argument closers, so nested
 // generic instantiations need no space between the closing angle brackets.
-// Pre-fix, `box<box<int32>>` was a parse error ("expected ')', got '<'") and
-// only the spaced `box<box<int32> >` form compiled.
+// Pre-fix, `box<box<i32>>` was a parse error ("expected ')', got '<'") and
+// only the spaced `box<box<i32> >` form compiled.
 struct box =
     v: 'a
 
@@ -10,15 +10,15 @@ struct pair =
     b: 'b
 
 // parameter type with a '>>' closer
-let unwrap2 = (b: box<box<int32>>) ->
+let unwrap2 = (b: box<box<i32>>) ->
     b.v.v
 
 // parameter type with a '>>>' closer (TOK_GTGT then TOK_GT)
-let unwrap3 = (b: box<box<box<int32>>>) ->
+let unwrap3 = (b: box<box<box<i32>>>) ->
     b.v.v.v
 
 // nested generic instance in the last type argument of a multi-arg list
-let second = (p: pair<int32, box<bool>>) ->
+let second = (p: pair<i32, box<bool>>) ->
     p.b.v
 
 let main = (args: str[]) ->

@@ -3,13 +3,13 @@
 // into one -> wrong field types in the generated C. Length-prefixed joining
 // keeps them distinct.
 struct foo_bar =
-    a: int32
+    a: i32
 struct baz =
-    b: int32
+    b: i32
 struct foo =
-    c: int32
+    c: i32
 struct bar_baz =
-    d: int32
+    d: i32
 
 struct pair =
     first: 'a

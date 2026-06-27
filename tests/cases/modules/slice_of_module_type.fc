@@ -1,7 +1,7 @@
 module m =
     struct pair =
-        a: int32
-        b: int32
+        a: i32
+        b: i32
 
 let main = (args: str[]) ->
     let _result =

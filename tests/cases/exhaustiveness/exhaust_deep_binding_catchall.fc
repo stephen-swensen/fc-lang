@@ -1,11 +1,11 @@
 // Bindings work as wildcards deep inside nested patterns
 union shape =
-    | circle(int32)
-    | square(int32)
+    | circle(i32)
+    | square(i32)
 
 struct item =
     shape: shape
-    label: int32?
+    label: i32?
 
 let check = (i: item) ->
     match i with

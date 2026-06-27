@@ -4,8 +4,8 @@ union maybe =
     | no
 
 module choices =
-    let a = maybe<int32>.yes(42)
-    let b = maybe<int32>.no
+    let a = maybe<i32>.yes(42)
+    let b = maybe<i32>.no
 
 let main = (args: str[]) ->
     match choices.a with

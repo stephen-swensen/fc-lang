@@ -2,10 +2,10 @@
 // shadows it. On-demand type checking of the parent binding (triggered from
 // the child) must use the parent's imports, not the child's.
 module lib_a =
-    let helper = (x: int32) -> x * 2
+    let helper = (x: i32) -> x * 2
 
 module lib_b =
-    let helper = (x: int32) -> x * 3
+    let helper = (x: i32) -> x * 3
 
 module outer =
     import helper from lib_a
@@ -20,7 +20,7 @@ module outer =
         // Also verify child's own import works correctly
         let use_own = () -> helper(10)
 
-    let parent_fn = (x: int32) -> helper(x)
+    let parent_fn = (x: i32) -> helper(x)
 
 let main = (args: str[]) ->
     assert(outer.inner.use_it() == 20)   // parent's helper: 10 * 2

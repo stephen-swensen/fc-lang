@@ -1,6 +1,6 @@
 struct vec =
-    data: int32[4]
-    len: int32
+    data: i32[4]
+    len: i32
 
 let main = (args: str[]) ->
     let mut v = vec { len = 0 }

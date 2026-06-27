@@ -1,6 +1,6 @@
 let make = <'a>() -> default('a)
 
 let main = (args: str[]) ->
-    let x = make<int32>()
+    let x = make<i32>()
     assert(x + 42 == 42)
     0

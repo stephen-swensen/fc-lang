@@ -1,4 +1,4 @@
 namespace test::
 
 module math =
-    let quad = (x: int32) -> helper.double(helper.double(x))
+    let quad = (x: i32) -> helper.double(helper.double(x))

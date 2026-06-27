@@ -1,6 +1,6 @@
 let mut counter = 0
 
-let increment = (n: int32) ->
+let increment = (n: i32) ->
     counter = counter + n
     counter
 

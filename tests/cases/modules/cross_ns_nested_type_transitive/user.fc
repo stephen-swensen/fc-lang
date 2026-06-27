@@ -7,7 +7,7 @@ module client =
     // are resolved yet — each peer call triggers on-demand.
 
     let inner = (r: rng.pcg*) ->
-        (int32) (rng.pcg.next(r) & 0xFFu32)
+        (i32) (rng.pcg.next(r) & 0xFFu32)
 
     let middle = (r: rng.pcg*) ->
         client.inner(r) + 1i32

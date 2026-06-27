@@ -10,17 +10,17 @@ let main = (args: str[]) ->
     assert(sum == 10)
 
     // Element + index iteration with keyword/libc names.
-    let mut arr = alloc(int32[3] { 10, 20, 30 })!
+    let mut arr = alloc(i32[3] { 10, 20, 30 })!
     let mut total = 0
     for index, static in arr do
-        total = total + static + (int32) index
+        total = total + static + (i32) index
     free(arr.ptr)
     assert(total == 63)
 
     // Keyword-named range var used inside a nested expression / capture.
     let mut acc = 0
     for switch in 1..4 do
-        let f = (n: int32) -> n * switch
+        let f = (n: i32) -> n * switch
         acc = acc + f(2)
     assert(acc == 12)
     0

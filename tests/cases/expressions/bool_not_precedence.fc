@@ -53,7 +53,7 @@ let main = (args: str[]) ->
     assert(r_ptr == 200)
 
     // `!fn(x)` — bang over call
-    let get_flag = (i: int32) -> arr[i]
+    let get_flag = (i: i32) -> arr[i]
     assert(!get_flag(1))
     let r_call =
         if false then 1

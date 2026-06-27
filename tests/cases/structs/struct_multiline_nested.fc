@@ -1,11 +1,11 @@
 // Nested multiline struct literals
 struct inner =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 struct outer =
     a: inner
-    b: int32
+    b: i32
 
 let main = (args: str[]) ->
     let _result =

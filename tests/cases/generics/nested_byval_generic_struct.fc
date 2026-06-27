@@ -1,7 +1,7 @@
 // Item 7: a generic struct holding another generic struct BY VALUE in a field.
-// Instantiating cell<int32> built the concrete field type inner<int32> by
+// Instantiating cell<i32> built the concrete field type inner<i32> by
 // shallow-copying then canonicalizing the field name in place, which corrupted
-// the shared template field stub -> "unknown type name 'inner__5_int32'".
+// the shared template field stub -> "unknown type name 'inner__5_i32'".
 // A deep copy before canonicalization isolates it. Two instantiations confirm
 // the template is not corrupted by the first.
 struct inner =
@@ -15,6 +15,6 @@ let main = (args: str[]) ->
     assert(c.i.v == 8)
     let c2 = cell { i = inner { v = true } }
     assert(c2.i.v == true)
-    let c3 = cell { i = inner { v = 8 } }   // re-instantiate int32 after bool
+    let c3 = cell { i = inner { v = 8 } }   // re-instantiate i32 after bool
     assert(c3.i.v == 8)
     0

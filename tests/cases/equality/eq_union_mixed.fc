@@ -1,6 +1,6 @@
 union token =
-    | number(int32)
-    | name(int32)
+    | number(i32)
+    | name(i32)
     | eof
 
 let main = (args: str[]) ->

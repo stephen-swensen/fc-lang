@@ -1,13 +1,13 @@
 // The idiomatic "unwrap-or-bail": a `none` arm `return`s while the `some` arm's
 // value type flows out as the match's type. Covers single-line and multi-line
 // (intermediate-statement) diverging arms.
-let first_or_bail = (o: int32?) ->
+let first_or_bail = (o: i32?) ->
     let v = match o with
     | some(w) -> w
     | none -> return -1
     v * 2
 
-let unwrap_multiline = (o: int32?) ->
+let unwrap_multiline = (o: i32?) ->
     let v = match o with
     | some(w) -> w
     | none ->
@@ -17,7 +17,7 @@ let unwrap_multiline = (o: int32?) ->
 
 let main = (args: str[]) ->
     assert(first_or_bail(some(21)) == 42)
-    assert(first_or_bail(none(int32)) == -1)
+    assert(first_or_bail(none(i32)) == -1)
     assert(unwrap_multiline(some(10)) == 11)
-    assert(unwrap_multiline(none(int32)) == 7)
+    assert(unwrap_multiline(none(i32)) == 7)
     0

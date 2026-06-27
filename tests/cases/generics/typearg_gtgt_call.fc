@@ -1,22 +1,22 @@
 // Audit item 10: explicit generic-call type arguments closing with '>>' / '>>>'.
-// Pre-fix, `zero<box<int32>>()` failed to parse ("unexpected token ')'").
+// Pre-fix, `zero<box<i32>>()` failed to parse ("unexpected token ')'").
 struct box =
     v: 'a
 
 // type variable used only in the body, so explicit type args are required
 let zero = <'a>() -> default('a)
-let zeroed = <'a>(n: int32) -> default('a)
+let zeroed = <'a>(n: i32) -> default('a)
 
 let main = (args: str[]) ->
     // '>>' closer, empty argument list
-    let b = zero<box<int32>>()
+    let b = zero<box<i32>>()
     assert(b.v == 0)
 
     // '>>' closer, non-empty argument list
-    let b2 = zeroed<box<int32>>(7)
+    let b2 = zeroed<box<i32>>(7)
     assert(b2.v == 0)
 
     // '>>>' closer (TOK_GTGT then TOK_GT)
-    let b3 = zero<box<box<int32>>>()
+    let b3 = zero<box<box<i32>>>()
     assert(b3.v.v == 0)
     0

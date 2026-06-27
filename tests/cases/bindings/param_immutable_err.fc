@@ -1,4 +1,4 @@
-let modify = (x: int32) ->
+let modify = (x: i32) ->
     x = 99
     x
 

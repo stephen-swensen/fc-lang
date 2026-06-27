@@ -3,8 +3,8 @@ module containers =
 
 module geo =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
 let main = (args: str[]) ->
     let p = geo.point { x = 20, y = 22 }

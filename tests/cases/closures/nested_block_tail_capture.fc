@@ -3,17 +3,17 @@
 // closure, in outer's frame. Each lambda's context backing must be hoisted into
 // the frame of *its constructor* — outer's into main, inner's into outer's lifted
 // function — so each gets its own frame and pointer lifetime, at every depth.
-let apply = (f: (int32) -> int32, x: int32) ->
+let apply = (f: (i32) -> i32, x: i32) ->
     f(x)
 
 let main = (args: str[]) ->
     let a = 100
     let outer =
         let oa = a
-        (x: int32) ->
+        (x: i32) ->
             let inner =
                 let ix = oa + x
-                (y: int32) -> y + ix
+                (y: i32) -> y + ix
             apply(inner, 1)
     let r = apply(outer, 5)
     assert(r == 106)

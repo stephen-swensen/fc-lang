@@ -1,1 +1,1 @@
-expected uint32?, got uint8?
+expected u32?, got u8?

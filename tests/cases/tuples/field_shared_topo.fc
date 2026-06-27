@@ -1,14 +1,14 @@
 // Ordering stress: 'last' is declared first but depends (via tuple fields) on
-// types declared later, and two structs share the {int32, int32} tuple. The
+// types declared later, and two structs share the {i32, i32} tuple. The
 // combined topo-sort must order all definitions correctly regardless of source
 // order or whether a def is top-level or monomorphized.
 struct last =
-    a: {int32, int32}
-    b: {first, int32}
+    a: {i32, i32}
+    b: {first, i32}
 struct mid =
-    pt: {int32, int32}
+    pt: {i32, i32}
 struct first =
-    n: int32
+    n: i32
 let main = (args: str[]) ->
     let l = last { a = { 1, 2 }, b = { first { n = 7 }, 8 } }
     let m = mid { pt = { 3, 4 } }

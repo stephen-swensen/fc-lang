@@ -1,7 +1,7 @@
 // Returning a capturing closure via let binding — context dangles
-let make_adder = (x: int32) ->
+let make_adder = (x: i32) ->
     let offset = x
-    let f = (n: int32) -> n + offset
+    let f = (n: i32) -> n + offset
     f
 
 let main = (args: str[]) ->

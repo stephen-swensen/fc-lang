@@ -10,5 +10,5 @@ struct b =
     back: a<'a>*?
 
 let main = (args: str[]) ->
-    let mut v = a { x = 1, link = none(b<a<int32> >*) }
+    let mut v = a { x = 1, link = none(b<a<i32> >*) }
     v.x

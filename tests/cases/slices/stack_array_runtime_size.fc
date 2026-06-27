@@ -1,4 +1,4 @@
 let main = (args: str[]) ->
     let n = 3
-    let s = int32[n] { 10, 20, 30 }
+    let s = i32[n] { 10, 20, 30 }
     s[0]

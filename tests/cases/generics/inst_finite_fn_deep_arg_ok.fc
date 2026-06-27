@@ -1,5 +1,5 @@
 // Calling a generic function with a deeply but finitely nested concrete argument
-// names exactly one instance (id<box<box<box<int32>>>>). Must compile and run;
+// names exactly one instance (id<box<box<box<i32>>>>). Must compile and run;
 // the depth backstop only fires for self-growing (unbounded) instantiation.
 struct box =
     v: 'a

@@ -3,9 +3,9 @@ module a =
     module b =
         module c =
             struct triple =
-                x: int32
-                y: int32
-                z: int32
+                x: i32
+                y: i32
+                z: i32
 
 let main = (args: str[]) ->
     let t = a.b.c.triple { x = 1, y = 2, z = 3 }

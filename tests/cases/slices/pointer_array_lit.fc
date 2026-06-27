@@ -1,6 +1,6 @@
 // stack slice literal of pointer-typed elements: T*[N] { ... }
 struct p =
-    x: int32
+    x: i32
 
 let main = (args: str[]) ->
     let mut a = p { x = 1 }

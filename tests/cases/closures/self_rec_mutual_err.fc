@@ -2,10 +2,10 @@
 // locals are still resolved left-to-right, so `is_even` cannot see `is_odd` (defined
 // after it).
 let main = (args: str[]) ->
-    let is_even = (n: int32) ->
+    let is_even = (n: i32) ->
         if n == 0 then 1
         else is_odd(n - 1)
-    let is_odd = (n: int32) ->
+    let is_odd = (n: i32) ->
         if n == 0 then 0
         else is_even(n - 1)
     is_even(4)

@@ -1,8 +1,8 @@
 // Array/slice of user struct values at module scope — backing uses struct type
 module grid =
     struct point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
 
     let origins = point[3] {
         point { x = 0, y = 0 },

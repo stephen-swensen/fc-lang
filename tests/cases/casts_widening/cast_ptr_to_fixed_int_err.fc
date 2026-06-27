@@ -1,8 +1,8 @@
-// A pointer cannot be cast to a fixed-width int (uint64 != pointer width on
+// A pointer cannot be cast to a fixed-width int (u64 != pointer width on
 // every target). Use (usize)/(isize), then chain to narrow.
 let main = (args: str[]) ->
     let mut x = 5i32
     let p = &x
-    let bad = (uint64) p
+    let bad = (u64) p
     assert(bad > 0u64)
     0

@@ -2,7 +2,7 @@
 // top-level branch contains a recursive call. The anchor still finds the base
 // case (the literal 1, nested two ifs deep) before a sibling consumes a
 // recursive result.
-let f = (n: int32) ->
+let f = (n: i32) ->
     if n > 10 then n * f(n - 1)
     else
         if n > 1 then n * f(n - 1)

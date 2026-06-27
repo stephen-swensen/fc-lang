@@ -975,8 +975,8 @@ static const char *KEYWORDS[] = {
     "true", "false", "none", "void", "guarded", "unguarded", "checked",
     "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "default",
     "const", "assert", "atomic_load_acquire", "atomic_store_release",
-    "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
-    "isize", "usize", "float32", "float64", "bool", "char", "str", "cstr", "any",
+    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+    "isize", "usize", "f32", "f64", "bool", "char", "str", "cstr", "any",
 };
 static const int KEYWORD_COUNT = (int)(sizeof KEYWORDS / sizeof KEYWORDS[0]);
 

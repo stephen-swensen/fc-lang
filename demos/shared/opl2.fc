@@ -8,26 +8,26 @@ module opl2 =
     import math from std::
 
     struct chip =
-        op_phase: float64[18]
-        op_env: float64[18]
-        op_stage: int32[18]
-        op_tl: int32[18]
-        op_mult: int32[18]
-        op_ar: int32[18]
-        op_dr: int32[18]
-        op_sl: int32[18]
-        op_rr: int32[18]
-        op_wf: int32[18]
-        ch_fnum: int32[9]
-        ch_block: int32[9]
+        op_phase: f64[18]
+        op_env: f64[18]
+        op_stage: i32[18]
+        op_tl: i32[18]
+        op_mult: i32[18]
+        op_ar: i32[18]
+        op_dr: i32[18]
+        op_sl: i32[18]
+        op_rr: i32[18]
+        op_wf: i32[18]
+        ch_fnum: i32[9]
+        ch_block: i32[9]
         ch_key: bool[9]
-        ch_fb: int32[9]
+        ch_fb: i32[9]
         ch_add: bool[9]
-        ch_prev0: float64[9]
-        ch_prev1: float64[9]
-        rate: float64
+        ch_prev0: f64[9]
+        ch_prev1: f64[9]
+        rate: f64
 
-    let init = (sample_rate: float64) ->
+    let init = (sample_rate: f64) ->
         let c = alloc(chip)!
         c->rate = sample_rate
         for i in 0..18 do
@@ -36,7 +36,7 @@ module opl2 =
         c
 
     // Register offset -> operator index (channel*2 + op), or -1 if invalid
-    let op_idx = (offset: int32) ->
+    let op_idx = (offset: i32) ->
         let group = offset / 8
         let slot = offset % 8
         if group > 2 || slot > 5 then -1
@@ -45,7 +45,7 @@ module opl2 =
             let op = slot / 3
             ch * 2 + op
 
-    let write = (c: chip*, reg: int32, val: int32) ->
+    let write = (c: chip*, reg: i32, val: i32) ->
         let base = reg & 240
         let off = reg & 31
         if base == 32 then
@@ -92,7 +92,7 @@ module opl2 =
             c->ch_add[ci] = (val & 1) != 0
         return
 
-    let wave = (phase: float64, wf: int32) ->
+    let wave = (phase: f64, wf: i32) ->
         let p = phase * 6.2831853071795864
         let s = math.sin(p)
         if wf == 0 then s
@@ -100,7 +100,7 @@ module opl2 =
         else if wf == 2 then math.abs(s)
         else if phase < 0.25 then s else 0.0
 
-    let env_step = (c: chip*, idx: int32) ->
+    let env_step = (c: chip*, idx: i32) ->
         let stage = c->op_stage[idx]
         if stage == 0 then return
         let mut env = c->op_env[idx]
@@ -108,17 +108,17 @@ module opl2 =
         if stage == 1 then
             let ar = c->op_ar[idx]
             if ar == 0 then return
-            env = env + (float64) ar * 320.0 * rs
+            env = env + (f64) ar * 320.0 * rs
             if env >= 1.0 then
                 env = 1.0
                 c->op_stage[idx] = 2
         if stage == 2 then
             let dr = c->op_dr[idx]
-            let target = 1.0 - (float64) c->op_sl[idx] / 15.0
+            let target = 1.0 - (f64) c->op_sl[idx] / 15.0
             if dr == 0 then
                 c->op_stage[idx] = 3
             else
-                env = env - (float64) dr * 80.0 * rs
+                env = env - (f64) dr * 80.0 * rs
                 if env <= target then
                     env = target
                     c->op_stage[idx] = 3
@@ -128,26 +128,26 @@ module opl2 =
                 env = 0.0
                 c->op_stage[idx] = 0
             else
-                env = env - (float64) rr * 80.0 * rs
+                env = env - (f64) rr * 80.0 * rs
                 if env <= 0.0 then
                     env = 0.0
                     c->op_stage[idx] = 0
         c->op_env[idx] = env
         return
 
-    let mult_val = (m: int32) ->
+    let mult_val = (m: i32) ->
         if m == 0 then 0.5
         else if m == 11 then 10.0
         else if m == 13 then 12.0
         else if m == 14 then 15.0
-        else (float64) m
+        else (f64) m
 
     let sample = (c: chip*) ->
         let mut out = 0.0
         for ch in 0..9 do
             let fnum = c->ch_fnum[ch]
             let block = c->ch_block[ch]
-            let base_freq = (float64) fnum * math.pow(2.0, (float64) (block - 1)) * 49716.0 / 1048576.0
+            let base_freq = (f64) fnum * math.pow(2.0, (f64) (block - 1)) * 49716.0 / 1048576.0
             let mi = ch * 2
             let ci = ch * 2 + 1
             env_step(c, mi)
@@ -156,18 +156,18 @@ module opl2 =
             c->op_phase[mi] = c->op_phase[mi] + mf / c->rate
             if c->op_phase[mi] >= 1.0 then
                 c->op_phase[mi] = c->op_phase[mi] - 1.0
-            let mtl = (float64) c->op_tl[mi] / 63.0
+            let mtl = (f64) c->op_tl[mi] / 63.0
             let mvol = c->op_env[mi] * (1.0 - mtl)
             let fb = c->ch_fb[ch]
             let mut fbv = 0.0
             if fb > 0 then
-                fbv = (c->ch_prev0[ch] + c->ch_prev1[ch]) / 2.0 / math.pow(2.0, (float64) (8 - fb))
+                fbv = (c->ch_prev0[ch] + c->ch_prev1[ch]) / 2.0 / math.pow(2.0, (f64) (8 - fb))
             let mp = c->op_phase[mi] + fbv
             let mout = wave(mp - math.floor(mp), c->op_wf[mi]) * mvol
             c->ch_prev1[ch] = c->ch_prev0[ch]
             c->ch_prev0[ch] = mout
             let cf = base_freq * mult_val(c->op_mult[ci])
-            let ctl = (float64) c->op_tl[ci] / 63.0
+            let ctl = (f64) c->op_tl[ci] / 63.0
             let cvol = c->op_env[ci] * (1.0 - ctl)
             c->op_phase[ci] = c->op_phase[ci] + cf / c->rate
             if c->op_phase[ci] >= 1.0 then
@@ -181,4 +181,4 @@ module opl2 =
                 out = out + cout
         if out > 1.0 then out = 1.0
         if out < -1.0 then out = -1.0
-        (int16) (out * 16000.0)
+        (i16) (out * 16000.0)

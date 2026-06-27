@@ -1,6 +1,6 @@
 // Error: reading a stack pointer field out of a stack struct bypasses the return check without propagation
 struct holder =
-    p: int32*
+    p: i32*
 
 let bad = () ->
     let mut x = 42

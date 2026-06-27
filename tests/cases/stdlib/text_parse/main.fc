@@ -1,59 +1,59 @@
 import text from std::
 
 let main = (args: str[]) ->
-    // parse_int32 — success
-    assert(text.parse_int32("42") == some(42))
-    assert(text.parse_int32("-7") == some(-7))
-    assert(text.parse_int32("0") == some(0))
+    // parse_i32 — success
+    assert(text.parse_i32("42") == some(42))
+    assert(text.parse_i32("-7") == some(-7))
+    assert(text.parse_i32("0") == some(0))
 
-    // parse_int32 — failure
-    assert(text.parse_int32("abc") == none(int32))
-    assert(text.parse_int32("") == none(int32))
+    // parse_i32 — failure
+    assert(text.parse_i32("abc") == none(i32))
+    assert(text.parse_i32("") == none(i32))
 
-    // parse_int64 — success
-    assert(text.parse_int64("1000000000000") == some(1000000000000i64))
-    assert(text.parse_int64("-999") == some(-999i64))
+    // parse_i64 — success
+    assert(text.parse_i64("1000000000000") == some(1000000000000i64))
+    assert(text.parse_i64("-999") == some(-999i64))
 
-    // parse_int64 — failure
-    assert(text.parse_int64("xyz") == none(int64))
-    assert(text.parse_int64("") == none(int64))
+    // parse_i64 — failure
+    assert(text.parse_i64("xyz") == none(i64))
+    assert(text.parse_i64("") == none(i64))
 
-    // parse_float64 — success
-    assert(text.parse_float64("3.14") != none(float64))
-    assert(text.parse_float64("0.0") == some(0.0))
-    assert(text.parse_float64("-1.5") == some(-1.5))
+    // parse_f64 — success
+    assert(text.parse_f64("3.14") != none(f64))
+    assert(text.parse_f64("0.0") == some(0.0))
+    assert(text.parse_f64("-1.5") == some(-1.5))
 
-    // parse_float64 — failure
-    assert(text.parse_float64("bad") == none(float64))
-    assert(text.parse_float64("") == none(float64))
+    // parse_f64 — failure
+    assert(text.parse_f64("bad") == none(f64))
+    assert(text.parse_f64("") == none(f64))
 
-    // parse_float32 — success
-    assert(text.parse_float32("2.5") == some(2.5f32))
-    assert(text.parse_float32("0.0") == some(0.0f32))
+    // parse_f32 — success
+    assert(text.parse_f32("2.5") == some(2.5f32))
+    assert(text.parse_f32("0.0") == some(0.0f32))
 
-    // parse_float32 — failure
-    assert(text.parse_float32("bad") == none(float32))
-    assert(text.parse_float32("") == none(float32))
+    // parse_f32 — failure
+    assert(text.parse_f32("bad") == none(f32))
+    assert(text.parse_f32("") == none(f32))
 
     // over-length input returns none rather than overflowing the stack.
     // build a 600-byte run of '0' digits — a "valid" number far past the
     // max_parse_len cap, so every parse_* must reject it.
-    let big = alloc(uint8[600] {})!
+    let big = alloc(u8[600] {})!
     defer free(big)
     let mut i = 0i64
     loop
         if i >= big.len then break
         big[i] = 48u8   // '0'
         i = i + 1i64
-    assert(text.parse_int32(big) == none(int32))
-    assert(text.parse_int64(big) == none(int64))
-    assert(text.parse_float32(big) == none(float32))
-    assert(text.parse_float64(big) == none(float64))
+    assert(text.parse_i32(big) == none(i32))
+    assert(text.parse_i64(big) == none(i64))
+    assert(text.parse_f32(big) == none(f32))
+    assert(text.parse_f64(big) == none(f64))
 
     // the cap is inclusive: a 512-byte run still parses, 513 does not.
-    assert(text.parse_int32(big[0..512]) == some(0))
-    assert(text.parse_int64(big[0..512]) == some(0i64))
-    assert(text.parse_int32(big[0..513]) == none(int32))
-    assert(text.parse_int64(big[0..513]) == none(int64))
+    assert(text.parse_i32(big[0..512]) == some(0))
+    assert(text.parse_i64(big[0..512]) == some(0i64))
+    assert(text.parse_i32(big[0..513]) == none(i32))
+    assert(text.parse_i64(big[0..513]) == none(i64))
 
     0

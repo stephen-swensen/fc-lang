@@ -1,5 +1,5 @@
 /* Top-level block comment */
-let add = (a: int32, b: int32) ->
+let add = (a: i32, b: i32) ->
     /* nested /* inner block comment */ end */
     a + b /* inline comment */
 

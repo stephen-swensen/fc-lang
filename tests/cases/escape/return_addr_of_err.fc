@@ -1,5 +1,5 @@
 // Error: returning address of local variable
-let bad = (x: int32) ->
+let bad = (x: i32) ->
     let mut val = x
     return &val
 

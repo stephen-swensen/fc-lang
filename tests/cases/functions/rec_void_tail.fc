@@ -1,7 +1,7 @@
 // A void-returning recursive function whose tail is the recursive call, with the
 // base case expressed as a bare `return`. The return type is void (derived from
 // the bare return), not `never` — the function does terminate.
-let count_down = (n: int32, acc: int32*) ->
+let count_down = (n: i32, acc: i32*) ->
     if n <= 0 then return
     acc[0] = acc[0] + n
     count_down(n - 1, acc)

@@ -1,6 +1,6 @@
 // match inside a for-in loop body over a slice of union variants
 union entry =
-    | num(int32)
+    | num(i32)
     | skip
 
 let main = (args: str[]) ->

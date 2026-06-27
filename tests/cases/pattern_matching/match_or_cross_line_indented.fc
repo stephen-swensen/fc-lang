@@ -1,6 +1,6 @@
 // Or-pattern alternatives on continuation lines must be indented
 // DEEPER than the arm-introducing `|` column.
-let small = (x: int32) ->
+let small = (x: i32) ->
     match x with
     | 0
         | 1

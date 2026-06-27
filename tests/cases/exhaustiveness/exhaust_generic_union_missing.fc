@@ -2,9 +2,9 @@ union result =
     | ok('a)
     | err('b)
 
-let check = (r: result<int32, int32>) ->
+let check = (r: result<i32, i32>) ->
     match r with
     | ok(v) -> v
 
 let main = (args: str[]) ->
-    check(result<int32, int32>.ok(42))
+    check(result<i32, i32>.ok(42))

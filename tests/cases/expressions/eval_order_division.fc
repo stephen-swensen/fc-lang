@@ -1,10 +1,10 @@
 // Division and modulo evaluate the dividend (lhs) before the divisor (rhs),
 // each exactly once — matching every other binary operator.
-let bump = (c: int32*) ->
+let bump = (c: i32*) ->
     *c = *c + 1
     *c
 
-let bumpu = (c: uint32*) ->
+let bumpu = (c: u32*) ->
     *c = *c + 1u32
     *c
 

@@ -1,8 +1,8 @@
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
-let set_point = (p: point*, nx: int32, ny: int32) ->
+let set_point = (p: point*, nx: i32, ny: i32) ->
     p->x = nx
     p->y = ny
 

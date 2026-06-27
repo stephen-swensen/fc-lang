@@ -1,4 +1,4 @@
-let twice = (x: int32) -> x * 2
+let twice = (x: i32) -> x * 2
 
 let main = (args: str[]) ->
     assert(twice(21) == 42)

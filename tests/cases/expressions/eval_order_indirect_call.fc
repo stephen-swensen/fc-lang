@@ -1,10 +1,10 @@
 // Indirect calls (through a function value) evaluate the callee first, then the
 // arguments left-to-right, each exactly once.
-let bump = (c: int32*) ->
+let bump = (c: i32*) ->
     *c = *c + 1
     *c
 
-let three = (a: int32, b: int32, c: int32) ->
+let three = (a: i32, b: i32, c: i32) ->
     a * 100 + b * 10 + c
 
 let main = (args: str[]) ->
@@ -16,7 +16,7 @@ let main = (args: str[]) ->
     assert(c == 3)
 
     // Lambda value, same property.
-    let g = (a: int32, b: int32) -> a * 10 + b
+    let g = (a: i32, b: i32) -> a * 10 + b
     let mut d = 0
     assert(g(bump(&d), bump(&d)) == 12)
     assert(d == 2)

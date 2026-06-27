@@ -63,7 +63,7 @@ PRIM(unresolved, TYPE_UNRESOLVED)
 
 #undef PRIM
 
-/* str = uint8[] with alias "str" */
+/* str = u8[] with alias "str" */
 Type *type_str(void) {
     static Type str_type = {0};
     static bool init = false;
@@ -76,7 +76,7 @@ Type *type_str(void) {
     return &str_type;
 }
 
-/* cstr = uint8* with alias "cstr" */
+/* cstr = u8* with alias "cstr" */
 Type *type_cstr(void) {
     static Type cstr_type = {0};
     static bool init = false;
@@ -386,18 +386,18 @@ bool type_eq_ignore_const(Type *a, Type *b) {
 }
 
 static const char *primitive_names[] = {
-    [TYPE_INT8]    = "int8",
-    [TYPE_INT16]   = "int16",
-    [TYPE_INT32]   = "int32",
-    [TYPE_INT64]   = "int64",
-    [TYPE_UINT8]   = "uint8",
-    [TYPE_UINT16]  = "uint16",
-    [TYPE_UINT32]  = "uint32",
-    [TYPE_UINT64]  = "uint64",
+    [TYPE_INT8]    = "i8",
+    [TYPE_INT16]   = "i16",
+    [TYPE_INT32]   = "i32",
+    [TYPE_INT64]   = "i64",
+    [TYPE_UINT8]   = "u8",
+    [TYPE_UINT16]  = "u16",
+    [TYPE_UINT32]  = "u32",
+    [TYPE_UINT64]  = "u64",
     [TYPE_ISIZE]   = "isize",
     [TYPE_USIZE]   = "usize",
-    [TYPE_FLOAT32] = "float32",
-    [TYPE_FLOAT64] = "float64",
+    [TYPE_FLOAT32] = "f32",
+    [TYPE_FLOAT64] = "f64",
     [TYPE_BOOL]    = "bool",
     [TYPE_VOID]    = "void",
     [TYPE_CHAR]    = "char",
@@ -645,7 +645,7 @@ Type *type_from_int_suffix(const char *suffix, int len) {
         {"i32", 3, type_int32},  {"i64", 3, type_int64},
         {"u8",  2, type_uint8},  {"u16", 3, type_uint16},
         {"u32", 3, type_uint32}, {"u64", 3, type_uint64},
-        {"i",   1, type_isize},  {"u",   1, type_usize},
+        {"isize", 5, type_isize}, {"usize", 5, type_usize},
     };
 
     for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
@@ -658,11 +658,11 @@ Type *type_from_int_suffix(const char *suffix, int len) {
 
 Type *type_from_name(const char *s, int len) {
     struct { const char *n; int l; Type *(*fn)(void); } map[] = {
-        {"int8",4, type_int8},     {"int16",5, type_int16},
-        {"int32",5, type_int32},   {"int64",5, type_int64},
-        {"uint8",5, type_uint8},   {"uint16",6, type_uint16},
-        {"uint32",6, type_uint32}, {"uint64",6, type_uint64},
-        {"float32",7, type_float32}, {"float64",7, type_float64},
+        {"i8",2, type_int8},     {"i16",3, type_int16},
+        {"i32",3, type_int32},   {"i64",3, type_int64},
+        {"u8",2, type_uint8},    {"u16",3, type_uint16},
+        {"u32",3, type_uint32},  {"u64",3, type_uint64},
+        {"f32",3, type_float32}, {"f64",3, type_float64},
         {"bool",4, type_bool},     {"char",4, type_char},
         {"str",3, type_str},       {"cstr",4, type_cstr},
         {"any",3, type_any_ptr},
@@ -1024,14 +1024,14 @@ char *mangle_type_name(Type *t) {
     if (is_str_type(t)) return str_dup("str");
     if (is_cstr_type(t)) return str_dup("cstr");
     switch (t->kind) {
-    case TYPE_INT8:    return str_dup("int8");
-    case TYPE_INT16:   return str_dup("int16");
-    case TYPE_INT32:   return str_dup("int32");
-    case TYPE_INT64:   return str_dup("int64");
-    case TYPE_UINT8:   return str_dup("uint8");
-    case TYPE_UINT16:  return str_dup("uint16");
-    case TYPE_UINT32:  return str_dup("uint32");
-    case TYPE_UINT64:  return str_dup("uint64");
+    case TYPE_INT8:    return str_dup("i8");
+    case TYPE_INT16:   return str_dup("i16");
+    case TYPE_INT32:   return str_dup("i32");
+    case TYPE_INT64:   return str_dup("i64");
+    case TYPE_UINT8:   return str_dup("u8");
+    case TYPE_UINT16:  return str_dup("u16");
+    case TYPE_UINT32:  return str_dup("u32");
+    case TYPE_UINT64:  return str_dup("u64");
     case TYPE_ISIZE:   return str_dup("isize");
     case TYPE_USIZE:   return str_dup("usize");
     case TYPE_FLOAT32: return str_dup("f32");
@@ -1043,10 +1043,10 @@ char *mangle_type_name(Type *t) {
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
     case TYPE_STUB:
-        /* A generic-instance stub (box<int32>) must mangle identically to its
-         * monomorphized struct (box__5_int32): base "__" lp(arg)*, mirroring
+        /* A generic-instance stub (box<i32>) must mangle identically to its
+         * monomorphized struct (box__3_i32): base "__" lp(arg)*, mirroring
          * mangle_generic_name. Without recursing into the args, a stub nested in
-         * another instance's type args (box<box<int32>>, where the inner arg is
+         * another instance's type args (box<box<i32>>, where the inner arg is
          * still an unresolved stub) would drop its args to the bare base name —
          * making distinct instantiations collide and mis-resolving the C type
          * name. Concrete top-level decl field types keep their args as base-name

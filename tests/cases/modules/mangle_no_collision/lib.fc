@@ -1,4 +1,4 @@
 namespace a::
 
 module math =
-    let add = (x: int32, y: int32) -> x + y
+    let add = (x: i32, y: i32) -> x + y

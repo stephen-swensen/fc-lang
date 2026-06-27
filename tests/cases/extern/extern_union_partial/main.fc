@@ -2,18 +2,18 @@
 // Only declare a subset of the C union's fields
 module u from "test_union.h" =
     extern struct partial_a as partial_a =
-        x: int32
-        y: int32
-        z: int32
+        x: i32
+        y: i32
+        z: i32
     // partial_b and partial_c are NOT declared — we don't need them
     extern union big_union as big_union =
-        tag: int32
+        tag: i32
         a: partial_a
         // b, c, raw are NOT declared
 
 let main = (args: str[]) ->
     // sizeof should reflect the real C union size, not just declared fields
-    // The C union has a uint8_t[16] member so it's at least 16 bytes
+    // The C union has a u8_t[16] member so it's at least 16 bytes
     let sz = sizeof(u.big_union)
     assert(sz >= 16)
 

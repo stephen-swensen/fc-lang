@@ -2,11 +2,11 @@
 // change: lambdas inside module functions can capture local variables
 // across lambda boundaries within the current module scope.
 module m =
-    let apply_with = (n: int32, f: (int32) -> int32) ->
-        let add = (x: int32) -> x + n
+    let apply_with = (n: i32, f: (i32) -> i32) ->
+        let add = (x: i32) -> x + n
         f(add(0))
 
 let main = (args: str[]) ->
-    let result = m.apply_with(5, (x: int32) -> x * 2)
+    let result = m.apply_with(5, (x: i32) -> x * 2)
     assert(result == 10)
     0

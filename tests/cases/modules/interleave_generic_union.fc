@@ -14,8 +14,8 @@ module parent =
 
     module child =
         import maybe from unions_b
-        let make_just = (x: int32) ->
-            let m = maybe<int32>.just(x)
+        let make_just = (x: i32) ->
+            let m = maybe<i32>.just(x)
             match m with
             | just(v) -> v
             | nothing_b -> 0

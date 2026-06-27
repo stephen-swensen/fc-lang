@@ -29,7 +29,7 @@ let main = (args: str[]) ->
     // f32 / f64 suffixes
     let l = 0x1.8p1f32             // 3.0f32
     let m = 0x1.8p1f64             // 3.0f64
-    assert((int32) l == 3)
+    assert((i32) l == 3)
     assert(m == 3.0)
 
     // digit separators in mantissa and exponent

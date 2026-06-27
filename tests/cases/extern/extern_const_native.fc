@@ -4,5 +4,5 @@ module c from "stdio.h" =
 
 let main = (args: str[]) ->
     let sz = c.bufsiz
-    assert(sz > 0u)
+    assert(sz > 0usize)
     0

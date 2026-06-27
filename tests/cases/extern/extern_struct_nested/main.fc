@@ -1,8 +1,8 @@
 // Test: extern structs with struct-typed fields (nested structs)
 module geom from "test_struct.h" =
     extern struct point as point =
-        x: int32
-        y: int32
+        x: i32
+        y: i32
     extern struct rect as rect =
         origin: point
         size: point

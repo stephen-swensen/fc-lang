@@ -1,4 +1,4 @@
-// int32? must not widen to int64? on assignment to a wider-option mut binding.
+// i32? must not widen to i64? on assignment to a wider-option mut binding.
 let main = (args: str[]) ->
     let mut x = some(1i64)
     x = some(2i32)

@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
-    let a = 50i
+    let a = 50isize
     let b = -a
     let c = -(-a)
-    assert((int32) (c + b) + 100 == 100)
+    assert((i32) (c + b) + 100 == 100)
     0

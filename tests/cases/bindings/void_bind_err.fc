@@ -1,4 +1,4 @@
-let do_nothing = (x: int32) ->
+let do_nothing = (x: i32) ->
     return
 
 let main = (args: str[]) ->

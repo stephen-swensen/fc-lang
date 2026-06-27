@@ -1,6 +1,6 @@
 // Item 6: sizeof/alignof whose TYPE OPERAND is a generic struct instance used
 // only inside a generic body. discover_in_expr had no EXPR_SIZEOF/EXPR_ALIGNOF
-// case, so box<int64> was never registered -> sizeof(box__5_int64) referenced an
+// case, so box<i64> was never registered -> sizeof(box__5_i64) referenced an
 // undefined type. The operand type carries no resolved_sym (it comes straight
 // from resolve_type), so discovery must fall back to a symtab name lookup.
 struct box =
@@ -10,10 +10,10 @@ let szof = (x: 'a) -> sizeof(box<'a>)
 let algn = (x: 'a) -> alignof(box<'a>)
 
 let main = (args: str[]) ->
-    // box<int64> holds one int64 -> size 8, alignment >= 1
+    // box<i64> holds one i64 -> size 8, alignment >= 1
     assert(szof(0i64) == 8i64)
     assert(algn(0i64) >= 1i64)
-    // distinct instantiation box<int8> is smaller, proving per-type registration
+    // distinct instantiation box<i8> is smaller, proving per-type registration
     assert(szof(0i8) == 1i64)
     assert(szof(0i64) > szof(0i8))
     0

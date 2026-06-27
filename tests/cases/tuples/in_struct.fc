@@ -1,6 +1,6 @@
 struct box =
-    pair: {int32, int32}
-    tag: int32
+    pair: {i32, i32}
+    tag: i32
 
 let main = (args: str[]) ->
     let b = box { pair = { 3, 4 }, tag = 1 }

@@ -1,8 +1,8 @@
 // 3 levels deep: union containing option containing struct
 // Tests cross-product coverage: 2 variants x (some/none) x struct fields
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 union located =
     | at(point?)

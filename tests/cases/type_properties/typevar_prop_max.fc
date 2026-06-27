@@ -1,7 +1,7 @@
-// 'a.max on int8
+// 'a.max on i8
 let get_max = <'a>() -> 'a.max
 
 let main = (args: str[]) ->
-    let m = get_max<int8>()
+    let m = get_max<i8>()
     assert((m + 0) == 127)
     0

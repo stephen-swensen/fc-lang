@@ -1,6 +1,6 @@
 struct packet =
-    data: uint8[16]
-    id: int32
+    data: u8[16]
+    id: i32
 
 let main = (args: str[]) ->
     let mut p = packet { id = 42 }

@@ -2,10 +2,10 @@
 // not compile. An integer literal — even zero — cannot be cast to a pointer;
 // it is rejected like any other fixed-width int->pointer cast. Use
 // default(any*) / default(T*) for a null raw pointer (see
-// pointers/null_raw_ptr_default), or (T*) 0u to reach null via usize.
+// pointers/null_raw_ptr_default), or (T*) 0usize to reach null via usize.
 let main = (args: str[]) ->
     let p = (any*) 0
-    let q = (int32*) 0
+    let q = (i32*) 0
     assert(p == p)
     assert(q == q)
     0

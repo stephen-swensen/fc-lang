@@ -21,13 +21,13 @@ module containers =
         let i = alloc(inner { x = a, y = b })!
         outer { ptr = i }
 
-    let sum_inner = (o: outer<int32>) ->
+    let sum_inner = (o: outer<i32>) ->
         o.ptr->x + o.ptr->y
 
     let make_pair = (a: 'a, b: 'a, c: 'a, d: 'a) ->
         pair { fst = inner { x = a, y = b }, snd = inner { x = c, y = d } }
 
-    let pair_sum = (p: pair<int32>) ->
+    let pair_sum = (p: pair<i32>) ->
         p.fst.x + p.fst.y + p.snd.x + p.snd.y
 
     // union referencing struct
@@ -38,7 +38,7 @@ module containers =
     let wrap = (x: 'a, y: 'a) ->
         wrapped<'a>.val(inner { x = x, y = y })
 
-    let unwrap_x = (w: wrapped<int32>) ->
+    let unwrap_x = (w: wrapped<i32>) ->
         match w with
         | val(i) -> i.x
         | empty -> 0
@@ -51,7 +51,7 @@ module containers =
     let nest = (x: 'a, y: 'a) ->
         maybe<'a>.some_wrapped(wrapped<'a>.val(inner { x = x, y = y }))
 
-    let unnest_x = (m: maybe<int32>) ->
+    let unnest_x = (m: maybe<i32>) ->
         match m with
         | some_wrapped(w) ->
             match w with

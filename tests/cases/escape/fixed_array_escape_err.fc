@@ -1,8 +1,8 @@
 struct holder =
-    data: int32[4]
+    data: i32[4]
 
 let bad = () ->
-    let h = holder { data = int32[4] { 1, 2, 3, 4 } }
+    let h = holder { data = i32[4] { 1, 2, 3, 4 } }
     h.data
 
 let main = (args: str[]) ->

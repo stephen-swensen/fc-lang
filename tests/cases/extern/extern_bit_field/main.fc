@@ -4,10 +4,10 @@
 // FC needs no awareness of bit widths.
 module b from "bits.h" =
     extern struct reg =
-        enable: uint32
-        mode: uint32
-        priority: uint32
-        reserved: uint32
+        enable: u32
+        mode: u32
+        priority: u32
+        reserved: u32
 
 let main = (args: str[]) ->
     // default zero-initializes every bit field.

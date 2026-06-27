@@ -3,11 +3,11 @@ module parent =
     let helper = (x: 'a) -> x
 
     module child =
-        let use_helper = (x: int32) -> helper(x)
+        let use_helper = (x: i32) -> helper(x)
 
     module grandchild =
         module inner =
-            let deep_use = (x: int32) -> helper(x) + 1
+            let deep_use = (x: i32) -> helper(x) + 1
 
 let main = (args: str[]) ->
     assert(parent.child.use_helper(42) == 42)

@@ -1,4 +1,4 @@
-let double = (x: int32) -> x * 2
+let double = (x: i32) -> x * 2
 
 let main = (args: str[]) ->
     let p = &double

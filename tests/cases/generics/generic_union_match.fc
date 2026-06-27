@@ -8,7 +8,7 @@ let from_maybe = (m: maybe<'a>, fallback: 'a) ->
     | nothing -> fallback
 
 let main = (args: str[]) ->
-    let x = maybe<int32>.just(42)
-    let y = maybe<int32>.just(10)
+    let x = maybe<i32>.just(42)
+    let y = maybe<i32>.just(10)
     assert(from_maybe(x, 0) + from_maybe(y, 0) == 52)
     0

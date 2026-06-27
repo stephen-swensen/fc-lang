@@ -1,6 +1,6 @@
 // Error: returning a stack struct literal whose field holds a stack pointer
 struct holder =
-    p: int32*
+    p: i32*
 
 let bad = () ->
     let mut x = 42

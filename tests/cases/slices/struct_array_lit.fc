@@ -1,7 +1,7 @@
 // Test: stack slice literal with struct element type
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let main = (args: str[]) ->
     let arr = point[3] { point { x = 1, y = 2 }, point { x = 3, y = 4 }, point { x = 5, y = 6 } }

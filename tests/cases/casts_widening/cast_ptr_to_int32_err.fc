@@ -2,6 +2,6 @@
 let main = (args: str[]) ->
     let mut x = 5i32
     let p = &x
-    let bad = (int32) p
+    let bad = (i32) p
     assert(bad != 0)
     0

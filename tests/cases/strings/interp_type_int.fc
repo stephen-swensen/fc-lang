@@ -3,8 +3,8 @@ let main = (args: str[]) ->
         let x = 42
         let s = "%T{x}"
         let mut r = 0
-        if s == "int32" then r = r + 1
-        if s.len == 5 then r = r + 2
+        if s == "i32" then r = r + 1
+        if s.len == 3 then r = r + 2
         r
     assert(_result == 3)
     0

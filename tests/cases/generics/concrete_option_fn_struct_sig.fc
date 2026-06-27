@@ -1,13 +1,13 @@
 // Item 8c (hardest case): an option of a function whose signature uses a struct
 // BY VALUE (point param), embedded by value in a generic struct. The old codegen
 // split fn typedefs into two phases — struct-using fn typedefs were deferred
-// until AFTER all struct defs — so a struct embedding option<(point)->int32> by
+// until AFTER all struct defs — so a struct embedding option<(point)->i32> by
 // value could never be ordered correctly. Removing the split (fn-ptr typedefs
 // only need their aggregates forward-declared, which they always are) lets the
 // fn typedef, its option body, and the embedding struct all emit in order.
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 struct optbox =
     v: 'a?

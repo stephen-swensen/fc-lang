@@ -4,60 +4,60 @@
 // behavior at the range edges (and observably divergent across optimizers).
 let main = (args: str[]) ->
     // --- in-range: truncates toward zero (not floor) ---
-    assert((int32) 3.9 == 3)
-    assert((int32) (-3.9) == -3)
-    assert((int32) 0.0 == 0)
-    assert((uint8) 200.7 == 200u8)
-    assert((int64) (-7.99) == -7i64)
+    assert((i32) 3.9 == 3)
+    assert((i32) (-3.9) == -3)
+    assert((i32) 0.0 == 0)
+    assert((u8) 200.7 == 200u8)
+    assert((i64) (-7.99) == -7i64)
 
     // --- positive overflow clamps to max ---
-    assert((int8) 1e30 == int8.max)
-    assert((uint8) 1e30 == uint8.max)
-    assert((int16) 1e30 == int16.max)
-    assert((uint16) 1e30 == uint16.max)
-    assert((int32) 1e30 == int32.max)
-    assert((uint32) 1e30 == uint32.max)
-    assert((int64) 1e30 == int64.max)
-    assert((uint64) 1e30 == uint64.max)
+    assert((i8) 1e30 == i8.max)
+    assert((u8) 1e30 == u8.max)
+    assert((i16) 1e30 == i16.max)
+    assert((u16) 1e30 == u16.max)
+    assert((i32) 1e30 == i32.max)
+    assert((u32) 1e30 == u32.max)
+    assert((i64) 1e30 == i64.max)
+    assert((u64) 1e30 == u64.max)
 
     // --- negative overflow: clamps to min (signed) / 0 (unsigned) ---
-    assert((int8) (-1e30) == int8.min)
-    assert((int16) (-1e30) == int16.min)
-    assert((int32) (-1e30) == int32.min)
-    assert((int64) (-1e30) == int64.min)
-    assert((uint8) (-1e30) == 0u8)
-    assert((uint32) (-5.0) == 0u32)
-    assert((uint64) (-1e30) == 0u64)
+    assert((i8) (-1e30) == i8.min)
+    assert((i16) (-1e30) == i16.min)
+    assert((i32) (-1e30) == i32.min)
+    assert((i64) (-1e30) == i64.min)
+    assert((u8) (-1e30) == 0u8)
+    assert((u32) (-5.0) == 0u32)
+    assert((u64) (-1e30) == 0u64)
 
     // --- nan -> 0 (every width) ---
-    assert((int32) float64.nan == 0)
-    assert((uint8) float64.nan == 0u8)
-    assert((int64) float64.nan == 0i64)
+    assert((i32) f64.nan == 0)
+    assert((u8) f64.nan == 0u8)
+    assert((i64) f64.nan == 0i64)
 
     // --- +/- infinity saturate like any out-of-range value ---
-    assert((int32) float64.inf == int32.max)
-    assert((int32) (-float64.inf) == int32.min)
-    assert((uint32) (-float64.inf) == 0u32)
+    assert((i32) f64.inf == i32.max)
+    assert((i32) (-f64.inf) == i32.min)
+    assert((u32) (-f64.inf) == 0u32)
 
     // --- platform-width isize / usize (bounds via type properties) ---
     assert((isize) 1e30 == isize.max)
     assert((isize) (-1e30) == isize.min)
     assert((usize) 1e30 == usize.max)
-    assert((usize) (-1.0) == 0u)
-    assert((usize) 100.9 == 100u)
-    assert((isize) (-100.9) == -100i)
+    assert((usize) (-1.0) == 0usize)
+    assert((usize) 100.9 == 100usize)
+    assert((isize) (-100.9) == -100isize)
 
-    // --- float32 source: same bounds/truncation as float64 ---
+    // --- f32 source: same bounds/truncation as f64 ---
     let f = 1e30f32
-    assert((int32) f == int32.max)
-    assert((int16) f == int16.max)
+    assert((i32) f == i32.max)
+    assert((i16) f == i16.max)
     let g = 42.9f32
-    assert((uint8) g == 42u8)
-    assert((int32) (-1.0f32 / 0.0f32) == int32.min)   // -inf (float32) clamps
+    assert((u8) g == 42u8)
+    assert((i32) (-1.0f32 / 0.0f32) == i32.min)   // -inf (f32) clamps
 
     // --- interactions: cast result feeds widening, arithmetic, args ---
-    let widened = (int32) 5.9 + 1i64                   // int32 -> int64 widen
+    let widened = (i32) 5.9 + 1i64                   // i32 -> i64 widen
     assert(widened == 6i64)
-    let sum = (int32) 2.5e9 + (int32) (-2.5e9)         // max + min
-    assert(sum == -1)                                  // int32.max + int32.min
+    let sum = (i32) 2.5e9 + (i32) (-2.5e9)         // max + min
+    assert(sum == -1)                                  // i32.max + i32.min
     0

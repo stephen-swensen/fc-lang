@@ -1,7 +1,7 @@
 // A self-recursive call made unconditionally before any base case cannot be
 // typed (it is genuine non-terminating recursion); binding its result is an error.
 let main = (args: str[]) ->
-    let f = (n: int32) ->
+    let f = (n: i32) ->
         let x = f(n - 1)
         if n > 0 then x else 0
     assert(f(3) == 0)

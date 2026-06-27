@@ -1,9 +1,9 @@
 // Positive: struct with heap-pointer field can be returned (all fields are safe)
 struct holder =
-    p: int32*
+    p: i32*
 
 let make = () ->
-    let p = alloc(int32)!
+    let p = alloc(i32)!
     *p = 42
     holder { p = p }
 

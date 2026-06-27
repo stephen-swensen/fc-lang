@@ -1,12 +1,12 @@
 module helpers =
-    let triple = (x: int32) -> x * 3
+    let triple = (x: i32) -> x * 3
 
 module top =
     import triple from helpers
 
     module mid =
         module bottom =
-            let compute = (x: int32) -> triple(x)
+            let compute = (x: i32) -> triple(x)
 
 let main = (args: str[]) ->
     assert(top.mid.bottom.compute(7) == 21)

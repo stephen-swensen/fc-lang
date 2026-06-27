@@ -1,7 +1,7 @@
 let main = (args: str[]) ->
     let a = default(isize)
     let b = default(usize)
-    let r1 = if a == 0i then 1 else 0
-    let r2 = if b == 0u then 1 else 0
+    let r1 = if a == 0isize then 1 else 0
+    let r2 = if b == 0usize then 1 else 0
     assert(r1 + r2 == 2)
     0

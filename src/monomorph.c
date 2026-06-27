@@ -822,7 +822,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
 
     /* Resolve all type names in concrete_types. This is the single centralized
      * pass that converts canonical struct names (e.g., "m__entry") to mangled
-     * C identifiers (e.g., "m__entry_int32_int32"). Done AFTER discovery so
+     * C identifiers (e.g., "m__entry_i32_i32"). Done AFTER discovery so
      * all mono instances are registered and mono_find can prevent double-mangling. */
     for (int i = 0; i < t->count; i++) {
         MonoInstance *inst = &t->entries[i];

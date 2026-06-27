@@ -1,11 +1,11 @@
 // Function parameter shadows a union type name.
 // The parameter's type should be used, not the union.
 union shape =
-    | circle(int32)
-    | rect(int32)
+    | circle(i32)
+    | rect(i32)
 
 module m =
-    let get_value = (shape: int32) -> shape + 1
+    let get_value = (shape: i32) -> shape + 1
 
 let main = (args: str[]) ->
     assert(m.get_value(5) == 6)

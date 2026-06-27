@@ -5,7 +5,7 @@ union op =
     | inc
     | dec
 
-let apply = (f: (int32) -> int32, x: int32) ->
+let apply = (f: (i32) -> i32, x: i32) ->
     f(x)
 
 let main = (args: str[]) ->
@@ -15,9 +15,9 @@ let main = (args: str[]) ->
         match k with
         | inc ->
             let amt = base
-            (x: int32) -> x + amt
+            (x: i32) -> x + amt
         | dec ->
             let amt = base
-            (x: int32) -> x - amt
+            (x: i32) -> x - amt
     assert(apply(f, 5) == 105)
     0

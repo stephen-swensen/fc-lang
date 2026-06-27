@@ -1,10 +1,10 @@
 namespace vendor::
 
 module utils =
-    let add = (a: int32, b: int32) -> a + b
-    let mul = (a: int32, b: int32) -> a * b
+    let add = (a: i32, b: i32) -> a + b
+    let mul = (a: i32, b: i32) -> a * b
 
 module app =
     module core =
         import * from utils
-        let compute = (x: int32, y: int32) -> add(x, mul(y, 2))
+        let compute = (x: i32, y: i32) -> add(x, mul(y, 2))

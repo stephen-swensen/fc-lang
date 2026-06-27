@@ -3,7 +3,7 @@
 // option positions. The mangled fc__ type name keeps it distinct from the
 // libc typedef so the C compile is clean.
 struct div_t =
-    static: int32
+    static: i32
 
 let via_ptr = (p: div_t*) -> p->static
 let via_slice = (s: div_t[]) -> s[0].static

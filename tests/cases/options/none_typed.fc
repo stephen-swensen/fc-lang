@@ -1,10 +1,10 @@
-let check = (x: int32?) ->
+let check = (x: i32?) ->
     match x with
     | some(v) -> v
     | none -> 0
 
 let main = (args: str[]) ->
-    let a = check(none(int32))
+    let a = check(none(i32))
     let b = check(some(42))
     assert(a + b == 42)
     0

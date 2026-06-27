@@ -1,11 +1,11 @@
 // A nested lvalue path rooted at a heap pointer must be walked to its root
 struct inner =
-    p: int32*
+    p: i32*
 struct outer =
     i: inner
 
 let leak = () ->
-    let ho = alloc(outer { i = inner { p = default(int32*) } })!
+    let ho = alloc(outer { i = inner { p = default(i32*) } })!
     let mut x = 42
     ho->i.p = &x
     free(ho)

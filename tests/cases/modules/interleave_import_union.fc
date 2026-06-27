@@ -1,12 +1,12 @@
 // Child's imported union type shadows a parent's union with the same name.
 module shapes_a =
     union shape =
-        | circle(int32)
+        | circle(i32)
         | empty_a
 
 module shapes_b =
     union shape =
-        | square(int32)
+        | square(i32)
         | empty_b
 
 module parent =

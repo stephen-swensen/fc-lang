@@ -1,7 +1,7 @@
 // Cast between any* and user-defined struct pointers
 struct point =
-    x: int32
-    y: int32
+    x: i32
+    y: i32
 
 let round_trip = (p: point*) ->
     let opaque = (any*) p

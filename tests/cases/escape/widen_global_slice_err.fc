@@ -1,9 +1,9 @@
-// A subslice of a stack array widened to a `const int32[]` global must be
+// A subslice of a stack array widened to a `const i32[]` global must be
 // rejected: the slice const-change widen must preserve PROV_STACK.
-let mut g = default(const int32[])
+let mut g = default(const i32[])
 
 let leak = () ->
-    let arr = int32[4] { 1, 2, 3, 4 }
+    let arr = i32[4] { 1, 2, 3, 4 }
     g = arr[0..2]
 
 let main = (args: str[]) ->

@@ -2,7 +2,7 @@
 // into a binding. Each arm builds its own context struct in a nested
 // statement-expression; both must get function-frame lifetime. Exercises both
 // arms (the taken one carries the live capture).
-let apply = (f: (int32) -> int32, x: int32) ->
+let apply = (f: (i32) -> i32, x: i32) ->
     f(x)
 
 let main = (args: str[]) ->
@@ -10,9 +10,9 @@ let main = (args: str[]) ->
     let pick =
         if base > 50 then
             let hi = base
-            (x: int32) -> x + hi
+            (x: i32) -> x + hi
         else
             let lo = base
-            (x: int32) -> x - lo
+            (x: i32) -> x - lo
     assert(apply(pick, 5) == 105)
     0

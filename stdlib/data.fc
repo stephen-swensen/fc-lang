@@ -14,7 +14,7 @@ module data =
 
     struct array_list =
         data: 'a[]
-        len:  int64
+        len:  i64
 
     module array_list =
 
@@ -31,7 +31,7 @@ module data =
             alloc(array_list { data = alloc('a[8] { })!, len = 0 })!
 
         // make_with_capacity: creates an empty array_list with given capacity. Caller must destroy.
-        let make_with_capacity = <'a>(cap: int64) ->
+        let make_with_capacity = <'a>(cap: i64) ->
             let actual = if cap < 1i64 then 1i64 else cap
             alloc(array_list { data = alloc('a[actual] { })!, len = 0 })!
 
@@ -48,7 +48,7 @@ module data =
             alloc(array_list { data = new_data, len = l->len })!
 
         // get: returns element at index. Bounds-checked by underlying slice.
-        let get = (l: array_list<'a>*, index: int64) ->
+        let get = (l: array_list<'a>*, index: i64) ->
             l->data[index]
 
         // len: returns the number of elements.
@@ -89,11 +89,11 @@ module data =
             l->len = l->len + 1
 
         // update: sets element at index.
-        let update = (l: array_list<'a>*, index: int64, value: 'a) ->
+        let update = (l: array_list<'a>*, index: i64, value: 'a) ->
             l->data[index] = value
 
         // insert: inserts element at index, shifting right.
-        let insert = (l: array_list<'a>*, index: int64, value: 'a) ->
+        let insert = (l: array_list<'a>*, index: i64, value: 'a) ->
             if l->len == l->data.len then array_list.grow(l)
             let mut i = l->len
             loop
@@ -104,7 +104,7 @@ module data =
             l->len = l->len + 1
 
         // remove_at: removes and returns element at index, shifting left.
-        let remove_at = (l: array_list<'a>*, index: int64) ->
+        let remove_at = (l: array_list<'a>*, index: i64) ->
             let value = l->data[index]
             let mut i = index
             loop
@@ -172,7 +172,7 @@ module data =
             result
 
         // mapi: transforms each element with index. Caller must destroy.
-        let mapi = (l: array_list<'a>*, f: (int64, 'a) -> 'b) ->
+        let mapi = (l: array_list<'a>*, f: (i64, 'a) -> 'b) ->
             let result = array_list.make_with_capacity<'b>(l->len)
             for i, e in l->data[0..l->len] do
                 array_list.add(result, f(i, e))
@@ -191,7 +191,7 @@ module data =
                 f(e)
 
         // iteri: applies f to each (index, element) for side effects.
-        let iteri = (l: array_list<'a>*, f: (int64, 'a) -> 'b) ->
+        let iteri = (l: array_list<'a>*, f: (i64, 'a) -> 'b) ->
             for i, e in l->data[0..l->len] do
                 f(i, e)
 
@@ -226,7 +226,7 @@ module data =
 
         // sort: sorts elements in place.
         // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
-        let sort = (l: array_list<'a>*, cmp: ('a, 'a) -> int32) ->
+        let sort = (l: array_list<'a>*, cmp: ('a, 'a) -> i32) ->
             slice.sort(l->data[0..l->len], cmp)
 
         // reverse: reverses element order in place.
@@ -249,7 +249,7 @@ module data =
                 l->data[i] = f(l->data[i])
 
         // applyi: transforms each element in place with index.
-        let applyi = (l: array_list<'a>*, f: (int64, 'a) -> 'a) ->
+        let applyi = (l: array_list<'a>*, f: (i64, 'a) -> 'a) ->
             for i in 0..l->len do
                 l->data[i] = f(i, l->data[i])
 
@@ -313,7 +313,7 @@ module data =
             result
 
         // mapi: transforms each element with index. Caller must free.
-        let mapi = (s: const 'a[], f: (int64, 'a) -> 'b) ->
+        let mapi = (s: const 'a[], f: (i64, 'a) -> 'b) ->
             let result = alloc('b[s.len] { })!
             for i, e in s do
                 result[i] = f(i, e)
@@ -338,7 +338,7 @@ module data =
                 f(e)
 
         // iteri: applies f to each (index, element) for side effects.
-        let iteri = (s: const 'a[], f: (int64, 'a) -> 'b) ->
+        let iteri = (s: const 'a[], f: (i64, 'a) -> 'b) ->
             for i, e in s do
                 f(i, e)
 
@@ -425,12 +425,12 @@ module data =
                 s[i] = f(s[i])
 
         // applyi: transforms each element in place with index.
-        let applyi = (s: 'a[], f: (int64, 'a) -> 'a) ->
+        let applyi = (s: 'a[], f: (i64, 'a) -> 'a) ->
             for i in 0..s.len do
                 s[i] = f(i, s[i])
 
         // sort_range: sorts s[lo..hi] (inclusive) in place using quicksort.
-        private let sort_range = (s: 'a[], lo: int64, hi: int64, cmp: ('a, 'a) -> int32) ->
+        private let sort_range = (s: 'a[], lo: i64, hi: i64, cmp: ('a, 'a) -> i32) ->
             if lo >= hi then return
             let pivot = s[hi]
             let mut i = lo
@@ -448,7 +448,7 @@ module data =
 
         // sort: sorts a slice in place using quicksort.
         // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
-        let sort = (s: 'a[], cmp: ('a, 'a) -> int32) ->
+        let sort = (s: 'a[], cmp: ('a, 'a) -> i32) ->
             if s.len > 1 then slice.sort_range(s, 0i64, s.len - 1, cmp)
 
     // =========================================================================
@@ -467,7 +467,7 @@ module data =
     struct linked_list =
         head: dl_node<'a>*?
         tail: dl_node<'a>*?
-        len:  int64
+        len:  i64
 
     module linked_list =
 
@@ -539,7 +539,7 @@ module data =
 
         // insert: inserts value before the element at index. O(n) traversal.
         // index 0 = prepend, index len = append.
-        let insert = (l: linked_list<'a>*, index: int64, value: 'a) ->
+        let insert = (l: linked_list<'a>*, index: i64, value: 'a) ->
             if index <= 0 then linked_list.prepend(l, value)
             else if index >= l->len then linked_list.append(l, value)
             else
@@ -683,7 +683,7 @@ module data =
                     cur = ptr->next
 
         // mapi: transforms each element with index. Returns new linked_list. Caller must destroy.
-        let mapi = (l: linked_list<'a>*, f: (int64, 'a) -> 'b) ->
+        let mapi = (l: linked_list<'a>*, f: (i64, 'a) -> 'b) ->
             let result = linked_list.make<'b>()
             let mut cur = l->head
             let mut idx = 0i64
@@ -717,7 +717,7 @@ module data =
                     cur = ptr->next
 
         // iteri: applies f to each (index, element) for side effects.
-        let iteri = (l: linked_list<'a>*, f: (int64, 'a) -> 'b) ->
+        let iteri = (l: linked_list<'a>*, f: (i64, 'a) -> 'b) ->
             let mut cur = l->head
             let mut idx = 0i64
             loop
@@ -788,7 +788,7 @@ module data =
 
         // sort: sorts elements in place.
         // cmp(a, b) returns negative if a < b, 0 if equal, positive if a > b.
-        let sort = (l: linked_list<'a>*, cmp: ('a, 'a) -> int32) ->
+        let sort = (l: linked_list<'a>*, cmp: ('a, 'a) -> i32) ->
             if l->len <= 1 then return
             let s = linked_list.to_slice(l)
             slice.sort(s, cmp)
@@ -848,7 +848,7 @@ module data =
                     cur = ptr->next
 
         // applyi: transforms each element in place with index.
-        let applyi = (l: linked_list<'a>*, f: (int64, 'a) -> 'a) ->
+        let applyi = (l: linked_list<'a>*, f: (i64, 'a) -> 'a) ->
             let mut cur = l->head
             let mut idx = 0i64
             loop
@@ -871,23 +871,23 @@ module data =
     struct hd_entry =
         key:   'a
         value: 'b
-        state: int32
+        state: i32
 
     struct hash_dict =
         buckets: hd_entry<'a, 'b>[]
-        len:     int64
-        hash:    ('a) -> int64
+        len:     i64
+        hash:    ('a) -> i64
         eq:      ('a, 'a) -> bool
 
     module hash_dict =
 
         // make: creates empty hash_dict with default capacity 16. Caller must destroy.
         // 'b must be explicitly provided; 'a is inferred from hash/eq.
-        let make = <'b>(hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+        let make = <'b>(hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
             alloc(hash_dict { buckets = alloc(hd_entry<'a, 'b>[16] { })!, len = 0, hash = hash, eq = eq })!
 
         // make_with_capacity: creates empty hash_dict with given capacity. Caller must destroy.
-        let make_with_capacity = <'b>(cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+        let make_with_capacity = <'b>(cap: i64, hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
             let actual = if cap < 4i64 then 4i64 else cap
             alloc(hash_dict { buckets = alloc(hd_entry<'a, 'b>[actual] { })!, len = 0, hash = hash, eq = eq })!
 
@@ -1064,22 +1064,22 @@ module data =
 
     struct hs_entry =
         key:   'a
-        state: int32
+        state: i32
 
     struct hash_set =
         buckets: hs_entry<'a>[]
-        len:     int64
-        hash:    ('a) -> int64
+        len:     i64
+        hash:    ('a) -> i64
         eq:      ('a, 'a) -> bool
 
     module hash_set =
 
         // make: creates empty hash_set with default capacity 16. Caller must destroy.
-        let make = (hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+        let make = (hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
             alloc(hash_set { buckets = alloc(hs_entry<'a>[16] { })!, len = 0, hash = hash, eq = eq })!
 
         // make_with_capacity: creates empty hash_set with given capacity. Caller must destroy.
-        let make_with_capacity = (cap: int64, hash: ('a) -> int64, eq: ('a, 'a) -> bool) ->
+        let make_with_capacity = (cap: i64, hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
             let actual = if cap < 4i64 then 4i64 else cap
             alloc(hash_set { buckets = alloc(hs_entry<'a>[actual] { })!, len = 0, hash = hash, eq = eq })!
 

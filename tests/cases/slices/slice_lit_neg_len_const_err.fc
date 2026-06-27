@@ -1,7 +1,7 @@
 // In const context (file-scope initializer) there is no runtime guard, so a
 // negative literal length must be caught statically.
 module m =
-    let bad = int32[] { ptr = default(int32*), len = -1 }
+    let bad = i32[] { ptr = default(i32*), len = -1 }
 
 let main = (args: str[]) ->
-    (int32) m.bad.len
+    (i32) m.bad.len

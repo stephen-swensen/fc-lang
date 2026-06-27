@@ -1,4 +1,4 @@
-let classify = (n: int32) -> match n with
+let classify = (n: i32) -> match n with
     | 0 -> 10
     | 1 -> 20
     | 2 -> 30

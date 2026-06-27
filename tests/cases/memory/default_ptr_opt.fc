@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let p = default(int32*?)
+        let p = default(i32*?)
         match p with
         | none -> 10
         | some(_) -> 0

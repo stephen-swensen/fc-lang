@@ -1,6 +1,6 @@
 // zero-length subslice: .len and iteration
 let main = (args: str[]) ->
-    let buf = int32[5] { 10, 20, 30, 40, 50 }
+    let buf = i32[5] { 10, 20, 30, 40, 50 }
     let e1 = buf[0..0]
     let e2 = buf[3..3]
     let e3 = buf[5..5]
@@ -16,7 +16,7 @@ let main = (args: str[]) ->
     let mut entered = false
     for i, x in e2 do
         entered = true
-        touched = touched + x + (int32) i
+        touched = touched + x + (i32) i
     assert(!entered)
     assert(touched == 0)
     0

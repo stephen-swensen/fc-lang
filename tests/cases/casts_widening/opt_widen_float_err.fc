@@ -1,5 +1,5 @@
-// float32? must not widen to float64? — same struct-to-struct issue as ints.
-let take = (x: float64?) ->
+// f32? must not widen to f64? — same struct-to-struct issue as ints.
+let take = (x: f64?) ->
     match x with
     | some(v) -> v
     | none -> 0.0
@@ -7,4 +7,4 @@ let take = (x: float64?) ->
 let main = (args: str[]) ->
     let a = some(1.5f32)
     let r = take(a)
-    (int32) r
+    (i32) r

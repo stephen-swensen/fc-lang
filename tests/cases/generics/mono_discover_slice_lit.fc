@@ -1,7 +1,7 @@
 // Item 6 (same class): a slice literal (T[] { ptr = ..., len = ... }) whose
 // element type is a generic struct instance used only inside a generic body.
 // discover_in_expr walked ptr/len but not slice_lit.elem_type, so the slice
-// typedef referenced an undefined `box__5_int64`.
+// typedef referenced an undefined `box__5_i64`.
 struct box =
     v: 'a
 

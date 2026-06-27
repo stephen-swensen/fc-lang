@@ -1,8 +1,8 @@
 struct buffer =
-    data: int32[4]
+    data: i32[4]
 
 let main = (args: str[]) ->
-    let mut b = buffer { data = int32[4] { 10, 20, 30, 40 } }
+    let mut b = buffer { data = i32[4] { 10, 20, 30, 40 } }
     let p = &b
 
     // access through pointer
