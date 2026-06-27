@@ -22,12 +22,16 @@
           "match": "//.*$",
           "captures": { "0": { "patterns": [ { "include": "#todo" } ] } }
         },
-        {
-          "name": "comment.block.fc",
-          "begin": "/\\*",
-          "end": "\\*/",
-          "patterns": [ { "include": "#todo" } ]
-        }
+        { "include": "#block-comment" }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.fc",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [
+        { "include": "#block-comment" },
+        { "include": "#todo" }
       ]
     },
     "todo": {

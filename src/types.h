@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "diag.h"   /* SrcLoc (StructField/UnionVariant carry a source loc) */
 
 typedef enum {
     TYPE_INT8,
@@ -44,11 +45,13 @@ typedef struct UnionVariant UnionVariant;
 struct StructField {
     const char *name;
     Type *type;
+    SrcLoc loc;     /* source loc of the field name (editor go-to-definition); {0} if synthesized */
 };
 
 struct UnionVariant {
     const char *name;
     Type *payload;  /* NULL if no payload */
+    SrcLoc loc;     /* source loc of the variant name (editor go-to-definition); {0} if synthesized */
 };
 
 struct Type {

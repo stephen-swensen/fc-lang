@@ -14,6 +14,8 @@ typedef struct {
     bool is_mut;
     bool is_capturing;          /* true if bound to a capturing lambda */
     Provenance prov;            /* provenance of the bound value */
+    SrcLoc def_loc;             /* source loc where this name is introduced (editor
+                                   go-to-def on a block-local); {0} if synthesized */
 } LocalBinding;
 
 typedef struct Scope Scope;
@@ -66,8 +68,9 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
     return buf;
 }
 
-static void scope_add_prov(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut, Provenance prov) {
-    LocalBinding b = { name, codegen_name, type, is_mut, false, prov };
+static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
+                           Type *type, bool is_mut, Provenance prov, SrcLoc def_loc) {
+    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, def_loc };
     /* Grow arena-side so the locals array is reclaimed with the AST arena
      * (a long-running server frees it; the CLI frees it at the end). */
     if (s->local_count >= s->local_cap) {
@@ -81,8 +84,9 @@ static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
     s->locals[s->local_count++] = b;
 }
 
-static void scope_add(Scope *s, const char *name, const char *codegen_name, Type *type, bool is_mut) {
-    scope_add_prov(s, name, codegen_name, type, is_mut, PROV_UNKNOWN);
+static void scope_add(Scope *s, const char *name, const char *codegen_name,
+                      Type *type, bool is_mut, SrcLoc def_loc) {
+    scope_add_prov(s, name, codegen_name, type, is_mut, PROV_UNKNOWN, def_loc);
 }
 
 /* Scope lookup with lambda boundary crossing and mutability tracking.
@@ -92,7 +96,7 @@ static void scope_add(Scope *s, const char *name, const char *codegen_name, Type
    bindings are resolved by the interleaved parent/import loop in EXPR_IDENT. */
 static Type *scope_lookup_capture(Scope *s, const char *name,
     const char **out_codegen_name, bool *out_is_mut, int *out_crossings,
-    bool *out_is_global)
+    bool *out_is_global, SrcLoc *out_def_loc)
 {
     int crossings = 0;
     for (Scope *sc = s; sc; sc = sc->parent) {
@@ -103,6 +107,7 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
                 /* Global scope bindings are never captures */
                 if (out_crossings) *out_crossings = sc->is_global ? 0 : crossings;
                 if (out_is_global) *out_is_global = sc->is_global;
+                if (out_def_loc) *out_def_loc = sc->locals[i].def_loc;
                 return sc->locals[i].type;
             }
         }
@@ -117,6 +122,7 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
     if (out_is_mut) *out_is_mut = false;
     if (out_crossings) *out_crossings = 0;
     if (out_is_global) *out_is_global = false;
+    if (out_def_loc) *out_def_loc = (SrcLoc){0};
     return NULL;
 }
 
@@ -248,7 +254,7 @@ static bool expr_may_yield_stack(Scope *scope, Expr *e) {
             Expr *operand = e->unary_prefix.operand;
             if (operand->kind == EXPR_IDENT) {
                 Type *ot = scope_lookup_capture(scope, operand->ident.name,
-                    NULL, NULL, NULL, NULL);
+                    NULL, NULL, NULL, NULL, NULL);
                 if (ot && ot->kind == TYPE_FUNC) return false;
             }
             return true;
@@ -513,6 +519,7 @@ typedef struct {
     const char *pending_self_name;
     const char *pending_self_codegen;
     Type *pending_self_type;     /* partial function type with mutable placeholder return */
+    SrcLoc pending_self_loc;     /* def loc of the self-recursive binding name (editor go-to-def) */
     LambdaCtx *lambda_ctx;       /* capture tracking for lambdas, NULL outside lambdas */
     bool is_top_level_init;      /* true when checking the init of a top-level DECL_LET */
     MonoTable *mono_table;       /* global instantiation registry */
@@ -1857,7 +1864,7 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
             int id = local_id_counter++;
             const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
             inner->binding.name = cg;  /* overwrite with codegen name */
-            scope_add(ctx->scope, orig_name, cg, field_type, is_mut);
+            scope_add(ctx->scope, orig_name, cg, field_type, is_mut, inner->loc);
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
@@ -1906,7 +1913,7 @@ static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is
             int id = local_id_counter++;
             const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
             inner->binding.name = cg;  /* overwrite with codegen name */
-            scope_add(ctx->scope, orig_name, cg, elem_type, is_mut);
+            scope_add(ctx->scope, orig_name, cg, elem_type, is_mut, inner->loc);
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this element */
         } else if (inner->kind == PAT_STRUCT) {
@@ -1929,7 +1936,7 @@ static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is
 static void for_pattern_bind_error(CheckCtx *ctx, Pattern *pat) {
     switch (pat->kind) {
     case PAT_BINDING:
-        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type_error(), false);
+        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type_error(), false, pat->loc);
         break;
     case PAT_TUPLE:
         for (int i = 0; i < pat->tuple_pat.pattern_count; i++)
@@ -1961,7 +1968,8 @@ static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
             check_destruct_pattern(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
     } else {
         scope_add(ctx->scope, e->for_expr.var,
-            c_safe_ident(ctx->intern, e->for_expr.var), elem_type, false);
+            c_safe_ident(ctx->intern, e->for_expr.var), elem_type, false,
+            e->for_expr.var_loc);
     }
 }
 
@@ -2989,8 +2997,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         bool is_mut = false;
         int boundary_crossings = 0;
         bool is_global_binding = false;
+        SrcLoc local_def_loc = {0};
         Type *t = scope_lookup_capture(ctx->scope, e->ident.name,
-            &cg_name, &is_mut, &boundary_crossings, &is_global_binding);
+            &cg_name, &is_mut, &boundary_crossings, &is_global_binding, &local_def_loc);
         if (t) {
             if (boundary_crossings > 0) {
                 if (is_mut) {
@@ -3033,6 +3042,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->ident.codegen_name = cg_name;
             e->ident.is_local = !is_global_binding;
             e->ident.is_mut = is_mut;
+            /* Record the binding's definition site for editor go-to-definition.
+             * Only for block-locals (params, lets, for-vars, match bindings);
+             * global bindings resolve through resolved_sym below. */
+            if (!is_global_binding)
+                e->ident.resolved_local_loc = local_def_loc;
             /* For global-scope bindings (module-level or top-level lets),
              * look up the Symbol so EXPR_FIELD and EXPR_CALL can use it
              * without re-resolving.  Local bindings (parameters, block-scoped
@@ -3613,7 +3627,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
                 bool op_is_mut = false;
                 scope_lookup_capture(ctx->scope, operand->ident.name,
-                    NULL, &op_is_mut, NULL, NULL);
+                    NULL, &op_is_mut, NULL, NULL, NULL);
                 if (!op_is_mut) {
                     diag_error(e->loc, "address-of requires mutable binding");
                     e->type = type_error();
@@ -3738,7 +3752,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
              * `register`); the FC lookup name stays raw so source references
              * still resolve. Decl emission applies the same escape. */
             scope_add(inner, e->func.params[i].name,
-                c_safe_ident(ctx->intern, e->func.params[i].name), ptypes[i], false);
+                c_safe_ident(ctx->intern, e->func.params[i].name), ptypes[i], false,
+                e->func.params[i].loc);
         }
 
         /* Consume the pending-self channel set by an enclosing EXPR_LET so this
@@ -3749,11 +3764,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         const char *self_name = ctx->pending_self_name;
         const char *self_cg = ctx->pending_self_codegen;
         Type *self_type = ctx->pending_self_type;
+        SrcLoc self_loc = ctx->pending_self_loc;
         ctx->pending_self_name = NULL;
         ctx->pending_self_codegen = NULL;
         ctx->pending_self_type = NULL;
+        ctx->pending_self_loc = (SrcLoc){0};
         if (self_name)
-            scope_add(inner, self_name, self_cg, self_type, false);
+            scope_add(inner, self_name, self_cg, self_type, false, self_loc);
 
         /* Consume the recursion channel set by the enclosing let/decl when this is
            the recursive binding's own initializer. Clearing it here scopes the
@@ -3872,9 +3889,20 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Pop lambda context */
         ctx->lambda_ctx = saved_lambda;
 
-        /* Transfer captures to AST node */
-        e->func.captures = lctx.entries;
+        /* Transfer captures to the AST node. lctx.entries is a malloc'd DA_APPEND
+         * array; copy it into the arena so it is reclaimed with the AST (a
+         * long-running server frees the arena each analysis) and release the temp.
+         * lctx.returns is pure scratch for the return-type check above — free it. */
+        if (lctx.count > 0) {
+            Capture *caps = arena_alloc(ctx->arena, sizeof(Capture) * (size_t)lctx.count);
+            memcpy(caps, lctx.entries, sizeof(Capture) * (size_t)lctx.count);
+            e->func.captures = caps;
+        } else {
+            e->func.captures = NULL;
+        }
         e->func.capture_count = lctx.count;
+        free(lctx.entries);
+        free(lctx.returns);
 
         /* Record self-recursion result for codegen: materialize the self fat pointer
            only when the name was actually referenced, keeping generated C -Werror-clean. */
@@ -4485,6 +4513,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         const char *saved_psn = ctx->pending_self_name;
         const char *saved_psc = ctx->pending_self_codegen;
         Type *saved_pst = ctx->pending_self_type;
+        SrcLoc saved_psl = ctx->pending_self_loc;
         Type *saved_prr = ctx->pending_recursive_ret;
         const char *saved_prs = ctx->pending_recursive_self;
         if (e->let_expr.let_init->kind == EXPR_FUNC && !e->let_expr.let_is_mut) {
@@ -4495,8 +4524,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             for (int i = 0; i < pc; i++)
                 ptypes[i] = resolve_type(ctx, fn->func.params[i].type);
 
-            self_placeholder = malloc(sizeof(Type));
-            memset(self_placeholder, 0, sizeof(Type));
+            self_placeholder = arena_alloc(ctx->arena, sizeof(Type));
             self_placeholder->kind = TYPE_UNRESOLVED;  /* patched after body check */
 
             Type *ft = arena_alloc(ctx->arena, sizeof(Type));
@@ -4510,6 +4538,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             ctx->pending_self_name = e->let_expr.let_name;
             ctx->pending_self_codegen = cg;
             ctx->pending_self_type = ft;
+            ctx->pending_self_loc = e->let_expr.let_name_loc;
             ctx->pending_recursive_ret = self_placeholder;
             ctx->pending_recursive_self = e->let_expr.let_name;
         }
@@ -4521,20 +4550,23 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->pending_self_name = saved_psn;
         ctx->pending_self_codegen = saved_psc;
         ctx->pending_self_type = saved_pst;
+        ctx->pending_self_loc = saved_psl;
         ctx->pending_recursive_ret = saved_prr;
         ctx->pending_recursive_self = saved_prs;
 
         if (type_is_error(t)) {
             /* Add binding with error type so subsequent uses don't cascade "undefined" */
             e->let_expr.let_type = type_error();
-            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
+                      e->let_expr.let_name_loc);
             e->type = type_void();
             return e->type;
         }
         if (t->kind == TYPE_VOID) {
             diag_error(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
             e->let_expr.let_type = type_error();
-            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
+                      e->let_expr.let_name_loc);
             e->type = type_void();
             return e->type;
         }
@@ -4542,7 +4574,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             diag_error(e->loc, "cannot bind '%s': every path through this expression "
                 "returns, so it has no value", e->let_expr.let_name);
             e->let_expr.let_type = type_error();
-            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
+                      e->let_expr.let_name_loc);
             e->type = type_void();
             return e->type;
         }
@@ -4552,7 +4585,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             diag_error(e->loc, "cannot bind '%s': it depends on a recursive call made "
                 "before a base case establishes the return type", e->let_expr.let_name);
             e->let_expr.let_type = type_error();
-            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut);
+            scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
+                      e->let_expr.let_name_loc);
             e->type = type_void();
             return e->type;
         }
@@ -4566,7 +4600,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         e->let_expr.let_type = t;
         scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
-                        e->let_expr.let_init->prov);
+                        e->let_expr.let_init->prov, e->let_expr.let_name_loc);
         /* Mark binding as capturing if init is a lambda with captures */
         if (e->let_expr.let_init->kind == EXPR_FUNC &&
             e->let_expr.let_init->func.capture_count > 0) {
@@ -5746,9 +5780,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (e->for_expr.var_pattern)
                 for_pattern_bind_error(ctx, e->for_expr.var_pattern);
             else
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false,
+                          e->for_expr.var_loc);
             if (e->for_expr.index_var)
-                scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false);
+                scope_add(ctx->scope, e->for_expr.index_var, e->for_expr.index_var, type_int64(), false,
+                          e->for_expr.index_var_loc);
         } else if (e->for_expr.range_end) {
             /* Range iteration: for i in lo..hi */
             Type *end_type = check_expr(ctx, e->for_expr.range_end);
@@ -5757,10 +5793,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 diag_error(e->loc, "cannot destructure a range element — ranges produce integers");
                 for_pattern_bind_error(ctx, e->for_expr.var_pattern);
             } else if (type_is_error(end_type)) {
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false,
+                          e->for_expr.var_loc);
             } else if (!type_is_integer(iter_type) || !type_is_integer(end_type)) {
                 diag_error(e->loc, "range bounds must be integer types");
-                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+                scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false,
+                          e->for_expr.var_loc);
             } else {
                 /* Unify the endpoints by widening rules — not by TypeKind
                  * ordinal. The common type becomes the loop variable's type,
@@ -5782,7 +5820,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         e->for_expr.range_end = wrap_widen(ctx->arena, e->for_expr.range_end, var_type);
                 }
                 scope_add(ctx->scope, e->for_expr.var,
-                    c_safe_ident(ctx->intern, e->for_expr.var), var_type, false);
+                    c_safe_ident(ctx->intern, e->for_expr.var), var_type, false,
+                    e->for_expr.var_loc);
             }
         } else {
             /* Collection iteration: for x in slice */
@@ -5790,14 +5829,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 bind_for_element(ctx, e, iter_type->slice.elem);
                 if (e->for_expr.index_var) {
                     scope_add(ctx->scope, e->for_expr.index_var,
-                        c_safe_ident(ctx->intern, e->for_expr.index_var), type_int64(), false);
+                        c_safe_ident(ctx->intern, e->for_expr.index_var), type_int64(), false,
+                        e->for_expr.index_var_loc);
                 }
             } else {
                 diag_error(e->loc, "for-in requires slice or range, got %s", type_name(iter_type));
                 if (e->for_expr.var_pattern)
                     for_pattern_bind_error(ctx, e->for_expr.var_pattern);
                 else
-                    scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false);
+                    scope_add(ctx->scope, e->for_expr.var, e->for_expr.var, type_error(), false,
+                          e->for_expr.var_loc);
             }
         }
 
@@ -6048,7 +6089,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (e->alloc_expr.init_expr->kind == EXPR_IDENT) {
                 const char *name = e->alloc_expr.init_expr->ident.name;
                 Type *var_type = scope_lookup_capture(ctx->scope, name,
-                    NULL, NULL, NULL, NULL);
+                    NULL, NULL, NULL, NULL, NULL);
                 if (!var_type) {
                     Symbol *sym = global_lookup(ctx->symtab, name, ctx->current_ns);
                     if (sym && sym->kind == DECL_LET) var_type = sym->type;
@@ -6266,7 +6307,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
                 pat->binding.name);
             return;
         }
-        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false);
+        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false, pat->loc);
         break;
     case PAT_INT_LIT:
         if (!type_is_integer(type)) {
@@ -8175,7 +8216,9 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     if (sym) sym->type = t;
     /* Add to scope so later decls can reference it */
     const char *cg_name = d->let.codegen_name ? d->let.codegen_name : d->let.name;
-    scope_add(ctx->scope, d->let.name, cg_name, t, d->let.is_mut);
+    /* Global binding: go-to-def resolves via the Symbol, so the def_loc is unused
+     * here, but pass the decl loc for consistency. */
+    scope_add(ctx->scope, d->let.name, cg_name, t, d->let.is_mut, d->loc);
 }
 
 /* Recursively type-check module members, including arbitrarily nested submodules.

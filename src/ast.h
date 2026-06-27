@@ -132,6 +132,8 @@ struct Expr {
             bool is_mut;
             struct Symbol *resolved_sym;       /* Symbol resolved by pass2 (module, struct, union, let) */
             struct Symbol *companion_module;   /* non-NULL when resolved_sym is a struct/union with a companion module */
+            SrcLoc resolved_local_loc;         /* def loc of a resolved block-local binding (param, let, for-var,
+                                                  match pattern) for editor go-to-def; {0} if global/unresolved */
         } ident;
 
         /* EXPR_BINARY */
@@ -161,6 +163,7 @@ struct Expr {
         /* EXPR_FIELD, EXPR_DEREF_FIELD */
         struct {
             Expr *object; const char *name; const char *codegen_name;
+            SrcLoc name_loc;        /* source loc of the field-name token (editor queries) */
             Type **type_args;       /* explicit type args for generic variant: name<Types>.variant */
             int type_arg_count;
             Type *fixed_array_type; /* non-NULL if field is a fixed-size inline array (TYPE_FIXED_ARRAY) */
@@ -211,6 +214,8 @@ struct Expr {
             struct Pattern *var_pattern; /* non-NULL: destructure the element (PAT_TUPLE/PAT_STRUCT) */
             const char *elem_tmp;   /* codegen temp holding the element when destructuring */
             const char *index_var;  /* NULL if not i,x form */
+            SrcLoc var_loc;         /* source loc of `var` (editor go-to-def); {0} if pattern/absent */
+            SrcLoc index_var_loc;   /* source loc of `index_var` (editor go-to-def); {0} if absent */
             Expr *iter;             /* collection expr, or range start */
             Expr *range_end;        /* non-NULL for range iteration (lo..hi) */
             Expr **body;
@@ -336,6 +341,7 @@ struct Expr {
             bool let_is_mut;
             Expr *let_init;
             Type *let_type;     /* filled by pass2 */
+            SrcLoc let_name_loc;        /* source loc of the binding name (editor go-to-def) */
         } let_expr;
 
         /* EXPR_LET_DESTRUCT */

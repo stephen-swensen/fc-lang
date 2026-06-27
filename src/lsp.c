@@ -298,10 +298,25 @@ typedef struct {
     Type *type;
     const char *name;
     Symbol *sym;                    /* resolved symbol, for go-to-def (may be NULL) */
+    SrcLoc def_loc;                 /* direct definition loc when there is no Symbol
+                                       (block-local bindings, plain struct fields);
+                                       .line == 0 means none. Takes precedence over sym. */
+    SrcLoc doc_loc;                 /* site to scan for a doc comment in hover; .line == 0
+                                       falls back to def_loc, then sym->decl. Distinct from
+                                       def_loc so a union variant constructor can keep
+                                       go-to-def on the union while its doc reads the
+                                       variant line. */
+    bool doc_is_field;              /* doc_loc is a struct/union field/variant line
+                                       (enables trailing-comment extraction) */
 } FindCtx;
 
-static void consider(FindCtx *c, int line, int col, int span,
-                     Type *type, const char *name, Symbol *sym) {
+static Type *peel_to_aggregate(Type *t);   /* defined in the completion section */
+
+static const SrcLoc NO_LOC = {0};
+
+static void consider(FindCtx *c, int line, int col, int span, Type *type,
+                     const char *name, Symbol *sym, SrcLoc def_loc,
+                     SrcLoc doc_loc, bool doc_is_field) {
     if (line != c->target_line) return;
     if (c->target_col < col || c->target_col >= col + span) return;
     if (c->found && span > c->best_span) return;   /* keep the innermost (smallest) */
@@ -312,6 +327,9 @@ static void consider(FindCtx *c, int line, int col, int span,
     c->type = type;
     c->name = name;
     c->sym = sym;
+    c->def_loc = def_loc;
+    c->doc_loc = doc_loc;
+    c->doc_is_field = doc_is_field;
 }
 
 /* Column (1-based) of the binding name in a `let [mut] name ...` whose `let`
@@ -341,27 +359,50 @@ static void find_in_expr(Expr *e, FindCtx *c) {
     switch (e->kind) {
         case EXPR_IDENT:
             consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
-                     e->type, e->ident.name, e->ident.resolved_sym);
+                     e->type, e->ident.name, e->ident.resolved_sym,
+                     e->ident.resolved_local_loc, e->ident.resolved_local_loc, false);
             break;
         case EXPR_FIELD:
         case EXPR_DEREF_FIELD:
             find_in_expr(e->field.object, c);
-            /* Best-effort: when the object is a simple identifier on one line,
-             * the field name's position is computable, so the field's resolved
-             * type can be hovered precisely. A go-to-definition symbol is offered
-             * for module members (mod.member -> the member's declaration) and for
-             * union variant constructors (shape.circle -> the union declaration);
-             * plain struct-field access has no per-field declaration site. */
-            if (e->field.object && e->field.object->kind == EXPR_IDENT) {
-                int sep = (e->kind == EXPR_DEREF_FIELD) ? 2 : 1;  /* "->" vs "." */
-                int col = e->field.object->loc.col +
-                          (int)strlen(e->field.object->ident.name) + sep;
+            /* The field-name token's exact source loc is recorded by the parser,
+             * so hover/definition target the field name precisely regardless of the
+             * object expression's shape (a.b, a.b.c, s . field) or spacing. Go-to-
+             * definition resolves: module members (mod.member -> the member decl)
+             * and variant constructors (shape.circle -> the union decl) via a
+             * Symbol; plain struct-field access (s.field) jumps to the field's
+             * declaration in the struct body via its recorded StructField loc. */
+            if (e->field.name_loc.line > 0) {
                 Symbol *def = e->field.resolved_member;
+                SrcLoc doc_loc = NO_LOC;
+                bool doc_is_field = false;
                 if (!def && e->field.is_variant_constructor &&
-                    e->type && e->type->kind == TYPE_UNION)
+                    e->type && e->type->kind == TYPE_UNION) {
+                    /* Variant constructor: go-to-def lands on the union decl (Symbol),
+                     * but the doc comment is read from the variant's own line. */
                     def = e->type->unio.resolved_sym;
-                consider(c, e->field.object->loc.line, col,
-                         (int)strlen(e->field.name), e->type, e->field.name, def);
+                    for (int i = 0; i < e->type->unio.variant_count; i++)
+                        if (e->type->unio.variants[i].name == e->field.name) {
+                            doc_loc = e->type->unio.variants[i].loc;
+                            doc_is_field = true;
+                            break;
+                        }
+                }
+                SrcLoc field_def = NO_LOC;
+                if (!def && e->field.object) {
+                    Type *ot = peel_to_aggregate(e->field.object->type);
+                    if (ot && ot->kind == TYPE_STRUCT)
+                        for (int i = 0; i < ot->struc.field_count; i++)
+                            if (ot->struc.fields[i].name == e->field.name) {
+                                field_def = ot->struc.fields[i].loc;
+                                doc_loc = field_def;       /* plain field: def == doc site */
+                                doc_is_field = true;
+                                break;
+                            }
+                }
+                consider(c, e->field.name_loc.line, e->field.name_loc.col,
+                         (int)strlen(e->field.name), e->type, e->field.name,
+                         def, field_def, doc_loc, doc_is_field);
             }
             break;
         case EXPR_BINARY:
@@ -411,7 +452,7 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                 Param *p = &e->func.params[i];
                 if (p->name)
                     consider(c, p->loc.line, p->loc.col, (int)strlen(p->name),
-                             p->type, p->name, NULL);
+                             p->type, p->name, NULL, NO_LOC, NO_LOC, false);
             }
             find_in_exprs(e->func.body, e->func.body_count, c);
             break;
@@ -420,7 +461,8 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             if (e->struct_lit.type_name)
                 consider(c, e->loc.line, e->loc.col,
                          (int)strlen(e->struct_lit.type_name), e->type,
-                         e->struct_lit.type_name, e->struct_lit.resolved_sym);
+                         e->struct_lit.type_name, e->struct_lit.resolved_sym,
+                         NO_LOC, NO_LOC, false);
             for (int i = 0; i < e->struct_lit.field_count; i++)
                 find_in_expr(e->struct_lit.fields[i].value, c);
             break;
@@ -451,7 +493,8 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         case EXPR_LET: {
             int col = let_name_col(c, e->loc.line, e->loc.col, e->let_expr.let_is_mut);
             consider(c, e->loc.line, col, (int)strlen(e->let_expr.let_name),
-                     e->let_expr.let_type, e->let_expr.let_name, NULL);
+                     e->let_expr.let_type, e->let_expr.let_name, NULL,
+                     NO_LOC, e->let_expr.let_name_loc, false);
             find_in_expr(e->let_expr.let_init, c);
             break;
         }
@@ -483,7 +526,7 @@ static void find_in_decl(Decl *d, FindCtx *c) {
             if (d->let.name) {
                 int col = let_name_col(c, d->loc.line, d->loc.col, d->let.is_mut);
                 consider(c, d->loc.line, col, (int)strlen(d->let.name),
-                         d->let.resolved_type, d->let.name, NULL);
+                         d->let.resolved_type, d->let.name, NULL, NO_LOC, d->loc, false);
             }
             find_in_expr(d->let.init, c);
             break;
@@ -746,6 +789,117 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
 }
 
 /* ======================================================================== */
+/* Doc comments (hover)                                                      */
+/*                                                                          */
+/* FC has no structured doc-comment syntax; the lexer discards comments. So  */
+/* the server reads them straight from source text at the definition site:   */
+/* the contiguous run of `//` lines immediately above a definition (the way  */
+/* a reader documents a `let`/`struct`/`union`/field), plus, for a struct or */
+/* union field, a `//` trailing the field's own line.                        */
+/* ======================================================================== */
+
+/* Resolve the source text + length for `path`: the open document, then any
+ * other open buffer, then the on-disk file. Sets *out_owned when the returned
+ * buffer was read from disk and must be freed by the caller. Returns NULL if
+ * the file cannot be read. */
+static const char *doc_file_text(LspServer *S, LspDoc *doc, const char *path,
+                                 int *out_len, bool *out_owned) {
+    *out_owned = false;
+    if (!path || (doc->path && strcmp(path, doc->path) == 0)) {
+        *out_len = doc->text_len;
+        return doc->text;
+    }
+    LspDoc *od = store_find_by_path(&S->store, path);
+    if (od) { *out_len = od->text_len; return od->text; }
+    char *buf = read_whole_file(path, out_len);
+    if (!buf) return NULL;
+    *out_owned = true;
+    return buf;
+}
+
+/* One trimmed comment line: content after `//` (and one optional space), with
+ * trailing whitespace removed. Returns false if [ls,le) is not a `// ` line. */
+static bool comment_line_content(const char *text, int ls, int le,
+                                 const char **out, int *out_len) {
+    int s = ls;
+    while (s < le && (text[s] == ' ' || text[s] == '\t')) s++;
+    if (s + 1 >= le || text[s] != '/' || text[s + 1] != '/') return false;
+    int cs = s + 2;
+    if (cs < le && text[cs] == ' ') cs++;
+    while (le > cs && (text[le - 1] == ' ' || text[le - 1] == '\t')) le--;
+    *out = text + cs;
+    *out_len = le - cs;
+    return true;
+}
+
+/* Byte range [*ls,*le) of 1-based line `ln`, with the trailing newline trimmed. */
+static void line_span(const LineIndex *idx, const char *text, int text_len,
+                      int ln, int *ls, int *le) {
+    *ls = idx->starts[ln - 1];
+    *le = (ln < idx->count) ? idx->starts[ln] : text_len;
+    while (*le > *ls && (text[*le - 1] == '\n' || text[*le - 1] == '\r')) (*le)--;
+}
+
+/* Build the doc-comment markdown for a definition on line `def_line1`, or NULL.
+ * Gathers contiguous `//` lines above the definition (stopping at a blank or
+ * non-comment line) in source order; when want_trailing, also appends a `//`
+ * trailing the definition line (struct/union fields). */
+static char *extract_doc_comment(Arena *a, const char *text, int text_len,
+                                 const LineIndex *idx, int def_line1,
+                                 bool want_trailing) {
+    enum { MAX_LINES = 64 };
+    const char *above[MAX_LINES];
+    int above_len[MAX_LINES], n = 0;
+
+    for (int ln = def_line1 - 1; ln >= 1 && n < MAX_LINES; ln--) {
+        int ls, le;
+        line_span(idx, text, text_len, ln, &ls, &le);
+        const char *content; int clen;
+        if (comment_line_content(text, ls, le, &content, &clen)) {
+            above[n] = content;
+            above_len[n] = clen;
+            n++;
+        } else {
+            break;   /* blank or code line terminates the block */
+        }
+    }
+
+    const char *trail = NULL; int trail_len = 0;
+    if (want_trailing && def_line1 >= 1 && def_line1 <= idx->count) {
+        int ls, le;
+        line_span(idx, text, text_len, def_line1, &ls, &le);
+        bool in_str = false;
+        for (int i = ls; i + 1 < le; i++) {
+            char ch = text[i];
+            if (ch == '"' && (i == ls || text[i - 1] != '\\')) in_str = !in_str;
+            else if (!in_str && ch == '/' && text[i + 1] == '/') {
+                const char *content; int clen;
+                if (comment_line_content(text, i, le, &content, &clen) && clen > 0) {
+                    trail = content; trail_len = clen;
+                }
+                break;
+            }
+        }
+    }
+
+    if (n == 0 && !trail) return NULL;
+
+    size_t need = 1;
+    for (int i = 0; i < n; i++) need += (size_t)above_len[i] + 3;   /* + "  \n" hard break */
+    if (trail) need += (size_t)trail_len;
+    char *buf = arena_alloc(a, need);
+    int off = 0;
+    for (int i = n - 1; i >= 0; i--) {      /* reverse: bottom-up -> source order */
+        memcpy(buf + off, above[i], (size_t)above_len[i]);
+        off += above_len[i];
+        if (i > 0 || trail) { buf[off++] = ' '; buf[off++] = ' '; buf[off++] = '\n'; }
+    }
+    if (trail) { memcpy(buf + off, trail, (size_t)trail_len); off += trail_len; }
+    buf[off] = '\0';
+    return buf;
+}
+
+/* ======================================================================== */
 /* Handlers: hover / definition                                             */
 /* ======================================================================== */
 
@@ -769,9 +923,33 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
 
     char tn[512];
     copy_type_name(hit.type, tn, sizeof tn);
-    char md[640];
-    snprintf(md, sizeof md, "```fc\n%s: %s\n```",
-             hit.name ? hit.name : "", tn);
+
+    /* Doc comment at the definition site. The site may live in another file (a
+     * sibling or the stdlib), so read whichever buffer backs it; reuse the open
+     * doc's line index when the site is in the open file. */
+    char *doc_md = NULL;
+    {
+        SrcLoc site = NO_LOC; bool site_is_field = false;
+        if (hit.doc_loc.line > 0)          { site = hit.doc_loc; site_is_field = hit.doc_is_field; }
+        else if (hit.def_loc.line > 0)     { site = hit.def_loc; }
+        else if (hit.sym && hit.sym->decl) { site = hit.sym->decl->loc; }
+        if (site.line > 0) {
+            int flen = 0; bool owned = false;
+            const char *ftext = doc_file_text(S, doc, site.filename, &flen, &owned);
+            if (ftext) {
+                LineIndex fidx = (ftext == doc->text) ? idx
+                               : line_index_build(a, ftext, flen);
+                doc_md = extract_doc_comment(a, ftext, flen, &fidx, site.line, site_is_field);
+                if (owned) free((void *)ftext);
+            }
+        }
+    }
+
+    const char *nm = hit.name ? hit.name : "";
+    const char *fmt = doc_md ? "```fc\n%s: %s\n```\n\n%s" : "```fc\n%s: %s\n```";
+    int need = snprintf(NULL, 0, fmt, nm, tn, doc_md) + 1;
+    char *md = arena_alloc(a, (size_t)need);
+    snprintf(md, (size_t)need, fmt, nm, tn, doc_md);
 
     int sl, sc, el, ec;
     loc_to_lsp(&idx, doc->text, hit.start_line, hit.start_col, &sl, &sc);
@@ -799,13 +977,22 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
-    if (!locate(doc, &idx, (int)line, (int)ch, &hit) ||
-        !hit.sym || !hit.sym->decl) {
-        lsp_reply(a, id, json_null(a));   /* locals have no resolved_sym in v1 */
+    if (!locate(doc, &idx, (int)line, (int)ch, &hit)) {
+        lsp_reply(a, id, json_null(a));
         return;
     }
 
-    SrcLoc dl = hit.sym->decl->loc;
+    /* A direct definition loc (block-local binding, plain struct field) takes
+     * precedence; otherwise fall back to a resolved Symbol's declaration. */
+    SrcLoc dl;
+    if (hit.def_loc.line > 0)
+        dl = hit.def_loc;
+    else if (hit.sym && hit.sym->decl)
+        dl = hit.sym->decl->loc;
+    else {
+        lsp_reply(a, id, json_null(a));
+        return;
+    }
     const char *def_path = dl.filename ? dl.filename : doc->path;
     int dline = dl.line > 0 ? dl.line : 1;
     int dcol  = dl.col  > 0 ? dl.col  : 1;

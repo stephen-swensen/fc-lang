@@ -5,11 +5,16 @@ built-in language server (`fcc --lsp`).
 
 ## Features
 
-- **Syntax highlighting** (TextMate grammar — works even without the server).
+- **Syntax highlighting** (TextMate grammar — works even without the server;
+  block comments nest, matching the compiler).
 - **Live diagnostics** — error squiggles as you type, from the real compiler.
-- **Hover** — inferred type of the identifier under the cursor.
+- **Hover** — inferred type of the identifier under the cursor, plus its doc
+  comment: the run of `//` lines directly above a definition, and the `//`
+  trailing a struct/union field.
 - **Type CodeLens** — the inferred type shown on a line *above* each `let`.
-- **Go to definition** — for module-level functions, structs, unions, modules.
+- **Go to definition** — module-level functions, structs, unions, modules;
+  block-locals (parameters, `let`s, `for` variables, match bindings); and
+  struct fields (jumps to the field's declaration).
 - **Completion** — keywords, in-scope/top-level names, and `.`/`::` members.
 
 The server merges the installed standard library into every analysis, so
@@ -49,7 +54,6 @@ built-in `"editor.codeLens"` setting (scoped to `[fc]` by default).
 
 ## Known limitations (v1)
 
-- Go-to-definition resolves module-level symbols only (not block-local `let`s).
-- Field-name hover targeting is approximate.
 - Completion over-offers (no flow-sensitive local scoping yet).
-- Nested block comments are not fully nested by the TextMate grammar (cosmetic).
+- Go-to-definition on a union variant constructor lands on the union
+  declaration, not the individual variant.

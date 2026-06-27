@@ -348,5 +348,112 @@ check("go-to-def on variant constructor 'shape.circle' -> union declaration (lin
 check("go-to-def on module name 'mathx' -> module declaration (line 0)",
       def_line(5) == 0, str(gresp.get(5, {}).get("result")))
 
+# --- go-to-definition for block-locals: parameters, lets, and uses resolve to
+# the binding's own name location (not just module-level symbols).
+ld = tempfile.mkdtemp(prefix="fc_lsp_locals_")
+LOCALS = (
+    "let f = (x: i32) ->\n"             # line 0: param 'x' name at char 9
+    "    x + 1\n"                        # line 1: 'x' use at char 4
+    "let main = (args: str[]) ->\n"      # line 2
+    "    let count = 10\n"               # line 3: 'count' name at char 8
+    "    let r = count + f(2)\n"          # line 4: 'count' use char 12, 'r' name char 8
+    "    return r\n"                      # line 5: 'r' use at char 11
+)
+luri = "file://" + os.path.join(ld, "doc.fc")
+def ldef(i, l, c): return req(i, "textDocument/definition",
+    {"textDocument": {"uri": luri}, "position": {"line": l, "character": c}})
+lm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": luri, "languageId": "fc",
+         "version": 1, "text": LOCALS}}),
+    ldef(2, 1, 4),     # 'x'     -> param def, line 0
+    ldef(3, 4, 12),    # 'count' -> let def, line 3
+    ldef(4, 5, 11),    # 'r'     -> let def, line 4
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+lresp, _, _, _, _ = run_session(lm)
+def lline(iid):
+    r = lresp.get(iid, {}).get("result")
+    return r.get("range", {}).get("start", {}).get("line") if isinstance(r, dict) else None
+check("go-to-def on parameter use 'x' -> parameter declaration (line 0)",
+      lline(2) == 0, str(lresp.get(2, {}).get("result")))
+check("go-to-def on local use 'count' -> let binding (line 3)",
+      lline(3) == 3, str(lresp.get(3, {}).get("result")))
+check("go-to-def on local use 'r' -> let binding (line 4)",
+      lline(4) == 4, str(lresp.get(4, {}).get("result")))
+
+# --- exact field-name targeting + plain-struct-field go-to-definition + the
+# field's trailing doc comment. Spacing around the dot must not mislocate.
+fd = tempfile.mkdtemp(prefix="fc_lsp_fields_")
+FIELDS = (
+    "struct point =\n"                       # line 0
+    "    x: i32  // the abscissa\n"           # line 1: field 'x' + trailing comment
+    "    y: i32\n"                            # line 2: field 'y'
+    "let main = (args: str[]) ->\n"           # line 3
+    "    let p = point{x = 1, y = 2}\n"       # line 4
+    "    let q = p . x\n"                      # line 5: spaced access, 'x' at char 16
+    "    return q\n"                           # line 6
+)
+furi = "file://" + os.path.join(fd, "doc.fc")
+fm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": furi, "languageId": "fc",
+         "version": 1, "text": FIELDS}}),
+    req(2, "textDocument/definition",
+        {"textDocument": {"uri": furi}, "position": {"line": 5, "character": 16}}),
+    req(3, "textDocument/hover",
+        {"textDocument": {"uri": furi}, "position": {"line": 5, "character": 16}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+fresp2, _, _, _, _ = run_session(fm)
+fr = fresp2.get(2, {}).get("result")
+check("go-to-def on spaced field access 'p . x' -> field declaration (line 1)",
+      isinstance(fr, dict) and fr.get("range", {}).get("start", {}).get("line") == 1,
+      str(fr))
+fhov = (fresp2.get(3, {}).get("result") or {}).get("contents", {}).get("value", "")
+check("hover on field 'x' targets it (type i32) despite spaces",
+      "x: i32" in fhov, fhov)
+check("hover on field 'x' includes its trailing doc comment",
+      "the abscissa" in fhov, fhov)
+
+# --- doc-comment hover: a run of `//` lines above a definition is shown on hover
+# (top-level symbol and block-local binding).
+dd = tempfile.mkdtemp(prefix="fc_lsp_docs_")
+DOCS = (
+    "// returns n doubled\n"              # line 0
+    "// (second line of the doc)\n"       # line 1
+    "let twice = (n: i32) ->\n"           # line 2: 'twice' def
+    "    n * 2\n"                          # line 3
+    "let main = (args: str[]) ->\n"       # line 4
+    "    // running total\n"              # line 5
+    "    let total = 0\n"                  # line 6: 'total' def
+    "    let r = twice(total)\n"           # line 7: 'twice' use char 12, 'total' use char 18
+    "    return r\n"                       # line 8
+)
+duri = "file://" + os.path.join(dd, "doc.fc")
+dm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": duri, "languageId": "fc",
+         "version": 1, "text": DOCS}}),
+    req(2, "textDocument/hover",
+        {"textDocument": {"uri": duri}, "position": {"line": 7, "character": 12}}),  # 'twice'
+    req(3, "textDocument/hover",
+        {"textDocument": {"uri": duri}, "position": {"line": 7, "character": 18}}),  # 'total'
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+dresp, _, _, _, _ = run_session(dm)
+def dval(iid):
+    return (dresp.get(iid, {}).get("result") or {}).get("contents", {}).get("value", "")
+check("hover on top-level 'twice' shows the doc comment above its definition",
+      "returns n doubled" in dval(2) and "second line of the doc" in dval(2), dval(2))
+check("hover on block-local 'total' shows the comment above its let binding",
+      "running total" in dval(3), dval(3))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

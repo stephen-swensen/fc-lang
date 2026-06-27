@@ -884,7 +884,10 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
         letnode->let_destruct.is_mut = is_mut;
         letnode->let_destruct.init = init;
     } else {
-        const char *name = tok_intern(p, expect(p, TOK_IDENT));
+        Token *name_tok = expect(p, TOK_IDENT);
+        const char *name = tok_intern(p, name_tok);
+        SrcLoc name_loc = loc_from_token(name_tok);
+        name_loc.filename = p->filename;
         expect(p, TOK_EQ);
 
         Expr *init;
@@ -904,6 +907,7 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
 
         letnode = alloc_expr(p, EXPR_LET, loc);
         letnode->let_expr.let_name = name;
+        letnode->let_expr.let_name_loc = name_loc;
         letnode->let_expr.let_is_mut = is_mut;
         letnode->let_expr.let_init = init;
     }
@@ -1668,21 +1672,31 @@ static Expr *parse_prefix(Parser *p) {
         const char *var = NULL;
         Pattern *var_pattern = NULL;
         const char *index_var = NULL;
+        SrcLoc var_loc = {0}, index_var_loc = {0};
         /* The element binding may be a destructure pattern (`{ ... }`); the
          * index, when present, is always a plain identifier. */
         if (check(p, TOK_LBRACE)) {
             var_pattern = parse_pattern(p);
         } else {
-            var = tok_intern(p, expect(p, TOK_IDENT));
+            Token *vt = expect(p, TOK_IDENT);
+            var = tok_intern(p, vt);
+            var_loc = loc_from_token(vt);
+            var_loc.filename = p->filename;
             if (check(p, TOK_COMMA)) {
                 advance_p(p);
                 /* first was index, second is element (ident or destructure) */
                 index_var = var;
+                index_var_loc = var_loc;
                 var = NULL;
-                if (check(p, TOK_LBRACE))
+                var_loc = (SrcLoc){0};
+                if (check(p, TOK_LBRACE)) {
                     var_pattern = parse_pattern(p);
-                else
-                    var = tok_intern(p, expect(p, TOK_IDENT));
+                } else {
+                    Token *vt2 = expect(p, TOK_IDENT);
+                    var = tok_intern(p, vt2);
+                    var_loc = loc_from_token(vt2);
+                    var_loc.filename = p->filename;
+                }
             }
         }
         expect(p, TOK_IN);
@@ -1702,6 +1716,8 @@ static Expr *parse_prefix(Parser *p) {
         e->for_expr.var = var;
         e->for_expr.var_pattern = var_pattern;
         e->for_expr.index_var = index_var;
+        e->for_expr.var_loc = var_loc;
+        e->for_expr.index_var_loc = index_var_loc;
         e->for_expr.iter = iter;
         e->for_expr.range_end = range_end;
         e->for_expr.body = body;
@@ -2080,6 +2096,8 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_FIELD, loc);
         e->field.object = left;
         e->field.name = tok_intern(p, field);
+        e->field.name_loc = loc_from_token(field);
+        e->field.name_loc.filename = p->filename;
         return e;
     }
 
@@ -2088,6 +2106,8 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_DEREF_FIELD, loc);
         e->field.object = left;
         e->field.name = tok_intern(p, field);
+        e->field.name_loc = loc_from_token(field);
+        e->field.name_loc.filename = p->filename;
         return e;
     }
 
@@ -2182,6 +2202,8 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                     Expr *fld = alloc_expr(p, EXPR_FIELD, loc);
                     fld->field.object = left;
                     fld->field.name = vname;
+                    fld->field.name_loc = loc_from_token(field);
+                    fld->field.name_loc.filename = p->filename;
 
                     /* Store type args on the field expr for pass2 to resolve */
                     fld->field.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
@@ -2750,13 +2772,16 @@ static Decl *parse_struct_decl(Parser *p) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
 
-        const char *fname = tok_intern(p, expect(p, TOK_IDENT));
+        Token *ftok = expect(p, TOK_IDENT);
+        const char *fname = tok_intern(p, ftok);
+        SrcLoc floc = loc_from_token(ftok);
+        floc.filename = p->filename;
         expect(p, TOK_COLON);
         p->allow_fixed_array = true;
         Type *ftype = parse_type(p);
         p->allow_fixed_array = false;
 
-        StructField f = { .name = fname, .type = ftype };
+        StructField f = { .name = fname, .type = ftype, .loc = floc };
         DA_APPEND(fields, field_count, field_cap, f);
         skip_newlines(p);
     }
@@ -2793,7 +2818,10 @@ static Decl *parse_union_decl(Parser *p) {
         if (check(p, TOK_DEDENT)) break;
 
         expect(p, TOK_PIPE);
-        const char *vname = tok_intern(p, expect(p, TOK_IDENT));
+        Token *vtok = expect(p, TOK_IDENT);
+        const char *vname = tok_intern(p, vtok);
+        SrcLoc vloc = loc_from_token(vtok);
+        vloc.filename = p->filename;
         Type *payload = NULL;
         if (check(p, TOK_LPAREN)) {
             advance_p(p);
@@ -2801,7 +2829,7 @@ static Decl *parse_union_decl(Parser *p) {
             expect(p, TOK_RPAREN);
         }
 
-        UnionVariant v = { .name = vname, .payload = payload };
+        UnionVariant v = { .name = vname, .payload = payload, .loc = vloc };
         DA_APPEND(variants, variant_count, variant_cap, v);
         skip_newlines(p);
     }
@@ -3106,12 +3134,15 @@ static Decl *parse_extern_decl(Parser *p) {
         while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
             skip_newlines(p);
             if (check(p, TOK_DEDENT)) break;
-            const char *fname = tok_intern(p, expect(p, TOK_IDENT));
+            Token *ftok = expect(p, TOK_IDENT);
+            const char *fname = tok_intern(p, ftok);
+            SrcLoc floc = loc_from_token(ftok);
+            floc.filename = p->filename;
             expect(p, TOK_COLON);
             p->allow_fixed_array = true;
             Type *ftype = parse_type(p);
             p->allow_fixed_array = false;
-            StructField f = { .name = fname, .type = ftype };
+            StructField f = { .name = fname, .type = ftype, .loc = floc };
             DA_APPEND(fields, field_count, field_cap, f);
             skip_newlines(p);
         }

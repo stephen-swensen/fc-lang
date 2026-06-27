@@ -4,35 +4,49 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Copy a malloc'd name array (built by type_collect_vars via DA_APPEND) into the
+ * arena so it is reclaimed with the AST. These type_params arrays are aliased
+ * from decl/symbol fields and never freed piecemeal; arena-backing them closes a
+ * per-analysis leak in the long-running server (the CLI frees the arena at exit). */
+static const char **arena_dup_names(Arena *a, const char **src, int n) {
+    const char **out = arena_alloc(a, sizeof(const char *) * (size_t)n);
+    for (int i = 0; i < n; i++) out[i] = src[i];
+    return out;
+}
+
 /* Detect generics: scan fields/params for type variables */
-static void detect_generic_struct(Decl *d, Symbol *sym) {
+static void detect_generic_struct(Arena *arena, Decl *d, Symbol *sym) {
     const char **vars = NULL;
     int vcount = 0, vcap = 0;
     for (int i = 0; i < d->struc.field_count; i++)
         type_collect_vars(d->struc.fields[i].type, &vars, &vcount, &vcap);
     if (vcount > 0) {
+        const char **av = arena_dup_names(arena, vars, vcount);
         d->struc.is_generic = true;
-        d->struc.type_params = vars;
+        d->struc.type_params = av;
         d->struc.type_param_count = vcount;
         sym->is_generic = true;
-        sym->type_params = vars;
+        sym->type_params = av;
         sym->type_param_count = vcount;
     }
+    free(vars);
 }
 
-static void detect_generic_union(Decl *d, Symbol *sym) {
+static void detect_generic_union(Arena *arena, Decl *d, Symbol *sym) {
     const char **vars = NULL;
     int vcount = 0, vcap = 0;
     for (int i = 0; i < d->unio.variant_count; i++)
         type_collect_vars(d->unio.variants[i].payload, &vars, &vcount, &vcap);
     if (vcount > 0) {
+        const char **av = arena_dup_names(arena, vars, vcount);
         d->unio.is_generic = true;
-        d->unio.type_params = vars;
+        d->unio.type_params = av;
         d->unio.type_param_count = vcount;
         sym->is_generic = true;
-        sym->type_params = vars;
+        sym->type_params = av;
         sym->type_param_count = vcount;
     }
+    free(vars);
 }
 
 /* ---- Reject non-uniform recursive type definitions (audit item 14) ----
@@ -163,7 +177,7 @@ static void check_recursion_in_decls(Decl **decls, int count) {
     }
 }
 
-static void detect_generic_func(Decl *d, Symbol *sym) {
+static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
     if (!d->let.init || d->let.init->kind != EXPR_FUNC) return;
     Expr *fn = d->let.init;
     const char **vars = NULL;
@@ -179,10 +193,11 @@ static void detect_generic_func(Decl *d, Symbol *sym) {
 
     if (vcount > 0) {
         sym->is_generic = true;
-        sym->type_params = vars;
+        sym->type_params = arena_dup_names(arena, vars, vcount);
         sym->type_param_count = vcount;
         sym->explicit_type_param_count = fn->func.explicit_type_var_count;
     }
+    free(vars);
 }
 
 void symtab_init(SymbolTable *t) {
@@ -464,12 +479,12 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
  * and function types) and replaces TYPE_STUB nodes with the actual type from the
  * symtab. Used to resolve references to sibling extern types within the same
  * from-module. */
-static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
+static Type *resolve_type_stubs(Arena *arena, Type *t, SymbolTable *members) {
     if (!t) return t;
     if (t->kind == TYPE_POINTER) {
-        Type *inner = resolve_type_stubs(t->pointer.pointee, members);
+        Type *inner = resolve_type_stubs(arena, t->pointer.pointee, members);
         if (inner != t->pointer.pointee) {
-            Type *r = malloc(sizeof(Type));
+            Type *r = arena_alloc(arena, sizeof(Type));
             *r = *t;
             r->pointer.pointee = inner;
             return r;
@@ -477,9 +492,9 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
         return t;
     }
     if (t->kind == TYPE_SLICE) {
-        Type *inner = resolve_type_stubs(t->slice.elem, members);
+        Type *inner = resolve_type_stubs(arena, t->slice.elem, members);
         if (inner != t->slice.elem) {
-            Type *r = malloc(sizeof(Type));
+            Type *r = arena_alloc(arena, sizeof(Type));
             *r = *t;
             r->slice.elem = inner;
             return r;
@@ -487,9 +502,9 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
         return t;
     }
     if (t->kind == TYPE_OPTION) {
-        Type *inner = resolve_type_stubs(t->option.inner, members);
+        Type *inner = resolve_type_stubs(arena, t->option.inner, members);
         if (inner != t->option.inner) {
-            Type *r = malloc(sizeof(Type));
+            Type *r = arena_alloc(arena, sizeof(Type));
             *r = *t;
             r->option.inner = inner;
             return r;
@@ -497,9 +512,9 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
         return t;
     }
     if (t->kind == TYPE_FIXED_ARRAY) {
-        Type *inner = resolve_type_stubs(t->fixed_array.elem, members);
+        Type *inner = resolve_type_stubs(arena, t->fixed_array.elem, members);
         if (inner != t->fixed_array.elem) {
-            Type *r = malloc(sizeof(Type));
+            Type *r = arena_alloc(arena, sizeof(Type));
             *r = *t;
             r->fixed_array.elem = inner;
             return r;
@@ -508,15 +523,15 @@ static Type *resolve_type_stubs(Type *t, SymbolTable *members) {
     }
     if (t->kind == TYPE_FUNC) {
         bool changed = false;
-        Type **params = malloc(sizeof(Type*) * (size_t)t->func.param_count);
+        Type **params = arena_alloc(arena, sizeof(Type*) * (size_t)t->func.param_count);
         for (int i = 0; i < t->func.param_count; i++) {
-            params[i] = resolve_type_stubs(t->func.param_types[i], members);
+            params[i] = resolve_type_stubs(arena, t->func.param_types[i], members);
             if (params[i] != t->func.param_types[i]) changed = true;
         }
-        Type *ret = resolve_type_stubs(t->func.return_type, members);
+        Type *ret = resolve_type_stubs(arena, t->func.return_type, members);
         if (ret != t->func.return_type) changed = true;
-        if (!changed) { free(params); return t; }
-        Type *r = malloc(sizeof(Type));
+        if (!changed) return t;
+        Type *r = arena_alloc(arena, sizeof(Type));
         *r = *t;
         r->func.param_types = params;
         r->func.return_type = ret;
@@ -547,8 +562,7 @@ static Type *register_struct_sym(SymbolTable *tab, InternTable *intern, Decl *d)
     symtab_add(tab, src_name, DECL_STRUCT, d);
     /* Use the last added entry (not symtab_lookup which may find a module with same name) */
     Symbol *sym = &tab->symbols[tab->count - 1];
-    Type *st = malloc(sizeof(Type));
-    memset(st, 0, sizeof(Type));
+    Type *st = arena_alloc(intern->arena, sizeof(Type));
     st->kind = TYPE_STRUCT;
     st->struc.name = mangled;
     st->struc.qualified_name = src_name;
@@ -562,11 +576,11 @@ static Type *register_struct_sym(SymbolTable *tab, InternTable *intern, Decl *d)
     /* resolved_sym is bound in the final phase (set_type_resolved_syms), not here:
      * the symtab_add below — and every later one — may realloc tab->symbols, so a
      * &symbols[i] taken now would dangle. */
-    detect_generic_struct(d, sym);
+    detect_generic_struct(intern->arena, d, sym);
     symtab_add(tab, mangled, DECL_STRUCT, d);
     Symbol *sym2 = &tab->symbols[tab->count - 1];
     sym2->type = st;
-    detect_generic_struct(d, sym2);
+    detect_generic_struct(intern->arena, d, sym2);
     return st;
 }
 
@@ -581,8 +595,7 @@ static Type *register_union_sym(SymbolTable *tab, InternTable *intern, Decl *d) 
     symtab_add(tab, src_name, DECL_UNION, d);
     /* Use the last added entry (not symtab_lookup which may find a module with same name) */
     Symbol *sym = &tab->symbols[tab->count - 1];
-    Type *ut = malloc(sizeof(Type));
-    memset(ut, 0, sizeof(Type));
+    Type *ut = arena_alloc(intern->arena, sizeof(Type));
     ut->kind = TYPE_UNION;
     ut->unio.name = mangled;
     ut->unio.qualified_name = src_name;
@@ -592,11 +605,11 @@ static Type *register_union_sym(SymbolTable *tab, InternTable *intern, Decl *d) 
     ut->unio.type_arg_count = 0;
     sym->type = ut;
     /* resolved_sym deferred to set_type_resolved_syms — see register_struct_sym. */
-    detect_generic_union(d, sym);
+    detect_generic_union(intern->arena, d, sym);
     symtab_add(tab, mangled, DECL_UNION, d);
     Symbol *sym2 = &tab->symbols[tab->count - 1];
     sym2->type = ut;
-    detect_generic_union(d, sym2);
+    detect_generic_union(intern->arena, d, sym2);
     return ut;
 }
 
@@ -669,7 +682,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 symtab_add(members, src_name, DECL_LET, child);
                 Symbol *msym = symtab_lookup(members, src_name);
                 msym->is_private = child->is_private;
-                detect_generic_func(child, msym);
+                detect_generic_func(intern->arena, child, msym);
             }
             break;
         }
@@ -684,8 +697,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 symtab_add(members, src_name, DECL_STRUCT, child);
                 Symbol *msym = symtab_lookup(members, src_name);
                 msym->is_private = child->is_private;
-                Type *st = malloc(sizeof(Type));
-                memset(st, 0, sizeof(Type));
+                Type *st = arena_alloc(intern->arena, sizeof(Type));
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
                 st->struc.qualified_name = make_qualified(intern, display_prefix, src_name);
@@ -696,7 +708,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 st->struc.type_args = NULL;
                 st->struc.type_arg_count = 0;
                 msym->type = st;
-                detect_generic_struct(child, msym);
+                detect_generic_struct(intern->arena, child, msym);
                 /* Also register under mangled name so canonicalized type stubs
                  * (which use the mangled name) resolve in module_symtab directly,
                  * avoiding namespace-filter rejection in global_lookup_kind. */
@@ -704,7 +716,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 Symbol *msym2 = &members->symbols[members->count - 1];
                 msym2->is_private = child->is_private;
                 msym2->type = st;
-                detect_generic_struct(child, msym2);
+                detect_generic_struct(intern->arena, child, msym2);
             }
             break;
         }
@@ -719,8 +731,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 symtab_add(members, src_name, DECL_UNION, child);
                 Symbol *msym = symtab_lookup(members, src_name);
                 msym->is_private = child->is_private;
-                Type *ut = malloc(sizeof(Type));
-                memset(ut, 0, sizeof(Type));
+                Type *ut = arena_alloc(intern->arena, sizeof(Type));
                 ut->kind = TYPE_UNION;
                 ut->unio.name = mangled;
                 ut->unio.qualified_name = make_qualified(intern, display_prefix, src_name);
@@ -729,13 +740,13 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                 ut->unio.type_args = NULL;
                 ut->unio.type_arg_count = 0;
                 msym->type = ut;
-                detect_generic_union(child, msym);
+                detect_generic_union(intern->arena, child, msym);
                 /* Also register under mangled name (see struct case above) */
                 symtab_add(members, mangled, DECL_UNION, child);
                 Symbol *msym2 = &members->symbols[members->count - 1];
                 msym2->is_private = child->is_private;
                 msym2->type = ut;
-                detect_generic_union(child, msym2);
+                detect_generic_union(intern->arena, child, msym2);
             }
             break;
         }
@@ -831,7 +842,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
 
         /* Resolve the symbol's top-level type (e.g. extern function signatures
          * whose param/return types reference sibling extern structs/unions) */
-        Type *resolved = resolve_type_stubs(msym->type, members);
+        Type *resolved = resolve_type_stubs(intern->arena, msym->type, members);
         if (resolved != msym->type) {
             msym->type = resolved;
             if (msym->kind == DECL_EXTERN && msym->decl)
@@ -842,7 +853,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
         if (msym->type->kind == TYPE_STRUCT) {
             Type *st = msym->type;
             for (int k = 0; k < st->struc.field_count; k++) {
-                Type *fr = resolve_type_stubs(st->struc.fields[k].type, members);
+                Type *fr = resolve_type_stubs(intern->arena, st->struc.fields[k].type, members);
                 if (fr != st->struc.fields[k].type)
                     st->struc.fields[k].type = fr;
             }
@@ -1201,7 +1212,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             }
             /* Detect generic functions */
             Symbol *let_sym = symtab_lookup(symtab, d->let.name);
-            if (let_sym) detect_generic_func(d, let_sym);
+            if (let_sym) detect_generic_func(intern->arena, d, let_sym);
             break;
         }
         case DECL_STRUCT: {
@@ -1229,8 +1240,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 symtab_add(symtab, src_name, DECL_STRUCT, d);
                 Symbol *sym = &symtab->symbols[symtab->count - 1];
                 sym->ns_prefix = current_ns;
-                Type *st = malloc(sizeof(Type));
-                memset(st, 0, sizeof(Type));
+                Type *st = arena_alloc(intern->arena, sizeof(Type));
                 st->kind = TYPE_STRUCT;
                 st->struc.name = mangled;
                 {
@@ -1248,7 +1258,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 st->struc.type_arg_count = 0;
                 sym->type = st;
                 /* resolved_sym deferred to set_type_resolved_syms (stable addr). */
-                detect_generic_struct(d, sym);
+                detect_generic_struct(intern->arena, d, sym);
                 /* Also register under the mangled name so canonicalized type
                  * stubs resolve in the global symtab directly. The mangled
                  * alias carries ns_prefix=NULL (matching module-scoped types'
@@ -1257,7 +1267,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 symtab_add(symtab, mangled, DECL_STRUCT, d);
                 Symbol *sym2 = &symtab->symbols[symtab->count - 1];
                 sym2->type = st;
-                detect_generic_struct(d, sym2);
+                detect_generic_struct(intern->arena, d, sym2);
             } else {
                 Symbol *existing = symtab_lookup_kind_ns(symtab, d->struc.name,
                     DECL_STRUCT, NULL);
@@ -1289,8 +1299,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 symtab_add(symtab, src_name, DECL_UNION, d);
                 Symbol *sym = &symtab->symbols[symtab->count - 1];
                 sym->ns_prefix = current_ns;
-                Type *ut = malloc(sizeof(Type));
-                memset(ut, 0, sizeof(Type));
+                Type *ut = arena_alloc(intern->arena, sizeof(Type));
                 ut->kind = TYPE_UNION;
                 ut->unio.name = mangled;
                 {
@@ -1306,12 +1315,12 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 ut->unio.type_arg_count = 0;
                 sym->type = ut;
                 /* resolved_sym deferred to set_type_resolved_syms (stable addr). */
-                detect_generic_union(d, sym);
+                detect_generic_union(intern->arena, d, sym);
                 /* Also register under the mangled name (see struct case). */
                 symtab_add(symtab, mangled, DECL_UNION, d);
                 Symbol *sym2 = &symtab->symbols[symtab->count - 1];
                 sym2->type = ut;
-                detect_generic_union(d, sym2);
+                detect_generic_union(intern->arena, d, sym2);
             } else {
                 Symbol *existing = symtab_lookup_kind_ns(symtab, d->unio.name,
                     DECL_UNION, NULL);
