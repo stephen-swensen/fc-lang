@@ -17,9 +17,29 @@ built-in language server (`fcc --lsp`).
   struct fields (jumps to the field's declaration).
 - **Completion** — keywords, in-scope/top-level names, and `.`/`::` members.
 
-The server merges the installed standard library into every analysis, so
-`import ... from std::...` resolves and diagnostics for `std::` symbols are
-suppressed (only the open file's diagnostics are shown).
+By default the server merges the installed standard library and the open file's
+sibling `.fc` files into every analysis, so `import ... from std::...` resolves
+and diagnostics for `std::` symbols are suppressed (only the open file's
+diagnostics are shown).
+
+### Project files (`lsp.rsp`)
+
+For projects spanning multiple directories, drop an `lsp.rsp` file at the project
+root. The server discovers it by walking up from the file you're editing and
+treats it as authoritative — the analysis then uses exactly the inputs it lists
+(instead of guessing via the sibling/stdlib heuristic), so cross-directory
+imports resolve correctly. It is an ordinary compiler response file: each line
+holds command-line arguments (input paths, globs, `--flag`s), paths are relative
+to the `lsp.rsp` itself, `#`/`//` begin comments, and `@other.rsp` pulls in
+another file. The very same file works on the CLI as `fcc @lsp.rsp`. Example:
+
+```
+# lsp.rsp — the project's compilation unit
+src/*.fc
+lib/*.fc
+stdlib/io.fc        # opt into just the stdlib modules you use
+--flag debug
+```
 
 ## Install
 

@@ -10,6 +10,8 @@
 #include "types.h"
 #include "token.h"
 #include "version.h"
+#include "args.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +23,7 @@
 #else
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 /* ======================================================================== */
@@ -634,6 +637,43 @@ static void publish_diagnostics(LspServer *S, LspDoc *doc) {
     lsp_notify(a, "textDocument/publishDiagnostics", params);
 }
 
+/* Walk up from the directory of `doc_path` looking for an `lsp.rsp` response
+ * file (the by-convention name the LSP discovers; equivalent to `fcc @lsp.rsp`).
+ * Nearest ancestor wins. Returns a malloc'd path (caller frees) or NULL. */
+static char *find_lsp_rsp(const char *doc_path) {
+#if defined(_WIN32)
+    (void)doc_path;
+    return NULL;
+#else
+    const char *slash = strrchr(doc_path, '/');
+    if (!slash) return NULL;
+    int dlen = (int)(slash - doc_path);
+    if (dlen <= 0 || dlen >= 4096) return NULL;
+    char dirbuf[4096];
+    memcpy(dirbuf, doc_path, (size_t)dlen);
+    dirbuf[dlen] = '\0';
+
+    /* Resolve the directory (the file itself may be unsaved/virtual). */
+    char *dir = realpath(dirbuf, NULL);
+    if (!dir) return NULL;
+
+    char *result = NULL;
+    for (;;) {
+        size_t dn = strlen(dir);
+        char *path = malloc(dn + sizeof("/lsp.rsp"));
+        memcpy(path, dir, dn);
+        memcpy(path + dn, "/lsp.rsp", sizeof("/lsp.rsp"));
+        if (access(path, R_OK) == 0) { result = path; break; }
+        free(path);
+        char *up = strrchr(dir, '/');
+        if (!up || up == dir) break;        /* reached the filesystem root */
+        *up = '\0';
+    }
+    free(dir);
+    return result;
+#endif
+}
+
 /* Collect sibling `.fc` files in the same directory as `doc_path` (excluding it).
  * Returns malloc'd path strings in a malloc'd array. Non-recursive on purpose:
  * recursing a workspace would pull in unrelated programs (test files, examples,
@@ -669,10 +709,15 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
 #endif
 }
 
-/* (Re)run analysis for a document and publish diagnostics. The compilation unit
- * is the open file + its sibling .fc files (open-buffer text preferred over
- * disk) + the stdlib feed. This makes cross-file references (a shared `prelude`
- * module, `let main` in another file) resolve. */
+/* (Re)run analysis for a document and publish diagnostics.
+ *
+ * The compilation unit comes from one of two sources:
+ *   - an `lsp.rsp` response file discovered by walking up from the open file —
+ *     authoritative: exactly its listed inputs (plus the open buffer), with no
+ *     sibling glob and no blanket stdlib feed, so the editor resolves names
+ *     identically to `fcc @lsp.rsp` on the CLI; or
+ *   - (no lsp.rsp) the zero-config heuristic: the open file + its sibling .fc
+ *     files (open-buffer text preferred over disk) + the full stdlib feed. */
 static void analyze_doc(LspServer *S, LspDoc *doc) {
     /* The previous fresh result is retired below, AFTER the new analysis, so it
      * can be kept as last_good when the new one fails to type-check. */
@@ -682,82 +727,155 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
     int n = 0, cap = 0;
     char **disk_bufs = NULL;    /* text buffers read from disk, freed after analyze */
     int db = 0, dbcap = 0;
-    char **sibs = NULL;
-    int sc = 0, scap = 0;
+    char **sibs = NULL;         /* sibling paths; some back extra[].filename, so */
+    int sc = 0, scap = 0;       /* they must outlive analyze() (freed at the end) */
 
-    collect_sibling_fc(doc->path, &sibs, &sc, &scap);
-    for (int i = 0; i < sc; i++) {
-        LspDoc *od = store_find_by_path(&S->store, sibs[i]);
-        if (od == doc) continue;
-        if (od) {                                   /* open in the editor: live text */
-            AnalysisSource s = { od->path, od->text, od->text_len };
-            DA_APPEND(extra, n, cap, s);
-        } else {                                    /* on disk */
-            int len;
-            char *buf = read_whole_file(sibs[i], &len);
-            if (!buf) continue;
-            AnalysisSource s = { sibs[i], buf, len };
-            DA_APPEND(extra, n, cap, s);
-            DA_APPEND(disk_bufs, db, dbcap, buf);
+    /* Conditional-compilation flags; when from lsp.rsp the `rsp_*` values own the
+     * token storage the flags' name/value pointers borrow, so they must outlive
+     * the analyze() call (freed at the end). */
+    Flag *flags = NULL;
+    int flag_count = 0, flag_cap = 0;
+    ExpandedArgs rsp_expanded = {0};
+    CompileArgs  rsp_ca = {0};
+    bool have_rsp = false;
+    char *rsp_err = NULL;       /* set when an lsp.rsp exists but is unusable */
+
+    char *rsp_path = find_lsp_rsp(doc->path);
+    if (rsp_path) {
+        char at[4096];
+        snprintf(at, sizeof at, "@%s", rsp_path);
+        char *fake_argv[] = { (char *)"fcc", at };
+        char *aerr = NULL;
+        if (args_expand(2, fake_argv, &rsp_expanded, &aerr) &&
+            args_parse(&rsp_expanded, &rsp_ca)) {
+            have_rsp = true;
+            flags = rsp_ca.flags;
+            flag_count = rsp_ca.flag_count;
+
+            char *doc_real = canon_path(doc->path);
+            for (int i = 0; i < rsp_ca.input_count; i++) {
+                char *in_real = canon_path(rsp_ca.inputs[i]);
+                /* The open document arrives as the primary source; never add it
+                 * again, and its live buffer must win over the on-disk copy. */
+                bool is_open = (strcmp(doc_real, in_real) == 0);
+                free(in_real);
+                if (is_open) continue;
+                LspDoc *od = store_find_by_path(&S->store, rsp_ca.inputs[i]);
+                if (od && od != doc) {              /* open elsewhere: live text */
+                    AnalysisSource s = { od->path, od->text, od->text_len };
+                    DA_APPEND(extra, n, cap, s);
+                } else {                            /* read from disk */
+                    int len;
+                    char *buf = read_whole_file(rsp_ca.inputs[i], &len);
+                    if (!buf) continue;
+                    AnalysisSource s = { rsp_ca.inputs[i], buf, len };
+                    DA_APPEND(extra, n, cap, s);
+                    DA_APPEND(disk_bufs, db, dbcap, buf);
+                }
+            }
+            free(doc_real);
+        } else {
+            /* A broken lsp.rsp must not silently behave as if absent: fall back
+             * to the heuristic but surface the reason on the open file below. */
+            const char *m = aerr ? aerr : (rsp_ca.error ? rsp_ca.error : "parse failed");
+            rsp_err = dup_cstr(m);
+            free(aerr);
+            args_compile_free(&rsp_ca);
+            args_expand_free(&rsp_expanded);
         }
+        free(rsp_path);
     }
 
-    /* stdlib feed. Drop any feed file that is really the SAME source as the open
-     * document or a sibling — most commonly because you followed Go To Definition
-     * into a stdlib module, so the editor opened the very file the feed already
-     * provides. Without this it is analyzed twice => pass1 "redefinition" => pass2
-     * never runs (no diagnostics AND no hover/CodeLens; the error is attributed to
-     * the feed copy and filtered out, so nothing surfaces).
-     *
-     * A feed entry is a duplicate if it matches a "have" entry by EITHER:
-     *   - canonical absolute path (realpath) — the same on-disk file regardless of
-     *     how its path was spelled or symlinked, and crucially for an open document
-     *     with unsaved edits (path matches even though the buffer differs from
-     *     disk, and the live buffer must win); OR
-     *   - byte-identical content — a separate copy of the same source at a
-     *     different path (e.g. opening the repo's stdlib/data.fc while the feed
-     *     resolves to the *installed* /usr/local/share/.../data.fc; the two files
-     *     are identical but their realpaths differ). The content check is gated on
-     *     an equal length first, so a full memcmp runs only for a genuine
-     *     same-length candidate — never for an ordinary edit.
-     * Two DIFFERENT files that merely share a basename — a project's own `data.fc`
-     * vs the stdlib's — match neither key and are correctly kept (basename-matching
-     * would wrongly shadow `std::data`). */
-    int sib_n = n;                              /* siblings precede any feed entries */
-    int have_n = sib_n + 1;
-    char       **have_path = malloc(sizeof *have_path * (size_t)have_n);
-    const char **have_text = malloc(sizeof *have_text * (size_t)have_n);
-    int         *have_len  = malloc(sizeof *have_len  * (size_t)have_n);
-    have_path[0] = canon_path(doc->path);
-    have_text[0] = doc->text;
-    have_len[0]  = doc->text_len;
-    for (int j = 0; j < sib_n; j++) {
-        have_path[1 + j] = canon_path(extra[j].filename);
-        have_text[1 + j] = extra[j].text;
-        have_len[1 + j]  = extra[j].len;
-    }
+    if (!have_rsp) {
+        /* Zero-config heuristic: host flags + sibling .fc files + stdlib feed. */
+        platform_detect_flags(&flags, &flag_count, &flag_cap);
 
-    for (int i = 0; i < S->stdlib_count; i++) {
-        char *feed_real = canon_path(S->stdlib[i].filename);
-        bool dup = false;
-        for (int j = 0; j < have_n; j++) {
-            if (strcmp(have_path[j], feed_real) == 0 ||
-                (have_len[j] == S->stdlib[i].len &&
-                 memcmp(have_text[j], S->stdlib[i].text,
-                        (size_t)S->stdlib[i].len) == 0)) {
-                dup = true;
-                break;
+        collect_sibling_fc(doc->path, &sibs, &sc, &scap);
+        for (int i = 0; i < sc; i++) {
+            LspDoc *od = store_find_by_path(&S->store, sibs[i]);
+            if (od == doc) continue;
+            if (od) {                                   /* open in the editor: live text */
+                AnalysisSource s = { od->path, od->text, od->text_len };
+                DA_APPEND(extra, n, cap, s);
+            } else {                                    /* on disk */
+                int len;
+                char *buf = read_whole_file(sibs[i], &len);
+                if (!buf) continue;
+                AnalysisSource s = { sibs[i], buf, len };
+                DA_APPEND(extra, n, cap, s);
+                DA_APPEND(disk_bufs, db, dbcap, buf);
             }
         }
-        free(feed_real);
-        if (!dup) DA_APPEND(extra, n, cap, S->stdlib[i]);
-    }
-    for (int j = 0; j < have_n; j++) free(have_path[j]);
-    free(have_path);
-    free(have_text);
-    free(have_len);
 
-    doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n);
+        /* stdlib feed. Drop any feed file that is really the SAME source as the open
+         * document or a sibling — most commonly because you followed Go To Definition
+         * into a stdlib module, so the editor opened the very file the feed already
+         * provides. Without this it is analyzed twice => pass1 "redefinition" => pass2
+         * never runs (no diagnostics AND no hover/CodeLens; the error is attributed to
+         * the feed copy and filtered out, so nothing surfaces).
+         *
+         * A feed entry is a duplicate if it matches a "have" entry by EITHER:
+         *   - canonical absolute path (realpath) — the same on-disk file regardless of
+         *     how its path was spelled or symlinked, and crucially for an open document
+         *     with unsaved edits (path matches even though the buffer differs from
+         *     disk, and the live buffer must win); OR
+         *   - byte-identical content — a separate copy of the same source at a
+         *     different path (e.g. opening the repo's stdlib/data.fc while the feed
+         *     resolves to the *installed* /usr/local/share/.../data.fc; the two files
+         *     are identical but their realpaths differ). The content check is gated on
+         *     an equal length first, so a full memcmp runs only for a genuine
+         *     same-length candidate — never for an ordinary edit.
+         * Two DIFFERENT files that merely share a basename — a project's own `data.fc`
+         * vs the stdlib's — match neither key and are correctly kept (basename-matching
+         * would wrongly shadow `std::data`). */
+        int sib_n = n;                              /* siblings precede any feed entries */
+        int have_n = sib_n + 1;
+        char       **have_path = malloc(sizeof *have_path * (size_t)have_n);
+        const char **have_text = malloc(sizeof *have_text * (size_t)have_n);
+        int         *have_len  = malloc(sizeof *have_len  * (size_t)have_n);
+        have_path[0] = canon_path(doc->path);
+        have_text[0] = doc->text;
+        have_len[0]  = doc->text_len;
+        for (int j = 0; j < sib_n; j++) {
+            have_path[1 + j] = canon_path(extra[j].filename);
+            have_text[1 + j] = extra[j].text;
+            have_len[1 + j]  = extra[j].len;
+        }
+
+        for (int i = 0; i < S->stdlib_count; i++) {
+            char *feed_real = canon_path(S->stdlib[i].filename);
+            bool dup = false;
+            for (int j = 0; j < have_n; j++) {
+                if (strcmp(have_path[j], feed_real) == 0 ||
+                    (have_len[j] == S->stdlib[i].len &&
+                     memcmp(have_text[j], S->stdlib[i].text,
+                            (size_t)S->stdlib[i].len) == 0)) {
+                    dup = true;
+                    break;
+                }
+            }
+            free(feed_real);
+            if (!dup) DA_APPEND(extra, n, cap, S->stdlib[i]);
+        }
+        for (int j = 0; j < have_n; j++) free(have_path[j]);
+        free(have_path);
+        free(have_text);
+        free(have_len);
+    }
+
+    doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count);
+
+    /* lsp.rsp existed but couldn't be used: attach one file-level diagnostic so
+     * the editor explains the fallback instead of silently differing. */
+    if (rsp_err) {
+        char m[512];
+        snprintf(m, sizeof m, "lsp.rsp ignored: %s", rsp_err);
+        Diagnostic d;
+        d.loc = (SrcLoc){ .filename = doc->result->filename, .line = 1, .col = 1 };
+        d.message = arena_strdup(&doc->result->arena, m, (int)strlen(m));
+        DA_APPEND(doc->result->diags, doc->result->diag_count, doc->result->diag_cap, d);
+        free(rsp_err);
+    }
 
     /* Retain the last analysis that type-checked. When the fresh one is good it
      * becomes the new last_good (and the previous good copy is freed); when it is
@@ -777,6 +895,12 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
     for (int i = 0; i < sc; i++) free(sibs[i]);
     free(sibs);
     free(extra);
+    if (have_rsp) {
+        args_compile_free(&rsp_ca);     /* frees the flags array */
+        args_expand_free(&rsp_expanded); /* frees the tokens flags borrowed */
+    } else {
+        free(flags);
+    }
 
     publish_diagnostics(S, doc);
 }

@@ -172,6 +172,16 @@ for milestone_dir in "$TESTDIR"/*/; do
             done < "${test_subdir}flags"
         fi
 
+        # Literal extra fcc args (one per line; `#` comments skipped) — e.g.
+        # --backtraces or a @response.rsp file. Matches tests/run_tests.sh.
+        if [ -f "${test_subdir}fcc_args" ]; then
+            while IFS= read -r arg; do
+                [ -n "$arg" ] || continue
+                case "$arg" in \#*) continue ;; esac
+                fc_flags="$fc_flags $arg"
+            done < "${test_subdir}fcc_args"
+        fi
+
         echo "$milestone/$test_name|$fc_files|${test_subdir}error|${test_subdir}expected_exit|${test_subdir}expected|$fc_flags"
     done
 done > "$test_list"

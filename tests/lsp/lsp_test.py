@@ -567,5 +567,58 @@ check("stale retention: the broken edit's diagnostic is still reported (squiggle
 check("stale retention: CodeLens refreshes after recovery",
       isinstance(recov_lenses, list) and len(recov_lenses) > 0, str(len(recov_lenses)))
 
+# --- lsp.rsp: a response file discovered by walking up from the open file pins
+# the compilation unit to its (globbed, file-relative) inputs across subdirs,
+# exactly like `fcc @lsp.rsp` — resolving cross-directory imports the flat
+# sibling-glob heuristic cannot reach, with no blanket stdlib feed. ---
+def rwrite(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+
+UTIL = "namespace acme::\n\nmodule util =\n    let helper = (x: i32) ->\n        x * 2\n"
+MAIN = ("import helper from acme::util\n\n"
+        "let main = (args: str[]) ->\n    assert(helper(21) == 42)\n    0\n")
+
+def open_main_session(proj):
+    mp = os.path.join(proj, "src", "main.fc")
+    return [
+        req(1, "initialize", {"capabilities": {}}),
+        note("initialized", {}),
+        note("textDocument/didOpen", {"textDocument": {
+            "uri": "file://" + mp, "languageId": "fc", "version": 1,
+            "text": open(mp).read()}}),
+        req(9, "shutdown", None),
+        note("exit", None),
+    ]
+
+# 1) with lsp.rsp globbing src/ and lib/, the cross-dir import resolves cleanly.
+rp = tempfile.mkdtemp(prefix="fc_lsp_rsp_")
+rwrite(os.path.join(rp, "src", "main.fc"), MAIN)
+rwrite(os.path.join(rp, "lib", "util.fc"), UTIL)
+rwrite(os.path.join(rp, "lsp.rsp"), "# project unit\nsrc/*.fc\nlib/*.fc\n")
+_, _, rbf, _, _ = run_session(open_main_session(rp))
+rmsgs = rbf.get("main.fc", [["?"]])[-1]
+check("lsp.rsp: cross-directory import resolves (no diagnostics)", rmsgs == [], str(rmsgs))
+
+# 2) negative control: identical layout WITHOUT lsp.rsp — the sibling glob sees
+# only src/, so the import into lib/ is unresolved (proves the rsp did the work).
+npj = tempfile.mkdtemp(prefix="fc_lsp_norsp_")
+rwrite(os.path.join(npj, "src", "main.fc"), MAIN)
+rwrite(os.path.join(npj, "lib", "util.fc"), UTIL)
+_, _, nbf, _, _ = run_session(open_main_session(npj))
+nmsgs = nbf.get("main.fc", [[]])[-1]
+check("no lsp.rsp: cross-directory import is unresolved (control)", len(nmsgs) > 0, str(nmsgs))
+
+# 3) a broken lsp.rsp (references a missing @file) must not silently behave as if
+# absent: fall back to the heuristic AND surface one 'lsp.rsp ignored' note.
+bp = tempfile.mkdtemp(prefix="fc_lsp_rspbad_")
+rwrite(os.path.join(bp, "src", "main.fc"), "let main = (args: str[]) ->\n    return 0\n")
+rwrite(os.path.join(bp, "lsp.rsp"), "@does_not_exist.rsp\n")
+_, _, bbf, _, _ = run_session(open_main_session(bp))
+bmsgs = bbf.get("main.fc", [["?"]])[-1]
+check("broken lsp.rsp surfaces an 'lsp.rsp ignored' diagnostic (fallback)",
+      any("lsp.rsp ignored" in m for m in bmsgs), str(bmsgs))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

@@ -3,7 +3,6 @@
 #include "parser.h"
 #include "pass1.h"
 #include "pass2.h"
-#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +20,7 @@ static void collect_sink(SrcLoc loc, const char *msg, void *ud) {
 /* ---- one source: lex + parse into an arena-owned Program ---- */
 
 static Program *lex_parse_one(AnalysisResult *r, const char *text,
-                              const char *filename, Flag *flags, int flag_count) {
+                              const char *filename, const Flag *flags, int flag_count) {
     diag_set_filename(filename);
 
     /* Expose the lexer's in-progress arrays so an abort during lexing frees
@@ -83,7 +82,8 @@ static void symtab_free_nested(SymbolTable *t) {
 /* ---- public entry ---- */
 
 AnalysisResult *analyze(const char *source, int source_len, const char *filename,
-                        const AnalysisSource *extra, int extra_count) {
+                        const AnalysisSource *extra, int extra_count,
+                        const Flag *flags, int flag_count) {
     AnalysisResult *r = calloc(1, sizeof *r);
     arena_init(&r->arena);
     intern_init(&r->intern, &r->arena);
@@ -94,11 +94,6 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
     r->source[source_len] = '\0';
     r->source_len = source_len;
     r->filename = arena_strdup(&r->arena, filename, (int)strlen(filename));
-
-    /* Conditional-compilation flags for the host (matches the CLI default). */
-    Flag *flags = NULL;
-    int flag_count = 0, flag_cap = 0;
-    platform_detect_flags(&flags, &flag_count, &flag_cap);
 
     diag_reset_counts();
     diag_set_filename(r->filename);
@@ -216,7 +211,6 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
 
     diag_set_abort_jmp(NULL);
     diag_set_sink(NULL, NULL);
-    free(flags);
     return r;
 }
 

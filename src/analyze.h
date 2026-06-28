@@ -4,6 +4,7 @@
 #include "pass1.h"
 #include "monomorph.h"
 #include "diag.h"
+#include "lexer.h"   /* Flag */
 
 /* Reusable, non-fatal front-end pipeline (lexer → parser → pass1 → pass2) over
  * an in-memory source string, for the in-process LSP server (src/lsp.c).
@@ -69,9 +70,12 @@ typedef struct AnalysisResult {
 } AnalysisResult;
 
 /* Analyze `source` (NUL-terminated copy made internally) under `filename`,
- * merging `extra` sources (may be NULL/0). Always returns a result (never NULL);
- * check `diags`/`aborted`. */
+ * merging `extra` sources (may be NULL/0). `flags`/`flag_count` are the
+ * conditional-compilation flags (caller-owned; borrowed for the call) — the
+ * caller supplies host auto-detect and/or lsp.rsp `--flag`s. Always returns a
+ * result (never NULL); check `diags`/`aborted`. */
 AnalysisResult *analyze(const char *source, int source_len, const char *filename,
-                        const AnalysisSource *extra, int extra_count);
+                        const AnalysisSource *extra, int extra_count,
+                        const Flag *flags, int flag_count);
 
 void analysis_free(AnalysisResult *r);

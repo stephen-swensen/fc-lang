@@ -1,0 +1,2 @@
+# nested: resolved relative to THIS file, not cwd
+@flags.rsp

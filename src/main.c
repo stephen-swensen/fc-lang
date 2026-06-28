@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "version.h"
 #include "lsp.h"
+#include "args.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,91 +68,34 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
                 "usage: fcc <input.fc> [input2.fc ...] [-o output.c]\n"
-                "       [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n");
+                "       [@response.rsp] [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n");
         return 1;
     }
 
-    const char **input_paths = NULL;
-    int input_count = 0, input_cap = 0;
-    const char *output_path = NULL;
-    Flag *flags = NULL;
-    int flag_count = 0, flag_cap = 0;
-    bool backtraces = false;
-
-    /* Auto-detect host platform from compile-time #ifdefs in platform.c,
-     * unless --no-auto-detect is passed. Detection writes os/arch/env
-     * entries that the user can override below with --flag (later set_flag
-     * calls replace by name). */
-    bool auto_detect = true;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--no-auto-detect") == 0) {
-            auto_detect = false;
-            break;
-        }
-    }
-    if (auto_detect) {
-        platform_detect_flags(&flags, &flag_count, &flag_cap);
-    }
-
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-            output_path = argv[++i];
-        } else if (strcmp(argv[i], "--no-auto-detect") == 0) {
-            /* Already handled above. */
-        } else if (strcmp(argv[i], "--backtraces") == 0) {
-            backtraces = true;
-        } else if (strcmp(argv[i], "--flag") == 0 && i + 1 < argc) {
-            const char *arg = argv[++i];
-            const char *eq = strchr(arg, '=');
-            Flag f = {0};
-            if (eq) {
-                if (eq == arg) {
-                    fprintf(stderr, "fcc: --flag requires a name before '='\n");
-                    return 1;
-                }
-                if (*(eq + 1) == '\0') {
-                    fprintf(stderr, "fcc: --flag '%s' has empty value after '='\n", arg);
-                    return 1;
-                }
-                f.name = arg;
-                f.name_len = (int)(eq - arg);
-                f.value = eq + 1;
-            } else {
-                if (*arg == '\0') {
-                    fprintf(stderr, "fcc: --flag requires a name\n");
-                    return 1;
-                }
-                f.name = arg;
-                f.name_len = (int)strlen(arg);
-                f.value = NULL;
-            }
-            /* User flag override: if a flag with this name already exists
-             * (e.g., from auto-detect), replace it in place so the user's
-             * value wins and there is exactly one entry per name. */
-            bool replaced = false;
-            for (int j = 0; j < flag_count; j++) {
-                if (flags[j].name_len == f.name_len &&
-                    memcmp(flags[j].name, f.name, (size_t)f.name_len) == 0) {
-                    flags[j] = f;
-                    replaced = true;
-                    break;
-                }
-            }
-            if (!replaced) {
-                DA_APPEND(flags, flag_count, flag_cap, f);
-            }
-        } else if (argv[i][0] != '-') {
-            DA_APPEND(input_paths, input_count, input_cap, argv[i]);
-        } else {
-            fprintf(stderr, "fcc: unknown option '%s'\n", argv[i]);
-            return 1;
-        }
-    }
-
-    if (input_count == 0) {
-        fprintf(stderr, "fcc: no input file\n");
+    /* Expand gcc-style @response files into a flat token stream, then interpret
+     * it (host auto-detect, --flag overrides, -o, inputs with file-relative
+     * glob/rebase). The same args module backs the LSP's lsp.rsp discovery. */
+    char *args_err = NULL;
+    ExpandedArgs expanded;
+    if (!args_expand(argc, argv, &expanded, &args_err)) {
+        fprintf(stderr, "fcc: %s\n", args_err);
+        free(args_err);
         return 1;
     }
+    CompileArgs ca;
+    if (!args_parse(&expanded, &ca)) {
+        fprintf(stderr, "fcc: %s\n", ca.error);
+        args_compile_free(&ca);
+        args_expand_free(&expanded);
+        return 1;
+    }
+
+    const char **input_paths = ca.inputs;
+    int input_count = ca.input_count;
+    const char *output_path = ca.output;
+    Flag *flags = ca.flags;
+    int flag_count = ca.flag_count;
+    bool backtraces = ca.backtraces;
 
     /* Initialize memory */
     Arena arena;
@@ -283,8 +227,8 @@ int main(int argc, char **argv) {
     free(programs);
     free(sources);
     free(all_tokens);
-    free(input_paths);
-    free(flags);
+    args_compile_free(&ca);      /* frees inputs + flags array + output */
+    args_expand_free(&expanded); /* frees the token strings flags borrowed */
     free(symtab.symbols);
     free(mono.entries);
     arena_free(&arena);
