@@ -4,6 +4,52 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## LSP CodeLens/hover went silently blank on stdlib files (resolved 2026-06-27)
+
+> **The "`-O0`-only empty-CodeLens divergence" framing was a misdiagnosis.**
+> Optimization level had nothing to do with it; the variable was how the server
+> resolved the stdlib feed versus where the opened file lived. All four
+> combinations of `{-O0, -O2} × {feed path matches open file, feed path differs}`
+> were tested: opt level never changed the outcome — only the path match did.
+
+**Root cause.** `analyze_doc` (`src/lsp.c`) deduped the stdlib feed against the open
+document by **canonical path** (`realpath`). When the opened file was a stdlib source
+whose on-disk copy sat at a *different path* than the feed copy — e.g. opening the
+repo's `stdlib/data.fc` while the server's feed resolved to the **installed**
+`/usr/local/share/fcc/stdlib` (which happens whenever `FCC_STDLIB_DIR` is unset and FC
+is installed) — the path dedup missed even though the two files were byte-identical.
+The module was then merged twice → pass1 raised a redefinition → `analyze()` gated
+`pass2_check` (so every `resolved_type` was NULL → empty CodeLens *and* dead hover) →
+the redefinition diagnostic was attributed to the feed copy's path (≠ the open file),
+so `publish_diagnostics` filtered it out. Net: the editor went silently blank.
+
+The original observer correlated the failure with `-O0`/`make dev` because whichever
+way they ran the `-O2` test happened to point the feed at the repo stdlib (the
+`make test-lsp` wrapper sets `FCC_STDLIB_DIR`), while the `-O0` run resolved the feed
+to the installed copy — a spurious correlation with the build, not the optimization.
+
+**Fix (two parts, conservative-but-complete).**
+1. **Content-identity dedup** in `analyze_doc`, OR'd with the existing path dedup: a
+   feed entry is dropped if it matches the open document or a sibling by canonical
+   path *or* by byte-identical content. The content check is gated on an equal length
+   first, so a full `memcmp` runs only for a genuine same-length candidate — never for
+   an ordinary edit (cheaper than the `realpath` syscalls already performed). The two
+   keys are complementary: path catches the same file with unsaved edits (live buffer
+   must win); content catches a separate identical copy at a different path.
+2. **Safety-net diagnostic** in `analyze()` (`src/analyze.c`): when type-checking is
+   gated (a pass1 error in a merged sibling/feed file, or a mid-parse abort) yet no
+   diagnostic lands on the open file, a single file-level diagnostic is surfaced on the
+   open document naming the first offending include ("analysis incomplete: an error in
+   an included file (…) halted type checking …"). This makes the residual cases the
+   dedup heuristic can't catch (an *edited* divergent copy) visible instead of a
+   mysteriously dead editor, and fixes the whole class of silent gating (any merged
+   sibling error used to blank the open file with no explanation). LSP-only; the CLI
+   pipeline (`main.c`) never calls `analyze()` and is unchanged.
+
+Tests: `tests/lsp/lsp_test.py` — "identical stdlib copy at a different path: type
+CodeLens still provided" and the safety-net pair ("a merged sibling's error surfaces
+an 'analysis incomplete' diagnostic …"). Both fail on the pre-fix binary.
+
 ## Unchecked cast `(T!)` — opt out of float→int saturation (resolved 2026-06-19)
 
 > **Superseded 2026-06-21 by `unguarded`/`guarded` blocks.** The suffix-`!` cast

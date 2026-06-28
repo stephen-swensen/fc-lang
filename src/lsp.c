@@ -670,33 +670,60 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
         }
     }
 
-    /* stdlib feed. Drop any feed file that is the SAME on-disk file as the open
+    /* stdlib feed. Drop any feed file that is really the SAME source as the open
      * document or a sibling — most commonly because you followed Go To Definition
      * into a stdlib module, so the editor opened the very file the feed already
      * provides. Without this it is analyzed twice => pass1 "redefinition" => pass2
      * never runs (no diagnostics AND no hover/CodeLens; the error is attributed to
      * the feed copy and filtered out, so nothing surfaces).
      *
-     * The key is the canonical absolute path (realpath), so the same file dedups
-     * regardless of how its path was spelled, while two DIFFERENT files that merely
-     * share a basename — a project's own `data.fc` vs the stdlib's — are correctly
-     * kept (basename-matching would wrongly shadow `std::data`). */
+     * A feed entry is a duplicate if it matches a "have" entry by EITHER:
+     *   - canonical absolute path (realpath) — the same on-disk file regardless of
+     *     how its path was spelled or symlinked, and crucially for an open document
+     *     with unsaved edits (path matches even though the buffer differs from
+     *     disk, and the live buffer must win); OR
+     *   - byte-identical content — a separate copy of the same source at a
+     *     different path (e.g. opening the repo's stdlib/data.fc while the feed
+     *     resolves to the *installed* /usr/local/share/.../data.fc; the two files
+     *     are identical but their realpaths differ). The content check is gated on
+     *     an equal length first, so a full memcmp runs only for a genuine
+     *     same-length candidate — never for an ordinary edit.
+     * Two DIFFERENT files that merely share a basename — a project's own `data.fc`
+     * vs the stdlib's — match neither key and are correctly kept (basename-matching
+     * would wrongly shadow `std::data`). */
     int sib_n = n;                              /* siblings precede any feed entries */
-    char **have = malloc(sizeof *have * (size_t)(sib_n + 1));
-    int have_n = 0;
-    have[have_n++] = canon_path(doc->path);
-    for (int j = 0; j < sib_n; j++) have[have_n++] = canon_path(extra[j].filename);
+    int have_n = sib_n + 1;
+    char       **have_path = malloc(sizeof *have_path * (size_t)have_n);
+    const char **have_text = malloc(sizeof *have_text * (size_t)have_n);
+    int         *have_len  = malloc(sizeof *have_len  * (size_t)have_n);
+    have_path[0] = canon_path(doc->path);
+    have_text[0] = doc->text;
+    have_len[0]  = doc->text_len;
+    for (int j = 0; j < sib_n; j++) {
+        have_path[1 + j] = canon_path(extra[j].filename);
+        have_text[1 + j] = extra[j].text;
+        have_len[1 + j]  = extra[j].len;
+    }
 
     for (int i = 0; i < S->stdlib_count; i++) {
         char *feed_real = canon_path(S->stdlib[i].filename);
         bool dup = false;
-        for (int j = 0; j < have_n; j++)
-            if (strcmp(have[j], feed_real) == 0) { dup = true; break; }
+        for (int j = 0; j < have_n; j++) {
+            if (strcmp(have_path[j], feed_real) == 0 ||
+                (have_len[j] == S->stdlib[i].len &&
+                 memcmp(have_text[j], S->stdlib[i].text,
+                        (size_t)S->stdlib[i].len) == 0)) {
+                dup = true;
+                break;
+            }
+        }
         free(feed_real);
         if (!dup) DA_APPEND(extra, n, cap, S->stdlib[i]);
     }
-    for (int j = 0; j < have_n; j++) free(have[j]);
-    free(have);
+    for (int j = 0; j < have_n; j++) free(have_path[j]);
+    free(have_path);
+    free(have_text);
+    free(have_len);
 
     doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n);
 

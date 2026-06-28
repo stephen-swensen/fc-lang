@@ -51,9 +51,3 @@ restart the editor). Linux is the supported target.
 
 The type CodeLens uses VSCode's standard CodeLens rendering; toggle it with the
 built-in `"editor.codeLens"` setting (scoped to `[fc]` by default).
-
-## Known limitations (v1)
-
-- Completion over-offers (no flow-sensitive local scoping yet).
-- Go-to-definition on a union variant constructor lands on the union
-  declaration, not the individual variant.

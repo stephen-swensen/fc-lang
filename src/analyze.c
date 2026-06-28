@@ -4,6 +4,7 @@
 #include "pass1.h"
 #include "pass2.h"
 #include "platform.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -103,6 +104,10 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
     diag_set_filename(r->filename);
     diag_set_sink(collect_sink, r);
 
+    /* Volatile so its value survives the longjmp below (it is read after the
+     * setjmp/else path). Stays false unless pass2 actually executed. */
+    volatile bool pass2_ran = false;
+
     jmp_buf env;
     diag_set_abort_jmp(&env);
     if (setjmp(env) == 0) {
@@ -151,15 +156,60 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
          * a stdlib module), so the missing-`main` diagnostic is suppressed. */
         pass1_collect(r->program, &r->symtab, &r->intern, &r->file_scopes,
                       /*require_main=*/false);
-        if (diag_error_count() == 0)
+        if (diag_error_count() == 0) {
             pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
                         &r->arena);
+            pass2_ran = true;
+        }
     } else {
         r->aborted = true;
         /* Free the lexer's in-progress arrays the abort left behind. The
          * already-returned per-source arrays are tracked in token_arrays. */
         if (r->lex_raw)    { free(r->lex_raw);    r->lex_raw = NULL; }
         if (r->lex_layout) { free(r->lex_layout); r->lex_layout = NULL; }
+    }
+
+    /* Safety net against silent blanking. Type-checking is gated on a clean
+     * pass1 (and on a clean parse), so a single error in a *merged* sibling or
+     * stdlib-feed file suppresses pass2 for the whole analysis — every node's
+     * resolved type is then NULL, so hover / definition / CodeLens all go empty.
+     * publish_diagnostics filters to the open file, so when the offending error
+     * lives in another file the open document shows NOTHING: no error to explain
+     * the silence, no type info. (The canonical trigger is the same module merged
+     * twice from two different paths.) Surface one file-level diagnostic on the
+     * open document, naming the first offending included file, so the failure is
+     * visible and actionable instead of a mysteriously dead editor. */
+    if (!pass2_ran) {
+        bool open_has_diag = false;
+        const char *other = NULL;
+        for (int i = 0; i < r->diag_count; i++) {
+            const char *fn = r->diags[i].loc.filename;
+            /* A NULL filename defaults to the open document (publish_diagnostics
+             * shows it), so it already explains the silence — treat as open. */
+            if (!fn || strcmp(fn, r->filename) == 0) { open_has_diag = true; break; }
+            if (!other) other = fn;
+        }
+        if (!open_has_diag) {
+            const char *base = other;
+            if (base) {
+                const char *slash = strrchr(base, '/');
+                if (slash) base = slash + 1;
+            }
+            char msg[256];
+            if (base)
+                snprintf(msg, sizeof msg,
+                         "analysis incomplete: an error in an included file (%s) "
+                         "halted type checking — hover, definition, and lenses are "
+                         "unavailable for this file until it is resolved", base);
+            else
+                snprintf(msg, sizeof msg,
+                         "analysis incomplete: type checking did not run — hover, "
+                         "definition, and lenses are unavailable for this file");
+            Diagnostic d;
+            d.loc = (SrcLoc){ .filename = r->filename, .line = 1, .col = 1 };
+            d.message = arena_strdup(&r->arena, msg, (int)strlen(msg));
+            DA_APPEND(r->diags, r->diag_count, r->diag_cap, d);
+        }
     }
 
     diag_set_abort_jmp(NULL);

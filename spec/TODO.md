@@ -82,26 +82,6 @@ no store.
 Architecture lives in `CLAUDE.md` → "Editor integration"; this section is the
 open-item backlog. None of these block release.
 
-### `data.fc` CodeLens is empty under `-O0` (optimization-level divergence)
-
-Opening `stdlib/data.fc` returns an empty `textDocument/codeLens` response when
-`fcc` is built at `-O0` (`make dev`, or any `-fsanitize` build), but is correct
-at `-O2` (the default `make`, and what `make test-lsp` / `make check` build). So
-the wire test `tests/lsp/lsp_test.py` ("type CodeLens still provided") passes in
-CI and fails only on debug builds.
-
-This **predates** the 2026-06-27 LSP work — it reproduces on a pristine checkout,
-so it is not a regression from the doc-comment / go-to-def / leak changes. The
-divergence-by-optimization-level smells like undefined behavior or an
-uninitialized read that `-O2` happens to mask; ASan (a `-O0` build) reports no
-memory error for the session, so it is a *logic* divergence, not a detectable
-overflow/UAF. `data.fc` is `namespace std:: / module data` with generics
-(`array_list<'a>`); `lens_decls`→`lens_emit` finds zero emittable `let` lenses
-while analysis reports no diagnostics for the file. First thing to check: whether
-pass2 is being silently gated — a pass1 error in a *sibling* merged stdlib file
-suppresses all resolved types yet stays invisible because diagnostics are
-filtered to the open file — and whether that gating differs by opt level.
-
 ### Smaller follow-ups (non-blocking)
 
 - **Completion over-offers** — no flow-sensitive local scoping, so it lists

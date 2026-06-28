@@ -301,6 +301,63 @@ _, _, nbf, _, _ = run_session(nm)
 check("own file named like a stdlib module: `import data from std::` still resolves",
       nbf.get("main.fc", [["?"]])[-1] == [], str(nbf.get("main.fc")))
 
+# --- content dedup: a byte-identical COPY of a stdlib file opened at a DIFFERENT
+# path must still type-check. The feed provides the stdlib's own copy (a different
+# realpath), so a path-only dedup would miss it -> the module is merged twice ->
+# pass1 redefinition -> pass2 gated -> empty CodeLens/hover with the error filtered
+# out (a silently blank editor). Content-identity dedup collapses the two copies.
+# This is the regression guard for the former "-O0 data.fc CodeLens empty" issue,
+# which was really a path-mismatch dedup miss (installed stdlib vs. opened file).
+if cand:
+    cpdir = tempfile.mkdtemp(prefix="fc_lsp_copy_")
+    cpath = os.path.join(cpdir, os.path.basename(cand))      # same basename, different dir
+    with open(cpath, "w") as f:
+        f.write(open(cand).read())                           # byte-identical content
+    cpuri = "file://" + cpath
+    cp = [
+        req(1, "initialize", {"capabilities": {}}),
+        note("initialized", {}),
+        note("textDocument/didOpen", {"textDocument": {"uri": cpuri, "languageId": "fc",
+             "version": 1, "text": open(cpath).read()}}),
+        req(2, "textDocument/codeLens", {"textDocument": {"uri": cpuri}}),
+        req(9, "shutdown", None),
+        note("exit", None),
+    ]
+    cresp, _, cbf, _, _ = run_session(cp)
+    cname = os.path.basename(cpath)
+    check("identical stdlib copy at a different path: no spurious redefinition diagnostics",
+          cbf.get(cname, [["?"]])[-1] == [], str(cbf.get(cname)))
+    clenses = cresp.get(2, {}).get("result") or []
+    check("identical stdlib copy at a different path: type CodeLens still provided",
+          isinstance(clenses, list) and len(clenses) > 0,
+          str(len(clenses) if isinstance(clenses, list) else clenses))
+
+# --- safety net: an error in a MERGED sibling file gates type-checking for the
+# whole analysis (pass2 only runs on a clean pass1), so the open file loses all
+# type info. The error lives in another file, so it is filtered out -> the open
+# document would otherwise show NOTHING (no diagnostic, no hover, no lenses). A
+# single file-level diagnostic must surface on the open file naming the offending
+# include, so the silence is explained instead of a mysteriously dead editor.
+sndir = tempfile.mkdtemp(prefix="fc_lsp_safetynet_")
+with open(os.path.join(sndir, "broken.fc"), "w") as f:       # duplicate top-level name -> pass1 error
+    f.write("let dup = (n: i32) ->\n    n\nlet dup = (n: i32) ->\n    n\n")
+with open(os.path.join(sndir, "main.fc"), "w") as f:         # clean; its analysis is gated by the sibling
+    f.write("let ok = (n: i32) ->\n    n + 1\n")
+sn = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + os.path.join(sndir, "main.fc"),
+         "languageId": "fc", "version": 1, "text": open(os.path.join(sndir, "main.fc")).read()}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, snbf, _, _ = run_session(sn)
+sn_msgs = snbf.get("main.fc", [["?"]])[-1]
+check("safety net: a merged sibling's error surfaces an 'analysis incomplete' diagnostic on the open file",
+      any("analysis incomplete" in m for m in sn_msgs), str(sn_msgs))
+check("safety net: the incomplete-analysis diagnostic names the offending included file",
+      any("broken.fc" in m for m in sn_msgs), str(sn_msgs))
+
 # --- go-to-definition beyond plain identifiers: module members, struct-literal
 # type names, and union variant constructors all resolve to their declarations.
 gd = tempfile.mkdtemp(prefix="fc_lsp_gotodef_")
