@@ -121,6 +121,13 @@ function docPos(document, position) {
   };
 }
 
+// How inferred-type annotations are shown: "inline" (after the name, `let x: T`,
+// default), "codelens" (above the line), or "off". The server always offers both
+// CodeLens and inlay hints; this picks which the editor actually renders.
+function typeDisplayMode() {
+  return vscode.workspace.getConfiguration("fc").get("typeDisplay") || "inline";
+}
+
 /* ---- activation ---- */
 
 async function activate(context) {
@@ -166,6 +173,11 @@ async function activate(context) {
 
   const selector = { scheme: "file", language: "fc" };
 
+  // Fired on `fc.typeDisplay` change so VSCode re-queries the providers below.
+  const codeLensEmitter = new vscode.EventEmitter();
+  const inlayEmitter = new vscode.EventEmitter();
+  context.subscriptions.push(codeLensEmitter, inlayEmitter);
+
   context.subscriptions.push(
     vscode.languages.registerHoverProvider(selector, {
       async provideHover(document, position) {
@@ -208,7 +220,9 @@ async function activate(context) {
     ),
 
     vscode.languages.registerCodeLensProvider(selector, {
+      onDidChangeCodeLenses: codeLensEmitter.event,
       async provideCodeLenses(document) {
+        if (typeDisplayMode() !== "codelens") return [];
         const r = await request("textDocument/codeLens", {
           textDocument: { uri: document.uri.toString() },
         });
@@ -216,6 +230,38 @@ async function activate(context) {
           (l) => new vscode.CodeLens(toRange(l.range), l.command || { title: "", command: "" })
         );
       },
+    }),
+
+    vscode.languages.registerInlayHintsProvider(selector, {
+      onDidChangeInlayHints: inlayEmitter.event,
+      async provideInlayHints(document, range) {
+        if (typeDisplayMode() !== "inline") return [];
+        const r = await request("textDocument/inlayHint", {
+          textDocument: { uri: document.uri.toString() },
+          range: {
+            start: { line: range.start.line, character: range.start.character },
+            end: { line: range.end.line, character: range.end.character },
+          },
+        });
+        return (r || []).map(
+          (h) =>
+            new vscode.InlayHint(
+              new vscode.Position(h.position.line, h.position.character),
+              h.label,
+              vscode.InlayHintKind.Type
+            )
+        );
+      },
+    })
+  );
+
+  // Flipping fc.typeDisplay changes which provider yields results; re-query both.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("fc.typeDisplay")) {
+        codeLensEmitter.fire();
+        inlayEmitter.fire();
+      }
     })
   );
 }

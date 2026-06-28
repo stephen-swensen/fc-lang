@@ -11,7 +11,12 @@ built-in language server (`fcc --lsp`).
 - **Hover** — inferred type of the identifier under the cursor, plus its doc
   comment: the run of `//` lines directly above a definition, and the `//`
   trailing a struct/union field.
-- **Type CodeLens** — the inferred type shown on a line *above* each `let`.
+- **Inferred-type annotations** — each `let`'s inferred type, shown either
+  *inline* after the name (`let x: i32`, default) or as a CodeLens on the line
+  *above*, selectable with the `fc.typeDisplay` setting. A function binding shows
+  just its inferred return type (`: -> i32` inline, `:-> i32` as a lens), since
+  the parameter types are already written at the definition site. (Hovering a
+  name shows the full type.)
 - **Go to definition** — module-level functions, structs, unions, modules;
   block-locals (parameters, `let`s, `for` variables, match bindings); and
   struct fields (jumps to the field's declaration).
@@ -68,6 +73,11 @@ restart the editor). Linux is the supported target.
 - `fc.stdlibPath` (default empty) — directory holding the stdlib `.fc` files;
   sets `FCC_STDLIB_DIR` for the server. Leave empty to use the installed
   location (or a repo-relative `./stdlib`).
+- `fc.typeDisplay` (default `"inline"`) — how each `let`'s inferred type is
+  shown: `"inline"` (after the name, as an inlay hint), `"codelens"` (on the line
+  above), or `"off"`. The server always provides both; this selects which the
+  editor renders, and changes apply immediately.
 
-The type CodeLens uses VSCode's standard CodeLens rendering; toggle it with the
-built-in `"editor.codeLens"` setting (scoped to `[fc]` by default).
+In `"inline"` mode the hints honor the built-in `"editor.inlayHints.enabled"`
+setting; `"codelens"` mode uses VSCode's standard CodeLens rendering, which also
+honors `"editor.codeLens"` (scoped to `[fc]` by default).

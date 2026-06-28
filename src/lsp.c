@@ -1227,20 +1227,64 @@ typedef struct {
     JsonValue *arr;
     const LineIndex *idx;
     const char *src;
-    const char *file;   /* only emit lenses for decls from this file */
+    const char *file;   /* only emit hints for decls from this file */
+    bool inlay;         /* false = CodeLens (type above), true = inlay hint (type inline) */
+    int  lo_line, hi_line; /* inlay only: requested LSP 0-based line range (inclusive) */
 } LensCtx;
 
-static void lens_emit(LensCtx *lc, int let_line, int let_col, bool is_mut, Type *type) {
+/* Column (1-based) just past the binding identifier that begins at `name_col`,
+ * so an inline type hint renders as `let x: T` directly after the name. */
+static int name_end_col(const LineIndex *idx, const char *src, int line, int name_col) {
+    int off = idx->starts[line - 1] + (name_col - 1);
+    int i = off;
+    while (i < idx->len) {
+        char ch = src[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_') i++;
+        else break;
+    }
+    return (i - idx->starts[line - 1]) + 1;
+}
+
+static void lens_emit(LensCtx *lc, int let_line, int let_col, bool is_mut,
+                      Type *type, bool init_is_lambda) {
     if (!type) return;
-    char tn[512];
-    copy_type_name(type, tn, sizeof tn);
     char title[560];
-    snprintf(title, sizeof title, ": %s", tn);
+    /* For a lambda binding the parameter types are written explicitly at the
+     * definition site, so the only new information is the inferred return type:
+     * render `:-> ret`. Everything else — including a plain function-reference
+     * binding (`let f = g`), whose params are NOT visible here — shows the full
+     * type. Hover is unaffected and always reports the full type. */
+    if (init_is_lambda && type->kind == TYPE_FUNC && type->func.return_type) {
+        char rt[512];
+        copy_type_name(type->func.return_type, rt, sizeof rt);
+        /* Inline keeps a space after the colon to match the plain `: T` hints
+         * (`let f: -> ret`); the standalone CodeLens reads fine tight (`:-> ret`). */
+        snprintf(title, sizeof title, lc->inlay ? ": -> %s" : ":-> %s", rt);
+    } else {
+        char tn[512];
+        copy_type_name(type, tn, sizeof tn);
+        snprintf(title, sizeof title, ": %s", tn);
+    }
 
     FindCtx fc = {0};
     fc.idx = lc->idx;
     fc.src = lc->src;
     int name_col = let_name_col(&fc, let_line, let_col, is_mut);
+
+    if (lc->inlay) {
+        /* Hint sits just after the binding name: `let x` -> `let x: T`. */
+        int end_col = name_end_col(lc->idx, lc->src, let_line, name_col);
+        int l0, c0;
+        loc_to_lsp(lc->idx, lc->src, let_line, end_col, &l0, &c0);
+        if (l0 < lc->lo_line || l0 > lc->hi_line) return;   /* outside requested range */
+        JsonValue *h = json_object(lc->a);
+        json_object_set(lc->a, h, "position", mk_pos(lc->a, l0, c0));
+        json_object_set(lc->a, h, "label", json_str(lc->a, title));
+        json_object_set(lc->a, h, "kind", json_num(lc->a, 1));   /* InlayHintKind.Type */
+        json_array_push(lc->a, lc->arr, h);
+        return;
+    }
 
     int l0, c0;
     loc_to_lsp(lc->idx, lc->src, let_line, name_col, &l0, &c0);
@@ -1265,7 +1309,8 @@ static void lens_expr(Expr *e, LensCtx *lc) {
     switch (e->kind) {
         case EXPR_LET:
             lens_emit(lc, e->loc.line, e->loc.col, e->let_expr.let_is_mut,
-                      e->let_expr.let_type);
+                      e->let_expr.let_type,
+                      e->let_expr.let_init && e->let_expr.let_init->kind == EXPR_FUNC);
             lens_expr(e->let_expr.let_init, lc);
             break;
         case EXPR_BINARY: lens_expr(e->binary.left, lc); lens_expr(e->binary.right, lc); break;
@@ -1322,7 +1367,8 @@ static void lens_decls(Decl **decls, int n, LensCtx *lc) {
         /* skip decls merged in from stdlib / other files */
         if (lc->file && d->loc.filename && strcmp(d->loc.filename, lc->file) != 0) continue;
         if (d->kind == DECL_LET) {
-            lens_emit(lc, d->loc.line, d->loc.col, d->let.is_mut, d->let.resolved_type);
+            lens_emit(lc, d->loc.line, d->loc.col, d->let.is_mut, d->let.resolved_type,
+                      d->let.init && d->let.init->kind == EXPR_FUNC);
             lens_expr(d->let.init, lc);
         } else if (d->kind == DECL_MODULE) {
             lens_decls(d->module.decls, d->module.decl_count, lc);
@@ -1341,6 +1387,33 @@ static void handle_codelens(LspServer *S, JsonValue *id, JsonValue *params) {
         LineIndex idx = line_index_build(a, doc->text, doc->text_len);
         LensCtx lc = { .a = a, .arr = arr, .idx = &idx, .src = doc->text,
                        .file = doc->path };
+        lens_decls(r->program->decls, r->program->decl_count, &lc);
+    }
+    lsp_reply(a, id, arr);
+}
+
+/* Inlay hints carry the same per-binding inferred type as the CodeLens, but
+ * rendered inline after the name (`let x: T`) rather than on the line above.
+ * The client (extension.js) shows at most one of the two per the `fc.typeDisplay`
+ * setting; the server always offers both and lets the editor choose. */
+static void handle_inlayhint(LspServer *S, JsonValue *id, JsonValue *params) {
+    Arena *a = &S->msg_arena;
+    JsonValue *td = json_get(params, "textDocument");
+    const char *uri = json_get_str(td, "uri");
+    LspDoc *doc = uri ? store_find(&S->store, uri) : NULL;
+    JsonValue *arr = json_array(a);
+    AnalysisResult *r = doc ? query_result(doc) : NULL;
+    if (r && r->program) {
+        long lo = 0, hi = (1L << 30);
+        JsonValue *range = json_get(params, "range");
+        if (range) {
+            json_get_int(json_get(range, "start"), "line", &lo);
+            json_get_int(json_get(range, "end"), "line", &hi);
+        }
+        LineIndex idx = line_index_build(a, doc->text, doc->text_len);
+        LensCtx lc = { .a = a, .arr = arr, .idx = &idx, .src = doc->text,
+                       .file = doc->path, .inlay = true,
+                       .lo_line = (int)lo, .hi_line = (int)hi };
         lens_decls(r->program->decls, r->program->decl_count, &lc);
     }
     lsp_reply(a, id, arr);
@@ -1589,6 +1662,7 @@ static void handle_initialize(LspServer *S, JsonValue *id) {
     JsonValue *cl = json_object(a);
     json_object_set(a, cl, "resolveProvider", json_bool(a, false));
     json_object_set(a, caps, "codeLensProvider", cl);
+    json_object_set(a, caps, "inlayHintProvider", json_bool(a, true));
     JsonValue *comp = json_object(a);
     JsonValue *trig = json_array(a);
     json_array_push(a, trig, json_str(a, "."));
@@ -1639,6 +1713,8 @@ static void dispatch(LspServer *S, JsonValue *req) {
         handle_definition(S, id, params);
     } else if (strcmp(method, "textDocument/codeLens") == 0) {
         handle_codelens(S, id, params);
+    } else if (strcmp(method, "textDocument/inlayHint") == 0) {
+        handle_inlayhint(S, id, params);
     } else if (strcmp(method, "textDocument/completion") == 0) {
         handle_completion(S, id, params);
     } else if (is_request) {

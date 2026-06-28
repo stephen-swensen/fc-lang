@@ -62,6 +62,8 @@ msgs = [
     req(4, "textDocument/definition", {"textDocument": {"uri": URI}, "position": {"line": 3, "character": 13}}),
     req(5, "textDocument/codeLens", {"textDocument": {"uri": URI}}),
     req(6, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 4, "character": 4}}),
+    req(10, "textDocument/inlayHint", {"textDocument": {"uri": URI},     # inline type hints
+        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 0}}}),
     change(2, TYPEERR),                                                  # diag[1] = type error
     change(3, BROKEN),                                                   # diag[2] = unterminated
     hover(7, 0, 4),                                                      # SURVIVAL: must still reply
@@ -111,7 +113,7 @@ caps = responses.get(1, {}).get("result", {}).get("capabilities", {})
 check("initialize advertises capabilities",
       caps.get("hoverProvider") and caps.get("definitionProvider")
       and caps.get("completionProvider") and caps.get("codeLensProvider")
-      and caps.get("textDocumentSync") == 1, str(caps))
+      and caps.get("inlayHintProvider") and caps.get("textDocumentSync") == 1, str(caps))
 
 check("clean document has no diagnostics",
       len(diags) >= 1 and diags[0] == [], str(diags[0] if diags else None))
@@ -130,15 +132,34 @@ check("definition of 'helper' returns line 0",
       json.dumps(dfn))
 
 cl = responses.get(5, {}).get("result") or []
+cl_titles = [x.get("command", {}).get("title", "") for x in cl]
 check("codeLens returns type lenses",
-      isinstance(cl, list) and len(cl) > 0
-      and any(": " in (x.get("command", {}).get("title", "")) for x in cl),
+      isinstance(cl, list) and len(cl) > 0 and any(": " in t for t in cl_titles),
       json.dumps(cl)[:200])
+# Standalone CodeLens labels read fine tight: function bindings use ':-> ret'.
+check("codeLens: function binding uses tight ':-> i32'",
+      ":-> i32" in cl_titles, str(cl_titles))
 
 comp = responses.get(6, {}).get("result") or {}
 labels = [it.get("label") for it in (comp.get("items") if isinstance(comp, dict) else comp) or []]
 check("completion includes keywords", "let" in labels and "match" in labels,
       str(labels[:10]))
+
+ih = responses.get(10, {}).get("result") or []
+check("inlayHint returns inline type hints (kind=Type)",
+      isinstance(ih, list) and len(ih) >= 2
+      and all(h.get("kind") == 1 and str(h.get("label", "")).startswith(":") for h in ih),
+      json.dumps(ih)[:300])
+check("inlayHint: non-function binding 'x' renders full ': i32' on its own line",
+      any(h.get("position", {}).get("line") == 3 and h.get("label") == ": i32" for h in ih),
+      json.dumps(ih)[:300])
+# A lambda binding writes its param types at the site, so only the inferred
+# return type is new: the hint is ': -> ret' (inline keeps a space after the
+# colon to match the plain ': T' hints), not the full function type.
+check("inlayHint: lambda binding shows return-only ': -> i32' (spaced inline)",
+      any(h.get("label") == ": -> i32" for h in ih)
+      and not any("(" in str(h.get("label", "")) for h in ih),
+      json.dumps(ih)[:300])
 
 check("type-error diagnostic reported",
       len(diags) >= 2 and any("numeric" in d["message"] or "bool" in d["message"]

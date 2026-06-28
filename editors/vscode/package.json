@@ -37,6 +37,17 @@
           "type": "string",
           "default": "",
           "description": "Directory containing the FC stdlib .fc files (sets FCC_STDLIB_DIR for the server). Leave empty to use the installed location."
+        },
+        "fc.typeDisplay": {
+          "type": "string",
+          "enum": ["inline", "codelens", "off"],
+          "enumDescriptions": [
+            "Show each binding's inferred type inline, after the name (let x: i32) (default).",
+            "Show each binding's inferred type as a CodeLens on the line above.",
+            "Don't show inferred-type annotations."
+          ],
+          "default": "inline",
+          "description": "How to display the inferred type of each `let` binding."
         }
       }
     },
