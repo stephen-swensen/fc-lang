@@ -212,6 +212,8 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         }
     }
 
+    r->typed = pass2_ran;
+
     diag_set_abort_jmp(NULL);
     diag_set_sink(NULL, NULL);
     free(flags);

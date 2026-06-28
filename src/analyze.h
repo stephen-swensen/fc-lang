@@ -47,6 +47,12 @@ typedef struct AnalysisResult {
     int              diag_count, diag_cap;
 
     bool             aborted;      /* a diag_fatal longjmp'd out of lex/parse */
+    bool             typed;        /* pass2 ran to completion: every node carries
+                                    * its inferred type. False when the parse
+                                    * aborted or a pass1 error gated pass2 — i.e.
+                                    * the AST has no usable type info. The server
+                                    * uses this to decide when to fall back to the
+                                    * last good analysis for type-aware queries. */
 
     char            *source;       /* owned copy of the primary document text */
     int              source_len;

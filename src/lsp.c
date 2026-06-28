@@ -34,6 +34,11 @@ typedef struct {
     int             text_len;
     long            version;
     AnalysisResult *result;     /* latest analysis; NULL until first analyze */
+    AnalysisResult *last_good;  /* most recent analysis that type-checked (result
+                                 * itself when fresh is good), retained so a
+                                 * transient parse/pass1 failure mid-typing does
+                                 * not blank type-aware queries. May alias result.
+                                 * NULL until the first good analysis. */
 } LspDoc;
 
 typedef struct {
@@ -64,6 +69,30 @@ static LspDoc *store_find_by_path(LspDocStore *s, const char *path) {
     for (int i = 0; i < s->count; i++)
         if (s->docs[i].path && strcmp(s->docs[i].path, path) == 0) return &s->docs[i];
     return NULL;
+}
+
+/* The analysis that answers type-aware queries (hover, definition, completion,
+ * CodeLens): the fresh result whenever it actually type-checked, otherwise the
+ * last one that did. This keeps overlays stable while you type through a
+ * transient broken state (`let r2 = `, `... problem_01.`) instead of blanking
+ * everything every other keystroke. Diagnostics deliberately do NOT use this —
+ * they always come from the fresh `result`, so squiggles stay live. The stale
+ * AST carries positions from an earlier revision; consumers locate by current
+ * coordinates, so a line you have not touched still resolves while the line
+ * under edit may simply miss (the same as a blank, never a crash). May return
+ * NULL before the first good analysis. */
+static AnalysisResult *query_result(LspDoc *doc) {
+    if (doc->result && doc->result->typed) return doc->result;
+    return doc->last_good;
+}
+
+/* Free both analyses a document may own. result and last_good can alias (when
+ * the freshest analysis is the good one), so free the distinct one first. */
+static void doc_free_results(LspDoc *d) {
+    if (d->last_good && d->last_good != d->result) analysis_free(d->last_good);
+    if (d->result) analysis_free(d->result);
+    d->result = NULL;
+    d->last_good = NULL;
 }
 
 /* ======================================================================== */
@@ -543,7 +572,8 @@ static void find_in_decls(Decl **decls, int n, FindCtx *c) {
 
 /* Run the position lookup against a document's analysis. */
 static bool locate(LspDoc *doc, const LineIndex *idx, int line0, int char0, FindCtx *out) {
-    if (!doc->result || !doc->result->program) return false;
+    AnalysisResult *r = query_result(doc);
+    if (!r || !r->program) return false;
     int line1, col1;
     lsp_to_loc(idx, doc->text, line0, char0, &line1, &col1);
     FindCtx c = {0};
@@ -552,7 +582,7 @@ static bool locate(LspDoc *doc, const LineIndex *idx, int line0, int char0, Find
     c.src = doc->text;
     c.idx = idx;
     c.file = doc->path;
-    find_in_decls(doc->result->program->decls, doc->result->program->decl_count, &c);
+    find_in_decls(r->program->decls, r->program->decl_count, &c);
     *out = c;
     return c.found;
 }
@@ -644,7 +674,9 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
  * disk) + the stdlib feed. This makes cross-file references (a shared `prelude`
  * module, `let main` in another file) resolve. */
 static void analyze_doc(LspServer *S, LspDoc *doc) {
-    if (doc->result) { analysis_free(doc->result); doc->result = NULL; }
+    /* The previous fresh result is retired below, AFTER the new analysis, so it
+     * can be kept as last_good when the new one fails to type-check. */
+    AnalysisResult *prev = doc->result;
 
     AnalysisSource *extra = NULL;
     int n = 0, cap = 0;
@@ -727,6 +759,19 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
 
     doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n);
 
+    /* Retain the last analysis that type-checked. When the fresh one is good it
+     * becomes the new last_good (and the previous good copy is freed); when it is
+     * degraded (parse abort or pass1-gated pass2) we hold onto the prior good one
+     * so type-aware queries keep answering. prev/last_good may alias, hence the
+     * !=-guarded frees so nothing is freed twice or while still in use. */
+    if (doc->result->typed) {
+        if (doc->last_good && doc->last_good != prev) analysis_free(doc->last_good);
+        doc->last_good = doc->result;
+        if (prev && prev != doc->result) analysis_free(prev);
+    } else {
+        if (prev && prev != doc->last_good) analysis_free(prev);
+    }
+
     for (int i = 0; i < db; i++) free(disk_bufs[i]);
     free(disk_bufs);
     for (int i = 0; i < sc; i++) free(sibs[i]);
@@ -807,7 +852,7 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
             lsp_notify(&S->msg_arena, "textDocument/publishDiagnostics", params2);
 
             LspDoc *d = &S->store.docs[i];
-            if (d->result) analysis_free(d->result);
+            doc_free_results(d);
             free(d->uri); free(d->path); free(d->text);
             S->store.docs[i] = S->store.docs[--S->store.count];
             return;
@@ -1167,12 +1212,12 @@ static void handle_codelens(LspServer *S, JsonValue *id, JsonValue *params) {
     const char *uri = json_get_str(td, "uri");
     LspDoc *doc = uri ? store_find(&S->store, uri) : NULL;
     JsonValue *arr = json_array(a);
-    if (doc && doc->result && doc->result->program) {
+    AnalysisResult *r = doc ? query_result(doc) : NULL;
+    if (r && r->program) {
         LineIndex idx = line_index_build(a, doc->text, doc->text_len);
         LensCtx lc = { .a = a, .arr = arr, .idx = &idx, .src = doc->text,
                        .file = doc->path };
-        lens_decls(doc->result->program->decls,
-                   doc->result->program->decl_count, &lc);
+        lens_decls(r->program->decls, r->program->decl_count, &lc);
     }
     lsp_reply(a, id, arr);
 }
@@ -1301,9 +1346,9 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     c.src = doc->text;
     c.idx = idx;
     c.file = doc->path;
-    if (!doc->result || !doc->result->program) return false;
-    find_in_decls(doc->result->program->decls,
-                  doc->result->program->decl_count, &c);
+    AnalysisResult *r = query_result(doc);
+    if (!r || !r->program) return false;
+    find_in_decls(r->program->decls, r->program->decl_count, &c);
     if (!c.found) return false;
 
     /* Module members. */
@@ -1377,8 +1422,9 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     for (int i = 0; i < KEYWORD_COUNT; i++)
         add_item(a, items, KEYWORDS[i], CIK_KEYWORD, NULL);
 
-    if (doc->result) {
-        SymbolTable *st = &doc->result->symtab;
+    AnalysisResult *r = query_result(doc);
+    if (r) {
+        SymbolTable *st = &r->symtab;
         for (int i = 0; i < st->count; i++) {
             if (st->symbols[i].is_private) continue;
             if (!st->symbols[i].name) continue;
@@ -1387,10 +1433,10 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
             add_item(a, items, st->symbols[i].name, sym_kind_to_cik(&st->symbols[i]),
                      detail[0] ? detail : NULL);
         }
-        if (doc->result->program) {
+        if (r->program) {
             const char **names = NULL; int n = 0, cap = 0;
-            for (int i = 0; i < doc->result->program->decl_count; i++) {
-                Decl *d = doc->result->program->decls[i];
+            for (int i = 0; i < r->program->decl_count; i++) {
+                Decl *d = r->program->decls[i];
                 if (!d || d->kind != DECL_LET) continue;
                 if (d->loc.filename && strcmp(d->loc.filename, doc->path) != 0) continue;
                 harvest_expr(d->let.init, &names, &n, &cap);
@@ -1604,7 +1650,7 @@ int lsp_main(void) {
 
     /* Cleanup */
     for (int i = 0; i < S.store.count; i++) {
-        if (S.store.docs[i].result) analysis_free(S.store.docs[i].result);
+        doc_free_results(&S.store.docs[i]);
         free(S.store.docs[i].uri);
         free(S.store.docs[i].path);
         free(S.store.docs[i].text);

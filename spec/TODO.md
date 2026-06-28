@@ -84,6 +84,27 @@ open-item backlog. None of these block release.
 
 ### Smaller follow-ups (non-blocking)
 
+- **Error-recovery parsing (the real fix behind stale overlays)** — the parser's
+  `diag_fatal`/`longjmp` sites abort the whole analysis on any syntax error, so a
+  mid-typing state like `let r2 = ` or `... problem_01.` produces no AST and all
+  type info would vanish. Stale-overlay retention (done — see CLAUDE.md "Editor
+  integration") masks this by serving hover/CodeLens from the last analysis that
+  type-checked, but the overlays are then stale (positions drift as lines are
+  added/removed, and the line under edit can't update). The principled fix is
+  panic-mode recovery: on a parse error, synthesize an error/missing node, resync
+  to the next `NEWLINE`/`DEDENT`, and keep parsing, so the rest of the file stays
+  live within the *current* edit (pairs with the existing `TYPE_ERROR` poison).
+  This would make stale serving a rare fallback rather than the primary path.
+- **Ungate pass2 from recoverable pass1 errors** — pass2 only runs when
+  `diag_error_count()==0` after pass1 (`analyze.c`), so a single recoverable
+  pass1 error (e.g. a duplicate/missing name in a *merged* sibling) drops every
+  node's type and blanks overlays for the whole analysis. pass2 already
+  accumulates with `diag_error` and poisons subtrees, so running it past
+  recoverable pass1 errors — and isolating per-binding failures so one bad `let`
+  doesn't nuke the others — would keep types alive for everything else. Audit
+  which pass1/pass2 errors are genuinely unrecoverable vs. merely gated. (Same
+  motivation as error-recovery parsing above; the two together retire most
+  reliance on stale retention.)
 - **Completion over-offers** — no flow-sensitive local scoping, so it lists
   names not yet in scope at the cursor. Needs a scope-at-position filter.
 - **Variant-constructor go-to-definition granularity** — lands on the union

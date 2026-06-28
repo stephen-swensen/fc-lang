@@ -512,5 +512,60 @@ check("hover on top-level 'twice' shows the doc comment above its definition",
 check("hover on block-local 'total' shows the comment above its let binding",
       "running total" in dval(3), dval(3))
 
+# --- stale-overlay retention: typing through a transient unrecoverable state
+# (a parse abort, or a pass1 error that gates pass2) must NOT blank type-aware
+# overlays. The fresh analysis still drives diagnostics (the squiggle stays
+# live), but hover / CodeLens fall back to the last analysis that type-checked,
+# so they don't flicker off every other keystroke. Regression guard for the
+# "type info disappears while typing `let r2 = ...`" report.
+st = tempfile.mkdtemp(prefix="fc_lsp_stale_")
+STALE_BASE = (
+    "let helper = (n: i32) ->\n"     # line 0
+    "    n + 1\n"                      # line 1
+    "let main = (args: str[]) ->\n"   # line 2
+    "    let x = helper(41)\n"         # line 3: 'x' at char 8
+    "    return x\n"                   # line 4
+)
+# Identical first five lines (so unchanged positions still resolve against the
+# retained AST), plus a trailing unterminated string: a lexer diag_fatal that
+# longjmps out -> program is NULL, the harshest of the degraded states.
+STALE_BROKEN = STALE_BASE + 'let broken = "unterminated\n'   # line 5
+suri = "file://" + os.path.join(st, "doc.fc")
+def s_cl(i):  return req(i, "textDocument/codeLens", {"textDocument": {"uri": suri}})
+def s_ch(v, t): return note("textDocument/didChange",
+    {"textDocument": {"uri": suri, "version": v}, "contentChanges": [{"text": t}]})
+sm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": suri, "languageId": "fc",
+         "version": 1, "text": STALE_BASE}}),
+    s_cl(2),                                                              # baseline lenses
+    s_ch(2, STALE_BROKEN),                                               # -> parse abort (program NULL)
+    s_cl(3),                                                             # must still answer (stale)
+    req(4, "textDocument/hover",
+        {"textDocument": {"uri": suri}, "position": {"line": 3, "character": 8}}),  # 'x' -> i32 (stale)
+    s_ch(3, STALE_BASE),                                                 # recover
+    s_cl(5),                                                            # fresh again
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+sresp, _, sbf2, _, _ = run_session(sm)
+base_lenses  = sresp.get(2, {}).get("result") or []
+stale_lenses = sresp.get(3, {}).get("result") or []
+stale_hover  = json.dumps(sresp.get(4, {}).get("result") or {})
+recov_lenses = sresp.get(5, {}).get("result") or []
+all_doc_msgs = [m for lst in sbf2.get("doc.fc", []) for m in lst]
+check("stale retention: baseline CodeLens present",
+      isinstance(base_lenses, list) and len(base_lenses) > 0, str(len(base_lenses)))
+check("stale retention: CodeLens survives a parse-abort edit (served from last good)",
+      isinstance(stale_lenses, list) and len(stale_lenses) == len(base_lenses),
+      f"base={len(base_lenses)} stale={len(stale_lenses) if isinstance(stale_lenses, list) else stale_lenses}")
+check("stale retention: hover on an unchanged line still resolves (i32)",
+      "i32" in stale_hover, stale_hover)
+check("stale retention: the broken edit's diagnostic is still reported (squiggle stays live)",
+      any("unterminated" in m for m in all_doc_msgs), str(sbf2.get("doc.fc")))
+check("stale retention: CodeLens refreshes after recovery",
+      isinstance(recov_lenses, list) and len(recov_lenses) > 0, str(len(recov_lenses)))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
