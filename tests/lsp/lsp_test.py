@@ -641,5 +641,94 @@ bmsgs = bbf.get("main.fc", [["?"]])[-1]
 check("broken lsp.rsp surfaces an 'lsp.rsp ignored' diagnostic (fallback)",
       any("lsp.rsp ignored" in m for m in bmsgs), str(bmsgs))
 
+# --- built-in intrinsic hover: alloc/alloca/free/some/none/default/sizeof/
+# alignof/assert/atomics and the stdin/stdout/stderr globals are not user
+# declarations, so they carry curated documentation surfaced on hover.
+bid = tempfile.mkdtemp(prefix="fc_lsp_builtins_")
+BUILTIN_LINES = [
+    "struct point =",                                  # 0
+    "    x: i32",                                       # 1
+    "    y: i32",                                       # 2
+    "let main = (args: str[]) ->",                      # 3
+    "    let p = alloc(point)",                         # 4
+    "    defer free(p!)",                               # 5
+    "    let q = some(42)",                             # 6
+    "    let r = none(i32)",                            # 7
+    "    let d = default(point)",                       # 8
+    "    let sz = sizeof(point)",                       # 9
+    "    let al = alignof(point)",                      # 10
+    "    let buf = alloca(i32, 4)",                     # 11
+    "    let mut counter = 0",                          # 12
+    "    atomic_store_release(&counter, 1)",            # 13
+    "    let cur = atomic_load_acquire(&counter)",      # 14
+    "    assert(cur == 1)",                             # 15
+    "    let h = stdout",                               # 16
+    "    return 0",                                     # 17
+]
+BUILTINS = "\n".join(BUILTIN_LINES) + "\n"
+biuri = "file://" + os.path.join(bid, "doc.fc")
+# (request id, 0-based line, keyword on that line, a phrase only its doc contains)
+probes = [
+    (20, 4,  "alloc",                "Allocates `T` on the **heap**"),
+    (21, 5,  "free",                 "Releases heap memory"),
+    (22, 6,  "some",                 "Wraps a present value"),
+    (23, 7,  "none",                 "The **empty** option"),
+    (24, 8,  "default",              "the **zero value**"),
+    (25, 9,  "sizeof",               "The size of type"),
+    (26, 10, "alignof",              "The alignment requirement"),
+    (27, 11, "alloca",               "on the **dynamic stack**"),
+    (28, 13, "atomic_store_release", "acquire-loads"),
+    (29, 14, "atomic_load_acquire",  "visible afterward"),
+    (30, 15, "assert",               "calls `abort()`"),
+    (31, 16, "stdout",               "standard output stream"),
+]
+bm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": biuri, "languageId": "fc",
+         "version": 1, "text": BUILTINS}}),
+]
+for (rid, ln, kw, _phrase) in probes:
+    col = BUILTIN_LINES[ln].find(kw) + 1   # one char into the keyword
+    bm.append(req(rid, "textDocument/hover",
+                  {"textDocument": {"uri": biuri}, "position": {"line": ln, "character": col}}))
+bm += [req(9, "shutdown", None), note("exit", None)]
+bresp, _, _, _, _ = run_session(bm)
+def bval(rid):
+    return (bresp.get(rid, {}).get("result") or {}).get("contents", {}).get("value", "")
+for (rid, ln, kw, phrase) in probes:
+    v = bval(rid)
+    check(f"builtin hover '{kw}' is rendered as an fc-fenced doc",
+          v.startswith("```fc"), v[:80])
+    check(f"builtin hover '{kw}' contains its documentation",
+          phrase in v, v)
+# The generic signature appears in the fence, and the concrete result type of the
+# occurrence is appended for non-void builtins (here alloc(point) -> point*?).
+av = bval(20)
+check("builtin hover 'alloc' shows the generic signature 'alloc(T) -> T*?'",
+      "alloc(T) -> T*?" in av, av)
+check("builtin hover 'alloc' appends the concrete result type 'point*?'",
+      "point*?" in av and "Result type" in av, av)
+# void builtins (free) omit the result-type line.
+fv = bval(21)
+check("builtin hover 'free' (void) omits the result-type line",
+      "Result type" not in fv, fv)
+# A plain local that happens to sit next to builtins still hovers as `name: type`,
+# never picking up builtin prose.
+bm2 = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": biuri, "languageId": "fc",
+         "version": 1, "text": BUILTINS}}),
+    req(40, "textDocument/hover",
+        {"textDocument": {"uri": biuri}, "position": {"line": 6, "character": 8}}),  # 'q'
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+bresp2, _, _, _, _ = run_session(bm2)
+qv = (bresp2.get(40, {}).get("result") or {}).get("contents", {}).get("value", "")
+check("plain local 'q' hovers as 'q: i32?' (no builtin doc bleed-through)",
+      "q: i32?" in qv and "option" not in qv, qv)
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

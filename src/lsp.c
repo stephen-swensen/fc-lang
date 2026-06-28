@@ -315,6 +315,124 @@ static void copy_type_name(Type *t, char *out, size_t n) {
 }
 
 /* ======================================================================== */
+/* Built-in intrinsic hover documentation                                   */
+/* ======================================================================== */
+
+/* The language's keyword-builtins (alloc, some, default, ...) and built-in
+ * globals (stdin/stdout/stderr) are not user declarations, so there is no
+ * decl/doc-comment to surface on hover. This static table provides one. `sig`
+ * is a generic signature shown in a code fence; `doc` is the markdown body.
+ * The keyword/identifier as written in source is the lookup key — this lets
+ * `none` and `default` (both EXPR_DEFAULT nodes) carry distinct docs. */
+typedef struct {
+    const char *name;   /* exact spelling in source */
+    const char *sig;    /* generic signature for the code fence */
+    const char *doc;    /* markdown body: summary + details (no leading/trailing blank) */
+} BuiltinDoc;
+
+static const BuiltinDoc BUILTIN_DOCS[] = {
+    { "alloc", "alloc(T) -> T*?",
+      "Allocates `T` on the **heap**, zero-initialized, and returns an option that is "
+      "`none` when the OS allocation fails — so a successful pointer is checked, not assumed.\n\n"
+      "Forms:\n"
+      "- `alloc(T)` → `T*?` — one zeroed `T`\n"
+      "- `alloc(T[n])` → `T[]?` — a slice of `n` zeroed elements\n"
+      "- `alloc(T, n)` → `T*?` — a raw buffer of `n` elements\n"
+      "- `alloc(expr)` → `T?` — a heap copy of a struct/union/string value\n\n"
+      "Unwrap with `!` once checked, and release with `free` (commonly `defer free(p)`). "
+      "Lowers to C `calloc`/`malloc`." },
+
+    { "alloca", "alloca(T) -> T*",
+      "Allocates `T` on the **dynamic stack** (`__builtin_alloca`), zero-initialized. "
+      "Unlike `alloc` it cannot fail, returns the value directly (no option), and is "
+      "reclaimed automatically when the enclosing function returns — never `free` it.\n\n"
+      "Forms:\n"
+      "- `alloca(T)` → `T*`\n"
+      "- `alloca(T[n])` → `T[]`\n"
+      "- `alloca(T, n)` → `T*` — a raw buffer\n\n"
+      "The result has stack provenance: escape analysis forbids returning it or storing it "
+      "in heap/static memory. **Beware loops** — each iteration grows the frame; promote a "
+      "buffer that must persist or repeat to the heap with `alloc(...)`." },
+
+    { "free", "free(p: T*) -> void",
+      "Releases heap memory obtained from `alloc` (lowers to C `free`; for a slice it frees "
+      "the backing `.ptr`).\n\n"
+      "Only heap pointers may be freed: escape analysis rejects freeing stack (`alloca`, "
+      "`&local`), static (string-literal), or `const` memory. After freeing, the pointer is "
+      "dangling — don't read it again. Pairs naturally with `defer free(p)`." },
+
+    { "default", "default(T) -> T",
+      "Produces the **zero value** of any type `T`, with no initializer to spell out:\n"
+      "- numbers → `0` / `0.0`\n"
+      "- booleans → `false`\n"
+      "- pointers and options → null / `none`\n"
+      "- structs, unions, slices, tuples → every field zeroed\n\n"
+      "Useful for an explicit empty or initial value. `none(T)` is shorthand for `default(T?)`." },
+
+    { "some", "some(x: T) -> T?",
+      "Wraps a present value in an option, yielding a `T?` that holds `x`.\n\n"
+      "For a pointer option (`T*?`, which uses null as its empty sentinel) a value known to be "
+      "non-null is stored directly; an unprovable one is null-checked at runtime and aborts if "
+      "null. Pair with `none(T)` for the empty case, and read the value back with `!` or `match`." },
+
+    { "none", "none(T) -> T?",
+      "The **empty** option of inner type `T` — a `T?` holding no value. Exactly equivalent to "
+      "`default(T?)`.\n\n"
+      "The type argument is required so the element type is known: write `none(i32)`, not a bare "
+      "`none`. Build the present case with `some(x)`, and test for empty with a `none` match arm "
+      "(or `.is_none`)." },
+
+    { "sizeof", "sizeof(T) -> i64",
+      "The size of type `T` in bytes, as an `i64` (lowers to `(int64_t)sizeof(T)`). Works on any "
+      "type — primitives, pointers, slices, structs, unions. Computed by the C compiler, so it "
+      "reflects the target's real layout and padding." },
+
+    { "alignof", "alignof(T) -> i64",
+      "The alignment requirement of type `T` in bytes, as an `i64` (lowers to "
+      "`(int64_t)_Alignof(T)`). The address of any `T` value is a multiple of this." },
+
+    { "assert", "assert(cond: bool[, msg: str]) -> void",
+      "Checks `cond` at runtime; if it is false, prints the source file, line, and the failing "
+      "condition text (plus the optional `msg`) to stderr and calls `abort()`.\n\n"
+      "Forms:\n"
+      "- `assert(cond)`\n"
+      "- `assert(cond, \"message\")`\n\n"
+      "For invariants that must hold — a violated assert ends the program. Always active; there "
+      "is no disable switch." },
+
+    { "atomic_load_acquire", "atomic_load_acquire(p: T*) -> T",
+      "Atomically reads `*p` with **acquire** ordering: writes another thread released before "
+      "storing to `*p` become visible afterward. `T` must be a lock-free integer or `bool` "
+      "(enforced by a `_Static_assert`). Lowers to `__atomic_load_n(p, __ATOMIC_ACQUIRE)`.\n\n"
+      "Pair with `atomic_store_release` to hand data between threads without a lock." },
+
+    { "atomic_store_release", "atomic_store_release(p: T*, v: T) -> void",
+      "Atomically writes `v` into `*p` with **release** ordering: writes this thread made before "
+      "it are visible to any thread that later acquire-loads `*p`. `T` must be a lock-free integer "
+      "or `bool`. Lowers to `__atomic_store_n(p, v, __ATOMIC_RELEASE)`.\n\n"
+      "The reading side uses `atomic_load_acquire`." },
+
+    { "stdin", "stdin: any*",
+      "The process's standard input stream as an opaque `any*` (a C `FILE*`). Pass it to extern C "
+      "I/O functions that expect a `FILE*`; it cannot be dereferenced in FC." },
+
+    { "stdout", "stdout: any*",
+      "The process's standard output stream as an opaque `any*` (a C `FILE*`). Pass it to extern C "
+      "I/O functions that expect a `FILE*`; it cannot be dereferenced in FC." },
+
+    { "stderr", "stderr: any*",
+      "The process's standard error stream as an opaque `any*` (a C `FILE*`). Pass it to extern C "
+      "I/O functions that expect a `FILE*`; it cannot be dereferenced in FC." },
+};
+
+static const BuiltinDoc *builtin_doc_lookup(const char *name) {
+    if (!name) return NULL;
+    for (size_t i = 0; i < sizeof BUILTIN_DOCS / sizeof BUILTIN_DOCS[0]; i++)
+        if (strcmp(BUILTIN_DOCS[i].name, name) == 0) return &BUILTIN_DOCS[i];
+    return NULL;
+}
+
+/* ======================================================================== */
 /* Position -> node lookup (hover / definition / completion anchor)         */
 /* ======================================================================== */
 
@@ -340,6 +458,9 @@ typedef struct {
                                        variant line. */
     bool doc_is_field;              /* doc_loc is a struct/union field/variant line
                                        (enables trailing-comment extraction) */
+    const BuiltinDoc *builtin;      /* set when the winning node is a built-in intrinsic
+                                       (alloc/some/.../stdin); hover renders its doc instead
+                                       of a `name: type` line. Cleared by every consider() win. */
 } FindCtx;
 
 static Type *peel_to_aggregate(Type *t);   /* defined in the completion section */
@@ -362,6 +483,55 @@ static void consider(FindCtx *c, int line, int col, int span, Type *type,
     c->def_loc = def_loc;
     c->doc_loc = doc_loc;
     c->doc_is_field = doc_is_field;
+    c->builtin = NULL;   /* a plain node wins; consider_builtin re-sets this when it wins */
+}
+
+/* Reads the contiguous identifier/keyword token at `loc` from source into `buf`,
+ * returning its length (0 if `loc` is out of range). Used to recover the exact
+ * keyword a built-in node was spelled with — e.g. to tell `none` from `default`,
+ * which share the EXPR_DEFAULT node kind. */
+static int read_ident_at(const FindCtx *c, SrcLoc loc, char *buf, size_t bufsz) {
+    buf[0] = '\0';
+    if (loc.line < 1 || loc.line > c->idx->count) return 0;
+    int off = c->idx->starts[loc.line - 1] + (loc.col - 1);
+    int end = c->idx->len;
+    size_t n = 0;
+    while (off >= 0 && off < end && n + 1 < bufsz) {
+        char ch = c->src[off];
+        bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                  (ch >= '0' && ch <= '9') || ch == '_';
+        if (!ok) break;
+        buf[n++] = ch;
+        off++;
+    }
+    buf[n] = '\0';
+    return (int)n;
+}
+
+/* If `e` is a keyword-builtin node whose keyword is under the cursor, register
+ * it as the hit (innermost-wins, like consider()). The keyword span is read from
+ * source so the highlight covers exactly the keyword, and so `none`/`default`
+ * resolve to their own docs. */
+static void consider_builtin(FindCtx *c, const Expr *e) {
+    char kw[32];
+    int span = read_ident_at(c, e->loc, kw, sizeof kw);
+    if (span <= 0) return;
+    const BuiltinDoc *bd = builtin_doc_lookup(kw);
+    if (!bd) return;
+    if (e->loc.line != c->target_line) return;
+    if (c->target_col < e->loc.col || c->target_col >= e->loc.col + span) return;
+    if (c->found && span > c->best_span) return;   /* keep the innermost (smallest) */
+    c->found = true;
+    c->best_span = span;
+    c->start_line = e->loc.line;
+    c->start_col = e->loc.col;
+    c->type = e->type;
+    c->name = bd->name;
+    c->sym = NULL;
+    c->def_loc = NO_LOC;
+    c->doc_loc = NO_LOC;
+    c->doc_is_field = false;
+    c->builtin = bd;
 }
 
 /* Column (1-based) of the binding name in a `let [mut] name ...` whose `let`
@@ -393,6 +563,14 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
                      e->type, e->ident.name, e->ident.resolved_sym,
                      e->ident.resolved_local_loc, e->ident.resolved_local_loc, false);
+            /* Built-in globals (stdin/stdout/stderr) resolve to no Symbol and no
+             * local binding. If the cursor landed on one, attach its doc. (Keyword
+             * builtins can't appear as idents, so only these globals match here.) */
+            if (!e->ident.resolved_sym && e->ident.resolved_local_loc.line == 0 &&
+                c->found && c->start_line == e->loc.line && c->start_col == e->loc.col) {
+                const BuiltinDoc *bd = builtin_doc_lookup(e->ident.name);
+                if (bd) c->builtin = bd;
+            }
             break;
         case EXPR_FIELD:
         case EXPR_DEREF_FIELD:
@@ -508,10 +686,21 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_expr(e->slice_lit.len_expr, c);
             break;
         case EXPR_ALLOC:
+            consider_builtin(c, e);   /* the alloc/alloca keyword */
             find_in_expr(e->alloc_expr.size_expr, c);
             find_in_expr(e->alloc_expr.init_expr, c);
             break;
-        case EXPR_FREE: find_in_expr(e->free_expr.operand, c); break;
+        case EXPR_FREE:
+            consider_builtin(c, e);
+            find_in_expr(e->free_expr.operand, c);
+            break;
+        case EXPR_SIZEOF:
+        case EXPR_ALIGNOF:
+        case EXPR_DEFAULT:
+            /* sizeof/alignof/default (and `none`, which desugars to EXPR_DEFAULT)
+             * take only a type argument — nothing further to descend into. */
+            consider_builtin(c, e);
+            break;
         case EXPR_INTERP_STRING:
             for (int i = 0; i < e->interp_string.segment_count; i++)
                 if (!e->interp_string.segments[i].is_literal)
@@ -521,7 +710,10 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_expr(e->assign.target, c);
             find_in_expr(e->assign.value, c);
             break;
-        case EXPR_SOME: find_in_expr(e->some_expr.value, c); break;
+        case EXPR_SOME:
+            consider_builtin(c, e);
+            find_in_expr(e->some_expr.value, c);
+            break;
         case EXPR_LET: {
             int col = let_name_col(c, e->loc.line, e->loc.col, e->let_expr.let_is_mut);
             consider(c, e->loc.line, col, (int)strlen(e->let_expr.let_name),
@@ -532,12 +724,17 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         }
         case EXPR_LET_DESTRUCT: find_in_expr(e->let_destruct.init, c); break;
         case EXPR_ASSERT:
+            consider_builtin(c, e);
             find_in_expr(e->assert_expr.condition, c);
             find_in_expr(e->assert_expr.message, c);
             break;
         case EXPR_DEFER: find_in_expr(e->defer_expr.value, c); break;
-        case EXPR_ATOMIC_LOAD: find_in_expr(e->atomic_load.ptr, c); break;
+        case EXPR_ATOMIC_LOAD:
+            consider_builtin(c, e);
+            find_in_expr(e->atomic_load.ptr, c);
+            break;
         case EXPR_ATOMIC_STORE:
+            consider_builtin(c, e);
             find_in_expr(e->atomic_store.ptr, c);
             find_in_expr(e->atomic_store.value, c);
             break;
@@ -1112,40 +1309,56 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
-    if (!locate(doc, &idx, (int)line, (int)ch, &hit) || !hit.type) {
+    if (!locate(doc, &idx, (int)line, (int)ch, &hit) || (!hit.type && !hit.builtin)) {
         lsp_reply(a, id, json_null(a));
         return;
     }
 
-    char tn[512];
-    copy_type_name(hit.type, tn, sizeof tn);
+    char *md;
+    if (hit.builtin) {
+        /* Built-in intrinsic: generic signature fence + prose, then the concrete
+         * result type of this occurrence when it carries information (skip void
+         * builtins like free/assert, and any node pass2 couldn't type). */
+        const BuiltinDoc *bd = hit.builtin;
+        char rt[256]; rt[0] = '\0';
+        if (hit.type && !type_is_error(hit.type) && hit.type->kind != TYPE_VOID)
+            copy_type_name(hit.type, rt, sizeof rt);
+        const char *fmt = rt[0] ? "```fc\n%s\n```\n\n%s\n\n*Result type: `%s`*"
+                                : "```fc\n%s\n```\n\n%s";
+        int need = snprintf(NULL, 0, fmt, bd->sig, bd->doc, rt) + 1;
+        md = arena_alloc(a, (size_t)need);
+        snprintf(md, (size_t)need, fmt, bd->sig, bd->doc, rt);
+    } else {
+        char tn[512];
+        copy_type_name(hit.type, tn, sizeof tn);
 
-    /* Doc comment at the definition site. The site may live in another file (a
-     * sibling or the stdlib), so read whichever buffer backs it; reuse the open
-     * doc's line index when the site is in the open file. */
-    char *doc_md = NULL;
-    {
-        SrcLoc site = NO_LOC; bool site_is_field = false;
-        if (hit.doc_loc.line > 0)          { site = hit.doc_loc; site_is_field = hit.doc_is_field; }
-        else if (hit.def_loc.line > 0)     { site = hit.def_loc; }
-        else if (hit.sym && hit.sym->decl) { site = hit.sym->decl->loc; }
-        if (site.line > 0) {
-            int flen = 0; bool owned = false;
-            const char *ftext = doc_file_text(S, doc, site.filename, &flen, &owned);
-            if (ftext) {
-                LineIndex fidx = (ftext == doc->text) ? idx
-                               : line_index_build(a, ftext, flen);
-                doc_md = extract_doc_comment(a, ftext, flen, &fidx, site.line, site_is_field);
-                if (owned) free((void *)ftext);
+        /* Doc comment at the definition site. The site may live in another file (a
+         * sibling or the stdlib), so read whichever buffer backs it; reuse the open
+         * doc's line index when the site is in the open file. */
+        char *doc_md = NULL;
+        {
+            SrcLoc site = NO_LOC; bool site_is_field = false;
+            if (hit.doc_loc.line > 0)          { site = hit.doc_loc; site_is_field = hit.doc_is_field; }
+            else if (hit.def_loc.line > 0)     { site = hit.def_loc; }
+            else if (hit.sym && hit.sym->decl) { site = hit.sym->decl->loc; }
+            if (site.line > 0) {
+                int flen = 0; bool owned = false;
+                const char *ftext = doc_file_text(S, doc, site.filename, &flen, &owned);
+                if (ftext) {
+                    LineIndex fidx = (ftext == doc->text) ? idx
+                                   : line_index_build(a, ftext, flen);
+                    doc_md = extract_doc_comment(a, ftext, flen, &fidx, site.line, site_is_field);
+                    if (owned) free((void *)ftext);
+                }
             }
         }
-    }
 
-    const char *nm = hit.name ? hit.name : "";
-    const char *fmt = doc_md ? "```fc\n%s: %s\n```\n\n%s" : "```fc\n%s: %s\n```";
-    int need = snprintf(NULL, 0, fmt, nm, tn, doc_md) + 1;
-    char *md = arena_alloc(a, (size_t)need);
-    snprintf(md, (size_t)need, fmt, nm, tn, doc_md);
+        const char *nm = hit.name ? hit.name : "";
+        const char *fmt = doc_md ? "```fc\n%s: %s\n```\n\n%s" : "```fc\n%s: %s\n```";
+        int need = snprintf(NULL, 0, fmt, nm, tn, doc_md) + 1;
+        md = arena_alloc(a, (size_t)need);
+        snprintf(md, (size_t)need, fmt, nm, tn, doc_md);
+    }
 
     int sl, sc, el, ec;
     loc_to_lsp(&idx, doc->text, hit.start_line, hit.start_col, &sl, &sc);
