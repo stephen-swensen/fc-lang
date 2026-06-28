@@ -6172,7 +6172,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             TYPE_UINT32, TYPE_INT64, TYPE_UINT64, TYPE_ISIZE, TYPE_USIZE,
         };
         for (size_t i = 0; i < sizeof f2i_kinds / sizeof f2i_kinds[0]; i++) {
-            F2iInfo fi;
+            F2iInfo fi = {0};   /* table holds only handled kinds; {0} silences
+                                 * -Wmaybe-uninitialized for the unreachable default */
             float_to_int_info(f2i_kinds[i], &fi);
             fprintf(out,
                 "__attribute__((unused)) static inline %s %s(double f) { "

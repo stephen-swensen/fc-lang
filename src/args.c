@@ -1,5 +1,8 @@
-/* Expose POSIX realpath() under -std=c11 (same policy as src/lsp.c). glob() is
- * declared in <glob.h> and available under this feature level on glibc. */
+/* Expose POSIX glob() under -std=c11 on glibc (it sits behind __STRICT_ANSI__
+ * otherwise). Must precede every #include. Path canonicalization goes through
+ * platform_realpath() rather than realpath() directly, so the mingw-w64 /
+ * UCRT64 gap is handled there; the missing <glob.h> on that toolchain is
+ * covered by the compatible shim provided further down. */
 #define _DEFAULT_SOURCE
 
 #include "args.h"
@@ -10,7 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <glob.h>
+#endif
 
 #define ARGS_MAX_DEPTH 32   /* nesting backstop in case realpath cycle check fails */
 
@@ -100,7 +107,7 @@ static bool expand_file(ExpandedArgs *out, const char *rsp_path,
     }
 
     /* Cycle detection: a file that is already on the active stack would loop. */
-    char *canon = realpath(rsp_path, NULL);
+    char *canon = platform_realpath(rsp_path);
     if (!canon) {
         *err = msgf("cannot open response file '%s'", rsp_path);
         return false;
@@ -185,6 +192,166 @@ void args_expand_free(ExpandedArgs *e) {
     free(e->dirs);
     memset(e, 0, sizeof *e);
 }
+
+/* ---- glob() shim for Windows ---- */
+
+/* mingw-w64 / UCRT64 has no <glob.h> and no POSIX glob(). add_inputs() needs
+ * only the narrow slice it uses: GLOB_NOCHECK expansion of a forward-slash
+ * input pattern into matching paths, with the pattern passed through verbatim
+ * when nothing matches (the bash default). We provide a compatible glob_t /
+ * glob() / globfree() over the Win32 directory API so the call site below stays
+ * byte-for-byte identical across platforms.
+ *
+ * Wildcards are matched by our own wc_match (not Win32's quirky DOS matcher,
+ * which folds short names and case) for POSIX-consistent semantics: '*' (any
+ * run, never crossing '/'), '?' (one char), and '[...]' classes with ranges and
+ * leading '!'/'^' negation. Wildcards may appear in any path component. MSYS
+ * mount paths ('/c/...') are not understood by the native Win32 API, so they
+ * simply won't match and fall through literally — the same limitation the rest
+ * of the native binary already has with such paths. */
+#if defined(_WIN32)
+
+typedef struct { size_t gl_pathc; char **gl_pathv; } glob_t;
+#define GLOB_NOCHECK 0x1
+
+/* fnmatch-style matcher for a single path component (never contains '/'). */
+static bool wc_match(const char *p, const char *s) {
+    while (*p) {
+        if (*p == '*') {
+            while (*p == '*') p++;              /* collapse a run of stars */
+            if (!*p) return true;               /* trailing '*' matches the rest */
+            for (const char *t = s; ; t++) {
+                if (wc_match(p, t)) return true;
+                if (!*t) return false;
+            }
+        } else if (*p == '?') {
+            if (!*s) return false;
+            p++; s++;
+        } else if (*p == '[') {
+            const char *q = p + 1;
+            bool neg = (*q == '!' || *q == '^');
+            if (neg) q++;
+            const char *first = q;
+            bool matched = false;
+            while (*q && (*q != ']' || q == first)) {
+                if (q[1] == '-' && q[2] && q[2] != ']') {
+                    unsigned char lo = (unsigned char)q[0], hi = (unsigned char)q[2];
+                    unsigned char c = (unsigned char)*s;
+                    if (*s && c >= lo && c <= hi) matched = true;
+                    q += 3;
+                } else {
+                    if (*s && *s == *q) matched = true;
+                    q++;
+                }
+            }
+            if (*q != ']') {                    /* unterminated class: literal '[' */
+                if (*s != '[') return false;
+                p++; s++;
+            } else {
+                if (neg) matched = !matched;
+                if (!matched || !*s) return false;
+                p = q + 1; s++;
+            }
+        } else {
+            if (*p != *s) return false;
+            p++; s++;
+        }
+    }
+    return *s == '\0';
+}
+
+typedef struct { char **v; int n, cap; } GlobList;
+
+/* "base/comp", or just "comp" when base is empty (caller frees). */
+static char *glob_join(const char *base, const char *comp) {
+    return base[0] ? path_join(base, comp) : dupn(comp, (int)strlen(comp));
+}
+
+/* Match `comp[i..n)` under directory `base`, appending full paths to `out`.
+ * Non-wildcard components are descended literally; a wildcard component
+ * enumerates `base` and matches each entry. Only the leaf may match files;
+ * intermediate wildcard components descend into directories only. */
+static void glob_walk(const char *base, char **comp, int n, int i, GlobList *out) {
+    const char *c = comp[i];
+    bool leaf = (i == n - 1);
+
+    if (!strpbrk(c, "*?[")) {                   /* literal component */
+        char *next = glob_join(base, c);
+        if (leaf) {
+            if (GetFileAttributesA(next) != INVALID_FILE_ATTRIBUTES)
+                DA_APPEND(out->v, out->n, out->cap, next);
+            else free(next);
+        } else {
+            glob_walk(next, comp, n, i + 1, out);
+            free(next);
+        }
+        return;
+    }
+
+    char *spec = base[0] ? path_join(base, "*") : dupn("*", 1);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(spec, &fd);
+    free(spec);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const char *name = fd.cFileName;
+        if (name[0] == '.' && (!name[1] || (name[1] == '.' && !name[2])))
+            continue;                           /* skip "." and ".." */
+        if (!wc_match(c, name)) continue;
+        char *next = glob_join(base, name);
+        if (leaf) {
+            DA_APPEND(out->v, out->n, out->cap, next);
+        } else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            glob_walk(next, comp, n, i + 1, out);
+            free(next);
+        } else {
+            free(next);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+static int glob(const char *pattern, int flags, void *errfunc, glob_t *pg) {
+    (void)flags; (void)errfunc;                 /* only GLOB_NOCHECK is modelled */
+    pg->gl_pathc = 0;
+    pg->gl_pathv = NULL;
+
+    int ncomp = 1;
+    for (const char *q = pattern; *q; q++) if (*q == '/') ncomp++;
+    char **comp = malloc((size_t)ncomp * sizeof *comp);
+    int k = 0;
+    const char *start = pattern;
+    for (const char *q = pattern; ; q++) {
+        if (*q == '/' || !*q) {
+            comp[k++] = dupn(start, (int)(q - start));
+            start = q + 1;
+            if (!*q) break;
+        }
+    }
+
+    GlobList list = {0};
+    glob_walk("", comp, ncomp, 0, &list);
+
+    for (int j = 0; j < ncomp; j++) free(comp[j]);
+    free(comp);
+
+    /* GLOB_NOCHECK: nothing matched -> yield the pattern verbatim. */
+    if (list.n == 0)
+        DA_APPEND(list.v, list.n, list.cap, dupn(pattern, (int)strlen(pattern)));
+
+    pg->gl_pathc = (size_t)list.n;
+    pg->gl_pathv = list.v;
+    return 0;
+}
+
+static void globfree(glob_t *pg) {
+    for (size_t i = 0; i < pg->gl_pathc; i++) free(pg->gl_pathv[i]);
+    free(pg->gl_pathv);
+    pg->gl_pathc = 0;
+    pg->gl_pathv = NULL;
+}
+
+#endif /* _WIN32 */
 
 /* ---- parsing ---- */
 

@@ -117,7 +117,7 @@ static char *dup_cstr(const char *s) {
  * when the path can't be resolved (e.g. an unsaved/virtual document). Caller
  * frees. */
 static char *canon_path(const char *path) {
-    char *rp = realpath(path, NULL);
+    char *rp = platform_realpath(path);
     return rp ? rp : dup_cstr(path);
 }
 

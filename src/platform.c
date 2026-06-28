@@ -1,6 +1,14 @@
+/* Expose POSIX realpath() under -std=c11 (glibc hides it behind __STRICT_ANSI__
+ * otherwise). Must precede every #include. */
+#define _DEFAULT_SOURCE
+
 #include "platform.h"
 #include "common.h"
 #include <string.h>
+#include <stdlib.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 static bool has_axis(const Flag *flags, int count, const char *axis) {
     int axis_len = (int)strlen(axis);
@@ -97,5 +105,24 @@ const char *platform_get_env(void) {
     return "gnu";
 #else
     return NULL;
+#endif
+}
+
+char *platform_realpath(const char *path) {
+#if defined(_WIN32)
+    /* First call sizes the buffer (return value includes the terminating NUL);
+     * second call fills it. GetFullPathNameA resolves `..` and makes the path
+     * absolute lexically — it does not require the file to exist, which suits
+     * both our uses (cycle-detection keys and path-dedup keys). */
+    DWORD need = GetFullPathNameA(path, 0, NULL, NULL);
+    if (need == 0) return NULL;
+    char *buf = malloc(need);
+    if (!buf) return NULL;
+    DWORD wrote = GetFullPathNameA(path, need, buf, NULL);
+    if (wrote == 0 || wrote >= need) { free(buf); return NULL; }
+    for (char *p = buf; *p; p++) if (*p == '\\') *p = '/';
+    return buf;
+#else
+    return realpath(path, NULL);
 #endif
 }

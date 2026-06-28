@@ -32,4 +32,12 @@ const char *platform_get_os(void);
 const char *platform_get_arch(void);
 const char *platform_get_env(void);
 
+/* Canonical absolute path for `path` (malloc'd; caller frees), or NULL on
+ * failure. POSIX uses realpath() (resolves symlinks, `..`, and relative
+ * spellings); Windows uses GetFullPathNameA() lexical resolution with `\` then
+ * normalized to `/` — mingw-w64 / UCRT64 hides realpath() under -std=c11 and
+ * would truncate its pointer return to int. The result uses forward slashes on
+ * both platforms, so callers can keep their `/`-based path handling. */
+char *platform_realpath(const char *path);
+
 #endif
