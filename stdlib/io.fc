@@ -34,14 +34,14 @@ module io =
     let seek_cur = 1
     let seek_end = 2
 
-    // write: writes the bytes of s to file handle f.
+    // Writes the bytes of s to file handle f.
     // s: const str — the data to write; const because write does not modify the buffer.
     // f: any* — opaque FILE* handle (e.g. stdout, or from open).
     // returns: i64 — number of bytes actually written.
     let write = (s: const str, f: any*) ->
         (i64) c.fwrite(s.ptr, 1usize, (usize) s.len, f)
 
-    // read: reads up to n bytes from file handle f into buf.
+    // Reads up to n bytes from file handle f into buf.
     // buf: u8[] — mutable destination buffer; non-const because read fills it.
     // n: i64 — maximum number of bytes to read.
     // f: any* — opaque FILE* handle.
@@ -49,28 +49,28 @@ module io =
     let read = (buf: u8[], n: i64, f: any*) ->
         (i64) c.fread(buf.ptr, 1usize, (usize) n, f)
 
-    // open: opens a file at path with the given mode (e.g. "r", "w", "rb").
+    // Opens a file at path with the given mode (e.g. "r", "w", "rb").
     // path: const str — file path; const because open only reads it.
     // mode: const str — fopen mode string; const because open only reads it.
     // returns: any*? — opaque FILE* on success, none on failure.
     let open = (path: const str, mode: const str) ->
         c.fopen(alloca((cstr) path), alloca((cstr) mode))
 
-    // close: closes a file handle. The handle must not be used after this call.
+    // Closes a file handle. The handle must not be used after this call.
     // f: any* — opaque FILE* handle to close.
     // returns: void.
     let close = (f: any*) ->
         c.fclose(f)
         return
 
-    // flush: flushes any buffered output on file handle f.
+    // Flushes any buffered output on file handle f.
     // f: any* — opaque FILE* handle to flush.
     // returns: void.
     let flush = (f: any*) ->
         c.fflush(f)
         return
 
-    // sync: flushes buffered output AND forces it all the way to the physical
+    // Flushes buffered output AND forces it all the way to the physical
     // disk, so the bytes survive a power loss or kernel panic. flush() only
     // pushes data to the OS page cache, which a power cut discards; sync()
     // additionally issues fsync (POSIX) / _commit (Windows) on the underlying
@@ -99,7 +99,7 @@ module io =
         c.fflush(f)
         sy.commit(sy.fileno(f)) == 0
 
-    // seek: repositions the file position indicator.
+    // Repositions the file position indicator.
     // f: any* — opaque FILE* handle.
     // offset: i64 — byte offset relative to whence.
     // whence: i32 — seek_set (start), seek_cur (current), or seek_end (end).
@@ -107,32 +107,32 @@ module io =
     let seek = (f: any*, offset: i64, whence: i32) ->
         c.fseek(f, (isize) offset, whence)
 
-    // tell: returns the current file position indicator.
+    // Returns the current file position indicator.
     // f: any* — opaque FILE* handle.
     // returns: i64 — byte offset from start, or -1 on error.
     let tell = (f: any*) ->
         (i64) c.ftell(f)
 
-    // eof: tests end-of-file indicator on a file handle.
+    // Tests end-of-file indicator on a file handle.
     // f: any* — opaque FILE* handle.
     // returns: bool — true if end-of-file has been reached.
     let eof = (f: any*) ->
         c.feof(f) != 0
 
-    // remove: deletes a file at the given path.
+    // Deletes a file at the given path.
     // path: const str — file path to delete.
     // returns: bool — true on success.
     let remove = (path: const str) ->
         c.remove(alloca((cstr) path)) == 0
 
-    // rename: renames or moves a file.
+    // Renames or moves a file.
     // old_path: const str — current file path.
     // new_path: const str — new file path.
     // returns: bool — true on success.
     let rename = (old_path: const str, new_path: const str) ->
         c.rename(alloca((cstr) old_path), alloca((cstr) new_path)) == 0
 
-    // read_all: reads an entire file into a heap-allocated string.
+    // Reads an entire file into a heap-allocated string.
     // path: const str — file path to read.
     // returns: str? — some(contents) on success, none if the file cannot be opened. Caller must free.
     //
@@ -155,7 +155,7 @@ module io =
             read(buf, size, handle)
             some(buf)
 
-    // read_char: reads a single byte from a file handle.
+    // Reads a single byte from a file handle.
     // f: any* — opaque FILE* handle (e.g. stdin, or from open).
     // returns: u8? — the byte read, or none on EOF.
     let read_char = (f: any*) ->
@@ -163,7 +163,7 @@ module io =
         if ch == -1 then default(u8?)
         else some((u8) ch)
 
-    // mkdir: creates a directory at the given path.
+    // Creates a directory at the given path.
     // path: const str — directory path to create.
     // returns: bool — true on success, false if it already exists or on error.
 #if os == "windows"
@@ -181,25 +181,25 @@ module io =
         st.mkdir(alloca((cstr) path), 493) == 0
 #end
 
-    // exists: checks whether a file or directory exists at path.
+    // Checks whether a file or directory exists at path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists.
     let exists = (path: const str) ->
         u.access(alloca((cstr) path), 0) == 0
 
-    // can_read: checks whether the current process has read permission for path.
+    // Checks whether the current process has read permission for path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists and is readable.
     let can_read = (path: const str) ->
         u.access(alloca((cstr) path), 4) == 0
 
-    // can_write: checks whether the current process has write permission for path.
+    // Checks whether the current process has write permission for path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists and is writable.
     let can_write = (path: const str) ->
         u.access(alloca((cstr) path), 2) == 0
 
-    // list_dir: list the entries in a directory, excluding "." and "..".
+    // List the entries in a directory, excluding "." and "..".
     // path: const str — directory path to list.
     // returns: str[]? — some(names) on success, none if the directory cannot be
     //   opened. The outer array and each name are heap-allocated; the caller

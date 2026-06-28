@@ -3,7 +3,15 @@ namespace std::
 module random =
 
     // =========================================================================
-    // lcg_random — linear congruential generator (Knuth's constants)
+    //   lcg_random
+    // =========================================================================
+
+    // PRNG state for an lcg_random: a single 64-bit LCG state word, advanced in
+    // place. Pass &rng to the module's functions.
+    struct lcg_random =
+        state: u64
+
+    // Linear congruential generator (Knuth's constants).
     //
     // Fast, minimal-state PRNG. Period is 2^64. Suitable for simulations,
     // games, and non-cryptographic randomness. Uses Knuth's constants from
@@ -13,51 +21,46 @@ module random =
     // Usage:
     //   let mut rng = lcg_random.make(seed)
     //   let x = lcg_random.next_u32(&rng)
-    // =========================================================================
-
-    struct lcg_random =
-        state: u64
-
     module lcg_random =
 
         // Knuth's LCG constants (Numerical Recipes).
         private let multiplier = 6364136223846793005u64
         private let increment = 1442695040888963407u64
 
-        // step: advances the LCG state by one iteration.
+        // Advances the LCG state by one iteration.
         // state = state * multiplier + increment (mod 2^64).
         private let step = (r: lcg_random*) ->
             r->state = r->state * multiplier + increment
 
-        // make: creates an LCG with the given seed.
+        // Creates an LCG with the given seed.
         let make = (seed: u64) ->
             lcg_random { state = seed }
 
-        // next_u32: generates a pseudorandom u32.
+        // Generates a pseudorandom u32.
         // Returns the upper 32 bits of the 64-bit state after one step.
         let next_u32 = (r: lcg_random*) ->
             lcg_random.step(r)
             (u32) (r->state >> 32)
 
-        // next_u64: generates a pseudorandom u64 from two u32 outputs.
+        // Generates a pseudorandom u64 from two u32 outputs.
         let next_u64 = (r: lcg_random*) ->
             let hi = (u64) lcg_random.next_u32(r)
             let lo = (u64) lcg_random.next_u32(r)
             (hi << 32) | lo
 
-        // next_f64: generates a uniform f64 in [0.0, 1.0).
+        // Generates a uniform f64 in [0.0, 1.0).
         // Uses the top 53 bits of a u64 divided by 2^53 (9007199254740992).
         let next_f64 = (r: lcg_random*) ->
             let bits = lcg_random.next_u64(r)
             (f64) (bits >> 11) / 9007199254740992.0
 
-        // next_f32: generates a uniform f32 in [0.0, 1.0).
+        // Generates a uniform f32 in [0.0, 1.0).
         // Uses the top 24 bits of a u32 divided by 2^24 (16777216).
         let next_f32 = (r: lcg_random*) ->
             let bits = lcg_random.next_u32(r)
             (f32) (bits >> 8) / 16777216.0f32
 
-        // next_bounded_u32: generates a uniform u32 in [0, bound).
+        // Generates a uniform u32 in [0, bound).
         // Uses rejection sampling to eliminate modulo bias. The threshold
         // (2^32 - bound) % bound rejects values that would over-represent
         // lower residues. Aborts if bound is 0 (division by zero).
@@ -68,7 +71,16 @@ module random =
                 if x >= threshold then break x % bound
 
     // =========================================================================
-    // pcg_random — PCG-XSH-RR (pcg32) permuted congruential generator
+    //   pcg_random
+    // =========================================================================
+
+    // PRNG state for a pcg_random: the 64-bit `state` word plus the per-channel
+    // `inc` (always odd). Pass &rng to the module's functions.
+    struct pcg_random =
+        state: u64
+        inc:   u64
+
+    // PCG-XSH-RR (pcg32) permuted congruential generator.
     //
     // High-quality PRNG from the PCG family (O'Neill 2014). Combines an LCG
     // core with a permutation output function (xorshift-high, random rotation)
@@ -83,27 +95,21 @@ module random =
     //   let mut rng = pcg_random.make(seed)
     //   let mut rng = pcg_random.make_with_channel(seed, channel)
     //   let x = pcg_random.next_u32(&rng)
-    // =========================================================================
-
-    struct pcg_random =
-        state: u64
-        inc:   u64
-
     module pcg_random =
 
         // Same multiplier as the LCG (from the PCG paper).
         private let multiplier = 6364136223846793005u64
 
-        // step: advances the PCG state by one iteration.
+        // Advances the PCG state by one iteration.
         // state = state * multiplier + inc (mod 2^64).
         private let step = (r: pcg_random*) ->
             r->state = r->state * multiplier + r->inc
 
-        // make: creates a PCG with the given seed, using default channel 1.
+        // Creates a PCG with the given seed, using default channel 1.
         let make = (seed: u64) ->
             pcg_random.make_with_channel(seed, 1u64)
 
-        // make_with_channel: creates a PCG with given seed and channel.
+        // Creates a PCG with given seed and channel.
         // The channel selects the LCG stream: inc = channel * 2 + 1 (always odd).
         // Seeding follows the reference PCG procedure: zero state, set increment,
         // step once, mix in seed, step again. This ensures well-distributed
@@ -115,7 +121,7 @@ module random =
             pcg_random.step(&r)
             r
 
-        // next_u32: generates a pseudorandom u32 using XSH-RR output.
+        // Generates a pseudorandom u32 using XSH-RR output.
         // Saves old state, advances, then applies the permutation:
         //   xorshifted = (u32) (((old >> 18) ^ old) >> 27)
         //   rot        = (u32) (old >> 59)
@@ -127,25 +133,25 @@ module random =
             let rot = (u32) (old_state >> 59)
             (xorshifted >> rot) | (xorshifted << ((32u32 - rot) & 31u32))
 
-        // next_u64: generates a pseudorandom u64 from two u32 outputs.
+        // Generates a pseudorandom u64 from two u32 outputs.
         let next_u64 = (r: pcg_random*) ->
             let hi = (u64) pcg_random.next_u32(r)
             let lo = (u64) pcg_random.next_u32(r)
             (hi << 32) | lo
 
-        // next_f64: generates a uniform f64 in [0.0, 1.0).
+        // Generates a uniform f64 in [0.0, 1.0).
         // Uses the top 53 bits of a u64 divided by 2^53 (9007199254740992).
         let next_f64 = (r: pcg_random*) ->
             let bits = pcg_random.next_u64(r)
             (f64) (bits >> 11) / 9007199254740992.0
 
-        // next_f32: generates a uniform f32 in [0.0, 1.0).
+        // Generates a uniform f32 in [0.0, 1.0).
         // Uses the top 24 bits of a u32 divided by 2^24 (16777216).
         let next_f32 = (r: pcg_random*) ->
             let bits = pcg_random.next_u32(r)
             (f32) (bits >> 8) / 16777216.0f32
 
-        // next_bounded_u32: generates a uniform u32 in [0, bound).
+        // Generates a uniform u32 in [0, bound).
         // Uses rejection sampling to eliminate modulo bias. The threshold
         // (2^32 - bound) % bound rejects values that would over-represent
         // lower residues. Aborts if bound is 0 (division by zero).

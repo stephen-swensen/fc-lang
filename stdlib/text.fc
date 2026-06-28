@@ -14,7 +14,7 @@ module text =
     // extremes fit), so only pathological/corrupt input is ever rejected.
     private let max_parse_len = 512i64
 
-    // parse_i32: parses a string as a 32-bit signed integer (base 10).
+    // Parses a string as a 32-bit signed integer (base 10).
     // returns: i32? — some(value) on success, none if the string is not a
     // valid integer or is longer than max_parse_len.
     let parse_i32 = (s: const str) ->
@@ -26,7 +26,7 @@ module text =
             if endptr == cs then default(i32?)
             else some((i32) val)
 
-    // parse_i64: parses a string as a 64-bit signed integer (base 10).
+    // Parses a string as a 64-bit signed integer (base 10).
     // returns: i64? — some(value) on success, none if the string is not a
     // valid integer or is longer than max_parse_len.
     let parse_i64 = (s: const str) ->
@@ -38,7 +38,7 @@ module text =
             if endptr == cs then default(i64?)
             else some(val)
 
-    // parse_f32: parses a string as a 32-bit float.
+    // Parses a string as a 32-bit float.
     // returns: f32? — some(value) on success, none if the string is not a
     // valid number or is longer than max_parse_len.
     let parse_f32 = (s: const str) ->
@@ -50,7 +50,7 @@ module text =
             if endptr == cs then default(f32?)
             else some(val)
 
-    // parse_f64: parses a string as a 64-bit float.
+    // Parses a string as a 64-bit float.
     // returns: f64? — some(value) on success, none if the string is not a
     // valid number or is longer than max_parse_len.
     let parse_f64 = (s: const str) ->
@@ -62,7 +62,7 @@ module text =
             if endptr == cs then default(f64?)
             else some(val)
 
-    // copy: returns a heap-allocated copy of a string. Caller must free.
+    // Returns a heap-allocated copy of a string. Caller must free.
     let copy = (s: const str) ->
         let buf = alloc(u8[s.len] {})!
         let mut i = 0i64
@@ -72,7 +72,7 @@ module text =
             i = i + 1i64
         buf
 
-    // contains: true if haystack contains needle as a substring.
+    // True if haystack contains needle as a substring.
     let contains = (haystack: const str, needle: const str) ->
         if needle.len == 0i64 then true
         else if needle.len > haystack.len then false
@@ -86,17 +86,17 @@ module text =
                 i = i + 1i64
             found
 
-    // starts_with: true if s begins with prefix.
+    // True if s begins with prefix.
     let starts_with = (s: const str, prefix: const str) ->
         if prefix.len > s.len then false
         else s[0i64..prefix.len] == prefix
 
-    // ends_with: true if s ends with suffix.
+    // True if s ends with suffix.
     let ends_with = (s: const str, suffix: const str) ->
         if suffix.len > s.len then false
         else s[s.len - suffix.len..s.len] == suffix
 
-    // index_of: returns the position of the first occurrence of needle in haystack.
+    // Returns the position of the first occurrence of needle in haystack.
     // returns: i64? — some(index) if found, none if not found.
     let index_of = (haystack: const str, needle: const str) ->
         if needle.len == 0i64 then some(0i64)
@@ -110,7 +110,7 @@ module text =
                 i = i + 1i64
             default(i64?)
 
-    // trim: strips leading and trailing ASCII whitespace. Returns a subslice of s (no allocation).
+    // Strips leading and trailing ASCII whitespace. Returns a subslice of s (no allocation).
     let trim = (s: const str) ->
         let mut start = 0i64
         loop
@@ -126,7 +126,7 @@ module text =
             end = end - 1i64
         s[start..end]
 
-    // trim_left: strips leading ASCII whitespace. Returns a subslice of s (no allocation).
+    // Strips leading ASCII whitespace. Returns a subslice of s (no allocation).
     let trim_left = (s: const str) ->
         let mut start = 0i64
         loop
@@ -136,7 +136,7 @@ module text =
             start = start + 1i64
         s[start..s.len]
 
-    // trim_right: strips trailing ASCII whitespace. Returns a subslice of s (no allocation).
+    // Strips trailing ASCII whitespace. Returns a subslice of s (no allocation).
     let trim_right = (s: const str) ->
         let mut end = s.len
         loop
@@ -146,17 +146,17 @@ module text =
             end = end - 1i64
         s[0i64..end]
 
-    // to_upper_char: converts an ASCII lowercase byte to uppercase.
+    // Converts an ASCII lowercase byte to uppercase.
     let to_upper_char = (b: u8) ->
         if b >= 97u8 && b <= 122u8 then b - 32u8
         else b
 
-    // to_lower_char: converts an ASCII uppercase byte to lowercase.
+    // Converts an ASCII uppercase byte to lowercase.
     let to_lower_char = (b: u8) ->
         if b >= 65u8 && b <= 90u8 then b + 32u8
         else b
 
-    // to_upper: returns a heap-allocated copy with ASCII lowercase converted to uppercase.
+    // Returns a heap-allocated copy with ASCII lowercase converted to uppercase.
     // Caller must free the returned string.
     let to_upper = (s: const str) ->
         let result = alloc(u8[s.len] {})!
@@ -167,7 +167,7 @@ module text =
             i = i + 1i64
         result
 
-    // to_lower: returns a heap-allocated copy with ASCII uppercase converted to lowercase.
+    // Returns a heap-allocated copy with ASCII uppercase converted to lowercase.
     // Caller must free the returned string.
     let to_lower = (s: const str) ->
         let result = alloc(u8[s.len] {})!
@@ -178,7 +178,7 @@ module text =
             i = i + 1i64
         result
 
-    // split: splits a string by a delimiter. Returns a heap-allocated array of subslices of s.
+    // Splits a string by a delimiter. Returns a heap-allocated array of subslices of s.
     // Caller must free the returned array. The individual strings are views into s (not copies).
     let split = (s: const str, delim: const str) ->
         let mut count = 1i64
@@ -208,7 +208,7 @@ module text =
             parts[idx] = (str) s[start..s.len]
         parts
 
-    // join: joins an array of strings with a delimiter. Returns a heap-allocated string.
+    // Joins an array of strings with a delimiter. Returns a heap-allocated string.
     // Caller must free the returned string.
     let join = (parts: const str[], delim: const str) ->
         let mut total = 0i64

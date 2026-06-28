@@ -155,21 +155,21 @@ module net =
 
     // --- Byte order ---
 
-    // host_to_net16: convert u16 from host to network byte order.
+    // Convert u16 from host to network byte order.
     let host_to_net16 = (x: u16) -> arpa.htons(x)
 
-    // net_to_host16: convert u16 from network to host byte order.
+    // Convert u16 from network to host byte order.
     let net_to_host16 = (x: u16) -> arpa.ntohs(x)
 
-    // host_to_net32: convert u32 from host to network byte order.
+    // Convert u32 from host to network byte order.
     let host_to_net32 = (x: u32) -> arpa.htonl(x)
 
-    // net_to_host32: convert u32 from network to host byte order.
+    // Convert u32 from network to host byte order.
     let net_to_host32 = (x: u32) -> arpa.ntohl(x)
 
     // --- Address construction ---
 
-    // make_addr: construct a sockaddr_in from a host byte-order IPv4 address and port.
+    // Construct a sockaddr_in from a host byte-order IPv4 address and port.
     // Use inaddr_any or inaddr_loopback for common addresses.
     let make_addr = (host: u32, port: u16) ->
         inet.sockaddr_in {
@@ -178,7 +178,7 @@ module net =
             sin_addr = inet.in_addr { s_addr = host_to_net32(host) }
         }
 
-    // make_addr_str: construct a sockaddr_in from a dotted-decimal IPv4 string and port.
+    // Construct a sockaddr_in from a dotted-decimal IPv4 string and port.
     // Note: inet_addr returns 0xFFFFFFFF for invalid addresses.
     let make_addr_str = (ip: const str, port: u16) ->
         ensure_init()
@@ -190,33 +190,33 @@ module net =
 
     // --- Socket lifecycle ---
 
-    // open_tcp: create a TCP (stream) socket.
+    // Create a TCP (stream) socket.
     // returns: some(fd) on success, none on failure.
     let open_tcp = () ->
         ensure_init()
         let fd = sock.socket(sock.af_inet, sock.sock_stream, 0)
         if fd >= 0 then some(fd) else default(i32?)
 
-    // open_udp: create a UDP (datagram) socket.
+    // Create a UDP (datagram) socket.
     // returns: some(fd) on success, none on failure.
     let open_udp = () ->
         ensure_init()
         let fd = sock.socket(sock.af_inet, sock.sock_dgram, 0)
         if fd >= 0 then some(fd) else default(i32?)
 
-    // open_icmp: create a raw ICMP socket (requires cap_net_raw or root).
+    // Create a raw ICMP socket (requires cap_net_raw or root).
     // returns: some(fd) on success, none on failure.
     let open_icmp = () ->
         ensure_init()
         let fd = sock.socket(sock.af_inet, sock.sock_raw, inet.ipproto_icmp)
         if fd >= 0 then some(fd) else default(i32?)
 
-    // close: close a socket.
+    // Close a socket.
     let close = (fd: i32) ->
         u.close(fd)
         return
 
-    // shutdown: shut down part or all of a socket connection.
+    // Shut down part or all of a socket connection.
     // how: shut_rd, shut_wr, or shut_rdwr.
     // returns: true on success.
     let shutdown = (fd: i32, how: i32) ->
@@ -224,7 +224,7 @@ module net =
 
     // --- Socket options ---
 
-    // set_reuse_addr: enable SO_REUSEADDR on a socket.
+    // Enable SO_REUSEADDR on a socket.
     // returns: true on success.
     let set_reuse_addr = (fd: i32) ->
         let mut val = 1
@@ -232,25 +232,25 @@ module net =
 
     // --- TCP operations ---
 
-    // bind_addr: bind a socket to an address.
+    // Bind a socket to an address.
     // returns: true on success.
     let bind_addr = (fd: i32, addr: inet.sockaddr_in) ->
         let mut a = addr
         sock.bind(fd, (const any*) &a, 16) == 0
 
-    // listen: start listening for connections.
+    // Start listening for connections.
     // backlog: maximum pending connection queue length.
     // returns: true on success.
     let listen = (fd: i32, backlog: i32) ->
         sock.listen(fd, backlog) == 0
 
-    // accept: accept a connection on a listening socket.
+    // Accept a connection on a listening socket.
     // returns: some(client_fd) on success, none on failure.
     let accept = (fd: i32) ->
         let client = sock.accept(fd, default(any*?), default(i32*?))
         if client >= 0 then some(client) else default(i32?)
 
-    // connect_addr: connect a socket to a remote address.
+    // Connect a socket to a remote address.
     // returns: true on success.
     let connect_addr = (fd: i32, addr: inet.sockaddr_in) ->
         let mut a = addr
@@ -258,13 +258,13 @@ module net =
 
     // --- Data transfer ---
 
-    // send_bytes: send data on a connected socket.
+    // Send data on a connected socket.
     // data: const u8[] — the bytes to send.
     // returns: number of bytes sent, or -1 on error.
     let send_bytes = (fd: i32, data: const u8[]) ->
         (i64) sock.send(fd, (const any*) data.ptr, (i32) data.len, 0)
 
-    // recv_bytes: receive data from a connected socket.
+    // Receive data from a connected socket.
     // buf: u8[] — destination buffer.
     // max: i64 — maximum bytes to receive.
     // returns: bytes received, 0 if peer closed, or -1 on error.
@@ -273,7 +273,7 @@ module net =
 
     // --- UDP operations ---
 
-    // send_to: send a datagram to a specific address.
+    // Send a datagram to a specific address.
     // data: const u8[] — the bytes to send.
     // addr: destination address.
     // returns: number of bytes sent, or -1 on error.
@@ -281,7 +281,7 @@ module net =
         let mut a = addr
         (i64) sock.sendto(fd, (const any*) data.ptr, (i32) data.len, 0, (const any*) &a, 16)
 
-    // recv_from: receive a datagram (discards source address).
+    // Receive a datagram (discards source address).
     // buf: u8[] — destination buffer.
     // max: i64 — maximum bytes to receive.
     // returns: bytes received, or -1 on error.
@@ -290,7 +290,7 @@ module net =
 
     // --- Utility ---
 
-    // local_port: get the locally bound port of a socket.
+    // Get the locally bound port of a socket.
     // returns: some(port) in host byte order, or none on error.
     let local_port = (fd: i32) ->
         let mut addr = default(inet.sockaddr_in)
@@ -302,7 +302,7 @@ module net =
 
     // --- DNS ---
 
-    // resolve: resolve a hostname or dotted-decimal IPv4 string to a network-byte-order address.
+    // Resolve a hostname or dotted-decimal IPv4 string to a network-byte-order address.
     // Tries inet_addr first (for "1.2.3.4" style), falls back to gethostbyname for hostnames.
     // returns: some(ip) in network byte order, or none if resolution fails.
     let resolve = (host: const str) ->

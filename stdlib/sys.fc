@@ -28,7 +28,7 @@ module sys =
             tv_nsec: i64
 #end
 
-    // env: looks up an environment variable by name.
+    // Looks up an environment variable by name.
     // name: const str — variable name; const because env only reads it.
     // returns: const str? — the value if set, none if unset. Const because the
     //   returned str points into the process environment block.
@@ -37,13 +37,13 @@ module sys =
         | some(cs) -> some((const str) cs)
         | none -> default(const str?)
 
-    // exit: terminates the process immediately with the given exit code.
+    // Terminates the process immediately with the given exit code.
     // code: i32 — exit status (0 = success, nonzero = failure).
     // returns: void (never returns — the process exits).
     let exit = (code: i32) ->
         c.exit(code)
 
-    // time: returns the current wall-clock time as milliseconds since the Unix epoch.
+    // Returns the current wall-clock time as milliseconds since the Unix epoch.
     // returns: i64 — milliseconds since 1970-01-01 00:00:00 UTC.
 #if os == "windows"
     // Win32 GetSystemTimeAsFileTime returns 100ns ticks since 1601-01-01 UTC.
@@ -62,7 +62,7 @@ module sys =
         ts.tv_sec * 1000 + ts.tv_nsec / 1000000
 #end
 
-    // temp_dir: returns the platform temp directory path.
+    // Returns the platform temp directory path.
     // Checks TMPDIR, TMP, TEMP (in order). On POSIX falls back to "/tmp"
     // since those env vars are often unset; Windows always sets TEMP/TMP.
     // returns: const str? — the temp directory path if found, none otherwise.
@@ -81,7 +81,7 @@ module sys =
                 | none -> some((const str) "/tmp")
 #end
 
-    // home_dir: returns the user's home directory path.
+    // Returns the user's home directory path.
     // Checks HOME (Linux, macOS, MinGW), then USERPROFILE (Windows).
     // returns: const str? — the home directory path if found, none otherwise.
     let home_dir = () ->
@@ -92,7 +92,7 @@ module sys =
             | some(cs) -> some((const str) cs)
             | none -> default(const str?)
 
-    // sleep: suspends the calling thread for at least ms milliseconds.
+    // Suspends the calling thread for at least ms milliseconds.
     // ms: i64 — duration to sleep in milliseconds.
     // returns: void.
 #if os == "windows"
@@ -107,7 +107,7 @@ module sys =
         return
 #end
 
-    // get_pid: returns the current process ID.
+    // Returns the current process ID.
     // returns: i32 — the process ID.
 #if os == "windows"
     let get_pid = () -> (i32) w.get_current_pid()

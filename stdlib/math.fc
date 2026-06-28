@@ -29,81 +29,81 @@ module math =
     let pi = 3.14159265358979323846
     let e = 2.71828182845904523536
 
-    // sqrt: square root of x.
+    // Square root of x.
     let sqrt = (x: f64) -> c.sqrt(x)
 
-    // abs: absolute value of x.
+    // Absolute value of x.
     let abs = (x: f64) -> c.fabs(x)
 
-    // pow: x raised to the power y.
+    // X raised to the power y.
     let pow = (x: f64, y: f64) -> c.pow(x, y)
 
-    // min: smaller of x and y.
+    // Smaller of x and y.
     let min = (x: f64, y: f64) -> c.fmin(x, y)
 
-    // max: larger of x and y.
+    // Larger of x and y.
     let max = (x: f64, y: f64) -> c.fmax(x, y)
 
-    // floor: largest integer value <= x.
+    // Largest integer value <= x.
     let floor = (x: f64) -> c.floor(x)
 
-    // ceil: smallest integer value >= x.
+    // Smallest integer value >= x.
     let ceil = (x: f64) -> c.ceil(x)
 
-    // round: nearest integer value, rounding halfway cases away from zero.
+    // Nearest integer value, rounding halfway cases away from zero.
     let round = (x: f64) -> c.round(x)
 
-    // sin: sine of x (radians).
+    // Sine of x (radians).
     let sin = (x: f64) -> c.sin(x)
 
-    // cos: cosine of x (radians).
+    // Cosine of x (radians).
     let cos = (x: f64) -> c.cos(x)
 
-    // tan: tangent of x (radians).
+    // Tangent of x (radians).
     let tan = (x: f64) -> c.tan(x)
 
-    // asin: inverse sine of x. Result in radians [-pi/2, pi/2].
+    // Inverse sine of x. Result in radians [-pi/2, pi/2].
     let asin = (x: f64) -> c.asin(x)
 
-    // acos: inverse cosine of x. Result in radians [0, pi].
+    // Inverse cosine of x. Result in radians [0, pi].
     let acos = (x: f64) -> c.acos(x)
 
-    // atan: inverse tangent of x. Result in radians [-pi/2, pi/2].
+    // Inverse tangent of x. Result in radians [-pi/2, pi/2].
     let atan = (x: f64) -> c.atan(x)
 
-    // atan2: arc tangent of y/x, using signs to determine quadrant.
+    // Arc tangent of y/x, using signs to determine quadrant.
     let atan2 = (y: f64, x: f64) -> c.atan2(y, x)
 
-    // fmod: floating-point remainder of x/y.
+    // Floating-point remainder of x/y.
     let fmod = (x: f64, y: f64) -> c.fmod(x, y)
 
-    // hypot: sqrt(x*x + y*y), computed without intermediate overflow.
+    // Sqrt(x*x + y*y), computed without intermediate overflow.
     let hypot = (x: f64, y: f64) -> c.hypot(x, y)
 
-    // trunc: round toward zero (strip fractional part).
+    // Round toward zero (strip fractional part).
     let trunc = (x: f64) -> c.trunc(x)
 
-    // exp: e raised to the power x.
+    // E raised to the power x.
     let exp = (x: f64) -> c.exp(x)
 
-    // log: natural logarithm of x.
+    // Natural logarithm of x.
     let log = (x: f64) -> c.log(x)
 
-    // log2: base-2 logarithm of x.
+    // Base-2 logarithm of x.
     let log2 = (x: f64) -> c.log2(x)
 
-    // log10: base-10 logarithm of x.
+    // Base-10 logarithm of x.
     let log10 = (x: f64) -> c.log10(x)
 
-    // is_nan: true if x is NaN.
+    // True if x is NaN.
     let is_nan = (x: f64) -> x != x
 
-    // is_inf: true if x is positive or negative infinity.
+    // True if x is positive or negative infinity.
     let is_inf = (x: f64) ->
         if x == f64.inf then true
         else x == f64.neg_inf
 
-    // is_finite: true if x is neither NaN nor infinity.
+    // True if x is neither NaN nor infinity.
     let is_finite = (x: f64) ->
         if x != x then false
         else if x == f64.inf then false
