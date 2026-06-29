@@ -813,5 +813,131 @@ check("coalescing: only the final revision's diagnostic is published (unterminat
       and not any("numeric" in m or "bool" in m for m in flat)
       and [] not in co_diags, str(co_diags))
 
+# --- interactive idle-flush: the pure timing-driven path the batch tests cannot
+# reach. The batch harness pipes every frame at once, so input_pending() stays
+# true through a burst and the flush is always triggered by a trailing REQUEST
+# (flush_dirty in dispatch). Here we drive the server like a real editor: send a
+# notification, then STOP — so the only thing that can publish diagnostics is the
+# idle flush once the input queue drains (lsp_main's `if (!input_pending())
+# flush_dirty`). A paused edit must publish on its own, and two edits separated by
+# a pause must publish SEPARATELY (the inverse of the coalescing test above).
+# Skipped on Windows, where input_pending() is a no-op (every message flushes
+# immediately) and select() on a pipe is unavailable.
+import os, select, time
+
+if sys.platform.startswith("win"):
+    check("interactive idle-flush (skipped on Windows)", True)
+else:
+    class FramedReader:
+        """Incrementally decodes Content-Length-framed JSON-RPC from a pipe fd,
+        buffering across reads. next(timeout) returns the next message or None if
+        nothing complete arrives within `timeout` seconds (select-based wait)."""
+        def __init__(self, fd):
+            self.fd, self.buf = fd, bytearray()
+        def _extract(self):
+            h = self.buf.find(b"\r\n\r\n")
+            if h < 0:
+                return None
+            clen = None
+            for line in self.buf[:h].decode("latin1").split("\r\n"):
+                if line.lower().startswith("content-length:"):
+                    clen = int(line.split(":", 1)[1])
+            if clen is None or len(self.buf) < h + 4 + clen:
+                return None
+            obj = json.loads(bytes(self.buf[h + 4:h + 4 + clen]))
+            del self.buf[:h + 4 + clen]
+            return obj
+        def next(self, timeout):
+            deadline = time.monotonic() + timeout
+            while True:
+                obj = self._extract()
+                if obj is not None:
+                    return obj
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                r, _, _ = select.select([self.fd], [], [], remaining)
+                if not r:
+                    return None
+                chunk = os.read(self.fd, 65536)
+                if not chunk:                       # server closed stdout (EOF)
+                    return None
+                self.buf += chunk
+
+    def publishes_after(rd, first_timeout=5.0, settle=0.4):
+        """Collect publishDiagnostics following a paused edit: wait up to
+        first_timeout for the first frame, then keep reading until `settle`
+        seconds pass with nothing new — so a stray SECOND publish (which would
+        mean the edit wasn't coalesced/flushed exactly once) is also caught."""
+        pubs, got = [], False
+        while True:
+            msg = rd.next(first_timeout if not got else settle)
+            if msg is None:
+                break
+            got = True
+            if msg.get("method") == "textDocument/publishDiagnostics":
+                pubs.append(msg["params"]["diagnostics"])
+        return pubs
+
+    idir = tempfile.mkdtemp(prefix="fc_lsp_interactive_")
+    iuri = "file://" + os.path.join(idir, "doc.fc")
+    proc = subprocess.Popen([BIN, "--lsp"], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+
+    def send(*ms):
+        proc.stdin.write(b"".join(frame(m) for m in ms))
+        proc.stdin.flush()
+
+    rd = FramedReader(proc.stdout.fileno())
+    p1 = p2 = p3 = None
+    ierr = b""
+    try:
+        # Handshake; sync on the initialize response so subsequent reads see only
+        # the publishes provoked by our paused edits.
+        send(req(1, "initialize", {"capabilities": {}}), note("initialized", {}))
+        init = rd.next(5.0)
+        check("interactive: server completes the initialize handshake",
+              isinstance(init, dict) and init.get("id") == 1, str(init))
+
+        # 1) didOpen alone, then STOP. No request follows, so only the idle flush
+        # can produce this publish — the path no batch test exercises.
+        send(note("textDocument/didOpen", {"textDocument": {"uri": iuri,
+            "languageId": "fc", "version": 1, "text": CLEAN}}))
+        p1 = publishes_after(rd)
+
+        # 2) one paused edit -> one publish, on its own.
+        send(note("textDocument/didChange", {"textDocument": {"uri": iuri, "version": 2},
+            "contentChanges": [{"text": TYPEERR}]}))
+        p2 = publishes_after(rd)
+
+        # 3) a second paused edit publishes SEPARATELY (not coalesced with #2),
+        # because the pause between them let the queue drain and flush.
+        send(note("textDocument/didChange", {"textDocument": {"uri": iuri, "version": 3},
+            "contentChanges": [{"text": BROKEN}]}))
+        p3 = publishes_after(rd)
+
+        send(req(9, "shutdown", None), note("exit", None))
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+        ierr = proc.stderr.read() or b""
+
+    check("interactive: a paused didOpen is published by the idle flush (no request forced it)",
+          p1 is not None and len(p1) == 1 and p1[0] == [], str(p1))
+    check("interactive: a paused edit publishes on its own (type error)",
+          p2 is not None and len(p2) == 1
+          and any("numeric" in d["message"] or "bool" in d["message"] for d in p2[0]), str(p2))
+    check("interactive: a second paused edit publishes separately, not coalesced (unterminated)",
+          p3 is not None and len(p3) == 1
+          and any("unterminated" in d["message"] for d in p3[0]), str(p3))
+    check("interactive: clean process exit", proc.returncode == 0, f"rc={proc.returncode}")
+    if ierr.strip():
+        sys.stderr.write("interactive server stderr:\n" + ierr.decode(errors="replace") + "\n")
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
