@@ -84,35 +84,23 @@ open-item backlog. None of these block release.
 
 ### Smaller follow-ups (non-blocking)
 
-- **Error-recovery parsing (the real fix behind stale overlays)** — the parser's
-  `diag_fatal`/`longjmp` sites abort the whole analysis on any syntax error, so a
-  mid-typing state like `let r2 = ` or `... problem_01.` produces no AST and all
-  type info would vanish. Stale-overlay retention (done — see CLAUDE.md "Editor
-  integration") masks this by serving hover/CodeLens from the last analysis that
-  type-checked, but the overlays are then stale (positions drift as lines are
-  added/removed, and the line under edit can't update). The principled fix is
-  panic-mode recovery: on a parse error, synthesize an error/missing node, resync
-  to the next `NEWLINE`/`DEDENT`, and keep parsing, so the rest of the file stays
-  live within the *current* edit (pairs with the existing `TYPE_ERROR` poison).
-  This would make stale serving a rare fallback rather than the primary path.
-- **Ungate pass2 from recoverable pass1 errors** — pass2 only runs when
-  `diag_error_count()==0` after pass1 (`analyze.c`), so a single recoverable
-  pass1 error (e.g. a duplicate/missing name in a *merged* sibling) drops every
-  node's type and blanks overlays for the whole analysis. pass2 already
-  accumulates with `diag_error` and poisons subtrees, so running it past
-  recoverable pass1 errors — and isolating per-binding failures so one bad `let`
-  doesn't nuke the others — would keep types alive for everything else. Audit
-  which pass1/pass2 errors are genuinely unrecoverable vs. merely gated. (Same
-  motivation as error-recovery parsing above; the two together retire most
-  reliance on stale retention.)
 - **Completion over-offers** — no flow-sensitive local scoping, so it lists
   names not yet in scope at the cursor. Needs a scope-at-position filter.
 - **Variant-constructor go-to-definition granularity** — lands on the union
   declaration, not the specific variant. Deliberate today, but `UnionVariant.loc`
   is now recorded, so refining it is a small change plus a wire-test update.
+- **Residual parser `diag_fatal` sites** — error-recovery parsing (done — see
+  `spec/hist/archived-todos.md`) left ~14 `diag_fatal`s in `parser.c` for
+  validation *inside* matched delimiters (slice/tuple/`alloc`/`cstr[N]` literals,
+  fixed-array size), string interpolation, the inline `let…in` form, and the
+  extern-reserved-name check. These still abort the analysis (LSP falls back to
+  `last_good`, no crash); converting them to `diag_error` + a best-effort node
+  would close the last in-band recovery gaps. Low value (rare mid-typing).
 - **Stdlib re-parse per keystroke** — `analyze()` re-lexes/parses the whole
   merged stdlib on every edit; caching the parsed stdlib would cut per-keystroke
-  CPU (the leak it also caused is already fixed).
+  CPU (the leak it also caused is already fixed). This — *not* incremental
+  reparsing — is the cheaper next perf win for large projects; error-recovery
+  parsing is the shared prerequisite for both.
 - **Install targets are Linux-only** — `make install` / `install-vscode` assume
   a Linux layout; Windows/macOS packaging is unwritten.
 

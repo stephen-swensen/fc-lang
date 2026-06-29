@@ -4,6 +4,73 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Error-recovery parsing + ungated pass2 (resolved 2026-06-28)
+
+Two paired LSP follow-ups, implemented together because each enables the other's payoff.
+The throughline (from rust-analyzer/Clang/Roslyn): the front end should be **resilient** —
+always return a spanned tree plus a side list of errors, never abort — so the *fresh*
+analysis stays usable on the well-formed parts of a file the user is mid-editing.
+
+**1. Error-recovery (panic-mode) parsing.** The parser's `expect`/`expect_typearg_gt`/
+`expect_extern_c_name` were `diag_fatal` (→ `longjmp` in the server, `exit` in the CLI), so
+any syntax error discarded the whole AST. They are now **non-fatal**: report via `diag_error`
+and return the current token without consuming, so an enclosing loop can resynchronize.
+Mechanics (all in `src/parser.c`):
+- New AST placeholders `EXPR_ERROR` / `PAT_ERROR` / `DECL_ERROR` (`ast.h`), carrying only
+  kind+loc. pass2 types `EXPR_ERROR` as `type_error()` silently (fixing the fatal `default:`
+  in `check_expr_inner`); `PAT_ERROR` is treated like a wildcard; error nodes never reach
+  codegen (a `-Wswitch` sweep + an `assert(0)` tripwire in `emit_expr` enforce this).
+- A **leaf-bump rule** (`parse_prefix` / `parse_pattern_atom` defaults consume the offending
+  token unless it's a hard stop) plus a **no-progress watchdog** (`recover_progress`) in every
+  item loop guarantee forward progress — the LSP can never hang.
+- **Scope-aware recovery** (`recover_to` + `DECL_START` sync set, Dragon-Book hierarchical
+  anchoring) in `parse_program` / `parse_module_decl`; block bodies resync on layout
+  (NEWLINE/DEDENT) via leaf-bump + watchdog. Match arms handle `PAT_ERROR`/guard/unterminated-
+  or-pattern by resyncing to the next `|` without corrupting the or-pattern buffer.
+- The **CLI now reports all syntax errors in one run** (a post-parse gate in `main.c` reports
+  and exits non-zero before pass1, so error nodes never reach codegen). The lexer/layout
+  errors (tabs, unterminated string/comment, inconsistent indentation) **stay fatal** — the
+  `setjmp`/`longjmp` backstop in `analyze()` remains the single unrecoverable path (recovering
+  the indentation stack mid-stream was deliberately out of scope).
+
+**2. Ungated pass2.** `analyze.c` and `main.c` gated `pass2_check` behind
+`diag_error_count()==0`, so one recoverable pass1 error (a duplicate name in a *merged*
+sibling, an unresolvable type) blanked every node's type. pass2 already accumulates with
+`diag_error` and propagates the `TYPE_ERROR` poison, so the gate is simply removed: pass2 now
+runs past recoverable parse/pass1 errors. The LSP keeps hover/definition/CodeLens **live on
+the well-formed lines** while a broken line is typed, and a broken merged sibling no longer
+blanks the open file. The CLI surfaces name and type errors together in one compile.
+
+A planned `pass1_seal_incomplete` boundary-poison and extra pass2 NULL-guards turned out to be
+**unnecessary** and were skipped (no dead defensive code): an ASan sweep — a direct `analyze()`
+harness over ~20 adversarial single-file + merged-sibling inputs, plus the wire tests run
+against an ASan-instrumented server with `abort_on_error=1` — found pass2's existing guards
+(`EXPR_IDENT` `!sym->type`, module `!members`, `TYPE_ERROR` propagation) already sufficient.
+`make_mangled` never returns NULL, and pass1 already skips the second `symtab_add` on a
+redefinition, so the realistic NULL-deref surface was empty.
+
+The old **safety-net** "analysis incomplete" diagnostic (`analyze.c`) now fires only on a hard
+lexer abort (`!pass2_ran` ⇔ `aborted`), not on ordinary recoverable errors — its two wire
+tests were rewritten to assert the new payoff. Stale-overlay retention (`last_good`) is kept
+as the fallback for the lexer-abort case but is no longer the primary path.
+
+Tests: `tests/cases/recovery/` (10 cases — leaf/block/decl/match recovery, a watchdog
+no-hang case, and a `pass2-runs-after-pass1-error` CLI guard); new `tests/lsp/` wire tests for
+the recovery payoff (live hover/CodeLens with a broken line) and the rewritten sibling-error
+tests. 1691 tests green (gcc+clang), LSP wire tests green (incl. ASan), `examples.fc` clean.
+(Drive-by: `run.sh` globbed `stdlib/*`, which scooped up `stdlib/lsp.rsp`; narrowed to
+`stdlib/*.fc`.)
+
+Remaining (still in TODO.md): lexer-level recovery is intentionally not done (layout errors
+stay fatal). A handful (~14) of parser `diag_fatal` sites also remain by choice — validation
+*inside* matched delimiters (slice/tuple/`alloc`/`cstr[N]` literals, fixed-array size),
+string-interpolation, the inline `let…in` form, and the extern-reserved-name check; these are
+rare mid-typing and the LSP falls back to `last_good` for them (no crash), so converting them
+was deferred as low-value. And error recovery is a *prerequisite* for — but not itself —
+parsed-file caching / incremental reparsing.
+
+---
+
 ## LSP CodeLens/hover went silently blank on stdlib files (resolved 2026-06-27)
 
 > **The "`-O0`-only empty-CodeLens divergence" framing was a misdiagnosis.**

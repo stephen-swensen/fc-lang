@@ -124,6 +124,15 @@ int main(int argc, char **argv) {
         programs[i] = parse_program(&parser);
     }
 
+    /* The parser now recovers from syntax errors (producing error nodes) instead of
+       aborting on the first one, so all files are parsed and every syntax error is
+       reported in one run. But error nodes must never reach pass1/codegen — gate here
+       before the merge. (Item 2 relaxes the pass1 gate below; this parse gate stays.) */
+    if (diag_error_count() > 0) {
+        fprintf(stderr, "%d error(s)\n", diag_error_count());
+        return 1;
+    }
+
     /* Merge all programs into one.
      * Insert DECL_NAMESPACE(NULL) sentinel at the start of each file's decls
      * if the file doesn't begin with a DECL_NAMESPACE, so that the namespace
@@ -171,12 +180,11 @@ int main(int argc, char **argv) {
     FileImportScopes file_scopes = { .scopes = NULL, .count = 0, .capacity = 0 };
     pass1_collect(prog, &symtab, &intern_table, &file_scopes, /*require_main=*/true);
 
-    if (diag_error_count() > 0) {
-        fprintf(stderr, "%d error(s)\n", diag_error_count());
-        return 1;
-    }
-
-    /* Pass 2: type check */
+    /* Pass 2: type check. Run it even when pass1 reported recoverable errors, so name
+       errors and type errors surface together in one run. The parse gate above already
+       returned on any syntax error, so the AST here has no error nodes — only pass1's
+       symbol-table partiality to tolerate, which pass2 handles via its TYPE_ERROR poison.
+       The post-pass2 gate below still fails the build (and keeps mono/codegen gated). */
     MonoTable mono = {0};
     pass2_check(prog, &symtab, &intern_table, &mono, &file_scopes, &arena);
 

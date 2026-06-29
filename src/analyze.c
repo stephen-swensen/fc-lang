@@ -151,11 +151,17 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
          * a stdlib module), so the missing-`main` diagnostic is suppressed. */
         pass1_collect(r->program, &r->symtab, &r->intern, &r->file_scopes,
                       /*require_main=*/false);
-        if (diag_error_count() == 0) {
-            pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
-                        &r->arena);
-            pass2_ran = true;
-        }
+        /* Run pass2 even when the parser or pass1 reported recoverable errors, so
+           type-aware queries (hover, definition, lenses) stay live on the parts of
+           the file that are still well formed — instead of blanking the whole file
+           because of one bad line or a duplicate name in a merged sibling. pass2
+           already accumulates with diag_error and poisons subtrees with TYPE_ERROR,
+           so it tolerates a partial program; a parse error leaves EXPR_ERROR/poison
+           nodes that pass2 types silently. (The lexer's longjmp backstop still aborts
+           the whole analysis on an unrecoverable layout error — the else branch.) */
+        pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
+                    &r->arena);
+        pass2_ran = true;
     } else {
         r->aborted = true;
         /* Free the lexer's in-progress arrays the abort left behind. The
@@ -164,16 +170,14 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         if (r->lex_layout) { free(r->lex_layout); r->lex_layout = NULL; }
     }
 
-    /* Safety net against silent blanking. Type-checking is gated on a clean
-     * pass1 (and on a clean parse), so a single error in a *merged* sibling or
-     * stdlib-feed file suppresses pass2 for the whole analysis — every node's
-     * resolved type is then NULL, so hover / definition / CodeLens all go empty.
-     * publish_diagnostics filters to the open file, so when the offending error
-     * lives in another file the open document shows NOTHING: no error to explain
-     * the silence, no type info. (The canonical trigger is the same module merged
-     * twice from two different paths.) Surface one file-level diagnostic on the
-     * open document, naming the first offending included file, so the failure is
-     * visible and actionable instead of a mysteriously dead editor. */
+    /* Safety net against silent blanking. pass2 now runs past recoverable parse/pass1
+     * errors (see above), so this only triggers when the analysis HARD-aborted — i.e.
+     * the lexer hit an unrecoverable layout error (tab, unterminated string/comment,
+     * inconsistent indentation) and longjmp'd, leaving pass2_ran false and r->aborted
+     * true. In that case every node's resolved type is NULL, so hover / definition /
+     * CodeLens go empty; publish_diagnostics filters to the open file, so an abort in a
+     * *merged* sibling shows the open document NOTHING. Surface one file-level diagnostic
+     * naming the first offending file so the failure is visible, not a dead editor. */
     if (!pass2_ran) {
         bool open_has_diag = false;
         const char *other = NULL;

@@ -1,0 +1,7 @@
+// Recovery: a match arm with a missing pattern (`| -> ...`). The PAT_ERROR must
+// resync to the next arm without corrupting the or-pattern buffering.
+let main = () ->
+    let x = 1
+    match x with
+    | -> 9
+    | _ -> 0

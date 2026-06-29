@@ -6274,6 +6274,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    case EXPR_ERROR:
+        /* Parse-error placeholder: the parser already emitted the diagnostic. Type it
+           silently as poison so it propagates without cascading (and never trips the
+           fatal default below). Only exists when diag_error_count()>0. */
+        e->type = type_error();
+        return e->type;
+
     default:
         diag_fatal(e->loc, "unsupported expression kind in type checker (kind=%d)", e->kind);
     }
@@ -6288,6 +6295,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
     type = resolve_type(ctx, type);
     switch (pat->kind) {
     case PAT_WILDCARD:
+    case PAT_ERROR:   /* malformed pattern: treat as wildcard, bind nothing */
         break;
     case PAT_BINDING:
         /* Check if binding name is a no-payload union variant */
@@ -6486,6 +6494,7 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
     switch (pat->kind) {
     case PAT_WILDCARD:
     case PAT_BINDING:
+    case PAT_ERROR:   /* malformed pattern: matches anything */
         m.is_wildcard = true;
         return m;
     case PAT_BOOL_LIT:
@@ -6615,6 +6624,7 @@ static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLo
     case PAT_BOOL_LIT:
     case PAT_STRING_LIT:
     case PAT_NONE:
+    case PAT_ERROR:   /* malformed pattern: an or-free leaf (wildcard-like) */
         *out = arena_alloc(a, sizeof(Pattern *));
         (*out)[0] = pat;
         return 1;

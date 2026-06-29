@@ -61,6 +61,9 @@ typedef enum {
     EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
     EXPR_ATOMIC_STORE,  /* atomic_store_release(p, v) */
     EXPR_GUARD,         /* guarded/unguarded (precondition guards) OR checked/unchecked (overflow) */
+    EXPR_ERROR,         /* parse-error placeholder; carries only kind+loc. Exists only when
+                           diag_error_count()>0, so it never reaches codegen (gated). pass2
+                           types it as type_error() silently (the diagnostic was already emitted). */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -390,6 +393,8 @@ typedef enum {
     PAT_STRUCT,
     PAT_TUPLE, /* { a, b, ... } — positional tuple destructuring (let-bindings only) */
     PAT_OR,    /* p1 | p2 | ... — disjunction; alternatives must be binding-free */
+    PAT_ERROR, /* parse-error placeholder; treated like PAT_WILDCARD (matches anything, binds
+                  nothing) so a malformed arm produces no spurious exhaustiveness cascade. */
 } PatternKind;
 
 struct Pattern {
@@ -437,6 +442,8 @@ typedef enum {
     DECL_IMPORT,
     DECL_EXTERN,
     DECL_NAMESPACE,
+    DECL_ERROR,    /* parse-error placeholder for a malformed top-level/module declaration;
+                      skipped by pass1 collect and the pass2 top loop, never reaches codegen. */
 } DeclKind;
 
 typedef struct Decl Decl;

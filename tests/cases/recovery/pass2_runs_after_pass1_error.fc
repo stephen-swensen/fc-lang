@@ -1,0 +1,10 @@
+// Item 2 (ungated pass2): a recoverable pass1 error (the redefinition of `dup`) no
+// longer suppresses type checking. pass2 still runs and reports the undefined name in
+// main's body, so name errors and type errors surface together in one compile.
+// The asserted .error substring is a *pass2-only* diagnostic: it would not appear if
+// pass2 were still gated behind a clean pass1.
+let dup = 1
+let dup = 2
+let main = () ->
+    let r = undefined_name_xyz
+    0

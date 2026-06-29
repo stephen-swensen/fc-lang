@@ -1,0 +1,6 @@
+// Recovery watchdog: a long run of stray closing delimiters must terminate (never
+// spin) and report errors. Hard-stop tokens that the leaf-bump won't consume are
+// advanced past by the no-progress watchdog.
+let main = () ->
+    let s = ) ) ) } } } ] ] ]
+    0

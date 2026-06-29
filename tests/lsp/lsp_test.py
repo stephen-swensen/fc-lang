@@ -353,31 +353,73 @@ if cand:
           isinstance(clenses, list) and len(clenses) > 0,
           str(len(clenses) if isinstance(clenses, list) else clenses))
 
-# --- safety net: an error in a MERGED sibling file gates type-checking for the
-# whole analysis (pass2 only runs on a clean pass1), so the open file loses all
-# type info. The error lives in another file, so it is filtered out -> the open
-# document would otherwise show NOTHING (no diagnostic, no hover, no lenses). A
-# single file-level diagnostic must surface on the open file naming the offending
-# include, so the silence is explained instead of a mysteriously dead editor.
-sndir = tempfile.mkdtemp(prefix="fc_lsp_safetynet_")
+# --- ungated pass2 (Item 2): an error in a MERGED sibling file no longer blanks the
+# open file. pass2 now runs past a recoverable pass1 error (here, a duplicate top-level
+# name in the sibling), so the open document still type-checks — its overlays stay live
+# and there is NO "analysis incomplete" diagnostic. The sibling's own error lives in
+# another file and is filtered out of the open file's diagnostics. (This is the payoff
+# the old "safety net" diagnostic existed only to explain.)
+sndir = tempfile.mkdtemp(prefix="fc_lsp_ungated_")
 with open(os.path.join(sndir, "broken.fc"), "w") as f:       # duplicate top-level name -> pass1 error
     f.write("let dup = (n: i32) ->\n    n\nlet dup = (n: i32) ->\n    n\n")
-with open(os.path.join(sndir, "main.fc"), "w") as f:         # clean; its analysis is gated by the sibling
+with open(os.path.join(sndir, "main.fc"), "w") as f:         # clean; must still type-check despite the sibling
     f.write("let ok = (n: i32) ->\n    n + 1\n")
+snuri = "file://" + os.path.join(sndir, "main.fc")
 sn = [
     req(1, "initialize", {"capabilities": {}}),
     note("initialized", {}),
-    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + os.path.join(sndir, "main.fc"),
+    note("textDocument/didOpen", {"textDocument": {"uri": snuri,
          "languageId": "fc", "version": 1, "text": open(os.path.join(sndir, "main.fc")).read()}}),
+    req(2, "textDocument/codeLens", {"textDocument": {"uri": snuri}}),
     req(9, "shutdown", None),
     note("exit", None),
 ]
-_, _, snbf, _, _ = run_session(sn)
-sn_msgs = snbf.get("main.fc", [["?"]])[-1]
-check("safety net: a merged sibling's error surfaces an 'analysis incomplete' diagnostic on the open file",
-      any("analysis incomplete" in m for m in sn_msgs), str(sn_msgs))
-check("safety net: the incomplete-analysis diagnostic names the offending included file",
-      any("broken.fc" in m for m in sn_msgs), str(sn_msgs))
+snresp, _, snbf, _, _ = run_session(sn)
+sn_msgs = snbf.get("main.fc", [[]])[-1]
+check("ungated pass2: a merged sibling's recoverable error no longer blanks the open file (no 'analysis incomplete')",
+      not any("analysis incomplete" in m for m in sn_msgs), str(sn_msgs))
+sn_lenses = snresp.get(2, {}).get("result") or []
+check("ungated pass2: the open file still type-checks despite the sibling error (CodeLens present)",
+      isinstance(sn_lenses, list) and len(sn_lenses) > 0,
+      str(len(sn_lenses) if isinstance(sn_lenses, list) else sn_lenses))
+
+# --- ungated pass2 + error-recovery parsing (the headline payoff): a buffer with a
+# syntactically broken line mid-function still answers hover / CodeLens on the OTHER,
+# well-formed lines — served from the FRESH analysis (not stale fallback). Before this
+# work the broken line aborted the parse (or gated pass2), blanking the whole file.
+brkuri = "file:///tmp/fc_lsp_broken_live.fc"
+BROKEN_LIVE = (
+    "let helper = (n: i32) ->\n"   # line 0
+    "    n + 1\n"                   # line 1
+    "let main = () ->\n"           # line 2
+    "    let a = helper(2)\n"      # line 3: 'helper' starts at col 12 — hover here
+    "    let b =\n"                # line 4: BROKEN (missing RHS) — recovered, not fatal
+    "    let c = a\n"              # line 5
+    "    c\n"                       # line 6
+)
+bl = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": brkuri, "languageId": "fc",
+         "version": 1, "text": BROKEN_LIVE}}),
+    req(2, "textDocument/hover", {"textDocument": {"uri": brkuri},
+         "position": {"line": 3, "character": 13}}),       # hover 'helper' on a valid line
+    req(3, "textDocument/codeLens", {"textDocument": {"uri": brkuri}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+blresp, _, blbf, _, _ = run_session(bl)
+bl_hover = (blresp.get(2, {}).get("result") or {}).get("contents", {})
+bl_hover = bl_hover.get("value", "") if isinstance(bl_hover, dict) else str(bl_hover)
+check("recovery payoff: hover on a valid line works despite a broken line in the same file",
+      "i32" in bl_hover, repr(bl_hover))
+bl_lenses = blresp.get(3, {}).get("result") or []
+check("recovery payoff: CodeLens still provided for a file with a broken line",
+      isinstance(bl_lenses, list) and len(bl_lenses) > 0,
+      str(len(bl_lenses) if isinstance(bl_lenses, list) else bl_lenses))
+bl_msgs = blbf.get("fc_lsp_broken_live.fc", [[]])[-1]
+check("recovery payoff: the broken line still produces a diagnostic (squiggle stays live)",
+      len(bl_msgs) > 0, str(bl_msgs))
 
 # --- go-to-definition beyond plain identifiers: module members, struct-literal
 # type names, and union variant constructors all resolve to their declarations.

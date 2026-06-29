@@ -1,0 +1,4 @@
+// Recovery: a function literal missing its `->` body introducer.
+let f = (x: i32) x * 2
+let main = () ->
+    0

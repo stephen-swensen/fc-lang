@@ -48,12 +48,15 @@ typedef struct AnalysisResult {
     int              diag_count, diag_cap;
 
     bool             aborted;      /* a diag_fatal longjmp'd out of lex/parse */
-    bool             typed;        /* pass2 ran to completion: every node carries
-                                    * its inferred type. False when the parse
-                                    * aborted or a pass1 error gated pass2 — i.e.
-                                    * the AST has no usable type info. The server
-                                    * uses this to decide when to fall back to the
-                                    * last good analysis for type-aware queries. */
+    bool             typed;        /* pass2 ran: the well-formed parts of the AST carry
+                                    * their inferred types. pass2 now runs even past
+                                    * recoverable parse/pass1 errors, so this is true
+                                    * for ordinary mid-typing states (a broken line
+                                    * leaves EXPR_ERROR/poison nodes the queries skip).
+                                    * It is False only when the analysis HARD-aborted
+                                    * (a lexer longjmp — see `aborted`), where the AST
+                                    * has no type info; the server then falls back to
+                                    * the last good analysis for type-aware queries. */
 
     char            *source;       /* owned copy of the primary document text */
     int              source_len;

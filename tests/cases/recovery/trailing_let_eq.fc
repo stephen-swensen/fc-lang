@@ -1,0 +1,6 @@
+// Recovery: a let binding with no right-hand side (a common mid-typing state).
+// The parser must report the missing expression and recover, not abort.
+let main = () ->
+    let r2 =
+    let z = 1
+    z

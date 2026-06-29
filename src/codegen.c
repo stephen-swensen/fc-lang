@@ -4,6 +4,7 @@
 #include "diag.h"
 #include <inttypes.h>
 #include <string.h>
+#include <assert.h>
 
 /* Substitution context for monomorphized emission */
 typedef struct {
@@ -1147,6 +1148,7 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     switch (pat->kind) {
     case PAT_BINDING:
     case PAT_WILDCARD:
+    case PAT_ERROR:   /* unreachable: error nodes never reach codegen */
         break;
     case PAT_INT_LIT:
         if (!*first) fprintf(out, " && ");
@@ -1279,6 +1281,8 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
    type is the FC type of the value. */
 static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *out) {
     switch (pat->kind) {
+    case PAT_ERROR:   /* unreachable: error nodes never reach codegen */
+        break;
     case PAT_BINDING:
         emit_indent(out);
         if (is_hoisted(pat->binding.name)) {
@@ -4473,6 +4477,12 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
 
+    case EXPR_ERROR:
+        /* Tripwire: error nodes exist only when diag_error_count()>0, and codegen is
+           gated behind a clean compile, so reaching here is a compiler bug. */
+        assert(0 && "EXPR_ERROR reached codegen");
+        break;
+
     default:
         fprintf(out, "/* TODO: expr kind %d */", e->kind);
         break;
@@ -5787,6 +5797,8 @@ static void detect_features_expr(Expr *e) {
     if (g_needs_stdio && g_needs_math && g_needs_float) return; /* all found */
 
     switch (e->kind) {
+    case EXPR_ERROR:   /* unreachable: error nodes never reach codegen */
+        return;
     case EXPR_INTERP_STRING:
         g_needs_stdio = true;
         for (int i = 0; i < e->interp_string.segment_count; i++) {

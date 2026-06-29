@@ -1,0 +1,7 @@
+// Recovery: stray tokens in the middle of a block. The leaf-bump + watchdog must
+// consume them and keep the surrounding statements live (and not hang).
+let main = () ->
+    let a = 1
+    let b = )
+    let c = a
+    c

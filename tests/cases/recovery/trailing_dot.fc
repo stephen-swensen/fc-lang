@@ -1,0 +1,4 @@
+// Recovery: a field access with no field name yet (trailing `.` while typing).
+let main = () ->
+    let p = some_obj.
+    0

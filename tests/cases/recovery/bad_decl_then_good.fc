@@ -1,0 +1,8 @@
+// Recovery: a malformed top-level declaration must resync to the next declaration
+// so the good `struct` and `main` after it still parse cleanly (no cascade onto them).
+let 123 = 5
+struct point =
+    x: i32
+    y: i32
+let main = () ->
+    0

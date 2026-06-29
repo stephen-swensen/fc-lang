@@ -1,0 +1,7 @@
+// Recovery: a `when` guard with no arm body (`-> ...`). Reports and resyncs to the
+// next arm instead of aborting.
+let main = () ->
+    let x = 1
+    match x with
+    | y when true
+    | _ -> 0

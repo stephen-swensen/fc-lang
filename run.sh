@@ -36,7 +36,7 @@ FCC="$(make -s print-bin)"
 tmpdir=$(mktemp -d /tmp/fc-run.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
 
-"$FCC" "${fc_files[@]}" stdlib/* "${fc_flags[@]}" -o "$tmpdir/out.c"
+"$FCC" "${fc_files[@]}" stdlib/*.fc "${fc_flags[@]}" -o "$tmpdir/out.c"
 src_dir=$(dirname "${fc_files[0]}")
 cc -std=c11 -Wall -Werror -I "$src_dir" -o "$tmpdir/out" "$tmpdir/out.c" -lm
 set +e

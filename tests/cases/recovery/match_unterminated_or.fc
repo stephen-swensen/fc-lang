@@ -1,0 +1,6 @@
+// Recovery: a trailing body-less or-pattern alternative with no closing `-> body`.
+// Reports the unterminated or-pattern and discards the buffered alternative.
+let main = () ->
+    let x = 1
+    match x with
+    | 1
