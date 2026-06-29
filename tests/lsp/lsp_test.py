@@ -53,22 +53,29 @@ def change(v, text):    return note("textDocument/didChange",
 def hover(i, l, c):     return req(i, "textDocument/hover",
     {"textDocument": {"uri": URI}, "position": {"line": l, "character": c}})
 
+# Analysis is deferred: didOpen/didChange only mark the doc dirty, and the server
+# analyzes (and publishes diagnostics) at the next idle point or before the next
+# request — coalescing a burst of edits into one analysis (see the dedicated
+# coalescing test near the end). So each revision whose diagnostics we want to
+# observe is followed by a request, which forces a flush of THAT revision before
+# the next change overwrites it; hence one publishDiagnostics per state, in order.
 msgs = [
     req(1, "initialize", {"capabilities": {}}),
     note("initialized", {}),
-    open_doc(1, CLEAN),                                                  # diag[0] = clean
-    hover(2, 3, 8),                                                      # x -> i32
+    open_doc(1, CLEAN),
+    hover(2, 3, 8),                                                      # flush CLEAN -> diag[0]; x -> i32
     hover(3, 3, 13),                                                     # helper -> func
     req(4, "textDocument/definition", {"textDocument": {"uri": URI}, "position": {"line": 3, "character": 13}}),
     req(5, "textDocument/codeLens", {"textDocument": {"uri": URI}}),
     req(6, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 4, "character": 4}}),
     req(10, "textDocument/inlayHint", {"textDocument": {"uri": URI},     # inline type hints
         "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 0}}}),
-    change(2, TYPEERR),                                                  # diag[1] = type error
-    change(3, BROKEN),                                                   # diag[2] = unterminated
-    hover(7, 0, 4),                                                      # SURVIVAL: must still reply
-    change(4, UNICODE),                                                  # diag[3]
-    hover(8, 2, 12),                                                     # greeting after a multibyte line
+    change(2, TYPEERR),
+    hover(11, 1, 8),                                                     # flush TYPEERR -> diag[1] (z on line 1)
+    change(3, BROKEN),
+    hover(7, 0, 4),                                                      # flush BROKEN -> diag[2]; SURVIVAL: must still reply
+    change(4, UNICODE),
+    hover(8, 2, 12),                                                     # flush UNICODE -> diag[3]; greeting after a multibyte line
     req(9, "shutdown", None),
     note("exit", None),
 ]
@@ -771,6 +778,40 @@ bresp2, _, _, _, _ = run_session(bm2)
 qv = (bresp2.get(40, {}).get("result") or {}).get("contents", {}).get("value", "")
 check("plain local 'q' hovers as 'q: i32?' (no builtin doc bleed-through)",
       "q: i32?" in qv and "option" not in qv, qv)
+
+# --- edit coalescing: a burst of changes with no intervening request collapses
+# into ONE analysis. didOpen/didChange only mark the doc dirty; while more input is
+# already queued the server keeps draining and analyzes only the latest revision
+# (before the next request, or at the next idle point). So the intermediate states
+# never publish diagnostics — the editor doesn't flash a squiggle for text the user
+# already typed past. Here open(CLEAN) + change(TYPEERR) + change(BROKEN) arrive
+# back-to-back; only BROKEN's `unterminated` diagnostic should ever be published.
+co_uri = "file:///tmp/fc_lsp_coalesce.fc"
+co = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": co_uri, "languageId": "fc",
+         "version": 1, "text": CLEAN}}),
+    note("textDocument/didChange", {"textDocument": {"uri": co_uri, "version": 2},
+         "contentChanges": [{"text": TYPEERR}]}),
+    note("textDocument/didChange", {"textDocument": {"uri": co_uri, "version": 3},
+         "contentChanges": [{"text": BROKEN}]}),
+    req(2, "textDocument/hover", {"textDocument": {"uri": co_uri},       # forces the single flush
+        "position": {"line": 0, "character": 4}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, co_diags, _, _, _ = run_session(co)
+# Exactly one publishDiagnostics for three buffered revisions (CLEAN/TYPEERR/BROKEN).
+check("coalescing: a burst of 3 edits yields a single diagnostics publish",
+      len(co_diags) == 1, f"{len(co_diags)} publishes: {co_diags}")
+# The one published state is the latest (BROKEN -> unterminated), never an
+# intermediate (no clean [] and no type-error squiggle was ever emitted).
+flat = [m for d in co_diags for m in (x["message"] for x in d)]
+check("coalescing: only the final revision's diagnostic is published (unterminated)",
+      any("unterminated" in m for m in flat)
+      and not any("numeric" in m or "bool" in m for m in flat)
+      and [] not in co_diags, str(co_diags))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

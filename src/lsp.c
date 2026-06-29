@@ -24,6 +24,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <poll.h>
 #endif
 
 /* ======================================================================== */
@@ -36,6 +37,9 @@ typedef struct {
     char           *text;       /* owned: current full document text (UTF-8) */
     int             text_len;
     long            version;
+    bool            dirty;      /* text changed since last analysis. didOpen/didChange
+                                 * only set this; analysis is deferred so a burst of
+                                 * keystrokes coalesces into one analyze (see lsp_main). */
     AnalysisResult *result;     /* latest analysis; NULL until first analyze */
     AnalysisResult *last_good;  /* most recent analysis that type-checked (result
                                  * itself when fresh is good), retained so a
@@ -1102,6 +1106,34 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
     publish_diagnostics(S, doc);
 }
 
+/* Analyze every document whose text changed since its last analysis (and publish
+ * its diagnostics). Called when the input queue drains and before answering any
+ * type-aware request, so deferred edits are realized exactly once per quiet
+ * point — collapsing a burst of keystrokes into a single analysis. */
+static void flush_dirty(LspServer *S) {
+    for (int i = 0; i < S->store.count; i++) {
+        LspDoc *doc = &S->store.docs[i];
+        if (doc->dirty) {
+            doc->dirty = false;
+            analyze_doc(S, doc);
+        }
+    }
+}
+
+/* True if more input is already waiting, so we should keep reading (and coalesce)
+ * rather than analyze now. Relies on stdin being unbuffered (see lsp_main): with
+ * no stdio read-ahead, a poll at the fd level reflects the true pending state.
+ * On Windows we can't poll stdin portably, so report "nothing pending" — every
+ * message then flushes immediately, i.e. the original un-coalesced behavior. */
+static bool input_pending(void) {
+#if defined(_WIN32)
+    return false;
+#else
+    struct pollfd p = { .fd = 0, .events = POLLIN, .revents = 0 };
+    return poll(&p, 1, 0) > 0;
+#endif
+}
+
 /* ======================================================================== */
 /* Handlers: text sync                                                       */
 /* ======================================================================== */
@@ -1130,7 +1162,7 @@ static void handle_did_open(LspServer *S, JsonValue *params) {
     memcpy(doc->text, text, (size_t)doc->text_len);
     doc->text[doc->text_len] = '\0';
 
-    analyze_doc(S, doc);
+    doc->dirty = true;   /* analyzed at the next idle flush (see lsp_main) */
 }
 
 static void handle_did_change(LspServer *S, JsonValue *params) {
@@ -1157,7 +1189,7 @@ static void handle_did_change(LspServer *S, JsonValue *params) {
     JsonValue *vv = json_get(td, "version");
     if (vv && vv->kind == JSON_NUMBER) doc->version = (long)vv->num;
 
-    analyze_doc(S, doc);
+    doc->dirty = true;   /* analyzed at the next idle flush (see lsp_main) */
 }
 
 static void handle_did_close(LspServer *S, JsonValue *params) {
@@ -1905,6 +1937,11 @@ static void dispatch(LspServer *S, JsonValue *req) {
     JsonValue *params = json_get(req, "params");
     bool is_request = (id != NULL);
 
+    /* Any request expecting a reply (hover, definition, completion, …) must
+     * answer against current types, so realize deferred edits first. No-op when
+     * nothing is dirty (e.g. initialize, or a request with no pending change). */
+    if (is_request) flush_dirty(S);
+
     if (strcmp(method, "initialize") == 0) {
         handle_initialize(S, id);
     } else if (strcmp(method, "initialized") == 0) {
@@ -2033,6 +2070,11 @@ int lsp_main(void) {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
+    /* Unbuffer stdin so input_pending()'s fd-level poll is accurate: with stdio
+     * read-ahead, a buffered next message would be invisible to poll and defeat
+     * coalescing. LSP message volume is tiny, so byte-granular reads cost nothing. */
+    setvbuf(stdin, NULL, _IONBF, 0);
+
     LspServer S = {0};
     arena_init(&S.msg_arena);
     load_stdlib(&S);
@@ -2058,6 +2100,11 @@ int lsp_main(void) {
             const char *method = json_get_str(req, "method");
             dispatch(&S, req);
             if (method && strcmp(method, "exit") == 0) { exiting = true; break; }
+
+            /* didOpen/didChange only mark the doc dirty; analyze once the client
+             * pauses. While more messages are already queued, keep draining so a
+             * fast burst of edits collapses into a single analysis. */
+            if (!input_pending()) flush_dirty(&S);
         }
     }
 
