@@ -84,8 +84,14 @@ open-item backlog. None of these block release.
 
 ### Smaller follow-ups (non-blocking)
 
-- **Completion over-offers** — no flow-sensitive local scoping, so it lists
-  names not yet in scope at the cursor. Needs a scope-at-position filter.
+- **Completion within-function flow-sensitivity** — the scope-at-position
+  filter shipped: `complete_scope` walks the decl tree by line span and offers
+  the enclosing module's members + imports, the enclosing function's locals,
+  file imports, and top-level (no more global dump). One residual gap: inside a
+  function body `harvest_expr` collects every local regardless of source order,
+  so a `let` declared textually *after* the cursor is still offered. A line
+  filter on the harvest closes it. Low value (a name you're about to type
+  showing up a few lines early is mild).
 - **Variant-constructor go-to-definition granularity** — lands on the union
   declaration, not the specific variant. Deliberate today, but `UnionVariant.loc`
   is now recorded, so refining it is a small change plus a wire-test update.
@@ -96,11 +102,13 @@ open-item backlog. None of these block release.
   extern-reserved-name check. These still abort the analysis (LSP falls back to
   `last_good`, no crash); converting them to `diag_error` + a best-effort node
   would close the last in-band recovery gaps. Low value (rare mid-typing).
-- **Stdlib re-parse per keystroke** — `analyze()` re-lexes/parses the whole
-  merged stdlib on every edit; caching the parsed stdlib would cut per-keystroke
-  CPU (the leak it also caused is already fixed). This — *not* incremental
-  reparsing — is the cheaper next perf win for large projects; error-recovery
-  parsing is the shared prerequisite for both.
+- **Stdlib AST re-parse per keystroke** — the dominant half shipped: a session
+  lex cache (commit `70a3331`) keeps unchanged feed sources (stdlib + `lsp.rsp`
+  files) from being re-lexed each keystroke, and edit-burst coalescing
+  (`263bff2`) collapses bursts into one analysis. `analyze()` still re-*parses*
+  the cached tokens into a fresh AST each time; caching the parsed AST
+  (token→AST) is the remaining, lower-value win now that lexing — the dominant
+  cost — is cached.
 - **Install targets are Linux-only** — `make install` / `install-vscode` assume
   a Linux layout; Windows/macOS packaging is unwritten.
 

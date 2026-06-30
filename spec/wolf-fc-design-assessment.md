@@ -74,11 +74,16 @@ lifetimes, traits, borrows, or ownership types. But three other places are worth
    avoids Rust's conceptual tax cleanly; it is accumulating a syntax-surface tax. These are
    different axes and worth tracking separately, because the second one sneaks up.
 
-3. **Inferred return types lean hard on tooling.** No return annotations is lovely for terseness,
-   but in a 4.6K-line `main.fc` a function's contract isn't visible without running inference in
-   your head — you're betting on LSP inlay hints to carry it. A legitimate TypeScript-ish stance,
-   but a sharp departure from C's "everything is declared," and likely *why* the LSP work looms so
-   large. A soft spot that grows with codebase size.
+3. **Inferred return types locate the contract in the tooling, not the syntax.** No return
+   annotations is lovely for terseness, but in a 4.6K-line `main.fc` a function's contract isn't
+   visible without running inference in your head — the source alone doesn't state it; the editor
+   does. FC already answers this with a mature in-process LSP (`fcc --lsp`): inferred-type
+   CodeLens/inlay hints, hover, go-to-definition, and scope-aware completion, with wolf-fc pinning
+   its own compilation unit via `lsp.rsp`. So the capability is real and shipped — the design
+   *observation* is just that FC, like TypeScript, deliberately puts a function's contract in the
+   tooling rather than the declaration. A legitimate stance, and a real departure from C's
+   "everything is declared"; the residual cost is that reading the code *without* the editor is
+   harder, and that grows with codebase size.
 
 *Minor leaks:* the `->` triple-overload forcing `(p->x)` parens inside match guards
 (`examples.fc:307`), and tagless-typedef interop needing the `any*` + mirror-struct dance
