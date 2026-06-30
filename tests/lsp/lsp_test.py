@@ -1059,5 +1059,90 @@ check("completion: after 'vgagraph.' the member type is 'huffnode' once, no mang
       mem_labels.count("huffnode") == 1 and "helper" in mem_labels
       and "vgagraph__huffnode" not in mem_labels, str(mem_labels))
 
+# --- completion: lexical scope at the cursor (module siblings + function locals)
+# Inside a module function, its sibling members are in scope as bare names, and
+# the enclosing function's params/lets are in scope — completion must offer both.
+# A module-internal local must NOT leak to a sibling top-level function's scope.
+SCOPE = (
+    "module vgagraph =\n"                                 # 0
+    "    struct huffnode =\n"                             # 1
+    "        bit0: i32\n"                                 # 2
+    "    let huff_expand = (n: i32) ->\n"                 # 3
+    "        n\n"                                         # 4
+    "    let decompress_at = (raw: i32, dict: i32) ->\n"  # 5
+    "        let expanded_len = raw + 1\n"                # 6
+    "        \n"                                          # 7  cursor: inside decompress_at
+    "    let decompress_chunk = (chunk: i32) ->\n"        # 8
+    "        chunk\n"                                     # 9
+    "\n"                                                  # 10
+    "let main = (args: str[]) ->\n"                       # 11
+    "    let top_local = 5\n"                             # 12
+    "    \n"                                              # 13  cursor: inside top-level main
+    "    return 0\n"                                      # 14
+)
+sc = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, SCOPE),
+    req(2, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 7, "character": 8}}),
+    req(3, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 13, "character": 4}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+scresp, _, _, _, _ = run_session(sc)
+def sc_labels(rid):
+    res = scresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return [it.get("label") for it in (its or [])]
+inmod = sc_labels(2)
+intop = sc_labels(3)
+check("completion: a module's sibling members are in scope inside its functions",
+      all(x in inmod for x in ("huff_expand", "decompress_chunk", "huffnode")),
+      str([l for l in inmod if "decompress" in (l or "") or "huff" in (l or "")]))
+check("completion: the enclosing function's params and locals are in scope",
+      all(x in inmod for x in ("raw", "dict", "expanded_len")), str(inmod))
+check("completion: an in-scope sibling member is not duplicated",
+      inmod.count("huff_expand") == 1, str([l for l in inmod if l == "huff_expand"]))
+check("completion: a top-level function sees its own locals/params",
+      "top_local" in intop and "args" in intop and "vgagraph" in intop, str(intop))
+check("completion: a module-internal local does not leak to a top-level scope",
+      "expanded_len" not in intop, str([l for l in intop if "expand" in (l or "")]))
+
+# --- completion: scope walk survives the multi-file merge's namespace sentinels.
+# analyze() injects a line-0 / NULL-filename DECL_NAMESPACE "reset sentinel"
+# before every merged file that doesn't open with a namespace (src/analyze.c). In
+# a multi-file unit, a sentinel for a file ordered AFTER the open one lands past
+# the open file's module in the decl list; the scope walk must ignore foreign and
+# synthetic decls (match filename + real line) or that sentinel wins the line race
+# and no in-scope names are offered. `zz.fc` sorts after `data.fc` under src/*.fc,
+# so its sentinel reproduces exactly the wolf-fc regression.
+rsp_proj = tempfile.mkdtemp(prefix="fc_lsp_scope_rsp_")
+rwrite(os.path.join(rsp_proj, "src", "data.fc"),
+       "module vgagraph =\n"
+       "    let huff_expand = (n: i32) ->\n"
+       "        n\n"
+       "    let decompress_at = (raw: i32, dict: i32) ->\n"
+       "        let expanded_len = raw + 1\n"
+       "        \n"                                     # line 5: cursor, inside decompress_at
+       "    let decompress_chunk = (chunk: i32) ->\n"
+       "        chunk\n")
+rwrite(os.path.join(rsp_proj, "src", "zz.fc"),
+       "module other =\n    let g = () ->\n        0\n")  # merged AFTER data.fc -> a sentinel follows vgagraph
+rwrite(os.path.join(rsp_proj, "lsp.rsp"), "# unit\nsrc/*.fc\n")
+dp = os.path.join(rsp_proj, "src", "data.fc")
+rsp_sess = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + dp,
+         "languageId": "fc", "version": 1, "text": open(dp).read()}}),
+    req(2, "textDocument/completion", {"textDocument": {"uri": "file://" + dp},
+         "position": {"line": 5, "character": 8}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+rresp, _, _, _, _ = run_session(rsp_sess)
+rres = rresp.get(2, {}).get("result") or {}
+rits = rres.get("items") if isinstance(rres, dict) else rres
+rlabels = [it.get("label") for it in (rits or [])]
+check("completion: in-scope names survive merged-unit namespace sentinels (lsp.rsp)",
+      all(x in rlabels for x in ("huff_expand", "decompress_chunk", "expanded_len", "raw", "dict")),
+      str([l for l in rlabels if l and ("huff" in l or "decompress" in l or "expand" in l or l in ("raw","dict"))]))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

@@ -1849,6 +1849,102 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     return false;
 }
 
+/* Dedup set over interned names (all symbol/identifier strings share the
+ * analysis intern table, so pointer compare suffices). Returns false if `name`
+ * was already present. */
+typedef struct { const char **names; int n, cap; } NameSet;
+static bool nameset_add(NameSet *s, const char *name) {
+    if (!name) return false;
+    for (int i = 0; i < s->n; i++) if (s->names[i] == name) return false;
+    DA_APPEND(s->names, s->n, s->cap, name);
+    return true;
+}
+
+static int import_kind_to_cik(DeclKind k) {
+    switch (k) {
+        case DECL_MODULE: return CIK_MODULE;
+        case DECL_STRUCT: return CIK_STRUCT;
+        case DECL_UNION:  return CIK_ENUM;
+        default:          return CIK_VARIABLE;
+    }
+}
+
+/* Find the module Symbol for a module Decl within `scope` (the global symtab, or
+ * a parent module's member table). Match by decl pointer to sidestep name/ns
+ * ambiguity. */
+static Symbol *module_sym_for(SymbolTable *scope, const Decl *d) {
+    if (!scope) return NULL;
+    for (int i = 0; i < scope->count; i++)
+        if (scope->symbols[i].kind == DECL_MODULE && scope->symbols[i].decl == d)
+            return &scope->symbols[i];
+    return NULL;
+}
+
+static void emit_imports(Arena *a, JsonValue *items, NameSet *seen,
+                         ImportTable *imp) {
+    if (!imp) return;
+    for (int i = 0; i < imp->count; i++) {
+        ImportRef *ref = &imp->entries[i];
+        if (!nameset_add(seen, ref->local_name)) continue;
+        add_item(a, items, ref->local_name, import_kind_to_cik(ref->kind), NULL);
+    }
+}
+
+/* Add the bare names in scope at `target_line`: walk the decl tree by line span
+ * (open-file decls only), emitting each enclosing module's members + imports and
+ * then, for the innermost enclosing function, its locals (params/lets/for-vars).
+ * `scope` is the symbol table whose module decls in `decls` resolve through.
+ * This mirrors FC's lexical resolution: a module's siblings are visible bare
+ * within it, and a function's bindings within its body. */
+static void complete_scope(Arena *a, JsonValue *items, NameSet *seen,
+                           Decl **decls, int n, SymbolTable *scope,
+                           const char *file, int target_line) {
+    /* The container is the last decl from this file that starts at or before the
+     * cursor (decls are in source order, so its span reaches the next sibling).
+     * Require a matching filename AND a real (1-based) line: the merged program
+     * mixes in other files' decls and synthetic, line-0 / NULL-filename decls
+     * (e.g. a stdlib `namespace std` wrapper) that must not win the line race. */
+    Decl *enc = NULL;
+    for (int i = 0; i < n; i++) {
+        Decl *d = decls[i];
+        if (!d) continue;
+        if (file && (!d->loc.filename || strcmp(d->loc.filename, file) != 0)) continue;
+        if (d->loc.line <= 0 || d->loc.line > target_line) continue;
+        enc = d;
+    }
+    if (!enc) return;
+
+    if (enc->kind == DECL_MODULE) {
+        Symbol *ms = module_sym_for(scope, enc);
+        if (!ms) return;
+        if (ms->members) {
+            SymbolTable *m = ms->members;
+            for (int i = 0; i < m->count; i++) {
+                if (m->symbols[i].is_private) continue;
+                if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
+                if (!nameset_add(seen, m->symbols[i].name)) continue;
+                char detail[512]; detail[0] = '\0';
+                if (m->symbols[i].type)
+                    copy_type_name(m->symbols[i].type, detail, sizeof detail);
+                add_item(a, items, m->symbols[i].name,
+                         sym_kind_to_cik(&m->symbols[i]), detail[0] ? detail : NULL);
+            }
+        }
+        emit_imports(a, items, seen, ms->imports);
+        /* Descend: a nested module/function may further narrow the scope. */
+        complete_scope(a, items, seen, enc->module.decls, enc->module.decl_count,
+                       ms->members, file, target_line);
+    } else if (enc->kind == DECL_LET) {
+        /* The enclosing function: harvest its bindings (and referenced names). */
+        const char **names = NULL; int nn = 0, cap = 0;
+        harvest_expr(enc->let.init, &names, &nn, &cap);
+        for (int i = 0; i < nn; i++)
+            if (nameset_add(seen, names[i]))
+                add_item(a, items, names[i], CIK_VARIABLE, NULL);
+        free(names);
+    }
+}
+
 static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     Arena *a = &S->msg_arena;
     JsonValue *td = json_get(params, "textDocument");
@@ -1884,40 +1980,43 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
         return;
     }
 
-    /* Global context: keywords + top-level symbols + file identifiers. */
+    /* Global context: keywords, then everything in lexical scope at the cursor —
+     * enclosing-module members + imports and the enclosing function's locals
+     * (complete_scope), file-level imports, and top-level symbols. A NameSet
+     * dedups across all of these so a name in scope two ways is offered once. */
     for (int i = 0; i < KEYWORD_COUNT; i++)
         add_item(a, items, KEYWORDS[i], CIK_KEYWORD, NULL);
 
     AnalysisResult *r = query_result(doc);
     if (r) {
+        NameSet seen = {0};
+
+        /* In-scope module members / imports / function locals (innermost-first). */
+        if (r->program)
+            complete_scope(a, items, &seen, r->program->decls,
+                           r->program->decl_count, &r->symtab, doc->path, line1);
+
+        /* File-level imports visible to this file. */
+        for (int i = 0; i < r->file_scopes.count; i++) {
+            FileImportScope *fs = &r->file_scopes.scopes[i];
+            if (fs->filename && doc->path && strcmp(fs->filename, doc->path) != 0)
+                continue;
+            emit_imports(a, items, &seen, &fs->imports);
+        }
+
+        /* Top-level (global) declarations. */
         SymbolTable *st = &r->symtab;
         for (int i = 0; i < st->count; i++) {
             if (st->symbols[i].is_private) continue;
             if (!st->symbols[i].name) continue;
             if (sym_is_mangled_type_twin(&st->symbols[i])) continue;
+            if (!nameset_add(&seen, st->symbols[i].name)) continue;
             char detail[512]; detail[0] = '\0';
             if (st->symbols[i].type) copy_type_name(st->symbols[i].type, detail, sizeof detail);
             add_item(a, items, st->symbols[i].name, sym_kind_to_cik(&st->symbols[i]),
                      detail[0] ? detail : NULL);
         }
-        if (r->program) {
-            const char **names = NULL; int n = 0, cap = 0;
-            for (int i = 0; i < r->program->decl_count; i++) {
-                Decl *d = r->program->decls[i];
-                if (!d || d->kind != DECL_LET) continue;
-                if (d->loc.filename && strcmp(d->loc.filename, doc->path) != 0) continue;
-                harvest_expr(d->let.init, &names, &n, &cap);
-            }
-            /* Harvested names pick up block-locals (params, lets, for-vars) the
-             * global symtab doesn't carry, but they also re-collect references to
-             * top-level symbols already emitted above. Skip any name the symtab
-             * already supplied so a global like `vgagraph` isn't offered twice. */
-            for (int i = 0; i < n; i++) {
-                if (symtab_lookup(st, names[i])) continue;
-                add_item(a, items, names[i], CIK_VARIABLE, NULL);
-            }
-            free(names);
-        }
+        free(seen.names);
     }
 
     JsonValue *list = json_object(a);
