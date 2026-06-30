@@ -469,6 +469,15 @@ typedef struct {
     const BuiltinDoc *builtin;      /* set when the winning node is a built-in intrinsic
                                        (alloc/some/.../stdin); hover renders its doc instead
                                        of a `name: type` line. Cleared by every consider() win. */
+
+    /* Member-completion hook: the operator (`.`/`->`) position of an in-progress
+     * member access. During the walk, the EXPR_FIELD/EXPR_DEREF_FIELD node whose
+     * loc matches is captured in op_field — its `field.object` carries the object
+     * expression's type for ANY object shape (`dict[i]`, `f()`, nested), which a
+     * position lookup on the object's last character can't reach when that char is
+     * a `]`/`)`. Zero op_line disables the hook. */
+    int   op_line, op_col;
+    Expr *op_field;
 } FindCtx;
 
 static Type *peel_to_aggregate(Type *t);   /* defined in the completion section */
@@ -583,6 +592,12 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         case EXPR_FIELD:
         case EXPR_DEREF_FIELD:
             find_in_expr(e->field.object, c);
+            /* Member-completion capture: the parser stamps EXPR_FIELD.loc with the
+             * operator token (`.`/`->`), so match the completion operator position
+             * to grab this node regardless of the field name's completeness (the
+             * in-progress name may be empty or absent). */
+            if (c->op_line && e->loc.line == c->op_line && e->loc.col == c->op_col)
+                c->op_field = e;
             /* The field-name token's exact source loc is recorded by the parser,
              * so hover/definition target the field name precisely regardless of the
              * object expression's shape (a.b, a.b.c, s . field) or spacing. Go-to-
@@ -1837,24 +1852,48 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
                 return true;
     }
 
-    /* Derive line/col from the anchor byte and locate the object node. */
+    /* One AST walk resolves two things: the anchor node (the object's last char,
+     * for simple `a.b` / `::` paths) and — via the op-position hook — the field
+     * node at the operator, whose `field.object` gives the object type for ANY
+     * shape (`dict[i]`, `f()`, nested), which the anchor can't when the object
+     * ends in `]`/`)`. */
     int line0 = 0;
     for (int i = 0; i < idx->count; i++)
         if (idx->starts[i] <= anchor) line0 = i; else break;
+    int oline0 = 0;
+    for (int i = 0; i < idx->count; i++)
+        if (idx->starts[i] <= dot_byte) oline0 = i; else break;
     FindCtx c = {0};
     c.target_line = line0 + 1;
     c.target_col = anchor - idx->starts[line0] + 1;
+    c.op_line = oline0 + 1;
+    c.op_col = dot_byte - idx->starts[oline0] + 1;
     c.src = doc->text;
     c.idx = idx;
     c.file = doc->path;
     AnalysisResult *r = query_result(doc);
     if (!r || !r->program) return false;
     find_in_decls(r->program->decls, r->program->decl_count, &c);
-    if (!c.found) return false;
 
-    /* Module members ('.'/'::' only). */
-    if (!arrow && c.sym && c.sym->kind == DECL_MODULE && c.sym->members) {
-        SymbolTable *m = c.sym->members;
+    Expr *obj = c.op_field ? c.op_field->field.object : NULL;
+
+    /* Module members ('.'/'::'): the object resolves to a module — the anchor
+     * landed on the module name ('::' paths, simple `mod.`), or the field node's
+     * object is a module-typed ident or a nested `a.b` module member. (A union
+     * with a companion module keeps its variants below: resolved_sym is the
+     * union, not the module, so `mod` stays NULL here.) */
+    Symbol *mod = NULL;
+    if (!arrow) {
+        if (c.sym && c.sym->kind == DECL_MODULE) mod = c.sym;
+        else if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
+                 obj->ident.resolved_sym->kind == DECL_MODULE)
+            mod = obj->ident.resolved_sym;
+        else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
+                 obj->field.resolved_member->kind == DECL_MODULE)
+            mod = obj->field.resolved_member;
+    }
+    if (mod && mod->members) {
+        SymbolTable *m = mod->members;
         for (int i = 0; i < m->count; i++) {
             if (m->symbols[i].is_private) continue;
             if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
@@ -1867,7 +1906,9 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
         return true;
     }
 
-    Type *t = c.type;
+    /* Value dispatch on the object's type: the field node's object (any shape),
+     * else the anchored node (simple idents the field capture didn't reach). */
+    Type *t = (obj && obj->type) ? obj->type : c.type;
     /* '->' dereferences exactly one pointer level (pass2: -> requires a pointer
      * to struct). '.' on a pointer is a type error in FC, so offer nothing. */
     if (arrow) {

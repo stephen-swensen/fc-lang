@@ -1241,5 +1241,46 @@ check("completion: Invoked '->' at a lambda body also stays empty (no global lea
 check("completion: a genuine pointer '->' still completes fields under a trigger char",
       set(trg_labels(4)) == {"x"}, str(trg_labels(4)))
 
+# --- completion: member access on a composite object (index / call / nested) --
+# The object before a '.'/'->' need not be a bare identifier. `dict[i].` ends in
+# ']', `mk().` in ')', which no leaf node's position span covers — so the server
+# captures the field node by its operator position and reads field.object.type.
+# Index→struct, call→struct, and index→pointer '->' must all complete the fields.
+CMP = (
+    "module m =\n"                                       # 0
+    "    struct pt =\n"                                  # 1
+    "        bit0: i32\n"                                # 2
+    "        bit1: i32\n"                                # 3
+    "    let mk = (n: i32) ->\n"                         # 4
+    "        pt { bit0 = n, bit1 = n }\n"                # 5
+    "    let f = (arr: pt[], pp: pt*[]) ->\n"            # 6
+    "        let a = arr[0].bit0\n"                      # 7  index  -> struct '.'
+    "        let b = mk(3).bit1\n"                       # 8  call   -> struct '.'
+    "        let c = pp[0]->bit0\n"                      # 9  index  -> pointer '->'
+    "        0\n")                                       # 10
+def cmpreq(i, ln, after):
+    col = CMP.split("\n")[ln].index(after) + len(after) + 1   # one char into the member
+    return req(i, "textDocument/completion",
+               {"textDocument": {"uri": URI}, "position": {"line": ln, "character": col}})
+cmps = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, CMP),
+    cmpreq(2, 7, "arr[0]."),
+    cmpreq(3, 8, "mk(3)."),
+    cmpreq(4, 9, "pp[0]->"),
+    req(9, "shutdown", None), note("exit", None),
+]
+cmpresp, _, _, _, _ = run_session(cmps)
+def cmp_labels(rid):
+    res = cmpresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return set(it.get("label") for it in (its or []))
+check("completion: a slice element 'arr[i].' completes the element struct's fields",
+      cmp_labels(2) == {"bit0", "bit1"}, str(cmp_labels(2)))
+check("completion: a call result 'f().' completes the returned struct's fields",
+      cmp_labels(3) == {"bit0", "bit1"}, str(cmp_labels(3)))
+check("completion: a slice-of-pointers element 'arr[i]->' completes pointee fields",
+      cmp_labels(4) == {"bit0", "bit1"}, str(cmp_labels(4)))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
