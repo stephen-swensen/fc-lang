@@ -1711,6 +1711,24 @@ static int sym_kind_to_cik(const Symbol *s) {
     }
 }
 
+/* pass1 registers every struct/union type a SECOND time under its mangled C
+ * name — file-scope `fc__x`, module-scoped `mod__x` — so canonicalized type
+ * stubs resolve directly (see register_struct_sym / register_module_members in
+ * pass1.c). That twin's symbol name IS the type's mangled name, whereas the
+ * user-facing entry is keyed by the source name. These twins are never writable
+ * as bare identifiers, so completion must skip them — otherwise it offers
+ * `vgagraph__huffnode` (and twice over, since the module-member table holds both
+ * keys and both register into the global symtab). Pointer compare: names are
+ * interned. */
+static bool sym_is_mangled_type_twin(const Symbol *s) {
+    if (!s->type) return false;
+    if (s->kind == DECL_STRUCT && s->type->kind == TYPE_STRUCT)
+        return s->name == s->type->struc.name;
+    if (s->kind == DECL_UNION && s->type->kind == TYPE_UNION)
+        return s->name == s->type->unio.name;
+    return false;
+}
+
 /* Peel option/pointer one level to reach a struct/union for member access. */
 static Type *peel_to_aggregate(Type *t) {
     for (int i = 0; t && i < 4; i++) {
@@ -1803,6 +1821,7 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
         SymbolTable *m = c.sym->members;
         for (int i = 0; i < m->count; i++) {
             if (m->symbols[i].is_private) continue;
+            if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
             char detail[512];
             detail[0] = '\0';
             if (m->symbols[i].type) copy_type_name(m->symbols[i].type, detail, sizeof detail);
@@ -1875,6 +1894,7 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
         for (int i = 0; i < st->count; i++) {
             if (st->symbols[i].is_private) continue;
             if (!st->symbols[i].name) continue;
+            if (sym_is_mangled_type_twin(&st->symbols[i])) continue;
             char detail[512]; detail[0] = '\0';
             if (st->symbols[i].type) copy_type_name(st->symbols[i].type, detail, sizeof detail);
             add_item(a, items, st->symbols[i].name, sym_kind_to_cik(&st->symbols[i]),
@@ -1888,7 +1908,14 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
                 if (d->loc.filename && strcmp(d->loc.filename, doc->path) != 0) continue;
                 harvest_expr(d->let.init, &names, &n, &cap);
             }
-            for (int i = 0; i < n; i++) add_item(a, items, names[i], CIK_VARIABLE, NULL);
+            /* Harvested names pick up block-locals (params, lets, for-vars) the
+             * global symtab doesn't carry, but they also re-collect references to
+             * top-level symbols already emitted above. Skip any name the symtab
+             * already supplied so a global like `vgagraph` isn't offered twice. */
+            for (int i = 0; i < n; i++) {
+                if (symtab_lookup(st, names[i])) continue;
+                add_item(a, items, names[i], CIK_VARIABLE, NULL);
+            }
             free(names);
         }
     }

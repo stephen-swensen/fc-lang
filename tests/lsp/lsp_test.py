@@ -1018,5 +1018,46 @@ a_last = sibbf.get("a.fc", [["?"]])[-1]
 check("lex cache: edited sibling feed re-lexed; importer stays clean (slot replace)",
       a_last == [], str(a_last))
 
+# --- completion: module-scoped types never leak their mangled C twin -----------
+# pass1 registers each module struct/union a SECOND time under its mangled name
+# (e.g. `vgagraph__huffnode`) so type stubs resolve, and that twin lands in BOTH
+# the module member table AND the global symtab. Completion must hide these: at
+# top level it must not offer `vgagraph__huffnode`, and after `vgagraph.` it must
+# list `huffnode` exactly once (not the mangled twin, not a duplicate). It must
+# also not offer the same global twice (symtab entry + a harvested reference).
+COMP = (
+    "module vgagraph =\n"
+    "    struct huffnode =\n"
+    "        bit0: i32\n"
+    "        bit1: i32\n"
+    "    let helper = (n: i32) ->\n"
+    "        n\n"
+    "\n"
+    "let main = (args: str[]) ->\n"
+    "    let v = vgagraph.helper(3)\n"   # line 8: a reference to `vgagraph`
+    "    return 0\n"                      # line 9: top-level completion anchor
+)
+cm = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, COMP),
+    req(2, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 9, "character": 4}}),
+    req(3, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 8, "character": 22}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+cresp, _, _, _, _ = run_session(cm)
+def comp_labels(rid):
+    res = cresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return [it.get("label") for it in (its or [])]
+top_labels = comp_labels(2)
+mem_labels = comp_labels(3)
+check("completion: top level offers the module name, never its mangled type twin",
+      "vgagraph" in top_labels and "vgagraph__huffnode" not in top_labels, str(top_labels))
+check("completion: a referenced global appears once, not duplicated by harvesting",
+      top_labels.count("vgagraph") == 1, str([l for l in top_labels if l == "vgagraph"]))
+check("completion: after 'vgagraph.' the member type is 'huffnode' once, no mangled twin",
+      mem_labels.count("huffnode") == 1 and "helper" in mem_labels
+      and "vgagraph__huffnode" not in mem_labels, str(mem_labels))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
