@@ -53,6 +53,137 @@ static Program *lex_parse_one(AnalysisResult *r, const char *text,
     return prog;
 }
 
+/* ---- lex cache ----
+ *
+ * Feed sources (stdlib + sibling/lsp.rsp files) are stable across most edits, so
+ * their token arrays are cached per path and reused, skipping the dominant lexing
+ * cost. Re-parsing cached tokens is identical to re-lexing: the parser only reads
+ * tokens, and tokenization never interns (it just records `start`/`length` slices
+ * of the source), so the cache carries no interner dependency. */
+
+static uint64_t fnv64(const void *data, size_t n) {
+    const unsigned char *p = data;
+    uint64_t h = 1469598103934665603ULL;       /* FNV-1a 64 offset basis */
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ULL; }
+    return h;
+}
+
+/* Identity of the conditional-compile flag set. A feed file lexed under one set
+ * of flags is invalid under another (filter_conditionals strips #if-like spans by
+ * flag), so a flag change must miss and re-lex. */
+static uint64_t flags_signature(const Flag *flags, int flag_count) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int i = 0; i < flag_count; i++) {
+        h = fnv64(flags[i].name, (size_t)flags[i].name_len) ^ (h * 1099511628211ULL);
+        if (flags[i].value)
+            h = fnv64(flags[i].value, strlen(flags[i].value)) ^ (h * 1099511628211ULL);
+        h *= 1099511628211ULL;   /* separator so {ab,c} != {a,bc} */
+    }
+    return h;
+}
+
+static LexCacheEntry *lexcache_slot(LexCache *c, const char *path) {
+    for (int i = 0; i < c->count; i++)
+        if (strcmp(c->entries[i].path, path) == 0) return &c->entries[i];
+    return NULL;
+}
+
+/* Feed source via the lex cache: reuse cached tokens on a content+flags match,
+ * else lex and (re)populate the slot. Re-parses into r->arena like lex_parse_one,
+ * but the tokens are owned by the cache (NOT appended to r->token_arrays, so
+ * analysis_free never frees them). */
+static Program *parse_feed_cached(AnalysisResult *r, LexCache *cache,
+                                  const AnalysisSource *src, const char *fn,
+                                  const Flag *flags, int flag_count, uint64_t flags_sig) {
+    LexCacheEntry *e = lexcache_slot(cache, src->filename);
+
+    bool hit = false;
+    if (e && e->flags_sig == flags_sig && e->len == src->len) {
+        if (e->last_src == src->text) hit = true;               /* stable-buffer fast path */
+        else if (e->hash == fnv64(src->text, (size_t)src->len) &&
+                 memcmp(e->text, src->text, (size_t)src->len) == 0) hit = true;
+    }
+
+    Token *tokens;
+    int tc;
+    if (hit) {
+        e->last_src = src->text;
+        tokens = e->tokens;
+        tc = e->token_count;
+    } else {
+        /* MISS: lex with the same abort slots as lex_parse_one so a feed layout
+         * error still longjmps cleanly (the dup below runs only after success, so
+         * the abort path has nothing extra to clean up). */
+        diag_set_filename(fn);
+        r->lex_raw = NULL;
+        r->lex_layout = NULL;
+        Lexer lexer = {0};
+        lexer_init(&lexer, src->text, &r->intern, flags, flag_count);
+        lexer.abort_slot_raw = &r->lex_raw;
+        lexer.abort_slot_layout = &r->lex_layout;
+        tokens = lexer_tokenize(&lexer, &tc);
+        r->lex_raw = NULL;
+        r->lex_layout = NULL;
+
+        /* Own a stable copy of the text and rebase token `start` pointers into it,
+         * so the cached tokens (and the AST literals parsed from them later) stay
+         * valid across analyses, independent of the caller's per-analysis buffer.
+         * The in-range guard leaves any synthetic/NULL-start token untouched (the
+         * parser never dereferences those). */
+        char *owned = malloc((size_t)src->len + 1);
+        memcpy(owned, src->text, (size_t)src->len);
+        owned[src->len] = '\0';
+        for (int j = 0; j < tc; j++) {
+            const char *s = tokens[j].start;
+            if (s >= src->text && s <= src->text + src->len)
+                tokens[j].start = owned + (s - src->text);
+        }
+
+        if (!e) {
+            LexCacheEntry blank = {0};
+            DA_APPEND(cache->entries, cache->count, cache->cap, blank);
+            e = &cache->entries[cache->count - 1];
+            size_t pn = strlen(src->filename);
+            e->path = malloc(pn + 1);
+            memcpy(e->path, src->filename, pn + 1);
+        } else {
+            /* Replace: free the superseded copy + tokens. The old `text` may still
+             * be referenced by a retained last_good's feed-literal pointers, but
+             * those bytes are never read by any LSP query (see the query handlers
+             * in lsp.c) — identical to the disk_bufs already freed post-analyze.
+             * The old tokens are referenced by nothing (the AST holds no token
+             * pointers), so freeing them is unconditionally safe. */
+            free(e->text);
+            free(e->tokens);
+        }
+        e->flags_sig = flags_sig;
+        e->hash = fnv64(owned, (size_t)src->len);
+        e->len = src->len;
+        e->last_src = src->text;
+        e->text = owned;
+        e->tokens = tokens;
+        e->token_count = tc;
+    }
+
+    Parser parser = {0};
+    parser_init(&parser, tokens, tc, &r->arena, &r->intern);
+    parser.filename = fn;
+    Program *prog = parse_program(&parser);
+    free(parser.pending_decls);
+    return prog;
+}
+
+void lexcache_free(LexCache *c) {
+    for (int i = 0; i < c->count; i++) {
+        free(c->entries[i].path);
+        free(c->entries[i].text);
+        free(c->entries[i].tokens);
+    }
+    free(c->entries);
+    c->entries = NULL;
+    c->count = c->cap = 0;
+}
+
 /* ---- deep free of pass1/pass2's malloc'd symbol metadata ----
  *
  * The compiler is written for a one-shot process: module member tables and
@@ -83,7 +214,7 @@ static void symtab_free_nested(SymbolTable *t) {
 
 AnalysisResult *analyze(const char *source, int source_len, const char *filename,
                         const AnalysisSource *extra, int extra_count,
-                        const Flag *flags, int flag_count) {
+                        const Flag *flags, int flag_count, LexCache *cache) {
     AnalysisResult *r = calloc(1, sizeof *r);
     arena_init(&r->arena);
     intern_init(&r->intern, &r->arena);
@@ -109,11 +240,16 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         int nsrc = 1 + extra_count;
         Program **programs = arena_alloc(&r->arena, sizeof(Program *) * (size_t)nsrc);
 
+        /* The primary edited buffer is always lexed fresh (it changes every
+         * keystroke); only the feed sources are cached. */
         programs[0] = lex_parse_one(r, r->source, r->filename, flags, flag_count);
+        uint64_t flags_sig = cache ? flags_signature(flags, flag_count) : 0;
         for (int i = 0; i < extra_count; i++) {
             const char *fn = arena_strdup(&r->arena, extra[i].filename,
                                           (int)strlen(extra[i].filename));
-            programs[1 + i] = lex_parse_one(r, extra[i].text, fn, flags, flag_count);
+            programs[1 + i] = cache
+                ? parse_feed_cached(r, cache, &extra[i], fn, flags, flag_count, flags_sig)
+                : lex_parse_one(r, extra[i].text, fn, flags, flag_count);
         }
 
         /* Merge programs, mirroring main.c: inject a global-namespace reset

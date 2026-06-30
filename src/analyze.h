@@ -36,6 +36,38 @@ typedef struct AnalysisSource {
     int         len;
 } AnalysisSource;
 
+/* ---- Lex cache (session-scoped, owned by the LSP server) ----
+ *
+ * Caches the lexer's token array per FEED file so unchanged feed sources (the
+ * stdlib + sibling/lsp.rsp files) are not re-lexed on every keystroke; analyze()
+ * re-parses from the cached tokens (the parser only reads tokens, and the lexer
+ * never interns, so a re-parse is identical to a re-lex). The primary edited
+ * buffer is always lexed fresh. A NULL cache passed to analyze() disables this
+ * (the CLI-equivalent path, byte-for-byte today's behavior).
+ *
+ * One slot per feed path bounds memory to the unit's file count; a content or
+ * flag change replaces the slot. The owned `text` keeps the cached tokens' (and
+ * the parsed AST's literal) `start` pointers valid across analyses. */
+typedef struct LexCacheEntry {
+    char       *path;        /* slot key: the feed source's filename (owned) */
+    uint64_t    flags_sig;   /* identity of the conditional-compile flag set */
+    uint64_t    hash;        /* FNV-1a 64 of the source bytes */
+    int         len;         /* source length (with hash, validates content) */
+    const char *last_src;    /* last incoming text ptr that matched (compared only,
+                              * never dereferenced; a fast path for stable buffers) */
+    char       *text;        /* owned NUL-terminated copy; tokens point into it */
+    Token      *tokens;      /* owned token array (NOT in any result's token_arrays) */
+    int         token_count;
+} LexCacheEntry;
+
+typedef struct LexCache {
+    LexCacheEntry *entries;  /* one slot per distinct feed path; linear scan */
+    int count, cap;
+} LexCache;
+
+/* Free every cached entry (path/text/tokens) and the entry array. */
+void lexcache_free(LexCache *c);
+
 typedef struct AnalysisResult {
     Arena            arena;        /* owns AST, types, interned names, diag messages */
     InternTable      intern;
@@ -75,10 +107,12 @@ typedef struct AnalysisResult {
 /* Analyze `source` (NUL-terminated copy made internally) under `filename`,
  * merging `extra` sources (may be NULL/0). `flags`/`flag_count` are the
  * conditional-compilation flags (caller-owned; borrowed for the call) — the
- * caller supplies host auto-detect and/or lsp.rsp `--flag`s. Always returns a
- * result (never NULL); check `diags`/`aborted`. */
+ * caller supplies host auto-detect and/or lsp.rsp `--flag`s. `cache` (may be
+ * NULL) is a session-scoped lex cache for the feed sources; NULL re-lexes every
+ * source (the CLI-equivalent path). Always returns a result (never NULL); check
+ * `diags`/`aborted`. */
 AnalysisResult *analyze(const char *source, int source_len, const char *filename,
                         const AnalysisSource *extra, int extra_count,
-                        const Flag *flags, int flag_count);
+                        const Flag *flags, int flag_count, LexCache *cache);
 
 void analysis_free(AnalysisResult *r);

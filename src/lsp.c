@@ -64,6 +64,10 @@ typedef struct {
      * owned here (malloc'd) and live for the whole session. */
     AnalysisSource *stdlib;
     int             stdlib_count, stdlib_cap;
+
+    /* Session-scoped lex cache: feed (stdlib + sibling/lsp.rsp) token arrays,
+     * reused across analyses so unchanged sources aren't re-lexed each keystroke. */
+    LexCache        lex_cache;
 } LspServer;
 
 static LspDoc *store_find(LspDocStore *s, const char *uri) {
@@ -1064,7 +1068,8 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
         free(have_len);
     }
 
-    doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count);
+    doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count,
+                          &S->lex_cache);
 
     /* lsp.rsp existed but couldn't be used: attach one file-level diagnostic so
      * the editor explains the fallback instead of silently differing. */
@@ -2121,6 +2126,7 @@ int lsp_main(void) {
         free((void *)S.stdlib[i].text);
     }
     free(S.stdlib);
+    lexcache_free(&S.lex_cache);
     arena_free(&S.msg_arena);
 
     /* A clean shutdown+exit returns 0; an exit without prior shutdown is 1. */

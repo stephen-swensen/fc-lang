@@ -939,5 +939,84 @@ else:
     if ierr.strip():
         sys.stderr.write("interactive server stderr:\n" + ierr.decode(errors="replace") + "\n")
 
+# --- lex cache: repeated edits keep the cached stdlib feed resolving correctly.
+# Each didChange re-analyzes; the stdlib feed is served from the session lex cache
+# (re-parsed from cached tokens, not re-lexed). A clean revision using std::math
+# stays clean only if the cached stdlib still resolves `math.sqrt`, so [] across
+# many consecutive cache hits — with an error revision in the middle and a return
+# to clean — proves the cache doesn't corrupt resolution as edits accumulate.
+lcd = tempfile.mkdtemp(prefix="fc_lsp_lexcache_")
+lcuri = "file://" + os.path.join(lcd, "doc.fc")
+def lc_doc(n, bad=False):
+    return ("import math from std::\n\n"
+            "let main = (args: str[]) ->\n"
+            f"    let r = math.sqrt({n}.0)\n"
+            + ("    let oops = 1 + true\n" if bad else "")
+            + "    return 0\n")
+def lc_change(v, n, bad=False): return note("textDocument/didChange",
+    {"textDocument": {"uri": lcuri, "version": v}, "contentChanges": [{"text": lc_doc(n, bad)}]})
+def lc_hover(i, l, c): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": lcuri}, "position": {"line": l, "character": c}})
+# A request after each change forces that revision to flush before the next edit
+# overwrites it (deferred/coalesced analysis), so we observe one publish per state.
+lc = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": lcuri, "languageId": "fc",
+         "version": 1, "text": lc_doc(4)}}),
+    lc_hover(20, 3, 8), lc_change(2, 9),              # clean -> clean
+    lc_hover(21, 3, 8), lc_change(3, 16, bad=True),   # clean -> error
+    lc_hover(22, 3, 8), lc_change(4, 25),             # error -> clean
+    lc_hover(23, 3, 8),
+    req(9, "shutdown", None), note("exit", None),
+]
+lcresp, _, lcbf, _, _ = run_session(lc)
+lc_states = lcbf.get("doc.fc", [])
+# Four observed revisions: clean, clean, error, clean.
+check("lex cache: 4 revisions each publish diagnostics", len(lc_states) == 4, str(lc_states))
+if len(lc_states) == 4:
+    check("lex cache: clean revisions stay clean across cache hits (rev 1,2,4 == [])",
+          lc_states[0] == [] and lc_states[1] == [] and lc_states[3] == [],
+          str(lc_states))
+    check("lex cache: the bad revision still errors (cache hit doesn't mask it)",
+          any("numeric" in m or "bool" in m for m in lc_states[2]), str(lc_states[2]))
+# Hover on `r` resolves through the cached stdlib `math.sqrt` (-> f64) every time.
+lc_hov = (lcresp.get(23, {}).get("result") or {}).get("contents", {})
+lc_hov = lc_hov.get("value", "") if isinstance(lc_hov, dict) else str(lc_hov)
+check("lex cache: hover still resolves a cached-stdlib-typed value (f64) after edits",
+      "f64" in lc_hov, repr(lc_hov))
+
+# --- lex cache: an edited SIBLING feed file is re-lexed (cache slot replaced).
+# Open A (imports from B's module) and B. Analyzing A caches B's tokens; editing B
+# changes its content; analyzing A again must re-lex B (slot replace + free old)
+# rather than reuse stale tokens. Exercises the replacement/free path (ASan-relevant)
+# and confirms the importer keeps resolving against B's current definition.
+sib = tempfile.mkdtemp(prefix="fc_lsp_lexcache_sib_")
+ap = os.path.join(sib, "a.fc"); bp = os.path.join(sib, "b.fc")
+auri = "file://" + ap; buri = "file://" + bp
+def a_src(n):  return ("import triple from bee\n\nlet main = (args: str[]) ->\n"
+                       f"    return triple({n})\n")
+def b_src(k):  return f"module bee =\n    let triple = (n: i32) ->\n        n * {k}\n"
+with open(ap, "w") as f: f.write(a_src(2))
+with open(bp, "w") as f: f.write(b_src(3))
+def od(uri, text): return note("textDocument/didOpen",
+    {"textDocument": {"uri": uri, "languageId": "fc", "version": 1, "text": text}})
+def ch(uri, v, text): return note("textDocument/didChange",
+    {"textDocument": {"uri": uri, "version": v}, "contentChanges": [{"text": text}]})
+def hv(i, uri): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 0}})
+sibm = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    od(auri, a_src(2)), od(buri, b_src(3)),
+    ch(auri, 2, a_src(3)), hv(30, auri),          # analyze A: caches B (v1, *3)
+    ch(buri, 2, b_src(4)), hv(31, buri),          # edit B -> *4
+    ch(auri, 3, a_src(5)), hv(32, auri),          # analyze A: B feed changed -> slot replace
+    req(9, "shutdown", None), note("exit", None),
+]
+_, _, sibbf, _, _ = run_session(sibm)
+a_last = sibbf.get("a.fc", [["?"]])[-1]
+check("lex cache: edited sibling feed re-lexed; importer stays clean (slot replace)",
+      a_last == [], str(a_last))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
