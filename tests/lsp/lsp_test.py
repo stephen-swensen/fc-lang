@@ -1201,5 +1201,45 @@ check("completion: float type name '.' adds nan/inf/neg_inf/epsilon typed f64",
       set(fl) == {"min", "max", "bits", "epsilon", "nan", "inf", "neg_inf"}
       and fl.get("nan") == "f64", str(fl))
 
+# --- completion: a member operator never falls through to the global list -----
+# `->` is overloaded (deref, lambda body, fn-type, match arm). At a NON-member
+# `->` — e.g. a lambda's `(params) ->` — completion must be empty, NOT the global
+# dump, regardless of triggerKind: once VSCode has a suggest session open it
+# re-queries as Invoked (kind=1) even as you type through `->`, so suppressing
+# only TriggerCharacter (kind=2) would still leak globals (the reported bug). A
+# genuine `ptr->` still completes the pointee's fields under either kind.
+TRIG = (
+    "module m =\n"                       # 0
+    "    struct pt =\n"                  # 1
+    "        x: i32\n"                   # 2
+    "    let f = (p: pt*) ->\n"          # 3  ') ->' is a lambda body, not a deref
+    "        let b = p->x\n"             # 4  real pointer dereference
+    "        0\n")                       # 5
+def trigreq(i, ln, ch, kind):
+    p = {"textDocument": {"uri": URI}, "position": {"line": ln, "character": ch},
+         "context": {"triggerKind": kind, "triggerCharacter": ">"}}
+    return req(i, "textDocument/completion", p)
+lam_col = TRIG.split("\n")[3].index("->") + 2      # just past the lambda '->'
+der_col = TRIG.split("\n")[4].index("p->") + 3     # just past 'p->'
+trg = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, TRIG),
+    trigreq(2, 3, lam_col, 2),   # lambda '->', TriggerCharacter -> empty
+    trigreq(3, 3, lam_col, 1),   # lambda '->', Invoked (persisted session) -> empty
+    trigreq(4, 4, der_col, 2),   # real   '->', TriggerCharacter -> pt fields
+    req(9, "shutdown", None), note("exit", None),
+]
+trgresp, _, _, _, _ = run_session(trg)
+def trg_labels(rid):
+    res = trgresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return [it.get("label") for it in (its or [])]
+check("completion: trigger-char '->' at a lambda body is suppressed (empty)",
+      trg_labels(2) == [], str(trg_labels(2)))
+check("completion: Invoked '->' at a lambda body also stays empty (no global leak)",
+      trg_labels(3) == [], str(trg_labels(3)[:8]))
+check("completion: a genuine pointer '->' still completes fields under a trigger char",
+      set(trg_labels(4)) == {"x"}, str(trg_labels(4)))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

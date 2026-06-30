@@ -2019,6 +2019,17 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     JsonValue *items = json_array(a);
     if (!doc) { lsp_reply(a, id, items); return; }
 
+    /* CompletionContext.triggerKind: 1=Invoked (Ctrl+Space or 24x7 word typing),
+     * 2=TriggerCharacter, 3=re-trigger. An auto-pop by a trigger character should
+     * only ever surface member completion — if the cursor isn't actually at a
+     * member access (a lambda/match/type `->`, a comparison `>`, a lone `:`, a
+     * float-literal `.`), stay quiet instead of dumping the global list. Absent
+     * context (non-VSCode clients) defaults to Invoked, preserving fall-through. */
+    long trig_kind = 1;
+    JsonValue *cctx = json_get(params, "context");
+    if (cctx) json_get_int(cctx, "triggerKind", &trig_kind);
+    bool auto_trigger = (trig_kind == 2);
+
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     int line1, col1;
     lsp_to_loc(&idx, doc->text, (int)line, (int)ch, &line1, &col1);
@@ -2039,10 +2050,22 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
         member = true; arrow = true; dot_byte = b - 1;
     }
 
-    if (member && complete_members(S, doc, &idx, dot_byte, arrow, items)) {
+    if (member) {
+        /* Member access offers ONLY the object's members — never the global list.
+         * Typing past a `.`/`::`/`->` shows members or nothing: a lambda/match/
+         * function-type `->` (no object to dereference) yields an empty reply,
+         * which dismisses the suggest widget instead of dumping every global.
+         * This is independent of triggerKind on purpose: once VSCode has a suggest
+         * session open (from word-typing) it re-queries as Invoked even as you
+         * type through `->`, so a triggerKind gate alone would leak the globals. */
+        complete_members(S, doc, &idx, dot_byte, arrow, items);
         lsp_reply(a, id, items);
         return;
     }
+    /* Not a member context. A trigger character that lands here (a lone `:` that
+     * isn't `::`, a comparison `>`) has nothing to offer, so an auto-pop stays
+     * quiet; an explicit invoke / word-typing falls through to scope completion. */
+    if (auto_trigger) { lsp_reply(a, id, items); return; }
 
     /* Global context: keywords, then everything in lexical scope at the cursor —
      * enclosing-module members + imports and the enclosing function's locals

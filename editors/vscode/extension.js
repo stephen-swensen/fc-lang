@@ -202,8 +202,18 @@ async function activate(context) {
     vscode.languages.registerCompletionItemProvider(
       selector,
       {
-        async provideCompletionItems(document, position) {
-          const r = await request("textDocument/completion", docPos(document, position));
+        async provideCompletionItems(document, position, _token, context) {
+          // Forward the trigger context so the server can keep a trigger-char
+          // auto-pop (e.g. after `->`) quiet when it isn't a real member access,
+          // while still answering an explicit Ctrl+Space.
+          const params = docPos(document, position);
+          if (context) {
+            params.context = {
+              triggerKind: context.triggerKind,
+              triggerCharacter: context.triggerCharacter,
+            };
+          }
+          const r = await request("textDocument/completion", params);
           const items = Array.isArray(r) ? r : (r && r.items) || [];
           return items.map((it) => {
             const ci = new vscode.CompletionItem(
