@@ -37,10 +37,14 @@ will not add (no interfaces, traits, or structural typing; no methods):
 
 1. **Generics write-once over value-or-pointer — void, not merely rare.** The payoff would be a
    generic accessing `x.field` that monomorphizes to `.` for a value instance and `->` for a
-   pointer instance. But that presupposes you can write `x.field` on a generic `'a` *at all* —
-   which requires either a constraint mechanism (Rust traits) or duck-typed generic bodies
-   (C++ templates, Zig comptime). FC has neither: there is no value-side `.field` on an
-   unconstrained `'a` to extend to the pointer case. The benefit doesn't exist in FC.
+   pointer instance. But that presupposes you can write `x.field` on a generic `'a` *at all*, and
+   FC rejects member access on a type var at the definition site (`field access on non-struct type
+   'a`). FC *does* duck-type a closed built-in operator set on type vars — arithmetic/ordering/
+   bitwise, validity checked at instantiation — alongside the universally-total `==`/`default`/
+   `sizeof`; what it does not do is defer *member* resolution to instantiation the way C++ templates
+   or Zig comptime would. So there is no value-side `.field` on a generic to extend to the pointer
+   case — the benefit doesn't exist in FC. (See `spec/generics-constraint-model.md` for the full
+   three-tier picture.)
 
 2. **Precedent alignment — weaker than it looks.** Go's auto-deref is motivated by method-call
    ergonomics (FC has no methods); Zig's pairs with comptime duck-typed generics (FC has neither).
@@ -66,5 +70,6 @@ uses are disambiguated by context and are not a source of real confusion. The on
 `when`-guard paren requirement, is rare, already handled by the documented parenthesization rule,
 and — if it ever genuinely nags — addressable in isolation (it concerns only how the guard's end is
 delimited) without touching deref semantics. Revisit only if FC ever gains a feature that makes
-abstract field access on generics meaningful (a constraint mechanism or duck-typed generic bodies),
-which is not currently planned.
+abstract field access on generics meaningful — a user-extensible constraint mechanism, or deferring
+*member* resolution to instantiation (FC already defers *operator* validity, just not member
+lookup) — which is not currently planned.
