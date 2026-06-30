@@ -121,6 +121,11 @@ check("initialize advertises capabilities",
       caps.get("hoverProvider") and caps.get("definitionProvider")
       and caps.get("completionProvider") and caps.get("codeLensProvider")
       and caps.get("inlayHintProvider") and caps.get("textDocumentSync") == 1, str(caps))
+# `>` must be a trigger char so finishing `->` auto-pops member completion (not
+# just Ctrl+Space); `.` and `:` cover value/module/type-name members and `::`.
+_trig = caps.get("completionProvider", {}).get("triggerCharacters", [])
+check("completion trigger characters include . : and > (for '->')",
+      set(_trig) >= {".", ":", ">"}, str(_trig))
 
 check("clean document has no diagnostics",
       len(diags) >= 1 and diags[0] == [], str(diags[0] if diags else None))
@@ -1143,6 +1148,58 @@ rlabels = [it.get("label") for it in (rits or [])]
 check("completion: in-scope names survive merged-unit namespace sentinels (lsp.rsp)",
       all(x in rlabels for x in ("huff_expand", "decompress_chunk", "expanded_len", "raw", "dict")),
       str([l for l in rlabels if l and ("huff" in l or "decompress" in l or "expand" in l or l in ("raw","dict"))]))
+
+# --- completion: synthetic / built-in members on non-struct objects -----------
+# `.` after a slice -> len/ptr, after an option -> is_some/is_none, after a
+# numeric type name -> min/max/bits (+ float nan/inf/neg_inf/epsilon); `->`
+# dereferences a pointer to its struct's fields. Each context returns EXACTLY its
+# synthetic set (member completion replaces, not augments, the global list), with
+# the right result type as `detail`.
+SYN = (
+    "module m =\n"                                 # 0
+    "    struct pt =\n"                            # 1
+    "        x: i32\n"                             # 2
+    "        y: i32\n"                             # 3
+    "    let f = (s: u8[], p: pt*, o: i32?) ->\n"  # 4
+    "        let a = s.len\n"                      # 5  slice '.'
+    "        let b = p->x\n"                       # 6  pointer '->'
+    "        let c = o.is_some\n"                  # 7  option '.'
+    "        let d = i32.max\n"                    # 8  int type name '.'
+    "        let e = f64.nan\n"                    # 9  float type name '.'
+    "        0\n")                                 # 10
+def synreq(i, ln, ch):
+    return req(i, "textDocument/completion",
+               {"textDocument": {"uri": URI}, "position": {"line": ln, "character": ch}})
+syn = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, SYN),
+    synreq(2, 5, 19),   # s.l|en
+    synreq(3, 6, 20),   # p->x|
+    synreq(4, 7, 21),   # o.is|_some
+    synreq(5, 8, 20),   # i32.m|ax
+    synreq(6, 9, 20),   # f64.n|an
+    req(9, "shutdown", None), note("exit", None),
+]
+synresp, _, _, _, _ = run_session(syn)
+def syn_items(rid):
+    res = synresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return {it.get("label"): it.get("detail") for it in (its or [])}
+sl, ar, op, it_, fl = (syn_items(i) for i in (2, 3, 4, 5, 6))
+check("completion: slice '.' offers exactly len/ptr with len: i64",
+      set(sl) == {"len", "ptr"} and sl.get("len") == "i64", str(sl))
+check("completion: slice '.ptr' detail is a pointer to the element type",
+      str(sl.get("ptr", "")).endswith("*"), str(sl))
+check("completion: pointer '->' offers exactly the pointee struct's fields",
+      set(ar) == {"x", "y"} and ar.get("x") == "i32", str(ar))
+check("completion: option '.' offers exactly is_some/is_none as bool",
+      set(op) == {"is_some", "is_none"} and op.get("is_some") == "bool", str(op))
+check("completion: integer type name '.' offers min/max/bits typed correctly",
+      set(it_) == {"min", "max", "bits"} and it_.get("max") == "i32"
+      and it_.get("bits") == "i32", str(it_))
+check("completion: float type name '.' adds nan/inf/neg_inf/epsilon typed f64",
+      set(fl) == {"min", "max", "bits", "epsilon", "nan", "inf", "neg_inf"}
+      and fl.get("nan") == "f64", str(fl))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

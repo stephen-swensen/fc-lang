@@ -1791,23 +1791,59 @@ static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
 }
 
 /* Member completion after '.' / '::': resolve the node just left of the dot. */
+/* Synthetic, type-level properties of a primitive numeric type name accessed
+ * like a module: i32.min/max/bits, f64.nan/inf/neg_inf/epsilon, etc. Mirrors
+ * resolve_type_property() in pass2.c. Returns true iff `tn` is an integer/float
+ * type (the object was a numeric type name), so the caller stops here. */
+static bool complete_type_properties(Arena *a, JsonValue *arr, Type *tn) {
+    if (!tn) return false;
+    bool is_int = type_is_integer(tn), is_float = type_is_float(tn);
+    if (!is_int && !is_float) return false;          /* bool/char/str/etc.: none */
+    char ty[128]; copy_type_name(tn, ty, sizeof ty);
+    add_item(a, arr, "bits", CIK_FIELD, "i32");       /* bit width */
+    add_item(a, arr, "min",  CIK_FIELD, ty);          /* smallest value */
+    add_item(a, arr, "max",  CIK_FIELD, ty);          /* largest value */
+    if (is_float) {
+        add_item(a, arr, "epsilon", CIK_FIELD, ty);
+        add_item(a, arr, "nan",     CIK_FIELD, ty);
+        add_item(a, arr, "inf",     CIK_FIELD, ty);
+        add_item(a, arr, "neg_inf", CIK_FIELD, ty);
+    }
+    return true;
+}
+
+/* Member completion after '.', '::' (dot) or '->' (arrow). `dot_byte` is the
+ * position of the operator's first char; the object expression ends at
+ * dot_byte-1. Offers, by object kind: a numeric type name's properties; module
+ * members; a slice's len/ptr; an option's is_some/is_none; a struct's fields; a
+ * union's variants. Arrow ('->') dereferences one pointer level to the pointee
+ * struct (and never matches a type name or module). */
 static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
-                             int dot_byte, JsonValue *arr) {
+                             int dot_byte, bool arrow, JsonValue *arr) {
     Arena *a = &S->msg_arena;
-    /* The identifier/expression ends at dot_byte-1. Locate it. */
-    int line1 = 1, col1 = 1;
-    /* derive line/col from byte: find line via the index */
     int anchor = dot_byte - 1;
     if (anchor < 0) return false;
+
+    /* Numeric type-name properties (i32.max, f64.nan). The object before a '.'
+     * is a reserved type keyword — never a binding — so read it from source
+     * without resolving a node. Arrow can't precede a type name. */
+    if (!arrow) {
+        const char *txt = doc->text;
+        int s = anchor;
+        while (s >= 0 && (isalnum((unsigned char)txt[s]) || txt[s] == '_')) s--;
+        s++;
+        if (anchor >= s)
+            if (complete_type_properties(a, arr, type_from_name(txt + s, anchor - s + 1)))
+                return true;
+    }
+
+    /* Derive line/col from the anchor byte and locate the object node. */
     int line0 = 0;
     for (int i = 0; i < idx->count; i++)
         if (idx->starts[i] <= anchor) line0 = i; else break;
-    line1 = line0 + 1;
-    col1 = anchor - idx->starts[line0] + 1;
-
     FindCtx c = {0};
-    c.target_line = line1;
-    c.target_col = col1;
+    c.target_line = line0 + 1;
+    c.target_col = anchor - idx->starts[line0] + 1;
     c.src = doc->text;
     c.idx = idx;
     c.file = doc->path;
@@ -1816,8 +1852,8 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     find_in_decls(r->program->decls, r->program->decl_count, &c);
     if (!c.found) return false;
 
-    /* Module members. */
-    if (c.sym && c.sym->kind == DECL_MODULE && c.sym->members) {
+    /* Module members ('.'/'::' only). */
+    if (!arrow && c.sym && c.sym->kind == DECL_MODULE && c.sym->members) {
         SymbolTable *m = c.sym->members;
         for (int i = 0; i < m->count; i++) {
             if (m->symbols[i].is_private) continue;
@@ -1831,9 +1867,33 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
         return true;
     }
 
-    /* Struct fields / union variants. */
-    Type *t = peel_to_aggregate(c.type);
-    if (t && t->kind == TYPE_STRUCT) {
+    Type *t = c.type;
+    /* '->' dereferences exactly one pointer level (pass2: -> requires a pointer
+     * to struct). '.' on a pointer is a type error in FC, so offer nothing. */
+    if (arrow) {
+        if (!t || t->kind != TYPE_POINTER) return false;
+        t = t->pointer.pointee;
+    }
+    if (!t) return false;
+
+    /* Slice fat-pointer fields (covers str = u8[]). */
+    if (t->kind == TYPE_SLICE) {
+        add_item(a, arr, "len", CIK_FIELD, "i64");
+        char ety[128]; ety[0] = '\0';
+        if (t->slice.elem) copy_type_name(t->slice.elem, ety, sizeof ety);
+        char pdetail[160];
+        snprintf(pdetail, sizeof pdetail, "%s*", ety[0] ? ety : "any");
+        add_item(a, arr, "ptr", CIK_FIELD, pdetail);
+        return true;
+    }
+    /* Option discriminant fields (the value itself needs `!` to unwrap). */
+    if (t->kind == TYPE_OPTION) {
+        add_item(a, arr, "is_some", CIK_FIELD, "bool");
+        add_item(a, arr, "is_none", CIK_FIELD, "bool");
+        return true;
+    }
+    /* Struct fields (tuples are indexed, not named). */
+    if (t->kind == TYPE_STRUCT && !t->struc.is_tuple) {
         for (int i = 0; i < t->struc.field_count; i++) {
             char detail[512];
             copy_type_name(t->struc.fields[i].type, detail, sizeof detail);
@@ -1841,7 +1901,8 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
         }
         return true;
     }
-    if (t && t->kind == TYPE_UNION) {
+    /* Union variants (bare-name construction site). */
+    if (t->kind == TYPE_UNION) {
         for (int i = 0; i < t->unio.variant_count; i++)
             add_item(a, arr, t->unio.variants[i].name, CIK_ENUMMEMBER, NULL);
         return true;
@@ -1963,19 +2024,22 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     lsp_to_loc(&idx, doc->text, (int)line, (int)ch, &line1, &col1);
     int cur = loc_byte_offset(&idx, line1, col1);
 
-    /* Member context: the char immediately before the cursor is '.' (or the
-     * trigger char preceding an in-progress member name). Scan back over an
-     * in-progress identifier to find a '.' or '::'. */
+    /* Member context: scan back over an in-progress member name to the operator
+     * just before the object — '.', '::', or '->'. dot_byte is the operator's
+     * first byte, so the object ends at dot_byte-1 in every case. */
     int b = cur - 1;
     while (b >= 0 && (isalnum((unsigned char)doc->text[b]) || doc->text[b] == '_')) b--;
-    bool member = false;
+    bool member = false, arrow = false;
     int dot_byte = -1;
     if (b >= 0 && doc->text[b] == '.') { member = true; dot_byte = b; }
     else if (b >= 1 && doc->text[b] == ':' && doc->text[b - 1] == ':') {
         member = true; dot_byte = b - 1;
     }
+    else if (b >= 1 && doc->text[b] == '>' && doc->text[b - 1] == '-') {
+        member = true; arrow = true; dot_byte = b - 1;
+    }
 
-    if (member && complete_members(S, doc, &idx, dot_byte, items)) {
+    if (member && complete_members(S, doc, &idx, dot_byte, arrow, items)) {
         lsp_reply(a, id, items);
         return;
     }
@@ -2041,8 +2105,13 @@ static void handle_initialize(LspServer *S, JsonValue *id) {
     json_object_set(a, caps, "inlayHintProvider", json_bool(a, true));
     JsonValue *comp = json_object(a);
     JsonValue *trig = json_array(a);
-    json_array_push(a, trig, json_str(a, "."));
-    json_array_push(a, trig, json_str(a, ":"));
+    json_array_push(a, trig, json_str(a, "."));   /* value/module/type-name members */
+    json_array_push(a, trig, json_str(a, ":"));   /* `::` namespace/module path */
+    json_array_push(a, trig, json_str(a, ">"));   /* completes `->`; the second char
+                                                   * fires it (handle_completion checks
+                                                   * the preceding `-`). A `>` not
+                                                   * forming `->` falls through to the
+                                                   * ordinary in-scope completion. */
     json_object_set(a, comp, "triggerCharacters", trig);
     json_object_set(a, caps, "completionProvider", comp);
 

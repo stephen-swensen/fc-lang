@@ -215,8 +215,14 @@ async function activate(context) {
           });
         },
       },
+      // Trigger characters. This manual provider gates auto-completion itself —
+      // the server's completionProvider.triggerCharacters capability is NOT
+      // consulted (we don't route completion through vscode-languageclient), so
+      // these must be kept in sync with it. '>' completes `->` (member access on
+      // a pointer); the server checks the preceding '-'.
       ".",
-      ":"
+      ":",
+      ">"
     ),
 
     vscode.languages.registerCodeLensProvider(selector, {
