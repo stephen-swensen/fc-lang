@@ -2924,6 +2924,45 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
 #undef guard_subtree_has_effect
 }
 
+/* Resolve a field access through a single pointer level: `p.field` auto-derefs
+ * one level (equivalently what `->` did before it was retired). `ptr_type` is the
+ * already-checked pointer type of `e->field.object`. Sets and returns e->type.
+ * Const propagates from the pointer (`through_const`); provenance comes from the
+ * pointed-to storage, so this is shared by the EXPR_FIELD auto-deref path and the
+ * internally-produced EXPR_DEREF_FIELD nodes. */
+static Type *check_pointer_field(CheckCtx *ctx, Expr *e, Type *ptr_type) {
+    bool through_const = ptr_type->is_const;
+    Type *pointee = resolve_type(ctx, ptr_type->pointer.pointee);
+    if (pointee->kind != TYPE_STRUCT) {
+        diag_error(e->loc, "field access requires pointer to struct, got pointer to %s",
+            type_name(pointee));
+        e->type = type_error();
+        return e->type;
+    }
+    for (int i = 0; i < pointee->struc.field_count; i++) {
+        if (pointee->struc.fields[i].name == e->field.name) {
+            Type *ft = resolve_type(ctx, pointee->struc.fields[i].type);
+            if (ft->kind == TYPE_FIXED_ARRAY) {
+                e->field.fixed_array_type = ft;
+                e->type = type_slice(ctx->arena, ft->fixed_array.elem);
+                if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                e->prov = e->field.object->prov;
+            } else {
+                e->type = ft;
+                if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                /* Propagate provenance from the pointed-to struct. */
+                if (type_has_provenance(ft))
+                    e->prov = e->field.object->prov;
+            }
+            return e->type;
+        }
+    }
+    diag_error(e->loc, "struct '%s' has no field '%s'",
+        type_name(pointee), e->field.name);
+    e->type = type_error();
+    return e->type;
+}
+
 /* Wrapper around the per-kind type checker. Consumes the one-shot
  * `in_callee_position` / `in_reflection_position` flags and rejects a generic
  * function used as a value (anywhere other than directly in call position or a
@@ -5429,6 +5468,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
+        /* '.' auto-derefs a single pointer level: `p.field` == `(*p).field`.
+           Rewrite to EXPR_DEREF_FIELD so codegen and every kind-dispatched pass
+           (const/provenance/lvalue analysis) treat it as through-pointer. */
+        if (obj_type->kind == TYPE_POINTER) {
+            Type *pointee = resolve_type(ctx, obj_type->pointer.pointee);
+            if (pointee->kind == TYPE_STRUCT) {
+                e->kind = EXPR_DEREF_FIELD;
+                return check_pointer_field(ctx, e, obj_type);
+            }
+        }
+
         /* Normal struct field access */
         if (obj_type->kind != TYPE_STRUCT) {
             diag_error(e->loc, "field access on non-struct type %s", type_name(obj_type));
@@ -5477,42 +5527,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_DEREF_FIELD: {
+        /* Produced internally when pass2 rewrites a `.`-on-pointer EXPR_FIELD
+           (see the EXPR_FIELD case). The parser no longer emits this kind. */
         Type *obj_type = check_expr(ctx, e->field.object);
         if (type_is_error(obj_type)) { e->type = type_error(); return e->type; }
-        bool through_const = obj_type->is_const;
         if (obj_type->kind != TYPE_POINTER) {
-            diag_error(e->loc, "-> requires pointer type, got %s", type_name(obj_type));
+            diag_error(e->loc, "field access requires pointer type, got %s", type_name(obj_type));
             e->type = type_error();
             return e->type;
         }
-        Type *pointee = resolve_type(ctx, obj_type->pointer.pointee);
-        if (pointee->kind != TYPE_STRUCT) {
-            diag_error(e->loc, "-> requires pointer to struct, got pointer to %s", type_name(pointee));
-            e->type = type_error();
-            return e->type;
-        }
-        for (int i = 0; i < pointee->struc.field_count; i++) {
-            if (pointee->struc.fields[i].name == e->field.name) {
-                Type *ft = resolve_type(ctx, pointee->struc.fields[i].type);
-                if (ft->kind == TYPE_FIXED_ARRAY) {
-                    e->field.fixed_array_type = ft;
-                    e->type = type_slice(ctx->arena, ft->fixed_array.elem);
-                    if (through_const) e->type = type_make_const(ctx->arena, e->type);
-                    e->prov = e->field.object->prov;
-                } else {
-                    e->type = ft;
-                    if (through_const) e->type = type_make_const(ctx->arena, e->type);
-                    /* Propagate provenance from the pointed-to struct. */
-                    if (type_has_provenance(ft))
-                        e->prov = e->field.object->prov;
-                }
-                return e->type;
-            }
-        }
-        diag_error(e->loc, "struct '%s' has no field '%s'",
-            type_name(pointee), e->field.name);
-        e->type = type_error();
-        return e->type;
+        return check_pointer_field(ctx, e, obj_type);
     }
 
     case EXPR_INDEX: {

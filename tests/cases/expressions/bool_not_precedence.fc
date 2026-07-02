@@ -1,6 +1,6 @@
 // Regression tests for prefix `!` precedence in various expression positions.
 // `!` is both prefix bool-not (PREC_PREFIX) and postfix option-unwrap
-// (PREC_POSTFIX). Postfix operators like `[i]`, `.f`, `->f`, and `()` bind
+// (PREC_POSTFIX). Postfix operators like `[i]`, `.f`, and `()` bind
 // tighter than prefix, so `!x[i]` must parse as `!(x[i])`, not `(!x)[i]`.
 
 struct flags_holder =
@@ -43,12 +43,12 @@ let main = (args: str[]) ->
     let fh = flags_holder { flags = arr[0..4] }
     assert(!fh.flags[1])
 
-    // `!ptr->field[i]` — bang over pointer-field-index chain
+    // `!ptr.field[i]` — bang over pointer-field-index chain
     let mut fh2 = flags_holder { flags = arr[0..4] }
     let p = &fh2
     let r_ptr =
         if false then 100
-        else if !p->flags[1] then 200
+        else if !p.flags[1] then 200
         else 300
     assert(r_ptr == 200)
 

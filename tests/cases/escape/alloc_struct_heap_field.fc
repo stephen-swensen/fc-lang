@@ -6,7 +6,7 @@ let main = (args: str[]) ->
     let p = alloc(i32)!
     *p = 42
     let n = alloc(node { data = p })!
-    let result = *(n->data)
+    let result = *(n.data)
     free(p)
     free(n)
     assert(result == 42)

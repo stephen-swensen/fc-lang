@@ -2193,13 +2193,15 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_ARROW: {
-        Token *field = expect(p, TOK_IDENT);
-        Expr *e = alloc_expr(p, EXPR_DEREF_FIELD, loc);
-        e->field.object = left;
-        e->field.name = tok_intern(p, field);
-        e->field.name_loc = loc_from_token(field);
-        e->field.name_loc.filename = p->filename;
-        return e;
+        /* `->` is no longer pointer field access — `.` auto-derefs one level
+           (`p.field`). Emit a helpful error and recover by consuming the field
+           name so the rest of the expression still parses. (Match-arm and
+           lambda `->` never reach here: block_arm_arrow / the lambda-prefix
+           parser consume those before the Pratt loop calls parse_infix.) */
+        diag_error(loc, "'->' is not pointer field access in FC — use '.' (e.g. p.field)");
+        if (check(p, TOK_IDENT)) advance_p(p);
+        (void)left;
+        return alloc_expr_error(p, loc);
     }
 
     case TOK_LBRACKET: {

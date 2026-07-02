@@ -5,7 +5,7 @@ module geometry =
         y: i32
 
 let set_x = (p: geometry.point*, val: i32) ->
-    p->x = val
+    p.x = val
 
 let main = (args: str[]) ->
     let mut p = geometry.point { x = 0, y = 5 }

@@ -1,4 +1,4 @@
-// x->y->z.a.b.c->e chain: mix of deref and value field access
+// x.y.z.a.b.c.e chain: mix of deref and value field access
 
 struct e_node =
     val: i32
@@ -26,17 +26,17 @@ let main = (args: str[]) ->
     let xp = &x
 
     // non-const read through full chain
-    let v1 = xp->y->z.a.b.c->val
+    let v1 = xp.y.z.a.b.c.val
 
     // non-const write through full chain
-    xp->y->z.a.b.c->val = 99
+    xp.y.z.a.b.c.val = 99
 
     // read back after write
-    let v2 = xp->y->z.a.b.c->val
+    let v2 = xp.y.z.a.b.c.val
 
     // const read through full chain
     let cxp = (const x_node*) xp
-    let v3 = cxp->y->z.a.b.c->val
+    let v3 = cxp.y.z.a.b.c.val
 
     // v1=42, v2=99, v3=99
     v1 + v2 + v3 - 240

@@ -6,7 +6,7 @@ struct point =
 let round_trip = (p: point*) ->
     let opaque = (any*) p
     let back = (point*) opaque
-    back->x + back->y
+    back.x + back.y
 
 let main = (args: str[]) ->
     let mut p = point { x = 10, y = 20 }
@@ -15,6 +15,6 @@ let main = (args: str[]) ->
     // Cast through any* and mutate
     let opaque = (any*) &p
     let q = (point*) opaque
-    q->x = 99
+    q.x = 99
     if p.x != 99 then return 2
     0

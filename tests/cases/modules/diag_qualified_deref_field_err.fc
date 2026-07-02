@@ -7,5 +7,5 @@ module m =
 let main = (args: str[]) ->
     let mut p = m.point { x = 1, y = 2 }
     let ptr = &p
-    let z = ptr->z
+    let z = ptr.z
     0

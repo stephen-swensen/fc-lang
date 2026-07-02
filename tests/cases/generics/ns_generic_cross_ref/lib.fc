@@ -22,7 +22,7 @@ module containers =
         outer { ptr = i }
 
     let sum_inner = (o: outer<i32>) ->
-        o.ptr->x + o.ptr->y
+        o.ptr.x + o.ptr.y
 
     let make_pair = (a: 'a, b: 'a, c: 'a, d: 'a) ->
         pair { fst = inner { x = a, y = b }, snd = inner { x = c, y = d } }

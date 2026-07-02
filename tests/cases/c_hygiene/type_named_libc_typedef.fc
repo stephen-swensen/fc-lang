@@ -5,7 +5,7 @@
 struct div_t =
     static: i32
 
-let via_ptr = (p: div_t*) -> p->static
+let via_ptr = (p: div_t*) -> p.static
 let via_slice = (s: div_t[]) -> s[0].static
 let via_opt = (o: div_t?) ->
     match o with

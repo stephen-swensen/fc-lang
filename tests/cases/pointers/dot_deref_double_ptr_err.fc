@@ -1,0 +1,11 @@
+// `.` derefs only ONE pointer level: a bare `.field` on a T** is an error (its
+// pointee is itself a pointer, not a struct). Use (*pp).field / (**pp).field.
+struct point =
+    x: i32
+
+let main = (args: str[]) ->
+    let mut p = point { x = 1 }
+    let mut q = &p
+    let pp = &q
+    assert(pp.x == 1)
+    0

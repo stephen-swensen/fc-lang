@@ -6,14 +6,14 @@ struct node =
     register: i32[4]
 
 let bump = (p: node*) ->
-    p->volatile = p->volatile + 1   // pointer field write to a keyword field
+    p.volatile = p.volatile + 1   // pointer field write to a keyword field
 
 let main = (args: str[]) ->
     let mut n = node { volatile = 41, register = i32[4] { 1, 2, 3, 4 } }
 
     // Pointer read/write of a keyword-named scalar field.
     let ptr = &n
-    assert(ptr->volatile == 41)
+    assert(ptr.volatile == 41)
     bump(ptr)
     assert(n.volatile == 42)
 

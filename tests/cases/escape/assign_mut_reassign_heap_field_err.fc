@@ -7,7 +7,7 @@ let bad = (param: i32*) ->
     let mut p = param
     let mut x = 5
     p = &x
-    h->p = p
+    h.p = p
     free(h)
 
 let main = (args: str[]) ->

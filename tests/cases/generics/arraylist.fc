@@ -5,15 +5,15 @@ struct arraylist =
 module arraylist =
 
     private let grow = (l: arraylist<'a>*) ->
-        let new_cap = l->data.len * 2
+        let new_cap = l.data.len * 2
         let mut new_data = alloc('a[new_cap] { })!
         let mut i = 0
         loop
-            if i >= l->len then break
-            new_data[i] = l->data[i]
+            if i >= l.len then break
+            new_data[i] = l.data[i]
             i = i + 1
-        free(l->data)
-        l->data = new_data
+        free(l.data)
+        l.data = new_data
 
     let make = <'a>() ->
         arraylist { data = alloc('a[4] { })!, len = 0 }
@@ -22,25 +22,25 @@ module arraylist =
         free(l.data)
 
     let add = (l: arraylist<'a>*, value: 'a) ->
-        if l->len == l->data.len then arraylist.grow(l)
-        l->data[l->len] = value
-        l->len = l->len + 1
+        if l.len == l.data.len then arraylist.grow(l)
+        l.data[l.len] = value
+        l.len = l.len + 1
 
     let get = (l: arraylist<'a>, index: i64) ->
         l.data[index]
 
     let update = (l: arraylist<'a>*, index: i64, value: 'a) ->
-        l->data[index] = value
+        l.data[index] = value
 
     let insert = (l: arraylist<'a>*, index: i64, value: 'a) ->
-        if l->len == l->data.len then arraylist.grow(l)
-        let mut i = l->len
+        if l.len == l.data.len then arraylist.grow(l)
+        let mut i = l.len
         loop
             if i <= index then break
-            l->data[i] = l->data[i - 1]
+            l.data[i] = l.data[i - 1]
             i = i - 1
-        l->data[index] = value
-        l->len = l->len + 1
+        l.data[index] = value
+        l.len = l.len + 1
 
     let fold = (l: arraylist<'a>, init: 'b, f: ('b, 'a) -> 'b) ->
         let mut acc = init

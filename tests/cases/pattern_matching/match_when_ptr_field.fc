@@ -1,12 +1,12 @@
 struct node =
     value: i32
 
-// Pointer-field access (p->x) in a guard requires parentheses because the
-// match-arm `->` would otherwise win tokenisation.
+// Pointer-field access `p.value` in a guard needs NO parentheses: `.` never
+// collides with the match-arm `->` (unlike the retired `->` deref, which did).
 let classify = (n: node*) ->
     match n with
-    | p when (p->value) > 0 -> 1
-    | p when (p->value) < 0 -> -1
+    | p when p.value > 0 -> 1
+    | p when p.value < 0 -> -1
     | _ -> 0
 
 let main = (args: str[]) ->

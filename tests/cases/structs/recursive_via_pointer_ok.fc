@@ -11,7 +11,7 @@ struct tree =
 let main = (args: str[]) ->
     let mut b = node { value = 2 }
     let a = node { value = 1, next = some(&b) }
-    assert(a.next!->value == 2)
+    assert(a.next!.value == 2)
     let t = tree { label = 7 }
     assert(t.label == 7)
     0

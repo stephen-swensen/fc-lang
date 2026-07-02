@@ -30,7 +30,7 @@ module random =
         // Advances the LCG state by one iteration.
         // state = state * multiplier + increment (mod 2^64).
         private let step = (r: lcg_random*) ->
-            r->state = r->state * multiplier + increment
+            r.state = r.state * multiplier + increment
 
         // Creates an LCG with the given seed.
         let make = (seed: u64) ->
@@ -40,7 +40,7 @@ module random =
         // Returns the upper 32 bits of the 64-bit state after one step.
         let next_u32 = (r: lcg_random*) ->
             lcg_random.step(r)
-            (u32) (r->state >> 32)
+            (u32) (r.state >> 32)
 
         // Generates a pseudorandom u64 from two u32 outputs.
         let next_u64 = (r: lcg_random*) ->
@@ -103,7 +103,7 @@ module random =
         // Advances the PCG state by one iteration.
         // state = state * multiplier + inc (mod 2^64).
         private let step = (r: pcg_random*) ->
-            r->state = r->state * multiplier + r->inc
+            r.state = r.state * multiplier + r.inc
 
         // Creates a PCG with the given seed, using default channel 1.
         let make = (seed: u64) ->
@@ -127,7 +127,7 @@ module random =
         //   rot        = (u32) (old >> 59)
         //   result     = rotate_right(xorshifted, rot)
         let next_u32 = (r: pcg_random*) ->
-            let old_state = r->state
+            let old_state = r.state
             pcg_random.step(r)
             let xorshifted = (u32) (((old_state >> 18) ^ old_state) >> 27)
             let rot = (u32) (old_state >> 59)

@@ -311,5 +311,5 @@ module net =
         if ip != 0xFFFFFFFFu32 then some(ip)
         else
             match dns.gethostbyname(alloca((cstr) host)) with
-            | some(h) -> some(**((u32**) h->h_addr_list))
+            | some(h) -> some(**((u32**) h.h_addr_list))
             | none -> default(u32?)

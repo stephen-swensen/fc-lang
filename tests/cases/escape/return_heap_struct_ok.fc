@@ -9,8 +9,8 @@ let make = () ->
 
 let main = (args: str[]) ->
     let h = make()!
-    let v = *h->p
-    free(h->p)
+    let v = *h.p
+    free(h.p)
     free(h)
     assert(v == 42)
     0

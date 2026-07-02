@@ -1,0 +1,7 @@
+// `.` auto-derefs a pointer only to reach a struct; a pointer to a non-struct
+// (here i32*) has no fields to access.
+let main = (args: str[]) ->
+    let mut n = 5
+    let p = &n
+    assert(p.x == 5)
+    0

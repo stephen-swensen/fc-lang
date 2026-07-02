@@ -1163,11 +1163,11 @@ struct node =
     next: node*?
 
 let f = (n: const node*) ->
-    n->data              // i32 — readable, not writable
-    n->next              // const node*? — deep const propagated
+    n.data              // i32 — readable, not writable
+    n.next              // const node*? — deep const propagated
 ```
 
-Deep const chains naturally: `const_ptr->a->b.c.d->e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
+Deep const chains naturally: `const_ptr.a.b.c.d.e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
 
 `.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`.
 
@@ -1179,9 +1179,9 @@ The compiler rejects these operations through const:
 let mut x = 42
 let cp = (const i32*) &x
 *cp = 10                 // compile error: cannot assign through const pointer/slice
-cp->field = 10           // compile error (for struct pointers)
+cp.field = 10           // compile error (for struct pointers)
 const_slice[0] = 10      // compile error
-&(cp->field)             // compile error: cannot take mutable address through const pointer
+&(cp.field)             // compile error: cannot take mutable address through const pointer
 free(cp)                 // compile error: cannot free const pointer/slice
 ```
 
@@ -1329,7 +1329,7 @@ Operators are listed from highest to lowest precedence. Operators at the same le
 
 | Level | Operators | Associativity | Notes |
 |-------|-----------|---------------|-------|
-| 1 | `x!` &nbsp; `x[i]` &nbsp; `x.f` &nbsp; `x->f` | left | postfix — unwrap, index, member access |
+| 1 | `x!` &nbsp; `x[i]` &nbsp; `x.f` &nbsp; `x()` | left | postfix — unwrap, index, member access, call |
 | 2 | `-x` &nbsp; `!x` &nbsp; `~x` &nbsp; `&x` &nbsp; `*x` &nbsp; `(T)x` | right | unary prefix |
 | 3 | `*` &nbsp; `/` &nbsp; `%` | left | multiplicative |
 | 4 | `+` &nbsp; `-` | left | additive |
@@ -1553,7 +1553,7 @@ Several tokens have multiple meanings distinguished by context:
 | `&` | expression context (binary) | bitwise AND — `a & b` |
 | `!` | expression context (prefix) | boolean not — `!flag` |
 | `!` | expression context (postfix) | option unwrap — `val!` |
-| `->` | expression context | pointer field access — `ptr->field` |
+| `.` | expression context (postfix) | field access; auto-derefs one pointer level — `s.f`, `ptr.f` |
 | `->` | type context | function type arrow — `(i32) -> i32` |
 | `->` | match arm | match arm separator — `\| some(x) -> ...` |
 | `..` | slice indexing | sub-slice range — `s[i..j]` |
@@ -1843,12 +1843,12 @@ match x with
 | _            -> "positive"
 ```
 
-**Pointer field access in a guard.** Because `->` is both the pointer-field operator and the match-arm separator, a guard that uses pointer-field access at the top level must be parenthesised so the `->` is recognised as part of the expression:
+**Pointer field access in a guard.** Field access is spelled `.` (it auto-derefs one pointer level), which never collides with the match-arm `->`, so a guard can use pointer-field access at the top level with no parentheses:
 
 ```fc
 match node_ptr with
-| p when (p->value) > 0 -> "positive"
-| _                     -> "non-positive"
+| p when p.value > 0 -> "positive"
+| _                  -> "non-positive"
 ```
 
 ### Struct destructuring in patterns
@@ -2301,7 +2301,7 @@ let f = () ->
 
 A pointer to a local binding is valid for the entire function call. It must not escape the function — storing it in a heap-allocated struct, returning it, or passing it to something that outlives the call will result in a dangling pointer. Use heap allocation for data that must outlive a function call.
 
-The compiler performs **escape analysis** on pointer and slice expressions, tracking whether they refer to stack, heap, or static memory. Returning a stack-derived pointer from a function, freeing a stack pointer, and storing a stack pointer in heap or static memory (including through an assignment such as `h->field = &x`) are all compile errors. See §Stack Allocation for details.
+The compiler performs **escape analysis** on pointer and slice expressions, tracking whether they refer to stack, heap, or static memory. Returning a stack-derived pointer from a function, freeing a stack pointer, and storing a stack pointer in heap or static memory (including through an assignment such as `h.field = &x`) are all compile errors. See §Stack Allocation for details.
 
 ---
 
@@ -2380,7 +2380,7 @@ Here `px` is a `let` binding holding an `i32*`, so it is capturable by copy. The
 >
 > // generated function — receives context as void*
 > bool _above_impl(i32_t x, void* _ctx) {
->     return x > ((_ctx_above*)_ctx)->threshold;
+>     return x > ((_ctx_above*)_ctx).threshold;
 > }
 >
 > // in the creating function's body:
@@ -2396,7 +2396,7 @@ Here `px` is a `let` binding holding an `i32*`, so it is capturable by copy. The
 >
 > - Passing a capturing closure as an argument to a function call: safe — the callee returns before the creator's frame is popped.
 > - Returning a capturing closure from the function that created it: **compile error** — the context pointer would dangle.
-> - Storing a capturing closure into heap memory that outlives the creating function: **compile error** — escape analysis detects the stack-provenance context and rejects it, both for `alloc(struct { f = capturing })` and for `heap_ptr->field = capturing`.
+> - Storing a capturing closure into heap memory that outlives the creating function: **compile error** — escape analysis detects the stack-provenance context and rejects it, both for `alloc(struct { f = capturing })` and for `heap_ptr.field = capturing`.
 > - Non-capturing closures have no lifetime restriction — the null context pointer is always valid.
 >
 > The safe rule: a capturing closure must not outlive the function that created it. If captured state must outlive the creating function, heap-allocate the data explicitly and capture the pointer — a `let` binding holding a pointer has no lifetime restriction on the closure itself, only the usual programmer responsibility to keep the pointed-to memory live.
@@ -2470,10 +2470,14 @@ A trailing comma after the last field is permitted.
 
 ### Field access
 
+Field access is always spelled `.`. On a pointer it **auto-dereferences one level** — `ptr.x` is exactly `(*ptr).x` — so the same accessor reads a struct value or a pointer to one:
+
 ```fc
-p.x        // direct field access
-ptr->x     // pointer field access
+p.x        // field access on a struct value
+ptr.x      // field access through a pointer — `.` auto-derefs one level
 ```
+
+The auto-deref is a single level only (a pure front-end desugar, no runtime cost). For a pointer-to-pointer (`T**`), dereference the extra level explicitly and let `.` take the last one: `(*pp).x` (equivalently `(**pp).x`). There is no `->` operator — writing `ptr->x` is a compile error that points you to `.`.
 
 Structs may be allocated on the stack or heap. Memory layout is identical to the equivalent C struct in declaration order — FC defers entirely to the C compiler for field alignment and padding. This means FC structs and their C equivalents are always ABI-compatible.
 
@@ -2573,13 +2577,13 @@ Because `t[N]` *is* a field selection on a synthesized struct, it carries no tup
 let mut p = point { x = 3, y = 4 }
 let t = { &p, 99 }        // type {point*, i32}
 
-t[0]->x                   // read a field through a pointer element
-t[0]->x = 10              // write through it  → mutates p (the pointee)
+t[0].x                   // read a field through a pointer element
+t[0].x = 10              // write through it  → mutates p (the pointee)
 &t[1]                     // address of an element (when t is `let mut`)
-t[0]->pair[1]             // chains left-to-right like any postfix run
+t[0].pair[1]             // chains left-to-right like any postfix run
 ```
 
-The element here is a pointer, so `->` dereferences it; if it were a struct value the accessor would be `.`, and if it were an array the next `[…]` would be a runtime, bounds-checked index. In each case `t[N]` participates as a plain field access. Mutating through `t[N]` follows the same rule as a struct field: the immutability of the tuple *binding* governs only whole-tuple reassignment and rebinding an element (`t[0] = …`, which needs `let mut`) — it never blocks writing *through* a pointer element, since that mutates the pointee, not the tuple. A `let` tuple holding `&p` can still drive `t[0]->x = 10`.
+The element here is a pointer, so `.` auto-dereferences it one level — the very same `.` a struct value would use, which is what makes the accessor uniform; if it were an array the next `[…]` would be a runtime, bounds-checked index. In each case `t[N]` participates as a plain field access. Mutating through `t[N]` follows the same rule as a struct field: the immutability of the tuple *binding* governs only whole-tuple reassignment and rebinding an element (`t[0] = …`, which needs `let mut`) — it never blocks writing *through* a pointer element, since that mutates the pointee, not the tuple. A `let` tuple holding `&p` can still drive `t[0].x = 10`.
 
 ### Destructuring
 
@@ -2777,7 +2781,7 @@ The main remaining use case for `&f` is a C struct that contains a function poin
 ```fc
 // storing a function pointer into a C struct field directly
 let mut handler = (x: i32) -> process(x)
-some_c_struct->callback = &handler
+some_c_struct.callback = &handler
 ```
 
 Taking the address of a capturing lambda is always a compile error:
@@ -2792,7 +2796,7 @@ let p = &above    // compile error — capturing lambda
 
 ```fc
 let val = *px        // explicit dereference, copies value
-px->field            // pointer field access, no struct copy
+px.field            // pointer field access, no struct copy
 (*px).field          // same as above — compiler does not copy struct
 ```
 
@@ -2804,7 +2808,7 @@ The dereference operator on the left-hand side of `=` writes through the pointer
 let mut x = 42
 let px = &x
 *px = 99        // x is now 99
-px->field = 1   // write through pointer to struct field
+px.field = 1   // write through pointer to struct field
 ```
 
 `px` itself is a let binding — its value (the address it holds) cannot change. What changes is the value at that address. Reassigning `px` to point somewhere else would require `px` to be a mutable let binding.
@@ -4282,7 +4286,7 @@ let mut x = 42
 free(&x)                            // compile error: cannot free stack-allocated memory
 ```
 
-- **Storing stack pointers in memory that outlives the frame** — placing a stack-derived pointer or slice into a heap-allocated structure, a global, or any location whose storage outlives the current call. This covers both construction (a field value in `alloc(struct_lit)`) and assignment through any lvalue path whose root is heap or static storage — `h->field = &x`, `(*h).field = &x`, `h->buf[i] = &x`, `*hp = &x`, nested paths like `ho->inner.p = &x`, and `global = &x`:
+- **Storing stack pointers in memory that outlives the frame** — placing a stack-derived pointer or slice into a heap-allocated structure, a global, or any location whose storage outlives the current call. This covers both construction (a field value in `alloc(struct_lit)`) and assignment through any lvalue path whose root is heap or static storage — `h.field = &x`, `(*h).field = &x`, `h.buf[i] = &x`, `*hp = &x`, nested paths like `ho.inner.p = &x`, and `global = &x`:
 
 ```fc
 struct node =
@@ -4292,7 +4296,7 @@ let mut x = 42
 let n = alloc(node { data = &x })   // compile error: cannot store stack-allocated i32* in heap struct
 
 let h = alloc(node { data = default(i32*) })!
-h->data = &x                        // compile error: cannot store stack-allocated i32* in heap-allocated struct field
+h.data = &x                        // compile error: cannot store stack-allocated i32* in heap-allocated struct field
 ```
 
 The destination is judged by its **root** storage: a local stack binding is exempt (it shares the frame), while a heap or static root is rejected. A write *through* a pointer of unknown provenance (a function parameter, an extern result) is not rejected — see the intraprocedural limitation below.
@@ -4444,8 +4448,8 @@ When using the zero-init form, there are two idiomatic ways to initialize fields
 
 ```fc
 let p = alloc(point3d)!
-p->x = 2
-p->z = 4
+p.x = 2
+p.z = 4
 // y remains 0 — already zero-initialized by alloc
 ```
 
@@ -4503,21 +4507,21 @@ struct ring =
     tail: usize        // written only by producer
 
 let enqueue = (r: ring*, c: command) ->
-    let t = atomic_load_acquire(&r->tail)
-    let h = atomic_load_acquire(&r->head)
-    if t - h == (usize) r->buf.len then false
+    let t = atomic_load_acquire(&r.tail)
+    let h = atomic_load_acquire(&r.head)
+    if t - h == (usize) r.buf.len then false
     else
-        r->buf[t % (usize) r->buf.len] = c          // plain write to the slot
-        atomic_store_release(&r->tail, t + 1usize)      // publish it
+        r.buf[t % (usize) r.buf.len] = c          // plain write to the slot
+        atomic_store_release(&r.tail, t + 1usize)      // publish it
         true
 
 let dequeue = (r: ring*) ->
-    let t = atomic_load_acquire(&r->tail)
-    let h = atomic_load_acquire(&r->head)
+    let t = atomic_load_acquire(&r.tail)
+    let h = atomic_load_acquire(&r.head)
     if t == h then none(command)
     else
-        let c = r->buf[h % (usize) r->buf.len]      // plain read of the slot
-        atomic_store_release(&r->head, h + 1usize)      // release the slot
+        let c = r.buf[h % (usize) r.buf.len]      // plain read of the slot
+        atomic_store_release(&r.head, h + 1usize)      // release the slot
         some(c)
 ```
 
@@ -5185,7 +5189,7 @@ No spaces in field access, pointer access, or indexing:
 
 ```fc
 p.x
-node->next
+node.next
 data[i]
 s[1..10]
 ```

@@ -1,4 +1,4 @@
-// (*h).p is the same heap store as h->p — both must be rejected
+// (*h).p is the same heap store as h.p — both must be rejected
 struct holder =
     p: i32*
 

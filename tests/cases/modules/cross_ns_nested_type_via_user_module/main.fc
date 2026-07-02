@@ -5,7 +5,7 @@ struct holder =
 
 let main = (args: str[]) ->
     let h = alloc(holder { r = rng.pcg.make(42u64) })!
-    let x = client.roll(&h->r)
+    let x = client.roll(&h.r)
     assert(x >= 0)
     assert(x <= 255)
     0i32

@@ -4,8 +4,8 @@ struct node =
 
 let push = (head: node*?, val: i32) ->
     let n = alloc(node)!
-    n->value = val
-    n->next = head
+    n.value = val
+    n.next = head
     some(n)
 
 let sum_list = (head: node*?) ->
@@ -15,8 +15,8 @@ let sum_list = (head: node*?) ->
         match cur with
         | none -> break
         | some(n) ->
-            sum = sum + n->value
-            cur = n->next
+            sum = sum + n.value
+            cur = n.next
     sum
 
 let free_list = (head: node*?) ->
@@ -25,7 +25,7 @@ let free_list = (head: node*?) ->
         match cur with
         | none -> break
         | some(n) ->
-            cur = n->next
+            cur = n.next
             free(n)
 
 let main = (args: str[]) ->

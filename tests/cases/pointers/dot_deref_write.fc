@@ -1,0 +1,19 @@
+// `.` writes a field through a pointer (mutation is visible on the pointee),
+// including through a pointer stored in another struct's value field.
+struct cell =
+    n: i32
+
+struct holder =
+    c: cell*
+
+let main = (args: str[]) ->
+    let mut c = cell { n = 1 }
+    let pc = &c
+    pc.n = 42                // write through pointer
+    assert(c.n == 42)
+    pc.n = pc.n + 1          // read-modify-write through pointer
+    assert(c.n == 43)
+    let mut h = holder { c = &c }
+    h.c.n = 100              // h.c is a pointer field; `.n` auto-derefs and writes
+    assert(c.n == 100)
+    0

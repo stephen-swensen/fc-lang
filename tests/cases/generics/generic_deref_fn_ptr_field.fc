@@ -4,10 +4,10 @@ struct processor =
     combine: ('a, 'a) -> 'a
 
 let apply_transform = (p: processor<'a>*, x: 'a) ->
-    p->transform(x)
+    p.transform(x)
 
 let apply_combine = (p: processor<'a>*, x: 'a, y: 'a) ->
-    p->combine(x, y)
+    p.combine(x, y)
 
 let main = (args: str[]) ->
     let p = alloc(processor { transform = (x: i32) -> x * 2, combine = (a: i32, b: i32) -> a + b })!

@@ -4,7 +4,7 @@ struct point =
 
 let main = (args: str[]) ->
     let p = alloc(point { x = 15, y = 25 })!
-    let result = p->x + p->y
+    let result = p.x + p.y
     free(p)
     assert(result == 40)
     0

@@ -14,7 +14,7 @@ module m =
         table { buckets = alloc(entry<'a, 'b>[cap] { })!, count = 0 }
 
     let set_entry = (t: table<'a, 'b>*, idx: i64, k: 'a, v: 'b) ->
-        t->buckets[idx] = entry { key = k, value = v, state = 1 }
+        t.buckets[idx] = entry { key = k, value = v, state = 1 }
 
     let get_key = (t: table<'a, 'b>, idx: i64) ->
         let e = t.buckets[idx]

@@ -1,0 +1,21 @@
+// `.` reads a field through a single pointer level, and composes left-to-right:
+// a pointer field read out of a pointee is itself auto-derefed by the next `.`.
+struct inner =
+    v: i32
+
+struct outer =
+    p: inner*
+    n: i32
+
+let get = (o: outer*) ->
+    // o : outer*  -> `.p` derefs one level, reading field p (an inner*);
+    // `.v` then auto-derefs that pointer — chained single-level derefs.
+    o.p.v + o.n
+
+let main = (args: str[]) ->
+    let mut i = inner { v = 7 }
+    let mut o = outer { p = &i, n = 3 }
+    assert(get(&o) == 10)
+    // a call/address result is a pointer, so `.n` auto-derefs it too
+    assert((&o).n == 3)
+    0

@@ -6,8 +6,8 @@ struct point =
 let main = (args: str[]) ->
     let p = alloc(point { x = 10, y = 20 })!
     defer free(p)
-    assert(p->x == 10)
-    assert(p->y == 20)
+    assert(p.x == 10)
+    assert(p.y == 20)
 
     let buf = alloc(i32[3] { 1, 2, 3 })!
     defer free(buf)

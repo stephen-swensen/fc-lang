@@ -1831,8 +1831,9 @@ static bool complete_type_properties(Arena *a, JsonValue *arr, Type *tn) {
  * position of the operator's first char; the object expression ends at
  * dot_byte-1. Offers, by object kind: a numeric type name's properties; module
  * members; a slice's len/ptr; an option's is_some/is_none; a struct's fields; a
- * union's variants. Arrow ('->') dereferences one pointer level to the pointee
- * struct (and never matches a type name or module). */
+ * union's variants. A '.' on a pointer auto-derefs one level to the pointee
+ * struct's members (the retired '->' did this explicitly). `arrow` is still
+ * honored only to suppress type-name/module completion, which '->' never had. */
 static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
                              int dot_byte, bool arrow, JsonValue *arr) {
     Arena *a = &S->msg_arena;
@@ -1909,12 +1910,12 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     /* Value dispatch on the object's type: the field node's object (any shape),
      * else the anchored node (simple idents the field capture didn't reach). */
     Type *t = (obj && obj->type) ? obj->type : c.type;
-    /* '->' dereferences exactly one pointer level (pass2: -> requires a pointer
-     * to struct). '.' on a pointer is a type error in FC, so offer nothing. */
-    if (arrow) {
-        if (!t || t->kind != TYPE_POINTER) return false;
+    /* '.' auto-derefs a single pointer level to the pointee struct (matching
+     * pass2's `.`-on-pointer rewrite; the old `->` accessor is retired). A
+     * numeric type name or module was handled above and is never pointer-typed
+     * here, so dereferencing unconditionally is safe for '.'. */
+    if (t && t->kind == TYPE_POINTER)
         t = t->pointer.pointee;
-    }
     if (!t) return false;
 
     /* Slice fat-pointer fields (covers str = u8[]). */

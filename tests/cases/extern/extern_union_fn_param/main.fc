@@ -17,5 +17,5 @@ let main = (args: str[]) ->
     // Pass via pointer
     let mut v2 = u.int_or_float { i = 10 }
     let p = &v2
-    assert(p->i == 10)
+    assert(p.i == 10)
     0

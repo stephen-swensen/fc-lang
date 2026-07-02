@@ -5,7 +5,7 @@ struct holder =
 let leak = () ->
     let h = alloc(holder { p = default(i32*) })!
     let mut x = 42
-    h->p = &x
+    h.p = &x
     free(h)
 
 let main = (args: str[]) ->

@@ -308,12 +308,12 @@ module io =
                     let mut nlen = 0i64
                     loop
                         if nlen >= 256 then break
-                        if e->d_name[nlen] == 0u8 then break
+                        if e.d_name[nlen] == 0u8 then break
                         nlen = nlen + 1
                     // Skip "." and "..".
-                    let is_dot = nlen == 1 && e->d_name[0] == '.'
+                    let is_dot = nlen == 1 && e.d_name[0] == '.'
                     let is_dotdot = nlen == 2 &&
-                        e->d_name[0] == '.' && e->d_name[1] == '.'
+                        e.d_name[0] == '.' && e.d_name[1] == '.'
                     if !is_dot && !is_dotdot then
                         if count >= cap then
                             let new_cap = cap * 2
@@ -325,7 +325,7 @@ module io =
                             cap = new_cap
                         let name_buf = alloc(u8[nlen] {})!
                         for j in 0..nlen do
-                            name_buf[j] = e->d_name[j]
+                            name_buf[j] = e.d_name[j]
                         names[count] = name_buf
                         count = count + 1
             let result = alloc(str[count] {})!

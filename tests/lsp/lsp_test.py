@@ -1151,8 +1151,8 @@ check("completion: in-scope names survive merged-unit namespace sentinels (lsp.r
 
 # --- completion: synthetic / built-in members on non-struct objects -----------
 # `.` after a slice -> len/ptr, after an option -> is_some/is_none, after a
-# numeric type name -> min/max/bits (+ float nan/inf/neg_inf/epsilon); `->`
-# dereferences a pointer to its struct's fields. Each context returns EXACTLY its
+# numeric type name -> min/max/bits (+ float nan/inf/neg_inf/epsilon); `.` on a
+# pointer auto-derefs to its struct's fields. Each context returns EXACTLY its
 # synthetic set (member completion replaces, not augments, the global list), with
 # the right result type as `detail`.
 SYN = (
@@ -1162,7 +1162,7 @@ SYN = (
     "        y: i32\n"                             # 3
     "    let f = (s: u8[], p: pt*, o: i32?) ->\n"  # 4
     "        let a = s.len\n"                      # 5  slice '.'
-    "        let b = p->x\n"                       # 6  pointer '->'
+    "        let b = p.x\n"                        # 6  pointer '.' (auto-deref)
     "        let c = o.is_some\n"                  # 7  option '.'
     "        let d = i32.max\n"                    # 8  int type name '.'
     "        let e = f64.nan\n"                    # 9  float type name '.'
@@ -1174,7 +1174,7 @@ syn = [
     req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
     open_doc(1, SYN),
     synreq(2, 5, 19),   # s.l|en
-    synreq(3, 6, 20),   # p->x|
+    synreq(3, 6, 19),   # p.x|
     synreq(4, 7, 21),   # o.is|_some
     synreq(5, 8, 20),   # i32.m|ax
     synreq(6, 9, 20),   # f64.n|an
@@ -1190,7 +1190,7 @@ check("completion: slice '.' offers exactly len/ptr with len: i64",
       set(sl) == {"len", "ptr"} and sl.get("len") == "i64", str(sl))
 check("completion: slice '.ptr' detail is a pointer to the element type",
       str(sl.get("ptr", "")).endswith("*"), str(sl))
-check("completion: pointer '->' offers exactly the pointee struct's fields",
+check("completion: pointer '.' auto-derefs and offers the pointee struct's fields",
       set(ar) == {"x", "y"} and ar.get("x") == "i32", str(ar))
 check("completion: option '.' offers exactly is_some/is_none as bool",
       set(op) == {"is_some", "is_none"} and op.get("is_some") == "bool", str(op))
@@ -1202,31 +1202,32 @@ check("completion: float type name '.' adds nan/inf/neg_inf/epsilon typed f64",
       and fl.get("nan") == "f64", str(fl))
 
 # --- completion: a member operator never falls through to the global list -----
-# `->` is overloaded (deref, lambda body, fn-type, match arm). At a NON-member
-# `->` — e.g. a lambda's `(params) ->` — completion must be empty, NOT the global
-# dump, regardless of triggerKind: once VSCode has a suggest session open it
-# re-queries as Invoked (kind=1) even as you type through `->`, so suppressing
-# only TriggerCharacter (kind=2) would still leak globals (the reported bug). A
-# genuine `ptr->` still completes the pointee's fields under either kind.
+# `->` is overloaded (lambda body, fn-type, match arm — the deref role was
+# retired in favor of `.`). At a NON-member `->` — e.g. a lambda's `(params) ->`
+# — completion must be empty, NOT the global dump, regardless of triggerKind:
+# once VSCode has a suggest session open it re-queries as Invoked (kind=1) even
+# as you type through `->`, so suppressing only TriggerCharacter (kind=2) would
+# still leak globals (the reported bug). A genuine `ptr.` still completes the
+# pointee's fields (auto-deref) under either kind.
 TRIG = (
     "module m =\n"                       # 0
     "    struct pt =\n"                  # 1
     "        x: i32\n"                   # 2
     "    let f = (p: pt*) ->\n"          # 3  ') ->' is a lambda body, not a deref
-    "        let b = p->x\n"             # 4  real pointer dereference
+    "        let b = p.x\n"              # 4  real pointer dereference via '.'
     "        0\n")                       # 5
-def trigreq(i, ln, ch, kind):
+def trigreq(i, ln, ch, kind, tc=">"):
     p = {"textDocument": {"uri": URI}, "position": {"line": ln, "character": ch},
-         "context": {"triggerKind": kind, "triggerCharacter": ">"}}
+         "context": {"triggerKind": kind, "triggerCharacter": tc}}
     return req(i, "textDocument/completion", p)
 lam_col = TRIG.split("\n")[3].index("->") + 2      # just past the lambda '->'
-der_col = TRIG.split("\n")[4].index("p->") + 3     # just past 'p->'
+der_col = TRIG.split("\n")[4].index("p.") + 2      # just past 'p.'
 trg = [
     req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
     open_doc(1, TRIG),
-    trigreq(2, 3, lam_col, 2),   # lambda '->', TriggerCharacter -> empty
-    trigreq(3, 3, lam_col, 1),   # lambda '->', Invoked (persisted session) -> empty
-    trigreq(4, 4, der_col, 2),   # real   '->', TriggerCharacter -> pt fields
+    trigreq(2, 3, lam_col, 2),        # lambda '->', TriggerCharacter -> empty
+    trigreq(3, 3, lam_col, 1),        # lambda '->', Invoked (persisted session) -> empty
+    trigreq(4, 4, der_col, 2, "."),   # real deref '.', TriggerCharacter -> pt fields
     req(9, "shutdown", None), note("exit", None),
 ]
 trgresp, _, _, _, _ = run_session(trg)
@@ -1238,14 +1239,14 @@ check("completion: trigger-char '->' at a lambda body is suppressed (empty)",
       trg_labels(2) == [], str(trg_labels(2)))
 check("completion: Invoked '->' at a lambda body also stays empty (no global leak)",
       trg_labels(3) == [], str(trg_labels(3)[:8]))
-check("completion: a genuine pointer '->' still completes fields under a trigger char",
+check("completion: a genuine pointer '.' completes pointee fields under a trigger char",
       set(trg_labels(4)) == {"x"}, str(trg_labels(4)))
 
 # --- completion: member access on a composite object (index / call / nested) --
-# The object before a '.'/'->' need not be a bare identifier. `dict[i].` ends in
+# The object before a '.' need not be a bare identifier. `dict[i].` ends in
 # ']', `mk().` in ')', which no leaf node's position span covers — so the server
 # captures the field node by its operator position and reads field.object.type.
-# Index→struct, call→struct, and index→pointer '->' must all complete the fields.
+# Index→struct, call→struct, and index→pointer '.' must all complete the fields.
 CMP = (
     "module m =\n"                                       # 0
     "    struct pt =\n"                                  # 1
@@ -1256,7 +1257,7 @@ CMP = (
     "    let f = (arr: pt[], pp: pt*[]) ->\n"            # 6
     "        let a = arr[0].bit0\n"                      # 7  index  -> struct '.'
     "        let b = mk(3).bit1\n"                       # 8  call   -> struct '.'
-    "        let c = pp[0]->bit0\n"                      # 9  index  -> pointer '->'
+    "        let c = pp[0].bit0\n"                       # 9  index  -> pointer '.' (auto-deref)
     "        0\n")                                       # 10
 def cmpreq(i, ln, after):
     col = CMP.split("\n")[ln].index(after) + len(after) + 1   # one char into the member
@@ -1267,7 +1268,7 @@ cmps = [
     open_doc(1, CMP),
     cmpreq(2, 7, "arr[0]."),
     cmpreq(3, 8, "mk(3)."),
-    cmpreq(4, 9, "pp[0]->"),
+    cmpreq(4, 9, "pp[0]."),
     req(9, "shutdown", None), note("exit", None),
 ]
 cmpresp, _, _, _, _ = run_session(cmps)
@@ -1279,7 +1280,7 @@ check("completion: a slice element 'arr[i].' completes the element struct's fiel
       cmp_labels(2) == {"bit0", "bit1"}, str(cmp_labels(2)))
 check("completion: a call result 'f().' completes the returned struct's fields",
       cmp_labels(3) == {"bit0", "bit1"}, str(cmp_labels(3)))
-check("completion: a slice-of-pointers element 'arr[i]->' completes pointee fields",
+check("completion: a slice-of-pointers element 'arr[i].' auto-derefs to pointee fields",
       cmp_labels(4) == {"bit0", "bit1"}, str(cmp_labels(4)))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")

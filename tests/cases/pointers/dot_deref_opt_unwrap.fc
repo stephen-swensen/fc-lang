@@ -1,0 +1,12 @@
+// option-unwrap yields the payload; when the payload is a pointer, `.` on the
+// unwrapped value auto-derefs it: `opt!.field` reads/writes the pointee.
+struct box =
+    v: i32
+
+let main = (args: str[]) ->
+    let mut b = box { v = 5 }
+    let opt = some(&b)       // opt : box*?
+    assert(opt!.v == 5)      // unwrap -> box*, then `.v` auto-derefs
+    opt!.v = 8               // write through the unwrapped pointer
+    assert(b.v == 8)
+    0

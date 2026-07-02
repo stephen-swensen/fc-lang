@@ -13,7 +13,7 @@ module m =
 
 let main = (args: str[]) ->
     let o = m.create(10, 20)
-    assert(o.ptr->x == 10)
-    assert(o.ptr->y == 20)
+    assert(o.ptr.x == 10)
+    assert(o.ptr.y == 20)
     free(o.ptr)
     0

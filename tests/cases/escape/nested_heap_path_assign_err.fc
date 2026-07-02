@@ -7,7 +7,7 @@ struct outer =
 let leak = () ->
     let ho = alloc(outer { i = inner { p = default(i32*) } })!
     let mut x = 42
-    ho->i.p = &x
+    ho.i.p = &x
     free(ho)
 
 let main = (args: str[]) ->

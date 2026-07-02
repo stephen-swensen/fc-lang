@@ -7,5 +7,5 @@ let main = (args: str[]) ->
     let mut b = p { x = 2 }
     let mut c = p { x = 4 }
     let arr = p*[3] { &a, &b, &c }
-    assert(arr[0]->x + arr[1]->x + arr[2]->x == 7)
+    assert(arr[0].x + arr[1].x + arr[2].x == 7)
     0

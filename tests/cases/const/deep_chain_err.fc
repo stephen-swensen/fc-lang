@@ -1,4 +1,4 @@
-// x->y->z.a.b.c->e chain: const write rejected
+// x.y.z.a.b.c.e chain: const write rejected
 
 struct e_node =
     val: i32
@@ -25,5 +25,5 @@ let main = (args: str[]) ->
     let mut x = x_node { y = &y }
     let cxp = (const x_node*) &x
     // const write through full chain: should be rejected
-    cxp->y->z.a.b.c->val = 99
+    cxp.y.z.a.b.c.val = 99
     0

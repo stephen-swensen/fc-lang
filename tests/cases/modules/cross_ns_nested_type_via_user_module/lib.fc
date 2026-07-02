@@ -10,5 +10,5 @@ module rng =
             pcg { state = seed }
 
         let next = (r: pcg*) ->
-            r->state = r->state * 6364136223846793005u64 + 1u64
-            (u32) (r->state >> 32)
+            r.state = r.state * 6364136223846793005u64 + 1u64
+            (u32) (r.state >> 32)

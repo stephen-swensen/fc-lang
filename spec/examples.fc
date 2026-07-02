@@ -299,20 +299,20 @@ let main = (args: str[]) ->
     assert(sign(7) == 1i8)
 
     // A guard trailing an or-pattern applies to the whole set of alternatives.
-    // Pointer-field access `p->x` inside a guard must be parenthesised so
-    // the match-arm `->` doesn't win tokenisation.
+    // Pointer-field access `p.x` (`.` auto-derefs one level) needs NO parens in
+    // a guard: `.` never collides with the match-arm `->`.
     let grade = (p: point*) ->
-        match p->x with
-        | 0                          -> 0    // zero
-        | 1 | 2 | 3 when (p->x) > 0  -> 1    // small (or-pattern + guard)
-        | _ when (p->x) < 0          -> -1   // negative (parens around deref)
-        | _                          -> 2    // other — unguarded catch-all
+        match p.x with
+        | 0                       -> 0    // zero
+        | 1 | 2 | 3 when p.x > 0  -> 1    // small (or-pattern + guard)
+        | _ when p.x < 0          -> -1   // negative
+        | _                       -> 2    // other — unguarded catch-all
     let pp = alloc(point { x = 2, y = 0 })!
     defer free(pp)
     assert(grade(pp) == 1)
-    pp->x = 50
+    pp.x = 50
     assert(grade(pp) == 2)
-    pp->x = -1
+    pp.x = -1
     assert(grade(pp) == -1)
 
     // --------------------------------------------------------
@@ -587,7 +587,7 @@ let main = (args: str[]) ->
     // Pointer options: T*? uses null as none (no tag overhead)
     let mut val = point { x = 99, y = 0 }
     let ptr_opt = some(&val)          // point*?
-    assert(ptr_opt!->x == 99)
+    assert(ptr_opt!.x == 99)
 
     // --------------------------------------------------------
     // Pointers
@@ -603,8 +603,8 @@ let main = (args: str[]) ->
     // Pointer to struct — field access with ->
     let mut pt = point { x = 1, y = 2 }
     let pp = &pt
-    assert(pp->x == 1)
-    pp->y = 20
+    assert(pp.x == 1)
+    pp.y = 20
     assert(pt.y == 20)
 
     // --------------------------------------------------------
@@ -661,7 +661,7 @@ let main = (args: str[]) ->
 
     // Heap allocation — returns T? (option), must unwrap
     let hp = alloc(point { x = 5, y = 6 })!
-    assert(hp->x == 5)
+    assert(hp.x == 5)
     free(hp)
 
     // Heap slice
@@ -676,7 +676,7 @@ let main = (args: str[]) ->
     // defer — schedule cleanup to run at block scope exit (LIFO order)
     let dp = alloc(point { x = 7, y = 8 })!
     defer free(dp)          // free runs when this scope exits
-    assert(dp->x == 7)
+    assert(dp.x == 7)
     // dp is freed automatically — no manual free needed
 
     // sizeof and alignof (return i64)

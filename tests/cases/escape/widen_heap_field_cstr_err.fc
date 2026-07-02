@@ -5,7 +5,7 @@ struct holder =
 
 let leak = (p: const str) ->
     let h = alloc(holder)!
-    h->name = (cstr[8]) p
+    h.name = (cstr[8]) p
     free(h)
 
 let main = (args: str[]) ->

@@ -6,7 +6,7 @@ struct holder =
 let main = (args: str[]) ->
     let h = alloc(holder)!
     let c = alloc((cstr) "hi")!
-    h->name = c
+    h.name = c
     free(c)
     free(h)
     0

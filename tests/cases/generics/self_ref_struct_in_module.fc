@@ -6,12 +6,12 @@ module m =
 
     let make = (v: 'a) ->
         let n = alloc(node { value = v })!
-        n->next = none(node<'a>*)
+        n.next = none(node<'a>*)
         n
 
     let prepend = (head: node<'a>*, v: 'a) ->
         let n = m.make(v)
-        n->next = some(head)
+        n.next = some(head)
         n
 
 let main = (args: str[]) ->
@@ -19,10 +19,10 @@ let main = (args: str[]) ->
     let n2 = m.prepend(n1, 20)
     let n3 = m.prepend(n2, 30)
     // Test deep chain access (3 levels) from outside the module
-    assert(n3->value == 30)
-    assert(n3->next!->value == 20)
-    assert(n3->next!->next!->value == 10)
-    free(n3->next!->next!)
-    free(n3->next!)
+    assert(n3.value == 30)
+    assert(n3.next!.value == 20)
+    assert(n3.next!.next!.value == 10)
+    free(n3.next!.next!)
+    free(n3.next!)
     free(n3)
     0

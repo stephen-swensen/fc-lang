@@ -5,6 +5,6 @@ struct point =
 let main = (args: str[]) ->
     let mut p = point { x = 1, y = 2 }
     let cp = (const point*) &p
-    let px = &(cp->x)
+    let px = &(cp.x)
     *px = 10
     0

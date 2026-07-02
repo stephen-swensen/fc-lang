@@ -1,7 +1,7 @@
 struct buffer =
     data: i32[4]
 
-let read_first = (p: const buffer*) -> p->data[0]
+let read_first = (p: const buffer*) -> p.data[0]
 
 let main = (args: str[]) ->
     let mut b = buffer { data = i32[4] { 42, 0, 0, 0 } }

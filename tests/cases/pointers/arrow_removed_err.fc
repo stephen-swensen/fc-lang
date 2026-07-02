@@ -1,0 +1,9 @@
+// `->` is no longer pointer field access in FC — `.` auto-derefs one level.
+struct point =
+    x: i32
+
+let main = (args: str[]) ->
+    let mut p = point { x = 1 }
+    let q = &p
+    assert(q->x == 1)
+    0

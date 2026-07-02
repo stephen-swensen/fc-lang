@@ -5,20 +5,20 @@ struct node =
 module node =
     let make = (value: 'a) ->
         let n = alloc(node { value = value })!
-        n->next = none(node<'a>*)
+        n.next = none(node<'a>*)
         n
 
     let prepend = (head: node<'a>*?, value: 'a) ->
         let n = node.make(value)
-        n->next = head
+        n.next = head
         n
 
     let map = (head: node<'a>*?, f: ('a) -> 'b) ->
         match head with
         | none      -> none(node<'b>*)
         | some(ptr) ->
-            let n = node.make(f(ptr->value))
-            n->next = node.map(ptr->next, f)
+            let n = node.make(f(ptr.value))
+            n.next = node.map(ptr.next, f)
             some(n)
 
     let destroy = (head: node<'a>*?) ->
@@ -27,7 +27,7 @@ module node =
             match current with
             | none      -> break
             | some(ptr) ->
-                let next = ptr->next
+                let next = ptr.next
                 free(ptr)
                 current = next
 
@@ -39,15 +39,15 @@ let main = (args: str[]) ->
     let list = some(n3)
 
     // check head values
-    let v3 = n3->value    // 3
-    let v2 = n2->value    // 2
-    let v1 = n1->value    // 1
+    let v3 = n3.value    // 3
+    let v2 = n2.value    // 2
+    let v1 = n1.value    // 1
 
     // map: double each value -> 6 -> 4 -> 2
     let doubled = node.map(list, (x: i32) -> x * 2)
 
     // extract doubled head
-    let dv = doubled!->value    // 6
+    let dv = doubled!.value    // 6
 
     // clean up
     node.destroy(list)

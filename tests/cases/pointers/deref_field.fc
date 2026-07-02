@@ -3,8 +3,8 @@ struct point =
     y: i32
 
 let set_point = (p: point*, nx: i32, ny: i32) ->
-    p->x = nx
-    p->y = ny
+    p.x = nx
+    p.y = ny
 
 let main = (args: str[]) ->
     let mut p = point { x = 0, y = 0 }

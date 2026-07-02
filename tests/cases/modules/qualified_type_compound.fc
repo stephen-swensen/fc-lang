@@ -4,7 +4,7 @@ module m =
         x: i32
         y: i32
 
-let use_ptr = (p: m.point*) -> p->x
+let use_ptr = (p: m.point*) -> p.x
 let use_slice = (pts: m.point[]) -> pts[0].x
 let use_option = (p: m.point?) ->
     match p with

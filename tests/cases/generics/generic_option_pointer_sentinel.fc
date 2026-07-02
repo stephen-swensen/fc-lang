@@ -33,11 +33,11 @@ let main = (args: str[]) ->
     assert(!has(missing))
 
     // generic 'a? parameter with pointer payload
-    assert(unwrap_or(got, &p)->x == 9)
-    assert(unwrap_or(missing, &p)->x == 5)
+    assert(unwrap_or(got, &p).x == 9)
+    assert(unwrap_or(missing, &p).x == 5)
 
     // postfix unwrap of a generic option-of-pointer result
-    assert(pick(arr, 0, true)!->x == 5)
+    assert(pick(arr, 0, true)!.x == 5)
 
     // explicit pointer type argument constructing a none
     let n = none_of<point*>()

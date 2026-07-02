@@ -1,3 +1,34 @@
+# Decision: `->` pointer field access — SUPERSEDED (adopted single-level `.` auto-deref, on trial)
+
+> **Superseded 2026-07-01 (branch `dot-deref`).** The original decision below (keep explicit `->`)
+> was reversed and single-level `.` auto-deref was adopted **on a trial basis**, in both `fc-lang`
+> and the `wolf-fc` corpus. `.` now auto-derefs exactly one pointer level (`p.field` whether `p` is
+> `point` or `point*`; the front end resolves the object type and emits `.`/`->` in the generated C
+> accordingly), and the `->` *deref* spelling was **removed** — `p->x` is now a compile error that
+> points at `.`. The three *mapping-arrow* jobs of `->` (function type, lambda body, match arm) are
+> unchanged.
+>
+> Two reasons carried the trial despite the analysis below: (1) single-level `.` deref is a modern
+> standard (Go/Zig), and (2) reducing the number of distinct `->` roles from four to three removes
+> the one *unrelated* (non-mapping) job of the token — worthwhile given how many arrows FC already
+> carries via its ML-style syntax. A pleasant side effect: the `when`-guard parenthesization wart
+> disappears (`when p.x > 0 -> 1` needs no parens, since `.` never collides with the arm `->`). For
+> a `T**`, deref the extra level explicitly: `(*pp).field` or (equivalently) `(**pp).field` — there
+> is deliberately no multi-level auto-deref.
+>
+> Implementation: pass2 rewrites a `.`-on-pointer `EXPR_FIELD` node to `EXPR_DEREF_FIELD`, so codegen
+> and every `kind`-dispatched analysis follow with no further change (`src/pass2.c`
+> `check_pointer_field`); the parser retires the `->`-deref production (`src/parser.c`,
+> `case TOK_ARROW`); the LSP auto-derefs one level for `.` member completion (`src/lsp.c`
+> `complete_members`).
+>
+> The "both-spellings compromise" the original rejected is *not* what was adopted here — `->` deref
+> was removed outright, so FC's "one way" ethos still holds (one spelling for field access: `.`).
+>
+> *Everything below is the original 2026-06-30 rejection, retained for the record.*
+
+---
+
 # Decision: keep explicit `->` for pointer field access (auto-deref rejected)
 
 *Date: 2026-06-30. Status: decided — no change. This records why single-level `.` auto-deref

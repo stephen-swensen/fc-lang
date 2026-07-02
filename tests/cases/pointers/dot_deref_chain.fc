@@ -1,0 +1,15 @@
+// `.` auto-derefs exactly ONE pointer level. For a T** you deref the extra
+// level explicitly: (*pp).f and (**pp).f are equivalent — the first leaves a
+// T* that `.` then auto-derefs, the second reaches the struct value directly.
+struct point =
+    x: i32
+
+let main = (args: str[]) ->
+    let mut p = point { x = 9 }
+    let mut q = &p
+    let pp = &q             // pp : point**
+    assert((*pp).x == 9)    // *pp : point*  -> `.x` auto-derefs one level
+    assert((**pp).x == 9)   // **pp : point  -> plain field, equivalent
+    (*pp).x = 12            // write through the explicit deref
+    assert(p.x == 12)
+    0

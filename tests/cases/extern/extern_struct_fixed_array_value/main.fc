@@ -5,7 +5,7 @@
 // on the slice-view `.ptr` — otherwise gcc/clang reject the generated C
 // under `-Wall -Werror` (pointer-sign mismatch `char*` vs `u8_t*`).
 //
-// The parallel pointer-access path (`p->field`, EXPR_DEREF_FIELD) already
+// The parallel pointer-access path (`p.field`, EXPR_DEREF_FIELD) already
 // emitted the cast, which is why this only surfaced when `list_dir`'s
 // Windows branch accessed `fd.cFileName` on a by-value `WIN32_FIND_DATAA`.
 //
