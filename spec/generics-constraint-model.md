@@ -97,7 +97,7 @@ resolution to an explicit parameter.
 ## Consequence (do not re-litigate without this)
 
 The fact that **Tier 3 does not exist** — no abstract `.field` on a generic — is unchanged by the
-`.`-auto-deref trial. That trial (see `spec/auto-deref-decision.md`) made `.` auto-deref a single
+adoption of `.` auto-deref. That change (see `spec/auto-deref-decision.md`) made `.` auto-deref a single
 *concrete* pointer level (`p.field` on a `point*`); it did **not** add member access on an
 unconstrained type var. A generic body still cannot write `x.field` on a bare `'a` — the auto-deref
 only fires once the object's concrete type is known to be a pointer-to-struct. So the two questions

@@ -1,20 +1,45 @@
-# Decision: `->` pointer field access — SUPERSEDED (adopted single-level `.` auto-deref, on trial)
+# Decision: single-level `.` auto-deref for pointer field access — ADOPTED (final)
 
-> **Superseded 2026-07-01 (branch `dot-deref`).** The original decision below (keep explicit `->`)
-> was reversed and single-level `.` auto-deref was adopted **on a trial basis**, in both `fc-lang`
-> and the `wolf-fc` corpus. `.` now auto-derefs exactly one pointer level (`p.field` whether `p` is
-> `point` or `point*`; the front end resolves the object type and emits `.`/`->` in the generated C
-> accordingly), and the `->` *deref* spelling was **removed** — `p->x` is now a compile error that
-> points at `.`. The three *mapping-arrow* jobs of `->` (function type, lambda body, match arm) are
-> unchanged.
+> **Adopted 2026-07-01 (branch `dot-deref`); confirmed final 2026-07-02 after hands-on use.** The
+> original decision below (keep explicit `->`) was reversed and single-level `.` auto-deref was
+> adopted, in both `fc-lang` and the `wolf-fc` corpus. `.` now auto-derefs exactly one pointer
+> level (`p.field` whether `p` is `point` or `point*`; the front end resolves the object type and
+> emits `.`/`->` in the generated C accordingly), and the `->` *deref* spelling was **removed** —
+> `p->x` is now a compile error that points at `.`. The three *mapping-arrow* jobs of `->`
+> (function type, lambda body, match arm) are unchanged.
 >
-> Two reasons carried the trial despite the analysis below: (1) single-level `.` deref is a modern
+> Two reasons carried the change despite the analysis below: (1) single-level `.` deref is a modern
 > standard (Go/Zig), and (2) reducing the number of distinct `->` roles from four to three removes
 > the one *unrelated* (non-mapping) job of the token — worthwhile given how many arrows FC already
 > carries via its ML-style syntax. A pleasant side effect: the `when`-guard parenthesization wart
 > disappears (`when p.x > 0 -> 1` needs no parens, since `.` never collides with the arm `->`). For
 > a `T**`, deref the extra level explicitly: `(*pp).field` or (equivalently) `(**pp).field` — there
 > is deliberately no multi-level auto-deref.
+>
+> **Why the trial was confirmed (2026-07-02).** The deciding argument is the syntax conflict
+> itself: FC's `->` is an ML-inherited *mapping* arrow, and the C-family *deref* arrow was the one
+> role fighting that inheritance. With `.` being the accepted modern spelling (Go/Zig), the tie
+> breaks in favor of removing the conflict. Supporting arguments from the review:
+>
+> - **Decision-free accessor.** Choosing `.` vs `->` requires knowing a binding's pointer-ness,
+>   which is often far from the use site (an inferred `let`, a parameter declared elsewhere). With
+>   auto-deref there is no wrong choice — a persistent error class for both humans and,
+>   especially, AI code generation simply vanishes. When a C-trained reflex does emit `p->x`, the
+>   recoverable diagnostic contains the fix.
+> - **Prior alignment.** FC reads like its neighbors (Go, Zig, Rust, ML), all of which spell field
+>   access `.`. The `->` deref was the one place FC matched C against the grain of the rest of its
+>   syntax.
+> - **The cost is real but contained.** `p.field = …` no longer announces mutation-through-pointer
+>   at the use site — a carve-out from FC's "representation-crossing operations are explicit"
+>   posture (`&`, `*`, casts). But it is a fixed single-level desugar with zero cost and no user
+>   extensibility (nothing like Rust's `Deref` coercion); address-*taking*, the direction that
+>   creates aliases, stays fully explicit; and pointer-ness remains visible at binding sites,
+>   signatures, and via LSP hover/inlay types. Go and Zig hold this same combination as a stable
+>   design point.
+>
+> Revisit only if living with the converted corpus (~5,400 sites in wolf-fc) shows
+> mutation-through-pointer becoming genuinely harder to audit in review — the failure mode the
+> original analysis predicted, which hands-on use so far has not borne out.
 >
 > Implementation: pass2 rewrites a `.`-on-pointer `EXPR_FIELD` node to `EXPR_DEREF_FIELD`, so codegen
 > and every `kind`-dispatched analysis follow with no further change (`src/pass2.c`

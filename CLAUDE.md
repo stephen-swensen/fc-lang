@@ -148,7 +148,7 @@ match s with
 - No compound assignment (`+=`, `-=`, etc.) — only plain `=`
 - Bitwise operators bind tighter than comparison (fixes C's `x & mask == 0` wart)
 - `!` is postfix option-unwrap AND prefix boolean-not (context-dependent)
-- `.` is field access and **auto-derefs one pointer level** — `ptr.field` == `(*ptr).field` (a `.`-on-pointer `EXPR_FIELD` is rewritten to `EXPR_DEREF_FIELD` in pass2). For a `T**`, deref the extra level explicitly: `(*pp).f` / `(**pp).f`. (Trial on branch `dot-deref`; see `spec/auto-deref-decision.md`.)
+- `.` is field access and **auto-derefs one pointer level** — `ptr.field` == `(*ptr).field` (a `.`-on-pointer `EXPR_FIELD` is rewritten to `EXPR_DEREF_FIELD` in pass2). For a `T**`, deref the extra level explicitly: `(*pp).f` / `(**pp).f`. (Adopted as final syntax 2026-07-02; rationale in `spec/auto-deref-decision.md`.)
 - `->` means: function type arrow, match arm separator, OR lambda body introducer (context-dependent). It is **not** pointer field access — `ptr->field` is a compile error pointing at `.`.
 
 ### Match Arm Indentation
