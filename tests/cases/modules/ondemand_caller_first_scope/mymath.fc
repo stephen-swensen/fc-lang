@@ -1,0 +1,8 @@
+// A helper in its own namespace, imported at file level by lib.fc. Sorts last
+// alphabetically, so it is compiled after its user — exercising on-demand type
+// checking of a callee whose signature/body isn't resolved yet.
+namespace util::
+
+module mymath =
+    let dbl = (x: i32) ->
+        x * 2

@@ -813,6 +813,8 @@ typedef struct {
     ImportScope *import_scope;
     const char *current_ns;
     Scope *scope;
+    bool overflow_checked;
+    bool guards_suppressed;
 } SavedCtxScope;
 
 /* Reconstruct ctx.module_symtab, parent_modules, import_scope, and current_ns
@@ -830,6 +832,8 @@ static void enter_module_scope_on_demand(CheckCtx *ctx, Symbol *mod_sym,
     saved->import_scope = ctx->import_scope;
     saved->current_ns = ctx->current_ns;
     saved->scope = ctx->scope;
+    saved->overflow_checked = ctx->overflow_checked;
+    saved->guards_suppressed = ctx->guards_suppressed;
 
     enum { MAX_DEPTH = 64 };
     Symbol *chain[MAX_DEPTH];
@@ -888,6 +892,49 @@ static void enter_module_scope_on_demand(CheckCtx *ctx, Symbol *mod_sym,
     ctx->current_ns = mod_sym->ns_prefix;
     ctx->scope = scope_new(ctx->arena, NULL);
     ctx->scope->is_global = true;
+    /* The callee body is checked at its own definition site, where the overflow
+     * and guard axes start at their defaults — a `checked`/`guarded` context in
+     * the caller must not leak in and make the callee's own marker look redundant. */
+    ctx->overflow_checked = false;
+    ctx->guards_suppressed = false;
+}
+
+/* On-demand scope setup for a top-level (non-module) let: global members, no
+ * parent modules, the let's own file-level imports, a fresh global scope, and a
+ * clean overflow/guard context. The global-scope analogue of
+ * enter_module_scope_on_demand. */
+static void enter_global_scope_on_demand(CheckCtx *ctx, Symbol *sym,
+                                         SavedCtxScope *saved) {
+    saved->module_symtab = ctx->module_symtab;
+    saved->parent_modules = ctx->parent_modules;
+    saved->import_scope = ctx->import_scope;
+    saved->current_ns = ctx->current_ns;
+    saved->scope = ctx->scope;
+    saved->overflow_checked = ctx->overflow_checked;
+    saved->guards_suppressed = ctx->guards_suppressed;
+
+    ImportScope *fscope = NULL;
+    const char *fn = sym->decl ? sym->decl->loc.filename : NULL;
+    if (ctx->file_scopes && fn) {
+        for (int fi = 0; fi < ctx->file_scopes->count; fi++) {
+            if (ctx->file_scopes->scopes[fi].filename == fn) {
+                ImportScope *fs = arena_alloc(ctx->arena, sizeof(ImportScope));
+                fs->table = &ctx->file_scopes->scopes[fi].imports;
+                fs->parent = NULL;
+                fscope = fs;
+                break;
+            }
+        }
+    }
+
+    ctx->module_symtab = NULL;
+    ctx->parent_modules = NULL;
+    ctx->import_scope = fscope;
+    ctx->current_ns = sym->ns_prefix;
+    ctx->scope = scope_new(ctx->arena, NULL);
+    ctx->scope->is_global = true;
+    ctx->overflow_checked = false;
+    ctx->guards_suppressed = false;
 }
 
 static void restore_scope(CheckCtx *ctx, SavedCtxScope *saved) {
@@ -896,6 +943,23 @@ static void restore_scope(CheckCtx *ctx, SavedCtxScope *saved) {
     ctx->import_scope = saved->import_scope;
     ctx->current_ns = saved->current_ns;
     ctx->scope = saved->scope;
+    ctx->overflow_checked = saved->overflow_checked;
+    ctx->guards_suppressed = saved->guards_suppressed;
+}
+
+/* Type-check the module-or-global let `sym` on demand — its type is needed
+ * before the natural top-level walk reached it. Sets up ctx as if we were at the
+ * let's own definition site (its enclosing module's scope and file imports, or
+ * the global scope), checks the body, then restores. Cycle detection is the
+ * caller's job (the diagnostic wording varies by how the name was resolved). */
+static void run_let_on_demand(CheckCtx *ctx, Symbol *sym) {
+    SavedCtxScope saved;
+    if (sym->parent)
+        enter_module_scope_on_demand(ctx, sym->parent, &saved);
+    else
+        enter_global_scope_on_demand(ctx, sym, &saved);
+    check_decl_let(ctx, sym->decl);
+    restore_scope(ctx, &saved);
 }
 
 /* Look up a name in the import scope chain (innermost first = shadowing).
@@ -943,21 +1007,6 @@ static Symbol *import_scope_lookup_kind_until(ImportScope *scope, const char *na
 }
 
 /* Look up ImportRef metadata within a bounded import scope range */
-static ImportRef *import_scope_find_ref_until(ImportScope *scope, const char *name,
-                                              ImportScope *stop) {
-    for (ImportScope *s = scope; s && s != stop; s = s->parent) {
-        if (s->table) {
-            for (int i = s->table->count - 1; i >= 0; i--) {
-                ImportRef *ref = &s->table->entries[i];
-                if (ref->local_name == name) return ref;
-            }
-        }
-    }
-    return NULL;
-}
-
-
-
 /* Namespace-aware global symtab lookup for non-module symbols.
  * Top-level declarations are registered with ns_prefix set to their enclosing
  * namespace (or NULL for global::); lookup filters to only return entries
@@ -3132,11 +3181,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     }
                     OnDemandVisited vis = { .decl = msym->decl, .next = ctx->on_demand_visited };
                     ctx->on_demand_visited = &vis;
-                    Scope *saved_scope = ctx->scope;
-                    ctx->scope = scope_new(ctx->arena, NULL);
-                    ctx->scope->is_global = true;
-                    check_decl_let(ctx, msym->decl);
-                    ctx->scope = saved_scope;
+                    run_let_on_demand(ctx, msym);
                     ctx->on_demand_visited = vis.next;
                 }
                 if (msym->decl && msym->decl->kind == DECL_LET && msym->decl->let.codegen_name)
@@ -3187,20 +3232,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                             e->type = type_error();
                             return e->type;
                         }
-                        ImportRef *ref = import_scope_find_ref_until(imp, e->ident.name, stop);
-                        if (ref) {
-                            OnDemandVisited vis = { .decl = isym->decl, .next = ctx->on_demand_visited };
-                            ctx->on_demand_visited = &vis;
-                            SymbolTable *saved_mod = ctx->module_symtab;
-                            Scope *saved_scope = ctx->scope;
-                            ctx->module_symtab = ref->source_members;
-                            ctx->scope = scope_new(ctx->arena, NULL);
-                            ctx->scope->is_global = true;
-                            check_decl_let(ctx, isym->decl);
-                            ctx->scope = saved_scope;
-                            ctx->module_symtab = saved_mod;
-                            ctx->on_demand_visited = vis.next;
-                        }
+                        OnDemandVisited vis = { .decl = isym->decl, .next = ctx->on_demand_visited };
+                        ctx->on_demand_visited = &vis;
+                        run_let_on_demand(ctx, isym);
+                        ctx->on_demand_visited = vis.next;
                     }
                     if (isym->decl && isym->decl->kind == DECL_LET && isym->decl->let.codegen_name)
                         e->ident.codegen_name = isym->decl->let.codegen_name;
@@ -3245,17 +3280,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         }
                         OnDemandVisited vis = { .decl = psym->decl, .next = ctx->on_demand_visited };
                         ctx->on_demand_visited = &vis;
-                        SymbolTable *saved_mod = ctx->module_symtab;
-                        Scope *saved_scope = ctx->scope;
-                        ImportScope *saved_imports = ctx->import_scope;
-                        ctx->module_symtab = p->members;
-                        ctx->import_scope = p->import_scope;
-                        ctx->scope = scope_new(ctx->arena, NULL);
-                        ctx->scope->is_global = true;
-                        check_decl_let(ctx, psym->decl);
-                        ctx->scope = saved_scope;
-                        ctx->module_symtab = saved_mod;
-                        ctx->import_scope = saved_imports;
+                        run_let_on_demand(ctx, psym);
                         ctx->on_demand_visited = vis.next;
                     }
                     if (psym->decl && psym->decl->kind == DECL_LET && psym->decl->let.codegen_name)
@@ -3341,16 +3366,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
             OnDemandVisited vis = { .decl = sym->decl, .next = ctx->on_demand_visited };
             ctx->on_demand_visited = &vis;
-            SymbolTable *saved_mod = ctx->module_symtab;
-            Scope *saved_scope = ctx->scope;
-            ImportScope *saved_imports = ctx->import_scope;
-            ctx->module_symtab = NULL;
-            ctx->scope = scope_new(ctx->arena, NULL);
-            ctx->scope->is_global = true;
-            check_decl_let(ctx, sym->decl);
-            ctx->scope = saved_scope;
-            ctx->module_symtab = saved_mod;
-            ctx->import_scope = saved_imports;
+            run_let_on_demand(ctx, sym);
             ctx->on_demand_visited = vis.next;
         }
         if (!sym->type) {

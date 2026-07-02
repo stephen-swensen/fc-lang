@@ -1,0 +1,22 @@
+// Sorts first, so it is compiled before lib.fc: when `caller` is type-checked,
+// lib's imported functions have no inferred type yet and are checked on demand.
+// This is the shape that regressed — a caller-first file order must resolve the
+// callee in the callee's own definition context, not the caller's.
+import * from lib
+
+module caller =
+    // The surrounding `checked` establishes overflow-checked context, then calls
+    // uses_checked (on demand). The `+ n` keeps this block non-redundant on its
+    // own; the point is that uses_checked's inner `checked` must still be valid.
+    let a = (n: i32) ->
+        checked
+            uses_checked(n) + n
+
+    // Forces on-demand check of uses_import, whose body needs lib.fc's file import.
+    let b = (n: i32) ->
+        uses_import(n)
+
+let main = (args: str[]) ->
+    let r = caller.a(3) + caller.b(4)  // (3+3 + 3) + (4*2) = 9 + 8 = 17
+    assert(r == 17)
+    0

@@ -510,6 +510,19 @@ static Type *subst_resolve(Type *t) {
     return t;
 }
 
+/* True when `t` is a u8[] slice — the `str` alias — accounting for the active
+ * monomorphization substitution. A generic field/local typed `'a[]` where `'a`
+ * is bound to u8 is `str` and must share fc_str's C spelling (and its always-
+ * emitted typedef); is_str_type alone would miss it because it inspects the raw
+ * type-var element. Without this, one instance spells the type both `fc_str`
+ * (where the element is already concrete) and `fc_slice_uint8_t` (under the
+ * type var), and the latter has no typedef. */
+static bool slice_is_str_under_subst(Type *t) {
+    if (!t || t->kind != TYPE_SLICE) return false;
+    Type *elem = subst_resolve(t->slice.elem);
+    return elem && elem->kind == TYPE_UINT8;
+}
+
 /* Does the option inner type use null-sentinel optimization (bare pointer, NULL = none)? */
 static bool is_null_sentinel(Type *opt_type) {
     opt_type = subst_resolve(opt_type);
@@ -721,7 +734,7 @@ static void emit_type(Type *t, FILE *out) {
         fprintf(out, "*");
         break;
     case TYPE_SLICE:
-        if (is_str_type(t)) {
+        if (slice_is_str_under_subst(t)) {
             fprintf(out, "fc_str");
         } else {
             fprintf(out, "fc_slice_");
@@ -847,7 +860,7 @@ static void emit_type_ident(Type *t, FILE *out) {
             fprintf(out, "%s", t->unio.name);
         break;
     case TYPE_SLICE:
-        if (is_str_type(t)) {
+        if (slice_is_str_under_subst(t)) {
             fprintf(out, "fc_str");
         } else {
             fprintf(out, "fc_slice_");

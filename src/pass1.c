@@ -986,14 +986,17 @@ static void set_type_resolved_syms(SymbolTable *tab) {
     }
 }
 
-/* Walk modules and set parent pointers. Called at end of pass1 after all
+/* Walk modules and set parent pointers on every member symbol — not just nested
+ * modules but also member lets and types — so an on-demand type check can recover
+ * a member's enclosing module Symbol (and through it, that module's scope and
+ * file-level imports) from the member alone. Called at end of pass1 after all
  * symtab mutations are complete, so Symbol pointers are stable. */
 static void set_module_parents(SymbolTable *tab, Symbol *parent) {
     for (int i = 0; i < tab->count; i++) {
         Symbol *s = &tab->symbols[i];
-        if (s->kind != DECL_MODULE || !s->members) continue;
         s->parent = parent;
-        set_module_parents(s->members, s);
+        if (s->kind == DECL_MODULE && s->members)
+            set_module_parents(s->members, s);
     }
 }
 

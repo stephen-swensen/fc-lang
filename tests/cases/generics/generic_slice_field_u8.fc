@@ -1,0 +1,43 @@
+// Regression: a generic struct whose field is a bare slice 'a[]. When the struct
+// is instantiated with 'a = u8, that field type is the `str` alias (u8[] == str),
+// which codegen spells `fc_str`. The bug: method bodies that surfaced the field's
+// slice type *under the type-var substitution* spelled it `fc_slice_uint8_t`
+// instead — a name whose typedef is never emitted (only fc_str's is), so the
+// generated C referenced an undeclared type and failed to compile. The str check
+// must resolve the element through the active substitution. Non-u8 element types
+// (e.g. i32) were unaffected and are included here as a guard for that path.
+
+struct holder =
+    data: 'a[]
+    n: i64
+
+let wrap = (xs: 'a[]) ->
+    holder { data = xs, n = (i64) xs.len }
+
+let head = (h: holder<'a>) ->
+    h.data[0]
+
+// Binds the field's slice type to a local — this is where the 'a[] slice type
+// surfaces under substitution in a method body (was fc_slice_uint8_t for u8).
+let last = (h: holder<'a>) ->
+    let s = h.data
+    s[h.n - 1]
+
+// Produces an option of the slice — exercises the fc_option_<slice> spelling
+// (was fc_option_fc_slice_uint8_t for u8; must be fc_option_fc_str).
+let all = (h: holder<'a>) ->
+    if h.n > 0 then some(h.data) else default('a[]?)
+
+let main = (args: str[]) ->
+    // 'a = u8 → the data field is u8[] == str
+    let bytes = wrap(u8[3] { 10u8, 20u8, 30u8 })
+    assert(head(bytes) == 10u8)
+    assert(last(bytes) == 30u8)
+    assert(all(bytes)!.len == 3)
+
+    // 'a = i32 → a normal fc_slice_int32_t; guards the non-str path
+    let nums = wrap(i32[2] { 7, 9 })
+    assert(head(nums) == 7)
+    assert(last(nums) == 9)
+    assert(all(nums)!.len == 2)
+    0

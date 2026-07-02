@@ -1,0 +1,17 @@
+// A file-level import that only lib's own functions rely on. When a function
+// here is type-checked on demand (because a caller in an earlier-compiled file
+// referenced it before the natural walk reached lib), the on-demand check must
+// restore *this file's* import scope — otherwise `mymath` reads as undefined.
+import dbl from util::mymath
+
+module lib =
+    // Uses lib.fc's file-level import. Force-checked on demand from app.fc.
+    let uses_import = (n: i32) ->
+        dbl(n)
+
+    // Has its own `checked` marker. When force-checked on demand from inside a
+    // caller's `checked` block, the overflow-axis context must be reset to its
+    // default first, or this marker is wrongly rejected as redundant.
+    let uses_checked = (n: i32) ->
+        checked
+            n + n
