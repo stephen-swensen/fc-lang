@@ -209,8 +209,17 @@ let place_food = (pcg_state: pcg_random*, body: vec2[], head: i32, len: i32) ->
             break vec2 { x = x, y = y }
 
 let clear_screen = (r: any*) ->
-    sdl2.set_color(r, 20u8, 20u8, 40u8, 255u8)
+    // SDL_RenderClear ignores the logical viewport and paints the *whole* window,
+    // so clear it to black first — that gives crisp black letterbox bars around
+    // the 4:3 play field. Then fill only the logical play area with the background
+    // colour, so its edge (i.e. the wall) is visible instead of blending into the
+    // bars — otherwise the field looks like it extends to the screen edge and the
+    // snake dies on an invisible wall out in the "background".
+    sdl2.set_color(r, 0u8, 0u8, 0u8, 255u8)
     sdl2.clear(r)
+    let mut bg = rect { x = 0, y = 0, w = grid_w * cell, h = grid_h * cell }
+    sdl2.set_color(r, 20u8, 20u8, 40u8, 255u8)
+    sdl2.fill_rect(r, &bg)
     return
 
 // --- Sound effects (pre-generated square wave buffers) ---
@@ -327,10 +336,22 @@ let main = (args: str[]) ->
 
     // Init SDL
     sdl2.init(sdl2.init_video | sdl2.init_audio)
-    let win = sdl2.create_window(c"Fibbles", 40, 40,
-        grid_w * cell, grid_h * cell, sdl2.window_shown)
-    sdl2.set_resizable(win, 0)
-    let ren = sdl2.create_renderer(win, -1, sdl2.renderer_sw)
+    // Create a HiDPI-aware, resizable window and maximize it to the desktop,
+    // then draw to a fixed grid_w*cell x grid_h*cell *logical* canvas that SDL
+    // upscales (letterboxed) to fill the window. Without maximizing, the window
+    // stays a fixed 640x480 *device*-pixel box: fine at 1:1, but tiny on a HiDPI
+    // / fractional-scaled display (Windows bitmap-stretches such windows so they
+    // still look right; X11/Wayland don't, so it renders physically small).
+    // This mirrors face-invaders, which scales correctly on the same displays.
+    let flags = sdl2.window_shown | sdl2.window_allow_highdpi | sdl2.window_resizable
+    let win = sdl2.create_window(c"Fibbles",
+        sdl2.pos_centered, sdl2.pos_centered,
+        grid_w * cell, grid_h * cell, flags)
+    sdl2.maximize_window(win)
+    // Accelerated + vsync: the up-scale is then a GPU blit (smooth and cheap)
+    // rather than a full-window CPU scale every frame.
+    let ren = sdl2.create_renderer(win, -1,
+        sdl2.renderer_accel | sdl2.renderer_vsync)
     sdl2.set_logical_size(ren, grid_w * cell, grid_h * cell)
     let mut pcg_state = pcg_random.make((u64) sys.time())
 
@@ -628,7 +649,9 @@ let main = (args: str[]) ->
 
             sdl2.present(ren)
 
-        sdl2.delay(16u32)
+        // Vsync paces the loop (every state presents once per iteration); the
+        // 1ms floor just avoids a busy-spin if vsync is unavailable.
+        sdl2.delay(1u32)
 
     // Final score
     io.write("Final score: %d{score}\n", stdout)
