@@ -1,0 +1,9 @@
+// The divide-by-zero guard must fire inside a monomorphized generic body just
+// as it does in non-generic code (guards are on by default everywhere).
+let gdiv = (a: 'a, b: 'a) -> a / b
+
+let main = (args: str[]) ->
+    let x = gdiv(10, 0)   // aborts here
+    assert(false)         // not reached
+    let _ = x
+    0

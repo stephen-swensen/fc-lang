@@ -1,0 +1,8 @@
+// A marker in a generic body instantiated ONLY at a type where nothing is
+// governed still compiles: acceptance is judged against possible
+// instantiations, and this instance simply emits the plain operation.
+let add_ck = (a: 'a, b: 'a) -> checked (a + b)
+
+let main = (args: str[]) ->
+    assert(add_ck(1.5, 2.25) == 3.75)   // 'a = f64: checked no-ops
+    0

@@ -1,0 +1,11 @@
+// A marker on a type-variable operation is accepted when some instantiation
+// governs it, and is a no-op in instances where none does: the i32 instance
+// suppresses the divide-by-zero check (keeping the defined min/-1 wrap — the
+// overflow axis is untouched by unguarded), the f64 instance is a plain divide.
+let div_ug = (a: 'a, b: 'a) -> unguarded (a / b)
+
+let main = (args: str[]) ->
+    assert(div_ug(10, 2) == 5)                  // 'a = i32: zero check suppressed
+    assert(div_ug(10.0, 4.0) == 2.5)            // 'a = f64: marker no-ops
+    assert(div_ug(i32.min, -1) == i32.min)      // min/-1 wrap survives unguarded
+    0

@@ -1,0 +1,8 @@
+// Bitwise AND can never overflow at any instantiation, so checked on it is
+// redundant even when the operands are type variables.
+let and_ck = (a: 'a, b: 'a) -> checked (a & b)
+
+let main = (args: str[]) ->
+    let x = and_ck(1, 2)
+    let _ = x
+    0

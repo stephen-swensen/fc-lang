@@ -2352,7 +2352,10 @@ static void emit_expr(Expr *e, FILE *out) {
             }
         }
         int op = e->binary.op;
-        Type *rt = e->type;
+        /* Resolve a type-var result type to its concrete instance type: every
+         * defined-behavior decision below (wrap casts, shift mask, div guards,
+         * checked traps) must see the monomorphized type, not the raw 'a. */
+        Type *rt = subst_resolve(e->type);
 
         /* Pointer difference (ptr - ptr) → ptrdiff_t element count. Must emit a
          * plain subtraction: the signed-wrap path below would cast the pointers
@@ -2578,16 +2581,19 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_UNARY_PREFIX: {
+        /* Resolve a type-var result type (see EXPR_BINARY): the negation-wrap,
+         * checked-negation, and sub-int NOT decisions need the concrete type. */
+        Type *rt = subst_resolve(e->type);
         /* Signed negation. `checked`: only INT_MIN overflows (−INT_MIN is
          * unrepresentable), detected with __builtin_sub_overflow(0, x). */
-        if (e->unary_prefix.op == TOK_MINUS && e->type && type_is_signed(e->type) &&
+        if (e->unary_prefix.op == TOK_MINUS && rt && type_is_signed(rt) &&
             g_overflow_checked) {
             const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
             int tid = temp_counter++;
             fprintf(out, "({ ");
-            emit_type(e->type, out);
+            emit_type(rt, out);
             fprintf(out, " _r%d; if (__builtin_sub_overflow((", tid);
-            emit_type(e->type, out);
+            emit_type(rt, out);
             fprintf(out, ")0, ");
             emit_expr(e->unary_prefix.operand, out);
             fprintf(out, ", &_r%d)) fc_overflow(\"", tid);
@@ -2596,21 +2602,21 @@ static void emit_expr(Expr *e, FILE *out) {
             break;
         }
         /* Signed negation wrapping (unchecked): (int32_t)(-(uint32_t)x) */
-        if (e->unary_prefix.op == TOK_MINUS && e->type && type_is_signed(e->type)) {
-            const char *ut = unsigned_counterpart(e->type);
+        if (e->unary_prefix.op == TOK_MINUS && rt && type_is_signed(rt)) {
+            const char *ut = unsigned_counterpart(rt);
             fprintf(out, "(");
-            emit_type(e->type, out);
+            emit_type(rt, out);
             fprintf(out, ")(-((%s)", ut);
             emit_expr(e->unary_prefix.operand, out);
             fprintf(out, "))");
             break;
         }
         /* Bitwise NOT on sub-int types: cast result back to prevent C promotion issues */
-        if (e->unary_prefix.op == TOK_TILDE && e->type && type_is_integer(e->type) &&
-            (e->type->kind == TYPE_INT8  || e->type->kind == TYPE_UINT8 ||
-             e->type->kind == TYPE_INT16 || e->type->kind == TYPE_UINT16)) {
+        if (e->unary_prefix.op == TOK_TILDE && rt && type_is_integer(rt) &&
+            (rt->kind == TYPE_INT8  || rt->kind == TYPE_UINT8 ||
+             rt->kind == TYPE_INT16 || rt->kind == TYPE_UINT16)) {
             fprintf(out, "((");
-            emit_type(e->type, out);
+            emit_type(rt, out);
             fprintf(out, ")(~");
             emit_expr(e->unary_prefix.operand, out);
             fprintf(out, "))");

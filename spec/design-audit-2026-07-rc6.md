@@ -151,7 +151,7 @@ priced in the spec.)
   systems-language answer (it's C's), but the spec never *says* "FC strings are byte
   strings; UTF-8 is a convention of the data, not the type." One paragraph would prevent
   a class of user assumptions.
-- **Spec gap — context markers × generics.** The redundancy rule says
+- **Spec gap — context markers × generics.** ✅ RESOLVED 2026-07-03. The redundancy rule says
   `unguarded (a / b)` on floats is a compile error, and generic-body validation is
   deferred to monomorphization. So what happens to `unguarded (a / b)` in a generic body
   instantiated at both `i32` (guard exists) and `f64` (marker is redundant)?
@@ -159,6 +159,20 @@ priced in the spec.)
   silently waiving the rule for type variables is probably right but is currently
   unspecified. Same question for `checked`. Small, but it's a real hole in an otherwise
   airtight pair of sections.
+  *Resolution: waived for type variables — the redundancy scan accepts a marker when
+  some admissible instantiation would govern an operation in its body; instances where
+  none is governed emit the plain op (no per-instantiation errors). A marker meaningless
+  under every instantiation (`unguarded (a == b)`) is still rejected. Spec §Redundancy
+  "Generic bodies" paragraph; `type_maybe_integer`/`type_maybe_signed` in pass2's
+  governed-op predicates; tests `generics/generic_{unguarded_div,checked_add,
+  checked_float_inst,marker_redundant,checked_redundant}`. Investigating this uncovered —
+  and fixed — a far larger latent codegen bug: every defined-behavior emit decision
+  (wrap casts, shift masks, div/mod guards, min/-1, checked traps, sub-int `~`) keyed on
+  the raw type variable instead of the substituted type, so monomorphized generic bodies
+  emitted bare UB-carrying C operators (`a << b` unmasked, no divide-by-zero guard, UB
+  signed overflow). Fixed via `subst_resolve` at the EXPR_BINARY/EXPR_UNARY_PREFIX emit
+  sites (equality already did this); tests `generics/generic_{wrap_semantics,
+  div_zero_guard}`.*
 
 ---
 

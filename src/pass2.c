@@ -2807,6 +2807,21 @@ static bool expr_contains_control_flow(Expr *e) {
 /* Is this node one of the three value-precondition guards that `unguarded`
    governs? Checked post-typecheck, so operand/result types are populated.
    Must stay in lockstep with the three gated sites in codegen. */
+/* In a generic body an operation on type-variable operands may or may not be
+   governed depending on the instantiation (`a / b` has a zero guard at i32,
+   none at f64). The redundancy scan counts it as governed when SOME admissible
+   instantiation would be: the marker is accepted once at definition and is a
+   no-op in instances where nothing is governed (codegen keys each emit site on
+   the concrete substituted type). Casts from/to a type variable are invalid,
+   so the cast arms below never see one. */
+static bool type_maybe_integer(Type *t) {
+    return t && (type_is_integer(t) || t->kind == TYPE_TYPE_VAR);
+}
+
+static bool type_maybe_signed(Type *t) {
+    return t && (type_is_signed(t) || t->kind == TYPE_TYPE_VAR);
+}
+
 static bool expr_node_is_governed_guard(Expr *e) {
     switch (e->kind) {
     case EXPR_CAST:   /* float→int saturation helper */
@@ -2814,7 +2829,7 @@ static bool expr_node_is_governed_guard(Expr *e) {
                e->cast.target && type_is_integer(e->cast.target);
     case EXPR_BINARY: /* integer divide/modulo: zero + INT_MIN/-1 guard */
         return (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
-               e->type && type_is_integer(e->type);
+               type_maybe_integer(e->type);
     case EXPR_INDEX:  /* slice bounds check */
         return e->index.object->type && e->index.object->type->kind == TYPE_SLICE;
     case EXPR_SLICE:  /* subslice bounds check */
@@ -2837,13 +2852,13 @@ static bool expr_node_is_governed_overflow(Expr *e) {
     case EXPR_BINARY:
         if (e->binary.op == TOK_PLUS || e->binary.op == TOK_MINUS ||
             e->binary.op == TOK_STAR)
-            return e->type && type_is_integer(e->type);
+            return type_maybe_integer(e->type);
         if (e->binary.op == TOK_SLASH)
-            return e->type && type_is_signed(e->type);
+            return type_maybe_signed(e->type);
         return false;
     case EXPR_UNARY_PREFIX:
         return e->unary_prefix.op == TOK_MINUS &&
-               e->type && type_is_signed(e->type);
+               type_maybe_signed(e->type);
     case EXPR_CAST: {
         Type *from = e->cast.operand->type, *to = e->cast.target;
         return from && to && type_is_integer(from) && type_is_integer(to) &&

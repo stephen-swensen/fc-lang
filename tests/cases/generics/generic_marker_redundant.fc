@@ -1,0 +1,8 @@
+// A marker whose body has no possibly-governed operation under ANY
+// instantiation is still a redundant-marker error in a generic body.
+let cmp_ug = (a: 'a, b: 'a) -> unguarded (a == b)
+
+let main = (args: str[]) ->
+    let x = cmp_ug(1, 2)
+    let _ = x
+    0
