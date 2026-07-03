@@ -11,6 +11,10 @@ typedef struct Lexer {
     int line;
     int col;
     int start_col;          /* column at start of current token */
+    int start_line;         /* line at start of current token — a token's loc must be
+                               where it BEGINS; l->line has already advanced past a
+                               consumed '\n', so a newline token would otherwise get
+                               the next line paired with its start column */
     InternTable *intern;
 
     /* String interpolation state */

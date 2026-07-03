@@ -11,6 +11,7 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern,
     l->line = 1;
     l->col = 1;
     l->start_col = 1;
+    l->start_line = 1;
     l->intern = intern;
     l->interp_depth = 0;
     l->interp_scan_fmt = false;
@@ -51,7 +52,7 @@ static Token make_token(Lexer *l, TokenKind kind) {
         .kind = kind,
         .start = l->start,
         .length = (int)(l->current - l->start),
-        .line = l->line,
+        .line = l->start_line,
         .col = l->start_col,
     };
 }
@@ -61,7 +62,7 @@ static Token error_token(Lexer *l, const char *msg) {
         .kind = TOK_ERROR,
         .start = msg,
         .length = (int)strlen(msg),
-        .line = l->line,
+        .line = l->start_line,
         .col = l->start_col,
     };
 }
@@ -449,6 +450,7 @@ static Token scan_token(Lexer *l) {
 
     l->start = l->current;
     l->start_col = l->col;
+    l->start_line = l->line;
 
     if (at_end(l)) return make_token(l, TOK_EOF);
 
@@ -1036,15 +1038,17 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
         }
     }
 
-    /* Emit remaining DEDENTs */
+    /* Emit remaining DEDENTs and our EOF, located at the raw stream's EOF (the
+       raw array always ends with one) so end-of-file diagnostics point at the
+       end of the source instead of the meaningless 0:0. */
+    Token raw_eof = raw[raw_count - 1];
     while (indent_depth > 0) {
         indent_depth--;
-        Token dedent = make_layout_token(TOK_DEDENT, 0, 0);
+        Token dedent = make_layout_token(TOK_DEDENT, raw_eof.line, raw_eof.col);
         DA_APPEND(out, olen, ocap, dedent);
     }
 
-    /* Emit EOF */
-    Token eof = make_layout_token(TOK_EOF, 0, 0);
+    Token eof = make_layout_token(TOK_EOF, raw_eof.line, raw_eof.col);
     DA_APPEND(out, olen, ocap, eof);
 
     free(raw);

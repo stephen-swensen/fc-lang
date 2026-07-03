@@ -1,0 +1,6 @@
+// Layout-token locations: the synthesized newline must point at the end of
+// the line it terminates (line 5 is 17 chars, so 5:18), not at the next line.
+// Regression: it used to report the NEXT line paired with the old column.
+let main = (args: str[]) ->
+    assert x == 5
+    0

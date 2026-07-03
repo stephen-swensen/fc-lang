@@ -1,0 +1,5 @@
+// EOF-dedent location: the closing dedents synthesized at end of file must
+// carry the EOF's location (line 6, after this file's trailing newline),
+// not the meaningless 0:0 they used to report.
+let main = (args: str[]) ->
+    assert 1 == 1
