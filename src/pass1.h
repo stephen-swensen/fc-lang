@@ -67,6 +67,12 @@ Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
 Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix);
 void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
 
+/* Free the malloc'd tables hanging off a symtab's module symbols: each module
+ * Symbol owns exactly one members table and at most one imports table
+ * (ImportRefs only *reference* other tables), so a recursive walk frees each
+ * exactly once. Does NOT free t->symbols itself — the caller owns that. */
+void symtab_free_nested(SymbolTable *t);
+
 /* Run pass 1: collect top-level declarations into symbol table.
  *
  * `require_main` gates the entry-point requirement: when true (the CLI), a

@@ -186,29 +186,9 @@ void lexcache_free(LexCache *c) {
 
 /* ---- deep free of pass1/pass2's malloc'd symbol metadata ----
  *
- * The compiler is written for a one-shot process: module member tables and
- * import tables are malloc'd and never freed (main.c only frees the top-level
- * symtab.symbols array). A long-running server must reclaim them per analysis.
- * Ownership is a tree — each module Symbol owns exactly one members table and
- * at most one imports table; ImportRefs only *reference* other tables — so a
- * recursive walk frees each exactly once. */
-static void symtab_free_nested(SymbolTable *t) {
-    if (!t) return;
-    for (int i = 0; i < t->count; i++) {
-        Symbol *s = &t->symbols[i];
-        if (s->imports) {
-            free(s->imports->entries);
-            free(s->imports);
-            s->imports = NULL;
-        }
-        if (s->members) {
-            symtab_free_nested(s->members);
-            free(s->members->symbols);
-            free(s->members);
-            s->members = NULL;
-        }
-    }
-}
+ * Module member tables and import tables are malloc'd by pass1; a long-running
+ * server must reclaim them per analysis (the CLI does the same walk once at
+ * exit). The walk lives in pass1.c as symtab_free_nested. */
 
 /* ---- public entry ---- */
 

@@ -237,8 +237,13 @@ int main(int argc, char **argv) {
     free(all_tokens);
     args_compile_free(&ca);      /* frees inputs + flags array + output */
     args_expand_free(&expanded); /* frees the token strings flags borrowed */
+    symtab_free_nested(&symtab);  /* module member/import tables (malloc'd by pass1) */
     free(symtab.symbols);
+    for (int i = 0; i < file_scopes.count; i++)
+        free(file_scopes.scopes[i].imports.entries);
+    free(file_scopes.scopes);
     free(mono.entries);
+    free(intern_table.entries);  /* hash array is malloc'd; strings live in arena */
     arena_free(&arena);
 
     return 0;

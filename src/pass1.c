@@ -248,6 +248,24 @@ void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl) {
     DA_APPEND(t->symbols, t->count, t->capacity, sym);
 }
 
+void symtab_free_nested(SymbolTable *t) {
+    if (!t) return;
+    for (int i = 0; i < t->count; i++) {
+        Symbol *s = &t->symbols[i];
+        if (s->imports) {
+            free(s->imports->entries);
+            free(s->imports);
+            s->imports = NULL;
+        }
+        if (s->members) {
+            symtab_free_nested(s->members);
+            free(s->members->symbols);
+            free(s->members);
+            s->members = NULL;
+        }
+    }
+}
+
 /* ---- Import table helpers ---- */
 
 /* Add or replace (shadow) an import ref in an import table */
