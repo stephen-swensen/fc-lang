@@ -450,9 +450,9 @@ let draw_player = (r: any*, px: i32, py: i32, flash: bool) ->
 // ============================================================
 
 let draw_bullet = (r: any*, b: bullet*) ->
-    let bx = (i32) b->x
-    let by = (i32) b->y
-    if b->from_player then
+    let bx = (i32) b.x
+    let by = (i32) b.y
+    if b.from_player then
         // Bright yellow core with a soft cyan halo
         fill(r, bx - 3, by - 10, 6, 20, 100u8, 200u8, 255u8, 110u8)
         fill(r, bx - 1, by - 10, 2, 20, 255u8, 255u8, 120u8, 255u8)
@@ -468,29 +468,29 @@ let draw_bullet = (r: any*, b: bullet*) ->
 
 let init_stars = (w: world*, rng: pcg_random*) ->
     for i in 0..120 do
-        w->stars[i].x = pcg_random.next_f64(rng) * (f64) logical_w
-        w->stars[i].y = pcg_random.next_f64(rng) * (f64) logical_h
+        w.stars[i].x = pcg_random.next_f64(rng) * (f64) logical_w
+        w.stars[i].y = pcg_random.next_f64(rng) * (f64) logical_h
         let t = pcg_random.next_f64(rng)
-        w->stars[i].speed = 0.3 + t * 2.5
+        w.stars[i].speed = 0.3 + t * 2.5
         let b = 80.0 + pcg_random.next_f64(rng) * 175.0
-        w->stars[i].brightness = (u8) b
+        w.stars[i].brightness = (u8) b
 
 let update_stars = (w: world*) ->
     for i in 0..120 do
-        w->stars[i].y = w->stars[i].y + w->stars[i].speed
-        if w->stars[i].y >= (f64) logical_h then
-            w->stars[i].y = 0.0
+        w.stars[i].y = w.stars[i].y + w.stars[i].speed
+        if w.stars[i].y >= (f64) logical_h then
+            w.stars[i].y = 0.0
             // x stays the same — looks like streaks, which is fine
 
 let draw_stars = (w: world*, r: any*) ->
     for i in 0..120 do
-        let b = w->stars[i].brightness
-        let x = (i32) w->stars[i].x
-        let y = (i32) w->stars[i].y
-        if w->stars[i].speed > 1.8 then
+        let b = w.stars[i].brightness
+        let x = (i32) w.stars[i].x
+        let y = (i32) w.stars[i].y
+        if w.stars[i].speed > 1.8 then
             // Fast stars: 2x2 bright
             fill(r, x, y, 2, 2, b, b, 255u8, 255u8)
-        else if w->stars[i].speed > 1.0 then
+        else if w.stars[i].speed > 1.0 then
             fill(r, x, y, 1, 2, b, b, 255u8, 255u8)
         else
             fill(r, x, y, 1, 1, b, b, 255u8, 255u8)
@@ -504,40 +504,40 @@ let spawn_burst = (w: world*, rng: pcg_random*, cx: f64, cy: f64, count: i32,
     let mut spawned = 0
     for i in 0..256 do
         if spawned >= count then break
-        if w->particles[i].life <= 0 then
+        if w.particles[i].life <= 0 then
             let angle = pcg_random.next_f64(rng) * 6.2831853
             let speed = 1.5 + pcg_random.next_f64(rng) * 5.0
-            w->particles[i].x = cx
-            w->particles[i].y = cy
-            w->particles[i].vx = math.cos(angle) * speed
-            w->particles[i].vy = math.sin(angle) * speed
+            w.particles[i].x = cx
+            w.particles[i].y = cy
+            w.particles[i].vx = math.cos(angle) * speed
+            w.particles[i].vy = math.sin(angle) * speed
             let life = 30 + (i32) (pcg_random.next_f64(rng) * 25.0)
-            w->particles[i].life = life
-            w->particles[i].max_life = life
-            w->particles[i].r = cr
-            w->particles[i].g = cg
-            w->particles[i].b = cb
+            w.particles[i].life = life
+            w.particles[i].max_life = life
+            w.particles[i].r = cr
+            w.particles[i].g = cg
+            w.particles[i].b = cb
             spawned = spawned + 1
 
 let update_particles = (w: world*) ->
     for i in 0..256 do
-        if w->particles[i].life > 0 then
-            w->particles[i].x = w->particles[i].x + w->particles[i].vx
-            w->particles[i].y = w->particles[i].y + w->particles[i].vy
-            w->particles[i].vy = w->particles[i].vy + 0.08
-            w->particles[i].vx = w->particles[i].vx * 0.985
-            w->particles[i].life = w->particles[i].life - 1
+        if w.particles[i].life > 0 then
+            w.particles[i].x = w.particles[i].x + w.particles[i].vx
+            w.particles[i].y = w.particles[i].y + w.particles[i].vy
+            w.particles[i].vy = w.particles[i].vy + 0.08
+            w.particles[i].vx = w.particles[i].vx * 0.985
+            w.particles[i].life = w.particles[i].life - 1
 
 let draw_particles = (w: world*, r: any*) ->
     for i in 0..256 do
-        if w->particles[i].life > 0 then
-            let t = (f64) w->particles[i].life / (f64) w->particles[i].max_life
+        if w.particles[i].life > 0 then
+            let t = (f64) w.particles[i].life / (f64) w.particles[i].max_life
             let alpha = (u8) (t * 255.0)
             let size = if t > 0.6 then 4 else if t > 0.3 then 3 else 2
-            fill(r, (i32) w->particles[i].x - size / 2,
-                    (i32) w->particles[i].y - size / 2,
+            fill(r, (i32) w.particles[i].x - size / 2,
+                    (i32) w.particles[i].y - size / 2,
                     size, size,
-                    w->particles[i].r, w->particles[i].g, w->particles[i].b, alpha)
+                    w.particles[i].r, w.particles[i].g, w.particles[i].b, alpha)
 
 // ============================================================
 // Enemy formation helpers
@@ -555,42 +555,42 @@ let enemy_points = (kind: i32) ->
     | _ -> 30
 
 let enemy_screen_x = (w: world*, idx: i32) ->
-    let col = w->enemies[idx].col
-    w->game.formation_x + (f64) (col * (enemy_w + enemy_gap_x))
+    let col = w.enemies[idx].col
+    w.game.formation_x + (f64) (col * (enemy_w + enemy_gap_x))
 
 let enemy_screen_y = (w: world*, idx: i32) ->
-    let row = w->enemies[idx].row
-    w->game.formation_y + (f64) (row * (enemy_h + enemy_gap_y))
+    let row = w.enemies[idx].row
+    w.game.formation_y + (f64) (row * (enemy_h + enemy_gap_y))
 
 let reset_formation = (w: world*) ->
     let mut i = 0
     for row in 0..5 do
         for col in 0..11 do
-            w->enemies[i].col = col
-            w->enemies[i].row = row
-            w->enemies[i].alive = true
-            w->enemies[i].flash = 0
+            w.enemies[i].col = col
+            w.enemies[i].row = row
+            w.enemies[i].alive = true
+            w.enemies[i].flash = 0
             i = i + 1
-    w->game.formation_x = 70.0
-    w->game.formation_y = (f64) enemy_start_y + (f64) ((w->game.wave - 1) * 20)
-    if w->game.formation_y > 260.0 then
-        w->game.formation_y = 260.0
-    w->game.formation_dir = 1
-    w->game.alive_count = 55
-    w->game.move_timer = 0
-    w->game.fire_timer = 0
-    w->game.move_interval = base_move_interval
-    w->game.fire_interval = base_fire_interval - (w->game.wave - 1) * 5
-    if w->game.fire_interval < 15 then
-        w->game.fire_interval = 15
+    w.game.formation_x = 70.0
+    w.game.formation_y = (f64) enemy_start_y + (f64) ((w.game.wave - 1) * 20)
+    if w.game.formation_y > 260.0 then
+        w.game.formation_y = 260.0
+    w.game.formation_dir = 1
+    w.game.alive_count = 55
+    w.game.move_timer = 0
+    w.game.fire_timer = 0
+    w.game.move_interval = base_move_interval
+    w.game.fire_interval = base_fire_interval - (w.game.wave - 1) * 5
+    if w.game.fire_interval < 15 then
+        w.game.fire_interval = 15
 
 let clear_bullets = (w: world*) ->
     for i in 0..64 do
-        w->bullets[i].alive = false
+        w.bullets[i].alive = false
 
 let clear_particles = (w: world*) ->
     for i in 0..256 do
-        w->particles[i].life = 0
+        w.particles[i].life = 0
 
 // ============================================================
 // Bunkers
@@ -613,23 +613,23 @@ let bunker_row_template = (row: i32) ->
 let reset_bunkers = (w: world*) ->
     for b in 0..bunker_count do
         for row in 0..bunker_rows do
-            w->bunker_bitmaps[b * bunker_rows + row] = bunker_row_template(row)
+            w.bunker_bitmaps[b * bunker_rows + row] = bunker_row_template(row)
 
 // Evenly spaces 4 bunkers across a 960-wide central strip: x = 160, 448, 736, 1024.
 let bunker_screen_x = (b: i32) ->
     160 + b * 288
 
 let bunker_cell_alive = (w: world*, b: i32, row: i32, col: i32) ->
-    let bits = w->bunker_bitmaps[b * bunker_rows + row]
+    let bits = w.bunker_bitmaps[b * bunker_rows + row]
     (bits >> col) & 1 == 1
 
 let clear_bunker_cell = (w: world*, b: i32, row: i32, col: i32) ->
     let idx = b * bunker_rows + row
-    w->bunker_bitmaps[idx] = w->bunker_bitmaps[idx] & ~(1 << col)
+    w.bunker_bitmaps[idx] = w.bunker_bitmaps[idx] & ~(1 << col)
 
 let bullet_hits_bunker = (w: world*, bi: i32) ->
-    let bx = (i32) w->bullets[bi].x
-    let by = (i32) w->bullets[bi].y
+    let bx = (i32) w.bullets[bi].x
+    let by = (i32) w.bullets[bi].y
     let mut hit = false
     for b in 0..bunker_count do
         if !hit then
@@ -662,7 +662,7 @@ let erode_bunkers_by_formation = (w: world*) ->
                     let cy = bunker_y + row * bunker_cell_px + bunker_cell_px / 2
                     let mut touched = false
                     for ei in 0..55 do
-                        if !touched && w->enemies[ei].alive then
+                        if !touched && w.enemies[ei].alive then
                             let ex = (i32) enemy_screen_x(w, ei)
                             let ey = (i32) enemy_screen_y(w, ei)
                             if cx >= ex && cx < ex + enemy_w &&
@@ -687,44 +687,44 @@ let draw_bunkers = (w: world*, r: any*) ->
 // ============================================================
 
 let schedule_next_ufo = (w: world*, rng: pcg_random*) ->
-    w->game.ufo_active = false
-    w->game.ufo_spawn_timer = 0
+    w.game.ufo_active = false
+    w.game.ufo_spawn_timer = 0
     let range = (u32) (ufo_max_interval - ufo_min_interval)
     let r = (i32) pcg_random.next_bounded_u32(rng, range)
-    w->game.ufo_next_spawn = ufo_min_interval + r
+    w.game.ufo_next_spawn = ufo_min_interval + r
 
 let spawn_ufo = (w: world*, rng: pcg_random*) ->
-    w->game.ufo_active = true
+    w.game.ufo_active = true
     let from_right = (i32) pcg_random.next_bounded_u32(rng, 2u32)
     if from_right == 0 then
-        w->game.ufo_x = (f64) (-ufo_w)
-        w->game.ufo_vx = (f64) ufo_speed_int
+        w.game.ufo_x = (f64) (-ufo_w)
+        w.game.ufo_vx = (f64) ufo_speed_int
     else
-        w->game.ufo_x = (f64) (logical_w + 10)
-        w->game.ufo_vx = -(f64) ufo_speed_int
+        w.game.ufo_x = (f64) (logical_w + 10)
+        w.game.ufo_vx = -(f64) ufo_speed_int
 
 let update_ufo = (w: world*, rng: pcg_random*) ->
-    if w->game.ufo_active then
-        w->game.ufo_x = w->game.ufo_x + w->game.ufo_vx
-        if w->game.ufo_vx < 0.0 && w->game.ufo_x < (f64) -(ufo_w + 20) then
+    if w.game.ufo_active then
+        w.game.ufo_x = w.game.ufo_x + w.game.ufo_vx
+        if w.game.ufo_vx < 0.0 && w.game.ufo_x < (f64) -(ufo_w + 20) then
             schedule_next_ufo(w, rng)
-        else if w->game.ufo_vx > 0.0 && w->game.ufo_x > (f64) (logical_w + 20) then
+        else if w.game.ufo_vx > 0.0 && w.game.ufo_x > (f64) (logical_w + 20) then
             schedule_next_ufo(w, rng)
     else
-        w->game.ufo_spawn_timer = w->game.ufo_spawn_timer + 1
-        if w->game.ufo_spawn_timer >= w->game.ufo_next_spawn then
+        w.game.ufo_spawn_timer = w.game.ufo_spawn_timer + 1
+        if w.game.ufo_spawn_timer >= w.game.ufo_next_spawn then
             spawn_ufo(w, rng)
-    if w->game.ufo_popup_timer > 0 then
-        w->game.ufo_popup_timer = w->game.ufo_popup_timer - 1
+    if w.game.ufo_popup_timer > 0 then
+        w.game.ufo_popup_timer = w.game.ufo_popup_timer - 1
 
 let bullet_hits_ufo = (w: world*, bi: i32) ->
-    if !w->game.ufo_active then
+    if !w.game.ufo_active then
         return false
-    if !w->bullets[bi].from_player then
+    if !w.bullets[bi].from_player then
         return false
-    let bx = w->bullets[bi].x
-    let by = w->bullets[bi].y
-    let in_x = bx >= w->game.ufo_x && bx < w->game.ufo_x + (f64) ufo_w
+    let bx = w.bullets[bi].x
+    let by = w.bullets[bi].y
+    let in_x = bx >= w.game.ufo_x && bx < w.game.ufo_x + (f64) ufo_w
     let in_y = by >= (f64) ufo_y && by < (f64) (ufo_y + ufo_h)
     in_x && in_y
 
@@ -739,8 +739,8 @@ let ufo_random_points = (rng: pcg_random*) ->
     | _ -> 300
 
 let draw_ufo = (w: world*, r: any*) ->
-    if !w->game.ufo_active then return
-    let x = (i32) w->game.ufo_x
+    if !w.game.ufo_active then return
+    let x = (i32) w.game.ufo_x
     let y = ufo_y
     // Dome
     fill(r, x + 20, y + 0, 12, 4, 255u8, 200u8, 220u8, 255u8)
@@ -756,58 +756,58 @@ let draw_ufo = (w: world*, r: any*) ->
     fill(r, x + 46, y + 14, 4, 2, 255u8, 230u8, 80u8,  255u8)
 
 let draw_ufo_popup = (w: world*, r: any*) ->
-    if w->game.ufo_popup_timer > 0 then
-        let s = "%d{w->game.ufo_popup_val}"
+    if w.game.ufo_popup_timer > 0 then
+        let s = "%d{w.game.ufo_popup_val}"
         draw_text_centered(r, (const str) s,
-                           w->game.ufo_popup_x, w->game.ufo_popup_y, 4,
+                           w.game.ufo_popup_x, w.game.ufo_popup_y, 4,
                            255u8, 230u8, 80u8)
 
 let reset_game = (w: world*, rng: pcg_random*) ->
-    w->game.player_x = (f64) (logical_w / 2 - player_w / 2)
-    w->game.cooldown = 0
-    w->game.lives = starting_lives
-    w->game.score = 0
-    w->game.score_locked = false
-    w->game.wave = 1
-    w->game.new_high = false
+    w.game.player_x = (f64) (logical_w / 2 - player_w / 2)
+    w.game.cooldown = 0
+    w.game.lives = starting_lives
+    w.game.score = 0
+    w.game.score_locked = false
+    w.game.wave = 1
+    w.game.new_high = false
     clear_bullets(w)
     clear_particles(w)
     reset_formation(w)
     reset_bunkers(w)
-    w->game.ufo_popup_timer = 0
+    w.game.ufo_popup_timer = 0
     schedule_next_ufo(w, rng)
-    w->game.phase = game_phase.playing
-    w->game.phase_timer = 0
+    w.game.phase = game_phase.playing
+    w.game.phase_timer = 0
 
 let fire_player_bullet = (w: world*) ->
-    if w->game.cooldown > 0 then return
+    if w.game.cooldown > 0 then return
     for i in 0..64 do
-        if !w->bullets[i].alive then
-            w->bullets[i].x = w->game.player_x + (f64) (player_w / 2)
-            w->bullets[i].y = (f64) (player_y - 4)
-            w->bullets[i].vy = (f64) player_bullet_vy
-            w->bullets[i].alive = true
-            w->bullets[i].from_player = true
-            w->game.cooldown = 14
+        if !w.bullets[i].alive then
+            w.bullets[i].x = w.game.player_x + (f64) (player_w / 2)
+            w.bullets[i].y = (f64) (player_y - 4)
+            w.bullets[i].vy = (f64) player_bullet_vy
+            w.bullets[i].alive = true
+            w.bullets[i].from_player = true
+            w.game.cooldown = 14
             return
 
 let fire_enemy_bullet = (w: world*, rng: pcg_random*) ->
-    if w->game.alive_count == 0 then return
+    if w.game.alive_count == 0 then return
     // Pick a random column, then fire from its bottom-most alive enemy.
     let col = (i32) pcg_random.next_bounded_u32(rng, (u32) enemy_cols)
     let mut chosen = -1
     for i in 0..55 do
-        if w->enemies[i].alive && w->enemies[i].col == col then
-            if chosen == -1 || w->enemies[i].row > w->enemies[chosen].row then
+        if w.enemies[i].alive && w.enemies[i].col == col then
+            if chosen == -1 || w.enemies[i].row > w.enemies[chosen].row then
                 chosen = i
     if chosen < 0 then return
     for bi in 0..64 do
-        if !w->bullets[bi].alive then
-            w->bullets[bi].x = enemy_screen_x(w, chosen) + (f64) (enemy_w / 2)
-            w->bullets[bi].y = enemy_screen_y(w, chosen) + (f64) enemy_h
-            w->bullets[bi].vy = (f64) enemy_bullet_vy
-            w->bullets[bi].alive = true
-            w->bullets[bi].from_player = false
+        if !w.bullets[bi].alive then
+            w.bullets[bi].x = enemy_screen_x(w, chosen) + (f64) (enemy_w / 2)
+            w.bullets[bi].y = enemy_screen_y(w, chosen) + (f64) enemy_h
+            w.bullets[bi].vy = (f64) enemy_bullet_vy
+            w.bullets[bi].alive = true
+            w.bullets[bi].from_player = false
             return
 
 // ============================================================
@@ -816,10 +816,10 @@ let fire_enemy_bullet = (w: world*, rng: pcg_random*) ->
 
 let update_bullets = (w: world*) ->
     for i in 0..64 do
-        if w->bullets[i].alive then
-            w->bullets[i].y = w->bullets[i].y + w->bullets[i].vy
-            if w->bullets[i].y < -20.0 || w->bullets[i].y > (f64) (logical_h + 20) then
-                w->bullets[i].alive = false
+        if w.bullets[i].alive then
+            w.bullets[i].y = w.bullets[i].y + w.bullets[i].vy
+            if w.bullets[i].y < -20.0 || w.bullets[i].y > (f64) (logical_h + 20) then
+                w.bullets[i].alive = false
 
 let formation_bounds = (w: world*) ->
     // Returns the on-screen bounding box of alive enemies via &outparams.
@@ -827,10 +827,10 @@ let formation_bounds = (w: world*) ->
     let mut max_col = -1
     let mut max_row = -1
     for i in 0..55 do
-        if w->enemies[i].alive then
-            if w->enemies[i].col < min_col then min_col = w->enemies[i].col
-            if w->enemies[i].col > max_col then max_col = w->enemies[i].col
-            if w->enemies[i].row > max_row then max_row = w->enemies[i].row
+        if w.enemies[i].alive then
+            if w.enemies[i].col < min_col then min_col = w.enemies[i].col
+            if w.enemies[i].col > max_col then max_col = w.enemies[i].col
+            if w.enemies[i].row > max_row then max_row = w.enemies[i].row
     // Pack as i64 (bits 0-15 min_col, 16-31 max_col, 32-47 max_row)
     let low = (i64) min_col & 0xFFFF
     let mid = ((i64) max_col & 0xFFFF) << 16
@@ -844,45 +844,45 @@ let advance_formation = (w: world*, audio_dev: u32, step_snd: sound, step2_snd: 
     let max_row = (i32) ((packed >> 32) & 0xFFFF)
     if max_col < 0 then return
 
-    let left_x = w->game.formation_x + (f64) (min_col * (enemy_w + enemy_gap_x))
-    let right_x = w->game.formation_x + (f64) (max_col * (enemy_w + enemy_gap_x) + enemy_w)
+    let left_x = w.game.formation_x + (f64) (min_col * (enemy_w + enemy_gap_x))
+    let right_x = w.game.formation_x + (f64) (max_col * (enemy_w + enemy_gap_x) + enemy_w)
 
     let mut descend = false
-    if w->game.formation_dir > 0 && right_x + 12.0 >= (f64) logical_w then
+    if w.game.formation_dir > 0 && right_x + 12.0 >= (f64) logical_w then
         descend = true
-        w->game.formation_dir = -1
-    else if w->game.formation_dir < 0 && left_x - 12.0 <= 0.0 then
+        w.game.formation_dir = -1
+    else if w.game.formation_dir < 0 && left_x - 12.0 <= 0.0 then
         descend = true
-        w->game.formation_dir = 1
+        w.game.formation_dir = 1
 
     if descend then
-        w->game.formation_y = w->game.formation_y + 16.0
+        w.game.formation_y = w.game.formation_y + 16.0
         erode_bunkers_by_formation(w)
     else
-        w->game.formation_x = w->game.formation_x + (f64) (w->game.formation_dir * 10)
+        w.game.formation_x = w.game.formation_x + (f64) (w.game.formation_dir * 10)
 
     // Play alternating "step" sound
     if audio_dev > 0u32 then
-        if w->game.step_sound_toggle == 0 then
+        if w.game.step_sound_toggle == 0 then
             sdl2.clear_audio(audio_dev)
             sdl2.queue_audio(audio_dev, step_snd.data, step_snd.bytes)
         else
             sdl2.clear_audio(audio_dev)
             sdl2.queue_audio(audio_dev, step2_snd.data, step2_snd.bytes)
-        w->game.step_sound_toggle = 1 - w->game.step_sound_toggle
+        w.game.step_sound_toggle = 1 - w.game.step_sound_toggle
 
     // Check if formation has reached the player line — instant loss
-    let bottom_y = w->game.formation_y + (f64) (max_row * (enemy_h + enemy_gap_y) + enemy_h)
+    let bottom_y = w.game.formation_y + (f64) (max_row * (enemy_h + enemy_gap_y) + enemy_h)
     if bottom_y >= (f64) player_y then
-        w->game.phase = game_phase.game_over
-        w->game.phase_timer = 0
+        w.game.phase = game_phase.game_over
+        w.game.phase_timer = 0
 
 let bullet_hits_enemy = (w: world*, bi: i32) ->
-    let bx = w->bullets[bi].x
-    let by = w->bullets[bi].y
+    let bx = w.bullets[bi].x
+    let by = w.bullets[bi].y
     let mut hit = -1
     for ei in 0..55 do
-        if w->enemies[ei].alive && hit < 0 then
+        if w.enemies[ei].alive && hit < 0 then
             let ex = enemy_screen_x(w, ei)
             let ey = enemy_screen_y(w, ei)
             if bx >= ex && bx < ex + (f64) enemy_w &&
@@ -891,9 +891,9 @@ let bullet_hits_enemy = (w: world*, bi: i32) ->
     hit
 
 let bullet_hits_player = (w: world*, bi: i32) ->
-    let bx = w->bullets[bi].x
-    let by = w->bullets[bi].y
-    let px = w->game.player_x
+    let bx = w.bullets[bi].x
+    let by = w.bullets[bi].y
+    let px = w.game.player_x
     let py = (f64) player_y
     let in_x = bx >= px && bx < px + (f64) player_w
     let in_y = by >= py && by < py + (f64) player_h
@@ -902,38 +902,38 @@ let bullet_hits_player = (w: world*, bi: i32) ->
 let process_collisions = (w: world*, rng: pcg_random*, audio_dev: u32,
                           hit_snd: sound, die_snd: sound) ->
     for bi in 0..64 do
-        if w->bullets[bi].alive then
+        if w.bullets[bi].alive then
             if bullet_hits_bunker(w, bi) then
-                w->bullets[bi].alive = false
-                let cx = w->bullets[bi].x
-                let cy = w->bullets[bi].y
+                w.bullets[bi].alive = false
+                let cx = w.bullets[bi].x
+                let cy = w.bullets[bi].y
                 spawn_burst(w, rng, cx, cy, 6, 80u8, 240u8, 160u8)
-            else if w->bullets[bi].from_player && bullet_hits_ufo(w, bi) then
+            else if w.bullets[bi].from_player && bullet_hits_ufo(w, bi) then
                 let pts = ufo_random_points(rng)
-                if !w->game.score_locked then
-                    w->game.score = w->game.score + pts
-                w->bullets[bi].alive = false
-                let cx = w->game.ufo_x + (f64) (ufo_w / 2)
+                if !w.game.score_locked then
+                    w.game.score = w.game.score + pts
+                w.bullets[bi].alive = false
+                let cx = w.game.ufo_x + (f64) (ufo_w / 2)
                 let cy = (f64) (ufo_y + ufo_h / 2)
                 spawn_burst(w, rng, cx, cy, 30, 255u8, 120u8, 160u8)
                 spawn_burst(w, rng, cx, cy, 14, 255u8, 230u8, 80u8)
-                w->game.ufo_popup_val = pts
-                w->game.ufo_popup_x = (i32) cx
-                w->game.ufo_popup_y = ufo_y + ufo_h + 4
-                w->game.ufo_popup_timer = 90
+                w.game.ufo_popup_val = pts
+                w.game.ufo_popup_x = (i32) cx
+                w.game.ufo_popup_y = ufo_y + ufo_h + 4
+                w.game.ufo_popup_timer = 90
                 if audio_dev > 0u32 then
                     sdl2.clear_audio(audio_dev)
                     sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
                 schedule_next_ufo(w, rng)
-            else if w->bullets[bi].from_player then
+            else if w.bullets[bi].from_player then
                 let ei = bullet_hits_enemy(w, bi)
                 if ei >= 0 then
-                    let kind = enemy_kind_for_row(w->enemies[ei].row)
-                    if !w->game.score_locked then
-                        w->game.score = w->game.score + enemy_points(kind)
-                    w->enemies[ei].alive = false
-                    w->game.alive_count = w->game.alive_count - 1
-                    w->bullets[bi].alive = false
+                    let kind = enemy_kind_for_row(w.enemies[ei].row)
+                    if !w.game.score_locked then
+                        w.game.score = w.game.score + enemy_points(kind)
+                    w.enemies[ei].alive = false
+                    w.game.alive_count = w.game.alive_count - 1
+                    w.bullets[bi].alive = false
                     // Burst
                     let cx = enemy_screen_x(w, ei) + (f64) (enemy_w / 2)
                     let cy = enemy_screen_y(w, ei) + (f64) (enemy_h / 2)
@@ -954,29 +954,29 @@ let process_collisions = (w: world*, rng: pcg_random*, audio_dev: u32,
                         sdl2.queue_audio(audio_dev, hit_snd.data, hit_snd.bytes)
                     // Speed up formation as enemies die. Gentler curve
                     // than the original: -1 step per 5 kills, -1 per wave.
-                    let kill_bonus = (55 - w->game.alive_count) / 5
-                    let wave_bonus = w->game.wave - 1
+                    let kill_bonus = (55 - w.game.alive_count) / 5
+                    let wave_bonus = w.game.wave - 1
                     let target = base_move_interval - kill_bonus - wave_bonus
-                    w->game.move_interval = if target < min_move_interval
+                    w.game.move_interval = if target < min_move_interval
                                             then min_move_interval
                                             else target
             else
                 if bullet_hits_player(w, bi) then
-                    w->bullets[bi].alive = false
-                    w->game.lives = w->game.lives - 1
-                    let cx = w->game.player_x + (f64) (player_w / 2)
+                    w.bullets[bi].alive = false
+                    w.game.lives = w.game.lives - 1
+                    let cx = w.game.player_x + (f64) (player_w / 2)
                     let cy = (f64) (player_y + player_h / 2)
                     spawn_burst(w, rng, cx, cy, 36, 120u8, 220u8, 255u8)
                     spawn_burst(w, rng, cx, cy, 18, 255u8, 180u8, 80u8)
                     if audio_dev > 0u32 then
                         sdl2.clear_audio(audio_dev)
                         sdl2.queue_audio(audio_dev, die_snd.data, die_snd.bytes)
-                    if w->game.lives <= 0 then
-                        w->game.phase = game_phase.game_over
-                        w->game.phase_timer = 0
+                    if w.game.lives <= 0 then
+                        w.game.phase = game_phase.game_over
+                        w.game.phase_timer = 0
                     else
-                        w->game.phase = game_phase.dying
-                        w->game.phase_timer = 60
+                        w.game.phase = game_phase.dying
+                        w.game.phase_timer = 60
 
 // ============================================================
 // Sound effects
@@ -1092,24 +1092,24 @@ let draw_hud = (w: world*, r: any*) ->
 
     // SCORE (left)
     draw_text(r, "SCORE", 30, 12, 3, 100u8, 200u8, 255u8)
-    let score_str = "%d{w->game.score}"
+    let score_str = "%d{w.game.score}"
     draw_text(r, (const str) score_str, 30, 36, 4, 255u8, 255u8, 255u8)
 
     // WAVE (center)
     draw_text_centered(r, "WAVE", logical_w / 2, 12, 3, 100u8, 200u8, 255u8)
-    let wave_str = "%d{w->game.wave}"
+    let wave_str = "%d{w.game.wave}"
     draw_text_centered(r, (const str) wave_str, logical_w / 2, 36, 4, 255u8, 255u8, 255u8)
 
     // HIGH (right-of-center area)
     let hi_label = "HIGH"
     let hi_x = logical_w * 3 / 4
     draw_text_centered(r, hi_label, hi_x, 12, 3, 100u8, 200u8, 255u8)
-    let hi_str = "%d{w->game.high_score}"
+    let hi_str = "%d{w.game.high_score}"
     draw_text_centered(r, (const str) hi_str, hi_x, 36, 4, 255u8, 240u8, 120u8)
 
     // LIVES (far right — draw as small ship icons)
     let mut lx = logical_w - 30
-    for i in 0..w->game.lives do
+    for i in 0..w.game.lives do
         lx = lx - 40
         // small 32x12 ship icon
         fill(r, lx, 30, 32, 6, 80u8, 220u8, 240u8, 255u8)
@@ -1146,7 +1146,7 @@ let draw_splash = (r: any*) ->
 let draw_game_over = (w: world*, r: any*) ->
     fill(r, 0, 260, logical_w, 200, 0u8, 0u8, 0u8, 170u8)
     draw_text_centered(r, "GAME OVER", logical_w / 2, 290, 10, 255u8, 100u8, 100u8)
-    if w->game.new_high then
+    if w.game.new_high then
         draw_text_centered(r, "NEW HIGH SCORE.", logical_w / 2, 380, 5, 255u8, 230u8, 80u8)
     draw_text_centered(r, "ENTER TO RESTART   ESC TO QUIT",
                        logical_w / 2, 430, 3, 200u8, 200u8, 220u8)
@@ -1157,7 +1157,7 @@ let draw_paused = (r: any*) ->
 
 let draw_wave_clear = (w: world*, r: any*) ->
     draw_text_centered(r, "WAVE CLEAR.", logical_w / 2, 320, 7, 255u8, 230u8, 80u8)
-    let nxt = "WAVE %d{w->game.wave + 1}"
+    let nxt = "WAVE %d{w.game.wave + 1}"
     draw_text_centered(r, (const str) nxt, logical_w / 2, 400, 5, 255u8, 255u8, 255u8)
 
 // ============================================================
@@ -1180,7 +1180,7 @@ let render = (w: world*, r: any*, frame_count: i32) ->
     draw_stars(w, r)
 
     // Bunkers (drawn behind bullets/enemies but in front of stars)
-    let show_bunkers = match w->game.phase with
+    let show_bunkers = match w.game.phase with
     | splash -> false
     | _ -> true
     if show_bunkers then
@@ -1193,37 +1193,37 @@ let render = (w: world*, r: any*, frame_count: i32) ->
 
     // Bullets
     for i in 0..64 do
-        if w->bullets[i].alive then
-            draw_bullet(r, &w->bullets[i])
+        if w.bullets[i].alive then
+            draw_bullet(r, &w.bullets[i])
 
     // Enemies
     let frame = (frame_count / 30) % 2
     for i in 0..55 do
-        if w->enemies[i].alive then
-            let kind = enemy_kind_for_row(w->enemies[i].row)
+        if w.enemies[i].alive then
+            let kind = enemy_kind_for_row(w.enemies[i].row)
             draw_enemy(r, kind, (i32) enemy_screen_x(w, i), (i32) enemy_screen_y(w, i), frame)
 
     // Particles
     draw_particles(w, r)
 
     // Player (hidden during dying respawn flicker)
-    let show_player = match w->game.phase with
+    let show_player = match w.game.phase with
     | splash -> false
-    | dying -> (w->game.phase_timer / 6) % 2 == 0
+    | dying -> (w.game.phase_timer / 6) % 2 == 0
     | game_over -> false
     | _ -> true
     if show_player then
-        draw_player(r, (i32) w->game.player_x, player_y, false)
+        draw_player(r, (i32) w.game.player_x, player_y, false)
 
     // HUD
-    let show_hud = match w->game.phase with
+    let show_hud = match w.game.phase with
     | splash -> false
     | _ -> true
     if show_hud then
         draw_hud(w, r)
 
     // Phase overlays
-    match w->game.phase with
+    match w.game.phase with
     | splash -> draw_splash(r)
     | paused -> draw_paused(r)
     | wave_clear -> draw_wave_clear(w, r)
@@ -1286,11 +1286,11 @@ let main = (args: str[]) ->
     // The game_state field lives inline inside the world struct
     // and starts zero-filled (alloc zero-fills heap allocations).
     let w = alloc(world)!
-    w->enemies = alloc(enemy[55] { })!
-    w->bullets = alloc(bullet[64] { })!
-    w->stars = alloc(star[120] { })!
-    w->particles = alloc(particle[256] { })!
-    w->bunker_bitmaps = alloc(i32[40] { })!
+    w.enemies = alloc(enemy[55] { })!
+    w.bullets = alloc(bullet[64] { })!
+    w.stars = alloc(star[120] { })!
+    w.particles = alloc(particle[256] { })!
+    w.bunker_bitmaps = alloc(i32[40] { })!
 
     // Audio setup
     let mut desired = default(audio_spec)
@@ -1313,12 +1313,12 @@ let main = (args: str[]) ->
     let wave_snd = gen_wave_clear()
 
     // Startup state
-    w->game.high_score = load_high_score()
-    w->game.phase = game_phase.splash
-    w->game.phase_timer = 0
-    w->game.player_x = (f64) (logical_w / 2 - player_w / 2)
-    w->game.lives = starting_lives
-    w->game.wave = 1
+    w.game.high_score = load_high_score()
+    w.game.phase = game_phase.splash
+    w.game.phase_timer = 0
+    w.game.player_x = (f64) (logical_w / 2 - player_w / 2)
+    w.game.lives = starting_lives
+    w.game.wave = 1
 
     init_stars(w, &rng)
 
@@ -1366,13 +1366,13 @@ let main = (args: str[]) ->
                     sdl2.set_logical_size(ren, logical_w, logical_h)
 
                 if k == sdl2.key_left || k == sdl2.key_a then
-                    w->game.move_left = true
+                    w.game.move_left = true
                 if k == sdl2.key_right || k == sdl2.key_d then
-                    w->game.move_right = true
+                    w.game.move_right = true
                 if k == sdl2.key_space then
-                    match w->game.phase with
+                    match w.game.phase with
                     | playing ->
-                        w->game.fire_held = true
+                        w.game.fire_held = true
                         fire_player_bullet(w)
                         if audio_dev > 0u32 then
                             sdl2.clear_audio(audio_dev)
@@ -1380,24 +1380,24 @@ let main = (args: str[]) ->
                     | _ -> void()
 
                 if k == sdl2.key_return then
-                    match w->game.phase with
+                    match w.game.phase with
                     | splash
                     | game_over -> reset_game(w, &rng)
                     | playing ->
-                        w->game.lives = starting_lives
-                        w->game.score_locked = true
+                        w.game.lives = starting_lives
+                        w.game.score_locked = true
                     | _ -> void()
 
                 if k == sdl2.key_p then
-                    match w->game.phase with
-                    | playing -> w->game.phase = game_phase.paused
-                    | paused -> w->game.phase = game_phase.playing
+                    match w.game.phase with
+                    | playing -> w.game.phase = game_phase.paused
+                    | paused -> w.game.phase = game_phase.playing
                     | _ -> void()
 
                 if k == sdl2.key_c then
-                    match w->game.phase with
+                    match w.game.phase with
                     | splash ->
-                        w->game.high_score = 0
+                        w.game.high_score = 0
                         match sys.home_dir() with
                         | some(hd) ->
                             io.remove(alloca("%s{hd}/.face-invaders/highscore.txt"))
@@ -1408,11 +1408,11 @@ let main = (args: str[]) ->
             if (i32) event.type == sdl2.keyup_event then
                 let k = event.key.keysym.sym
                 if k == sdl2.key_left || k == sdl2.key_a then
-                    w->game.move_left = false
+                    w.game.move_left = false
                 if k == sdl2.key_right || k == sdl2.key_d then
-                    w->game.move_right = false
+                    w.game.move_right = false
                 if k == sdl2.key_space then
-                    w->game.fire_held = false
+                    w.game.fire_held = false
 
         if !running then break
 
@@ -1420,36 +1420,36 @@ let main = (args: str[]) ->
         update_stars(w)
         update_particles(w)
 
-        match w->game.phase with
+        match w.game.phase with
         | playing ->
             // Player movement
-            if w->game.move_left then
-                w->game.player_x = w->game.player_x - (f64) player_speed
-            if w->game.move_right then
-                w->game.player_x = w->game.player_x + (f64) player_speed
-            if w->game.player_x < 20.0 then w->game.player_x = 20.0
+            if w.game.move_left then
+                w.game.player_x = w.game.player_x - (f64) player_speed
+            if w.game.move_right then
+                w.game.player_x = w.game.player_x + (f64) player_speed
+            if w.game.player_x < 20.0 then w.game.player_x = 20.0
             let max_x = (f64) (logical_w - player_w - 20)
-            if w->game.player_x > max_x then w->game.player_x = max_x
+            if w.game.player_x > max_x then w.game.player_x = max_x
 
-            if w->game.cooldown > 0 then
-                w->game.cooldown = w->game.cooldown - 1
+            if w.game.cooldown > 0 then
+                w.game.cooldown = w.game.cooldown - 1
 
             // Auto-fire while space held
-            if w->game.fire_held && w->game.cooldown == 0 then
+            if w.game.fire_held && w.game.cooldown == 0 then
                 fire_player_bullet(w)
 
             update_bullets(w)
 
             // Formation movement
-            w->game.move_timer = w->game.move_timer + 1
-            if w->game.move_timer >= w->game.move_interval then
-                w->game.move_timer = 0
+            w.game.move_timer = w.game.move_timer + 1
+            if w.game.move_timer >= w.game.move_interval then
+                w.game.move_timer = 0
                 advance_formation(w, audio_dev, step_low, step_high)
 
             // Enemy fire
-            w->game.fire_timer = w->game.fire_timer + 1
-            if w->game.fire_timer >= w->game.fire_interval then
-                w->game.fire_timer = 0
+            w.game.fire_timer = w.game.fire_timer + 1
+            if w.game.fire_timer >= w.game.fire_interval then
+                w.game.fire_timer = 0
                 fire_enemy_bullet(w, &rng)
 
             // Mystery UFO
@@ -1459,41 +1459,41 @@ let main = (args: str[]) ->
             process_collisions(w, &rng, audio_dev, hit_snd, die_snd)
 
             // Wave clear
-            if w->game.alive_count == 0 then
-                w->game.phase = game_phase.wave_clear
-                w->game.phase_timer = 90
+            if w.game.alive_count == 0 then
+                w.game.phase = game_phase.wave_clear
+                w.game.phase_timer = 90
                 if audio_dev > 0u32 then
                     sdl2.clear_audio(audio_dev)
                     sdl2.queue_audio(audio_dev, wave_snd.data, wave_snd.bytes)
         | wave_clear ->
             update_bullets(w)
-            w->game.phase_timer = w->game.phase_timer - 1
-            if w->game.phase_timer <= 0 then
-                w->game.wave = w->game.wave + 1
+            w.game.phase_timer = w.game.phase_timer - 1
+            if w.game.phase_timer <= 0 then
+                w.game.wave = w.game.wave + 1
                 clear_bullets(w)
                 reset_formation(w)
                 reset_bunkers(w)
                 schedule_next_ufo(w, &rng)
-                w->game.phase = game_phase.playing
-                sdl2.set_title(win, c"Face Invaders - Wave %d{w->game.wave}")
+                w.game.phase = game_phase.playing
+                sdl2.set_title(win, c"Face Invaders - Wave %d{w.game.wave}")
         | dying ->
             update_bullets(w)
             update_ufo(w, &rng)
-            w->game.phase_timer = w->game.phase_timer - 1
-            if w->game.phase_timer <= 0 then
+            w.game.phase_timer = w.game.phase_timer - 1
+            if w.game.phase_timer <= 0 then
                 clear_bullets(w)
-                w->game.phase = game_phase.playing
-                w->game.player_x = (f64) (logical_w / 2 - player_w / 2)
+                w.game.phase = game_phase.playing
+                w.game.player_x = (f64) (logical_w / 2 - player_w / 2)
         | game_over ->
             update_bullets(w)
             // Lock in the high score exactly once on entering game_over
-            if w->game.phase_timer == 0 then
-                w->game.phase_timer = 1
-                if w->game.score > w->game.high_score then
-                    w->game.high_score = w->game.score
-                    w->game.new_high = true
-                    save_high_score(w->game.score)
-                    io.write("NEW HIGH SCORE: %d{w->game.score}.\n", stdout)
+            if w.game.phase_timer == 0 then
+                w.game.phase_timer = 1
+                if w.game.score > w.game.high_score then
+                    w.game.high_score = w.game.score
+                    w.game.new_high = true
+                    save_high_score(w.game.score)
+                    io.write("NEW HIGH SCORE: %d{w.game.score}.\n", stdout)
         | _ -> void()
 
         // --------- Render ---------
@@ -1502,7 +1502,7 @@ let main = (args: str[]) ->
         // Vsync handles pacing, but add a safety delay if vsync is unavailable
         sdl2.delay(1u32)
 
-    io.write("Final score: %d{w->game.score}\n", stdout)
+    io.write("Final score: %d{w.game.score}\n", stdout)
 
     if audio_dev > 0u32 then
         sdl2.close_audio(audio_dev)
