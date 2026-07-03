@@ -15,6 +15,9 @@ typedef struct Parser {
     bool allow_fixed_array; /* true when parsing struct/extern struct field types */
     bool block_arm_arrow;   /* true while parsing a match-arm `when` guard: stop expr at top-level `->`; cleared inside bracketed sub-expressions so pointer-field `p->x` still works when parenthesized */
     int expr_start_pos;     /* token index at start of current parse_expr (for postfix ! text capture) */
+    int expr_start_errs;    /* diag_error_count() at start of current parse_expr; a delta means error
+                               recovery ran, so token pointers may span buffers and text capture must be
+                               skipped (the text only feeds codegen, which never runs with errors) */
     bool half_gt;           /* a '>>' (TOK_GTGT) token has had its first '>' consumed as a type-argument closer; the parser is parked on it awaiting the second */
     int half_gt_pos;        /* token index of that '>>' (valid iff half_gt) */
 } Parser;

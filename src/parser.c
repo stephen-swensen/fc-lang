@@ -20,6 +20,7 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->allow_fixed_array = false;
     p->block_arm_arrow = false;
     p->expr_start_pos = 0;
+    p->expr_start_errs = 0;
     p->half_gt = false;
     p->half_gt_pos = -1;
 }
@@ -1896,17 +1897,26 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_ASSERT: {
         advance_p(p);
+        int errs_before = diag_error_count();
         expect(p, TOK_LPAREN);
         /* Capture source text of the condition expression */
         Token *cond_start = current(p);
         Expr *condition = parse_bracketed_expr(p, PREC_NONE + 1);
-        /* Expression text: from cond_start to just before current token (, or )) */
+        /* Expression text: from cond_start to just before current token (, or )).
+           Only valid when this construct parsed cleanly: under error recovery
+           current(p) can be a synthesized layout token whose start does not point
+           into the source buffer, making the subtraction meaningless (it produced
+           a huge bogus length). Errors gate codegen, the only consumer, so an
+           empty capture is unobservable in that case. */
         const char *text_start = cond_start->start;
-        int text_len = (int)(current(p)->start - text_start);
-        while (text_len > 0 && (text_start[text_len-1] == ' ' ||
-               text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
-               text_start[text_len-1] == '\t'))
-            text_len--;
+        int text_len = 0;
+        if (diag_error_count() == errs_before) {
+            text_len = (int)(current(p)->start - text_start);
+            while (text_len > 0 && (text_start[text_len-1] == ' ' ||
+                   text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
+                   text_start[text_len-1] == '\t'))
+                text_len--;
+        }
         Expr *message = NULL;
         if (check(p, TOK_COMMA)) {
             advance_p(p);
@@ -2170,13 +2180,19 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_UNARY_POSTFIX, loc);
         e->unary_postfix.op = TOK_BANG;
         e->unary_postfix.operand = left;
-        /* Capture source text of the operand expression for unwrap diagnostics */
+        /* Capture source text of the operand expression for unwrap diagnostics.
+           Skipped when error recovery ran inside this expression: the start
+           token may then be synthesized (not in the source buffer), making the
+           subtraction meaningless. Errors gate codegen, the only consumer. */
         const char *text_start = p->tokens[p->expr_start_pos].start;
-        int text_len = (int)(op_tok->start - text_start);
-        while (text_len > 0 && (text_start[text_len-1] == ' ' ||
-               text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
-               text_start[text_len-1] == '\t'))
-            text_len--;
+        int text_len = 0;
+        if (diag_error_count() == p->expr_start_errs) {
+            text_len = (int)(op_tok->start - text_start);
+            while (text_len > 0 && (text_start[text_len-1] == ' ' ||
+                   text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
+                   text_start[text_len-1] == '\t'))
+                text_len--;
+        }
         e->unary_postfix.expr_text = arena_strdup(p->arena, text_start, text_len);
         e->unary_postfix.expr_text_len = text_len;
         return e;
@@ -2416,7 +2432,9 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
 
 static Expr *parse_expr(Parser *p, Prec min_prec) {
     int saved_start = p->expr_start_pos;
+    int saved_errs = p->expr_start_errs;
     p->expr_start_pos = p->pos;
+    p->expr_start_errs = diag_error_count();
     Expr *left = parse_prefix(p);
     for (;;) {
         Token *t = current(p);
@@ -2439,6 +2457,7 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
         left = parse_infix(p, left, op_tok);
     }
     p->expr_start_pos = saved_start;
+    p->expr_start_errs = saved_errs;
     return left;
 }
 

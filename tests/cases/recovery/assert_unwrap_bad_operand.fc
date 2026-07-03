@@ -1,0 +1,9 @@
+// Recovery: errors inside the two constructs that capture source-text spans
+// (the assert condition and a postfix-! operand). The capture is skipped when
+// recovery ran inside the construct — the parser must keep going and report
+// both errors, never abort.
+let main = (args: str[]) ->
+    assert(1 == )
+    let o = none(i32)
+    let v = (o +)!
+    0

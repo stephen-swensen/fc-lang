@@ -1,0 +1,10 @@
+// Recovery: assert without parentheses (a natural mid-typing state, and the
+// spelling users coming from other languages reach for first). The condition
+// text capture must not run: after the failed '(' expect, the parser lands on
+// a synthesized layout token whose start pointer is not in the source buffer,
+// and the span subtraction once produced a huge bogus length that aborted the
+// whole compiler (and the LSP server) with "out of memory".
+let main = (args: str[]) ->
+    let x = 5
+    assert x == 5
+    0

@@ -1,4 +1,5 @@
 #include "common.h"
+#include <assert.h>
 #include <stdio.h>
 
 /* ---- Arena allocator ---- */
@@ -39,6 +40,10 @@ void *arena_alloc(Arena *a, size_t size) {
 }
 
 char *arena_strdup(Arena *a, const char *s, int len) {
+    /* A negative length is always a caller bug (e.g. a source-span subtraction
+       across unrelated buffers); the size_t cast would turn it into an absurd
+       allocation. Fail crisply instead of dying with "out of memory". */
+    assert(len >= 0);
     char *dup = arena_alloc(a, (size_t)len + 1);
     memcpy(dup, s, (size_t)len);
     dup[len] = '\0';

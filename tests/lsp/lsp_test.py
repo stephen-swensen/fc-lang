@@ -45,6 +45,11 @@ UNICODE = (
     "    let z = greeting\n"             # line 2: hover 'greeting' (col 12)
     "    return 0\n"
 )
+ASSERT_NOPAREN = (
+    "let main = (args: str[]) ->\n"
+    "    assert 1 == 1\n"                # missing parens: recovery once made the
+    "    return 0\n"                     # assert text capture exit(1) ("out of
+)                                        # memory") -- must not kill the server
 
 def open_doc(v, text):  return note("textDocument/didOpen",
     {"textDocument": {"uri": URI, "languageId": "fc", "version": v, "text": text}})
@@ -76,6 +81,8 @@ msgs = [
     hover(7, 0, 4),                                                      # flush BROKEN -> diag[2]; SURVIVAL: must still reply
     change(4, UNICODE),
     hover(8, 2, 12),                                                     # flush UNICODE -> diag[3]; greeting after a multibyte line
+    change(5, ASSERT_NOPAREN),
+    hover(12, 0, 4),                                                     # flush ASSERT_NOPAREN -> diag[4]; SURVIVAL: must still reply
     req(9, "shutdown", None),
     note("exit", None),
 ]
@@ -189,6 +196,12 @@ rng = hg.get("range", {}) if isinstance(hg, dict) else {}
 check("hover after a multibyte line maps correctly",
       "str" in json.dumps(hg) and rng.get("start", {}).get("line") == 2
       and rng.get("start", {}).get("character") == 12, json.dumps(hg))
+
+check("assert-without-parens -> syntax diagnostic",
+      len(diags) >= 5 and any("expected '('" in d["message"] for d in diags[4]),
+      str(diags[4] if len(diags) > 4 else None))
+check("SERVER SURVIVED assert-without-parens (hover still replies)",
+      12 in responses, "no response to hover after assert-without-parens doc")
 
 check("shutdown replies", 9 in responses)
 check("clean process exit", returncode == 0, f"rc={returncode}")
