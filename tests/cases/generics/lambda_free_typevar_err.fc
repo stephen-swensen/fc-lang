@@ -1,0 +1,6 @@
+// A lambda cannot introduce its own type variable — there is no instantiation
+// machinery for locals.
+let main = (args: str[]) ->
+    let id = (v: 'a) -> v
+    assert(id(5) == 5)
+    0

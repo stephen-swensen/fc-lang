@@ -1,6 +1,6 @@
 // alloc(lambda) inside a generic function body (concrete-typed captures).
-// Each instantiation shares the lifted lambda; each call allocates its own
-// context.
+// Each instantiation emits its own copy of the lifted lambda; each call
+// allocates its own context.
 let tag_len = (xs: 'a[], tag: i32) ->
     let n = (i32) xs.len
     alloc(() -> tag * 100 + n)!

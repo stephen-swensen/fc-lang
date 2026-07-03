@@ -1,0 +1,12 @@
+// Concrete-typed captures inside a generic body: each instantiation emits its
+// own copy of the lambda (identical bodies, distinct names) — behavior must
+// match across instances.
+let len_tag = (xs: 'a[], tag: i32) ->
+    let n = (i32) xs.len
+    let f = () -> tag * 100 + n
+    f()
+
+let main = (args: str[]) ->
+    assert(len_tag(i32[3]{1, 2, 3}, 7) == 703)
+    assert(len_tag(f64[2]{1.0, 2.0}, 9) == 902)
+    0

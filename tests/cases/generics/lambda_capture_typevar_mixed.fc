@@ -1,0 +1,10 @@
+// One context struct mixing type-var-typed and concrete-typed captures.
+let pick = (x: 'a, y: 'a, want_first: bool) ->
+    let f = () -> if want_first then x else y
+    f()
+
+let main = (args: str[]) ->
+    assert(pick(1, 2, true) == 1)
+    assert(pick(1, 2, false) == 2)
+    assert(pick(1.5, 2.5, false) == 2.5)
+    0

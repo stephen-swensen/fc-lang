@@ -1,0 +1,13 @@
+// The generic holding the lambda is only instantiated transitively (through
+// another generic), so its per-instantiation lambdas come from the transitive
+// mono discovery.
+let inner_held = (x: 'a) ->
+    let f = () -> x
+    f()
+
+let outer_held = (x: 'a) -> inner_held(x)
+
+let main = (args: str[]) ->
+    assert(outer_held(5) == 5)
+    assert(outer_held(true))
+    0

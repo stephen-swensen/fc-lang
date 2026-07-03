@@ -1,0 +1,12 @@
+// Nested lambdas propagate a type-var-typed capture through two context
+// structs; both are emitted per instantiation.
+let through = (x: 'a) ->
+    let outer = () ->
+        let inner = () -> x
+        inner()
+    outer()
+
+let main = (args: str[]) ->
+    assert(through(11) == 11)
+    assert(through(4.5) == 4.5)
+    0

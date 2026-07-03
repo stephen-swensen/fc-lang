@@ -540,6 +540,13 @@ typedef struct {
     SrcLoc pending_self_loc;     /* def loc of the self-recursive binding name (editor go-to-def) */
     LambdaCtx *lambda_ctx;       /* capture tracking for lambdas, NULL outside lambdas */
     bool is_top_level_init;      /* true when checking the init of a top-level DECL_LET */
+    /* Type variables bound by the enclosing generic function while its body is
+       being checked (param vars + explicit <> vars). A lambda's parameter types
+       may reference exactly these — they are fixed per instantiation; any other
+       type variable on a lambda parameter is rejected, because a lambda cannot
+       be generic (locals have no instantiation machinery). */
+    const char **active_type_vars;
+    int active_type_var_count;
     MonoTable *mono_table;       /* global instantiation registry */
     InternTable *intern;         /* for name mangling */
     ImportScope *import_scope;   /* lexically scoped import chain */
@@ -3824,6 +3831,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             done_explicit_check:;
         }
 
+        /* A lambda cannot be generic: there is no instantiation machinery for
+         * locals, so a type variable in a lambda's parameter types is only
+         * meaningful when it is one of the enclosing generic function's type
+         * variables (fixed per instantiation). Reject any other. */
+        if (!is_top && e->func.explicit_type_var_count > 0)
+            diag_error(e->loc, "a lambda cannot declare explicit type variables");
+
         /* Create inner scope for function body with lambda boundary */
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         inner->is_lambda_boundary = true;
@@ -3834,6 +3848,29 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 diag_error(e->func.params[i].loc,
                     "fixed-size array types are only valid in struct field declarations");
                 ptypes[i] = type_error();
+            }
+            if (!is_top && type_contains_type_var(ptypes[i])) {
+                const char **vars = NULL;
+                int vc = 0, vcap = 0;
+                type_collect_vars(ptypes[i], &vars, &vc, &vcap);
+                for (int k = 0; k < vc; k++) {
+                    bool bound = false;
+                    for (int m = 0; m < ctx->active_type_var_count; m++) {
+                        if (ctx->active_type_vars[m] == vars[k] ||
+                            strcmp(ctx->active_type_vars[m], vars[k]) == 0) {
+                            bound = true;
+                            break;
+                        }
+                    }
+                    if (!bound) {
+                        diag_error(e->func.params[i].loc,
+                            "type variable %s is not bound by an enclosing generic function — a lambda cannot introduce its own type variables",
+                            vars[k]);
+                        ptypes[i] = type_error();
+                        break;
+                    }
+                }
+                free(vars);
             }
             e->func.params[i].type = ptypes[i];
             /* Codegen name escapes C reserved words (e.g. a parameter named
@@ -3879,6 +3916,22 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         LambdaCtx *saved_lambda = ctx->lambda_ctx;
         ctx->lambda_ctx = &lctx;
 
+        /* A top-level function binds its type variables (param vars + explicit
+           <> vars) for the whole body, so lambdas inside a generic body may use
+           them; lambdas inherit the enclosing set unchanged. */
+        const char **saved_atv = ctx->active_type_vars;
+        int saved_atvc = ctx->active_type_var_count;
+        const char **atv = NULL;
+        if (is_top) {
+            int atvc = 0, atvcap = 0;
+            for (int i = 0; i < pc; i++)
+                type_collect_vars(ptypes[i], &atv, &atvc, &atvcap);
+            for (int i = 0; i < e->func.explicit_type_var_count; i++)
+                DA_APPEND(atv, atvc, atvcap, e->func.explicit_type_vars[i]);
+            ctx->active_type_vars = atv;
+            ctx->active_type_var_count = atvc;
+        }
+
         /* Type-check body in inner scope. recursive_ret/self_name are scoped to
            exactly this body (see channel consumption above): NULL for an ordinary
            lambda, the placeholder for the recursive function being resolved. */
@@ -3892,6 +3945,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->scope = saved;
         ctx->recursive_ret = saved_recursive_ret;
         ctx->recursive_self_name = saved_recursive_self;
+        if (is_top) {
+            ctx->active_type_vars = saved_atv;
+            ctx->active_type_var_count = saved_atvc;
+            free(atv);
+        }
 
         /* The body's tail yields no value of its own — it either diverges (`never`:
            a trailing `return value`, or an exhaustive `match` whose every arm

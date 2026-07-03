@@ -1,0 +1,10 @@
+// A lambda parameter may be typed by the enclosing generic function's type
+// variable — it is concrete in every instantiation.
+let via_id = (x: 'a) ->
+    let id = (v: 'a) -> v
+    id(x)
+
+let main = (args: str[]) ->
+    assert(via_id(7) == 7)
+    assert(via_id(false) == false)
+    0

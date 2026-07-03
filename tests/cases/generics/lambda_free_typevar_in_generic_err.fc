@@ -1,0 +1,9 @@
+// Inside a generic body, a lambda may reference the enclosing function's type
+// variables but not introduce a fresh one.
+let outer = (x: 'a) ->
+    let f = (v: 'b) -> v
+    f(x)
+
+let main = (args: str[]) ->
+    assert(outer(1) == 1)
+    0

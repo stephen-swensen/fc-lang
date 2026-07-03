@@ -1,0 +1,14 @@
+// Capture whose type is a generic struct instantiated at the enclosing
+// type variable.
+struct pair =
+    first: 'a
+    second: 'a
+
+let pair_sum = (p: pair<'a>) ->
+    let f = () -> p.first + p.second
+    f()
+
+let main = (args: str[]) ->
+    assert(pair_sum(pair { first = 1, second = 2 }) == 3)
+    assert(pair_sum(pair { first = 1.5, second = 2.5 }) == 4.0)
+    0

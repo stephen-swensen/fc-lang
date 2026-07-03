@@ -1,0 +1,17 @@
+// alloc(lambda) capturing the enclosing type variable: the malloc'd context is
+// the per-instantiation context struct, so the heap closure outlives the
+// generic frame with a concretely typed capture.
+let capture_held = (x: 'a) ->
+    alloc(() -> x)!
+
+let main = (args: str[]) ->
+    let f = capture_held(21)
+    let g = capture_held(true)
+    let h = capture_held(1.25)
+    assert(f() == 21)
+    assert(g())
+    assert(h() == 1.25)
+    free(f)
+    free(g)
+    free(h)
+    0

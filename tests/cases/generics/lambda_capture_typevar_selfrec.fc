@@ -1,0 +1,11 @@
+// Self-recursive capturing lambda in a generic body: recursive calls thread
+// the per-instantiation context.
+let times = (x: 'a, n: i32) ->
+    let go = (k: i32) ->
+        if k <= 1 then x else x + go(k - 1)
+    go(n)
+
+let main = (args: str[]) ->
+    assert(times(3, 4) == 12)
+    assert(times(1.5, 2) == 3.0)
+    0

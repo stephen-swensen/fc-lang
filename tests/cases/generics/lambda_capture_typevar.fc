@@ -1,0 +1,13 @@
+// A lambda inside a generic body may capture a binding typed by the enclosing
+// type variable: the lambda is emitted per instantiation, so each instance's
+// context struct carries the concrete capture type.
+let held = (x: 'a) ->
+    let f = () -> x
+    f()
+
+let main = (args: str[]) ->
+    assert(held(42) == 42)
+    assert(held(true))
+    assert(held(2.5) == 2.5)
+    assert(held(9i64) == 9i64)
+    0

@@ -1,0 +1,6 @@
+// A lambda cannot declare explicit <> type variables — only top-level
+// functions are generic templates.
+let main = (args: str[]) ->
+    let f = <'t>(x: i32) -> x
+    assert(f(1) == 1)
+    0

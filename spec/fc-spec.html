@@ -3298,6 +3298,8 @@ let eq_first = (a: 'a, b: 'a) -> a == b    // both arguments must be the same ty
 
 Return types are always inferred — if the body expression resolves to a concrete type, that becomes the return type after type variable substitution.
 
+**Only top-level and module-level function declarations are generic.** A lambda cannot introduce type variables: a local function value has exactly one concrete type, and a local binding is not a template with instantiation sites. `let id = (v: 'a) -> v` inside a function body is a compile error, as is an explicit `<'t>` prefix on a lambda. Inside a *generic* body, a lambda may freely use the enclosing function's type variables — in its parameter types and through its captures — because each is fixed to a concrete type per instantiation; every lambda in a generic body is monomorphized together with its enclosing instance (each instance emits its own copy of the lambda and its capture context).
+
 ### Implicit and explicit type arguments
 
 In the normal case, type variables are resolved entirely from the function's arguments — no explicit type annotation is needed at the call site:

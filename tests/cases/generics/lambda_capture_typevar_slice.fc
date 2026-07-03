@@ -1,0 +1,9 @@
+// Capture whose type composes the type variable ('a[] slice).
+let first_of = (xs: 'a[]) ->
+    let f = () -> xs[0]
+    f()
+
+let main = (args: str[]) ->
+    assert(first_of(i32[2]{4, 5}) == 4)
+    assert(first_of(f64[1]{1.5}) == 1.5)
+    0

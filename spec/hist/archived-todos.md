@@ -4,6 +4,37 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Latent bug — lambdas with type-var types in generic bodies (resolved 2026-07-03)
+
+Discovered 2026-07-03 while implementing heap closures. A lambda inside a generic function
+that captured a binding (or declared a param) whose type involved the enclosing type
+variable compiled without diagnostics but emitted broken C
+(`typedef struct { /* TODO: type 22 */ x; } _ctx__fn_N;`) — lifted lambdas were collected
+and emitted **once**, with no substitution context.
+
+**Resolved by per-instantiation lambda emission** (the complete option, not the
+reject-at-validation interim). In `src/codegen.c`: lambdas are collected per mono instance
+(from the template body) instead of from generic decls; a `g_lambda_suffix` global —
+active alongside `g_subst` during all generic-instance emission (ctx structs, forward
+decls, definitions, mono function bodies, trampoline collection, backtraces symmap) —
+makes `lambda_c_name()` mangle every lifted name to `_fn_N__<instance>` so each
+instantiation gets its own correctly-typed lambda copy and `_ctx_` struct. Concrete-typed
+lambdas in generic bodies are now also duplicated per instance (static, DCE'd — same cost
+model as the rest of monomorphization).
+
+A same-shaped adjacent hole closed at the same time, in pass2: a lambda whose param types
+contain a type variable **not bound by an enclosing generic function** (e.g.
+`let id = (v: 'a) -> v` inside `main`, or `(v: 'b) -> v` inside a generic over `'a`) also
+compiled to broken C — lambdas are never generic templates, so this is now a compile
+error ("type variable %s is not bound by an enclosing generic function"), as is an
+explicit `<'t>` prefix on a lambda. `CheckCtx.active_type_vars` carries the enclosing
+top-level function's bound vars (param vars + explicit `<>` vars) through the body so the
+legal uses stay legal. Spec §Generic Functions states the rule; tests
+`generics/lambda_capture_typevar*`, `generics/lambda_typevar_param`,
+`generics/lambda_*_err`, `closures/heap_closure_typevar_capture`.
+
+---
+
 ## Error-recovery parsing + ungated pass2 (resolved 2026-06-28)
 
 Two paired LSP follow-ups, implemented together because each enables the other's payoff.

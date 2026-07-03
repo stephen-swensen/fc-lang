@@ -13,6 +13,12 @@ typedef struct {
     int count;
 } SubstCtx;
 static SubstCtx *g_subst = NULL;
+/* Suffix appended to every lifted-lambda name while emitting a monomorphized
+ * generic instance.  Lambdas inside generic bodies are emitted once per
+ * instantiation (a capture/param/return may be typed by the enclosing type
+ * variable), so the lifted function and its _ctx_ struct are mangled with the
+ * instance's name.  NULL outside generic-instance emission. */
+static const char *g_lambda_suffix = NULL;
 static MonoTable *g_mono = NULL;
 static Arena *g_arena = NULL;
 static InternTable *g_intern = NULL;
@@ -111,6 +117,16 @@ static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
 static bool type_valueless(Type *t);
 static bool interp_const_buffer_size(Expr *e, int64_t *out_size);
+
+/* C name of a lifted lambda: pass2's lifted_name, plus the active
+ * generic-instance suffix (see g_lambda_suffix). */
+static const char *lambda_c_name(Expr *lam) {
+    if (!g_lambda_suffix) return lam->func.lifted_name;
+    size_t len = strlen(lam->func.lifted_name) + 2 + strlen(g_lambda_suffix);
+    char *buf = arena_alloc(g_arena, len + 1);
+    snprintf(buf, len + 1, "%s__%s", lam->func.lifted_name, g_lambda_suffix);
+    return buf;
+}
 
 static bool is_hoisted(const char *codegen_name) {
     for (int i = 0; i < g_hoisted_count; i++)
@@ -477,7 +493,7 @@ static void emit_fn_backing_decls(FILE *out) {
                     e->cast.codegen_backing_name, e->cast.buffer_size);
         } else if (e->kind == EXPR_FUNC) { /* capturing-lambda context struct */
             fprintf(out, "_ctx_%s %s;\n",
-                    e->func.lifted_name, e->func.codegen_ctx_backing_name);
+                    lambda_c_name(e), e->func.codegen_ctx_backing_name);
         } else { /* EXPR_INTERP_STRING */
             fprintf(out, "uint8_t %s[%" PRId64 "];\n",
                     e->interp_string.codegen_backing_name,
@@ -1097,7 +1113,7 @@ static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
             return;
         }
         if (e->kind == EXPR_FUNC && e->func.capture_count == 0 && e->func.lifted_name) {
-            fprintf(out, "fc_ctramp_%s", e->func.lifted_name);
+            fprintf(out, "fc_ctramp_%s", lambda_c_name(e));
             return;
         }
         /* Capturing lambda at C boundary — fall through, will produce type error */
@@ -2644,7 +2660,7 @@ static void emit_expr(Expr *e, FILE *out) {
             if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
                 operand->func.lifted_name && operand->type &&
                 operand->type->kind == TYPE_FUNC) {
-                fprintf(out, "fc_ctramp_%s", operand->func.lifted_name);
+                fprintf(out, "fc_ctramp_%s", lambda_c_name(operand));
                 break;
             }
         }
@@ -4312,7 +4328,7 @@ static void emit_expr(Expr *e, FILE *out) {
             int tid = temp_counter++;
             bool literal = e->alloc_expr.init_expr->kind == EXPR_FUNC;
             Expr *lam = literal ? e->alloc_expr.init_expr : e->alloc_expr.closure_src;
-            const char *ln = lam->func.lifted_name;
+            const char *ln = lambda_c_name(lam);
             fprintf(out, "({ _ctx_%s* _cp%d = (_ctx_%s*)malloc(sizeof(_ctx_%s)); ",
                 ln, tid, ln, ln);
             if (literal) {
@@ -4516,15 +4532,16 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "(");
             emit_type(e->type, out);
             fprintf(out, "){ .fn_ptr = %s, .ctx = &%s }; })",
-                e->func.lifted_name, bk);
+                lambda_c_name(e), bk);
         } else if (e->func.capture_count > 0) {
             /* Fallback: no hoisted backing (e.g. emitted outside a hoisted scope).
              * Inline compound literal — block-scope lifetime; safe only when the
              * lambda is consumed within the same block. */
+            const char *ln = lambda_c_name(e);
             fprintf(out, "(");
             emit_type(e->type, out);
             fprintf(out, "){ .fn_ptr = %s, .ctx = &(_ctx_%s){ ",
-                e->func.lifted_name, e->func.lifted_name);
+                ln, ln);
             for (int i = 0; i < e->func.capture_count; i++) {
                 if (i > 0) fprintf(out, ", ");
                 fprintf(out, ".%s = %s",
@@ -4537,7 +4554,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "(");
             emit_type(e->type, out);
             fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
-                e->func.lifted_name);
+                lambda_c_name(e));
         }
         break;
     }
@@ -5215,7 +5232,7 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
                            arg->func.lifted_name && arg->type &&
                            arg->type->kind == TYPE_FUNC) {
                     /* Non-capturing lambda passed at extern boundary */
-                    trampolineset_add(ts, arg->func.lifted_name, arg->type);
+                    trampolineset_add(ts, lambda_c_name(arg), arg->type);
                 }
             }
         }
@@ -5243,7 +5260,7 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
             } else if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
                        operand->func.lifted_name && operand->type &&
                        operand->type->kind == TYPE_FUNC) {
-                trampolineset_add(ts, operand->func.lifted_name, operand->type);
+                trampolineset_add(ts, lambda_c_name(operand), operand->type);
             }
         }
         collect_trampolines_expr(e->unary_prefix.operand, ts);
@@ -6119,6 +6136,101 @@ static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) 
     *out_count = count;
 }
 
+/* ---- Lifted-lambda emission ----
+ * Each pass runs once over the non-generic lambdas (no SubstCtx) and once per
+ * monomorphized instance over that instance's lambdas, with g_subst /
+ * g_lambda_suffix active so type-var-typed captures/params/returns resolve and
+ * the emitted names are per-instance. */
+
+static void emit_lambda_ctx_structs(LambdaSet *ls, FILE *out) {
+    for (int i = 0; i < ls->count; i++) {
+        Expr *lam = ls->exprs[i];
+        if (lam->func.capture_count > 0) {
+            fprintf(out, "typedef struct {");
+            for (int j = 0; j < lam->func.capture_count; j++) {
+                fprintf(out, " ");
+                emit_type(lam->func.captures[j].type, out);
+                fprintf(out, " %s;", lam->func.captures[j].codegen_name);
+            }
+            fprintf(out, " } _ctx_%s;\n", lambda_c_name(lam));
+        }
+    }
+}
+
+static void emit_lambda_fwd_decls(LambdaSet *ls, FILE *out) {
+    for (int i = 0; i < ls->count; i++) {
+        Expr *lam = ls->exprs[i];
+        Type *ft = lam->type;
+        fprintf(out, "%s", g_fn_attr);
+        emit_type(ft->func.return_type, out);
+        fprintf(out, " %s(", lambda_c_name(lam));
+        for (int j = 0; j < lam->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(lam->func.params[j].type, out);
+            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
+        }
+        if (lam->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx);\n");
+    }
+}
+
+static void emit_lambda_defs(LambdaSet *ls, FILE *out) {
+    for (int i = 0; i < ls->count; i++) {
+        Expr *lam = ls->exprs[i];
+        Type *ft = lam->type;
+        const char *ln = lambda_c_name(lam);
+        fprintf(out, "%s", g_fn_attr);
+        emit_type(ft->func.return_type, out);
+        fprintf(out, " %s(", ln);
+        for (int j = 0; j < lam->func.param_count; j++) {
+            if (j > 0) fprintf(out, ", ");
+            emit_type(lam->func.params[j].type, out);
+            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
+        }
+        if (lam->func.param_count > 0) fprintf(out, ", ");
+        fprintf(out, "void* _ctx) {\n");
+
+        indent_level = 1;
+        if (lam->func.capture_count > 0) {
+            /* Extract captures from context struct */
+            emit_indent(out);
+            fprintf(out, "_ctx_%s* _c = (_ctx_%s*)_ctx;\n", ln, ln);
+            for (int j = 0; j < lam->func.capture_count; j++) {
+                emit_indent(out);
+                emit_type(lam->func.captures[j].type, out);
+                fprintf(out, " %s = _c->%s;\n",
+                    lam->func.captures[j].codegen_name,
+                    lam->func.captures[j].codegen_name);
+            }
+        } else {
+            emit_indent(out);
+            fprintf(out, "(void)_ctx;\n");
+        }
+
+        /* Self-recursion: materialize the binding as a local fat pointer so the body
+           can call/use itself by name. Non-capturing passes a NULL context; capturing
+           threads the same _ctx through recursive calls. Emitted only when the name was
+           actually referenced, so non-recursive lambdas stay -Werror-clean. */
+        if (lam->func.self_codegen_name && lam->func.self_referenced) {
+            emit_indent(out);
+            emit_type(lam->type, out);
+            fprintf(out, " %s = { .fn_ptr = %s, .ctx = %s };\n",
+                lam->func.self_codegen_name, ln,
+                lam->func.capture_count > 0 ? "_ctx" : "NULL");
+        }
+
+        g_guards_suppressed = false;   /* lambda body: guards on (function boundary) */
+        g_overflow_checked = false;    /* lambda body: unchecked (function boundary) */
+        begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
+        defer_scope_push(false);
+        emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);
+        defer_scope_pop();
+        end_hoisted_scope();
+        indent_level = 0;
+        fprintf(out, "}\n\n");
+    }
+}
+
 void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
                   Arena *arena, InternTable *intern_tbl, SymbolTable *symtab,
                   const CodegenOptions *opts) {
@@ -6700,12 +6812,27 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
     fprintf(out, "\n");
 
-    /* Collect lambdas from all declarations */
+    /* Collect lambdas from all non-generic declarations.  Lambdas inside
+     * generic bodies are collected per mono instance instead: they are emitted
+     * once per instantiation, under that instance's SubstCtx and with the
+     * instance's mangled name suffixed onto every lifted name (a capture,
+     * param, or return typed by the enclosing type variable has no concrete
+     * type outside an instantiation). */
     LambdaSet lambdas = {0};
     for (int i = 0; i < all_count; i++) {
-        if (all_decls[i]->kind == DECL_LET && all_decls[i]->let.init) {
+        if (all_decls[i]->kind == DECL_LET && all_decls[i]->let.init &&
+            !is_generic_decl(all_decls[i])) {
             collect_lambdas_expr(all_decls[i]->let.init, &lambdas);
         }
+    }
+    LambdaSet *inst_lambdas = mono->count > 0
+        ? calloc((size_t)mono->count, sizeof(LambdaSet)) : NULL;
+    for (int mi = 0; mi < mono->count; mi++) {
+        MonoInstance *inst = &mono->entries[mi];
+        if (inst->decl_kind != DECL_LET || !inst->template_decl) continue;
+        if (!inst->template_decl->let.init ||
+            inst->template_decl->let.init->kind != EXPR_FUNC) continue;
+        collect_lambdas_expr(inst->template_decl->let.init, &inst_lambdas[mi]);
     }
     /* Record lambdas in symmap (for --backtraces frames) */
     if (g_backtraces) {
@@ -6714,6 +6841,16 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             if (!lam->func.lifted_name) continue;
             const char *disp = fmt_lambda_display(g_arena, lam->loc.filename, lam->loc.line);
             symmap_add(lam->func.lifted_name, disp, lam->loc.filename, lam->loc.line);
+        }
+        for (int mi = 0; mi < mono->count; mi++) {
+            g_lambda_suffix = mono->entries[mi].mangled_name;
+            for (int i = 0; i < inst_lambdas[mi].count; i++) {
+                Expr *lam = inst_lambdas[mi].exprs[i];
+                if (!lam->func.lifted_name) continue;
+                const char *disp = fmt_lambda_display(g_arena, lam->loc.filename, lam->loc.line);
+                symmap_add(lambda_c_name(lam), disp, lam->loc.filename, lam->loc.line);
+            }
+            g_lambda_suffix = NULL;
         }
     }
 
@@ -6735,8 +6872,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Expr *fn = tmpl->let.init;
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
+        g_lambda_suffix = inst->mangled_name;
         for (int j = 0; j < fn->func.body_count; j++)
             collect_trampolines_expr(fn->func.body[j], &trampolines);
+        g_lambda_suffix = NULL;
         g_subst = NULL;
     }
 
@@ -6804,33 +6943,29 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "\n");
 
     /* Emit context structs for capturing lambdas */
-    for (int i = 0; i < lambdas.count; i++) {
-        Expr *lam = lambdas.exprs[i];
-        if (lam->func.capture_count > 0) {
-            fprintf(out, "typedef struct {");
-            for (int j = 0; j < lam->func.capture_count; j++) {
-                fprintf(out, " ");
-                emit_type(lam->func.captures[j].type, out);
-                fprintf(out, " %s;", lam->func.captures[j].codegen_name);
-            }
-            fprintf(out, " } _ctx_%s;\n", lam->func.lifted_name);
-        }
+    emit_lambda_ctx_structs(&lambdas, out);
+    for (int mi = 0; mi < mono->count; mi++) {
+        if (!inst_lambdas || inst_lambdas[mi].count == 0) continue;
+        MonoInstance *inst = &mono->entries[mi];
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        g_lambda_suffix = inst->mangled_name;
+        emit_lambda_ctx_structs(&inst_lambdas[mi], out);
+        g_lambda_suffix = NULL;
+        g_subst = NULL;
     }
 
     /* Emit forward declarations for lifted lambdas */
-    for (int i = 0; i < lambdas.count; i++) {
-        Expr *lam = lambdas.exprs[i];
-        Type *ft = lam->type;
-        fprintf(out, "%s", g_fn_attr);
-        emit_type(ft->func.return_type, out);
-        fprintf(out, " %s(", lam->func.lifted_name);
-        for (int j = 0; j < lam->func.param_count; j++) {
-            if (j > 0) fprintf(out, ", ");
-            emit_type(lam->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
-        }
-        if (lam->func.param_count > 0) fprintf(out, ", ");
-        fprintf(out, "void* _ctx);\n");
+    emit_lambda_fwd_decls(&lambdas, out);
+    for (int mi = 0; mi < mono->count; mi++) {
+        if (!inst_lambdas || inst_lambdas[mi].count == 0) continue;
+        MonoInstance *inst = &mono->entries[mi];
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        g_lambda_suffix = inst->mangled_name;
+        emit_lambda_fwd_decls(&inst_lambdas[mi], out);
+        g_lambda_suffix = NULL;
+        g_subst = NULL;
     }
     /* Emit forward declarations for C-boundary trampolines */
     for (int i = 0; i < trampolines.count; i++) {
@@ -6850,61 +6985,22 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     fprintf(out, "\n");
 
     /* Emit lifted lambda function definitions */
-    for (int i = 0; i < lambdas.count; i++) {
-        Expr *lam = lambdas.exprs[i];
-        Type *ft = lam->type;
-        fprintf(out, "%s", g_fn_attr);
-        emit_type(ft->func.return_type, out);
-        fprintf(out, " %s(", lam->func.lifted_name);
-        for (int j = 0; j < lam->func.param_count; j++) {
-            if (j > 0) fprintf(out, ", ");
-            emit_type(lam->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
-        }
-        if (lam->func.param_count > 0) fprintf(out, ", ");
-        fprintf(out, "void* _ctx) {\n");
-
-        indent_level = 1;
-        if (lam->func.capture_count > 0) {
-            /* Extract captures from context struct */
-            emit_indent(out);
-            fprintf(out, "_ctx_%s* _c = (_ctx_%s*)_ctx;\n",
-                lam->func.lifted_name, lam->func.lifted_name);
-            for (int j = 0; j < lam->func.capture_count; j++) {
-                emit_indent(out);
-                emit_type(lam->func.captures[j].type, out);
-                fprintf(out, " %s = _c->%s;\n",
-                    lam->func.captures[j].codegen_name,
-                    lam->func.captures[j].codegen_name);
-            }
-        } else {
-            emit_indent(out);
-            fprintf(out, "(void)_ctx;\n");
-        }
-
-        /* Self-recursion: materialize the binding as a local fat pointer so the body
-           can call/use itself by name. Non-capturing passes a NULL context; capturing
-           threads the same _ctx through recursive calls. Emitted only when the name was
-           actually referenced, so non-recursive lambdas stay -Werror-clean. */
-        if (lam->func.self_codegen_name && lam->func.self_referenced) {
-            emit_indent(out);
-            emit_type(lam->type, out);
-            fprintf(out, " %s = { .fn_ptr = %s, .ctx = %s };\n",
-                lam->func.self_codegen_name, lam->func.lifted_name,
-                lam->func.capture_count > 0 ? "_ctx" : "NULL");
-        }
-
-        g_guards_suppressed = false;   /* lambda body: guards on (function boundary) */
-        g_overflow_checked = false;    /* lambda body: unchecked (function boundary) */
-        begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
-        defer_scope_push(false);
-        emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);
-        defer_scope_pop();
-        end_hoisted_scope();
-        indent_level = 0;
-        fprintf(out, "}\n\n");
+    emit_lambda_defs(&lambdas, out);
+    for (int mi = 0; mi < mono->count; mi++) {
+        if (!inst_lambdas || inst_lambdas[mi].count == 0) continue;
+        MonoInstance *inst = &mono->entries[mi];
+        SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
+        g_subst = &subst;
+        g_lambda_suffix = inst->mangled_name;
+        emit_lambda_defs(&inst_lambdas[mi], out);
+        g_lambda_suffix = NULL;
+        g_subst = NULL;
     }
     free(lambdas.exprs);
+    if (inst_lambdas) {
+        for (int mi = 0; mi < mono->count; mi++) free(inst_lambdas[mi].exprs);
+        free(inst_lambdas);
+    }
 
     /* Emit function definitions (skip generics) */
     for (int i = 0; i < all_count; i++) {
@@ -6945,6 +7041,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Expr *fn = tmpl->let.init;
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
+        g_lambda_suffix = inst->mangled_name;
         fprintf(out, "%s", g_fn_attr);
         emit_type(fn->type->func.return_type, out);
         fprintf(out, " %s(", inst->mangled_name);
@@ -6966,6 +7063,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         end_hoisted_scope();
         indent_level = 0;
         fprintf(out, "}\n\n");
+        g_lambda_suffix = NULL;
         g_subst = NULL;
     }
 
