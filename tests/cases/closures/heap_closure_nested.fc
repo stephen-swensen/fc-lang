@@ -1,0 +1,21 @@
+// Interactions across lambda boundaries:
+// 1. a stack closure may capture a heap closure value (the fat pointer copies)
+// 2. alloc(f) works inside a nested lambda where f itself is a capture —
+//    the context is copied from the captured value, not the original locals
+let main = (args: str[]) ->
+    let n = 10
+    let f = (x: i32) -> x + n
+
+    // capture the heap closure in a stack closure
+    let h = alloc(f)!
+    let wrap = (x: i32) -> h(x) * 2
+    assert(wrap(1) == 22)
+
+    // promote a captured stack closure from inside another lambda
+    let promote = () -> alloc(f)!
+    let g = promote()
+    assert(g(5) == 15)
+
+    free(g)
+    free(h)
+    0

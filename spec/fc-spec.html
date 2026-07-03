@@ -2313,7 +2313,7 @@ Lambdas may capture immutable `let` bindings from the enclosing *local* scope by
 
 **Top-level bindings are not captures.** When a lambda references a top-level `let` or `let mut` binding, it accesses the global directly — no copy is made and no capture occurs. This means the function sees mutations to the global, and the function is *not* a closure for C interop purposes (it can be passed to `extern` function pointer parameters). Only references that cross a local lambda boundary produce captures.
 
-**A self-recursive call is not a capture.** When a `let`-bound lambda calls itself by name, that name is treated as a local of the function's own body, not a captured value, so self-recursion adds nothing to the closure's context. A self-recursive lambda that captures *other* local bindings is still a capturing closure subject to the usual lifetime rules (it cannot be returned or stored beyond its creator's frame). If a *nested* lambda refers to an enclosing self-recursive function, that reference is an ordinary capture of the enclosing function's value.
+**A self-recursive call is not a capture.** When a `let`-bound lambda calls itself by name, that name is treated as a local of the function's own body, not a captured value, so self-recursion adds nothing to the closure's context. A self-recursive lambda that captures *other* local bindings is still a capturing closure subject to the usual lifetime rules (it cannot be returned or stored beyond its creator's frame unless promoted with `alloc` — see §Heap closures; recursive calls thread the promoted context). If a *nested* lambda refers to an enclosing self-recursive function, that reference is an ordinary capture of the enclosing function's value.
 
 ```fc
 let demo = () ->
@@ -2401,7 +2401,40 @@ Here `px` is a `let` binding holding an `i32*`, so it is capturable by copy. The
 > - Storing a capturing closure into heap memory that outlives the creating function: **compile error** — escape analysis detects the stack-provenance context and rejects it, both for `alloc(struct { f = capturing })` and for `heap_ptr.field = capturing`.
 > - Non-capturing closures have no lifetime restriction — the null context pointer is always valid.
 >
-> The safe rule: a capturing closure must not outlive the function that created it. If captured state must outlive the creating function, heap-allocate the data explicitly and capture the pointer — a `let` binding holding a pointer has no lifetime restriction on the closure itself, only the usual programmer responsibility to keep the pointed-to memory live.
+> The safe rule: a capturing closure must not outlive the function that created it. To let one escape, promote it with `alloc` (below), or heap-allocate the captured state explicitly and capture the pointer — a `let` binding holding a pointer has no lifetime restriction on the closure itself, only the usual programmer responsibility to keep the pointed-to memory live.
+
+### Heap closures
+
+`alloc` of a capturing lambda copies its context to the heap, exactly as `alloc` of a stack string copies its bytes. The result is `F?` where `F` is the lambda's function type — an option like every other heap allocation, `none` on failure. The promoted closure has heap provenance, so every escape restriction lifts: it can be returned, stored in heap structs, and captured by other lambdas. The caller owns the context and releases it with `free(f)`:
+
+```fc
+let make_adder = (n: i32) ->
+    alloc((x: i32) -> x + n)!    // context copied to the heap; returnable
+
+let add5 = make_adder(5)
+let y = add5(3)                  // 8 — call sites are unchanged
+free(add5)                       // frees the context block
+```
+
+The operand must be a **capturing lambda literal**, or an **immutable `let` bound directly to one** (the form to reach for when the closure body spans multiple statements, since an indented block cannot appear inside parentheses):
+
+```fc
+let make_scaler = (base: i32, step: i32) ->
+    let f = (x: i32) ->
+        let scaled = x * step
+        scaled + base
+    alloc(f)!                    // promote through the binding
+```
+
+No other operand qualifies: a fat pointer carries no context size, so an arbitrary function value — a parameter, a `let mut`, a conditional — has an unknowable context layout at the alloc site, and `alloc` of it is a compile error. (This is the same constraint that makes Rust's `Box::new` take the concrete closure.) `alloc` of a *non-capturing* lambda is also a compile error — it has no context and no lifetime restriction, so there is nothing to promote. `alloca(lambda)` is rejected for the opposite reason: a capturing closure's context is already stack-allocated.
+
+Semantics of the promoted closure:
+
+- **Capture rules are unchanged.** Captures are still immutable copies, taken when the closure is created; `let mut` still cannot be captured. `alloc` changes *where the copied context lives*, not what capture means. For shared mutable state, the existing idiom composes: heap-allocate the state, capture the pointer — and now the closure holding that pointer can itself escape.
+- **Copies share the context.** The value is still the same two-word fat pointer; copying it copies `{ fn_ptr, ctx }`, so all copies alias one heap block. Free it exactly once, through any copy. Function equality (`==`) compares `fn_ptr` and `ctx`, so copies compare equal and separately-promoted closures do not.
+- **`free(f)` frees only the context.** Heap data the captures point at is a separate allocation with its own owner. Freeing a function value whose context is null (a non-capturing function) is a runtime no-op; freeing a *stack* closure is a compile error.
+- **The extern boundary is unchanged.** A heap closure still cannot cross to a C function pointer parameter — that limit is the C ABI's missing context channel, not lifetime.
+- **Cost:** one `malloc` of exactly the context struct's size at creation, one `free` at death, zero change to call sites. The generated C is the `void* user_data` pattern a C programmer writes by hand — a malloc'd context struct passed alongside the function pointer.
 >
 > **`extern` function pointer parameters** — when a function type appears as a parameter in an `extern` declaration, the compiler maps it to a plain C function pointer at the C boundary. The programmer passes a non-capturing lambda directly; the compiler extracts the `fn_ptr` field from the fat struct automatically. Passing a capturing lambda to an `extern` function pointer parameter is a compile error.
 >
@@ -4126,7 +4159,8 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 | `alloc(T[N] { elems })` | Heap-allocate a slice initialized with provided elements. `N` must be a literal. |
 | `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
 | `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
-| `free(ptr)` | Free a heap-allocated pointer or slice. When passed a slice, compiler emits `free(slice.ptr)`. |
+| `alloc(lambda)` | Heap closure: copy a capturing lambda's context to the heap, returning `F?` where `F` is the lambda's function type. The result may outlive its creator; `free(f)` releases the context. Accepts a capturing lambda literal or an immutable `let` bound directly to one. See §Closures & Capture. |
+| `free(ptr)` | Free a heap-allocated pointer, slice, or heap closure. When passed a slice, compiler emits `free(slice.ptr)`; when passed a function value, `free(f.ctx)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
 | `sizeof(T)` | Return the size in bytes of type `T` as an `i64`. |
 | `alignof(T)` | Return the alignment in bytes of type `T` as an `i64`. For fixed arrays `T[N]`, returns alignment of element type `T`. |

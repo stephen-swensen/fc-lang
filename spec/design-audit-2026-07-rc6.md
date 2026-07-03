@@ -75,7 +75,7 @@ have written — it fits the cost-transparency rule the same way `for` is sugar 
 `loop`. Zig's `try` is the closest precedent in spirit. **Single highest-leverage
 ergonomic gap in the language.**
 
-### 2. Closures are stack-bound with no escape hatch
+### 2. Closures are stack-bound with no escape hatch — ✅ RESOLVED 2026-07-03
 
 Capturing closures can't be returned, can't be stored in heap structs, and `let mut`
 can't be captured at all. The workarounds (capture a pointer, heap-allocate a context
@@ -86,6 +86,20 @@ everything needed for an *explicit* heap-closure form (e.g. `alloc(closure)` pro
 heap context the caller frees, symmetric with how `alloc(s)` promotes a stack string).
 Right now the feature cliff is steep: closures work beautifully until the moment they
 need to outlive a frame, then vanish entirely.
+
+*Resolution: `alloc(lambda)` → `F?` copies the context struct to the heap (Apple
+Blocks' `Block_copy` precedent; option like every other alloc, `none` on failure); the
+result has heap provenance so all escape restrictions lift through the existing
+machinery. Operand must be a capturing lambda literal or an immutable `let` bound
+directly to one (`alloc(f)` — needed because an indented block body can't appear inside
+parens; the binding form memcpys the live context, sound because captures are immutable
+copies). Anything else — parameter, `let mut`, conditional init — is rejected: a fat
+pointer carries no context size (same constraint as Rust's `Box::new`). `free(f)` emits
+`free(f.ctx)`; freeing a stack closure is a compile error; copies share one context.
+Capture semantics unchanged (`let mut` still uncapturable — shared mutation stays
+"heap cell + captured pointer", which now composes with escaping closures). Extern
+boundary unchanged. Spec §Heap closures; tests `closures/heap_closure_*` (10 positive
+incl. self-recursive, generic-body, nested-capture promotion; 6 error). All ASan-clean.*
 
 ### 3. A mutability-model seam
 
@@ -203,7 +217,7 @@ may store this pointer") would be more in FC's spirit than whole-program analysi
 1. **Error-propagation sugar** — pure desugar, huge ergonomic payoff, zero cost-model
    violation.
 2. **An explicit heap-closure escape hatch** — the `alloc` symmetry already exists in the
-   language's vocabulary.
+   language's vocabulary. ✅ RESOLVED 2026-07-03 (see item 2 above).
 3. **The markers-in-generics spec gap** — cheap to specify now, annoying to retrofit.
 4. **The truncation-consistency question and the mutability-seam documentation.**
 

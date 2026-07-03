@@ -1,0 +1,20 @@
+// alloc(f) where f is an immutable let bound directly to a capturing lambda:
+// the multi-statement form (an inline lambda inside parens cannot carry an
+// indented block body). The heap copy snapshots f's context; the stack
+// original remains independently usable.
+let make_scaler = (base: i32, step: i32) ->
+    let f = (x: i32) ->
+        let scaled = x * step
+        scaled + base
+    let heap = alloc(f)!
+    assert(f(2) == heap(2))     // stack original still works alongside the copy
+    heap
+
+let main = (args: str[]) ->
+    let s1 = make_scaler(100, 3)
+    let s2 = make_scaler(1000, 5)
+    assert(s1(2) == 106)
+    assert(s2(2) == 1010)
+    free(s1)
+    free(s2)
+    0

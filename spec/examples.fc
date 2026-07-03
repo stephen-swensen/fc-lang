@@ -95,8 +95,11 @@ module point =
 
 let apply = (x: 'a, f: ('a) -> 'b) -> f(x)
 
-// Note: closures that capture cannot be returned from their enclosing
-// function (stack-allocated context). Composition is done inline instead.
+// Note: a capturing closure's context lives on its creator's stack frame, so
+// it cannot be returned or stored beyond that frame — unless promoted with
+// alloc(lambda), which copies the context to the heap (caller frees it).
+let make_adder = (n: i32) ->
+    alloc((x: i32) -> x + n)!    // heap closure: returnable, caller frees
 
 // ============================================================
 // C Interop — extern declarations bind to C headers
@@ -470,9 +473,16 @@ let main = (args: str[]) ->
     // Higher-order: passing functions as arguments
     assert(apply(21, double) == 42)
 
-    // Closures can be passed as arguments (not returned)
+    // Closures can be passed as arguments; a stack closure cannot be returned
     let inc = (n: i32) -> n + 1
     assert(apply(41, inc) == 42)
+
+    // Heap closures: alloc(lambda) copies the context to the heap so the
+    // closure outlives its creator (see make_adder above). alloc(f) works
+    // too when f is an immutable let bound directly to a capturing lambda.
+    let add5 = make_adder(5)
+    assert(add5(3) == 8)
+    free(add5)                       // frees the context block
 
     // --------------------------------------------------------
     // Structs

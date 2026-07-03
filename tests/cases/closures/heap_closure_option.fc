@@ -1,0 +1,11 @@
+// alloc(lambda) yields F? like every other heap alloc form — none on
+// allocation failure. Exercise the option surface without immediate unwrap,
+// and defer free.
+let main = (args: str[]) ->
+    let n = 4
+    let maybe = alloc((x: i32) -> x * n)
+    assert(maybe.is_some)
+    let f = maybe!
+    defer free(f)
+    assert(f(10) == 40)
+    0

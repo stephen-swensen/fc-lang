@@ -77,6 +77,32 @@ no store.
 
 ---
 
+## Latent bug — capturing lambdas with type-var-typed captures in generic bodies
+
+Discovered 2026-07-03 while implementing heap closures. A lambda inside a generic function
+that captures a binding whose type involves the enclosing type variable compiles without
+diagnostics but emits broken C:
+
+```fc
+let apply = (x: 'a) ->
+    let f = () -> x     // captures x: 'a
+    f()
+```
+
+produces `typedef struct { /* TODO: type 22 */ x; } _ctx__fn_N;` — lifted lambdas are
+collected and emitted **once**, with no substitution context, so a capture (or param/return)
+typed `'a` has no concrete type at emission. Captures with *concrete* types inside generic
+bodies work fine today (the single shared lifted function is correct for every
+instantiation), and `alloc(lambda)` inherits exactly the same behavior — this predates and
+is orthogonal to heap closures.
+
+Fix requires per-instantiation lambda emission (collect lambdas per mono instance, mangle
+`_fn_N`/`_ctx__fn_N` under the active `SubstCtx`), or — conservative-but-complete interim —
+reject type-var-typed captures at generic validation so the hole at least fails at compile
+time instead of at `cc`.
+
+---
+
 ## Editor / LSP server (`fcc --lsp`)
 
 Architecture lives in `CLAUDE.md` → "Editor integration"; this section is the

@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let n = 5
+    let f = (x: i32) -> x + n
+    free(f)
+    0

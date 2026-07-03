@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let n = 5
+    let f = alloca((x: i32) -> x + n)
+    f(1)
+    0

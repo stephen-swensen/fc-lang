@@ -390,8 +390,10 @@ static void collect_hoisted_bindings(Expr *e) {
          * stays valid for the whole call.  The single slot is reused per loop
          * iteration (identical to slice-literal reuse semantics).  Don't recurse
          * into the body: it is its own function/hoisting scope, and any capturing
-         * lambda constructed inside it is hoisted into that frame when it is emitted. */
-        if (e->func.capture_count > 0) {
+         * lambda constructed inside it is hoisted into that frame when it is emitted.
+         * A heap-allocated closure (alloc(lambda)) mallocs its context at the alloc
+         * site instead — no stack backing. */
+        if (e->func.capture_count > 0 && !e->func.heap_alloc) {
             if (!e->func.codegen_ctx_backing_name) {
                 char buf[40];
                 int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
@@ -4058,6 +4060,12 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "free((");
             emit_expr(e->free_expr.operand, out);
             fprintf(out, ").ptr)");
+        } else if (ot && subst_resolve(ot)->kind == TYPE_FUNC) {
+            /* Heap closure: the heap block is the context struct. free(NULL) is a
+             * no-op, so freeing a non-capturing function value is harmless. */
+            fprintf(out, "free((");
+            emit_expr(e->free_expr.operand, out);
+            fprintf(out, ").ctx)");
         } else {
             fprintf(out, "free(");
             emit_expr(e->free_expr.operand, out);
@@ -4289,6 +4297,49 @@ static void emit_expr(Expr *e, FILE *out) {
             Type *sl = e->type->option.inner;
             emit_type(sl, out);
             fprintf(out, "){ .ptr = _ap%d, .len = %d }, .has_value = true }) : (", tid, (int)size);
+            emit_type(e->type, out);
+            fprintf(out, "){ .has_value = false }; })");
+        } else if (e->alloc_expr.init_expr->kind == EXPR_FUNC ||
+                   e->alloc_expr.closure_src) {
+            /* alloc(lambda) / alloc(f) → F? — heap closure. Malloc the context
+             * struct and yield a fat pointer whose .ctx owns the heap block (freed
+             * by free(f) → free(f.ctx)). Option struct, none on malloc failure
+             * (function options have no null-sentinel form). The literal form fills
+             * the captures directly; the binding form memcpys the source closure's
+             * live context (captures are immutable copies, so the two are
+             * identical), which also works where only the binding — not the
+             * captured locals — is in scope (e.g. inside a nested lambda). */
+            int tid = temp_counter++;
+            bool literal = e->alloc_expr.init_expr->kind == EXPR_FUNC;
+            Expr *lam = literal ? e->alloc_expr.init_expr : e->alloc_expr.closure_src;
+            const char *ln = lam->func.lifted_name;
+            fprintf(out, "({ _ctx_%s* _cp%d = (_ctx_%s*)malloc(sizeof(_ctx_%s)); ",
+                ln, tid, ln, ln);
+            if (literal) {
+                fprintf(out, "if (_cp%d) { ", tid);
+                for (int i = 0; i < lam->func.capture_count; i++)
+                    fprintf(out, "_cp%d->%s = %s; ", tid,
+                        lam->func.captures[i].codegen_name,
+                        lam->func.captures[i].codegen_name);
+                fprintf(out, "} _cp%d ? (", tid);
+                emit_type(e->type, out);
+                fprintf(out, "){ .value = (");
+                emit_type(e->type->option.inner, out);
+                fprintf(out, "){ .fn_ptr = %s, .ctx = _cp%d }, .has_value = true } : (",
+                    ln, tid);
+            } else {
+                emit_type(e->type->option.inner, out);
+                fprintf(out, " _src%d = ", tid);
+                emit_expr(e->alloc_expr.init_expr, out);
+                fprintf(out, "; if (_cp%d) memcpy(_cp%d, _src%d.ctx, sizeof(_ctx_%s)); ",
+                    tid, tid, tid, ln);
+                fprintf(out, "_cp%d ? (", tid);
+                emit_type(e->type, out);
+                fprintf(out, "){ .value = (");
+                emit_type(e->type->option.inner, out);
+                fprintf(out, "){ .fn_ptr = _src%d.fn_ptr, .ctx = _cp%d }, "
+                    ".has_value = true } : (", tid, tid);
+            }
             emit_type(e->type, out);
             fprintf(out, "){ .has_value = false }; })");
         } else if (e->alloc_expr.init_expr->kind == EXPR_STRUCT_LIT) {

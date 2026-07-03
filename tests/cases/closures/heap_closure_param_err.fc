@@ -1,0 +1,8 @@
+let promote = (f: (i32) -> i32) ->
+    alloc(f)!
+
+let main = (args: str[]) ->
+    let n = 5
+    let g = promote((x: i32) -> x + n)
+    free(g)
+    0

@@ -16,6 +16,9 @@ typedef struct {
     Provenance prov;            /* provenance of the bound value */
     SrcLoc def_loc;             /* source loc where this name is introduced (editor
                                    go-to-def on a block-local); {0} if synthesized */
+    Expr *lambda_init;          /* the EXPR_FUNC this (immutable) binding was initialized
+                                   with, NULL otherwise — lets alloc(f) see the context
+                                   layout through the binding */
 } LocalBinding;
 
 typedef struct Scope Scope;
@@ -70,7 +73,7 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
 
 static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
                            Type *type, bool is_mut, Provenance prov, SrcLoc def_loc) {
-    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, def_loc };
+    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, def_loc, NULL };
     /* Grow arena-side so the locals array is reclaimed with the AST arena
      * (a long-running server frees it; the CLI frees it at the end). */
     if (s->local_count >= s->local_cap) {
@@ -123,6 +126,21 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
     if (out_crossings) *out_crossings = 0;
     if (out_is_global) *out_is_global = false;
     if (out_def_loc) *out_def_loc = (SrcLoc){0};
+    return NULL;
+}
+
+/* Look up the lambda literal an immutable local binding was initialized with
+ * (NULL if the name is unbound, mutable, or not directly bound to a lambda).
+ * Crosses lambda boundaries: alloc(f) in a nested lambda that captured f still
+ * sees f's context layout. */
+static Expr *scope_lookup_lambda_init(Scope *s, const char *name) {
+    for (Scope *sc = s; sc; sc = sc->parent) {
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].name == name)
+                return sc->locals[i].is_mut ? NULL : sc->locals[i].lambda_init;
+        }
+        if (sc->is_global) break;
+    }
     return NULL;
 }
 
@@ -4671,13 +4689,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         e->let_expr.let_type = t;
         scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
                         e->let_expr.let_init->prov, e->let_expr.let_name_loc);
-        /* Mark binding as capturing if init is a lambda with captures */
-        if (e->let_expr.let_init->kind == EXPR_FUNC &&
-            e->let_expr.let_init->func.capture_count > 0) {
+        /* Mark binding as capturing if init is a lambda with captures, and record
+         * the lambda itself so alloc(f) can promote its context through the name. */
+        if (e->let_expr.let_init->kind == EXPR_FUNC) {
             Scope *sc = ctx->scope;
             for (int ci = sc->local_count - 1; ci >= 0; ci--) {
                 if (sc->locals[ci].codegen_name == cg) {
-                    sc->locals[ci].is_capturing = true;
+                    if (e->let_expr.let_init->func.capture_count > 0)
+                        sc->locals[ci].is_capturing = true;
+                    sc->locals[ci].lambda_init = e->let_expr.let_init;
                     break;
                 }
             }
@@ -5980,14 +6000,19 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
         if (ot->kind != TYPE_POINTER && ot->kind != TYPE_SLICE &&
-            ot->kind != TYPE_ANY_PTR) {
-            diag_error(e->loc, "free requires pointer or slice, got %s", type_name(ot));
+            ot->kind != TYPE_ANY_PTR && ot->kind != TYPE_FUNC) {
+            diag_error(e->loc, "free requires pointer, slice, or function value, got %s",
+                       type_name(ot));
         }
         /* Escape analysis: reject free on non-heap memory */
         if (e->free_expr.operand->prov == PROV_STATIC) {
             diag_error(e->loc, "cannot free static memory (string literal)");
         } else if (e->free_expr.operand->prov == PROV_STACK) {
-            diag_error(e->loc, "cannot free stack-allocated memory");
+            if (ot->kind == TYPE_FUNC)
+                diag_error(e->loc, "cannot free a stack closure — its context was "
+                    "not heap-allocated; promote with alloc(lambda) first");
+            else
+                diag_error(e->loc, "cannot free stack-allocated memory");
         }
         if (ot->is_const) {
             diag_error(e->loc, "cannot free const pointer/slice");
@@ -6088,6 +6113,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             Expr *ie = e->alloc_expr.init_expr;
             Type *t = check_expr(ctx, ie);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
+            if (ie->kind == EXPR_FUNC || t->kind == TYPE_FUNC) {
+                diag_error(e->loc, "alloca of a closure is meaningless — a capturing "
+                    "closure's context is already stack-allocated; use alloc(...) to "
+                    "promote it to the heap");
+                e->type = type_error();
+                return e->type;
+            }
             if (ie->kind == EXPR_INTERP_STRING || ie->kind == EXPR_ARRAY_LIT ||
                 t->kind == TYPE_SLICE || is_cstr_type(t)) {
                 Type *rt = t;
@@ -6173,6 +6205,55 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
 
             Expr *ie = e->alloc_expr.init_expr;
+
+            /* alloc(lambda) → F? — heap closure. The context struct is copied to
+             * the heap at the alloc site, so the closure may outlive its creator
+             * (returnable, storable in heap structs). free(f) releases the context.
+             * Only a lambda *literal* qualifies: the context layout is statically
+             * known only at the literal (a function value's fat pointer carries no
+             * context size, so an arbitrary function-typed expression can't be
+             * promoted — same reason Rust's Box::new needs the concrete closure). */
+            if (ie->kind == EXPR_FUNC) {
+                if (ie->func.capture_count == 0) {
+                    diag_error(e->loc, "closure captures nothing — a non-capturing "
+                        "function has no lifetime restriction and needs no heap "
+                        "allocation");
+                    e->type = type_error();
+                    return e->type;
+                }
+                ie->func.heap_alloc = true;
+                e->type = type_option(ctx->arena, t);
+                e->prov = PROV_HEAP;
+                return e->type;
+            }
+            if (t->kind == TYPE_FUNC) {
+                /* alloc(f) — f must be an immutable local let bound directly to a
+                 * lambda literal, so the context layout is statically known through
+                 * the binding. Captures are immutable copies, so copying f's context
+                 * at the alloc site reproduces it exactly. Anything else (parameter,
+                 * mutable binding, conditional init) has an unknowable layout: a fat
+                 * pointer carries no context size. */
+                Expr *lam = ie->kind == EXPR_IDENT
+                    ? scope_lookup_lambda_init(ctx->scope, ie->ident.name) : NULL;
+                if (lam && lam->func.capture_count == 0) {
+                    diag_error(e->loc, "closure captures nothing — a non-capturing "
+                        "function has no lifetime restriction and needs no heap "
+                        "allocation");
+                    e->type = type_error();
+                    return e->type;
+                }
+                if (lam) {
+                    e->alloc_expr.closure_src = lam;
+                    e->type = type_option(ctx->arena, t);
+                    e->prov = PROV_HEAP;
+                    return e->type;
+                }
+                diag_error(e->loc, "alloc of a function value requires a capturing "
+                    "lambda literal or an immutable let bound directly to one — "
+                    "any other function value's context layout is unknown here");
+                e->type = type_error();
+                return e->type;
+            }
 
             /* alloc(c"literal") → cstr? */
             if (ie->kind == EXPR_CSTRING_LIT) {

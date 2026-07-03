@@ -1,0 +1,11 @@
+// alloc(f) resolves through shadowing like any name: the innermost binding's
+// lambda supplies the context layout.
+let main = (args: str[]) ->
+    let a = 1
+    let f = (x: i32) -> x + a
+    let b = 100
+    let f = (x: i32) -> x + b     // shadows: different capture set
+    let g = alloc(f)!
+    assert(g(1) == 101)
+    free(g)
+    0

@@ -1,0 +1,19 @@
+// The composed idiom: shared mutable state lives in an explicit heap cell,
+// the heap closure captures the pointer. Freeing the closure frees only its
+// context — the cell is freed separately by its owner.
+let make_counter = (cell: i32*) ->
+    let tick = () ->
+        *cell = *cell + 1
+        *cell
+    alloc(tick)!
+
+let main = (args: str[]) ->
+    let cell = alloc(i32)!
+    *cell = 10
+    let c = make_counter(cell)
+    assert(c() == 11)
+    assert(c() == 12)
+    assert(*cell == 12)
+    free(c)
+    free(cell)
+    0

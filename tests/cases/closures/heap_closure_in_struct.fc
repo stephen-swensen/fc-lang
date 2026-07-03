@@ -1,0 +1,20 @@
+// A heap closure has heap provenance, so it may be stored in heap-allocated
+// structs — both in the struct literal and by field assignment.
+struct handler =
+    id: i32
+    cb: (i32) -> i32
+
+let make_handler = (id: i32, offset: i32) ->
+    alloc(handler { id = id, cb = alloc((x: i32) -> x + offset)! })!
+
+let main = (args: str[]) ->
+    let h = make_handler(1, 100)
+    assert(h.cb(5) == 105)
+    // replace the callback through field assignment
+    free(h.cb)
+    let k = 3
+    h.cb = alloc((x: i32) -> x * k)!
+    assert(h.cb(5) == 15)
+    free(h.cb)
+    free(h)
+    0

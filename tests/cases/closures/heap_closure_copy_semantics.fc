@@ -1,0 +1,17 @@
+// Copying a heap closure copies the fat pointer: both copies share one
+// context (reference semantics, like any pointer). Function equality compares
+// fn_ptr and ctx, so copies are equal and separately-allocated closures are
+// not — even when built from the same lambda.
+let make = (n: i32) ->
+    alloc((x: i32) -> x + n)!
+
+let main = (args: str[]) ->
+    let a = make(1)
+    let b = a               // copy: shares a's context
+    let c = make(1)         // separate allocation, distinct context
+    assert(a == b)
+    assert(a != c)
+    assert(a(1) == b(1))
+    free(a)                 // frees the context shared by a and b — free once
+    free(c)
+    0

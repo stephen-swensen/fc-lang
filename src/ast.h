@@ -246,6 +246,8 @@ struct Expr {
             const char *codegen_ctx_backing_name; /* hoisted _ctx_<lifted> backing local (capturing lambdas) */
             const char *self_codegen_name; /* non-NULL: self-recursive let binding's codegen name */
             bool self_referenced;          /* set by pass2 if the self name is actually used */
+            bool heap_alloc;               /* set by pass2: alloc(lambda) — context goes to the
+                                              heap at the alloc site, no stack backing hoisted */
             const char **explicit_type_vars;    /* <'a, 'b> prefix, NULL if implicit-only */
             int explicit_type_var_count;
         } func;
@@ -293,6 +295,9 @@ struct Expr {
             Expr *init_expr;      /* init expression for alloc(expr) — NULL for type-only */
             bool alloc_raw;       /* true for alloc(T, N) → T*?, false for alloc(T[N]) → T[]? */
             bool is_stack;        /* true for alloca(...) → dynamic stack, no option, no free */
+            Expr *closure_src;    /* set by pass2 for alloc(f) where f is a local let bound
+                                     to a capturing lambda: the lambda whose context layout
+                                     the heap copy uses (init_expr stays the EXPR_IDENT) */
         } alloc_expr;
 
         /* EXPR_FREE */

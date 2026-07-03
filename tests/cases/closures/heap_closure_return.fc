@@ -1,0 +1,15 @@
+// alloc(lambda) promotes a capturing closure's context to the heap, so the
+// closure may be returned from its creator. Each call produces an independent
+// context; free(f) releases it.
+let make_adder = (n: i32) ->
+    alloc((x: i32) -> x + n)!
+
+let main = (args: str[]) ->
+    let add5 = make_adder(5)
+    let add7 = make_adder(7)
+    assert(add5(3) == 8)
+    assert(add7(3) == 10)
+    assert(add5(0) == 5)
+    free(add5)
+    free(add7)
+    0

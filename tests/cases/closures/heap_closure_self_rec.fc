@@ -1,0 +1,13 @@
+// A self-recursive capturing lambda can be promoted: recursive calls thread
+// the same context, so the heap copy recurses through its own heap context.
+let make_fact = (base: i32) ->
+    let fact = (x: i32) ->
+        if x <= 1 then base else x * fact(x - 1)
+    alloc(fact)!
+
+let main = (args: str[]) ->
+    let f = make_fact(2)
+    assert(f(1) == 2)
+    assert(f(4) == 48)      // 4*3*2*base = 48
+    free(f)
+    0

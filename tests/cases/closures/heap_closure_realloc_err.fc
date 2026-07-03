@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let n = 5
+    let f = alloc((x: i32) -> x + n)!
+    let g = alloc(f)!
+    free(f)
+    0
