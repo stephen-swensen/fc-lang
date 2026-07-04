@@ -1744,6 +1744,8 @@ if condition then
 
 `match` is an expression. The compiler enforces exhaustiveness — all variants must be covered. Inside a match, variant names may be used unqualified since the type is known from the match subject. All arms must return the same type. Match arms are canonically aligned at the same column as the `match` keyword — the lexer treats `|` as a same-level delimiter; indenting the arms deeper than `match` is also accepted.
 
+> **Each arm starts its own line — by design, not by accident.** There is no inline (single-line) match form, because `|` already carries two other meanings: infix bitwise OR in expressions and the or-pattern combinator in patterns. The line-start position is what marks a `|` as an arm delimiter; mid-line, `v | 1` in an arm body is unambiguously bitwise OR. An F#-style inline `match … with | a -> x | b -> y` is only unambiguous in languages where `|` is not an operator (F# spells bitwise OR `|||`, OCaml `lor`); FC keeps C's `|`, so it keeps the layout rule.
+
 ```fc
 match s with
 | circle(r)    -> 3.14159 * r * r
