@@ -186,10 +186,15 @@ priced in the spec.)
   exhaustiveness-checked — you always need `_`. Pure-FC code has unions, so this only
   bites interop-heavy code; acceptable, but one of FC's headline safety features
   (exhaustive match) goes dark exactly where C values enter.
-- **Numeric option bridging.** `i32?` not widening to `i64?` is representation-honest,
+- **Numeric option bridging.** ✅ RESOLVED 2026-07-03 (example fixed; limitation kept).
+  `i32?` not widening to `i64?` is representation-honest,
   but the prescribed bridge (`if x.is_some then some((i64) x!) else none(i64)`) is clunky
   enough that people will write helper functions per type pair. Genuinely rare, but the
   spec's own workaround is the least pleasant line in it.
+  *Resolution: the limitation stands, but the spec's bridge example now shows the
+  idiomatic form — `match x with | some(v) -> some((i64) v) | none -> none(i64)`.
+  The `is_some`/`!` chain is an anti-pattern where a match does the job; `!` is for
+  cases where matching is genuinely not an option.*
 - **Unicode posture is implicit.** `str` is bytes, `char` is a byte — a defensible
   systems-language answer (it's C's), but the spec never *says* "FC strings are byte
   strings; UTF-8 is a convention of the data, not the type." One paragraph would prevent
