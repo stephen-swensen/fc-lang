@@ -1,0 +1,27 @@
+// Surface forms of checked string-truncation governance with fitting sources:
+// inline, block, cstr-result interpolation, and the alloc heap home.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let s = "hello"
+
+    // inline form
+    let c1 = checked (cstr[8]) s
+    assert(((str) c1) == "hello")
+
+    // block form: value is the last expression
+    let bl = checked
+        let t = "%.5s{s}!"
+        t.len + 0
+    assert(bl == 6)
+
+    // cstr-result interpolation under checked
+    let cr = checked c"v=%.5s{s}"
+    assert(c.strlen(cr) == 7usize)
+
+    // alloc home with a fitting precision segment
+    let h = checked alloc("u=%.5s{s}")!
+    assert(h == "u=hello")
+    free(h)
+    0

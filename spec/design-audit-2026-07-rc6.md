@@ -124,6 +124,19 @@ aborting while a string cast clips is two answers to the same question. Worth a
 deliberate look — even if the resolution is just documenting why strings get strlcpy
 semantics and arrays don't.
 
+*✅ RESOLVED 2026-07-03: `checked` now governs the two truncating string forms —
+`checked (cstr[N]) s` and a `checked` interpolation with a `%.Ns` segment abort
+(`fc_trunc`, "string truncation in …: len=… max=…") instead of clipping; defaults
+unchanged (silent clip, printf/strlcpy semantics). This closes the real gap: string
+clipping was the only *defined* data loss the overflow axis didn't govern (narrowing
+casts already sat there). The remaining default asymmetry is now documented as
+principled (spec §Fixed arrays → Assignment): operations that spell their bound at
+the use site clip to it; `=` into a fixed-array field spells no bound and a clipped
+zero-filled binary copy would be indistinguishable from a short source — so its
+length check is a guard, like slice bounds; clip deliberately via subslice
+(`p.data = msg[0..n]`). Spec §Checked arithmetic; tests `checked/trunc_*`,
+`generics/generic_checked_trunc*`.*
+
 ### 5. Cast noise at the i64/usize boundary
 
 `slice.len` as `i64` is well-argued — but the spec's own examples show the cost: the
@@ -220,6 +233,8 @@ may store this pointer") would be more in FC's spirit than whole-program analysi
    language's vocabulary. ✅ RESOLVED 2026-07-03 (see item 2 above).
 3. **The markers-in-generics spec gap** — cheap to specify now, annoying to retrofit.
 4. **The truncation-consistency question and the mutability-seam documentation.**
+   ✅ Truncation half RESOLVED 2026-07-03 (see item 4 above); the mutability-seam
+   documentation (item 3) remains open.
 
 Everything else on the friction list is priced-in trade-offs that the spec defends
 adequately. The language's identity — "the discipline required to take the ML surface

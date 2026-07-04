@@ -1,0 +1,12 @@
+// A checked (cstr[N]) truncation aborts inside a monomorphized generic body
+// exactly as in a plain function.
+let clip = (x: 'a) ->
+    let label = "hello"
+    let cs = checked (cstr[4]) label   // len 5 > max 3 -> abort
+    let _ = cs
+    x
+
+let main = (args: str[]) ->
+    let _ = clip(1i32)
+    assert(false)   // not reached
+    0

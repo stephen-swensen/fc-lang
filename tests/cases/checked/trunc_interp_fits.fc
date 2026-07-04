@@ -1,0 +1,24 @@
+// Fitting sources leave checked %.Ns segments unchanged, including the
+// len == precision boundary (both operand kinds) and %.0s of an empty source.
+let main = (args: str[]) ->
+    let name = "hello"
+
+    // str operand: len == prec is the largest fitting source
+    let a = checked "u=%.5s{name}"
+    assert(a == "u=hello")
+
+    // shorter than prec
+    let b = checked "u=%.9s{name}"
+    assert(b == "u=hello")
+
+    // cstr operand at the boundary (NUL found inside the probed prec+1 bytes)
+    let cc = c"abc"
+    let d = checked "w=%.3s{cc}"
+    assert(d == "w=abc")
+
+    // %.0s of an empty source fits (anything longer would abort)
+    let e = ""
+    let z = checked "v=%.0s{e}"
+    assert(z == "v=")
+    assert(z.len == 2)
+    0

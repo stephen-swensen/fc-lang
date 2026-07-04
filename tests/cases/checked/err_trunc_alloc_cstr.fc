@@ -1,0 +1,7 @@
+// The alloc/alloca (cstr) homes are non-truncating (buffer sized to the
+// source), so `checked` has nothing to govern over one: redundant marker.
+let main = (args: str[]) ->
+    let s = "hello"
+    let cs = checked alloca((cstr) s)
+    let _ = cs
+    0

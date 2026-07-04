@@ -2864,14 +2864,18 @@ static bool expr_node_is_governed_guard(Expr *e) {
     }
 }
 
-/* Is this node one of the integer-overflow operations that `checked` governs?
+/* Is this node one of the data-loss operations that `checked` governs?
    Checked post-typecheck, so operand/result types are populated. Must stay in
    lockstep with the gated codegen sites.
      - `+ - *`: signed AND unsigned (unsigned wrap is trapped under checked too).
      - signed `/`: the INT_MIN/-1 case (unsigned `/` never overflows; `%` never).
      - signed unary `-`: INT_MIN negation.
      - integer→integer narrowing cast that can lose information (not a lossless
-       widen). float→int is NOT here — it lives on the guard axis (C-UB saturation). */
+       widen). float→int is NOT here — it lives on the guard axis (C-UB saturation).
+     - the two truncating string forms — a bounded `(cstr[N])` cast and a `%s`
+       interp segment with an explicit precision — whose silent clip is defined
+       data loss, same axis as a narrowing cast. (The non-truncating homes,
+       alloc/alloca-licensed casts and unbounded-wrapped interps, are not here.) */
 static bool expr_node_is_governed_overflow(Expr *e) {
     switch (e->kind) {
     case EXPR_BINARY:
@@ -2885,10 +2889,16 @@ static bool expr_node_is_governed_overflow(Expr *e) {
         return e->unary_prefix.op == TOK_MINUS &&
                type_maybe_signed(e->type);
     case EXPR_CAST: {
+        if (e->cast.buffer_size > 0) return true;   /* (cstr[N]): clips past N-1 */
         Type *from = e->cast.operand->type, *to = e->cast.target;
         return from && to && type_is_integer(from) && type_is_integer(to) &&
                !type_can_widen(from, to);   /* potentially-lossy narrowing */
     }
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (interp_seg_trunc_prec(&e->interp_string.segments[i]) >= 0)
+                return true;                        /* %.Ns: clips past N */
+        return false;
     default:
         return false;
     }
@@ -4623,8 +4633,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             } else if (!subtree_has_governed_effect(e->guard.body, overflow_axis)) {
                 if (overflow_axis)
                     diag_error(e->loc,
-                        "redundant '%s': no integer operation that can overflow "
-                        "(+, -, *, signed /, signed negation, or lossy narrowing cast) to %s",
+                        "redundant '%s': no operation that can overflow or truncate "
+                        "(+, -, *, signed /, signed negation, lossy narrowing cast, "
+                        "(cstr[N]) cast, or %%s segment with a precision) to %s",
                         e->guard.enable ? "checked" : "unchecked",
                         e->guard.enable ? "check" : "leave unchecked");
                 else

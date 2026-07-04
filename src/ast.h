@@ -542,6 +542,13 @@ typedef struct Program {
  * emitter uses (the two can never disagree on what counts as bounded). */
 bool interp_is_runtime_sized(const struct Expr *e);
 
+/* Explicit truncating precision of a `%s` format segment (>= 0), or -1 when the
+ * segment is literal, non-%s, or unbounded. A precision hard-caps the segment's
+ * bytes (printf semantics), so these segments are governed by the overflow axis
+ * (`checked` aborts instead of clipping). Defined in codegen.c beside the format
+ * -spec parser so pass2 and the emitter share one notion of "truncating". */
+int interp_seg_trunc_prec(const struct InterpSegment *seg);
+
 /* Pointer-value null-status predicates for null-sentinel options (T*?, any*?,
  * cstr?), where none is represented by a null pointer. provably_nonnull is true
  * only when a value can never be null (codegen elides the some() null-guard);

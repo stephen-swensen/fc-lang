@@ -1,0 +1,22 @@
+// A (cstr[N]) cast whose source fits (len <= N-1) is unchanged under checked:
+// no abort, same copy + NUL as the default form.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let s = "hello"
+
+    // exact fit: len == N-1 (the largest source that does not truncate)
+    let c1 = checked (cstr[6]) s
+    assert(c.strlen(c1) == 5usize)
+    assert(((str) c1) == "hello")
+
+    // roomy fit
+    let c2 = checked (cstr[16]) s
+    assert(((str) c2) == "hello")
+
+    // empty source always fits
+    let e = ""
+    let c3 = checked (cstr[4]) e
+    assert(c.strlen(c3) == 0usize)
+    0

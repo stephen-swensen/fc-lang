@@ -1,0 +1,18 @@
+// checked string-truncation governance inside a generic body: the operands
+// are always concretely typed (never type vars), so the marker is governed in
+// every monomorphized instance and fitting sources pass at each instantiation.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let describe = (xs: 'a[]) ->
+    let label = "len"
+    let cs = checked (cstr[8]) label                   // fits: 3 <= 7
+    let msg = checked "%.3s{label}=%d{(i32) xs.len}"   // boundary: len == prec
+    (i64) c.strlen(cs) + (i64) msg.len
+
+let main = (args: str[]) ->
+    let ints = i32[2] { 5, 6 }
+    let longs = i64[3] { 5i64, 6i64, 7i64 }
+    assert(describe(ints) == 3i64 + 5i64)    // "len" + "len=2"  ('a = i32)
+    assert(describe(longs) == 3i64 + 5i64)   // "len" + "len=3"  ('a = i64)
+    0

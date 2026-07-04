@@ -117,6 +117,7 @@ static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
 static bool type_valueless(Type *t);
 static bool interp_const_buffer_size(Expr *e, int64_t *out_size);
+static void emit_c_escaped(const char *text, int len, FILE *out);
 
 /* C name of a lifted lambda: pass2's lifted_name, plus the active
  * generic-instance suffix (see g_lambda_suffix). */
@@ -1717,6 +1718,19 @@ static void parse_format_width_prec(const char *text,
     }
 }
 
+/* Explicit truncating precision of a format segment: the precision (>= 0) when
+ * this is a non-literal `%s` segment carrying one, else -1. A precision on %s
+ * is a hard cap on the emitted bytes (printf semantics), so these are exactly
+ * the interpolation segments the overflow axis governs (`checked` turns the
+ * silent clip into an abort). Defined here, next to the spec parser, so pass2's
+ * governed-op test and the emission gate can never disagree. */
+int interp_seg_trunc_prec(const InterpSegment *seg) {
+    if (seg->is_literal || seg->conversion != 's') return -1;
+    int width = 0, precision = -1;
+    parse_format_width_prec(seg->text, &width, &precision);
+    return precision;
+}
+
 /* Bytes a literal segment contributes to the formatted output: each `%%` folds
  * to one `%`, and a backslash escape counts as the single byte it denotes. */
 static int interp_literal_len(InterpSegment *seg) {
@@ -1880,6 +1894,38 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
         emit_expr(segs[i].expr, out);
         fprintf(out, "; ");
         k++;
+    }
+
+    /* Under `checked`, a precision-bounded %s segment aborts instead of
+     * clipping — the clip is defined data loss on the overflow axis. Lockstep
+     * with pass2's expr_node_is_governed_overflow (EXPR_INTERP_STRING arm).
+     * A str segment reads its fat-pointer length; a cstr segment probes the
+     * first prec+1 bytes for the NUL (bounded scan — no full strlen on the hot
+     * path) and pays the strlen only in the aborting branch. */
+    if (g_overflow_checked) {
+        for (int i = 0, k = 0; i < seg_count; i++) {
+            if (segs[i].is_literal || segs[i].conversion == 'T') continue;
+            int prec = interp_seg_trunc_prec(&segs[i]);
+            if (prec >= 0) {
+                SrcLoc sl = segs[i].expr->loc;
+                const char *fn = sl.filename ? sl.filename : "<unknown>";
+                Type *st = segs[i].expr->type;
+                if (st && is_str_type(st)) {
+                    fprintf(out, "if (_sg%d_%d.len > (int64_t)%d) fc_trunc(\"",
+                            tid, k, prec);
+                    emit_c_escaped(fn, (int)strlen(fn), out);
+                    fprintf(out, "\", %d, \"%%.%ds segment\", (long long)_sg%d_%d.len, %d); ",
+                            sl.line, prec, tid, k, prec);
+                } else {
+                    fprintf(out, "if (!memchr(_sg%d_%d, 0, %d)) fc_trunc(\"",
+                            tid, k, prec + 1);
+                    emit_c_escaped(fn, (int)strlen(fn), out);
+                    fprintf(out, "\", %d, \"%%.%ds segment\", (long long)strlen((const char*)_sg%d_%d), %d); ",
+                            sl.line, prec, tid, k, prec);
+                }
+            }
+            k++;
+        }
     }
 
     /* Compute buffer size expression. The buffer must be guaranteed large
@@ -2967,6 +3013,16 @@ static void emit_expr(Expr *e, FILE *out) {
                 const char *bk = e->cast.codegen_backing_name;
                 fprintf(out, "({ fc_str _sc%d = ", tid);
                 emit_expr(e->cast.operand, out);
+                if (g_overflow_checked) {
+                    /* `checked`: the clip is defined data loss on the overflow
+                     * axis — abort instead of truncating. Lockstep with pass2's
+                     * expr_node_is_governed_overflow (cstr[N] arm). */
+                    const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+                    fprintf(out, "; if (_sc%d.len > %d) fc_trunc(\"", tid, n - 1);
+                    emit_c_escaped(fn, (int)strlen(fn), out);
+                    fprintf(out, "\", %d, \"(cstr[%d]) cast\", (long long)_sc%d.len, %d)",
+                            e->loc.line, n, tid, n - 1);
+                }
                 fprintf(out, "; int64_t _cn%d = _sc%d.len < %d ? _sc%d.len : %d",
                         tid, tid, n - 1, tid, n - 1);
                 fprintf(out, "; memcpy(%s, _sc%d.ptr, fc_to_size(_cn%d))", bk, tid, tid);
@@ -6422,6 +6478,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "static void fc_overflow(const char *file, int line, const char *what) {\n"
             "    fprintf(stderr, \"%%s:%%d: integer overflow in %%s\\n\", file, line, what);\n"
             "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_trunc(const char *file, int line, const char *what, long long len, long long max) {\n"
+            "    fprintf(stderr, \"%%s:%%d: string truncation in %%s: len=%%lld max=%%lld\\n\",\n"
+            "            file, line, what, len, max);\n"
+            "    FC_ABORT();\n"
             "}\n");
         /* Register the helpers as skip-entries so their frames don't pollute
          * the user-visible backtrace when a bounds check fires. */
@@ -6430,6 +6492,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         symmap_add("fc_neg_len", NULL, "<runtime>", 0);
         symmap_add("fc_null_some", NULL, "<runtime>", 0);
         symmap_add("fc_overflow", NULL, "<runtime>", 0);
+        symmap_add("fc_trunc", NULL, "<runtime>", 0);
     }
 
     /* Collect all slice, option, function, and eq types used in the program */

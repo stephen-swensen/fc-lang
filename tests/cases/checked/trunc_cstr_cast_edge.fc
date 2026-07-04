@@ -1,0 +1,7 @@
+// Boundary: len == N is the smallest (cstr[N]) overflow (payload capacity is
+// N-1 bytes; the last slot is the NUL) -> aborts under checked.
+let main = (args: str[]) ->
+    let s = "hell"
+    let _ = checked (cstr[4]) s   // len 4 > max 3 -> abort
+    assert(false)   // not reached
+    0

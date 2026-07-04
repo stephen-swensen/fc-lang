@@ -1,0 +1,9 @@
+// A precision segment clips even under alloc (the heap home licenses only a
+// runtime-sized buffer, it does not lift a segment's explicit cap), so
+// checked governs it there too.
+let main = (args: str[]) ->
+    let name = "hello world"
+    let h = checked alloc("user=%.5s{name}")!   // len 11 > max 5 -> abort
+    free(h)
+    assert(false)   // not reached
+    0

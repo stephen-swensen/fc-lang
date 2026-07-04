@@ -1,0 +1,16 @@
+// `unchecked` inside a checked region restores the silent clip for both
+// truncating string forms while the surrounding region stays checked.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let s = "hello"
+    let r = checked
+        let clipped = unchecked (cstr[4]) s    // silent clip -> "hel"
+        let line = unchecked "u=%.3s{s}"       // silent clip -> "u=hel"
+        assert(((str) clipped) == "hel")
+        assert(line == "u=hel")
+        // narrowing cast + add keep the outer `checked` non-redundant
+        (i32) c.strlen(clipped) + (i32) line.len
+    assert(r == 3 + 5)
+    0

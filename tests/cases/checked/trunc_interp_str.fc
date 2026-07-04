@@ -1,0 +1,7 @@
+// `checked` aborts a %.Ns segment whose str source is longer than the
+// precision instead of clipping (printf clipping stays the default).
+let main = (args: str[]) ->
+    let name = "hello world"
+    let _ = checked "user=%.5s{name}"   // len 11 > max 5 -> abort
+    assert(false)   // not reached
+    0

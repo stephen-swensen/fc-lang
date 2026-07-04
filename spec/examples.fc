@@ -244,6 +244,11 @@ let main = (args: str[]) ->
         let w = unchecked (127i8 + 1i8)      // intentional wrap to -128 inside a checked region
         w + 0i8                              // a checked op keeps `checked` non-redundant
     assert(wrapped == -128i8)
+    // `checked` also governs the truncating string forms: (cstr[N]) and %.Ns
+    // clip silently by default, and abort under checked when the source is longer.
+    let word = "hello"
+    let bounded = checked "%.5s{word}"       // fits (len == precision); would abort past 5
+    assert(bounded == "hello")
 
     // --------------------------------------------------------
     // If expressions — branches produce values

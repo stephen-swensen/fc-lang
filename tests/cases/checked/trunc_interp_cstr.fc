@@ -1,0 +1,7 @@
+// The %.Ns checked abort also covers a cstr segment operand (the emitted
+// guard probes for the NUL in the first N+1 bytes instead of reading .len).
+let main = (args: str[]) ->
+    let c = c"hello world"
+    let _ = checked "user=%.5s{c}"   // strlen 11 > max 5 -> abort
+    assert(false)   // not reached
+    0

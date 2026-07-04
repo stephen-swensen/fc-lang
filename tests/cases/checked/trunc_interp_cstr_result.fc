@@ -1,0 +1,7 @@
+// The governance is per-segment, independent of the interpolation's result
+// type: a c"..." (cstr-producing) interpolation aborts the same way.
+let main = (args: str[]) ->
+    let name = "hello world"
+    let _ = checked c"user=%.5s{name}"   // len 11 > max 5 -> abort
+    assert(false)   // not reached
+    0
