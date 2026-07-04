@@ -115,6 +115,22 @@ the core model most likely to generate recurring user confusion, and the spec mi
 benefit from confronting the `p.x = 10` / `&p` asymmetry head-on rather than in separate
 sections.
 
+*✅ RESOLVED 2026-07-03 (documentation): new spec passage §let and let mut → "One rule,
+three knobs" confronts the asymmetry in one place — the keyword governs the binding,
+contents are always assignable; addressability tracks reassignability (`*pp = v` is
+reassignment through an alias) and capturability is its complement (a copy of a
+reassignable binding would go stale). Reframed per user: the audit's "ML people expect
+`let` to freeze contents" was overstated — F# is the precedent, and its triple matches
+FC exactly (`let`/`let mutable` reassignment split, `&x` requires mutable, mutable
+locals uncapturable/FS0407, record `mutable` fields assignable through immutable
+bindings). FC's real divergence from ML is only the flipped default: no per-field
+immutability opt-in; `const T*`/`const T[]` views recover read-only-ness at access-path
+boundaries. Acknowledged in-spec as a deliberate omission (no frozen-contents value
+binding); `const` value bindings noted here as the natural extension point if demand
+ever materializes — declined for now (no demand, rc-stage). Also fixed the misleading
+"Value-level immutability is handled by `let`" line in §The const qualifier and added
+the reassignment-through-alias rationale to §Address-of. No rule changes.*
+
 ### 4. Truncation-consistency wobble
 
 FC's general stance is "trap on data loss" (fixed-array field assignment *aborts* when
@@ -233,8 +249,7 @@ may store this pointer") would be more in FC's spirit than whole-program analysi
    language's vocabulary. ✅ RESOLVED 2026-07-03 (see item 2 above).
 3. **The markers-in-generics spec gap** — cheap to specify now, annoying to retrofit.
 4. **The truncation-consistency question and the mutability-seam documentation.**
-   ✅ Truncation half RESOLVED 2026-07-03 (see item 4 above); the mutability-seam
-   documentation (item 3) remains open.
+   ✅ Both halves RESOLVED 2026-07-03 (see items 3 and 4 above).
 
 Everything else on the friction list is priced-in trade-offs that the spec defends
 adequately. The language's identity — "the discipline required to take the ML surface

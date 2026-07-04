@@ -1038,10 +1038,10 @@ Overflow detection is **deterministic**, independent of optimization level — F
 
 ## let and let mut
 
-| Keyword | Terminology | Reassignable | Addressable | Capturable in closure |
-|---------|-------------|---------|-------------|-----------------------|
-| let | let binding | no | no | yes — captured by copy |
-| let mut | mutable let binding | yes | yes | no |
+| Keyword | Terminology | Reassignable | Addressable | Contents assignable | Capturable in closure |
+|---------|-------------|---------|-------------|---------------------|-----------------------|
+| let | let binding | no | no | yes | yes — captured by copy |
+| let mut | mutable let binding | yes | yes | yes | no |
 
 All bindings must be initialized at declaration. Types are always inferred — there are no explicit type annotations on bindings.
 
@@ -1099,6 +1099,25 @@ q = point { x = 5.0, y = 6.0 }   // ok — reassigning q to a new value
 
 This is consistent with the pointer rule — writing through a `let` binding pointer (`*px = 99`) is valid because you are not changing the pointer, you are changing what it points to.
 
+#### One rule, three knobs
+
+A binding appears to have three separate mutability properties — reassignability, addressability, and content mutability (the table at §let and let mut). They are assigned by one rule: **the keyword governs the *binding*; the contents of the bound value are always assignable.** The two derived columns follow from reassignability:
+
+- **Addressability tracks reassignability.** A pointer to a binding is reassignment by another name — `*pp = v` writes the whole value, which is exactly what `let` forbids — so `&p` on a `let` would reopen the door the keyword closed. Only `let mut` is addressable (§Address-of).
+- **Capturability is its complement.** Capture is by copy, and a copy of a binding that can still be reassigned would silently go stale. A `let` can never be reassigned, so its captured copy stays honest; a `let mut` cannot be captured — capture a pointer to it instead (§Closures & Capture).
+
+The pairing this produces surprises readers from both of FC's parent traditions, in opposite directions, so it is worth stating head-on: **you can write a field of `p` that you cannot point at.**
+
+```fc
+let p = point { x = 1.0, y = 2.0 }
+p.x = 3.0     // ok — mutates the value
+// &p         // compile error — would permit *pp = v, i.e. reassigning p
+```
+
+This is not a contradiction: `p.x = v` operates on the *value*, while `&p` and `p = v` operate on the *binding*. The triple is precisely F#'s. There, `let` vs `let mutable` splits reassignment the same way; `&x` likewise requires a mutable local; mutable locals likewise cannot be captured by closures (F# directs you to a heap `ref` cell where FC directs you to capturing a pointer); and a record field declared `mutable` is assignable through an immutable binding — `let p = {...}` then `p.X <- 10` — exactly as every FC field is.
+
+Where FC departs from the ML school is only the default: OCaml and F# freeze record fields unless a field opts in with `mutable`, while FC follows C — every field of every struct is assignable, with no per-field opt-out. The `const` qualifier (below) recovers content-immutability at the pointer/slice boundary: `const T*` / `const T[]` are read-only *views* through which no write compiles, deeply (§Deep const). But a view is a property of an access path, not of the data — FC has no way to declare a struct binding or field whose contents are frozen everywhere. That is a deliberate omission, not an oversight: systems code initializes, patches, and reuses structures in place, and where a read-only guarantee matters it is at a boundary — an API handing out access to data it owns — which is exactly where a `const` view sits.
+
 ### The const qualifier
 
 `let` vs `let mut` controls whether a *binding* can be reassigned. The `const` qualifier controls whether data can be *written through* a pointer or slice. These are orthogonal:
@@ -1118,7 +1137,7 @@ const cstr       // read-only C string (alias for const u8*)
 const any*       // read-only opaque pointer (maps to const void* in C)
 ```
 
-`const` is not valid on bare value types — `const i32` is a compile error. Value-level immutability is handled by `let`.
+`const` is not valid on bare value types — `const i32` is a compile error. A value binding needs no qualifier to prevent reassignment (that is `let`), and FC has no frozen-*contents* value binding (§One rule, three knobs) — a read-only view of a value is expressed at the pointer/slice boundary.
 
 #### Const sources
 
@@ -2799,7 +2818,7 @@ This is why `any*` is a valid and faithful representation of an opaque C handle:
 
 ### Address-of
 
-Only `let mut` bindings have addresses. You cannot take the address of a `let` binding.
+Only `let mut` bindings have addresses. You cannot take the address of a `let` binding: writing through the pointer (`*pp = v`) would reassign the binding through an alias — the very thing `let` forbids (§One rule, three knobs). Note this is a rule about the *binding*, not the value: fields of a `let` struct are assignable (`p.x = 10`) even though `&p` is not available.
 
 ```fc
 let mut x = 42
