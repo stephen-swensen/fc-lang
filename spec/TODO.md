@@ -75,6 +75,58 @@ assert). Spec work extends the RMW section from the `fetch_add` item: exchange a
 are acq_rel RMWs in the cell's total modification order; CAS-failure is an acquire load with
 no store.
 
+## `&` on `let` bindings yielding `const T*` — read-only address-of
+
+Today `&p` requires `let mut` (§Address-of): a `T*` permits `*pp = v`, which is reassignment
+through an alias — the very thing `let` forbids. But that argument doesn't apply to a pointer
+that forecloses the write. The extension: **`&p` on a `let` binding yields `const T*`** (on a
+`let mut` it stays `T*`, unchanged). This is Rust's `&`/`&mut` split minus the borrow checker,
+and C++'s address-of-const, expressed with machinery FC already has.
+
+**The friction it removes** (real demand — felt in practice) is the *false-`mut` tax*: needing
+a pointer for plumbing reasons, not mutation, and having to declare `let mut` to get one. The
+`mut` is dishonest in the source, and in FC it costs something concrete — `let mut` is
+uncapturable, so promoting a binding just to take its address poisons its capturability for
+every closure in scope. The cases that hit it:
+
+- **Extern calls with `const T*` parameters** — the sharpest case; C fixed the signature
+  (`nanosleep(const struct timespec*, …)`, `sigaction`, `setsockopt`, `init(const config*)`
+  library entry points), so by-reference is not FC's choice to make.
+- **Big-struct helpers** — `(cfg: const config*)` to skip the by-value copy; today the caller
+  pays a copy into a `let mut` to get the pointer that avoids copies.
+- **Constraint/comparator functions in generics** — the passed-function constraint style wants
+  `(a: const T*, b: const T*) -> bool` for large `T`; only ergonomic if immutable data is
+  pointable.
+- **Read-only views at API boundaries** — hand `&table` to subroutines that consume it during
+  the call; the single-value analog of the `const T[]` slice-view story.
+
+**Why it's consistent and safe.** The "One rule, three knobs" derivation is untouched:
+addressability tracked reassignability because of `*pp = v`, and `const` deep-rejects every
+write through the pointer (§Deep const, §Write rejection), so nothing reachable through `&p`
+can reassign or mutate `p`. Escape analysis needs nothing new — the result is `PROV_STACK`
+like any address-of, same lifetime rules. `T*` already coerces to `const T*` (§Implicit
+coercion), so callee signatures compose. Additive and non-breaking: `&p` on `let` goes from
+compile error to `const T*`; no existing program changes meaning. Implementation is small:
+pass2's address-of check produces a const pointer type instead of erroring; codegen's `&` is
+unchanged.
+
+**Design questions to settle before shipping:**
+
+- **Observability, stated plainly in the spec:** `const T*` means no writes *through this
+  pointer*, not "nobody writes" — a const view of `p` still observes `p.x = 10` performed
+  through the binding. C's meaning of const, consistent with FC's existing const views.
+- **Field address-of:** does `&p.field` on a `let` struct also yield `const F*`? Symmetry says
+  yes (it's a smaller view of the same read-only aliasing); whatever the answer, the existing
+  carve-outs stay (`&s.fixed_array` error, packed/bit-field restrictions).
+- **Function bindings:** `&f` (C function pointer extraction) keeps its own rule — `let mut` +
+  non-capturing (§Address-of). A `const`-qualified C function pointer isn't a meaningful
+  interop artifact; decide explicitly that `&f` on a `let` lambda stays an error rather than
+  falling through to the new rule.
+- **Capturability interaction:** the binding stays capturable (that's half the point), and the
+  resulting `const T*` is itself an ordinary pointer value a closure may capture by copy —
+  confirm the capture-a-pointer idiom composes (it should: same as capturing any `let` pointer,
+  programmer owns the lifetime).
+
 ---
 
 ## Editor / LSP server (`fcc --lsp`)
