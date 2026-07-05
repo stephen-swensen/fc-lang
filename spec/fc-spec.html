@@ -2975,6 +2975,12 @@ Where the generated C must narrow an `i64` length or size to a platform-width ty
 
 Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
+### Strings are byte strings
+
+`str` is `u8[]` and `char` is `u8`: a string is a sequence of bytes and a `char` is one byte, nothing more. FC assigns no character-encoding semantics to string data. The language does not decode, validate, normalize, or count Unicode code points, and `str.len` is a **byte** count — never a code-point or grapheme count. This is C's string model, stated explicitly rather than left as folklore.
+
+UTF-8 is the conventional encoding for FC text, and the byte model is deliberately friendly to it: because UTF-8 is ASCII-compatible and every byte of a multi-byte sequence has its high bit set (so no ASCII byte ever appears mid-sequence), the byte-oriented operations FC provides — literals, indexing, slicing, concatenation, `==`, and searching for an ASCII delimiter — all work correctly on UTF-8 data with no encoding awareness. But the encoding lives in the *data*, not the *type*. Indexing or sub-slicing at an arbitrary byte offset can split a multi-byte code point, and code-point/grapheme iteration, case folding, and normalization are library concerns (see §std::text), not language ones. A `char` literal likewise holds one byte: `'a'` is fine, but a non-ASCII character that encodes to multiple bytes is not a single `char`.
+
 ### String literals and memory
 
 FC's `str` type makes no null-termination guarantee. A `str` is a fat pointer — a pointer and a length — and the length is the only authority on where the string ends. To pass a string to a C function that expects null termination, use a `(cstr)` cast or a `c"..."` literal.

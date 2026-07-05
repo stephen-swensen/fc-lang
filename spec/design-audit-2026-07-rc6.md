@@ -195,10 +195,15 @@ priced in the spec.)
   idiomatic form — `match x with | some(v) -> some((i64) v) | none -> none(i64)`.
   The `is_some`/`!` chain is an anti-pattern where a match does the job; `!` is for
   cases where matching is genuinely not an option.*
-- **Unicode posture is implicit.** `str` is bytes, `char` is a byte — a defensible
+- **Unicode posture is implicit.** ✅ RESOLVED 2026-07-04. `str` is bytes, `char` is a byte — a defensible
   systems-language answer (it's C's), but the spec never *says* "FC strings are byte
   strings; UTF-8 is a convention of the data, not the type." One paragraph would prevent
   a class of user assumptions.
+  *Resolution: added a "Strings are byte strings" subsection to §Slices & Strings that
+  states the byte-string model outright — `str.len` is a byte count, FC decodes/validates/
+  normalizes nothing, UTF-8 works under byte ops because it is ASCII-compatible, and the
+  encoding lives in the data not the type (arbitrary-offset slicing can split a code point;
+  code-point/grapheme/case/normalization are §std::text concerns).*
 - **Spec gap — context markers × generics.** ✅ RESOLVED 2026-07-03. The redundancy rule says
   `unguarded (a / b)` on floats is a compile error, and generic-body validation is
   deferred to monomorphization. So what happens to `unguarded (a / b)` in a generic body
