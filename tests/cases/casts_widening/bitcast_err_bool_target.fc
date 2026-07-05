@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = bitcast(bool, 1u8)  // bool excluded: not every byte is a valid bool
+    0

@@ -48,6 +48,7 @@ typedef enum {
     EXPR_FREE,
     EXPR_SIZEOF,
     EXPR_ALIGNOF,
+    EXPR_BITCAST,       /* bitcast(T, x) — reinterpret x's bits as scalar type T */
     EXPR_DEFAULT,
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
@@ -308,6 +309,11 @@ struct Expr {
 
         /* EXPR_ALIGNOF */
         struct { Type *target; } alignof_expr;
+
+        /* EXPR_BITCAST — bitcast(T, x): reinterpret x's bytes as scalar type T.
+         * target and operand must be equal-size fixed-width scalars (checked in
+         * pass2); no runtime failure mode, so no guard/checked variant. */
+        struct { Type *target; Expr *operand; } bitcast_expr;
 
         /* EXPR_DEFAULT */
         struct { Type *target; } default_expr;

@@ -1524,6 +1524,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                         }
                         break;
                     case EXPR_CAST: PUSH(ex->cast.operand); break;
+                    case EXPR_BITCAST: PUSH(ex->bitcast_expr.operand); break;
                     case EXPR_SOME: PUSH(ex->some_expr.value); break;
                     case EXPR_STRUCT_LIT:
                         for (int f = 0; f < ex->struct_lit.field_count; f++) { PUSH(ex->struct_lit.fields[f].value); }

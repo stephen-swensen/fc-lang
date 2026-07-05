@@ -47,6 +47,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_FREE]         = "'free'",
     [TOK_SIZEOF]       = "'sizeof'",
     [TOK_ALIGNOF]      = "'alignof'",
+    [TOK_BITCAST]      = "'bitcast'",
     [TOK_DEFAULT]      = "'default'",
     [TOK_ASSERT]       = "'assert'",
     [TOK_ATOMIC_LOAD]  = "'atomic_load_acquire'",

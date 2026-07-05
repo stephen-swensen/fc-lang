@@ -1852,6 +1852,21 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_BITCAST: {
+        /* bitcast(T, x) — a type argument (like sizeof) plus a value (like the
+         * second arg of atomic_store). Reinterprets x's bytes as T. */
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Type *ty = parse_type(p);
+        expect(p, TOK_COMMA);
+        Expr *operand = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_BITCAST, loc);
+        e->bitcast_expr.target = ty;
+        e->bitcast_expr.operand = operand;
+        return e;
+    }
+
     case TOK_DEFAULT: {
         advance_p(p);
         expect(p, TOK_LPAREN);

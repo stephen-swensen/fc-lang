@@ -288,6 +288,8 @@ static bool expr_may_yield_stack(Scope *scope, Expr *e) {
         return scope_lookup_prov(scope, e->ident.name) == PROV_STACK;
     case EXPR_CAST:
         return expr_may_yield_stack(scope, e->cast.operand);
+    case EXPR_BITCAST:
+        return false;   /* scalar result — never a stack pointer */
     case EXPR_GUARD:
         return expr_may_yield_stack(scope, e->guard.body);
     case EXPR_SOME:
@@ -429,6 +431,9 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
         break;
     case EXPR_CAST:
         pretaint_walk(scope, e->cast.operand, changed);
+        break;
+    case EXPR_BITCAST:
+        pretaint_walk(scope, e->bitcast_expr.operand, changed);
         break;
     case EXPR_GUARD:
         pretaint_walk(scope, e->guard.body, changed);
@@ -616,6 +621,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
                                    (e->slice.lo && expr_refs_self(e->slice.lo, self)) ||
                                    (e->slice.hi && expr_refs_self(e->slice.hi, self));
     case EXPR_CAST:         return expr_refs_self(e->cast.operand, self);
+    case EXPR_BITCAST:      return expr_refs_self(e->bitcast_expr.operand, self);
     case EXPR_GUARD:        return expr_refs_self(e->guard.body, self);
     case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
     case EXPR_ASSERT:       return expr_refs_self(e->assert_expr.condition, self);
@@ -2637,6 +2643,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_CAST:
         ok &= validate_generic_body(e->cast.operand, arena, type_params, bindings, ntp, frame);
         break;
+    case EXPR_BITCAST:
+        ok &= validate_generic_body(e->bitcast_expr.operand, arena, type_params, bindings, ntp, frame);
+        break;
     case EXPR_IF:
         ok &= validate_generic_body(e->if_expr.cond, arena, type_params, bindings, ntp, frame);
         ok &= validate_generic_body(e->if_expr.then_body, arena, type_params, bindings, ntp, frame);
@@ -2814,6 +2823,8 @@ static bool expr_contains_control_flow(Expr *e) {
         return expr_contains_control_flow(e->field.object);
     case EXPR_CAST:
         return expr_contains_control_flow(e->cast.operand);
+    case EXPR_BITCAST:
+        return expr_contains_control_flow(e->bitcast_expr.operand);
     case EXPR_SOME:
         return expr_contains_control_flow(e->some_expr.value);
     case EXPR_DEFER:
@@ -2845,6 +2856,24 @@ static bool type_maybe_integer(Type *t) {
 
 static bool type_maybe_signed(Type *t) {
     return t && (type_is_signed(t) || t->kind == TYPE_TYPE_VAR);
+}
+
+/* Byte width of a fixed-width scalar eligible for bitcast, or 0 if the type is
+ * not bitcast-eligible. Eligible = the fixed-width integers (NOT the
+ * target-defined isize/usize), the floats, and char — every one of which has
+ * the property that all bit patterns of its width denote a valid value, which
+ * is what makes bitcast statically total (no runtime failure, no guard axis).
+ * bool is deliberately excluded: a byte other than 0/1 is not a valid bool
+ * representation, so bitcasting *to* bool could fabricate an invalid value. */
+static int bitcast_scalar_bytes(Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_INT8:  case TYPE_UINT8:  case TYPE_CHAR:    return 1;
+    case TYPE_INT16: case TYPE_UINT16:                    return 2;
+    case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: return 4;
+    case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: return 8;
+    default: return 0;
+    }
 }
 
 static bool expr_node_is_governed_guard(Expr *e) {
@@ -2969,6 +2998,8 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
                guard_subtree_has_effect(e->slice.hi);
     case EXPR_CAST:
         return guard_subtree_has_effect(e->cast.operand);
+    case EXPR_BITCAST:
+        return guard_subtree_has_effect(e->bitcast_expr.operand);
     case EXPR_SOME:
         return guard_subtree_has_effect(e->some_expr.value);
     case EXPR_ASSERT:
@@ -5005,6 +5036,39 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
         } else if (type_has_provenance(to))
             e->prov = e->cast.operand->prov;   /* pointer casts preserve provenance */
+        return e->type;
+    }
+
+    case EXPR_BITCAST: {
+        Type *from = check_expr(ctx, e->bitcast_expr.operand);
+        if (type_is_error(from)) { e->type = type_error(); return e->type; }
+        Type *to = resolve_type(ctx, e->bitcast_expr.target);
+        e->bitcast_expr.target = to;
+        int from_bytes = bitcast_scalar_bytes(from);
+        int to_bytes = bitcast_scalar_bytes(to);
+        /* Both sides must be fixed-width scalars (numeric or char, not
+         * isize/usize/bool/pointer/aggregate). Point the diagnostic at whichever
+         * side is ineligible. */
+        if (from_bytes == 0 || to_bytes == 0) {
+            diag_error(e->loc,
+                "bitcast requires fixed-width scalar types (a fixed-width "
+                "integer, float, or char); %s is not one — got bitcast(%s, %s)",
+                to_bytes == 0 ? type_name(to) : type_name(from),
+                type_name(to), type_name(from));
+            e->type = type_error();
+            return e->type;
+        }
+        if (from_bytes != to_bytes) {
+            diag_error(e->loc,
+                "bitcast requires equal-size types: %s is %d byte%s, %s is %d byte%s",
+                type_name(to), to_bytes, to_bytes == 1 ? "" : "s",
+                type_name(from), from_bytes, from_bytes == 1 ? "" : "s");
+            e->type = type_error();
+            return e->type;
+        }
+        /* Size-matched scalar reinterpretation is a pure value with no
+         * provenance and no runtime failure mode. */
+        e->type = to;
         return e->type;
     }
 

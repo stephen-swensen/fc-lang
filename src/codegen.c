@@ -306,6 +306,9 @@ static void collect_hoisted_bindings(Expr *e) {
         }
         collect_hoisted_bindings(e->cast.operand);
         break;
+    case EXPR_BITCAST:
+        collect_hoisted_bindings(e->bitcast_expr.operand);
+        break;
     case EXPR_SOME:
         collect_hoisted_bindings(e->some_expr.value);
         break;
@@ -990,6 +993,7 @@ static bool expr_has_side_effects(Expr *e) {
                expr_has_side_effects(e->slice.lo) ||
                expr_has_side_effects(e->slice.hi);
     case EXPR_CAST: return expr_has_side_effects(e->cast.operand);
+    case EXPR_BITCAST: return expr_has_side_effects(e->bitcast_expr.operand);
     case EXPR_GUARD: return expr_has_side_effects(e->guard.body);
     case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
     case EXPR_INTERP_STRING:
@@ -4085,6 +4089,23 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_BITCAST: {
+        /* Reinterpret the operand's bytes as the target scalar type via a C11
+         * union compound literal — the standard, *defined* type-pun (a
+         * pointer-cast reinterpret is strict-aliasing UB). pass2 has verified
+         * both sides are equal-size fixed-width scalars, so the union has no
+         * padding and reading `.to` yields exactly the operand's bytes. GCC and
+         * clang lower this to a plain register move — genuinely zero cost. */
+        fprintf(out, "(((union { ");
+        emit_type(e->bitcast_expr.operand->type, out);
+        fprintf(out, " from; ");
+        emit_type(e->bitcast_expr.target, out);
+        fprintf(out, " to; }){ .from = ");
+        emit_expr(e->bitcast_expr.operand, out);
+        fprintf(out, " }).to)");
+        break;
+    }
+
     case EXPR_DEFAULT: {
         Type *t = e->default_expr.target;
         switch (t->kind) {
@@ -5052,6 +5073,10 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
         collect_types_in_type(e->cast.target, slices, options, fns);
         collect_types_expr(e->cast.operand, slices, options, fns);
         break;
+    case EXPR_BITCAST:
+        /* target is a scalar (no typedef); walk the operand for nested types */
+        collect_types_expr(e->bitcast_expr.operand, slices, options, fns);
+        break;
     case EXPR_GUARD:
         collect_types_expr(e->guard.body, slices, options, fns);
         break;
@@ -5256,6 +5281,9 @@ static void collect_const_backings(Expr *e) {
     case EXPR_CAST:
         collect_const_backings(e->cast.operand);
         break;
+    case EXPR_BITCAST:
+        collect_const_backings(e->bitcast_expr.operand);
+        break;
     case EXPR_GUARD:
         collect_const_backings(e->guard.body);
         break;
@@ -5365,6 +5393,9 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
         break;
     case EXPR_CAST:
         collect_trampolines_expr(e->cast.operand, ts);
+        break;
+    case EXPR_BITCAST:
+        collect_trampolines_expr(e->bitcast_expr.operand, ts);
         break;
     case EXPR_GUARD:
         collect_trampolines_expr(e->guard.body, ts);
@@ -5492,6 +5523,9 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         break;
     case EXPR_CAST:
         collect_lambdas_expr(e->cast.operand, ls);
+        break;
+    case EXPR_BITCAST:
+        collect_lambdas_expr(e->bitcast_expr.operand, ls);
         break;
     case EXPR_GUARD:
         collect_lambdas_expr(e->guard.body, ls);
@@ -5996,6 +6030,9 @@ static void detect_features_expr(Expr *e) {
         return;
     case EXPR_CAST:
         detect_features_expr(e->cast.operand);
+        return;
+    case EXPR_BITCAST:
+        detect_features_expr(e->bitcast_expr.operand);
         return;
     case EXPR_GUARD:
         /* A `checked` body emits fc_overflow (stderr) on overflow. pass2 rejects a

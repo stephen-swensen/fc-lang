@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let s = "hi"
+    let x = bitcast(u64, s)     // a slice/str is an aggregate, not a scalar
+    x

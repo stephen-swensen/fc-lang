@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let d = 1.0f64
+    let x = bitcast(usize, d)   // usize width is target-defined — not fixed-width
+    x

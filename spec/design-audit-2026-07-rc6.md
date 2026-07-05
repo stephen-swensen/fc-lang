@@ -177,10 +177,19 @@ priced in the spec.)
 - **Atomics RMW set** — already in `spec/TODO.md`; the analysis there (fetch_add →
   exchange → CAS, pointer publication gated on escape rules) is correct and correctly
   sequenced.
-- **Bit reinterpretation.** `f32`↔`u32` bit inspection requires the
-  pointer-cast-through-temporary dance. For a systems language this is a common need
-  (hashing floats, serialization); a `bitcast`-style operation would be zero-cost and
+- **Bit reinterpretation.** ✅ RESOLVED 2026-07-04 (shipped). `f32`↔`u32` bit inspection
+  required the pointer-cast-through-temporary dance. For a systems language this is a common
+  need (hashing floats, serialization); a `bitcast`-style operation would be zero-cost and
   in-spirit. The spec acknowledges the gap; it's worth an eventual answer.
+  *Resolution: shipped a builtin `bitcast(T, x)` (mirrors `sizeof`/`alignof`), scalars-only
+  and fixed-width, with a **static** equal-size check (a mismatch is a compile error, not a
+  runtime guard) and a C11 union type-pun lowering — which also fixes a real bug: the old
+  pointer-cast workaround was strict-aliasing UB that `-O2` may miscompile. `usize`/`isize`
+  and `bool` are excluded (target-dependent width / no invalid-representation guarantee);
+  aggregate bitcast is punted (padding hazard; covered by pointer overlay / explicit
+  shift-packing). Because a size-matched reinterpretation is statically total, `bitcast`
+  sits on neither the checked/unchecked nor the bounded/unbounded axis. See §bitcast in the
+  spec; implementation record in `spec/hist/archived-todos.md`.*
 - **No C-style enum / integer exhaustiveness.** The "module of i32 constants" pattern for
   C enums is fine at the boundary, but matching on such constants can't be
   exhaustiveness-checked — you always need `_`. Pure-FC code has unions, so this only

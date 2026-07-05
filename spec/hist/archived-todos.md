@@ -4,6 +4,46 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## Bit reinterpretation — `bitcast(T, x)` builtin (resolved 2026-07-04)
+
+Closed the design-audit "bit reinterpretation" gap (`spec/design-audit-2026-07-rc6.md`):
+inspecting a value's raw bits across the int/float boundary (hashing an `f32`, serializing
+a float, picking apart sign/exponent/mantissa) had no first-class form. The spec's old
+workaround — `*(u32*)&f` on a `let mut` temporary — was both noisy and **strict-aliasing UB**
+that `-O2` may miscompile.
+
+Shipped as a built-in `bitcast(T, x)`, wired exactly like `sizeof`/`alignof` (`TOK_BITCAST`,
+`EXPR_BITCAST` with a `Type *target` + `Expr *operand`; parser reads a type arg then a
+comma + value). Design (settled in conversation the same day):
+
+- **Scalars only, equal size.** Both sides must be fixed-width scalars — a fixed-width
+  integer, float, or `char` — of equal byte width (`bitcast_scalar_bytes` in `src/pass2.c`
+  encodes eligibility + width in one helper). A size mismatch or an ineligible type is a
+  **compile error**, not a runtime check.
+- **Excludes `isize`/`usize`** (target-defined width would make the size match
+  target-dependent) **and `bool`** (a byte other than 0/1 is not a valid bool, so bitcasting
+  *to* bool could fabricate an invalid value). Every accepted type has the property that all
+  bit patterns of its width are valid — which makes `bitcast` **statically total**: no
+  runtime failure mode, hence **no `checked`/`unguarded` variant** (it sits on neither the
+  guard nor the overflow axis; the distinguishing case vs. the value cast `(u32) f`, which
+  *does* carry a saturation guard).
+- **Lowering:** a C11 union compound-literal type-pun
+  (`(((union { F from; T to; }){ .from = x }).to)`) — the *defined* pun (unlike the pointer
+  cast), which GCC/clang fold to a register move. No `memcpy`/header dependency; no bare
+  `int`, so it is int-width-agnostic for 16-bit targets. Verified defined at `-O2
+  -fstrict-aliasing` on gcc+clang.
+- **Aggregates punted** (padding-indeterminacy hazard). The motivating aggregate uses are
+  covered without a value bitcast: pointer overlay (`(header*) buf.ptr`) for buffers,
+  explicit shift-packing for struct→int. Revisit behind a no-padding check only if a
+  concrete need appears.
+
+Walk sites updated across pass1/pass2/monomorph/codegen/lsp (mirroring `EXPR_CAST`); a
+`bitcast` `BUILTIN_DOCS` hover entry + keyword-completion entry added. Spec: §Casts points
+to a new §bitcast; `spec/examples.fc` gains a demo. Tests in `tests/cases/casts_widening/`:
+`bitcast_float_int`, `bitcast_int_reinterpret`, `bitcast_special_floats`, plus six `.error`
+cases (size mismatch, bool source/target, `usize`, pointer, slice). A type-var operand in a
+generic body is cleanly rejected (not supported; not a crash). 1762 tests green gcc+clang.
+
 ## Latent bug — lambdas with type-var types in generic bodies (resolved 2026-07-03)
 
 Discovered 2026-07-03 while implementing heap closures. A lambda inside a generic function

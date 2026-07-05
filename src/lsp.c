@@ -399,6 +399,17 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
       "The alignment requirement of type `T` in bytes, as an `i64` (lowers to "
       "`(int64_t)_Alignof(T)`). The address of any `T` value is a multiple of this." },
 
+    { "bitcast", "bitcast(T, x) -> T",
+      "Reinterprets the raw bytes of `x` as type `T` — e.g. inspect an `f32`'s bits as a "
+      "`u32` for hashing or serialization (`bitcast(u32, x)`), or vice versa.\n\n"
+      "`T` and `x`'s type must both be **equal-size fixed-width scalars** (a fixed-width "
+      "integer, float, or `char`); a size mismatch is a compile error, and `isize`/`usize` "
+      "(target-defined width) and `bool` are not accepted. Unlike the value cast `(T) x`, no "
+      "conversion happens — the bits are unchanged. Every bit pattern is a valid result, so "
+      "there is no runtime failure (no `checked`/`unguarded` variant). Lowers to a C11 union "
+      "type-pun that compilers fold to a register move (zero cost); it is *not* the "
+      "strict-aliasing UB of a pointer-cast reinterpret." },
+
     { "assert", "assert(cond: bool[, msg: str]) -> void",
       "Checks `cond` at runtime; if it is false, prints the source file, line, and the failing "
       "condition text (plus the optional `msg`) to stderr and calls `abort()`.\n\n"
@@ -658,6 +669,10 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_expr(e->slice.hi, c);
             break;
         case EXPR_CAST:    find_in_expr(e->cast.operand, c); break;
+        case EXPR_BITCAST:
+            consider_builtin(c, e);   /* the bitcast keyword */
+            find_in_expr(e->bitcast_expr.operand, c);
+            break;
         case EXPR_IF:
             find_in_expr(e->if_expr.cond, c);
             find_in_expr(e->if_expr.then_body, c);
@@ -1591,6 +1606,7 @@ static void lens_expr(Expr *e, LensCtx *lc) {
             lens_expr(e->slice.object, lc); lens_expr(e->slice.lo, lc); lens_expr(e->slice.hi, lc);
             break;
         case EXPR_CAST: lens_expr(e->cast.operand, lc); break;
+        case EXPR_BITCAST: lens_expr(e->bitcast_expr.operand, lc); break;
         case EXPR_IF:
             lens_expr(e->if_expr.cond, lc);
             lens_expr(e->if_expr.then_body, lc);
@@ -1694,8 +1710,8 @@ static const char *KEYWORDS[] = {
     "as", "extern", "private", "match", "with", "when", "if", "then", "else",
     "for", "in", "loop", "do", "break", "continue", "return", "defer", "some",
     "true", "false", "none", "void", "guarded", "unguarded", "checked",
-    "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "default",
-    "const", "assert", "atomic_load_acquire", "atomic_store_release",
+    "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "bitcast",
+    "default", "const", "assert", "atomic_load_acquire", "atomic_store_release",
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
     "isize", "usize", "f32", "f64", "bool", "char", "str", "cstr", "any",
 };
@@ -1781,6 +1797,7 @@ static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
         case EXPR_INDEX: harvest_expr(e->index.object, names, n, cap); harvest_expr(e->index.index, names, n, cap); break;
         case EXPR_SLICE: harvest_expr(e->slice.object, names, n, cap); harvest_expr(e->slice.lo, names, n, cap); harvest_expr(e->slice.hi, names, n, cap); break;
         case EXPR_CAST: harvest_expr(e->cast.operand, names, n, cap); break;
+        case EXPR_BITCAST: harvest_expr(e->bitcast_expr.operand, names, n, cap); break;
         case EXPR_IF: harvest_expr(e->if_expr.cond, names, n, cap); harvest_expr(e->if_expr.then_body, names, n, cap); harvest_expr(e->if_expr.else_body, names, n, cap); break;
         case EXPR_MATCH:
             harvest_expr(e->match_expr.subject, names, n, cap);

@@ -670,7 +670,7 @@ The following are **reserved words** and may not be used as identifiers:
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `alignof`, `default`, `assert`, `atomic_load_acquire`, `atomic_store_release`
+`alloc`, `free`, `sizeof`, `alignof`, `bitcast`, `default`, `assert`, `atomic_load_acquire`, `atomic_store_release`
 
 The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
 
@@ -971,7 +971,7 @@ let p = (i32*) (usize) raw_u64        // a u64 address reaches a pointer via usi
 
 **Identity casts** — casting a scalar value to its own type (e.g. `(i32) x` where `x` is already `i32`, or `(bool) b`) is a permitted no-op for any numeric, `bool`, `char`, or pointer type. Aggregate types (structs, unions, slices) cannot be cast at all, so they have no identity-cast form.
 
-Bit-reinterpretation of value types (e.g. inspecting the raw bits of a `f32` as `u32`) is not supported via cast syntax — use explicit pointer casts through a temporary if needed.
+**Bit reinterpretation** — inspecting the raw bits of a value (e.g. reading a `f32` as a `u32` to hash or serialize it) is a *different operation* from the value casts above, and has its own form: the built-in `bitcast(T, x)`. A cast like `(u32) f` converts the *value* (`1.0f32` → `1`); `bitcast(u32, f)` leaves the bytes untouched and reinterprets them (`1.0f32` → `0x3f800000`). See §bitcast.
 
 ### Unguarded blocks
 
@@ -3177,6 +3177,35 @@ In generic functions, `alignof('a)` is resolved at monomorphization time:
 let get_align = <'a>() -> alignof('a)
 get_align<i32>()   // 4
 get_align<i64>()   // 8
+```
+
+### bitcast
+
+`bitcast(T, x)` reinterprets the raw bytes of `x` as type `T`, changing no bits. It is the tool for crossing the integer/float boundary at the bit level — hashing a float, serializing one deterministically, or picking apart its sign/exponent/mantissa — where the value-preserving cast `(T) x` is the wrong operation:
+
+```fc
+let f = 1.0f32
+let bits = bitcast(u32, f)     // 0x3f800000 — the IEEE-754 bit pattern
+let g    = (u32) f             // 1          — the value, converted
+let back = bitcast(f32, bits)  // 1.0f32     — round-trips exactly
+```
+
+**Both types must be equal-size fixed-width scalars** — a fixed-width integer (`i8`…`i64`, `u8`…`u64`), a float (`f32`, `f64`), or `char`. A size mismatch is a **compile error**, not a runtime check:
+
+```fc
+let x = bitcast(u32, some_f64)   // compile error: u32 is 4 bytes, f64 is 8
+```
+
+Two kinds are deliberately excluded. `isize`/`usize` have target-defined width, so `bitcast(usize, f64)` would be size-valid on a 64-bit target and invalid on a 32-bit one — FC never lets a size match depend on a guessed target width (the same reason pointer↔integer casts route through `usize`/`isize`). And `bool` is excluded because a byte other than `0`/`1` is not a valid `bool`, so bitcasting *to* `bool` could fabricate an invalid value; every accepted type has the property that **all** bit patterns of its width denote a valid value.
+
+That property is what makes `bitcast` **statically total**: once the sizes match, every source bit pattern maps to a defined result (reinterpreting a `u32` as `f32` may produce a NaN or infinity — that is fine, not a trap). There is therefore no runtime failure mode and **no `checked`/`unguarded` variant** — the only way a `bitcast` can fail is the static size/type check. This is precisely what distinguishes it from the value cast `(u32) f`, whose float→int conversion *does* carry a saturation guard.
+
+It lowers to a C11 union type-pun, which compilers fold to a plain register move — genuinely zero-cost, and **defined** (unlike a `*(u32*)&f` pointer-cast, which is a strict-aliasing violation that an optimizing compiler may miscompile).
+
+**Aggregates are not supported** — `bitcast` operates only on scalars. A struct or fixed array can carry padding whose bytes are indeterminate, and a whole-value reinterpretation would fold that padding into the result. The uses that motivate an aggregate reinterpretation are already covered without one: overlay a struct on a byte buffer with a pointer cast (`(header*) buf.ptr`), and pack a small struct into an integer with explicit shifts (which are also endianness-explicit):
+
+```fc
+let packed = (u32) c.r | ((u32) c.g << 8) | ((u32) c.b << 16) | ((u32) c.a << 24)
 ```
 
 Transpiles to `(i64_t) _Alignof(...)` in C11.

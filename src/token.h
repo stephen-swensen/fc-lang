@@ -54,6 +54,7 @@ typedef enum {
     TOK_FREE,
     TOK_SIZEOF,
     TOK_ALIGNOF,
+    TOK_BITCAST,
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,

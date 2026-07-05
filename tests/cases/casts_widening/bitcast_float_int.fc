@@ -1,0 +1,25 @@
+// bitcast reinterprets bits across the int/float boundary (unlike (T) which
+// converts values). f32 <-> u32 and f64 <-> u64, both directions, round-trip.
+let main = (args: str[]) ->
+    // 1.0f32 has IEEE-754 bit pattern 0x3f800000
+    let f = 1.0f32
+    let bits = bitcast(u32, f)
+    assert(bits == 0x3f800000u32)
+    // bitcast is NOT the value cast: (u32) 1.0f32 == 1, but the bits differ
+    assert((u32) f == 1u32)
+    assert(bits != (u32) f)
+    // round-trip u32 -> f32 recovers the float exactly
+    let back = bitcast(f32, bits)
+    assert(back == 1.0f32)
+    // an arbitrary expression operand: bits of 2.0f32 == 0x40000000
+    assert(bitcast(u32, 1.0f32 + 1.0f32) == 0x40000000u32)
+    // f64 <-> u64: 1.0f64 == 0x3ff0000000000000
+    let d = 1.0f64
+    let db = bitcast(u64, d)
+    assert(db == 0x3ff0000000000000u64)
+    assert(bitcast(f64, db) == 1.0f64)
+    // i32 <-> f32: reinterpret an integer's bits as a float and back
+    let ib = 0x40490fdbi32          // bits of ~pi as f32
+    let pi = bitcast(f32, ib)
+    assert(bitcast(i32, pi) == ib)
+    0

@@ -1,0 +1,25 @@
+// bitcast between equal-width signed/unsigned integers and char is a pure
+// reinterpretation of the two's-complement bits — every width, both directions.
+let main = (args: str[]) ->
+    // i32 <-> u32: -1 reinterprets to all-ones
+    let n = 0i32 - 1i32
+    assert(bitcast(u32, n) == 0xffffffffu32)
+    assert(bitcast(i32, 0xffffffffu32) == n)
+    // i8 <-> u8 (1 byte)
+    let sb = 0i8 - 1i8
+    assert(bitcast(u8, sb) == 0xffu8)
+    // 0x80 is the i8 sign bit (-128); check it round-trips through i8
+    assert(bitcast(u8, bitcast(i8, 0x80u8)) == 0x80u8)
+    // i16 <-> u16 (2 bytes)
+    let sh = 0i16 - 1i16
+    assert(bitcast(u16, sh) == 0xffffu16)
+    // i64 <-> u64 (8 bytes)
+    let sl = 0i64 - 1i64
+    assert(bitcast(u64, sl) == 0xffffffffffffffffu64)
+    // char <-> u8: char is a 1-byte scalar, all 256 patterns valid
+    let c = (char) 65i32
+    assert(bitcast(u8, c) == 65u8)
+    assert(bitcast(u8, bitcast(char, 200u8)) == 200u8)
+    // identity bitcast (same type) is permitted and a no-op
+    assert(bitcast(u32, 7u32) == 7u32)
+    0

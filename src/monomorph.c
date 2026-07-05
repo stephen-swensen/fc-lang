@@ -461,6 +461,10 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         discover_in_expr(e->cast.operand, t, a, intern, symtab, var_names, concrete, var_count);
         discover_in_type(e->cast.target, t, a, intern, symtab, var_names, concrete, var_count);
         return;
+    case EXPR_BITCAST:
+        discover_in_expr(e->bitcast_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_type(e->bitcast_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     case EXPR_SOME:
         discover_in_expr(e->some_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;

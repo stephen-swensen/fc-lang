@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let d = 1.0f64
+    let x = bitcast(u32, d)     // f64 is 8 bytes, u32 is 4 — size mismatch
+    x

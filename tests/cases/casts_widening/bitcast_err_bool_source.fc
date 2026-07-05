@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = bitcast(u8, true)   // bool source also excluded
+    x

@@ -219,6 +219,13 @@ let main = (args: str[]) ->
     let fi = (i32) 3.7       // float→int truncates: 3 (saturating, defined for all inputs)
     assert(fi == 3)
 
+    // bitcast(T, x) reinterprets x's BITS as T (no conversion), unlike (T) x.
+    // Both sides must be equal-size fixed-width scalars. Statically total — no
+    // runtime failure, so no checked/unguarded variant.
+    let raw = bitcast(u32, 1.0f32)   // 0x3f800000 (IEEE-754 bits), not 1
+    assert(raw == 0x3f800000u32)
+    assert(bitcast(f32, raw) == 1.0f32)   // round-trips exactly
+
     // Unguarded blocks opt out of FC's runtime guards (float→int saturation,
     // integer divide/modulo, slice bounds) on a hot path. Identical result for
     // in-range/non-zero operands; UB otherwise. `guarded` re-enables a check.

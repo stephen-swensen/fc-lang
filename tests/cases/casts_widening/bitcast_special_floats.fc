@@ -1,0 +1,16 @@
+// bitcast is statically total: every source bit pattern maps to a defined
+// result, including infinities and NaNs (no trap, no guard).
+let main = (args: str[]) ->
+    // +inf / -inf have exact, deterministic bit patterns
+    assert(bitcast(u32, f32.inf) == 0x7f800000u32)
+    assert(bitcast(u32, f32.neg_inf) == 0xff800000u32)
+    assert(bitcast(f32, 0x7f800000u32) == f32.inf)
+    // f64 infinities
+    assert(bitcast(u64, f64.inf) == 0x7ff0000000000000u64)
+    // a NaN bit pattern reinterpreted to f32 is a NaN — confirm via NaN != NaN
+    let q = bitcast(f32, 0x7fc00000u32)
+    assert(q != q)
+    // -0.0 has the sign bit set; +0.0 does not
+    assert(bitcast(u32, 0.0f32) == 0u32)
+    assert(bitcast(u32, 0.0f32 * (0.0f32 - 1.0f32)) == 0x80000000u32)
+    0

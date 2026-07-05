@@ -129,6 +129,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"free",      4,  TOK_FREE},
         {"sizeof",    6,  TOK_SIZEOF},
         {"alignof",   7,  TOK_ALIGNOF},
+        {"bitcast",   7,  TOK_BITCAST},
         {"default",   7,  TOK_DEFAULT},
         {"const",     5,  TOK_CONST},
         {"assert",    6,  TOK_ASSERT},
