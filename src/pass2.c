@@ -447,6 +447,9 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
     case EXPR_OK:
         pretaint_walk(scope, e->ok_expr.value, changed);
         break;
+    case EXPR_ERROR_NAME:
+        pretaint_walk(scope, e->error_name_expr.code, changed);
+        break;
     case EXPR_ERR:
         pretaint_walk(scope, e->err_expr.code, changed);
         break;
@@ -635,6 +638,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
     case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
     case EXPR_OK:           return expr_refs_self(e->ok_expr.value, self);
     case EXPR_ERR:          return expr_refs_self(e->err_expr.code, self);
+    case EXPR_ERROR_NAME:   return expr_refs_self(e->error_name_expr.code, self);
     case EXPR_ASSERT:       return expr_refs_self(e->assert_expr.condition, self);
     case EXPR_IF:           return expr_refs_self(e->if_expr.cond, self) ||
                                    expr_refs_self(e->if_expr.then_body, self) ||
@@ -2735,6 +2739,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_OK:
         ok &= validate_generic_body(e->ok_expr.value, arena, type_params, bindings, ntp, frame);
         break;
+    case EXPR_ERROR_NAME:
+        ok &= validate_generic_body(e->error_name_expr.code, arena, type_params, bindings, ntp, frame);
+        break;
     case EXPR_ERR:
         ok &= validate_generic_body(e->err_expr.code, arena, type_params, bindings, ntp, frame);
         break;
@@ -2861,6 +2868,8 @@ static bool expr_contains_control_flow(Expr *e) {
         return expr_contains_control_flow(e->some_expr.value);
     case EXPR_OK:
         return expr_contains_control_flow(e->ok_expr.value);
+    case EXPR_ERROR_NAME:
+        return expr_contains_control_flow(e->error_name_expr.code);
     case EXPR_ERR:
         return expr_contains_control_flow(e->err_expr.code);
     case EXPR_DEFER:
@@ -3040,6 +3049,8 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
         return guard_subtree_has_effect(e->some_expr.value);
     case EXPR_OK:
         return guard_subtree_has_effect(e->ok_expr.value);
+    case EXPR_ERROR_NAME:
+        return guard_subtree_has_effect(e->error_name_expr.code);
     case EXPR_ERR:
         return guard_subtree_has_effect(e->err_expr.code);
     case EXPR_ASSERT:
@@ -6046,6 +6057,29 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    case EXPR_ERROR_NAME: {
+        /* error_name(e) — str? holding the fully-qualified name of a declared
+         * error code; none for reserved-range (platform passthrough) and
+         * negative codes. The str points into a static name table. */
+        Type *ct = check_expr(ctx, e->error_name_expr.code);
+        if (type_is_error(ct)) { e->type = type_error(); return e->type; }
+        if (!type_eq(ct, type_int32())) {
+            if (type_can_widen(ct, type_int32())) {
+                e->error_name_expr.code =
+                    wrap_widen(ctx->arena, e->error_name_expr.code, type_int32());
+            } else {
+                diag_error(e->loc, "error_name() takes an i32 error code, got %s",
+                    type_name(ct));
+                e->type = type_error();
+                return e->type;
+            }
+        }
+        /* const str: the name lives in a static table (string-literal rule) */
+        e->type = type_option(ctx->arena, type_const_str());
+        e->prov = PROV_STATIC;
+        return e->type;
+    }
+
     case EXPR_LOOP: {
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         Scope *saved = ctx->scope;
@@ -6650,6 +6684,42 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 }
 
+/* Resolve a pattern constant path (group.member / mod.group.member) by
+ * synthesizing the equivalent expression chain and type-checking it, so name
+ * resolution — imports, module nesting, privacy, shadowing — matches
+ * expression positions exactly. Returns the resolved error constant's
+ * assigned literal, or NULL after a diagnostic has been emitted. */
+static const Expr *resolve_pattern_const_path(CheckCtx *ctx, Pattern *pat) {
+    Expr *node = arena_alloc(ctx->arena, sizeof(Expr));
+    node->kind = EXPR_IDENT;
+    node->loc = pat->loc;
+    node->ident.name = pat->const_path.parts[0];
+    for (int i = 1; i < pat->const_path.part_count; i++) {
+        Expr *f = arena_alloc(ctx->arena, sizeof(Expr));
+        f->kind = EXPR_FIELD;
+        f->loc = pat->loc;
+        f->field.object = node;
+        f->field.name = pat->const_path.parts[i];
+        f->field.name_loc = pat->loc;
+        node = f;
+    }
+    Type *t = check_expr(ctx, node);
+    if (type_is_error(t)) return NULL;  /* diagnostic already emitted */
+    const Expr *lit = error_const_literal(node);
+    if (!lit) {
+        char path[256];
+        int n = 0;
+        for (int i = 0; i < pat->const_path.part_count && n < (int)sizeof path - 1; i++)
+            n += snprintf(path + n, sizeof path - (size_t)n, "%s%s",
+                          i ? "." : "", pat->const_path.parts[i]);
+        diag_error(pat->loc,
+            "'%s' in a pattern must name a declared error constant "
+            "(a member of an 'error' group)", path);
+        return NULL;
+    }
+    return lit;
+}
+
 /* Recursively check any pattern in a match arm, resolving types and adding bindings.
    When reject_bindings is true, any surviving PAT_BINDING (i.e. not converted to
    PAT_VARIANT for no-payload variants) is an error — used inside or-pattern
@@ -6689,6 +6759,24 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
         check_int_literal_range(pat->int_lit.value, type, pat->loc,
                                 pat->int_lit.out_of_range, pat->int_lit.negative);
         break;
+    case PAT_CONST_PATH: {
+        /* A declared error constant: resolve the path and rewrite the node in
+         * place to PAT_INT_LIT with the assigned code, so exhaustiveness /
+         * duplicate analysis and codegen see a plain integer literal. */
+        const Expr *lit = resolve_pattern_const_path(ctx, pat);
+        if (!lit) return;  /* diagnostic already emitted */
+        pat->kind = PAT_INT_LIT;
+        pat->int_lit.value = lit->int_lit.value;
+        pat->int_lit.lit_type = type_error_code();
+        pat->int_lit.out_of_range = false;
+        pat->int_lit.negative = false;
+        if (!type_is_integer(type)) {
+            diag_error(pat->loc, "integer pattern on non-integer type %s", type_name(type));
+            return;
+        }
+        check_int_literal_range(pat->int_lit.value, type, pat->loc, false, false);
+        break;
+    }
     case PAT_BOOL_LIT:
         if (!type_eq(type, type_bool())) {
             diag_error(pat->loc, "bool pattern on non-bool type %s", type_name(type));
@@ -6734,9 +6822,10 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             diag_error(pat->loc, "err pattern on non-result type %s", type_name(type));
             return;
         }
-        /* The err payload is the i32 code */
+        /* The err payload is the i32 code; bindings display as `error` (an
+         * i32 alias — display only, never semantics). */
         if (pat->some_pat.inner)
-            check_match_pattern(ctx, pat->some_pat.inner, type_int32(), reject_bindings);
+            check_match_pattern(ctx, pat->some_pat.inner, type_error_code(), reject_bindings);
         break;
     case PAT_VARIANT: {
         if (type->kind != TYPE_UNION) {
@@ -6876,7 +6965,10 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
     switch (pat->kind) {
     case PAT_WILDCARD:
     case PAT_BINDING:
-    case PAT_ERROR:   /* malformed pattern: matches anything */
+    case PAT_ERROR:      /* malformed pattern: matches anything */
+    case PAT_CONST_PATH: /* only survives check_match_pattern when resolution
+                            failed (else rewritten to PAT_INT_LIT) — treat as
+                            wildcard to avoid an exhaustiveness cascade */
         m.is_wildcard = true;
         return m;
     case PAT_BOOL_LIT:
@@ -6914,7 +7006,7 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
         m.ctor.arity = 1;
         m.sub = arena_alloc(a, sizeof(MatPat));
         if (pat->some_pat.inner)
-            m.sub[0] = pat_to_matpat(ctx, pat->some_pat.inner, type_int32());
+            m.sub[0] = pat_to_matpat(ctx, pat->some_pat.inner, type_error_code());
         else
             m.sub[0] = matpat_wild();
         return m;
@@ -7026,7 +7118,8 @@ static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLo
     case PAT_BOOL_LIT:
     case PAT_STRING_LIT:
     case PAT_NONE:
-    case PAT_ERROR:   /* malformed pattern: an or-free leaf (wildcard-like) */
+    case PAT_ERROR:      /* malformed pattern: an or-free leaf (wildcard-like) */
+    case PAT_CONST_PATH: /* or-free leaf (rewritten to PAT_INT_LIT during checking) */
         *out = arena_alloc(a, sizeof(Pattern *));
         (*out)[0] = pat;
         return 1;
@@ -8274,6 +8367,17 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         }
         if (e->field.is_extern_const || e->field.is_variant_constructor)
             return e;
+        /* A declared error constant (group.member) folds to its assigned code —
+         * pass1 already patched the member's literal, so a clone is enough. */
+        {
+            const Expr *errlit = error_const_literal(e);
+            if (errlit) {
+                Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+                *n = *errlit;
+                n->loc = e->loc;
+                return n;
+            }
+        }
         return NULL;
     case EXPR_STRUCT_LIT: {
         bool changed = false;
@@ -8530,7 +8634,7 @@ static bool is_const_expr(Expr *e) {
      * No-payload variant constructors also emit plain compound literals. */
     case EXPR_FIELD:
         return e->field.is_extern_const || e->field.is_variant_constructor ||
-               e->field.is_type_property;
+               e->field.is_type_property || error_const_literal(e) != NULL;
     /* Struct literal — valid if all field values are const */
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)

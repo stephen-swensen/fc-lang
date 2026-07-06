@@ -1,0 +1,40 @@
+// error groups: declaration, construction, qualified patterns, unwrap
+error file_io =
+    | not_found
+    | invalid_path
+
+let open = (path: const str) ->
+    if path.len == 0 then err(i32, file_io.invalid_path)
+    else if path.len == 1 then err(i32, file_io.not_found)
+    else ok(42)
+
+let main = (args: str[]) ->
+    // construction with a named code
+    let a = match open("") with
+            | ok(v) -> 0
+            | err(file_io.invalid_path) -> 1
+            | err(e) -> 2
+    assert(a == 1, "qualified pattern must match the named code")
+
+    // or-pattern over named codes (binding-free alternatives)
+    let b = match open("x") with
+            | ok(v) -> 0
+            | err(file_io.not_found | file_io.invalid_path) -> 1
+            | err(_) -> 2
+    assert(b == 1, "or-pattern over named codes")
+
+    // err binding still works alongside named arms
+    let c = match open("x") with
+            | ok(v) -> 0 - 1
+            | err(file_io.invalid_path) -> 0 - 2
+            | err(e) -> e
+    assert(c == file_io.not_found)
+
+    // ok path unwraps
+    let r = open("ok")
+    assert(r! == 42)
+
+    // named codes compare as plain i32
+    assert(file_io.not_found != file_io.invalid_path)
+    assert(file_io.not_found > 65535)
+    0

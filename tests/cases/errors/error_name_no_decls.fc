@@ -1,0 +1,12 @@
+// error_name in a program with no error declarations: always none
+// (the lookup helper is emitted without a table).
+let main = (args: str[]) ->
+    let a = match error_name(65536) with
+            | some(_) -> 1
+            | none -> 0
+    assert(a == 0)
+    let b = match error_name(7) with
+            | some(_) -> 1
+            | none -> 0
+    assert(b == 0)
+    0

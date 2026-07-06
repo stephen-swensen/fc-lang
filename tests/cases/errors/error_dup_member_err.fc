@@ -1,0 +1,6 @@
+error file_io =
+    | not_found
+    | not_found
+
+let main = (args: str[]) ->
+    0

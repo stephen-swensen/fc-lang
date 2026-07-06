@@ -1335,5 +1335,44 @@ check("hover a result binding shows the T! type",
 check("completion: 'r.' on a result offers is_ok/is_err",
       rs_labels(5) == {"is_ok", "is_err"}, str(rs_labels(5)))
 
+# --- error groups: member hover shows `error`, member completion, error_name doc ----
+ERR = (
+    "error file_io =\n"                          # 0
+    "    | not_found\n"                          # 1
+    "    | invalid_path\n"                       # 2
+    "\n"                                         # 3
+    "let main = (args: str[]) ->\n"              # 4
+    "    let c = file_io.not_found\n"            # 5  hover member; completion after 'file_io.'
+    "    let n = error_name(c)\n"                # 6  hover 'error_name'
+    "    if n.is_some then 0 else 1\n"           # 7
+)
+es = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, ERR),
+    hover(2, 5, ERR.split("\n")[5].index("not_found") + 1),
+    req(3, "textDocument/completion",
+        {"textDocument": {"uri": URI},
+         "position": {"line": 5, "character": ERR.split("\n")[5].index("file_io.") + 8}}),
+    hover(4, 6, ERR.split("\n")[6].index("error_name") + 1),
+    hover(5, 5, ERR.split("\n")[5].index("c =")),
+    req(9, "shutdown", None), note("exit", None),
+]
+esresp, _, _, _, _ = run_session(es)
+def es_hover(rid):
+    res = esresp.get(rid, {}).get("result") or {}
+    return ((res.get("contents") or {}).get("value")) or ""
+def es_labels(rid):
+    res = esresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return set(it.get("label") for it in (its or []))
+check("hover an error-group member shows the `error` display alias",
+      "error" in es_hover(2), es_hover(2))
+check("completion: 'file_io.' offers the group's members",
+      es_labels(3) == {"not_found", "invalid_path"}, str(es_labels(3)))
+check("hover 'error_name' shows the builtin doc",
+      "error_name(e: i32) -> str?" in es_hover(4), es_hover(4))
+check("hover a binding initialized from an error constant shows type error",
+      "error" in es_hover(5), es_hover(5))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

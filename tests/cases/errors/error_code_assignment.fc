@@ -1,0 +1,17 @@
+// Deterministic code assignment: fully-qualified names are sorted and
+// numbered sequentially from 65536, independent of declaration order.
+error zebra =
+    | last
+    | first
+
+error alpha =
+    | m2
+    | m1
+
+let main = (args: str[]) ->
+    // sorted: alpha.m1, alpha.m2, zebra.first, zebra.last
+    assert(alpha.m1 == 65536)
+    assert(alpha.m2 == 65537)
+    assert(zebra.first == 65538)
+    assert(zebra.last == 65539)
+    0

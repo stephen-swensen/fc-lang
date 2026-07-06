@@ -478,6 +478,9 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
         discover_in_expr(e->err_expr.code, t, a, intern, symtab, var_names, concrete, var_count);
         discover_in_type(e->err_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
         return;
+    case EXPR_ERROR_NAME:
+        discover_in_expr(e->error_name_expr.code, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     case EXPR_SLICE:
         discover_in_expr(e->slice.object, t, a, intern, symtab, var_names, concrete, var_count);
         discover_in_expr(e->slice.lo, t, a, intern, symtab, var_names, concrete, var_count);

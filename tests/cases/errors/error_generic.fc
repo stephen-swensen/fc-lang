@@ -1,0 +1,28 @@
+// Named codes inside generic functions: err('a, code) monomorphizes and
+// error_name works on the propagated code.
+error conv =
+    | too_big
+
+let fail_as = (x: 'a, should_fail: bool) ->
+    if should_fail then err('a, conv.too_big) else ok(x)
+
+let main = (args: str[]) ->
+    let a = match fail_as(1, true) with
+            | ok(v) -> 0
+            | err(conv.too_big) -> 1
+            | err(_) -> 2
+    assert(a == 1)
+
+    let b = match fail_as(50i64, false) with
+            | ok(v) -> if v == 50 then 1 else 2
+            | err(_) -> 0
+    assert(b == 1)
+
+    let c = match fail_as(9u8, true) with
+            | ok(_) -> 0
+            | err(e) ->
+                match error_name(e) with
+                | some(n) -> if n == "conv.too_big" then 1 else 2
+                | none -> 3
+    assert(c == 1)
+    0

@@ -1,0 +1,14 @@
+// The documented trap: an unqualified member name in a pattern is a
+// binding, not the constant — it matches ANY code. Qualification is
+// mandatory to match a specific named error.
+error file_io =
+    | not_found
+    | denied
+
+let main = (args: str[]) ->
+    let r = err(i32, file_io.denied)
+    let a = match r with
+            | ok(v) -> 0
+            | err(not_found) -> 1   // binding named 'not_found' — matches any err
+    assert(a == 1, "bare name binds; it does not select file_io.not_found")
+    0

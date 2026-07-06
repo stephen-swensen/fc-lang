@@ -1,0 +1,8 @@
+error file_io =
+    | not_found
+
+let use = (x: file_io) ->
+    0
+
+let main = (args: str[]) ->
+    use(file_io.not_found)

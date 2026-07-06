@@ -1,0 +1,8 @@
+error file_io =
+    | not_found
+
+let main = (args: str[]) ->
+    let r = err(i32, file_io.not_found)
+    match r with
+    | ok(v) -> v
+    | err(file_io.not_found) -> 0

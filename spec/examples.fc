@@ -42,6 +42,14 @@ union result =
     | good('a)
     | bad('b)
 
+// Error groups — named i32 error codes for the result type T!. A group is a
+// pseudo-module of constants (not a type): the compiler assigns each declared
+// error a unique code (sorted fully-qualified names, numbered from 65536;
+// 1–65535 is reserved for platform passthrough like errno).
+error file_io =
+    | not_found
+    | invalid_path
+
 let identity = (x: 'a) -> x
 
 let swap = (p: pair<'a, 'b>) ->
@@ -651,6 +659,24 @@ let main = (args: str[]) ->
     | ok(some(b)) -> assert(b == 65u8)
     | ok(none)    -> assert(false)
     | err(_)      -> assert(false)
+
+    // Named error codes — see the `error file_io` group at the top of this
+    // file. Members are i32 constants (display type `error`); construction
+    // uses the qualified name, and so do patterns (a bare member name in a
+    // pattern would be a binding).
+    let named_fail = err(i32, file_io.not_found)
+    let looked_up = match named_fail with
+                    | ok(v) -> 0
+                    | err(file_io.not_found) -> 1
+                    | err(_) -> 2
+    assert(looked_up == 1)
+
+    // error_name(e) -> str?: the qualified name of a declared code, none for
+    // platform passthrough codes (errno-range and negative values)
+    match error_name(file_io.invalid_path) with
+    | some(n) -> assert(n == "file_io.invalid_path")
+    | none -> assert(false)
+    assert(error_name(13).is_none)   // errno range — belongs to the platform
 
     // --------------------------------------------------------
     // Pointers

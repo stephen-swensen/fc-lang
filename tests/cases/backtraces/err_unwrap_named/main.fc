@@ -1,0 +1,9 @@
+error net =
+    | conn_refused
+
+let connect = (port: i32) ->
+    if port < 1024 then err(i32, net.conn_refused) else ok(port)
+
+let main = (args: str[]) ->
+    let s = connect(80)
+    s!

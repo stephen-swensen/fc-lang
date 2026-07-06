@@ -1,0 +1,20 @@
+// Importing a member from an error group gives a bare constant in
+// expressions (patterns still require qualification — a bare pattern
+// name is a binding).
+import not_found from file_io
+
+error file_io =
+    | not_found
+
+let main = (args: str[]) ->
+    // bare imported constant in expression position; guard elided
+    let r = err(i32, not_found)
+    let a = match r with
+            | ok(v) -> 0
+            | err(file_io.not_found) -> 1
+            | err(_) -> 2
+    assert(a == 1)
+    let mut copied = 0
+    copied = not_found
+    assert(copied == file_io.not_found)
+    0

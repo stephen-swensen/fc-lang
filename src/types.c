@@ -63,6 +63,21 @@ PRIM(unresolved, TYPE_UNRESOLVED)
 
 #undef PRIM
 
+/* error = i32 with alias "error" — the display type of declared error
+ * constants and err-pattern bindings. Like str/cstr, the alias affects
+ * type_name() output only, never equality or semantics: an error code is an
+ * i32 everywhere. */
+Type *type_error_code(void) {
+    static Type error_code_type = {0};
+    static bool init = false;
+    if (!init) {
+        error_code_type.kind = TYPE_INT32;
+        error_code_type.alias = "error";
+        init = true;
+    }
+    return &error_code_type;
+}
+
 /* str = u8[] with alias "str" */
 Type *type_str(void) {
     static Type str_type = {0};

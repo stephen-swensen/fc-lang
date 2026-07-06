@@ -1,0 +1,5 @@
+error file_io =
+    | not_found(i32)
+
+let main = (args: str[]) ->
+    0

@@ -59,6 +59,24 @@ typedef struct FileImportScopes {
     int capacity;
 } FileImportScopes;
 
+/* ---- Declared error codes (`error` groups) ----
+ * pass1_collect assigns every declared error constant a deterministic code:
+ * fully-qualified names are sorted and numbered sequentially from
+ * FC_ERROR_CODE_BASE (so a declared code is provably non-zero and the table
+ * is diffable across builds). [1, 65535] is reserved platform passthrough
+ * (errno / Win32 / WSA); 0 is the ok tag. The registry is rebuilt on every
+ * pass1_collect (the LSP re-runs it per edit) and read by codegen (the
+ * error_name table / --backtraces aborts) and the CLI (--emit-error-codes). */
+#define FC_ERROR_CODE_BASE 65536
+
+typedef struct ErrorCodeInfo {
+    const char *qualified;  /* fully-qualified display name, e.g. "io.file_io.not_found" */
+    SrcLoc loc;             /* declaration site of the member */
+} ErrorCodeInfo;
+
+int error_code_count(void);
+ErrorCodeInfo error_code_info(int idx);  /* code = FC_ERROR_CODE_BASE + idx */
+
 void symtab_init(SymbolTable *t);
 Symbol *symtab_lookup(SymbolTable *t, const char *name);
 Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind);

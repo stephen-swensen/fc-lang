@@ -404,6 +404,14 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
       "success case with `ok(x)`, match failure with an `err(e)` arm (literal codes like "
       "`err(2)` work too), or test with `.is_err`." },
 
+    { "error_name", "error_name(e: i32) -> str?",
+      "The fully-qualified name of a declared error code — `some(\"file_io.not_found\")` for a "
+      "constant declared in an `error` group, `none` for anything else (reserved-range platform "
+      "passthrough codes like errno/Win32, and negative codes).\n\n"
+      "Backed by a static name table emitted only when `error_name` is used (or unconditionally "
+      "under `--backtraces`, where unwrap aborts also print the name) — a static cost, no runtime "
+      "machinery. Format the numeric fallback yourself: codes below 65536 belong to the platform." },
+
     { "sizeof", "sizeof(T) -> i64",
       "The size of type `T` in bytes, as an `i64` (lowers to `(int64_t)sizeof(T)`). Works on any "
       "type — primitives, pointers, slices, structs, unions. Computed by the C compiler, so it "
@@ -773,6 +781,10 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         case EXPR_ERR:
             consider_builtin(c, e);
             find_in_expr(e->err_expr.code, c);
+            break;
+        case EXPR_ERROR_NAME:
+            consider_builtin(c, e);
+            find_in_expr(e->error_name_expr.code, c);
             break;
         case EXPR_LET: {
             int col = let_name_col(c, e->loc.line, e->loc.col, e->let_expr.let_is_mut);
@@ -1655,6 +1667,7 @@ static void lens_expr(Expr *e, LensCtx *lc) {
         case EXPR_SOME:   lens_expr(e->some_expr.value, lc); break;
         case EXPR_OK:     lens_expr(e->ok_expr.value, lc); break;
         case EXPR_ERR:    lens_expr(e->err_expr.code, lc); break;
+        case EXPR_ERROR_NAME: lens_expr(e->error_name_expr.code, lc); break;
         case EXPR_DEFER:  lens_expr(e->defer_expr.value, lc); break;
         case EXPR_GUARD:  lens_expr(e->guard.body, lc); break;
         case EXPR_ASSERT:
@@ -1736,7 +1749,7 @@ static const char *KEYWORDS[] = {
     "true", "false", "none", "void", "guarded", "unguarded", "checked",
     "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "bitcast",
     "default", "const", "assert", "atomic_load_acquire", "atomic_store_release",
-    "ok", "err",
+    "ok", "err", "error", "error_name",
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
     "isize", "usize", "f32", "f64", "bool", "char", "str", "cstr", "any",
 };
@@ -1844,6 +1857,7 @@ static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
         case EXPR_SOME: harvest_expr(e->some_expr.value, names, n, cap); break;
         case EXPR_OK: harvest_expr(e->ok_expr.value, names, n, cap); break;
         case EXPR_ERR: harvest_expr(e->err_expr.code, names, n, cap); break;
+        case EXPR_ERROR_NAME: harvest_expr(e->error_name_expr.code, names, n, cap); break;
         case EXPR_DEFER: harvest_expr(e->defer_expr.value, names, n, cap); break;
         case EXPR_GUARD: harvest_expr(e->guard.body, names, n, cap); break;
         default: break;

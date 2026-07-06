@@ -173,7 +173,7 @@ static void recover_progress(Parser *p, int guard_pos) {
    recovery resyncs on layout (NEWLINE/DEDENT) via leaf-bump + the watchdog instead,
    since a statement keyword is not a reliable in-block anchor. */
 static const TokenKind DECL_START[] = {
-    TOK_LET, TOK_STRUCT, TOK_UNION, TOK_MODULE,
+    TOK_LET, TOK_STRUCT, TOK_UNION, TOK_ERROR_KW, TOK_MODULE,
     TOK_IMPORT, TOK_EXTERN, TOK_NAMESPACE, TOK_PRIVATE,
 };
 
@@ -187,7 +187,7 @@ static Token *expect_extern_c_name(Parser *p) {
     TokenKind k = current(p)->kind;
     if (k == TOK_IDENT || k == TOK_ALLOC || k == TOK_FREE || k == TOK_SIZEOF ||
         k == TOK_ALIGNOF || k == TOK_DEFAULT || k == TOK_ASSERT ||
-        k == TOK_OK || k == TOK_ERR) {
+        k == TOK_OK || k == TOK_ERR || k == TOK_ERROR_KW || k == TOK_ERROR_NAME) {
         return advance_p(p);
     }
     diag_error(loc_from_token(current(p)),
@@ -288,7 +288,7 @@ static Type *parse_type(Parser *p);
 /* Check if a token kind is valid inside a type argument list <...> */
 static bool is_type_arg_token(TokenKind k) {
     switch (k) {
-    case TOK_IDENT: case TOK_TYPE_VAR: case TOK_VOID:
+    case TOK_IDENT: case TOK_TYPE_VAR: case TOK_VOID: case TOK_ERROR_KW:
     case TOK_LT: case TOK_GT:
     case TOK_COMMA:
     case TOK_DOT:                       /* module-qualified type: m.point */
@@ -489,6 +489,13 @@ static Type *parse_type(Parser *p) {
         return type_void();
     }
 
+    if (t->kind == TOK_ERROR_KW) {
+        /* `error` in type position: the i32 display alias (str/cstr precedent).
+         * An error code is an i32 everywhere; the alias only affects display. */
+        advance_p(p);
+        return parse_type_suffix(p, type_error_code());
+    }
+
     if (t->kind == TOK_TYPE_VAR) {
         advance_p(p);
         Type *tv = arena_alloc(p->arena, sizeof(Type));
@@ -543,6 +550,7 @@ static Type *parse_type(Parser *p) {
                 Token *tt = current(p);
                 if (tt->kind == TOK_IDENT || tt->kind == TOK_TYPE_VAR ||
                     tt->kind == TOK_LPAREN || tt->kind == TOK_VOID ||
+                    tt->kind == TOK_ERROR_KW ||
                     tt->kind == TOK_CONST || tt->kind == TOK_LBRACE) {
                     Type *ty = parse_type(p);
                     DA_APPEND(targs, ta_count, ta_cap, ty);
@@ -1160,7 +1168,8 @@ static bool token_starts_prefix_expr(TokenKind k) {
     case TOK_SOME: case TOK_NONE: case TOK_OK: case TOK_ERR:
     case TOK_ALLOC: case TOK_ALLOCA: case TOK_FREE:
     case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_DEFAULT:
-    case TOK_ASSERT: case TOK_ATOMIC_LOAD: case TOK_ATOMIC_STORE:
+    case TOK_ASSERT: case TOK_ERROR_NAME:
+    case TOK_ATOMIC_LOAD: case TOK_ATOMIC_STORE:
     case TOK_GUARDED: case TOK_UNGUARDED: case TOK_CHECKED: case TOK_UNCHECKED:
     case TOK_IF: case TOK_MATCH: case TOK_LOOP: case TOK_FOR: case TOK_LET:
     case TOK_LPAREN: case TOK_LBRACE: case TOK_LT:
@@ -1619,6 +1628,7 @@ static Expr *parse_prefix(Parser *p) {
             }
         }
         if (try_cast || peek_at(p, 1)->kind == TOK_TYPE_VAR ||
+            peek_at(p, 1)->kind == TOK_ERROR_KW ||
             peek_at(p, 1)->kind == TOK_CONST) {
             /* Try to parse as cast with backtracking */
             int save = p->pos;
@@ -1933,6 +1943,31 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_ERROR_NAME: {
+        /* error_name(e) — str? name of a declared error code */
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *code = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ERROR_NAME, loc);
+        e->error_name_expr.code = code;
+        return e;
+    }
+
+    case TOK_ERROR_KW: {
+        /* `error` in expression position: only as the element type of an
+         * array/slice literal (error[N]{...} / error[]{...}), mirroring the
+         * built-in numeric type names. */
+        if (peek_at(p, 1)->kind == TOK_LBRACKET) {
+            advance_p(p);
+            return parse_array_lit_body(p, type_error_code(), loc);
+        }
+        diag_error(loc, "'error' is a type/declaration keyword and cannot "
+            "appear bare in an expression");
+        advance_p(p); /* leaf-bump: guarantee progress */
+        return alloc_expr_error(p, loc);
+    }
+
     case TOK_ALIGNOF: {
         advance_p(p);
         expect(p, TOK_LPAREN);
@@ -2053,7 +2088,8 @@ static Expr *parse_prefix(Parser *p) {
          * Unknown identifiers followed by < need a tentative parse for generic
          * type args (the <> ambiguity is inherent to the grammar). */
         Token *first = current(p);
-        bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR);
+        bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR ||
+                        first->kind == TOK_ERROR_KW);
         bool try_type = false;
         int save = 0;
 
@@ -2740,6 +2776,28 @@ static Pattern *parse_pattern_atom(Parser *p) {
             return pat;
         }
 
+        /* Qualified constant path: group.member / mod.group.member — a declared
+         * error constant. Qualification is mandatory (a bare member name would be
+         * indistinguishable from a binding); pass2 resolves the path and rewrites
+         * the node to PAT_INT_LIT with the assigned code. */
+        if (peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT) {
+            const char **parts = NULL;
+            int count = 0, cap = 0;
+            DA_APPEND(parts, count, cap, name);
+            advance_p(p); /* consume first ident */
+            while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
+                advance_p(p); /* consume . */
+                DA_APPEND(parts, count, cap, tok_intern(p, current(p)));
+                advance_p(p); /* consume ident */
+            }
+            pat->kind = PAT_CONST_PATH;
+            pat->const_path.parts = arena_alloc(p->arena, sizeof(const char*) * (size_t)count);
+            memcpy(pat->const_path.parts, parts, sizeof(const char*) * (size_t)count);
+            pat->const_path.part_count = count;
+            free(parts);
+            return pat;
+        }
+
         /* Check if it's a variant: name(pattern) */
         if (peek_at(p, 1)->kind == TOK_LPAREN) {
             advance_p(p);  /* consume ident */
@@ -3118,6 +3176,74 @@ static Decl *parse_union_decl(Parser *p) {
     return d;
 }
 
+/* error <name> =
+ *     | member
+ *     | member
+ *
+ * Error-group declaration. Desugared here to a DECL_MODULE flagged
+ * is_error_group whose members are synthesized immutable i32-const lets, so
+ * the whole pipeline (pass1 registration, imports, member access, privacy,
+ * LSP hover/completion/go-to-def, codegen) rides the module machinery
+ * unchanged. Each member's init is an EXPR_INT_LIT placeholder whose value
+ * pass1 assigns deterministically (sorted fully-qualified names, numbered
+ * from 65536) once the whole program has been collected. */
+static Decl *parse_error_decl(Parser *p) {
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    expect(p, TOK_ERROR_KW);
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    expect(p, TOK_EQ);
+
+    /* Expect INDENT then | member lines (union-style layout, no payloads) */
+    expect(p, TOK_INDENT);
+
+    Decl **members = NULL;
+    int count = 0, cap = 0;
+
+    while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
+        skip_newlines(p);
+        if (check(p, TOK_DEDENT)) break;
+
+        int guard = p->pos;
+        expect(p, TOK_PIPE);
+        Token *mtok = expect(p, TOK_IDENT);
+        const char *mname = tok_intern(p, mtok);
+        SrcLoc mloc = loc_from_token(mtok);
+        mloc.filename = p->filename;
+        if (check(p, TOK_LPAREN)) {
+            diag_error(loc_from_token(current(p)),
+                "error members carry no payload — the assigned code itself is the value");
+        }
+
+        Expr *init = alloc_expr(p, EXPR_INT_LIT, mloc);
+        init->int_lit.value = 0;  /* patched by pass1's error-code assignment */
+        init->int_lit.lit_type = type_error_code();
+
+        Decl *m = arena_alloc(p->arena, sizeof(Decl));
+        m->kind = DECL_LET;
+        m->loc = mloc;
+        m->let.name = mname;
+        m->let.init = init;
+        DA_APPEND(members, count, cap, m);
+        recover_progress(p, guard);  /* a fully malformed member line consumes nothing */
+        skip_newlines(p);
+    }
+    expect(p, TOK_DEDENT);
+
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_MODULE;
+    d->loc = loc;
+    d->module.name = name;
+    d->module.is_error_group = true;
+    d->module.decl_count = count;
+    if (count > 0) {
+        d->module.decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
+        memcpy(d->module.decls, members, sizeof(Decl*) * (size_t)count);
+        free(members);
+    }
+    return d;
+}
+
 static Decl *parse_module_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
@@ -3490,6 +3616,7 @@ static Decl *parse_decl(Parser *p) {
     if (check(p, TOK_LET)) return parse_let_decl(p);
     if (check(p, TOK_STRUCT)) return parse_struct_decl(p);
     if (check(p, TOK_UNION)) return parse_union_decl(p);
+    if (check(p, TOK_ERROR_KW)) return parse_error_decl(p);
     if (check(p, TOK_MODULE)) return parse_module_decl(p);
     if (check(p, TOK_IMPORT)) return parse_import_decl(p);
     if (check(p, TOK_NAMESPACE)) return parse_namespace_decl(p);

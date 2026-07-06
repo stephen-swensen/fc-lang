@@ -1,0 +1,35 @@
+// error_name: some(qualified name) for declared codes, none for
+// reserved-range (platform passthrough) and negative codes.
+error net =
+    | timed_out
+
+let main = (args: str[]) ->
+    let a = match error_name(net.timed_out) with
+            | some(n) -> if n == "net.timed_out" then 1 else 2
+            | none -> 0
+    assert(a == 1, "declared code yields its qualified name")
+
+    // reserved passthrough range [1, 65535] — none
+    let b = match error_name(2) with
+            | some(_) -> 1
+            | none -> 0
+    assert(b == 0, "errno-range code has no declared name")
+
+    // negative (HRESULT-school) codes — none
+    let c = match error_name(0 - 5) with
+            | some(_) -> 1
+            | none -> 0
+    assert(c == 0, "negative code has no declared name")
+
+    // one past the declared range — none
+    let d = match error_name(net.timed_out + 1) with
+            | some(_) -> 1
+            | none -> 0
+    assert(d == 0, "code past the declared range has no name")
+
+    // 0 is the ok tag — none
+    let e = match error_name(0) with
+            | some(_) -> 1
+            | none -> 0
+    assert(e == 0)
+    0

@@ -1,0 +1,28 @@
+// error groups nest inside modules; qualified access, patterns, and
+// error_name all use the module path.
+module io =
+    error file =
+        | not_found
+        | denied
+
+    let fail = () ->
+        err(i32, file.not_found)
+
+let main = (args: str[]) ->
+    // qualified access from outside the module
+    let code = io.file.denied
+    assert(code > 65535)
+
+    // qualified pattern with the module path
+    let a = match io.fail() with
+            | ok(v) -> 0
+            | err(io.file.not_found) -> 1
+            | err(_) -> 2
+    assert(a == 1)
+
+    // error_name carries the full module path
+    let b = match error_name(io.file.not_found) with
+            | some(n) -> if n == "io.file.not_found" then 1 else 2
+            | none -> 0
+    assert(b == 1)
+    0

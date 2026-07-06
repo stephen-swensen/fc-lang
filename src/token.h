@@ -17,6 +17,7 @@ typedef enum {
     TOK_MUT,
     TOK_STRUCT,
     TOK_UNION,
+    TOK_ERROR_KW,       /* 'error' — error-group declaration / the i32 display alias in type position */
     TOK_MODULE,
     TOK_NAMESPACE,
     TOK_IMPORT,
@@ -60,6 +61,7 @@ typedef enum {
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,
+    TOK_ERROR_NAME,     /* error_name — declared-error name lookup */
     TOK_ATOMIC_LOAD,    /* atomic_load_acquire */
     TOK_ATOMIC_STORE,   /* atomic_store_release */
     /* String interpolation */

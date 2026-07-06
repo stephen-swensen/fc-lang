@@ -173,7 +173,7 @@ struct { int32_t err; T value; }   /* err == 0  ⇔  ok */
   syntax (`foo!` binds tightest without them). Documented rule, same class as the existing
   `(a*) b` vs `(a * b)` resolution.
 
-## Error-code organization: `error` declarations — ADOPTED 2026-07-06 (implementation pending)
+## Error-code organization: `error` declarations — ADOPTED 2026-07-06, IMPLEMENTED 2026-07-06
 
 *Second design pass on this branch, resolving follow-up 3 below (code-space ownership). Decided
 in discussion 2026-07-06; this records the decision and the rejected alternatives.*
@@ -308,6 +308,18 @@ Three channels deliver names, each with its own cost home (decided 2026-07-06):
 - The pseudo-module can likely ride the existing companion-module machinery (a group registers
   as a module of `i32` consts); the err-binding's type node carries the `error` display alias.
 - Pattern grammar grows qualified-constant paths (`grammar.bnf` update alongside).
+
+*(As implemented 2026-07-06: the parser desugars `error g = | m …` directly to a `DECL_MODULE`
+flagged `is_error_group` whose members are synthesized immutable i32-const lets — so
+registration, imports, privacy, member access, const-folding, LSP hover/completion/go-to-def,
+and codegen all ride the module machinery with zero special cases. pass1 assigns codes at the
+end of collection by patching each member's `EXPR_INT_LIT` placeholder (sorted fully-qualified
+names, numbered from `FC_ERROR_CODE_BASE`); the registry behind `error_name` /
+`--emit-error-codes` lives in pass1 with accessors. Pattern paths parse to `PAT_CONST_PATH`,
+resolve through a synthesized expression chain (so imports/privacy/shadowing match expression
+positions exactly), and rewrite in place to `PAT_INT_LIT` — exhaustiveness, duplicate-arm
+analysis, and codegen see a plain integer literal. `error_name` yields `const str?` — the name
+lives in a static table, same rule as string literals.)*
 - Stdlib-migration follow-ups, not blockers: an errno accessor shim (`errno` is a C macro, not
   a symbol — an `__errno_location`-style extern or one-line C helper), `GetLastError` on
   Windows, and *optionally* per-platform named errno const groups behind the existing
@@ -347,7 +359,9 @@ Three channels deliver names, each with its own cost home (decided 2026-07-06):
 2. **Propagation operator `x?`** — separate design pass once `T!` is in hand; the grid reserves
    the spelling.
 3. **Stdlib error-code convention** — ✅ RESOLVED 2026-07-06: compiler-owned code space via
-   `error` declarations; see "Error-code organization" above (implementation pending).
+   `error` declarations; see "Error-code organization" above. ✅ IMPLEMENTED 2026-07-06
+   (tests in `tests/cases/errors/` + `backtraces/err_unwrap_named`; spec §Named error codes;
+   grammar `error_decl`/const-path pattern/`error` type atom/`error_name_expr`).
 4. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
    trails the feature, lands on this branch before merge into `develop`.
 

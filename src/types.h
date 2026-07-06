@@ -126,6 +126,7 @@ Type *type_cstr(void);
 Type *type_const_str(void);
 Type *type_const_cstr(void);
 Type *type_char(void);
+Type *type_error_code(void);
 Type *type_any_ptr(void);
 Type *type_error(void);
 Type *type_never(void);

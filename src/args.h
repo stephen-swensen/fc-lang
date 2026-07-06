@@ -52,6 +52,9 @@ typedef struct {
     Flag        *flags;      /* owned array; name/value borrow ExpandedArgs   */
     int          flag_count, flag_cap;
     bool         backtraces;
+    bool         emit_error_codes;      /* --emit-error-codes[=path] present  */
+    char        *emit_error_codes_path; /* owned: explicit =path (rebased);
+                                           NULL → derive from the output name */
     char        *error;      /* owned message if parsing failed, else NULL   */
 } CompileArgs;
 

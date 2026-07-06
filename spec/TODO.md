@@ -17,10 +17,17 @@ followed by an expression start). **`spec/result-type-design.md` remains the sin
 truth**; don't re-litigate here. Remaining follow-ups, in order:
 
 1. **Propagation operator `x?`** — separate design pass; the `?`/`!` grid reserves the spelling.
-2. **Stdlib error-code convention** — code-space ownership rules (per-module ranges or a
-   registry) before any migration.
+2. **Stdlib error-code convention** — ✅ IMPLEMENTED 2026-07-06: compiler-owned code space via
+   `error` declarations (hard keyword; groups desugar to pseudo-modules of i32 consts;
+   deterministic assignment from 65536, [1, 65535] reserved platform passthrough; qualified
+   constant patterns; `error` i32 display alias in type position; `error_name(e) -> str?`
+   intrinsic; named `x!` aborts under `--backtraces`; `--emit-error-codes[=path]` map).
+   Design record in `spec/result-type-design.md` §Error-code organization; spec §Named error
+   codes; tests `tests/cases/errors/` + `backtraces/err_unwrap_named`.
 3. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
-   lands on this branch before merge into `develop`.
+   lands on this branch before merge into `develop`. Now unblocked by item 2; includes the
+   errno accessor shim (`errno` is a macro, not a symbol) and optionally per-platform named
+   errno const groups behind the conditional-compilation flags.
 
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 

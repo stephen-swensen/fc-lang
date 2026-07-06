@@ -55,6 +55,7 @@ typedef enum {
     EXPR_SOME,
     EXPR_OK,            /* ok(v) — result construction, infers from payload */
     EXPR_ERR,           /* err(T, code) — result construction, type-anchored like none(T) */
+    EXPR_ERROR_NAME,    /* error_name(e) — str? name of a declared error code */
     EXPR_DEREF_FIELD,   /* x->f */
     EXPR_LET,           /* let binding inside a block */
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
@@ -348,6 +349,12 @@ struct Expr {
          * zero, runtime guard otherwise, mirroring some(null)). */
         struct { Type *target; Expr *code; } err_expr;
 
+        /* EXPR_ERROR_NAME — error_name(e): str? holding the fully-qualified name of a
+         * declared error code (some("file_io.not_found")), none for reserved-range and
+         * negative codes. Backed by a static name table emitted only when used (or
+         * unconditionally under --backtraces). */
+        struct { Expr *code; } error_name_expr;
+
         /* EXPR_MATCH */
         struct {
             Expr *subject;
@@ -412,6 +419,10 @@ typedef enum {
     PAT_SOME,
     PAT_OK,
     PAT_ERR,
+    PAT_CONST_PATH, /* group.member / mod.group.member — a declared error constant.
+                       Resolved in pass2 and rewritten in place to PAT_INT_LIT with the
+                       assigned code, so exhaustiveness/duplicate analysis and codegen
+                       see a plain integer literal. */
     PAT_VARIANT,
     PAT_STRUCT,
     PAT_TUPLE, /* { a, b, ... } — positional tuple destructuring (let-bindings only) */
@@ -429,6 +440,7 @@ struct Pattern {
         struct { uint8_t value; } char_lit;
         struct { bool value; } bool_lit;
         struct { const char *value; int length; } string_lit;
+        struct { const char **parts; int part_count; } const_path; /* PAT_CONST_PATH */
         struct { Pattern *inner; } some_pat;   /* PAT_SOME, PAT_OK (inner over T), PAT_ERR (inner over i32) */
         struct {
             const char *variant;
@@ -522,6 +534,9 @@ struct Decl {
             const char *define_value; /* NULL unless define present */
             Decl **decls;
             int decl_count;
+            bool is_error_group;    /* true when this module was desugared from an `error`
+                                       declaration: decls are synthesized i32-const lets whose
+                                       init values pass1 assigns deterministically from 65536 */
         } module;
 
         /* DECL_IMPORT */
@@ -577,3 +592,11 @@ bool ptr_value_provably_nonnull(const struct Expr *e);
 bool ptr_value_provably_null(const struct Expr *e);
 bool int_value_provably_nonzero(const struct Expr *e);
 bool int_value_provably_zero(const struct Expr *e);
+
+/* If e is a resolved reference to a declared error constant (a member of an
+ * `error` group, reached as `group.member`/`mod.group.member` or through an
+ * import as a bare name), return the member's assigned EXPR_INT_LIT; else
+ * NULL. Defined in codegen.c beside the provably-nonzero predicates so the
+ * err(T,0) guard-elision and const-folding decisions share one source of
+ * truth. */
+const struct Expr *error_const_literal(const struct Expr *e);

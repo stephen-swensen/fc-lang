@@ -68,7 +68,8 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
                 "usage: fcc <input.fc> [input2.fc ...] [-o output.c]\n"
-                "       [@response.rsp] [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n");
+                "       [@response.rsp] [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n"
+                "       [--emit-error-codes[=path]]\n");
         return 1;
     }
 
@@ -225,6 +226,31 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
         remove(output_path);
         return 1;
+    }
+
+    /* --emit-error-codes: write the declared-error code map next to the build
+     * artifacts (the "strip the binary, keep the map" channel). One line per
+     * declared error, sorted by code — deterministic, so CI can diff the map
+     * across builds to see exactly which codes shifted. Reserved-range
+     * passthrough codes (errno / Win32) belong to the platform's own
+     * documentation and are not listed. */
+    if (ca.emit_error_codes) {
+        char *derived = ca.emit_error_codes_path
+            ? NULL : change_extension(output_path, ".errcodes");
+        const char *map_path = ca.emit_error_codes_path
+            ? ca.emit_error_codes_path : derived;
+        FILE *mf = fopen(map_path, "w");
+        if (!mf) {
+            diag_fatal_simple("cannot open error-code map '%s'", map_path);
+        }
+        for (int i = 0; i < error_code_count(); i++) {
+            ErrorCodeInfo info = error_code_info(i);
+            fprintf(mf, "%d\t%s\t%s:%d\n", FC_ERROR_CODE_BASE + i, info.qualified,
+                    info.loc.filename ? info.loc.filename : "<unknown>",
+                    info.loc.line);
+        }
+        fclose(mf);
+        free(derived);
     }
 
     /* Cleanup */

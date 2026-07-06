@@ -1,0 +1,27 @@
+// `error` in type position is a display alias of i32 — fully interchangeable.
+error disk =
+    | full
+
+let log_code = (e: error) ->
+    e + 0
+
+let main = (args: str[]) ->
+    // parameter annotation accepts named codes and plain i32
+    assert(log_code(disk.full) == disk.full)
+    assert(log_code(7) == 7)
+
+    // cast form and default/sizeof
+    let c = (error) 5
+    assert(c == 5)
+    assert(default(error) == 0)
+    assert(sizeof(error) == 4)
+
+    // slice of error codes
+    let codes = error[2]{ disk.full, 9 }
+    assert(codes[0] == disk.full)
+    assert(codes[1] == 9)
+
+    // widening: error (i32) widens to i64 like any i32
+    let wide = 0i64 + disk.full
+    assert(wide == (i64) disk.full)
+    0

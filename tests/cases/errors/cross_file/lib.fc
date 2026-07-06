@@ -1,0 +1,7 @@
+error aa_remote =
+    | second
+    | first
+
+module lib =
+    let fail = () ->
+        err(i32, aa_remote.second)

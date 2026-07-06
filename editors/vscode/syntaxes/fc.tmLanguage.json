@@ -50,11 +50,11 @@
         },
         {
           "name": "keyword.other.fc",
-          "match": "\\b(let|mut|struct|union|module|namespace|import|from|as|extern|private|define|guarded|unguarded|checked|unchecked)\\b"
+          "match": "\\b(let|mut|struct|union|error|module|namespace|import|from|as|extern|private|define|guarded|unguarded|checked|unchecked)\\b"
         },
         {
           "name": "support.function.builtin.fc",
-          "match": "\\b(alloc|alloca|free|sizeof|alignof|default|assert|some|atomic_load_acquire|atomic_store_release)\\b"
+          "match": "\\b(alloc|alloca|free|sizeof|alignof|default|assert|some|ok|err|error_name|atomic_load_acquire|atomic_store_release)\\b"
         }
       ]
     },

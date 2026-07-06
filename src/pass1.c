@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 /* Copy a malloc'd name array (built by type_collect_vars via DA_APPEND) into the
  * arena so it is reclaimed with the AST. These type_params arrays are aliased
@@ -706,7 +707,10 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             child->let.codegen_name = mangled;
             child->let.is_module_member = true;
             if (symtab_lookup(members, src_name)) {
-                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                diag_error(child->loc,
+                    d->module.is_error_group
+                        ? "redefinition of '%s' in error group '%s'"
+                        : "redefinition of '%s' in module '%s'",
                     src_name, mod_name);
             } else {
                 symtab_add(members, src_name, DECL_LET, child);
@@ -1018,6 +1022,80 @@ static void set_type_resolved_syms(SymbolTable *tab) {
     }
 }
 
+/* ---- Error-code assignment (`error` groups) --------------------------------
+ * The compiler owns the error-code space: every declared error constant gets a
+ * deterministic code — fully-qualified names are sorted (strcmp) and numbered
+ * sequentially from FC_ERROR_CODE_BASE. Runs at the end of pass1_collect, once
+ * the whole program has been merged, by patching each synthesized member let's
+ * EXPR_INT_LIT placeholder in place. The registry below backs error_name /
+ * --backtraces name tables in codegen and the --emit-error-codes listing. */
+
+typedef struct ErrEntry {
+    const char *qualified;
+    Decl *let_decl;
+} ErrEntry;
+
+static ErrEntry *g_err_entries = NULL;
+static int g_err_count = 0, g_err_cap = 0;
+
+int error_code_count(void) { return g_err_count; }
+
+ErrorCodeInfo error_code_info(int idx) {
+    ErrorCodeInfo info = { g_err_entries[idx].qualified, g_err_entries[idx].let_decl->loc };
+    return info;
+}
+
+static int err_entry_cmp(const void *a, const void *b) {
+    return strcmp(((const ErrEntry *)a)->qualified, ((const ErrEntry *)b)->qualified);
+}
+
+/* Collect the error-group members under module decl d, whose own display path
+ * (including d's name, [ns::]mod.sub…) is display_prefix. */
+static void collect_error_members(Decl *d, const char *display_prefix,
+                                  InternTable *intern) {
+    for (int j = 0; j < d->module.decl_count; j++) {
+        Decl *child = d->module.decls[j];
+        if (d->module.is_error_group) {
+            if (child->kind != DECL_LET) continue;
+            ErrEntry e = { make_qualified(intern, display_prefix, child->let.name), child };
+            DA_APPEND(g_err_entries, g_err_count, g_err_cap, e);
+        } else if (child->kind == DECL_MODULE) {
+            collect_error_members(child,
+                make_qualified(intern, display_prefix, child->module.name), intern);
+        }
+    }
+}
+
+static void assign_error_codes(Program *prog, InternTable *intern) {
+    g_err_count = 0;  /* rebuilt per collection — the LSP re-runs pass1 per edit */
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind != DECL_MODULE) continue;
+        const char *display;
+        if (d->module.ns_prefix) {  /* stamped in Phase 1 */
+            int needed = snprintf(NULL, 0, "%s::%s", d->module.ns_prefix, d->module.name) + 1;
+            char *buf = malloc((size_t)needed);
+            snprintf(buf, (size_t)needed, "%s::%s", d->module.ns_prefix, d->module.name);
+            display = intern_cstr(intern, buf);
+            free(buf);
+        } else {
+            display = d->module.name;
+        }
+        collect_error_members(d, display, intern);
+    }
+    if (g_err_count == 0) return;
+    qsort(g_err_entries, (size_t)g_err_count, sizeof(ErrEntry), err_entry_cmp);
+    if ((int64_t)g_err_count > (int64_t)INT32_MAX - FC_ERROR_CODE_BASE) {
+        diag_error(g_err_entries[0].let_decl->loc,
+            "too many declared errors (%d) — the error-code space is exhausted",
+            g_err_count);
+        return;
+    }
+    for (int i = 0; i < g_err_count; i++)
+        g_err_entries[i].let_decl->let.init->int_lit.value =
+            (uint64_t)(FC_ERROR_CODE_BASE + i);
+}
+
 /* Walk modules and set parent pointers on every member symbol — not just nested
  * modules but also member lets and types — so an on-demand type check can recover
  * a member's enclosing module Symbol (and through it, that module's scope and
@@ -1149,7 +1227,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 continue;
             }
             if (existing->kind == DECL_MODULE) {
-                diag_error(d->loc, "redefinition of module '%s'", mod_name);
+                diag_error(d->loc,
+                    d->module.is_error_group
+                        ? "redefinition of error group '%s'"
+                        : "redefinition of module '%s'",
+                    mod_name);
                 continue;
             }
         }
@@ -1542,6 +1624,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     case EXPR_SOME: PUSH(ex->some_expr.value); break;
                     case EXPR_OK: PUSH(ex->ok_expr.value); break;
                     case EXPR_ERR: PUSH(ex->err_expr.code); break;
+                    case EXPR_ERROR_NAME: PUSH(ex->error_name_expr.code); break;
                     case EXPR_STRUCT_LIT:
                         for (int f = 0; f < ex->struct_lit.field_count; f++) { PUSH(ex->struct_lit.fields[f].value); }
                         break;
@@ -1636,4 +1719,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
      * after all symtab mutations are complete so Symbol pointers are stable. */
     set_type_resolved_syms(symtab);
     set_module_parents(symtab, NULL);
+
+    /* Assign deterministic codes to declared error constants (error groups).
+     * Whole-program by construction: runs on the merged Program. */
+    assign_error_codes(prog, intern);
 }

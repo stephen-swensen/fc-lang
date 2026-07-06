@@ -1,0 +1,17 @@
+// A named code is provably non-zero, so err(T, group.member) is a valid
+// constant initializer (the zero-code guard is elided at compile time).
+error io =
+    | eof
+
+module m =
+    let default_result = err(i32, io.eof)
+    let the_code = io.eof
+
+let main = (args: str[]) ->
+    let a = match m.default_result with
+            | ok(v) -> 0
+            | err(io.eof) -> 1
+            | err(_) -> 2
+    assert(a == 1)
+    assert(m.the_code == io.eof)
+    0

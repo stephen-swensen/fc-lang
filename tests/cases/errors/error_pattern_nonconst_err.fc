@@ -1,0 +1,9 @@
+module m =
+    let limit = 42
+
+let main = (args: str[]) ->
+    let x = 42
+    let a = match x with
+            | m.limit -> 1
+            | _ -> 0
+    a

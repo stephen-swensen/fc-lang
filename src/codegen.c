@@ -13,6 +13,12 @@ typedef struct {
     int count;
 } SubstCtx;
 static SubstCtx *g_subst = NULL;
+
+/* Declared early: read by the result-unwrap emitter (named aborts) well before
+ * the feature-detection block that owns the rest of the g_* flags. */
+static bool g_backtraces;
+static bool g_uses_error_name;   /* any error_name(...) in emitted code */
+static bool g_errname_emitted;   /* the fc_errname table/lookup were emitted */
 /* Suffix appended to every lifted-lambda name while emitting a monomorphized
  * generic instance.  Lambdas inside generic bodies are emitted once per
  * instantiation (a capture/param/return may be typed by the enclosing type
@@ -318,6 +324,9 @@ static void collect_hoisted_bindings(Expr *e) {
         break;
     case EXPR_ERR:
         collect_hoisted_bindings(e->err_expr.code);
+        break;
+    case EXPR_ERROR_NAME:
+        collect_hoisted_bindings(e->error_name_expr.code);
         break;
     case EXPR_GUARD:
         collect_hoisted_bindings(e->guard.body);
@@ -635,8 +644,26 @@ bool ptr_value_provably_null(const Expr *e) {
  * would be dead), provably_zero true ONLY when it always is (pass2 rejects).
  * Anything uncertain yields false from both → a runtime guard. Negation
  * preserves zero-ness exactly (including INT_MIN), so unary minus recurses. */
+const Expr *error_const_literal(const Expr *e) {
+    if (!e) return NULL;
+    const Symbol *s = NULL;
+    if (e->kind == EXPR_FIELD) s = e->field.resolved_member;
+    else if (e->kind == EXPR_IDENT) s = e->ident.resolved_sym;
+    if (!s || s->kind != DECL_LET || !s->decl || !s->parent || !s->parent->decl)
+        return NULL;
+    const Decl *pd = s->parent->decl;
+    if (pd->kind != DECL_MODULE || !pd->module.is_error_group) return NULL;
+    return s->decl->let.init;  /* the assigned EXPR_INT_LIT (patched by pass1) */
+}
+
 bool int_value_provably_nonzero(const Expr *e) {
     if (!e) return false;
+    /* A declared error constant is provably non-zero by construction
+     * (assignment numbers from 65536) — the err(T,0) guard is elided. */
+    {
+        const Expr *lit = error_const_literal(e);
+        if (lit) return lit->int_lit.value != 0;
+    }
     switch (e->kind) {
     case EXPR_INT_LIT: return e->int_lit.value != 0;
     case EXPR_UNARY_PREFIX:
@@ -650,6 +677,10 @@ bool int_value_provably_nonzero(const Expr *e) {
 
 bool int_value_provably_zero(const Expr *e) {
     if (!e) return false;
+    {
+        const Expr *lit = error_const_literal(e);
+        if (lit) return lit->int_lit.value == 0;  /* never true post-assignment */
+    }
     switch (e->kind) {
     case EXPR_INT_LIT: return e->int_lit.value == 0;
     case EXPR_DEFAULT:
@@ -1061,6 +1092,7 @@ static bool expr_has_side_effects(Expr *e) {
     case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
     case EXPR_OK:   return expr_has_side_effects(e->ok_expr.value);
     case EXPR_ERR:  return true;   /* may abort via the zero-code guard */
+    case EXPR_ERROR_NAME: return expr_has_side_effects(e->error_name_expr.code);
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++)
             if (!e->interp_string.segments[i].is_literal &&
@@ -1249,7 +1281,8 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     switch (pat->kind) {
     case PAT_BINDING:
     case PAT_WILDCARD:
-    case PAT_ERROR:   /* unreachable: error nodes never reach codegen */
+    case PAT_ERROR:      /* unreachable: error nodes never reach codegen */
+    case PAT_CONST_PATH: /* unreachable: rewritten to PAT_INT_LIT in pass2 */
         break;
     case PAT_INT_LIT:
         if (!*first) fprintf(out, " && ");
@@ -1404,7 +1437,8 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
    type is the FC type of the value. */
 static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *out) {
     switch (pat->kind) {
-    case PAT_ERROR:   /* unreachable: error nodes never reach codegen */
+    case PAT_ERROR:      /* unreachable: error nodes never reach codegen */
+    case PAT_CONST_PATH: /* unreachable: rewritten to PAT_INT_LIT in pass2 */
         break;
     case PAT_BINDING:
         emit_indent(out);
@@ -2848,14 +2882,28 @@ static void emit_expr(Expr *e, FILE *out) {
                 int tid = temp_counter++;
                 fprintf(out, " _uw%d = ", tid);
                 emit_expr(e->unary_postfix.operand, out);
-                fprintf(out, "; if (_uw%d.err != 0) { fprintf(stderr, \"", tid);
+                fprintf(out, "; if (_uw%d.err != 0) { ", tid);
+                /* Under --backtraces the error-name table is present — print
+                 * the qualified name alongside the code; lean builds keep
+                 * the number only. */
+                bool named = g_backtraces && g_errname_emitted &&
+                             error_code_count() > 0;
+                if (named)
+                    fprintf(out, "const fc_errname *_nm%d = fc_error_lookup(_uw%d.err); ",
+                            tid, tid);
+                fprintf(out, "fprintf(stderr, \"");
                 emit_c_escaped(fn, fn_len, out);
                 fprintf(out, ":%d: unwrap failed: ", line);
                 if (e->unary_postfix.expr_text)
                     emit_c_escaped(e->unary_postfix.expr_text,
                                    e->unary_postfix.expr_text_len, out);
-                fprintf(out, " (error code %%lld)\\n\", (long long)_uw%d.err); "
-                             "FC_ABORT(); } _uw%d.value; })", tid, tid);
+                if (named)
+                    fprintf(out, " (error code %%lld%%s%%s)\\n\", (long long)_uw%d.err, "
+                                 "_nm%d ? \": \" : \"\", _nm%d ? _nm%d->name : \"\"); ",
+                            tid, tid, tid, tid);
+                else
+                    fprintf(out, " (error code %%lld)\\n\", (long long)_uw%d.err); ", tid);
+                fprintf(out, "FC_ABORT(); } _uw%d.value; })", tid);
             } else if (is_null_sentinel(opt_type)) {
                 /* T*? → plain pointer, unwrap = null check */
                 fprintf(out, "({ ");
@@ -3512,6 +3560,21 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->type, out);
             fprintf(out, "){ .err = _ec%d }; })", tid);
         }
+        break;
+    }
+
+    case EXPR_ERROR_NAME: {
+        /* error_name(e) — some(qualified name) for a declared code, none
+         * otherwise. The str points into the static fc_errnames table. */
+        int tid = temp_counter++;
+        fprintf(out, "({ const fc_errname *_en%d = fc_error_lookup(", tid);
+        emit_expr(e->error_name_expr.code, out);
+        fprintf(out, "); _en%d ? (", tid);
+        emit_type(e->type, out);
+        fprintf(out, "){ .value = { .ptr = (uint8_t *)_en%d->name, .len = _en%d->len }, "
+                     ".has_value = true } : (", tid, tid);
+        emit_type(e->type, out);
+        fprintf(out, "){ .has_value = false }; })");
         break;
     }
 
@@ -5287,6 +5350,9 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_ERR:
         collect_types_expr(e->err_expr.code, slices, options, fns);
         break;
+    case EXPR_ERROR_NAME:
+        collect_types_expr(e->error_name_expr.code, slices, options, fns);
+        break;
     case EXPR_ARRAY_LIT:
         collect_types_in_type(e->array_lit.elem_type, slices, options, fns);
         for (int i = 0; i < e->array_lit.elem_count; i++)
@@ -5470,6 +5536,9 @@ static void collect_const_backings(Expr *e) {
     case EXPR_ERR:
         collect_const_backings(e->err_expr.code);
         break;
+    case EXPR_ERROR_NAME:
+        collect_const_backings(e->error_name_expr.code);
+        break;
     case EXPR_CALL:
         if (e->call.func->kind == EXPR_FIELD &&
             e->call.func->field.is_variant_constructor) {
@@ -5619,6 +5688,9 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
     case EXPR_ERR:
         collect_trampolines_expr(e->err_expr.code, ts);
         break;
+    case EXPR_ERROR_NAME:
+        collect_trampolines_expr(e->error_name_expr.code, ts);
+        break;
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_trampolines_expr(e->array_lit.elems[i], ts);
@@ -5754,6 +5826,9 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         break;
     case EXPR_ERR:
         collect_lambdas_expr(e->err_expr.code, ls);
+        break;
+    case EXPR_ERROR_NAME:
+        collect_lambdas_expr(e->error_name_expr.code, ls);
         break;
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
@@ -6210,7 +6285,8 @@ static void collect_defines(Decl *d, CDefine *defs, int *count, int cap) {
 static bool g_needs_stdio;
 static bool g_needs_math;
 static bool g_needs_float;
-static bool g_backtraces;
+/* g_backtraces / g_uses_error_name / g_errname_emitted are declared at the
+ * top of the file — the result-unwrap emitter reads them. */
 
 /* Symbol map populated during codegen when g_backtraces is set; emitted as
  * _fc_symtab[] in the preamble so fc_dump_backtrace() can render FC-level names. */
@@ -6418,6 +6494,10 @@ static void detect_features_expr(Expr *e) {
         if (!int_value_provably_nonzero(e->err_expr.code))
             g_needs_stdio = true;
         detect_features_expr(e->err_expr.code);
+        return;
+    case EXPR_ERROR_NAME:
+        g_uses_error_name = true;
+        detect_features_expr(e->error_name_expr.code);
         return;
     case EXPR_ALLOC:
         detect_features_expr(e->alloc_expr.init_expr);
@@ -6667,6 +6747,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_needs_stdio = false;
     g_needs_math = false;
     g_needs_float = false;
+    g_uses_error_name = false;
+    g_errname_emitted = false;
     for (int i = 0; i < all_count; i++)
         detect_features_decl(all_decls[i]);
     /* Also scan monomorphized template bodies */
@@ -6849,6 +6931,41 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         symmap_add("fc_zero_err", NULL, "<runtime>", 0);
         symmap_add("fc_overflow", NULL, "<runtime>", 0);
         symmap_add("fc_trunc", NULL, "<runtime>", 0);
+    }
+
+    /* Declared-error name table + O(1) lookup: backs error_name() and, under
+     * --backtraces, the named result-unwrap abort. Emitted only when
+     * error_name is used — a static cost, no runtime machinery — except that
+     * --backtraces (the "pay static data for readable failures" knob) emits
+     * it unconditionally. Codes are assigned contiguously from
+     * FC_ERROR_CODE_BASE, so the table is indexed directly by (e - base). */
+    if (g_uses_error_name || (g_backtraces && error_code_count() > 0)) {
+        int n = error_code_count();
+        fprintf(out, "typedef struct { const char *name; int32_t len; } fc_errname;\n");
+        if (n > 0) {
+            fprintf(out, "static const fc_errname fc_errnames[%d] = {\n", n);
+            for (int i = 0; i < n; i++) {
+                ErrorCodeInfo info = error_code_info(i);
+                fprintf(out, "    { \"");
+                emit_c_escaped(info.qualified, (int)strlen(info.qualified), out);
+                fprintf(out, "\", %d },\n", (int)strlen(info.qualified));
+            }
+            fprintf(out, "};\n");
+            /* %dL literals keep the comparisons int-width-agnostic (a 16-bit
+             * int platform promotes to long on both sides). */
+            fprintf(out,
+                "__attribute__((unused))\n"
+                "static const fc_errname *fc_error_lookup(int32_t e) {\n"
+                "    if (e < %dL || e >= %dL + %dL) return 0;\n"
+                "    return &fc_errnames[e - %dL];\n"
+                "}\n",
+                FC_ERROR_CODE_BASE, FC_ERROR_CODE_BASE, n, FC_ERROR_CODE_BASE);
+        } else {
+            fprintf(out,
+                "__attribute__((unused))\n"
+                "static const fc_errname *fc_error_lookup(int32_t e) { (void)e; return 0; }\n");
+        }
+        g_errname_emitted = true;
     }
 
     /* Collect all slice, option, result, function, and eq types used in the

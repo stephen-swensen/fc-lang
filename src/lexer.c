@@ -121,6 +121,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"none",      4,  TOK_NONE},
         {"ok",        2,  TOK_OK},
         {"err",       3,  TOK_ERR},
+        {"error",     5,  TOK_ERROR_KW},
         {"void",      4,  TOK_VOID},
         {"guarded",   7,  TOK_GUARDED},
         {"unguarded", 9,  TOK_UNGUARDED},
@@ -135,6 +136,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"default",   7,  TOK_DEFAULT},
         {"const",     5,  TOK_CONST},
         {"assert",    6,  TOK_ASSERT},
+        {"error_name", 10, TOK_ERROR_NAME},
         {"atomic_load_acquire",  19, TOK_ATOMIC_LOAD},
         {"atomic_store_release", 20, TOK_ATOMIC_STORE},
     };
@@ -1036,7 +1038,8 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
 
         /* Track context for the `=` block-former detection */
         if (t.kind == TOK_LET || t.kind == TOK_STRUCT ||
-            t.kind == TOK_UNION || t.kind == TOK_MODULE) {
+            t.kind == TOK_UNION || t.kind == TOK_ERROR_KW ||
+            t.kind == TOK_MODULE) {
             saw_decl_keyword = true;
         }
     }

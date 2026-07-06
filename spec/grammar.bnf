@@ -110,7 +110,7 @@ TYPE_VAR      = "'" , letter , { ident_cont } ;
 (* ------------------------------------------------------------------ *)
 
 (* Reserved words — may not be used as identifiers.                    *)
-keyword = "let" | "mut" | "struct" | "union" | "module"
+keyword = "let" | "mut" | "struct" | "union" | "error" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
         | "private" | "const" | "match" | "with" | "when" | "if" | "then" | "else"
         | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
@@ -294,6 +294,7 @@ top_level_item   = import_decl
                  | let_decl
                  | struct_decl
                  | union_decl
+                 | error_decl
                  | module_decl
                  | cond_comp_block
                  ;
@@ -353,6 +354,20 @@ union_body       = variant_decl , { NEWLINE , variant_decl } ;
 
 variant_decl     = "|" , IDENT , [ "(" , type_expr , ")" ] ;
 
+(* --- error group -------------------------------------------------- *)
+(* An error group declares named i32 error constants (no payloads).    *)
+(* The group is a pseudo-module of constants, not a type: members are  *)
+(* accessed as group.member, and the compiler assigns each declared    *)
+(* error a unique code (fully-qualified names sorted, numbered from    *)
+(* 65536; [1, 65535] is reserved platform passthrough, 0 is the ok     *)
+(* tag). The member constants' display type is `error` (an i32 alias). *)
+
+error_decl       = [ "private" ] , "error" , IDENT , "=" , INDENT , error_body , DEDENT ;
+
+error_body       = error_member , { NEWLINE , error_member } ;
+
+error_member     = "|" , IDENT ;
+
 (* --- module ------------------------------------------------------- *)
 (* A module with "from" is a C binding module — it may only contain   *)
 (* extern declarations. A module without "from" may not contain       *)
@@ -366,6 +381,7 @@ module_body      = { module_item , NEWLINE } ;
 module_item      = let_decl
                  | struct_decl
                  | union_decl
+                 | error_decl
                  | module_decl
                  | extern_decl       (* only valid when enclosing module has "from" *)
                  | extern_struct     (* only valid when enclosing module has "from" *)
@@ -439,6 +455,7 @@ type_postfix     = "*"                           (* pointer type:  T*     *)
 
 type_atom        = builtin_type                  (* i32, str, cstr, ... *)
                  | "void"
+                 | "error"                       (* i32 display alias for error codes *)
                  | "any" , "*"                   (* any*  — opaque pointer *)
                  | IDENT , [ "<" , type_arg_list , ">" ]   (* user-defined, possibly generic *)
                  | TYPE_VAR                       (* 'a, 'b, 'elem, ...   *)
@@ -792,6 +809,12 @@ ok_expr          = "ok" , "(" , expr , ")" ;
 (* unprovable one is guarded at runtime.                                  *)
 err_expr         = "err" , "(" , type_expr , "," , expr , ")" ;
 
+(* error_name(e) yields str?: some of the fully-qualified name of a       *)
+(* declared error code ("file_io.not_found"), none for reserved-range     *)
+(* (platform passthrough) and negative codes. Backed by a static name     *)
+(* table emitted only when used (or unconditionally under --backtraces).  *)
+error_name_expr  = "error_name" , "(" , expr , ")" ;
+
 
 (* ------------------------------------------------------------------ *)
 (*  Struct, slice, and variant literals                                *)
@@ -853,6 +876,9 @@ pattern_atom     = "_"                                   (* wildcard           *
                  | IDENT , "(" , pattern , ")"           (* variant(pattern)   *)
                  | struct_destruct_pattern               (* { field = pat }    *)
                  | tuple_destruct_pattern                (* { pat, pat, ... }  *)
+                 | IDENT , "." , IDENT , { "." , IDENT } (* declared error constant: group.member /
+                                                            mod.group.member — qualification is
+                                                            mandatory (a bare member is a binding) *)
                  | IDENT                                 (* binding name       *)
                  ;
 

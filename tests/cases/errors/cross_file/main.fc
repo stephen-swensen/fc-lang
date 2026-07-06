@@ -1,0 +1,17 @@
+// Codes are assigned over the whole program: groups from every file share
+// one sorted, contiguous space.
+error zz_local =
+    | only
+
+let main = (args: str[]) ->
+    // sorted qualified names: aa_remote.first, aa_remote.second, zz_local.only
+    assert(aa_remote.first == 65536)
+    assert(aa_remote.second == 65537)
+    assert(zz_local.only == 65538)
+
+    let a = match lib.fail() with
+            | ok(v) -> 0
+            | err(aa_remote.second) -> 1
+            | err(_) -> 2
+    assert(a == 1)
+    0
