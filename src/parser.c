@@ -186,7 +186,8 @@ static const char *tok_intern(Parser *p, Token *t) {
 static Token *expect_extern_c_name(Parser *p) {
     TokenKind k = current(p)->kind;
     if (k == TOK_IDENT || k == TOK_ALLOC || k == TOK_FREE || k == TOK_SIZEOF ||
-        k == TOK_ALIGNOF || k == TOK_DEFAULT || k == TOK_ASSERT) {
+        k == TOK_ALIGNOF || k == TOK_DEFAULT || k == TOK_ASSERT ||
+        k == TOK_OK || k == TOK_ERR) {
         return advance_p(p);
     }
     diag_error(loc_from_token(current(p)),
@@ -291,7 +292,7 @@ static bool is_type_arg_token(TokenKind k) {
     case TOK_LT: case TOK_GT:
     case TOK_COMMA:
     case TOK_DOT:                       /* module-qualified type: m.point */
-    case TOK_QUESTION: case TOK_STAR:
+    case TOK_QUESTION: case TOK_STAR: case TOK_BANG:
     case TOK_LBRACKET: case TOK_RBRACKET:
     case TOK_LPAREN: case TOK_RPAREN:
     case TOK_LBRACE: case TOK_RBRACE:   /* tuple type {T1, T2} as a generic arg */
@@ -429,6 +430,11 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             base = type_option(p->arena, base);
             continue;
         }
+        if (check(p, TOK_BANG)) {
+            advance_p(p);
+            base = type_result(p->arena, base);
+            continue;
+        }
         break;
     }
     return base;
@@ -452,6 +458,16 @@ static Type *apply_const(Arena *a, Type *inner, SrcLoc loc) {
         ci->is_const = true;
         Type *opt = type_option(a, ci);
         return opt;
+    }
+    if (inner->kind == TYPE_RESULT &&
+        inner->result.inner &&
+        (inner->result.inner->kind == TYPE_POINTER ||
+         inner->result.inner->kind == TYPE_SLICE ||
+         inner->result.inner->kind == TYPE_ANY_PTR)) {
+        Type *ci = arena_alloc(a, sizeof(Type));
+        *ci = *inner->result.inner;
+        ci->is_const = true;
+        return type_result(a, ci);
     }
     diag_error(loc, "'const' can only modify pointer (*) or slice ([]) types, got %s",
                type_name(inner));
@@ -1131,6 +1147,30 @@ static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
     return e;
 }
 
+/* Can this token begin a prefix expression (parse_prefix)? Used by the
+ * (IDENT!) cast disambiguation: a `!`-triggered cast attempt commits only
+ * when the token after `)` starts an expression (the cast operand). */
+static bool token_starts_prefix_expr(TokenKind k) {
+    switch (k) {
+    case TOK_INT_LIT: case TOK_FLOAT_LIT: case TOK_STRING_LIT:
+    case TOK_CSTRING_LIT: case TOK_CHAR_LIT:
+    case TOK_INTERP_START: case TOK_CINTERP_START:
+    case TOK_TRUE: case TOK_FALSE: case TOK_VOID:
+    case TOK_IDENT: case TOK_TYPE_VAR:
+    case TOK_SOME: case TOK_NONE: case TOK_OK: case TOK_ERR:
+    case TOK_ALLOC: case TOK_ALLOCA: case TOK_FREE:
+    case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_DEFAULT:
+    case TOK_ASSERT: case TOK_ATOMIC_LOAD: case TOK_ATOMIC_STORE:
+    case TOK_GUARDED: case TOK_UNGUARDED: case TOK_CHECKED: case TOK_UNCHECKED:
+    case TOK_IF: case TOK_MATCH: case TOK_LOOP: case TOK_FOR: case TOK_LET:
+    case TOK_LPAREN: case TOK_LBRACE: case TOK_LT:
+    case TOK_MINUS: case TOK_BANG: case TOK_TILDE: case TOK_AMP: case TOK_STAR:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static Expr *parse_prefix(Parser *p) {
     Token *t = current(p);
     SrcLoc loc = loc_from_token(t);
@@ -1333,9 +1373,10 @@ static Expr *parse_prefix(Parser *p) {
             }
             if (ok) arr_start = scan; /* scan sits just past the closing > / >> */
         }
-        /* Scan past ? / * type suffixes on the element type: name?*[N]{...} */
+        /* Scan past ? / * / ! type suffixes on the element type: name?*![N]{...} */
         while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
-               peek_at(p, arr_start)->kind == TOK_STAR)
+               peek_at(p, arr_start)->kind == TOK_STAR ||
+               peek_at(p, arr_start)->kind == TOK_BANG)
             arr_start += 1;
         if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
             /* Look ahead: type[expr] { — the { after ] means slice literal */
@@ -1396,11 +1437,14 @@ static Expr *parse_prefix(Parser *p) {
                     elem_type->stub.type_arg_count = ta_count;
                     free(targs);
                 }
-                /* Apply ? (option) and * (pointer) suffixes to the element type */
-                while (check(p, TOK_QUESTION) || check(p, TOK_STAR)) {
+                /* Apply ? (option), * (pointer), ! (result) suffixes to the element type */
+                while (check(p, TOK_QUESTION) || check(p, TOK_STAR) || check(p, TOK_BANG)) {
                     if (check(p, TOK_QUESTION)) {
                         advance_p(p);
                         elem_type = type_option(p->arena, elem_type);
+                    } else if (check(p, TOK_BANG)) {
+                        advance_p(p);
+                        elem_type = type_result(p->arena, elem_type);
                     } else {
                         advance_p(p);
                         elem_type = type_pointer(p->arena, elem_type);
@@ -1542,11 +1586,18 @@ static Expr *parse_prefix(Parser *p) {
          * Backtracking handles false positives like (a * b). */
         {
         bool try_cast = false;
+        bool bang_cast = false; /* triggered only by `!` — see the guard below */
         if (peek_at(p, 1)->kind == TOK_IDENT &&
             (is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
              peek_at(p, 2)->kind == TOK_STAR ||
              peek_at(p, 2)->kind == TOK_LT)) {
             try_cast = true;
+        } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_BANG) {
+            /* (IDENT!) — result-type cast. Unlike (a*), `x!` is a complete
+             * expression (postfix unwrap), so this trigger alone is ambiguous
+             * with a parenthesized unwrap; the RPAREN guard below resolves it. */
+            try_cast = true;
+            bang_cast = true;
         } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_DOT) {
             /* Scan past IDENT (.IDENT)* and check for type suffix */
             int ca = 1; /* start at first IDENT */
@@ -1557,6 +1608,11 @@ static Expr *parse_prefix(Parser *p) {
                 TokenKind after = peek_at(p, ca + 1)->kind;
                 if (after == TOK_STAR || after == TOK_QUESTION || after == TOK_LBRACKET)
                     try_cast = true;
+                if (after == TOK_BANG) {
+                    /* (mod.type!) — same unwrap ambiguity as (IDENT!) above */
+                    try_cast = true;
+                    bang_cast = true;
+                }
                 /* Also allow (mod.type) as cast when followed by RPAREN and the
                  * final ident is a known type name — but we can't check that here.
                  * Only trigger for pointer/option/slice casts to avoid (a.b) ambiguity. */
@@ -1586,7 +1642,13 @@ static Expr *parse_prefix(Parser *p) {
                 advance_p(p); /* ] */
                 buffer_size = (int)n;
             }
-            if (check(p, TOK_RPAREN)) {
+            if (check(p, TOK_RPAREN) &&
+                !(bang_cast && !token_starts_prefix_expr(peek_at(p, 1)->kind))) {
+                /* A `!`-triggered attempt commits to the cast only when the token
+                 * after `)` starts an expression — otherwise `(x!)` is a
+                 * parenthesized unwrap (redundant parens), e.g. `f((x!))`,
+                 * `(x!) == y`. `(x!) e` resolves as a cast to type `x!` — dead
+                 * syntax when `x` isn't a type, same class as `(a*) b`. */
                 advance_p(p);
                 Expr *operand = parse_expr(p, PREC_PREFIX);
                 Expr *e = alloc_expr(p, EXPR_CAST, loc);
@@ -1715,6 +1777,37 @@ static Expr *parse_prefix(Parser *p) {
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_DEFAULT, loc);
         e->default_expr.target = type_option(p->arena, ty);
+        return e;
+    }
+
+    case TOK_OK: {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_OK, loc);
+        e->ok_expr.value = val;
+        return e;
+    }
+
+    case TOK_ERR: {
+        /* err(T, code) — T is the ok-payload type (the result is T!), code is
+         * the i32 error code. Type-anchored like none(T)/bitcast(T, x): FC's
+         * directional inference can't infer the payload type from the code
+         * alone. A bare `err` is rejected like a bare `none`. */
+        advance_p(p);
+        if (!check(p, TOK_LPAREN)) {
+            diag_fatal(loc, "'err' needs a type and a code; write err(T, code) "
+                "(or test a result with .is_err / an 'err' match arm)");
+        }
+        advance_p(p); /* ( */
+        Type *ty = parse_type(p);
+        expect(p, TOK_COMMA);
+        Expr *code = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ERR, loc);
+        e->err_expr.target = ty;
+        e->err_expr.code = code;
         return e;
     }
 
@@ -2136,7 +2229,8 @@ static Expr *parse_prefix(Parser *p) {
         {
             int arr_start = 1; /* offset past the type-var token */
             while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
-                   peek_at(p, arr_start)->kind == TOK_STAR)
+                   peek_at(p, arr_start)->kind == TOK_STAR ||
+                   peek_at(p, arr_start)->kind == TOK_BANG)
                 arr_start += 1;
             if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
                 int save = p->pos;
@@ -2154,10 +2248,13 @@ static Expr *parse_prefix(Parser *p) {
                     Type *elem_type = arena_alloc(p->arena, sizeof(Type));
                     elem_type->kind = TYPE_TYPE_VAR;
                     elem_type->type_var.name = tok_intern(p, t);
-                    while (check(p, TOK_QUESTION) || check(p, TOK_STAR)) {
+                    while (check(p, TOK_QUESTION) || check(p, TOK_STAR) || check(p, TOK_BANG)) {
                         if (check(p, TOK_QUESTION)) {
                             advance_p(p);
                             elem_type = type_option(p->arena, elem_type);
+                        } else if (check(p, TOK_BANG)) {
+                            advance_p(p);
+                            elem_type = type_result(p->arena, elem_type);
                         } else {
                             advance_p(p);
                             elem_type = type_pointer(p->arena, elem_type);
@@ -2551,6 +2648,26 @@ static Pattern *parse_pattern_atom(Parser *p) {
         advance_p(p);
         expect(p, TOK_LPAREN);
         pat->kind = PAT_SOME;
+        pat->some_pat.inner = parse_pattern(p);
+        expect(p, TOK_RPAREN);
+        return pat;
+    }
+
+    if (check(p, TOK_OK)) {
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        pat->kind = PAT_OK;
+        pat->some_pat.inner = parse_pattern(p);
+        expect(p, TOK_RPAREN);
+        return pat;
+    }
+
+    if (check(p, TOK_ERR)) {
+        /* err(<pat>) — the inner pattern matches the i32 code (a literal,
+         * binding, or wildcard). */
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        pat->kind = PAT_ERR;
         pat->some_pat.inner = parse_pattern(p);
         expect(p, TOK_RPAREN);
         return pat;

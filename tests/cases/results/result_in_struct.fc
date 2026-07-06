@@ -1,0 +1,15 @@
+struct inner =
+    v: i32
+
+struct holder =
+    r: inner!
+    code: i32
+
+let main = (args: str[]) ->
+    let h = holder { r = ok(inner { v = 7 }), code = 1 }
+    match h.r with
+    | ok(i) -> assert(i.v == 7)
+    | err(_) -> assert(false)
+    let h2 = holder { r = err(inner, 4), code = 2 }
+    assert(h2.r.is_err)
+    0

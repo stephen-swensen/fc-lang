@@ -7,10 +7,10 @@ let describe = (x: i32?) ->
 let main = (args: str[]) ->
     let a = describe(some(42))
     let b = describe(none(i32))
-    let mut ok = 0
-    if a == "got=42" then ok = ok + 1
-    if b == "empty=0" then ok = ok + 2
+    let mut passed = 0
+    if a == "got=42" then passed = passed + 1
+    if b == "empty=0" then passed = passed + 2
     free(a)
     free(b)
-    assert(ok == 3)
+    assert(passed == 3)
     0

@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let mut r = ok(1)
+    r.is_ok = false
+    0

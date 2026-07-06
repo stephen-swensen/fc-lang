@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let r = err(i32, 3)
+    let v = match r with
+    | ok(n) -> n
+    | _ -> -1
+    assert(v == -1)
+    0

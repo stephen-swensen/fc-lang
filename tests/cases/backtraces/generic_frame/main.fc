@@ -1,5 +1,5 @@
-let check = (x: 'a, ok: bool) ->
-    assert(ok)
+let check = (x: 'a, cond: bool) ->
+    assert(cond)
     x
 
 let main = (args: str[]) ->

@@ -390,6 +390,20 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
       "`none`. Build the present case with `some(x)`, and test for empty with a `none` match arm "
       "(or `.is_none`)." },
 
+    { "ok", "ok(x: T) -> T!",
+      "Wraps a success value in a result, yielding a `T!` that holds `x` with error code 0.\n\n"
+      "A result is `ok(T) | err(i32)` — repr `{ err: i32, value: T }` where `err == 0` means ok "
+      "(C's \"0 on success\"). Pair with `err(T, code)` for the failure case, and read the value "
+      "back with `match` or `!` (which aborts with the code on `err`)." },
+
+    { "err", "err(T, code: i32) -> T!",
+      "The **failure** result of payload type `T`, carrying a non-zero `i32` error code.\n\n"
+      "The type argument is required so the success type is known: write `err(i32, 2)`, not a "
+      "bare `err`. Code 0 is the ok tag and therefore unrepresentable — a provably-zero code is "
+      "a compile error, an unprovable one is checked at runtime and aborts if zero. Build the "
+      "success case with `ok(x)`, match failure with an `err(e)` arm (literal codes like "
+      "`err(2)` work too), or test with `.is_err`." },
+
     { "sizeof", "sizeof(T) -> i64",
       "The size of type `T` in bytes, as an `i64` (lowers to `(int64_t)sizeof(T)`). Works on any "
       "type — primitives, pointers, slices, structs, unions. Computed by the C compiler, so it "
@@ -751,6 +765,14 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         case EXPR_SOME:
             consider_builtin(c, e);
             find_in_expr(e->some_expr.value, c);
+            break;
+        case EXPR_OK:
+            consider_builtin(c, e);
+            find_in_expr(e->ok_expr.value, c);
+            break;
+        case EXPR_ERR:
+            consider_builtin(c, e);
+            find_in_expr(e->err_expr.code, c);
             break;
         case EXPR_LET: {
             int col = let_name_col(c, e->loc.line, e->loc.col, e->let_expr.let_is_mut);
@@ -1631,6 +1653,8 @@ static void lens_expr(Expr *e, LensCtx *lc) {
         case EXPR_FUNC:   lens_exprs(e->func.body, e->func.body_count, lc); break;
         case EXPR_ASSIGN: lens_expr(e->assign.target, lc); lens_expr(e->assign.value, lc); break;
         case EXPR_SOME:   lens_expr(e->some_expr.value, lc); break;
+        case EXPR_OK:     lens_expr(e->ok_expr.value, lc); break;
+        case EXPR_ERR:    lens_expr(e->err_expr.code, lc); break;
         case EXPR_DEFER:  lens_expr(e->defer_expr.value, lc); break;
         case EXPR_GUARD:  lens_expr(e->guard.body, lc); break;
         case EXPR_ASSERT:
@@ -1712,6 +1736,7 @@ static const char *KEYWORDS[] = {
     "true", "false", "none", "void", "guarded", "unguarded", "checked",
     "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "bitcast",
     "default", "const", "assert", "atomic_load_acquire", "atomic_store_release",
+    "ok", "err",
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
     "isize", "usize", "f32", "f64", "bool", "char", "str", "cstr", "any",
 };
@@ -1765,6 +1790,7 @@ static Type *peel_to_aggregate(Type *t) {
     for (int i = 0; t && i < 4; i++) {
         if (t->kind == TYPE_STRUCT || t->kind == TYPE_UNION) return t;
         if (t->kind == TYPE_OPTION)  { t = t->option.inner; continue; }
+        if (t->kind == TYPE_RESULT)  { t = t->result.inner; continue; }
         if (t->kind == TYPE_POINTER) { t = t->pointer.pointee; continue; }
         break;
     }
@@ -1816,6 +1842,8 @@ static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
             break;
         case EXPR_ASSIGN: harvest_expr(e->assign.target, names, n, cap); harvest_expr(e->assign.value, names, n, cap); break;
         case EXPR_SOME: harvest_expr(e->some_expr.value, names, n, cap); break;
+        case EXPR_OK: harvest_expr(e->ok_expr.value, names, n, cap); break;
+        case EXPR_ERR: harvest_expr(e->err_expr.code, names, n, cap); break;
         case EXPR_DEFER: harvest_expr(e->defer_expr.value, names, n, cap); break;
         case EXPR_GUARD: harvest_expr(e->guard.body, names, n, cap); break;
         default: break;
@@ -1949,6 +1977,12 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     if (t->kind == TYPE_OPTION) {
         add_item(a, arr, "is_some", CIK_FIELD, "bool");
         add_item(a, arr, "is_none", CIK_FIELD, "bool");
+        return true;
+    }
+    /* Result discriminant fields (the value itself needs `!` or match). */
+    if (t->kind == TYPE_RESULT) {
+        add_item(a, arr, "is_ok", CIK_FIELD, "bool");
+        add_item(a, arr, "is_err", CIK_FIELD, "bool");
         return true;
     }
     /* Struct fields (tuples are indexed, not named). */

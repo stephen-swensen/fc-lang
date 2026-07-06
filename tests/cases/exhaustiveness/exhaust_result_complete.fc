@@ -1,0 +1,7 @@
+let main = (args: str[]) ->
+    let r = ok(5)
+    let v = match r with
+    | ok(n) -> n
+    | err(e) -> e
+    assert(v == 5)
+    0

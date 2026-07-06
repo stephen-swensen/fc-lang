@@ -87,6 +87,7 @@ static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
     case TYPE_POINTER:     return find_nonuniform_self_ref(t->pointer.pointee, self_name, params, pc);
     case TYPE_SLICE:       return find_nonuniform_self_ref(t->slice.elem, self_name, params, pc);
     case TYPE_OPTION:      return find_nonuniform_self_ref(t->option.inner, self_name, params, pc);
+    case TYPE_RESULT:      return find_nonuniform_self_ref(t->result.inner, self_name, params, pc);
     case TYPE_FIXED_ARRAY: return find_nonuniform_self_ref(t->fixed_array.elem, self_name, params, pc);
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
@@ -459,6 +460,7 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
     case TYPE_POINTER: canonicalize_stub_names(t->pointer.pointee, members); return;
     case TYPE_SLICE:   canonicalize_stub_names(t->slice.elem, members); return;
     case TYPE_OPTION:  canonicalize_stub_names(t->option.inner, members); return;
+    case TYPE_RESULT:  canonicalize_stub_names(t->result.inner, members); return;
     case TYPE_FIXED_ARRAY: canonicalize_stub_names(t->fixed_array.elem, members); return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
@@ -525,6 +527,16 @@ static Type *resolve_type_stubs(Arena *arena, Type *t, SymbolTable *members) {
             Type *r = arena_alloc(arena, sizeof(Type));
             *r = *t;
             r->option.inner = inner;
+            return r;
+        }
+        return t;
+    }
+    if (t->kind == TYPE_RESULT) {
+        Type *inner = resolve_type_stubs(arena, t->result.inner, members);
+        if (inner != t->result.inner) {
+            Type *r = arena_alloc(arena, sizeof(Type));
+            *r = *t;
+            r->result.inner = inner;
             return r;
         }
         return t;
@@ -792,6 +804,8 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                     reason = "slice"; break;
                 case TYPE_OPTION:
                     reason = "option"; break;
+                case TYPE_RESULT:
+                    reason = "result"; break;
                 case TYPE_STRUCT:
                     reason = "struct"; break;
                 case TYPE_UNION:
@@ -1526,6 +1540,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     case EXPR_CAST: PUSH(ex->cast.operand); break;
                     case EXPR_BITCAST: PUSH(ex->bitcast_expr.operand); break;
                     case EXPR_SOME: PUSH(ex->some_expr.value); break;
+                    case EXPR_OK: PUSH(ex->ok_expr.value); break;
+                    case EXPR_ERR: PUSH(ex->err_expr.code); break;
                     case EXPR_STRUCT_LIT:
                         for (int f = 0; f < ex->struct_lit.field_count; f++) { PUSH(ex->struct_lit.fields[f].value); }
                         break;

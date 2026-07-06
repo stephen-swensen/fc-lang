@@ -1,0 +1,14 @@
+// T*! uses the uniform struct repr — ok(p) over a possibly-null p is LEGAL
+// (contrast some(p): pointer options use null as the none sentinel)
+let main = (args: str[]) ->
+    let nullp = default(i32*)
+    let r = ok(nullp)
+    assert(r.is_ok)
+    let heap = alloc(i32)!
+    *heap = 5
+    let h = ok(heap)
+    match h with
+    | ok(p) -> assert(*p == 5)
+    | err(_) -> assert(false)
+    free(heap)
+    0

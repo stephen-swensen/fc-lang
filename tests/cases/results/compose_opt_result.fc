@@ -1,0 +1,19 @@
+// u8?! — the idiomatic order: fallible read of an optional byte
+let read_char = (state: i32) ->
+    if state == 0 then ok(some(65u8))
+    else if state == 1 then ok(none(u8))
+    else err(u8?, 5)
+
+let main = (args: str[]) ->
+    match read_char(0) with
+    | ok(some(b)) -> assert(b == 65u8)
+    | ok(none) -> assert(false)
+    | err(_) -> assert(false)
+    match read_char(1) with
+    | ok(some(_)) -> assert(false)
+    | ok(none) -> assert(true)
+    | err(_) -> assert(false)
+    match read_char(2) with
+    | ok(_) -> assert(false)
+    | err(e) -> assert(e == 5)
+    0

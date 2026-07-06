@@ -1,0 +1,14 @@
+let classify = (r: i32!) ->
+    match r with
+    | ok(1) | ok(2) -> 12
+    | err(3) | err(4) -> 34
+    | ok(_) -> 0
+    | err(_) -> -1
+
+let main = (args: str[]) ->
+    assert(classify(ok(1)) == 12)
+    assert(classify(ok(2)) == 12)
+    assert(classify(ok(9)) == 0)
+    assert(classify(err(i32, 3)) == 34)
+    assert(classify(err(i32, 5)) == -1)
+    0

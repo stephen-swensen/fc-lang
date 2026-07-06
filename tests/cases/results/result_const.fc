@@ -1,0 +1,19 @@
+// module-scope const results fold to C constant initializers
+let good = ok(3)
+let bad = err(i32, -1)
+
+module m =
+    let n = 3
+    let folded = err(bool, n)
+
+let main = (args: str[]) ->
+    assert(good! == 3)
+    assert(bad.is_err)
+    match bad with
+    | ok(_) -> assert(false)
+    | err(e) -> assert(e == -1)
+    assert(m.folded.is_err)
+    match m.folded with
+    | ok(_) -> assert(false)
+    | err(e) -> assert(e == 3)
+    0

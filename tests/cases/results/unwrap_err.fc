@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let r = err(i32, 42)
+    let v = r!
+    v

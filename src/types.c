@@ -186,6 +186,12 @@ Type *type_deep_copy(Arena *a, Type *t) {
         c->option.inner = type_deep_copy(a, t->option.inner);
         return c;
     }
+    case TYPE_RESULT: {
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        c->result.inner = type_deep_copy(a, t->result.inner);
+        return c;
+    }
     case TYPE_FIXED_ARRAY: {
         Type *c = arena_alloc(a, sizeof(Type));
         *c = *t;
@@ -268,6 +274,13 @@ Type *type_option(Arena *a, Type *inner) {
     return t;
 }
 
+Type *type_result(Arena *a, Type *inner) {
+    Type *t = arena_alloc(a, sizeof(Type));
+    t->kind = TYPE_RESULT;
+    t->result.inner = inner;
+    return t;
+}
+
 Type *type_fixed_array(Arena *a, Type *elem, int64_t size) {
     Type *t = arena_alloc(a, sizeof(Type));
     t->kind = TYPE_FIXED_ARRAY;
@@ -320,6 +333,7 @@ bool type_eq(Type *a, Type *b) {
     case TYPE_SLICE:   return a->is_const == b->is_const &&
                               type_eq(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq(a->option.inner, b->option.inner);
+    case TYPE_RESULT:  return type_eq(a->result.inner, b->result.inner);
     case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
                                   type_eq(a->fixed_array.elem, b->fixed_array.elem);
     case TYPE_ANY_PTR: return a->is_const == b->is_const;
@@ -361,6 +375,7 @@ bool type_eq_ignore_const(Type *a, Type *b) {
     case TYPE_POINTER: return type_eq_ignore_const(a->pointer.pointee, b->pointer.pointee);
     case TYPE_SLICE:   return type_eq_ignore_const(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq_ignore_const(a->option.inner, b->option.inner);
+    case TYPE_RESULT:  return type_eq_ignore_const(a->result.inner, b->result.inner);
     case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
                                   type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
     case TYPE_STRUCT:
@@ -454,6 +469,13 @@ const char *type_name(Type *t) {
         static int oidx = 0;
         char *buf = obufs[oidx & 3]; oidx++;
         snprintf(buf, 256, "%s?", type_name(t->option.inner));
+        return buf;
+    }
+    case TYPE_RESULT: {
+        static char rbufs[4][256];
+        static int ridx = 0;
+        char *buf = rbufs[ridx & 3]; ridx++;
+        snprintf(buf, 256, "%s!", type_name(t->result.inner));
         return buf;
     }
     case TYPE_FIXED_ARRAY: {
@@ -695,6 +717,9 @@ bool type_needs_eq_func(Type *t) {
     case TYPE_OPTION:
         /* Pointer options use C native == (NULL for none) */
         return !(t->option.inner && t->option.inner->kind == TYPE_POINTER);
+    case TYPE_RESULT:
+        /* Always the { err; value } struct — no sentinel specialization */
+        return true;
     case TYPE_STUB:
         return false;  /* unresolved stubs don't need eq functions */
     default:
@@ -748,6 +773,7 @@ static bool type_contains_type_var_memo(Type *t, TypeVarCleanSet *clean) {
     case TYPE_POINTER:  return type_contains_type_var_memo(t->pointer.pointee, clean);
     case TYPE_SLICE:    return type_contains_type_var_memo(t->slice.elem, clean);
     case TYPE_OPTION:   return type_contains_type_var_memo(t->option.inner, clean);
+    case TYPE_RESULT:   return type_contains_type_var_memo(t->result.inner, clean);
     case TYPE_FIXED_ARRAY: return type_contains_type_var_memo(t->fixed_array.elem, clean);
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
@@ -801,6 +827,7 @@ void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
     case TYPE_POINTER: type_collect_vars(t->pointer.pointee, vars, count, cap); return;
     case TYPE_SLICE:   type_collect_vars(t->slice.elem, vars, count, cap); return;
     case TYPE_OPTION:  type_collect_vars(t->option.inner, vars, count, cap); return;
+    case TYPE_RESULT:  type_collect_vars(t->result.inner, vars, count, cap); return;
     case TYPE_FIXED_ARRAY: type_collect_vars(t->fixed_array.elem, vars, count, cap); return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
@@ -853,6 +880,11 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         Type *inner = type_substitute(a, t->option.inner, var_names, concrete, count);
         if (inner == t->option.inner) return t;
         return type_option(a, inner);
+    }
+    case TYPE_RESULT: {
+        Type *inner = type_substitute(a, t->result.inner, var_names, concrete, count);
+        if (inner == t->result.inner) return t;
+        return type_result(a, inner);
     }
     case TYPE_FIXED_ARRAY: {
         Type *inner = type_substitute(a, t->fixed_array.elem, var_names, concrete, count);
@@ -1076,6 +1108,12 @@ char *mangle_type_name(Type *t) {
     case TYPE_OPTION: {
         char *inner = mangle_type_name(t->option.inner);
         char *r = mangle_cat(str_dup("__o"), inner);
+        free(inner);
+        return r;
+    }
+    case TYPE_RESULT: {
+        char *inner = mangle_type_name(t->result.inner);
+        char *r = mangle_cat(str_dup("__r"), inner);
         free(inner);
         return r;
     }

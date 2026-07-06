@@ -1,0 +1,16 @@
+struct point =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    assert(ok(1) == ok(1))
+    assert(ok(1) != ok(2))
+    assert(err(i32, 3) == err(i32, 3))
+    assert(err(i32, 3) != err(i32, 4))
+    assert(ok(1) != err(i32, 3))
+    let p1 = ok(point { x = 1, y = 2 })
+    let p2 = ok(point { x = 1, y = 2 })
+    let p3 = err(point, 9)
+    assert(p1 == p2)
+    assert(p1 != p3)
+    0

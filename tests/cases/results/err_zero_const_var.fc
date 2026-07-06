@@ -1,0 +1,8 @@
+// A module-member err() whose code const-folds to zero is rejected: the
+// runtime guard is a statement-expression, invalid in a C constant initializer.
+module m =
+    let z = 0
+    let bad = err(bool, z)
+
+let main = (args: str[]) ->
+    if m.bad.is_err then 1 else 0

@@ -1,20 +1,20 @@
 // const types inside generic type argument lists
 
 union result =
-    | ok('a)
-    | err('b)
+    | good('a)
+    | bad('b)
 
 struct box =
     value: 'a
 
 let get_err = (r: result<i32, const str>) ->
     match r with
-    | ok(v) -> v
-    | err(s) -> (i32) s.len
+    | good(v) -> v
+    | bad(s) -> (i32) s.len
 
 let main = (args: str[]) ->
     // const as second type arg in type annotation + expression construction
-    let r = result<i32, const str>.err("fail")
+    let r = result<i32, const str>.bad("fail")
     assert(get_err(r) == 4)
     // const as sole type arg
     let mut x = 42

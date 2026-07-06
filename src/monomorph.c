@@ -40,6 +40,7 @@ static int mono_type_arg_depth(Type *t) {
     case TYPE_POINTER:     return 1 + mono_type_arg_depth(t->pointer.pointee);
     case TYPE_SLICE:       return 1 + mono_type_arg_depth(t->slice.elem);
     case TYPE_OPTION:      return 1 + mono_type_arg_depth(t->option.inner);
+    case TYPE_RESULT:      return 1 + mono_type_arg_depth(t->result.inner);
     case TYPE_FIXED_ARRAY: return 1 + mono_type_arg_depth(t->fixed_array.elem);
     case TYPE_FUNC: {
         int m = mono_type_arg_depth(t->func.return_type);
@@ -177,6 +178,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
     case TYPE_POINTER: mono_resolve_type_names(t, a, intern, type->pointer.pointee); return;
     case TYPE_SLICE:   mono_resolve_type_names(t, a, intern, type->slice.elem); return;
     case TYPE_OPTION:  mono_resolve_type_names(t, a, intern, type->option.inner); return;
+    case TYPE_RESULT:  mono_resolve_type_names(t, a, intern, type->result.inner); return;
     case TYPE_FIXED_ARRAY: mono_resolve_type_names(t, a, intern, type->fixed_array.elem); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
@@ -468,6 +470,14 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
     case EXPR_SOME:
         discover_in_expr(e->some_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
+    case EXPR_OK:
+        discover_in_expr(e->ok_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
+    case EXPR_ERR:
+        /* The target type may name a generic instance (err(point<i32>, c)) */
+        discover_in_expr(e->err_expr.code, t, a, intern, symtab, var_names, concrete, var_count);
+        discover_in_type(e->err_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     case EXPR_SLICE:
         discover_in_expr(e->slice.object, t, a, intern, symtab, var_names, concrete, var_count);
         discover_in_expr(e->slice.lo, t, a, intern, symtab, var_names, concrete, var_count);
@@ -543,6 +553,14 @@ static const char *find_by_value_dep(Type *type) {
     case TYPE_FIXED_ARRAY:
         /* Fixed arrays of structs are by-value */
         return find_by_value_dep(type->fixed_array.elem);
+    case TYPE_RESULT:
+        /* A result ALWAYS embeds its payload by value ({ err; value } struct).
+         * Options deliberately return NULL below: their answer is
+         * representation-dependent (T*? is a bare pointer, no embed) and this
+         * file can't see codegen's is_null_sentinel — codegen's
+         * find_by_value_dep_name handles the struct-option interleave instead.
+         * Results have no such split, so unconditional recursion is correct. */
+        return find_by_value_dep(type->result.inner);
     default:
         /* Pointers, slices, options, functions — NOT by-value dependencies */
         return NULL;
@@ -596,6 +614,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
     case TYPE_POINTER: discover_nested_types(type->pointer.pointee, t, a, intern, symtab); return;
     case TYPE_SLICE:   discover_nested_types(type->slice.elem, t, a, intern, symtab); return;
     case TYPE_OPTION:  discover_nested_types(type->option.inner, t, a, intern, symtab); return;
+    case TYPE_RESULT:  discover_nested_types(type->result.inner, t, a, intern, symtab); return;
     case TYPE_FIXED_ARRAY: discover_nested_types(type->fixed_array.elem, t, a, intern, symtab); return;
     case TYPE_FUNC:
         for (int i = 0; i < type->func.param_count; i++)
@@ -759,6 +778,7 @@ static void check_dangling_instance(MonoTable *t, Type *ty, Decl *site, bool *re
     case TYPE_POINTER:     check_dangling_instance(t, ty->pointer.pointee, site, reported); return;
     case TYPE_SLICE:       check_dangling_instance(t, ty->slice.elem, site, reported); return;
     case TYPE_OPTION:      check_dangling_instance(t, ty->option.inner, site, reported); return;
+    case TYPE_RESULT:      check_dangling_instance(t, ty->result.inner, site, reported); return;
     case TYPE_FIXED_ARRAY: check_dangling_instance(t, ty->fixed_array.elem, site, reported); return;
     case TYPE_FUNC:
         for (int i = 0; i < ty->func.param_count; i++)

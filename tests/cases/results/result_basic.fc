@@ -1,0 +1,14 @@
+let parse = (n: i32) ->
+    if n < 0 then err(i32, 1)
+    else ok(n * 2)
+
+let main = (args: str[]) ->
+    let a = match parse(21) with
+    | ok(v) -> v
+    | err(_) -> -1
+    assert(a == 42)
+    let b = match parse(-1) with
+    | ok(v) -> v
+    | err(e) -> 0 - e
+    assert(b == -1)
+    0

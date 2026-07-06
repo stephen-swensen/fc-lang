@@ -119,6 +119,8 @@ static TokenKind check_keyword(const char *start, int len) {
         {"true",      4,  TOK_TRUE},
         {"false",     5,  TOK_FALSE},
         {"none",      4,  TOK_NONE},
+        {"ok",        2,  TOK_OK},
+        {"err",       3,  TOK_ERR},
         {"void",      4,  TOK_VOID},
         {"guarded",   7,  TOK_GUARDED},
         {"unguarded", 9,  TOK_UNGUARDED},

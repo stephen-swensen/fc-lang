@@ -114,7 +114,7 @@ keyword = "let" | "mut" | "struct" | "union" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
         | "private" | "const" | "match" | "with" | "when" | "if" | "then" | "else"
         | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
-        | "some" | "true" | "false" | "none" | "void" ;
+        | "some" | "true" | "false" | "none" | "ok" | "err" | "void" ;
 (* Note: "any" is NOT a reserved word — it lexes as a plain identifier *)
 (* and is only meaningful in the "any*" type form (see type rules).    *)
 
@@ -434,6 +434,7 @@ type_postfix     = "*"                           (* pointer type:  T*     *)
                  | "[" , "]"                     (* slice type:    T[]    *)
                  | "[" , INT_LIT , "]"           (* fixed array:   T[N] — struct fields and sizeof only *)
                  | "?"                           (* option type:   T?     *)
+                 | "!"                           (* result type:   T! = ok(T) | err(i32) *)
                  ;
 
 type_atom        = builtin_type                  (* i32, str, cstr, ... *)
@@ -589,7 +590,7 @@ guard_expr       = ( "unguarded" | "guarded" | "unchecked" | "checked" )
 (* Level 1 — postfix (left-associative)                                *)
 postfix_expr     = primary_expr , { postfix_op } ;
 
-postfix_op       = "!"                                         (* option unwrap  *)
+postfix_op       = "!"                                         (* option/result unwrap *)
                  | "[" , index_or_slice , "]"                  (* index / slice  *)
                  | "." , IDENT                                 (* field access; auto-derefs one pointer level *)
                  | call_args                                   (* function call  *)
@@ -638,6 +639,8 @@ primary_expr     = INT_LIT
                  | atomic_store_expr
                  | some_expr
                  | none_expr
+                 | ok_expr
+                 | err_expr
                  | struct_literal
                  | tuple_literal
                  | slice_literal
@@ -780,6 +783,15 @@ some_expr        = "some" , "(" , expr , ")" ;
 (* none(T) constructs an empty option with inner type T; sugar for default(T?) *)
 none_expr        = "none" , "(" , type_expr , ")" ;
 
+(* ok(x) constructs the success case of a result T! (error code 0).      *)
+ok_expr          = "ok" , "(" , expr , ")" ;
+
+(* err(T, code) constructs the failure case of a T! — T is the SUCCESS    *)
+(* payload type (type-anchored, like none(T)); code is a non-zero i32.    *)
+(* A provably-zero code is a compile error (0 is the ok tag); an          *)
+(* unprovable one is guarded at runtime.                                  *)
+err_expr         = "err" , "(" , type_expr , "," , expr , ")" ;
+
 
 (* ------------------------------------------------------------------ *)
 (*  Struct, slice, and variant literals                                *)
@@ -836,6 +848,8 @@ pattern_atom     = "_"                                   (* wildcard           *
                  | STR_LIT                               (* string literal     *)
                  | [ "-" ] , INT_LIT                     (* integer literal, possibly negative *)
                  | "some" , "(" , pattern , ")"          (* some(pattern)      *)
+                 | "ok" , "(" , pattern , ")"            (* ok(pattern)        *)
+                 | "err" , "(" , pattern , ")"           (* err(pattern) — pattern matches the i32 code *)
                  | IDENT , "(" , pattern , ")"           (* variant(pattern)   *)
                  | struct_destruct_pattern               (* { field = pat }    *)
                  | tuple_destruct_pattern                (* { pat, pat, ... }  *)
@@ -918,6 +932,15 @@ tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}
 (*   cannot appear as an expression, and type-forming tokens like *    *)
 (*   (postfix), [], and ? after a type name have no expression         *)
 (*   interpretation in that position.                                  *)
+(*                                                                     *)
+(*   The result suffix '!' is the one modifier that IS also a postfix  *)
+(*   expression operator (unwrap), so "(x!)" is genuinely ambiguous:   *)
+(*   a cast to type x! vs. a parenthesized unwrap. Resolution: it is a *)
+(*   cast only when the ')' is followed by a token that can start a    *)
+(*   prefix_expr; otherwise it is a parenthesized unwrap. So f((x!))   *)
+(*   and (x!) == y unwrap, while (t!) e casts — redundant parens       *)
+(*   around a bare unwrap are dead syntax (x! binds tightest anyway),  *)
+(*   the same class as the (a*) b resolution above.                    *)
 (*                                                                     *)
 (* Rule 7: Negative pattern literals                                   *)
 (*                                                                     *)

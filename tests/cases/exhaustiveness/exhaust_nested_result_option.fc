@@ -1,0 +1,9 @@
+// exhaustiveness through the u8?! composition
+let main = (args: str[]) ->
+    let r = ok(some(65u8))
+    let v = match r with
+    | ok(some(b)) -> (i32) b
+    | ok(none) -> 0
+    | err(e) -> 0 - e
+    assert(v == 65)
+    0

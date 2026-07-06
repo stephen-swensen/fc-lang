@@ -1,17 +1,17 @@
 module lib =
     union result =
-        | ok('a)
-        | err(i32)
+        | good('a)
+        | bad(i32)
 
 let main = (args: str[]) ->
     let _result =
-        let r1 = lib.result<i32>.ok(42)
-        let r2 = lib.result<i32>.ok(10)
-        let r3 = lib.result<i32>.err(0)
+        let r1 = lib.result<i32>.good(42)
+        let r2 = lib.result<i32>.good(10)
+        let r3 = lib.result<i32>.bad(0)
         match r1 with
-        | ok(v) -> match r2 with
-            | ok(w) -> v + w
-            | err(_) -> 1
-        | err(_) -> 2
+        | good(v) -> match r2 with
+            | good(w) -> v + w
+            | bad(_) -> 1
+        | bad(_) -> 2
     assert(_result == 52)
     0

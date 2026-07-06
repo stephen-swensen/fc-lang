@@ -53,6 +53,8 @@ typedef enum {
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
     EXPR_SOME,
+    EXPR_OK,            /* ok(v) — result construction, infers from payload */
+    EXPR_ERR,           /* err(T, code) — result construction, type-anchored like none(T) */
     EXPR_DEREF_FIELD,   /* x->f */
     EXPR_LET,           /* let binding inside a block */
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
@@ -338,6 +340,14 @@ struct Expr {
         /* EXPR_SOME */
         struct { Expr *value; } some_expr;
 
+        /* EXPR_OK — ok(v): result construction, type inferred from payload */
+        struct { Expr *value; } ok_expr;
+
+        /* EXPR_ERR — err(T, code): T is the ok-payload type (the node's type is T!);
+         * code is i32, must be non-zero (0 is the ok tag — compile error when provably
+         * zero, runtime guard otherwise, mirroring some(null)). */
+        struct { Type *target; Expr *code; } err_expr;
+
         /* EXPR_MATCH */
         struct {
             Expr *subject;
@@ -400,6 +410,8 @@ typedef enum {
     PAT_STRING_LIT,
     PAT_NONE,
     PAT_SOME,
+    PAT_OK,
+    PAT_ERR,
     PAT_VARIANT,
     PAT_STRUCT,
     PAT_TUPLE, /* { a, b, ... } — positional tuple destructuring (let-bindings only) */
@@ -417,7 +429,7 @@ struct Pattern {
         struct { uint8_t value; } char_lit;
         struct { bool value; } bool_lit;
         struct { const char *value; int length; } string_lit;
-        struct { Pattern *inner; } some_pat;
+        struct { Pattern *inner; } some_pat;   /* PAT_SOME, PAT_OK (inner over T), PAT_ERR (inner over i32) */
         struct {
             const char *variant;
             Pattern *payload;   /* NULL if no payload */
@@ -563,3 +575,5 @@ int interp_seg_trunc_prec(const struct InterpSegment *seg);
  * codegen.c so the guard/elide/reject decisions share one source of truth. */
 bool ptr_value_provably_nonnull(const struct Expr *e);
 bool ptr_value_provably_null(const struct Expr *e);
+bool int_value_provably_nonzero(const struct Expr *e);
+bool int_value_provably_zero(const struct Expr *e);

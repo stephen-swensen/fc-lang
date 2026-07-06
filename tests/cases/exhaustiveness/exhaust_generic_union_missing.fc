@@ -1,10 +1,10 @@
 union result =
-    | ok('a)
-    | err('b)
+    | good('a)
+    | bad('b)
 
 let check = (r: result<i32, i32>) ->
     match r with
-    | ok(v) -> v
+    | good(v) -> v
 
 let main = (args: str[]) ->
-    check(result<i32, i32>.ok(42))
+    check(result<i32, i32>.good(42))

@@ -1,0 +1,18 @@
+struct point =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    // default(T!) = ok(default(T)) — zero-fill IS the default
+    let d = default(i32!)
+    assert(d.is_ok)
+    assert(d! == 0)
+    let pd = default(point!)
+    assert(pd.is_ok)
+    match pd with
+    | ok(p) -> assert(p.x == 0 && p.y == 0)
+    | err(_) -> assert(false)
+    // zero-filled slice literal of results — every element is ok(0)
+    let arr = i32![4] {}
+    for r in arr do assert(r.is_ok && r! == 0)
+    0

@@ -1,0 +1,16 @@
+struct point =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    let a = err(i32, 2)
+    assert(a.is_err)
+    let b = err(u8?, 5)
+    match b with
+    | ok(_) -> assert(false)
+    | err(e) -> assert(e == 5)
+    let c = err(point*, 7)
+    assert(c.is_err)
+    let d = err(str, 11)
+    assert(d.is_err)
+    0

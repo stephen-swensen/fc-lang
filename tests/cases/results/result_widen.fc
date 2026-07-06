@@ -1,0 +1,5 @@
+let take = (r: i64!) -> r
+
+let main = (args: str[]) ->
+    let r = take(ok(5))
+    0

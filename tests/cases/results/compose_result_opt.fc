@@ -1,0 +1,13 @@
+// u8!? — option of result, legal by regularity
+let main = (args: str[]) ->
+    let o1 = some(ok(9u8))
+    match o1 with
+    | some(r) -> assert(r! == 9u8)
+    | none -> assert(false)
+    let o2 = some(err(u8, 3))
+    match o2 with
+    | some(r) -> assert(r.is_err)
+    | none -> assert(false)
+    let o3 = none(u8!)
+    assert(o3.is_none)
+    0

@@ -21,6 +21,7 @@ typedef enum {
     TYPE_POINTER,
     TYPE_SLICE,
     TYPE_OPTION,
+    TYPE_RESULT,
     TYPE_FUNC,
     TYPE_STRUCT,
     TYPE_UNION,
@@ -62,6 +63,7 @@ struct Type {
         struct { Type *pointee; } pointer;
         struct { Type *elem; } slice;
         struct { Type *inner; } option;
+        struct { Type *inner; } result;   /* T! — ok(T) | err(i32); repr { int32_t err; T value; } */
         struct {
             Type **param_types;
             int param_count;
@@ -137,6 +139,7 @@ bool type_is_const(Type *t);
 Type *type_pointer(Arena *a, Type *pointee);
 Type *type_slice(Arena *a, Type *elem);
 Type *type_option(Arena *a, Type *inner);
+Type *type_result(Arena *a, Type *inner);
 Type *type_fixed_array(Arena *a, Type *elem, int64_t size);
 
 /* Alias type helpers: str = uint8[], cstr = uint8* */

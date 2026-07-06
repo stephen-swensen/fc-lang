@@ -1,0 +1,7 @@
+let wrap_err = (v: 'a, code: i32) -> err('a, code)
+
+let main = (args: str[]) ->
+    let mut c = 1
+    c = c - 1
+    let r = wrap_err(true, c)
+    if r.is_err then 1 else 0

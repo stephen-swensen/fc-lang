@@ -666,7 +666,7 @@ Type variable names begin with an apostrophe (`'`) followed by a letter, then ze
 
 The following are **reserved words** and may not be used as identifiers:
 
-`let`, `mut`, `const`, `struct`, `union`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `defer`, `some`, `true`, `false`, `none`, `void`
+`let`, `mut`, `const`, `struct`, `union`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `defer`, `some`, `true`, `false`, `none`, `ok`, `err`, `void`
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
@@ -990,7 +990,7 @@ The guard axis is one of two orthogonal lexical context axes; the overflow axis 
 
 The governing idea: **the operation's spelling states intent; the guard context states whether the precondition is verified or trusted.** `s[i]` always means "index"; `(i32) f` always means "narrow." Whether each is checked at runtime or taken on faith is decided by the enclosing `guarded`/`unguarded` context.
 
-**`unguarded` governs exactly three guards** — float→int saturation, integer divide-by-zero (`/` and `%`), and slice bounds (index and subslice). For an in-range, finite, non-zero operand the result is identical to the guarded form; otherwise it is **undefined behavior** (exactly C's semantics). It governs nothing else. In particular, **option unwrap `x!` is always checked** — its tag test is a software invariant, not a range guard, and skipping it would resurrect the null-dereference class that options exist to remove. `unguarded x!` is therefore a redundant-marker error (below), not an unchecked unwrap.
+**`unguarded` governs exactly three guards** — float→int saturation, integer divide-by-zero (`/` and `%`), and slice bounds (index and subslice). For an in-range, finite, non-zero operand the result is identical to the guarded form; otherwise it is **undefined behavior** (exactly C's semantics). It governs nothing else. In particular, **option and result unwrap `x!` is always checked** — its tag test is a software invariant, not a range guard, and skipping it would resurrect the null-dereference class that options exist to remove. `unguarded x!` is therefore a redundant-marker error (below), not an unchecked unwrap.
 
 **Guard is not overflow.** `unguarded` removes *precondition* checks only; it never changes an operation's *result*. A `+` inside an `unguarded` region still wraps, and `unguarded (a / b)` still upholds the defined `min / -1` wrap — integer overflow is governed by the separate overflow axis (`checked`/`unchecked`, [below](#checked-arithmetic)), never by guards. So `unguarded` on a divide drops exactly the divide-by-zero check and nothing else, keeping division consistent with every other operator (the always-correct `min / -1` and `min % -1` results cost one predictable branch, negligible beside the divide itself). (A bare `unguarded (a + b)` is itself a redundant-marker error — `+` is not a guarded operation, so the marker has nothing to toggle.)
 
@@ -1530,7 +1530,7 @@ let p = alloc(shape.circle(3.14))!
 | Address-of | `&x` | `let mut` bindings only | `T*` |
 | Dereference | `*x` | `T*` | `T` |
 | Cast | `(T)x` | numeric, `bool`→numeric, pointer, slice — see §Casting | `T` |
-| Unwrap | `x!` | `T?` | `T` — crashes at runtime if `none` |
+| Unwrap | `x!` | `T?`, `T!` | `T` — crashes at runtime if `none`/`err` (a result's abort includes the error code) |
 
 ### Implicit Widening
 
@@ -1571,6 +1571,8 @@ Widening applies only where there is a single anchor type that other values are 
 
 In these positions an explicit cast is required to bridge types: `if cond then (i64) x else y`, `return (i64) x`, etc.
 
+Widening never reaches *through* a result: `i32!` and `i64!` are distinct types with distinct representations, so `let r: i64! = ok(5i32)` is an error — convert the payload explicitly (`ok((i64) 5)`). (Options behave the same except for the representation-preserving pointer cases; see §Option Types.)
+
 ### Overloaded Tokens
 
 Several tokens have multiple meanings distinguished by context:
@@ -1582,8 +1584,9 @@ Several tokens have multiple meanings distinguished by context:
 | `*` | expression context (binary) | multiplication — `a * b` |
 | `&` | expression context (prefix) | address-of — `&x` |
 | `&` | expression context (binary) | bitwise AND — `a & b` |
+| `!` | type context (suffix) | result type — `i32!` |
 | `!` | expression context (prefix) | boolean not — `!flag` |
-| `!` | expression context (postfix) | option unwrap — `val!` |
+| `!` | expression context (postfix) | option/result unwrap — `val!` |
 | `.` | expression context (postfix) | field access; auto-derefs one pointer level — `s.f`, `ptr.f` |
 | `->` | type context | function type arrow — `(i32) -> i32` |
 | `->` | match arm | match arm separator — `\| some(x) -> ...` |
@@ -1598,6 +1601,8 @@ Several operations in FC can fail at runtime with no meaningful recovery path. T
 |---------|-------|
 | Bounds check | Slice index or sub-slice range out of bounds |
 | Option unwrap | `x!` on a `none` value |
+| Result unwrap | `x!` on an `err` value (diagnostic includes the code) |
+| Result construction | `err(T, code)` with a runtime code of 0 (0 is the ok tag) |
 | Division by zero | Integer division or remainder with a zero divisor |
 
 All hard failures call `abort()` from the C standard library, which terminates the process immediately without unwinding, without running cleanup functions, and without flushing output buffers.
@@ -2793,6 +2798,89 @@ For safe unwrapping, use a `match` expression.
 
 ---
 
+## Result Types
+
+Result is a built-in generic type (see §Generics) and FC's error-propagation carrier: a value that is either a success payload or a non-zero `i32` error code. The `!` suffix creates a result type. Conceptually, `T!` is the union `ok(T) | err(i32)` — only the success side is generic; the error type is **permanently `i32`** (see the design record in `spec/result-type-design.md` for why fixing the error type is what keeps propagation from infecting signatures).
+
+```fc
+i32!        // result: ok(i32) | err(code)
+handle!     // "opening may fail, and failure has a reason"
+u8?!        // result of option — "fallible read of an optional byte"
+point*!     // result carrying a pointer
+```
+
+Options and results answer different questions and stay separate types: `dict.get(k) -> v?` says absence is *normal*; `io.open(path) -> handle!` says failure has a *reason*. Composition provides unification where it's wanted: in `u8?!`, `ok(some(b))` is a byte, `ok(none(u8))` is a clean EOF, and `err(u8?, code)` is an I/O error. Both suffix orders are legal (`u8!?` is an option of a result), but `T?!` is the idiomatic one.
+
+### Constructing results
+
+```fc
+ok(x)              // wrap a success value — type inferred from x
+err(i32, 2)      // i32! carrying error code 2
+err(node*, 5)      // node*! carrying error code 5
+```
+
+`ok` is a built-in operator that infers the result type from its argument expression, exactly as `some` does. The symmetric partner `err(T, code)` is type-anchored like `none(T)`: `T` is the **success** payload type (so `err(i32, 2)` has type `i32!`), required because the payload type cannot be inferred from a bare code. A bare `err` in expression position is rejected (use `.is_err` or an `err` match arm to test a result). `T` may be a type variable in generic code — `err('a, code)`.
+
+**`err` with code 0.** The tag *is* the code: `err == 0` means ok (C's "0 on success" as a layout). An `err` carrying code 0 would therefore be indistinguishable from a success, so `err` rejects it exactly as `some` rejects a null pointer payload:
+
+- a **provably-zero** code is a compile error: `err(T, 0)` and `err(T, default(i32))` are rejected outright;
+- any other code is **guarded at construction**: if it is zero at runtime, the program aborts with a diagnostic (`file.fc:N: err() with code 0`). The guard is elided when the code is provably non-zero (a non-zero literal, possibly negated or cast), so the common cases pay nothing.
+
+As with `some`'s null guard, the runtime check cannot appear in a constant initializer (a module-member `let` emitted at C file scope) — use a code that const-folds to a non-zero value there, or initialize at runtime.
+
+### Checking results
+
+Result types have two synthetic read-only fields that return `bool`, mirroring `.is_some`/`.is_none`:
+
+```fc
+let a = ok(42)
+let b = err(i32, 3)
+
+a.is_ok     // true
+a.is_err    // false
+b.is_ok     // false
+b.is_err    // true
+```
+
+These fields cannot be assigned to. As with options, `match` remains the idiom; the fields exist for quick checks.
+
+### Matching
+
+`match` on a result uses `ok(pattern)` and `err(pattern)` arms. The `err` payload is the `i32` code, so **literal code patterns** work like any nested integer literal:
+
+```fc
+match parse_port(s) with
+| ok(p) -> use(p)
+| err(2) -> retry()      // match a specific code
+| err(e) -> fail(e)      // bind the code
+```
+
+Exhaustiveness requires both variants covered. Literal-code arms do not exhaust `err` (integers are an infinite type), so a binding arm (`err(e)`) or a wildcard must follow — the same rule as matching integers anywhere else.
+
+### Unwrapping
+
+`x!` unwraps a result exactly as it unwraps an option: it yields the `ok` payload, or aborts. The abort diagnostic includes **the error code** — a detail options cannot offer:
+
+```
+file.fc:3: unwrap failed: r (error code 42)
+```
+
+### Defaults, equality, widening
+
+- `default(T!)` is `ok(default(T))` — the all-zeros bit pattern is `err == 0` with a zero-filled payload, so *default ≡ zero-filled memory* holds for results as for every FC type (`arena_alloc`, `= {0}`, and zero-filled slice literals of results all yield `ok(default(T))`). A result defaults to "successfully zero", mirroring C's zeroed-status heritage; an option defaults to "safely absent". The asymmetry is priced in — see the design record.
+- `==` works when `T` supports it: equal iff same variant, and (for `ok`) equal payloads; two `err`s are equal iff their codes are equal.
+- There is **no implicit widening through results**: `i32!` and `i64!` are distinct types; convert the payload explicitly (`ok((i64) n)`).
+- `T!` participates in generics as any concrete type does (monomorphized; the universal tier `==`/`default`/`sizeof` applies).
+
+> **Transpilation**
+> Every result — including pointer payloads — transpiles to the same C struct; there is no sentinel specialization:
+> ```c
+> typedef struct { int32_t err; T value; } fc_result_T;   /* err == 0 ⇔ ok */
+> ```
+> The tag *is* the error code: one `i32` of overhead, debugger-readable, zero on success. `T*!` stores the pointer in `value` with `err` as the tag, so a null pointer success value is representable (unlike `T*?`, which reserves null for `none`). `T*?!` composes — the `value` field holds the null-sentinel option.
+
+---
+
 ## Pointers
 
 Pointers in FC are intended to always be valid — a value of type `T*` should always point to a live `T`. There is no null *literal* keyword in FC: `null` is not a valid expression. If a pointer may legitimately be absent, use the option type `T*?`. (Note: a physically null raw pointer is still obtainable as `default(T*)`, and raw pointers may be compared by address with `==`/`!=`; the language merely removes a dedicated `null` keyword, it does not forbid null pointer values at the memory level.)
@@ -3526,6 +3614,22 @@ union option =
 The syntax for option types is `T?` — there is no `option<T>` type syntax. Conceptually, `option` follows the same design as a union with `none` as its first variant: `default(T?)` produces a none value (first-variant-is-default, see §Default Values), and `| none ->` / `| some(v) ->` work as match patterns with exhaustiveness checking. The built-in `some(expr)` operator (see §Constructing options) wraps a value and infers the option type, and `x!` unwraps it (crashing if none).
 
 The pointer optimization is preserved as a special compiler rule applied during monomorphization: when `option` is instantiated with a pointer type (`'a*`), the compiler emits a plain nullable C pointer rather than a tagged struct. This is invisible at the FC level — `'a*?` still behaves as an option type — but means pointer options remain zero-cost and ABI-compatible with C nullable pointer returns.
+
+---
+
+## result
+
+`result` is a built-in generic union with a fixed error side:
+
+```fc
+union result =
+    | ok('a)
+    | err(i32)
+```
+
+The syntax for result types is `T!` — there is no `result<T>` type syntax. Only the success side is generic: the error payload is permanently `i32` (see §Result Types). `default(T!)` is `ok(default(T))` — forced by the `err == 0 ⇔ ok` representation, where all-zeros reads as success. `| ok(v) ->` / `| err(e) ->` work as match patterns with exhaustiveness checking; the built-in `ok(expr)` operator wraps a value and infers the result type, `err(T, code)` anchors the payload type explicitly, and `x!` unwraps (aborting with the code if err).
+
+Unlike `option`, `result` has **no pointer specialization**: every instantiation — pointer payloads included — is the same `{ int32_t err; T value; }` struct, because the code field is the tag. `'a!` in generic code monomorphizes per concrete payload type like any other type form.
 
 ---
 
@@ -4986,6 +5090,7 @@ Higher-level FC types must be explicitly lowered at C call sites:
 - `str` — use `(cstr) s` to create a null-terminated stack copy, or `c"..."` for constant strings. The `cstr` is always non-const (fresh stack copy). If the extern expects `const char*`, declare the parameter as `const cstr`.
 - `const cstr` / `cstr` — pass directly. `const cstr` maps to `const char*` (read-only), `cstr` maps to `char*` (mutable). Use `c"..."` literals for constant strings (type is `const cstr`).
 - `T?` — unwrap with `x!` or `match` before passing
+- `T!` — has no C equivalent; `match` (or unwrap) and pass the payload or the code
 - Structs — memory-compatible with C structs if declared in the same field order
 
 ### Automatic boundary casts

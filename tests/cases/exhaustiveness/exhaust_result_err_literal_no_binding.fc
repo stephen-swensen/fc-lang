@@ -1,0 +1,8 @@
+// literal code patterns don't exhaust err — i32 is an infinite type
+let main = (args: str[]) ->
+    let r = err(i32, 3)
+    let v = match r with
+    | ok(n) -> n
+    | err(2) -> 22
+    | err(7) -> 77
+    v

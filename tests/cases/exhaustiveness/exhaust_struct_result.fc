@@ -1,0 +1,12 @@
+struct wrap =
+    r: i32!
+    flag: bool
+
+let main = (args: str[]) ->
+    let w = wrap { r = ok(1), flag = true }
+    let v = match w with
+    | { r = ok(n), flag = true } -> n
+    | { r = ok(n), flag = false } -> 0 - n
+    | { r = err(e), flag = _ } -> e
+    assert(v == 1)
+    0

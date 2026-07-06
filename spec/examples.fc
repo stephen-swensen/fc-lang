@@ -39,8 +39,8 @@ struct pair =
     second: 'b
 
 union result =
-    | ok('a)
-    | err('b)
+    | good('a)
+    | bad('b)
 
 let identity = (x: 'a) -> x
 
@@ -182,7 +182,7 @@ let main = (args: str[]) ->
 
     // let controls reassignment, not content mutation
     let p = point { x = 1, y = 2 }
-    p.x = 10                   // field mutation on let binding is ok
+    p.x = 10                   // field mutation on let binding is good
     assert(p.x == 10)
 
     // Shadowing — any combination of let/let mut
@@ -612,6 +612,47 @@ let main = (args: str[]) ->
     assert(ptr_opt!.x == 99)
 
     // --------------------------------------------------------
+    // Result types — T! = ok(T) | err(i32), the error carrier
+    // --------------------------------------------------------
+
+    // ok(v) infers from the payload; err(T, code) is type-anchored like
+    // none(T). The error code is always i32 and never 0 (0 is the ok tag —
+    // err(T, 0) is a compile error).
+    let succ = ok(42)                 // i32!
+    let fail = err(i32, 2)          // i32! carrying code 2
+
+    // Check via .is_ok / .is_err
+    assert(succ.is_ok)
+    assert(fail.is_err)
+
+    // Unwrap with ! (aborts on err, printing the error code)
+    assert(succ! == 42)
+
+    // Pattern matching — literal code patterns work; they don't exhaust
+    // err (i32 is infinite), so a binding or _ must follow
+    let describe_res = (r: i32!) ->
+        match r with
+        | ok(v)  -> v
+        | err(2) -> -2
+        | err(e) -> 0 - e
+    assert(describe_res(succ) == 42)
+    assert(describe_res(fail) == -2)
+    assert(describe_res(err(i32, 9)) == -9)
+
+    // default(T!) is ok(default(T)) — zero-filled memory IS the default
+    assert(default(i32!).is_ok)
+
+    // Options say "absence is normal"; results say "failure has a reason".
+    // Compose them instead of merging: u8?! reads as "fallible read of an
+    // optional byte" — ok(some(b)) = data, ok(none(u8)) = clean EOF,
+    // err(u8?, code) = I/O error.
+    let read_result = ok(some(65u8))  // u8?!
+    match read_result with
+    | ok(some(b)) -> assert(b == 65u8)
+    | ok(none)    -> assert(false)
+    | err(_)      -> assert(false)
+
+    // --------------------------------------------------------
     // Pointers
     // --------------------------------------------------------
 
@@ -739,11 +780,11 @@ let main = (args: str[]) ->
     assert(identity(3.14) == 3.14)
 
     // Generic unions — type args required (variant may not constrain all params)
-    let ok_val = result<i32, bool>.ok(42)
-    let err_val = result<i32, bool>.err(true)
-    let got = match ok_val with
-    | ok(v)  -> v
-    | err(_) -> -1
+    let good_val = result<i32, bool>.good(42)
+    let bad_val = result<i32, bool>.bad(true)
+    let got = match good_val with
+    | good(v)  -> v
+    | bad(_) -> -1
     assert(got == 42)
 
     // Explicit type args — for functions where types can't be inferred from args

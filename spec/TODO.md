@@ -4,16 +4,23 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
-## Result type `T!` — design adopted, implementation pending (branch `result-type`)
+## Result type `T!` — IMPLEMENTED 2026-07-06 (branch `result-type`); follow-ups open
 
-The error-propagation carrier decision is made: a built-in result type `T!` = `ok('a) | err(i32)`
-with intrinsic constructors `ok(v)` / `err(T, code)`, the `err == 0 ⇔ ok` repr, and full parity
-with options (`x!` unwrap with code, literal-code patterns, `.is_ok`/`.is_err`, composition
-`T?!`). Full rationale, rejected alternatives (incl. codes-on-`none` and the suffix bikeshed),
-and the ordered follow-up list (implementation → propagation operator `x?` → stdlib code
-convention → stdlib migration) live in **`spec/result-type-design.md`** — that document is the
-single source of truth; don't re-litigate here. This supersedes the rc.6 audit's
-"error-propagation sugar" item (the sugar lands *after* the carrier, as follow-up 2).
+The carrier is in: built-in `T!` = `ok('a) | err(i32)` with intrinsic constructors `ok(v)` /
+`err(T, code)` (hard keywords, like `some`/`none`), the `err == 0 ⇔ ok` repr, and full parity
+with options — `x!` unwrap printing the error code, literal-code patterns, `.is_ok`/`.is_err`,
+`err(T, 0)` compile-error/runtime-guard mirroring `some(null)`, composition `T?!`/`T!?`,
+generics `'a!`, `default(T!) = ok(default(T))`, equality, LSP hover/completion. Tests in
+`tests/cases/results/` + `exhaustiveness/exhaust_result_*`; spec §Result Types + Part 5
+`## result`; grammar Rule 6 documents the `(x!)` cast-vs-unwrap resolution (cast only when `)` is
+followed by an expression start). **`spec/result-type-design.md` remains the single source of
+truth**; don't re-litigate here. Remaining follow-ups, in order:
+
+1. **Propagation operator `x?`** — separate design pass; the `?`/`!` grid reserves the spelling.
+2. **Stdlib error-code convention** — code-space ownership rules (per-module ranges or a
+   registry) before any migration.
+3. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
+   lands on this branch before merge into `develop`.
 
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 

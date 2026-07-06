@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let r = err(i32, default(i32))
+    0

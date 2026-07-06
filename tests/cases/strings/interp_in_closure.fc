@@ -4,8 +4,8 @@ let main = (args: str[]) ->
     let y = 7
     let fmt = () -> alloc("val=%d{x * y}")!
     let r = fmt()
-    let mut ok = 0
-    if r == "val=35" then ok = 1
+    let mut passed = 0
+    if r == "val=35" then passed = 1
     free(r)
-    assert(ok == 1)
+    assert(passed == 1)
     0

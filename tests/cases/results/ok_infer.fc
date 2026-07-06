@@ -1,0 +1,14 @@
+// ok(v) infers bottom-up from the payload, anchoring join points and returns
+let pick = (flag: bool) ->
+    if flag then ok(1i64) else err(i64, 9)
+
+let main = (args: str[]) ->
+    let r = pick(true)
+    assert(r! == 1i64)
+    let n = ok(ok(some(5)))
+    match n with
+    | ok(ok(some(v))) -> assert(v == 5)
+    | ok(ok(none)) -> assert(false)
+    | ok(err(_)) -> assert(false)
+    | err(_) -> assert(false)
+    0

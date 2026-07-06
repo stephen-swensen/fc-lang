@@ -1,0 +1,21 @@
+let wrap = (v: 'a, fail: bool) ->
+    if fail then err('a, 7) else ok(v)
+
+struct box =
+    val: 'a
+
+let main = (args: str[]) ->
+    let a = wrap(42, false)
+    assert(a! == 42)
+    let b = wrap(true, true)
+    match b with
+    | ok(_) -> assert(false)
+    | err(e) -> assert(e == 7)
+    // generic struct payload
+    let c = wrap(box { val = 3 }, false)
+    match c with
+    | ok(bx) -> assert(bx.val == 3)
+    | err(_) -> assert(false)
+    let d = err(box<i32>, 2)
+    assert(d.is_err)
+    0

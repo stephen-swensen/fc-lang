@@ -1,0 +1,14 @@
+let classify = (code: i32) ->
+    let r = if code == 0 then ok(1) else err(i32, code)
+    match r with
+    | ok(v) -> v
+    | err(2) -> 22
+    | err(7) -> 77
+    | err(e) -> e
+
+let main = (args: str[]) ->
+    assert(classify(0) == 1)
+    assert(classify(2) == 22)
+    assert(classify(7) == 77)
+    assert(classify(9) == 9)
+    0

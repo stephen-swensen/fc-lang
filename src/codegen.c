@@ -27,6 +27,7 @@ static SymbolTable *g_symtab = NULL;
 /* Forward declaration for TypeSet (defined later) */
 typedef struct TypeSet TypeSet;
 static TypeSet *g_eq_set = NULL;
+static TypeSet *g_results_set = NULL;   /* result (T!) types needing typedefs */
 
 static int indent_level = 0;
 static int temp_counter = 0;
@@ -312,6 +313,12 @@ static void collect_hoisted_bindings(Expr *e) {
     case EXPR_SOME:
         collect_hoisted_bindings(e->some_expr.value);
         break;
+    case EXPR_OK:
+        collect_hoisted_bindings(e->ok_expr.value);
+        break;
+    case EXPR_ERR:
+        collect_hoisted_bindings(e->err_expr.code);
+        break;
     case EXPR_GUARD:
         collect_hoisted_bindings(e->guard.body);
         break;
@@ -448,6 +455,14 @@ static void collect_hoisted_pat(Pattern *pat, Type *type) {
     case PAT_SOME:
         if (pat->some_pat.inner && type->kind == TYPE_OPTION)
             collect_hoisted_pat(pat->some_pat.inner, type->option.inner);
+        break;
+    case PAT_OK:
+        if (pat->some_pat.inner && type->kind == TYPE_RESULT)
+            collect_hoisted_pat(pat->some_pat.inner, type->result.inner);
+        break;
+    case PAT_ERR:
+        if (pat->some_pat.inner)
+            collect_hoisted_pat(pat->some_pat.inner, type_int32());
         break;
     case PAT_VARIANT:
         if (pat->variant.payload && type->kind == TYPE_UNION) {
@@ -614,6 +629,41 @@ bool ptr_value_provably_null(const Expr *e) {
     }
 }
 
+/* The integer twins, for the err(T, code) zero-code guard: err == 0 is the ok
+ * tag, so a zero code is unrepresentable. Same conservatism as the pointer
+ * pair: provably_nonzero true ONLY when the code can never be zero (guard
+ * would be dead), provably_zero true ONLY when it always is (pass2 rejects).
+ * Anything uncertain yields false from both → a runtime guard. Negation
+ * preserves zero-ness exactly (including INT_MIN), so unary minus recurses. */
+bool int_value_provably_nonzero(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_INT_LIT: return e->int_lit.value != 0;
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_MINUS)
+            return int_value_provably_nonzero(e->unary_prefix.operand);
+        return false;
+    case EXPR_CAST: return int_value_provably_nonzero(e->cast.operand);
+    default: return false;
+    }
+}
+
+bool int_value_provably_zero(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_INT_LIT: return e->int_lit.value == 0;
+    case EXPR_DEFAULT:
+        /* default(<integer type>) is 0 */
+        return e->default_expr.target && type_is_integer(e->default_expr.target);
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_MINUS)
+            return int_value_provably_zero(e->unary_prefix.operand);
+        return false;
+    case EXPR_CAST: return int_value_provably_zero(e->cast.operand);
+    default: return false;
+    }
+}
+
 static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
@@ -776,6 +826,14 @@ static void emit_type(Type *t, FILE *out) {
         }
         break;
     }
+    case TYPE_RESULT: {
+        /* Always the { err; value } struct — no sentinel specialization */
+        Type *inner = subst_resolve(t->result.inner);
+        fprintf(out, "fc_result_");
+        if (inner) emit_type_ident(inner, out);
+        else fprintf(out, "void");
+        break;
+    }
     case TYPE_STRUCT:
         if (t->struc.is_tuple) {
             if (g_subst && type_contains_type_var(t))
@@ -902,6 +960,11 @@ static void emit_type_ident(Type *t, FILE *out) {
         if (t->option.inner) emit_type_ident(t->option.inner, out);
         else fprintf(out, "void");
         break;
+    case TYPE_RESULT:
+        fprintf(out, "fc_result_");
+        if (t->result.inner) emit_type_ident(t->result.inner, out);
+        else fprintf(out, "void");
+        break;
     case TYPE_FIXED_ARRAY:
         fprintf(out, "fixarr%lld_", (long long)t->fixed_array.size);
         emit_type_ident(t->fixed_array.elem, out);
@@ -996,6 +1059,8 @@ static bool expr_has_side_effects(Expr *e) {
     case EXPR_BITCAST: return expr_has_side_effects(e->bitcast_expr.operand);
     case EXPR_GUARD: return expr_has_side_effects(e->guard.body);
     case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
+    case EXPR_OK:   return expr_has_side_effects(e->ok_expr.value);
+    case EXPR_ERR:  return true;   /* may abort via the zero-code guard */
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++)
             if (!e->interp_string.segments[i].is_literal &&
@@ -1228,6 +1293,28 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         else
             fprintf(out, "!%s.has_value", expr);
         break;
+    case PAT_OK: {
+        if (!*first) fprintf(out, " && ");
+        *first = false;
+        fprintf(out, "%s.err == 0", expr);
+        if (pat->some_pat.inner) {
+            char inner_expr[256];
+            snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            emit_pat_predicate(pat->some_pat.inner, inner_expr, type->result.inner, first, out);
+        }
+        break;
+    }
+    case PAT_ERR: {
+        if (!*first) fprintf(out, " && ");
+        *first = false;
+        fprintf(out, "%s.err != 0", expr);
+        if (pat->some_pat.inner) {
+            char inner_expr[256];
+            snprintf(inner_expr, sizeof(inner_expr), "%s.err", expr);
+            emit_pat_predicate(pat->some_pat.inner, inner_expr, type_int32(), first, out);
+        }
+        break;
+    }
     case PAT_VARIANT: {
         if (!*first) fprintf(out, " && ");
         *first = false;
@@ -1346,6 +1433,22 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
             else
                 snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
             emit_pat_bindings(pat->some_pat.inner, inner_expr, inner_type, out);
+        }
+        break;
+    }
+    case PAT_OK: {
+        if (pat->some_pat.inner) {
+            char inner_expr[256];
+            snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            emit_pat_bindings(pat->some_pat.inner, inner_expr, type->result.inner, out);
+        }
+        break;
+    }
+    case PAT_ERR: {
+        if (pat->some_pat.inner) {
+            char inner_expr[256];
+            snprintf(inner_expr, sizeof(inner_expr), "%s.err", expr);
+            emit_pat_bindings(pat->some_pat.inner, inner_expr, type_int32(), out);
         }
         break;
     }
@@ -2736,7 +2839,24 @@ static void emit_expr(Expr *e, FILE *out) {
             const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
             int fn_len = (int)strlen(fn);
             int line = e->loc.line;
-            if (is_null_sentinel(opt_type)) {
+            Type *rt = subst_resolve(opt_type);
+            if (rt && rt->kind == TYPE_RESULT) {
+                /* Result unwrap: check the tag, abort WITH THE CODE if err.
+                 * (long long)/%lld keeps the print int-width-agnostic. */
+                fprintf(out, "({ ");
+                emit_type(rt, out);
+                int tid = temp_counter++;
+                fprintf(out, " _uw%d = ", tid);
+                emit_expr(e->unary_postfix.operand, out);
+                fprintf(out, "; if (_uw%d.err != 0) { fprintf(stderr, \"", tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, ":%d: unwrap failed: ", line);
+                if (e->unary_postfix.expr_text)
+                    emit_c_escaped(e->unary_postfix.expr_text,
+                                   e->unary_postfix.expr_text_len, out);
+                fprintf(out, " (error code %%lld)\\n\", (long long)_uw%d.err); "
+                             "FC_ABORT(); } _uw%d.value; })", tid, tid);
+            } else if (is_null_sentinel(opt_type)) {
                 /* T*? → plain pointer, unwrap = null check */
                 fprintf(out, "({ ");
                 emit_type(opt_type->option.inner, out);
@@ -3184,6 +3304,21 @@ static void emit_expr(Expr *e, FILE *out) {
                 break;
             }
         }
+        /* Result .is_ok / .is_err synthetic fields (err == 0 ⇔ ok) */
+        if (e->field.object->type && e->field.object->type->kind == TYPE_RESULT) {
+            if (strcmp(e->field.name, "is_ok") == 0) {
+                fprintf(out, "(");
+                emit_expr(e->field.object, out);
+                fprintf(out, ".err == 0)");
+                break;
+            }
+            if (strcmp(e->field.name, "is_err") == 0) {
+                fprintf(out, "(");
+                emit_expr(e->field.object, out);
+                fprintf(out, ".err != 0)");
+                break;
+            }
+        }
         emit_expr(e->field.object, out);
         fprintf(out, ".%s", c_safe_ident(g_intern, e->field.name));
         break;
@@ -3338,6 +3473,44 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "){ .value = ");
             emit_expr(e->some_expr.value, out);
             fprintf(out, ", .has_value = true }");
+        }
+        break;
+    }
+
+    case EXPR_OK:
+        /* ok(v) — err = 0 is the ok tag. Always the struct repr. */
+        fprintf(out, "(");
+        emit_type(e->type, out);
+        fprintf(out, "){ .err = 0, .value = ");
+        emit_expr(e->ok_expr.value, out);
+        fprintf(out, " }");
+        break;
+
+    case EXPR_ERR: {
+        /* err(T, code) — code 0 would read as ok, so guard a not-provably-
+         * nonzero code: evaluate once into a temp and abort if zero. Elided
+         * when the code is provably non-zero, and in const context (a
+         * file-scope initializer cannot contain a statement-expression;
+         * pass2 guarantees only provably-non-zero codes reach here). The
+         * unmentioned .value field zero-fills (C11 designated initializer). */
+        Expr *code = e->err_expr.code;
+        if (g_const_context || int_value_provably_nonzero(code)) {
+            fprintf(out, "(");
+            emit_type(e->type, out);
+            fprintf(out, "){ .err = ");
+            emit_expr(code, out);
+            fprintf(out, " }");
+        } else {
+            int tid = temp_counter++;
+            const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+            int fn_len = (int)strlen(fn);
+            fprintf(out, "({ int32_t _ec%d = ", tid);
+            emit_expr(code, out);
+            fprintf(out, "; if (__builtin_expect(_ec%d == 0, 0)) fc_zero_err(\"", tid);
+            emit_c_escaped(fn, fn_len, out);
+            fprintf(out, "\", %d); (", e->loc.line);
+            emit_type(e->type, out);
+            fprintf(out, "){ .err = _ec%d }; })", tid);
         }
         break;
     }
@@ -4138,7 +4311,10 @@ static void emit_expr(Expr *e, FILE *out) {
             }
             break;
         default:
-            /* Structs, unions, slices — compound literal with {0} */
+            /* Structs, unions, slices — compound literal with {0}. Results
+             * (T!) intentionally ride this path too: all-zeros is err == 0
+             * with a zero-filled payload, i.e. exactly ok(default(T)) —
+             * default ≡ zero-filled memory holds for every FC type. */
             fprintf(out, "(");
             emit_type(t, out);
             fprintf(out, "){0}");
@@ -4878,6 +5054,19 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
         if (!inner || inner->kind != TYPE_POINTER) {
             typeset_add(options, t);
         }
+    } else if (t->kind == TYPE_RESULT) {
+        /* Same stub canonicalization + inner-first recursion as options; every
+         * result needs a typedef (no pointer-sentinel exemption). */
+        Type *inner = t->result.inner;
+        if (inner && inner->kind == TYPE_STUB) {
+            Type *resolved = resolve_struct_stub(inner);
+            if (resolved != inner) {
+                t = type_result(g_arena, resolved);
+                inner = resolved;
+            }
+        }
+        collect_types_in_type(inner, slices, options, fns);
+        if (g_results_set) typeset_add(g_results_set, t);
     } else if (t->kind == TYPE_FUNC) {
         /* Recurse into param/return types FIRST so dependencies are emitted before this type */
         for (int i = 0; i < t->func.param_count; i++)
@@ -4970,6 +5159,9 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
     case TYPE_OPTION:
         collect_eq_types(t->option.inner, eqs);
         break;
+    case TYPE_RESULT:
+        collect_eq_types(t->result.inner, eqs);
+        break;
     default:
         break;
     }
@@ -4983,6 +5175,8 @@ static void collect_eq_from_pattern(Pattern *pat, TypeSet *eqs) {
         collect_eq_types(type_str(), eqs);
         break;
     case PAT_SOME:
+    case PAT_OK:
+    case PAT_ERR:
         if (pat->some_pat.inner) collect_eq_from_pattern(pat->some_pat.inner, eqs);
         break;
     case PAT_VARIANT:
@@ -5086,6 +5280,12 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
         break;
     case EXPR_SOME:
         collect_types_expr(e->some_expr.value, slices, options, fns);
+        break;
+    case EXPR_OK:
+        collect_types_expr(e->ok_expr.value, slices, options, fns);
+        break;
+    case EXPR_ERR:
+        collect_types_expr(e->err_expr.code, slices, options, fns);
         break;
     case EXPR_ARRAY_LIT:
         collect_types_in_type(e->array_lit.elem_type, slices, options, fns);
@@ -5264,6 +5464,12 @@ static void collect_const_backings(Expr *e) {
     case EXPR_SOME:
         collect_const_backings(e->some_expr.value);
         break;
+    case EXPR_OK:
+        collect_const_backings(e->ok_expr.value);
+        break;
+    case EXPR_ERR:
+        collect_const_backings(e->err_expr.code);
+        break;
     case EXPR_CALL:
         if (e->call.func->kind == EXPR_FIELD &&
             e->call.func->field.is_variant_constructor) {
@@ -5407,6 +5613,12 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
     case EXPR_SOME:
         collect_trampolines_expr(e->some_expr.value, ts);
         break;
+    case EXPR_OK:
+        collect_trampolines_expr(e->ok_expr.value, ts);
+        break;
+    case EXPR_ERR:
+        collect_trampolines_expr(e->err_expr.code, ts);
+        break;
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_trampolines_expr(e->array_lit.elems[i], ts);
@@ -5536,6 +5748,12 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         break;
     case EXPR_SOME:
         collect_lambdas_expr(e->some_expr.value, ls);
+        break;
+    case EXPR_OK:
+        collect_lambdas_expr(e->ok_expr.value, ls);
+        break;
+    case EXPR_ERR:
+        collect_lambdas_expr(e->err_expr.code, ls);
         break;
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
@@ -5744,6 +5962,14 @@ static void emit_eq_func(Type *t, FILE *out) {
         emit_value_eq(t->option.inner, "a.value", "b.value", out);
         fprintf(out, ";\n");
         break;
+    case TYPE_RESULT:
+        /* Equal iff same variant; ok payloads compared, err codes ARE the tag */
+        fprintf(out, "    if (a.err != b.err) return false;\n");
+        fprintf(out, "    if (a.err != 0) return true;\n");
+        fprintf(out, "    return ");
+        emit_value_eq(t->result.inner, "a.value", "b.value", out);
+        fprintf(out, ";\n");
+        break;
     case TYPE_FUNC:
         fprintf(out, "    return a.fn_ptr == b.fn_ptr && a.ctx == b.ctx;\n");
         break;
@@ -5753,6 +5979,80 @@ static void emit_eq_func(Type *t, FILE *out) {
     }
 
     fprintf(out, "}\n");
+}
+
+/* ---- Option/result body emission (shared fixpoint) ----
+ *
+ * Option and result bodies embed their inner type BY VALUE, and the two
+ * wrappers nest across sets in both orders (u8?! embeds fc_option_uint8_t,
+ * u8!? embeds fc_result_uint8_t), so neither set can be emitted wholesale
+ * before the other. Bodies are emitted by fixpoint instead: a wrapper emits
+ * once its inner is complete. Scalars/pointers are always complete; slices
+ * and fn typedefs are complete by the time the first fixpoint runs;
+ * struct/union/stub inners complete as their defs land in the topo
+ * interleave (the caller records each def name in `defs_done`). */
+typedef struct {
+    TypeSet *options, *results;
+    bool *opt_done, *res_done;
+    const char **defs_done;     /* interned names of emitted struct/union defs */
+    int defs_done_count;
+    FILE *out;
+} WrapEmit;
+
+static bool wrap_inner_complete(WrapEmit *we, Type *inner) {
+    if (!inner) return true;
+    const char *name = NULL;
+    switch (inner->kind) {
+    case TYPE_STRUCT: name = inner->struc.name; break;
+    case TYPE_UNION:  name = inner->unio.name; break;
+    case TYPE_STUB:   name = inner->stub.name; break;
+    case TYPE_OPTION:
+        for (int i = 0; i < we->options->count; i++)
+            if (type_eq_ignore_const(we->options->types[i], inner))
+                return we->opt_done[i];
+        return true;  /* not in the set: null-sentinel option — a plain pointer */
+    case TYPE_RESULT:
+        for (int i = 0; i < we->results->count; i++)
+            if (type_eq_ignore_const(we->results->types[i], inner))
+                return we->res_done[i];
+        return true;  /* not collected — nothing to wait for */
+    default:
+        return true;  /* scalars, pointers, slices, fns — bodies already out */
+    }
+    for (int i = 0; i < we->defs_done_count; i++)
+        if (we->defs_done[i] == name) return true;
+    return false;
+}
+
+static void emit_wrapper_bodies(WrapEmit *we) {
+    bool progress = true;
+    while (progress) {
+        progress = false;
+        for (int i = 0; i < we->options->count; i++) {
+            if (we->opt_done[i]) continue;
+            Type *o = we->options->types[i];
+            if (!wrap_inner_complete(we, o->option.inner)) continue;
+            fprintf(we->out, "struct fc_option_");
+            emit_type_ident(o->option.inner, we->out);
+            fprintf(we->out, " { ");
+            emit_type(o->option.inner, we->out);
+            fprintf(we->out, " value; bool has_value; };\n");
+            we->opt_done[i] = true;
+            progress = true;
+        }
+        for (int i = 0; i < we->results->count; i++) {
+            if (we->res_done[i]) continue;
+            Type *r = we->results->types[i];
+            if (!wrap_inner_complete(we, r->result.inner)) continue;
+            fprintf(we->out, "struct fc_result_");
+            emit_type_ident(r->result.inner, we->out);
+            fprintf(we->out, " { int32_t err; ");
+            emit_type(r->result.inner, we->out);
+            fprintf(we->out, " value; };\n");
+            we->res_done[i] = true;
+            progress = true;
+        }
+    }
 }
 
 /* Collect all top-level decls plus module child decls into a flat array */
@@ -5791,6 +6091,9 @@ static const char *find_by_value_dep_name(Type *type) {
          * after the inner def. Option-of-pointer/scalar/fn carries no by-value
          * aggregate dependency (inner recurses to NULL). */
         return find_by_value_dep_name(type->option.inner);
+    case TYPE_RESULT:
+        /* A result ALWAYS embeds its payload by value — same interleave rule */
+        return find_by_value_dep_name(type->result.inner);
     default: return NULL;
     }
 }
@@ -6107,6 +6410,15 @@ static void detect_features_expr(Expr *e) {
         detect_features_expr(e->some_expr.value);
         return;
     }
+    case EXPR_OK:
+        detect_features_expr(e->ok_expr.value);
+        return;
+    case EXPR_ERR:
+        /* A not-provably-nonzero code emits the zero-code abort (fc_zero_err) */
+        if (!int_value_provably_nonzero(e->err_expr.code))
+            g_needs_stdio = true;
+        detect_features_expr(e->err_expr.code);
+        return;
     case EXPR_ALLOC:
         detect_features_expr(e->alloc_expr.init_expr);
         detect_features_expr(e->alloc_expr.size_expr);
@@ -6512,6 +6824,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "    FC_ABORT();\n"
             "}\n"
             "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_zero_err(const char *file, int line) {\n"
+            "    fprintf(stderr, \"%%s:%%d: err() with code 0 "
+            "(0 is the ok tag; error codes must be non-zero)\\n\", file, line);\n"
+            "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
             "static void fc_overflow(const char *file, int line, const char *what) {\n"
             "    fprintf(stderr, \"%%s:%%d: integer overflow in %%s\\n\", file, line, what);\n"
             "    FC_ABORT();\n"
@@ -6528,16 +6846,21 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
         symmap_add("fc_neg_len", NULL, "<runtime>", 0);
         symmap_add("fc_null_some", NULL, "<runtime>", 0);
+        symmap_add("fc_zero_err", NULL, "<runtime>", 0);
         symmap_add("fc_overflow", NULL, "<runtime>", 0);
         symmap_add("fc_trunc", NULL, "<runtime>", 0);
     }
 
-    /* Collect all slice, option, function, and eq types used in the program */
+    /* Collect all slice, option, result, function, and eq types used in the
+     * program. Results ride a module-level set (like g_eq_set) rather than a
+     * fourth parameter threaded through every collect_* call. */
     TypeSet slices = {0};
     TypeSet options = {0};
+    TypeSet results = {0};
     TypeSet fns = {0};
     TypeSet eqs = {0};
     g_eq_set = &eqs;
+    g_results_set = &results;
 
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
@@ -6583,6 +6906,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         g_subst = NULL;
     }
     g_eq_set = NULL;
+    g_results_set = NULL;
 
     /* Emit forward declarations for all structs and unions (skip generics) */
     for (int i = 0; i < all_count; i++) {
@@ -6630,6 +6954,18 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         else fprintf(out, "void");
         fprintf(out, " fc_option_");
         if (o->option.inner) emit_type_ident(o->option.inner, out);
+        else fprintf(out, "void");
+        fprintf(out, ";\n");
+    }
+
+    /* Forward-declare all result typedefs, for the same cycle-breaking reasons. */
+    for (int i = 0; i < results.count; i++) {
+        Type *r = results.types[i];
+        fprintf(out, "typedef struct fc_result_");
+        if (r->result.inner) emit_type_ident(r->result.inner, out);
+        else fprintf(out, "void");
+        fprintf(out, " fc_result_");
+        if (r->result.inner) emit_type_ident(r->result.inner, out);
         else fprintf(out, "void");
         fprintf(out, ";\n");
     }
@@ -6686,35 +7022,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "* ptr; int64_t len; };\n");
     }
 
-    /* Emit scalar option bodies (primitives, pointers, slices). Options wrapping
-       structs/unions are deferred until after their definitions; options wrapping
-       function types are deferred until just after the function typedefs (the
-       body embeds the fn struct by value, so the typedef must precede it). */
-    for (int i = 0; i < options.count; i++) {
-        Type *o = options.types[i];
-        if (o->option.inner &&
-            (o->option.inner->kind == TYPE_STRUCT || o->option.inner->kind == TYPE_UNION ||
-             o->option.inner->kind == TYPE_STUB || o->option.inner->kind == TYPE_FUNC))
-            continue; /* deferred (see comment above) */
-        fprintf(out, "struct fc_option_");
-        emit_type_ident(o->option.inner, out);
-        fprintf(out, " { ");
-        emit_type(o->option.inner, out);
-        fprintf(out, " value; bool has_value; };\n");
-    }
-
-    /* Option-of-function bodies, now that every fn typedef is complete. These
-       embed the fn struct by value, so they must follow the typedefs but precede
-       any struct that embeds the option by value (the struct defs come next). */
-    for (int i = 0; i < options.count; i++) {
-        Type *o = options.types[i];
-        if (!o->option.inner || o->option.inner->kind != TYPE_FUNC) continue;
-        fprintf(out, "struct fc_option_");
-        emit_type_ident(o->option.inner, out);
-        fprintf(out, " { ");
-        emit_type(o->option.inner, out);
-        fprintf(out, " value; bool has_value; };\n");
-    }
+    /* Emit option/result bodies whose inner types are already complete —
+       primitives, pointers, slices, and (since the fn typedefs above are done)
+       function types, plus any ?!-composition over those. Wrappers over
+       struct/union/stub inners are deferred to the def interleave below, where
+       each newly-emitted def unlocks the wrappers embedding it. */
+    WrapEmit we = {
+        .options = &options, .results = &results,
+        .opt_done = calloc(options.count > 0 ? (size_t)options.count : 1, sizeof(bool)),
+        .res_done = calloc(results.count > 0 ? (size_t)results.count : 1, sizeof(bool)),
+        .defs_done = NULL, .defs_done_count = 0,
+        .out = out,
+    };
+    emit_wrapper_bodies(&we);
 
     /* Combined topological sort of ALL struct/union definitions — top-level
        (non-generic) decls and monomorphized instances (including synthesized
@@ -6746,9 +7066,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         topo_visit_sudef(defs, def_count, i, def_state, def_order, &def_order_count);
     free(def_state);
 
-    /* Emit definitions in dependency order, interleaving option typedefs that
-       wrap each newly-defined struct/union/tuple. */
-    bool *opt_emitted = calloc(options.count > 0 ? (size_t)options.count : 1, sizeof(bool));
+    /* Emit definitions in dependency order, interleaving option/result bodies
+       that wrap each newly-defined struct/union/tuple. */
+    const char **defs_done = malloc(sizeof(char*) * (size_t)(def_count > 0 ? def_count : 1));
+    we.defs_done = defs_done;
     for (int oi = 0; oi < def_order_count; oi++) {
         SuDef *s = &defs[def_order[oi]];
         const char *def_name = s->name;
@@ -6788,27 +7109,14 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             }
         }
         if (!def_name) continue;
-        for (int j = 0; j < options.count; j++) {
-            if (opt_emitted[j]) continue;
-            Type *o = options.types[j];
-            if (!o->option.inner) continue;
-            const char *inner_name = NULL;
-            if (o->option.inner->kind == TYPE_STRUCT) inner_name = o->option.inner->struc.name;
-            else if (o->option.inner->kind == TYPE_UNION) inner_name = o->option.inner->unio.name;
-            else if (o->option.inner->kind == TYPE_STUB) inner_name = o->option.inner->stub.name;
-            if (inner_name && inner_name == def_name) {
-                fprintf(out, "struct fc_option_");
-                emit_type_ident(o->option.inner, out);
-                fprintf(out, " { ");
-                emit_type(o->option.inner, out);
-                fprintf(out, " value; bool has_value; };\n");
-                opt_emitted[j] = true;
-            }
-        }
+        defs_done[we.defs_done_count++] = def_name;
+        emit_wrapper_bodies(&we);
     }
     free(def_order);
     free(defs);
-    free(opt_emitted);
+    free(defs_done);
+    free(we.opt_done);
+    free(we.res_done);
 
     /* Emit eq function forward declarations and definitions */
     for (int i = 0; i < eqs.count; i++)
@@ -6818,6 +7126,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
 
     free(slices.types);
     free(options.types);
+    free(results.types);
     free(fns.types);
     free(eqs.types);
 

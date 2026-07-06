@@ -1,0 +1,5 @@
+// (x!) followed by an expression start resolves as a cast to type x!
+let main = (args: str[]) ->
+    let x = 5
+    let y = (x!) - 1
+    y

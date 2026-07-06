@@ -42,6 +42,8 @@ typedef enum {
     TOK_TRUE,
     TOK_FALSE,
     TOK_NONE,
+    TOK_OK,
+    TOK_ERR,
     TOK_VOID,
     TOK_GUARDED,
     TOK_UNGUARDED,

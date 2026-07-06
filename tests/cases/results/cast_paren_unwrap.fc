@@ -1,0 +1,11 @@
+// (x!) followed by a non-expression-start stays a parenthesized unwrap
+let eat = (x: i32) -> x
+let main = (args: str[]) ->
+    let o = some(7)
+    let a = eat((o!))
+    assert(a == 7)
+    let b = (o!) == 7
+    assert(b)
+    let r = ok(3)
+    assert((r!) == 3)
+    0

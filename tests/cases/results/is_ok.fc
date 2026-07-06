@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let a = ok(1)
+    let b = err(i32, 3)
+    assert(a.is_ok)
+    assert(!a.is_err)
+    assert(b.is_err)
+    assert(!b.is_ok)
+    0

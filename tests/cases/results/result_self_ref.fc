@@ -1,0 +1,5 @@
+struct node =
+    next: node!
+
+let main = (args: str[]) ->
+    0

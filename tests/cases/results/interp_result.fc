@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let r = ok(1)
+    let s = "%d{r}"
+    0

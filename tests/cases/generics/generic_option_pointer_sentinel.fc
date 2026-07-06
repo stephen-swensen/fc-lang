@@ -6,8 +6,8 @@
 struct point =
     x: i32
 
-let pick = (s: 'a[], i: i64, ok: bool) ->
-    if ok then some(s[i]) else none('a)
+let pick = (s: 'a[], i: i64, cond: bool) ->
+    if cond then some(s[i]) else none('a)
 
 let unwrap_or = (o: 'a?, d: 'a) ->
     match o with

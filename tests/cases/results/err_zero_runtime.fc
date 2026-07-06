@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let mut c = 5
+    c = c - 5
+    let r = err(i32, c)
+    if r.is_err then 1 else 0

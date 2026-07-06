@@ -1,8 +1,8 @@
 // 4 levels: outer struct -> inner struct -> option -> union
 // Tests that Maranget recurses through multiple struct layers
 union status =
-    | ok
-    | err(i32)
+    | good
+    | bad(i32)
 
 struct header =
     code: status
@@ -14,16 +14,16 @@ struct packet =
 
 let classify = (p: packet) ->
     match p with
-    | { hdr = { code = ok, flag = true } } -> 1
-    | { hdr = { code = ok, flag = false } } -> 2
-    | { hdr = { code = err(c), flag = true } } -> c
-    | { hdr = { code = err(c), flag = false } } -> 0 - c
+    | { hdr = { code = good, flag = true } } -> 1
+    | { hdr = { code = good, flag = false } } -> 2
+    | { hdr = { code = bad(c), flag = true } } -> c
+    | { hdr = { code = bad(c), flag = false } } -> 0 - c
 
 let main = (args: str[]) ->
-    let p1 = packet { hdr = header { code = status.ok, flag = true }, size = 100 }
-    let p2 = packet { hdr = header { code = status.ok, flag = false }, size = 200 }
-    let p3 = packet { hdr = header { code = status.err(5), flag = true }, size = 300 }
-    let p4 = packet { hdr = header { code = status.err(5), flag = false }, size = 400 }
+    let p1 = packet { hdr = header { code = status.good, flag = true }, size = 100 }
+    let p2 = packet { hdr = header { code = status.good, flag = false }, size = 200 }
+    let p3 = packet { hdr = header { code = status.bad(5), flag = true }, size = 300 }
+    let p4 = packet { hdr = header { code = status.bad(5), flag = false }, size = 400 }
     assert(classify(p1) == 1)
     assert(classify(p2) == 2)
     assert(classify(p3) == 5)

@@ -1,0 +1,7 @@
+// inner option not exhausted inside ok(...)
+let main = (args: str[]) ->
+    let r = ok(some(65u8))
+    let v = match r with
+    | ok(some(b)) -> (i32) b
+    | err(e) -> 0 - e
+    v

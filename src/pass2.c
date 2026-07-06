@@ -221,8 +221,9 @@ static bool type_has_provenance(Type *t) {
         t->kind == TYPE_ANY_PTR) return true;
     /* Capturing closures have a stack-allocated context struct */
     if (t->kind == TYPE_FUNC) return true;
-    /* Option wrapping a pointer/slice also carries provenance */
+    /* Option/result wrapping a pointer/slice also carries provenance */
     if (t->kind == TYPE_OPTION) return type_has_provenance(t->option.inner);
+    if (t->kind == TYPE_RESULT) return type_has_provenance(t->result.inner);
     if (t->kind == TYPE_STRUCT) {
         for (int i = 0; i < t->struc.field_count; i++) {
             if (type_has_provenance(t->struc.fields[i].type)) return true;
@@ -294,7 +295,9 @@ static bool expr_may_yield_stack(Scope *scope, Expr *e) {
         return expr_may_yield_stack(scope, e->guard.body);
     case EXPR_SOME:
         return expr_may_yield_stack(scope, e->some_expr.value);
-    case EXPR_UNARY_POSTFIX:           /* option unwrap x! preserves provenance */
+    case EXPR_OK:
+        return expr_may_yield_stack(scope, e->ok_expr.value);
+    case EXPR_UNARY_POSTFIX:           /* option/result unwrap x! preserves provenance */
         return expr_may_yield_stack(scope, e->unary_postfix.operand);
     case EXPR_FIELD:
     case EXPR_DEREF_FIELD:
@@ -440,6 +443,12 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
         break;
     case EXPR_SOME:
         pretaint_walk(scope, e->some_expr.value, changed);
+        break;
+    case EXPR_OK:
+        pretaint_walk(scope, e->ok_expr.value, changed);
+        break;
+    case EXPR_ERR:
+        pretaint_walk(scope, e->err_expr.code, changed);
         break;
     case EXPR_ASSERT:
         pretaint_walk(scope, e->assert_expr.condition, changed);
@@ -624,6 +633,8 @@ static bool expr_refs_self(Expr *e, const char *self) {
     case EXPR_BITCAST:      return expr_refs_self(e->bitcast_expr.operand, self);
     case EXPR_GUARD:        return expr_refs_self(e->guard.body, self);
     case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
+    case EXPR_OK:           return expr_refs_self(e->ok_expr.value, self);
+    case EXPR_ERR:          return expr_refs_self(e->err_expr.code, self);
     case EXPR_ASSERT:       return expr_refs_self(e->assert_expr.condition, self);
     case EXPR_IF:           return expr_refs_self(e->if_expr.cond, self) ||
                                    expr_refs_self(e->if_expr.then_body, self) ||
@@ -1172,6 +1183,7 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     switch (t->kind) {
     case TYPE_POINTER: canonicalize_field_stubs(ctx, t->pointer.pointee); return;
     case TYPE_OPTION:  canonicalize_field_stubs(ctx, t->option.inner); return;
+    case TYPE_RESULT:  canonicalize_field_stubs(ctx, t->result.inner); return;
     case TYPE_SLICE:   canonicalize_field_stubs(ctx, t->slice.elem); return;
     case TYPE_FIXED_ARRAY: canonicalize_field_stubs(ctx, t->fixed_array.elem); return;
     case TYPE_STRUCT:
@@ -1291,6 +1303,11 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (t->kind == TYPE_OPTION) {
         Type *inner = resolve_type(ctx, t->option.inner);
         if (inner != t->option.inner) return type_option(ctx->arena, inner);
+        return t;
+    }
+    if (t->kind == TYPE_RESULT) {
+        Type *inner = resolve_type(ctx, t->result.inner);
+        if (inner != t->result.inner) return type_result(ctx->arena, inner);
         return t;
     }
     if (t->kind == TYPE_SLICE) {
@@ -1626,6 +1643,9 @@ static bool unify(Type *param_type, Type *arg_type,
     case TYPE_OPTION:
         return unify(param_type->option.inner, arg_type->option.inner,
                      var_names, bindings, var_count);
+    case TYPE_RESULT:
+        return unify(param_type->result.inner, arg_type->result.inner,
+                     var_names, bindings, var_count);
     case TYPE_FIXED_ARRAY:
         if (param_type->fixed_array.size != arg_type->fixed_array.size) return false;
         return unify(param_type->fixed_array.elem, arg_type->fixed_array.elem,
@@ -1774,6 +1794,11 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
     case TYPE_OPTION: {
         Type *inner = resolve_generic_types_in_ret(ctx, t->option.inner);
         if (inner != t->option.inner) return type_option(ctx->arena, inner);
+        return t;
+    }
+    case TYPE_RESULT: {
+        Type *inner = resolve_generic_types_in_ret(ctx, t->result.inner);
+        if (inner != t->result.inner) return type_result(ctx->arena, inner);
         return t;
     }
     case TYPE_SLICE: {
@@ -2273,6 +2298,7 @@ static int gen_inst_type_depth(Type *t) {
     case TYPE_POINTER:     return 1 + gen_inst_type_depth(t->pointer.pointee);
     case TYPE_SLICE:       return 1 + gen_inst_type_depth(t->slice.elem);
     case TYPE_OPTION:      return 1 + gen_inst_type_depth(t->option.inner);
+    case TYPE_RESULT:      return 1 + gen_inst_type_depth(t->result.inner);
     case TYPE_FIXED_ARRAY: return 1 + gen_inst_type_depth(t->fixed_array.elem);
     case TYPE_FUNC: {
         int m = gen_inst_type_depth(t->func.return_type);
@@ -2706,6 +2732,12 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_SOME:
         ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, frame);
         break;
+    case EXPR_OK:
+        ok &= validate_generic_body(e->ok_expr.value, arena, type_params, bindings, ntp, frame);
+        break;
+    case EXPR_ERR:
+        ok &= validate_generic_body(e->err_expr.code, arena, type_params, bindings, ntp, frame);
+        break;
     case EXPR_ASSIGN:
         ok &= validate_generic_body(e->assign.target, arena, type_params, bindings, ntp, frame);
         ok &= validate_generic_body(e->assign.value, arena, type_params, bindings, ntp, frame);
@@ -2827,6 +2859,10 @@ static bool expr_contains_control_flow(Expr *e) {
         return expr_contains_control_flow(e->bitcast_expr.operand);
     case EXPR_SOME:
         return expr_contains_control_flow(e->some_expr.value);
+    case EXPR_OK:
+        return expr_contains_control_flow(e->ok_expr.value);
+    case EXPR_ERR:
+        return expr_contains_control_flow(e->err_expr.code);
     case EXPR_DEFER:
         return expr_contains_control_flow(e->defer_expr.value);
     case EXPR_TUPLE_LIT:
@@ -3002,6 +3038,10 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
         return guard_subtree_has_effect(e->bitcast_expr.operand);
     case EXPR_SOME:
         return guard_subtree_has_effect(e->some_expr.value);
+    case EXPR_OK:
+        return guard_subtree_has_effect(e->ok_expr.value);
+    case EXPR_ERR:
+        return guard_subtree_has_effect(e->err_expr.code);
     case EXPR_ASSERT:
         return guard_subtree_has_effect(e->assert_expr.condition) ||
                guard_subtree_has_effect(e->assert_expr.message);
@@ -3819,9 +3859,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         Type *ot = check_expr(ctx, e->unary_postfix.operand);
         if (type_is_error(ot)) { e->type = type_error(); return e->type; }
         if (e->unary_postfix.op == TOK_BANG) {
-            /* Option unwrap: T? -> T */
+            /* Option unwrap T? -> T; result unwrap T! -> T (aborts with the code) */
+            if (ot->kind == TYPE_RESULT) {
+                e->type = ot->result.inner;
+                e->prov = e->unary_postfix.operand->prov;
+                return e->type;
+            }
             if (ot->kind != TYPE_OPTION) {
-                diag_error(e->loc, "unwrap (!) requires option type, got %s", type_name(ot));
+                diag_error(e->loc, "unwrap (!) requires option or result type, got %s", type_name(ot));
                 e->type = type_error();
                 return e->type;
             }
@@ -4911,6 +4956,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                  strcmp(e->assign.target->field.name, "is_none") == 0)) {
                 diag_error(e->loc, "cannot assign to option .%s field", e->assign.target->field.name);
             }
+            if (ot && ot->kind == TYPE_RESULT &&
+                (strcmp(e->assign.target->field.name, "is_ok") == 0 ||
+                 strcmp(e->assign.target->field.name, "is_err") == 0)) {
+                diag_error(e->loc, "cannot assign to result .%s field", e->assign.target->field.name);
+            }
         }
         /* Escape check: storing stack-allocated values where they outlive the stack frame. */
         if (e->assign.value->prov == PROV_STACK && type_has_provenance(vt)) {
@@ -5652,6 +5702,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
+        /* Result .is_ok and .is_err fields */
+        if (obj_type->kind == TYPE_RESULT) {
+            if (strcmp(e->field.name, "is_ok") == 0 || strcmp(e->field.name, "is_err") == 0) {
+                e->type = type_bool();
+                return e->type;
+            }
+            diag_error(e->loc, "result type has no field '%s'", e->field.name);
+            e->type = type_error();
+            return e->type;
+        }
+
         /* '.' auto-derefs a single pointer level: `p.field` == `(*p).field`.
            Rewrite to EXPR_DEREF_FIELD so codegen and every kind-dispatched pass
            (const/provenance/lvalue analysis) treat it as through-pointer. */
@@ -5948,6 +6009,40 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     "some() of a null pointer is indistinguishable from none "
                     "(pointer options use null as the none sentinel)");
         }
+        return e->type;
+    }
+
+    case EXPR_OK: {
+        Type *inner = check_expr(ctx, e->ok_expr.value);
+        if (reject_unresolved_recursive_value(e->ok_expr.value)) { e->type = type_error(); return e->type; }
+        if (type_is_error(inner)) { e->type = type_error(); return e->type; }
+        e->type = type_result(ctx->arena, inner);
+        e->prov = e->ok_expr.value->prov;
+        return e->type;
+    }
+
+    case EXPR_ERR: {
+        Type *target = resolve_type(ctx, e->err_expr.target);
+        e->err_expr.target = target;
+        Type *ct = check_expr(ctx, e->err_expr.code);
+        if (type_is_error(target) || type_is_error(ct)) { e->type = type_error(); return e->type; }
+        if (!type_eq(ct, type_int32())) {
+            if (type_can_widen(ct, type_int32())) {
+                e->err_expr.code = wrap_widen(ctx->arena, e->err_expr.code, type_int32());
+            } else {
+                diag_error(e->loc, "err() code must be i32, got %s", type_name(ct));
+                e->type = type_error();
+                return e->type;
+            }
+        }
+        /* err == 0 is the ok tag, so err(T, 0) is unrepresentable. Reject a
+         * provably-zero code outright; a not-provably-nonzero code is guarded
+         * at construction in codegen (mirror of some(null)). */
+        if (int_value_provably_zero(e->err_expr.code))
+            diag_error(e->loc,
+                "err() with code 0 is indistinguishable from ok "
+                "(0 is the ok tag; error codes must be non-zero)");
+        e->type = type_result(ctx->arena, target);
         return e->type;
     }
 
@@ -6626,6 +6721,23 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             return;
         }
         break;
+    case PAT_OK:
+        if (type->kind != TYPE_RESULT) {
+            diag_error(pat->loc, "ok pattern on non-result type %s", type_name(type));
+            return;
+        }
+        if (pat->some_pat.inner)
+            check_match_pattern(ctx, pat->some_pat.inner, type->result.inner, reject_bindings);
+        break;
+    case PAT_ERR:
+        if (type->kind != TYPE_RESULT) {
+            diag_error(pat->loc, "err pattern on non-result type %s", type_name(type));
+            return;
+        }
+        /* The err payload is the i32 code */
+        if (pat->some_pat.inner)
+            check_match_pattern(ctx, pat->some_pat.inner, type_int32(), reject_bindings);
+        break;
     case PAT_VARIANT: {
         if (type->kind != TYPE_UNION) {
             diag_error(pat->loc, "variant pattern on non-union type %s", type_name(type));
@@ -6714,6 +6826,7 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
 typedef enum {
     CTOR_TRUE, CTOR_FALSE,
     CTOR_SOME, CTOR_NONE,
+    CTOR_OK, CTOR_ERR,
     CTOR_VARIANT,
     CTOR_STRUCT,
     CTOR_INT_LIT, CTOR_CHAR_LIT, CTOR_STRING_LIT,
@@ -6784,6 +6897,26 @@ static MatPat pat_to_matpat(CheckCtx *ctx, Pattern *pat, Type *type) {
     case PAT_NONE:
         m.ctor.kind = CTOR_NONE;
         m.ctor.arity = 0;
+        return m;
+    case PAT_OK:
+        m.ctor.kind = CTOR_OK;
+        m.ctor.arity = 1;
+        m.sub = arena_alloc(a, sizeof(MatPat));
+        if (pat->some_pat.inner) {
+            Type *inner = (type && type->kind == TYPE_RESULT) ? type->result.inner : NULL;
+            m.sub[0] = pat_to_matpat(ctx, pat->some_pat.inner, inner);
+        } else {
+            m.sub[0] = matpat_wild();
+        }
+        return m;
+    case PAT_ERR:
+        m.ctor.kind = CTOR_ERR;
+        m.ctor.arity = 1;
+        m.sub = arena_alloc(a, sizeof(MatPat));
+        if (pat->some_pat.inner)
+            m.sub[0] = pat_to_matpat(ctx, pat->some_pat.inner, type_int32());
+        else
+            m.sub[0] = matpat_wild();
         return m;
     case PAT_VARIANT: {
         m.ctor.kind = CTOR_VARIANT;
@@ -6919,7 +7052,9 @@ static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLo
         free(tmp);
         return count;
     }
-    case PAT_SOME: {
+    case PAT_SOME:
+    case PAT_OK:
+    case PAT_ERR: {   /* all single-inner (some_pat) shapes — flatten alike */
         if (!pat->some_pat.inner) {
             *out = arena_alloc(a, sizeof(Pattern *));
             (*out)[0] = pat;
@@ -6936,7 +7071,7 @@ static int flatten_or_pattern(CheckCtx *ctx, Pattern *pat, Pattern ***out, SrcLo
         *out = arena_alloc(a, sizeof(Pattern *) * (size_t)ic);
         for (int i = 0; i < ic; i++) {
             Pattern *np = arena_alloc(a, sizeof(Pattern));
-            np->kind = PAT_SOME;
+            np->kind = pat->kind;
             np->loc = pat->loc;
             np->some_pat.inner = inners[i];
             (*out)[i] = np;
@@ -7099,6 +7234,12 @@ static int type_ctors_list(CheckCtx *ctx, Type *type, Ctor **out) {
         (*out)[1] = (Ctor){ .kind = CTOR_NONE, .arity = 0 };
         return 2;
     }
+    if (type->kind == TYPE_RESULT) {
+        *out = arena_alloc(a, 2 * sizeof(Ctor));
+        (*out)[0] = (Ctor){ .kind = CTOR_OK,  .arity = 1 };
+        (*out)[1] = (Ctor){ .kind = CTOR_ERR, .arity = 1 };
+        return 2;
+    }
     if (type->kind == TYPE_UNION) {
         int n = type->unio.variant_count;
         *out = arena_alloc(a, n * sizeof(Ctor));
@@ -7135,6 +7276,19 @@ static TypeRow ctor_sub_types(CheckCtx *ctx, Ctor *ctor, Type *type) {
             r.elems = arena_alloc(ctx->arena, sizeof(Type*));
             r.elems[0] = resolve_type(ctx, type->option.inner);
         }
+        break;
+    case CTOR_OK:
+        if (type && type->kind == TYPE_RESULT) {
+            r.len = 1;
+            r.elems = arena_alloc(ctx->arena, sizeof(Type*));
+            r.elems[0] = resolve_type(ctx, type->result.inner);
+        }
+        break;
+    case CTOR_ERR:
+        /* The err payload is the i32 code */
+        r.len = 1;
+        r.elems = arena_alloc(ctx->arena, sizeof(Type*));
+        r.elems[0] = type_int32();
         break;
     case CTOR_NONE:
     case CTOR_TRUE:
@@ -7399,6 +7553,13 @@ static MatPat *find_interesting_witness(CheckCtx *ctx, MatPat *w, Type *type, Ty
         Type *inner = (type && type->kind == TYPE_OPTION) ? type->option.inner : NULL;
         return find_interesting_witness(ctx, &w->sub[0], inner, out_type);
     }
+    /* Dig through ok(inner) likewise; err's payload is always the i32 code */
+    if (w->ctor.kind == CTOR_OK && w->ctor.arity == 1 && !w->sub[0].is_wildcard) {
+        Type *inner = (type && type->kind == TYPE_RESULT) ? type->result.inner : NULL;
+        return find_interesting_witness(ctx, &w->sub[0], inner, out_type);
+    }
+    if (w->ctor.kind == CTOR_ERR && w->ctor.arity == 1 && !w->sub[0].is_wildcard)
+        return find_interesting_witness(ctx, &w->sub[0], type_int32(), out_type);
     /* Dig through variant(payload) — the interesting part is what's inside */
     if (w->ctor.kind == CTOR_VARIANT && w->ctor.arity == 1 && !w->sub[0].is_wildcard) {
         Type *pay = NULL;
@@ -7439,6 +7600,12 @@ static void report_witness(CheckCtx *ctx, SrcLoc loc, MatPat *witness, Type *sub
         break;
     case CTOR_NONE:
         diag_error(loc, "non-exhaustive match: missing 'none' case for option type");
+        break;
+    case CTOR_OK:
+        diag_error(loc, "non-exhaustive match: missing 'ok' case for result type");
+        break;
+    case CTOR_ERR:
+        diag_error(loc, "non-exhaustive match: missing 'err' case for result type");
         break;
     case CTOR_VARIANT:
         if (witness_type && witness_type->kind == TYPE_UNION)
@@ -7721,6 +7888,18 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
         Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
         *n = *src;
         n->some_expr.value = const_clone_expr(ctx, src->some_expr.value);
+        return n;
+    }
+    case EXPR_OK: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->ok_expr.value = const_clone_expr(ctx, src->ok_expr.value);
+        return n;
+    }
+    case EXPR_ERR: {
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *src;
+        n->err_expr.code = const_clone_expr(ctx, src->err_expr.code);
         return n;
     }
     case EXPR_CALL: {
@@ -8225,6 +8404,35 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         n->some_expr.value = v;
         return n;
     }
+    case EXPR_OK: {
+        Expr *v = const_fold_expr(ctx, e->ok_expr.value);
+        if (!v) return NULL;
+        if (v == e->ok_expr.value) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->ok_expr.value = v;
+        return n;
+    }
+    case EXPR_ERR: {
+        Expr *c = const_fold_expr(ctx, e->err_expr.code);
+        if (!c) return NULL;
+        /* A not-provably-nonzero code compiles to a runtime zero-guard
+         * (statement-expression), which is not a valid C file-scope constant
+         * initializer. Codegen elides the guard in const context, so reject
+         * anything not provably non-zero here (a provably-zero code already
+         * errored in check_expr) — mirror of the some(null) rule above. */
+        if (!int_value_provably_nonzero(c)) {
+            diag_error(e->loc,
+                "err() with a possibly-zero code is not allowed in a constant "
+                "initializer; use a non-zero literal or initialize at runtime");
+            return NULL;
+        }
+        if (c == e->err_expr.code) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->err_expr.code = c;
+        return n;
+    }
     case EXPR_CALL: {
         if (e->call.func->kind != EXPR_FIELD ||
             !e->call.func->field.is_variant_constructor)
@@ -8348,6 +8556,12 @@ static bool is_const_expr(Expr *e) {
     /* some(x) — valid if payload is const.  Emits a plain compound literal. */
     case EXPR_SOME:
         return is_const_expr(e->some_expr.value);
+    /* ok(x) / err(T, c) — valid if payload/code is const. (A possibly-zero
+     * err code is rejected separately by const_fold_expr.) */
+    case EXPR_OK:
+        return is_const_expr(e->ok_expr.value);
+    case EXPR_ERR:
+        return is_const_expr(e->err_expr.code);
     /* Union variant constructor with payload — valid if all args are const. */
     case EXPR_CALL:
         if (e->call.func->kind == EXPR_FIELD &&
@@ -8406,6 +8620,10 @@ static bool is_file_init_expr(Expr *e) {
                is_file_init_expr(e->alloc_expr.init_expr);
     case EXPR_SOME:
         return is_file_init_expr(e->some_expr.value);
+    case EXPR_OK:
+        return is_file_init_expr(e->ok_expr.value);
+    case EXPR_ERR:
+        return is_file_init_expr(e->err_expr.code);
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
             if (!is_file_init_expr(e->array_lit.elems[i])) return false;
@@ -8587,6 +8805,7 @@ static const char *a5_byval_name(Type *t) {
     case TYPE_UNION:       return t->unio.name;
     case TYPE_FIXED_ARRAY: return a5_byval_name(t->fixed_array.elem);
     case TYPE_OPTION:      return a5_byval_name(t->option.inner);
+    case TYPE_RESULT:      return a5_byval_name(t->result.inner);
     default:               return NULL;  /* pointer, slice, func, primitives */
     }
 }

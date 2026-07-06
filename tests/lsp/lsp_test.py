@@ -388,7 +388,7 @@ sndir = tempfile.mkdtemp(prefix="fc_lsp_ungated_")
 with open(os.path.join(sndir, "broken.fc"), "w") as f:       # duplicate top-level name -> pass1 error
     f.write("let dup = (n: i32) ->\n    n\nlet dup = (n: i32) ->\n    n\n")
 with open(os.path.join(sndir, "main.fc"), "w") as f:         # clean; must still type-check despite the sibling
-    f.write("let ok = (n: i32) ->\n    n + 1\n")
+    f.write("let inc = (n: i32) ->\n    n + 1\n")
 snuri = "file://" + os.path.join(sndir, "main.fc")
 sn = [
     req(1, "initialize", {"capabilities": {}}),
@@ -1295,6 +1295,45 @@ check("completion: a call result 'f().' completes the returned struct's fields",
       cmp_labels(3) == {"bit0", "bit1"}, str(cmp_labels(3)))
 check("completion: a slice-of-pointers element 'arr[i].' auto-derefs to pointee fields",
       cmp_labels(4) == {"bit0", "bit1"}, str(cmp_labels(4)))
+
+# --- result type T!: hover docs for ok/err, member completion is_ok/is_err ----
+RES = (
+    "let parse = (n: i32) ->\n"            # 0
+    "    if n < 0 then err(i32, 2)\n"      # 1  hover 'err'
+    "    else ok(n * 2)\n"                 # 2  hover 'ok'
+    "\n"                                   # 3
+    "let main = (args: str[]) ->\n"        # 4
+    "    let r = parse(21)\n"              # 5  hover 'r' -> i32!
+    "    let f = r.is_ok\n"                # 6  member completion after 'r.'
+    "    if f then 0 else 1\n"             # 7
+)
+rs = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, RES),
+    hover(2, 1, RES.split("\n")[1].index("err") + 1),
+    hover(3, 2, RES.split("\n")[2].index("ok(") + 1),
+    hover(4, 5, 8),
+    req(5, "textDocument/completion",
+        {"textDocument": {"uri": URI},
+         "position": {"line": 6, "character": RES.split("\n")[6].index("r.") + 2}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+rsresp, _, _, _, _ = run_session(rs)
+def rs_hover(rid):
+    res = rsresp.get(rid, {}).get("result") or {}
+    return ((res.get("contents") or {}).get("value")) or ""
+def rs_labels(rid):
+    res = rsresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return set(it.get("label") for it in (its or []))
+check("hover 'err' shows the err(T, code) builtin doc",
+      "err(T, code: i32) -> T!" in rs_hover(2), rs_hover(2))
+check("hover 'ok' shows the ok(x) builtin doc",
+      "ok(x: T) -> T!" in rs_hover(3), rs_hover(3))
+check("hover a result binding shows the T! type",
+      "i32!" in rs_hover(4), rs_hover(4))
+check("completion: 'r.' on a result offers is_ok/is_err",
+      rs_labels(5) == {"is_ok", "is_err"}, str(rs_labels(5)))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

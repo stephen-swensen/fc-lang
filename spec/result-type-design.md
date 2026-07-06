@@ -1,8 +1,10 @@
-# Design: built-in result type `T!` — ADOPTED (design final; implementation pending)
+# Design: built-in result type `T!` — ADOPTED (implemented 2026-07-06)
 
 *Date: 2026-07-05. Branch: `result-type`. Status: design decided; this records the decision, the
 precedent analysis, and the rejected alternatives so none of it is re-litigated. Implementation
-and the trailing stdlib migration land on this branch before merge into `develop`.*
+landed 2026-07-06 (`ok`/`err` as hard keywords, mirroring `some`/`none`; existing user
+identifiers named `ok`/`err` were renamed in the same change). The trailing stdlib migration
+lands on this branch before merge into `develop`.*
 
 ## The problem
 

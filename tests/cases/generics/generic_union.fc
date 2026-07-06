@@ -1,14 +1,14 @@
 union result =
-    | ok('a)
-    | err(i32)
+    | good('a)
+    | bad(i32)
 
-let make_ok = (x: 'a) -> result<'a>.ok(x)
+let make_good = (x: 'a) -> result<'a>.good(x)
 
 let main = (args: str[]) ->
     let _result =
-        let r = make_ok(42)
+        let r = make_good(42)
         match r with
-        | ok(v) -> v
-        | err(e) -> e
+        | good(v) -> v
+        | bad(e) -> e
     assert(_result == 42)
     0

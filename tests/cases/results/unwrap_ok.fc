@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let r = ok(42)
+    assert(r! == 42)
+    assert(ok(ok(7))!! == 7)
+    0
