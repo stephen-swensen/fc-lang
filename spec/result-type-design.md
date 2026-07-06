@@ -257,16 +257,33 @@ match open(p) with
   code after it in sort order). Accepted, as Zig accepts it: the mitigation is printing names,
   not persisting numbers — see `error_name`.
 
-### `error_name` intrinsic
+### Name delivery: `error_name`, `--backtraces` aborts, `--emit-error-codes`
 
-`error_name(e)` yields `str?`: `some` of the fully-qualified name (`"file_io.not_found"`) for
-a declared code, `none` for anything else (reserved-range and negative codes — the caller
-formats the number via interpolation; returning a formatted string would hide an allocation).
-Backed by a whole-program static table emitted **only when `error_name` is used** — a static
-cost, no runtime machinery. The `x!` abort message keeps printing the numeric code:
-unconditionally embedding the name table in every binary that unwraps would be unsought bloat.
-Upgrading the abort path to names (gated on the table already being present, or opt-in) can be
-revisited with lived experience.
+Three channels deliver names, each with its own cost home (decided 2026-07-06):
+
+- **`error_name(e)` intrinsic** yields `str?`: `some` of the fully-qualified name
+  (`"file_io.not_found"`) for a declared code, `none` for anything else (reserved-range and
+  negative codes — the caller formats the number via interpolation; returning a formatted
+  string would hide an allocation). Backed by a whole-program static table emitted **only when
+  `error_name` is used** — a static cost, no runtime machinery. Unconditionally embedding the
+  table in every binary that unwraps would be unsought bloat, so by default the `x!` abort
+  message prints the numeric code.
+- **Named aborts ride `--backtraces`.** The flag's existing contract is exactly "pay static
+  data for readable failures" — it already embeds a `_fc_symtab[]` name table so
+  `fc_dump_backtrace` renders FC-level frames, and `FC_ABORT()` under the flag is already the
+  fancy path. With `--backtraces` on, the error-name table is emitted unconditionally and the
+  `x!` abort message prints the qualified name alongside the code; lean builds keep numbers.
+  `error_name` and the abort path share the one table when both apply. No dedicated flag —
+  that would split the single diagnostic-fidelity-vs-size axis across two knobs.
+- **`--emit-error-codes` listing** — the "strip the binary, keep the map" channel (linker
+  map / PDB / split-DWARF school): writes `code<TAB>qualified_name<TAB>decl file:line` per
+  declared error, for decoding numeric codes from production logs and for publishing alongside
+  a release. Zero binary cost; trivially generated since assignment is deterministic and
+  whole-program. Deterministic output makes it diffable — CI can diff the map across builds to
+  see exactly which codes shifted when a declaration was added, making the one sharp edge of
+  unstable assignment visible. Scope: declared errors only (≥ 65536; reserved-range
+  passthrough codes belong to the platform's own documentation), regenerated per build like a
+  symbol map.
 
 ### Rejected alternatives (error codes)
 
