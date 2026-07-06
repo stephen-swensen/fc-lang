@@ -173,7 +173,131 @@ struct { int32_t err; T value; }   /* err == 0  ⇔  ok */
   syntax (`foo!` binds tightest without them). Documented rule, same class as the existing
   `(a*) b` vs `(a * b)` resolution.
 
-## Rejected alternatives
+## Error-code organization: `error` declarations — ADOPTED 2026-07-06 (implementation pending)
+
+*Second design pass on this branch, resolving follow-up 3 below (code-space ownership). Decided
+in discussion 2026-07-06; this records the decision and the rejected alternatives.*
+
+### The problem
+
+`err` carries a raw `i32`, but nothing says who owns the numbers. Manual per-module ranges are
+the kernel/FreeBSD approach and they rot (someone always squats on someone else's range); a
+registry file is coordination overhead. Zig's answer — the compiler owns a global table and
+assigns every named error a unique small integer — is the right one, and FC is unusually well
+placed for it: compilation is already whole-program, so the compiler sees every declaration in
+one invocation.
+
+### The decision: compiler-owned code space, declared through `error` groups
+
+```fc
+error file_io =
+    | not_found
+    | invalid_path
+
+let open = (path: str) ->
+    ...
+    err(handle, file_io.not_found)
+
+match open(p) with
+| ok(h) -> use(h)
+| err(file_io.not_found) -> create(p)
+| err(e) -> fail(e)
+```
+
+- **A group is a pseudo-module of `i32` constants, not a type.** `file_io` never appears in
+  type position; the err tag's user-facing type is the global **`error`**, a display alias of
+  `i32` on the `str`/`cstr` precedent (affects `type_name()` output only, never equality or
+  semantics). Declared constants and `| err(e)` bindings show `error` in diagnostics/hover but
+  are `i32` everywhere — raw codes at C boundaries need no casts, `(e: error)` params for
+  logging helpers work for free, and literal-code tests (`err(2)`) stay valid.
+- **No unification, contra Zig:** `file_io.not_found` and `parse.not_found` are distinct codes.
+  Zig unifies names globally because its error *sets* must merge; FC has no sets, so
+  unification buys nothing — and non-unification keeps provenance in the name, consistent with
+  per-call-provenance interpretation.
+- **Qualification is mandatory**, in expressions and in patterns. A bare `| err(not_found)`
+  would be indistinguishable from a binding (the classic enum-in-pattern trap); qualified
+  constant paths in patterns (`| err(file_io.not_found)`) are the main new grammar surface.
+- **No per-group exhaustiveness.** The err payload's type is the global `error`, so an `err`
+  arm always needs a binding or `_` after any literal/named arms — same as integer matching
+  today. `error` groups are namespaces of constants, not sum types; stating this here so
+  union-style exhaustiveness isn't asked of them later.
+- Group and member names follow FC's lowercase snake_case like all user names. `error` becomes
+  a hard keyword (the `ok`/`err` precedent).
+
+### Code-space layout
+
+| range         | meaning                                                              |
+|---------------|----------------------------------------------------------------------|
+| `0`           | `ok` — never an error code (repr invariant)                          |
+| `[1, 65535]`  | **reserved: platform passthrough** (errno, Win32/WSA error codes)    |
+| `≥ 65536`     | compiler-assigned declared errors                                    |
+| negative      | sign-bit-encoded platform conventions (HRESULT, kernel `-errno`)     |
+
+- **Assignment is deterministic:** fully-qualified declared names are sorted and numbered
+  sequentially from 65536. Every declared name is therefore provably nonzero — the
+  `err(T, 0)` guard is elided at compile time for named codes.
+- **Passthrough is sound by construction:** the errno domain already shares FC's zero
+  convention (`errno == 0` means "no error", exactly `err == 0 ⇔ ok`), so a failing C call's
+  errno wraps into `err(T, e)` unchanged — no translation table, the debugger shows the same
+  number `strace` does. The runtime `err(T, 0)` guard even catches the buggy-wrapper case
+  (wrapping errno when the call actually succeeded).
+- **Why 65536 and not the kernel's MAX_ERRNO (4095):** FC targets Windows, where the natural
+  passthrough values are Win32 system error codes (`GetLastError`) and Winsock errors
+  (`WSAECONNRESET` = 10054) — 16-bit-range values that would collide with a table starting at
+  4096. Reserving the full u16 space subsumes errno (Linux tops out ~133), MAX_ERRNO, and the
+  Win32/WSA space; `i32` leaves two billion codes above it, so the reservation costs nothing.
+  A code's value also classifies itself: below 65536 = platform code passed through, at or
+  above = declared FC error, findable by name.
+- **HRESULTs pass through in the negative space:** failing HRESULTs always have the severity
+  bit set, so as `i32` they're negative; `S_OK` = 0 aligns with `ok`. Caveat: `S_FALSE` = 1 is
+  a nonzero *success* HRESULT — a wrapper must test `FAILED(hr)` (the sign bit), never
+  `hr != 0`. Negative codes generally are representable and legal, governed by per-call
+  provenance; `std::net`'s current `-1` sentinels migrate to real errno passthroughs instead.
+- **Codes are not stable across builds** (adding or renaming a declared error shifts every
+  code after it in sort order). Accepted, as Zig accepts it: the mitigation is printing names,
+  not persisting numbers — see `error_name`.
+
+### `error_name` intrinsic
+
+`error_name(e)` yields `str?`: `some` of the fully-qualified name (`"file_io.not_found"`) for
+a declared code, `none` for anything else (reserved-range and negative codes — the caller
+formats the number via interpolation; returning a formatted string would hide an allocation).
+Backed by a whole-program static table emitted **only when `error_name` is used** — a static
+cost, no runtime machinery. The `x!` abort message keeps printing the numeric code:
+unconditionally embedding the name table in every binary that unwraps would be unsought bloat.
+Upgrading the abort path to names (gated on the table already being present, or opt-in) can be
+revisited with lived experience.
+
+### Rejected alternatives (error codes)
+
+- **Manual per-module ranges / a registry file** — rot and coordination overhead; the
+  compiler already sees the whole program.
+- **Zig-style global unification of names** — exists to serve error-set merging, which FC
+  doesn't have; loses namespacing for nothing.
+- **Mandatory translation at C boundaries** (the Zig `std.posix` school: switch on errno,
+  return named errors) — a per-platform mapping table in every wrapper plus an
+  "unexpected errno" fallback path; exactly the hidden layer FC's C-interop story avoids.
+  Translation stays *available* to the stdlib where a named contract is worth it, never forced.
+- **Explicit `= N` pins on declared errors** — reintroduce the collision problem the feature
+  exists to kill; stability wants `error_name`, not frozen numbers.
+- **Generalized `code` declarations** (named integer constant groups for non-error channels) —
+  deferred. That's a plain-enum design with different constraints (no reserved zero, real
+  type-position and exhaustiveness questions) and no current stdlib demand. If a general enum
+  design ever lands, `error` reframes cleanly as its specialized case; nothing here paints
+  that door shut.
+
+### Implementation notes
+
+- The pseudo-module can likely ride the existing companion-module machinery (a group registers
+  as a module of `i32` consts); the err-binding's type node carries the `error` display alias.
+- Pattern grammar grows qualified-constant paths (`grammar.bnf` update alongside).
+- Stdlib-migration follow-ups, not blockers: an errno accessor shim (`errno` is a C macro, not
+  a symbol — an `__errno_location`-style extern or one-line C helper), `GetLastError` on
+  Windows, and *optionally* per-platform named errno const groups behind the existing
+  conditional-compilation flags — only for codes the stdlib actually matches on (values are
+  platform-dependent: EAGAIN is 11 on Linux, 35 on macOS).
+
+## Rejected alternatives (carrier type)
 
 - **Generic error type (`result<'a, 'b>`)** — the Rust path; see precedent analysis. The
   conversion-at-boundaries problem is structural, and FC has no traits to paper over it.
@@ -205,9 +329,8 @@ struct { int32_t err; T value; }   /* err == 0  ⇔  ok */
    `-Werror`-clean emitted C at 16- and 32-bit `int`).
 2. **Propagation operator `x?`** — separate design pass once `T!` is in hand; the grid reserves
    the spelling.
-3. **Stdlib error-code convention** — the code space needs ownership rules (per-module ranges
-   or a registry) before the migration; codes are per-call-provenance interpretable (you know
-   which function returned it), same as C's `errno`.
+3. **Stdlib error-code convention** — ✅ RESOLVED 2026-07-06: compiler-owned code space via
+   `error` declarations; see "Error-code organization" above (implementation pending).
 4. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
    trails the feature, lands on this branch before merge into `develop`.
 
