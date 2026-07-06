@@ -4,6 +4,17 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
+## Result type `T!` — design adopted, implementation pending (branch `result-type`)
+
+The error-propagation carrier decision is made: a built-in result type `T!` = `ok('a) | err(i32)`
+with intrinsic constructors `ok(v)` / `err(T, code)`, the `err == 0 ⇔ ok` repr, and full parity
+with options (`x!` unwrap with code, literal-code patterns, `.is_ok`/`.is_err`, composition
+`T?!`). Full rationale, rejected alternatives (incl. codes-on-`none` and the suffix bikeshed),
+and the ordered follow-up list (implementation → propagation operator `x?` → stdlib code
+convention → stdlib migration) live in **`spec/result-type-design.md`** — that document is the
+single source of truth; don't re-litigate here. This supersedes the rc.6 audit's
+"error-propagation sugar" item (the sugar lands *after* the carrier, as follow-up 2).
+
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 
 `atomic_load_acquire` / `atomic_store_release` (shipped 2026-06-10, see archived TODO) accept
