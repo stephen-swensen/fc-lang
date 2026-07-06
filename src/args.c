@@ -407,25 +407,6 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             /* handled above */
         } else if (strcmp(a, "--backtraces") == 0) {
             out->backtraces = true;
-        } else if (strcmp(a, "--emit-error-codes") == 0 ||
-                   strncmp(a, "--emit-error-codes=", 19) == 0) {
-            /* Write the declared-error code map alongside the build (a symbol
-             * map for error codes). The bare form derives <output>.errcodes;
-             * =path overrides, rebased like -o when it comes from a response
-             * file. */
-            out->emit_error_codes = true;
-            if (a[18] == '=') {
-                const char *val = a + 19;
-                if (*val == '\0') {
-                    out->error = msgf("--emit-error-codes= requires a path");
-                    return false;
-                }
-                const char *vdir = e->dirs[i];
-                free(out->emit_error_codes_path);
-                out->emit_error_codes_path =
-                    (vdir && !path_is_abs(val)) ? path_join(vdir, val)
-                                                : dupn(val, (int)strlen(val));
-            }
         } else if (strcmp(a, "--flag") == 0 && i + 1 < e->count) {
             const char *arg = e->tokens[++i];      /* borrowed: name/value point into e */
             const char *eq = strchr(arg, '=');
@@ -472,7 +453,6 @@ void args_compile_free(CompileArgs *c) {
     free(c->inputs);
     free(c->flags);
     free(c->output);
-    free(c->emit_error_codes_path);
     free(c->error);
     memset(c, 0, sizeof *c);
 }

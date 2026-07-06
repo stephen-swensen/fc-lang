@@ -21,7 +21,8 @@ truth**; don't re-litigate here. Remaining follow-ups, in order:
    `error` declarations (hard keyword; groups desugar to pseudo-modules of i32 consts;
    deterministic assignment from 65536, [1, 65535] reserved platform passthrough; qualified
    constant patterns; `error` i32 display alias in type position; `error_name(e) -> str?`
-   intrinsic; named `x!` aborts under `--backtraces`; `--emit-error-codes[=path]` map).
+   intrinsic; named `x!` aborts under `--backtraces`; automatic `<output>.errcodes` map on
+   every successful compile that declares errors).
    Design record in `spec/result-type-design.md` §Error-code organization; spec §Named error
    codes; tests `tests/cases/errors/` + `backtraces/err_unwrap_named`.
 3. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —

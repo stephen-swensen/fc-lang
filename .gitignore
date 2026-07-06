@@ -11,6 +11,9 @@ a.out
 # Generated C from test runs
 tests/cases/**/*.c
 
+# Error-code maps (written automatically beside every compiled .c that declares errors)
+*.errcodes
+
 # Scratch Dir
 scratch*/
 

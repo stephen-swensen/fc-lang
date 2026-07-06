@@ -275,7 +275,7 @@ Three channels deliver names, each with its own cost home (decided 2026-07-06):
   `x!` abort message prints the qualified name alongside the code; lean builds keep numbers.
   `error_name` and the abort path share the one table when both apply. No dedicated flag —
   that would split the single diagnostic-fidelity-vs-size axis across two knobs.
-- **`--emit-error-codes` listing** — the "strip the binary, keep the map" channel (linker
+- **The `.errcodes` map** — the "strip the binary, keep the map" channel (linker
   map / PDB / split-DWARF school): writes `code<TAB>qualified_name<TAB>decl file:line` per
   declared error, for decoding numeric codes from production logs and for publishing alongside
   a release. Zero binary cost; trivially generated since assignment is deterministic and
@@ -283,7 +283,12 @@ Three channels deliver names, each with its own cost home (decided 2026-07-06):
   see exactly which codes shifted when a declaration was added, making the one sharp edge of
   unstable assignment visible. Scope: declared errors only (≥ 65536; reserved-range
   passthrough codes belong to the platform's own documentation), regenerated per build like a
-  symbol map.
+  symbol map. *(Revised 2026-07-06, same day: emission is **automatic**, not a flag. The
+  original `--emit-error-codes[=path]` opt-in was implemented and then dropped — since codes
+  are deliberately not build-stable, the map is the entire mitigation, and an opt-in's only
+  failure mode is not having the map for the build that shipped. Every successful compile that
+  declares errors writes `<output>.errcodes` beside the C output; a build that declares none
+  removes any stale map so the map can never lie about the `.c` next to it.)*
 
 ### Rejected alternatives (error codes)
 
