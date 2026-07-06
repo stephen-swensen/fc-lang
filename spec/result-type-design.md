@@ -118,6 +118,23 @@ struct { int32_t err; T value; }   /* err == 0  ⇔  ok */
   is also semantically defensible — a result's zero value succeeding mirrors C's `0 = success`
   heritage — but the honest statement is that the repr decides it. (Options differ: all-zeros
   `T?` is `none`. The asymmetry is priced in.)
+
+  *Precedent and the rejected `err(-1)` default (considered 2026-07-05):* the zero-value school
+  is unanimous that all-zeros reads as success — C (zeroed status int), Go (`nil` error means
+  no error), Odin (`.None = 0`), and Zig's internal repr (error codes number from 1; 0 is
+  reserved for "no error" — our exact layout). Rust's answer (`Result` implements no `Default`;
+  asking is a compile error) is unavailable: FC's `default` is universally total by design, and
+  a carve-out would make the tier partial while zero-filled aggregates deliver `ok(0)` through
+  the back door anyway. Defining `default(T!) = err(-1)` was rejected because it breaks the
+  invariant *default ≡ zero-filled memory*: `i32![n] {}` and `arena_alloc` are calloc-cheap
+  precisely because fresh zeros *are* default values, and restoring consistency would inject a
+  per-element stamping loop into every zero-fill path whose type transitively contains a result
+  — hidden runtime machinery FC doesn't accept. Re-encoding the tag so all-zeros decodes as an
+  error (offset codes) was likewise rejected: it forfeits the repr's point (the tag *is* the C
+  status code, debugger-readable, zero on success). Residual risk, stated: a result defaults to
+  "falsely fine" where an option defaults to "safely absent"; exposure is limited to explicitly
+  zero-filled aggregates (FC has no uninitialized bindings), where zeros-as-data is already the
+  contract, and matches C's own zeroed-status behavior rather than introducing a novel trap.
 - No pointer-packing specialization needed (unlike `T*?`'s null-sentinel): the code field is
   the tag, so `T*!` is the uniform repr. `T*?!` composes — the value field holds the
   null-sentinel option.
