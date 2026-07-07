@@ -25,10 +25,18 @@ truth**; don't re-litigate here. Remaining follow-ups, in order:
    every successful compile that declares errors).
    Design record in `spec/result-type-design.md` §Error-code organization; spec §Named error
    codes; tests `tests/cases/errors/` + `backtraces/err_unwrap_named`.
-3. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
-   lands on this branch before merge into `develop`. Now unblocked by item 2; includes the
-   errno accessor shim (`errno` is a macro, not a symbol) and optionally per-platform named
-   errno const groups behind the conditional-compilation flags.
+3. **C-interop extern result mapping** — ✅ DESIGNED 2026-07-06 (see design doc §C interop):
+   extern declarations returning `T!` take a mandatory `from <protocol>` tail; closed protocol
+   set `errno(-1)`/`errno(null)`/`status`/`neg_errno`/`hresult`/`last_error(<s>)`/
+   `wsa_error(-1)`; payload-ness declared by the return type (`i32!` vs `void!`); `void!`
+   legalized as the payload-less result (bare `ok` pattern, repr = lone `int32_t`, `status` is
+   a repr identity); raw code passthrough, no arithmetic. Implementation open.
+4. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
+   lands on this branch before merge into `develop`. Consumes items 1 and 3 (externs move to
+   `T!`/`void!` via protocols; wrappers propagate with `x?`). The errno accessor shim
+   (`errno` is a macro, not a symbol) shrinks to the irregular-tail wrappers (`readdir`,
+   `getpriority`); optionally per-platform named errno const groups behind the
+   conditional-compilation flags.
 
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 

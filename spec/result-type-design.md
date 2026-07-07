@@ -331,6 +331,178 @@ lives in a static table, same rule as string literals.)*
   conditional-compilation flags — only for codes the stdlib actually matches on (values are
   platform-dependent: EAGAIN is 11 on Linux, 35 on macOS).
 
+## C interop: extern result mapping via error protocols — ADOPTED 2026-07-06 (design decided; implementation pending)
+
+*Third design pass on this branch. Decided in discussion 2026-07-06; this records the decision,
+the precedent analysis, and the rejected alternatives so none of it is re-litigated.*
+
+### The problem
+
+The existing option mapping at extern boundaries is a **repr identity**: `T*?`/`any*?`/`cstr?`
+compile to a bare nullable pointer, so `extern fopen: … -> any*?` needs zero adaptation — the C
+return value already *is* the FC value. `T!` cannot work that way: its repr
+(`{ int32_t err; T value; }`) matches no C function's ABI, and — more fundamentally — the error
+code usually isn't in the return value at all (`errno` is a thread-local the callee sets
+out-of-band). So mapping a C failure into `T!` requires a synthesized adapter: call, test the
+failure convention, capture the code, build the struct.
+
+And "the failure convention" is not one thing. Standard C signals failure through at least
+seven distinct, incompatible protocols, varying on two axes — what the failure *test* is, and
+where the *code* lives. Leaving the wrapping entirely to hand-written FC code re-opens the
+wound this design exists to close (every wrapper author improvising a scheme) and hits a
+mechanical wall besides: `errno` is a C macro, not a symbol, so FC code can't even read it
+without a per-platform shim.
+
+### Precedent landscape
+
+- **Zig (`std.posix`):** hand-written wrappers that `switch` on errno into named error sets —
+  the mandatory-translation school this document already rejected (per-platform mapping tables,
+  an "unexpected errno" fallback path in every wrapper). Zig *has* to translate because its
+  errors are named sets; FC's passthrough model (raw code, no translation) is what makes
+  automation viable at all.
+- **Rust:** no automation — `libc` + manual wrappers + `io::Error::last_os_error()`. Same root
+  cause: generic `E` means there is no canonical wrapping to generate.
+- **C# P/Invoke — the strong precedent:** `[DllImport(SetLastError = true)]` tells the
+  *marshaller* to capture `GetLastError()` immediately after the call, precisely because
+  reading it from managed code later is unreliable. A declaration-site annotation driving
+  generated capture code — exactly this feature.
+- **Go (`syscall` package):** generated wrappers return `(r1, r2, errno)` — the same move,
+  generator-side.
+
+### The decision: a closed set of declared error protocols
+
+`extern` function declarations grow an optional `from <protocol>` tail, required exactly when
+the declared return type is a result (`T!` return without a protocol, or a protocol without a
+`T!` return, is a compile error — the two halves must agree):
+
+```fc
+module io from <sys/stat.h> =
+    extern open: (const cstr, i32) -> i32! from errno(-1)
+    extern fopen: (const cstr, const cstr) -> any*! from errno(null)
+    extern mkdir: (const cstr, u32) -> void! from errno(-1)
+    extern pthread_mutex_lock: (any*) -> void! from status
+```
+
+(The per-declaration `from` slot is free — only extern structs/unions use `from` today, and the
+reuse reads correctly both ways: the definition comes *from* a header; the error comes *from*
+errno.)
+
+The protocol set is **closed** — one entry per crisp, documented C convention:
+
+| protocol            | failure test          | code source          | typical payload | examples                        |
+|---------------------|-----------------------|----------------------|-----------------|---------------------------------|
+| `errno(-1)`         | `ret == -1`           | `errno`              | `ret` or void   | `open`, `read`, `mkdir`, `close`|
+| `errno(null)`       | `ret == NULL`         | `errno`              | `ret`           | `fopen`, `opendir`              |
+| `status`            | `ret != 0`            | `ret` itself         | void only       | `pthread_*`, C11 threads        |
+| `neg_errno`         | `ret < 0`             | `ret` itself (raw)   | `ret` or void   | raw syscalls, io_uring          |
+| `hresult`           | `ret < 0`             | `ret` itself (raw)   | `ret` or void   | COM                             |
+| `last_error(<s>)`   | `ret == s` (0/null/-1)| `GetLastError()`     | `ret` or void   | Win32 (`CreateFile`, BOOL APIs) |
+| `wsa_error(-1)`     | `ret == -1`           | `WSAGetLastError()`  | `ret` or void   | `send`, `recv`, `connect`       |
+
+- **Payload-ness is declared by the return type, orthogonal to the protocol:** `i32! from
+  errno(-1)` for `open` (the fd is data), `void! from errno(-1)` for `mkdir` (the 0 is noise).
+  `i32! from hresult` keeps the success-mode HRESULT observable (`ok(1)` = `S_FALSE`);
+  `void! from hresult` discards it. Payload kind is compile-checked against the protocol's
+  sentinel (integer sentinels need integer/void payloads, `null` needs a pointer payload); the
+  payload type otherwise follows the existing extern type-mapping rules.
+- **Sentinel tokens are protocol syntax, not expressions.** `null` spelled inside
+  `errno(null)`/`last_error(null)` exists only there — it does not introduce a null literal to
+  the language. `last_error` takes an explicit sentinel because Win32 genuinely varies (`FALSE`,
+  `NULL`, `INVALID_HANDLE_VALUE`); `errno`'s sentinel is kept explicit for the same reading
+  even though C practice pins it per payload kind.
+- **No code arithmetic, ever** (decided against negating kernel-style `-errno` into the
+  passthrough range): the number in the FC value is the number the platform produced, verbatim
+  — what the debugger and strace show. Everything below 65536 and everything negative is
+  platform-owned wild-west, interpreted by per-call provenance, exactly as the code-space table
+  above already states. The one cost — `EAGAIN` is 11 via libc but −11 via io_uring — is what
+  per-call provenance already prices in.
+- **Failed call but `errno == 0`** (a buggy C library breaking its own contract): the adapter
+  builds `err(T, 0)` and the existing runtime guard aborts — the buggy-wrapper case the
+  code-space section already blesses. No new rule.
+- **Payload on the err path is `default(T)`** (zero), never the sentinel — the sentinel is
+  protocol noise, not data.
+- Protocols apply to **extern declarations only**. FC functions construct results directly.
+
+### `void!` — the payload-less result
+
+The largest single class of fallible C functions returns a meaningless 0 on success —
+`mkdir`, `close`, `unlink`, `rmdir`, `chdir`, `fsync`, `bind`, `listen`, `setsockopt`, every
+`pthread` call. Typing these `i32!` would force `ok(0)` into existence and an `| ok(_) ->` wart
+into every match — precisely the meaningless-values-floating-around outcome FC avoids by having
+no unit type. So `void!` becomes legal, and it is the **anti-unit** choice:
+
+- **`ok` is a payload-less variant** (the `| empty` precedent), not `ok(unit)`. `match r with
+  | ok -> … | err(e) -> …`; `| ok(v)` on a `void!` is a compile error, same as `| empty(v)`.
+- **No void value ever materializes.** `r!` is a void expression (legal exactly where a void
+  call is); `let x = r!` hits the existing "cannot bind void expression" error; there is no
+  `()` literal, no void parameter, no `void?` (absence-of-nothing has no use case and no C
+  convention behind it — the same judgment that made `T?!` idiomatic and `T!?` merely legal),
+  and `void` remains banned as a generic type argument, so `'a!` never instantiates to it and
+  generic bodies never meet a payload-less `ok`.
+- **Repr: a lone `int32_t`** — the tag alone; C's status int reified as a type. This makes the
+  `status` protocol a **repr identity** (bit-for-bit, no adapter — the third free mapping after
+  `T*?` null-sentinel and errno passthrough).
+- `void!` is a normal type — return position (a user function containing `mkdir(p)?` infers
+  `void!` itself), struct fields, slice elements ("status of last operation" is legitimate
+  data). No extern-only carve-out.
+- `default(void!) = ok`, zero-filled memory, consistent with the repr section.
+
+With `x?` (follow-up 2) this completes the pipeline for the statement-shaped case:
+`io.mkdir(path, 493u32)?` is one line that propagates a real errno upward or continues as a
+plain void statement.
+
+### Adapter emission and cost
+
+Each protocol emits a ~4-line `static` C helper per extern (the existing
+`static __attribute__((unused))` regime), e.g. for `mkdir` above:
+
+```c
+static fc_result_void fc_mkdir_adapter(const char *p, uint32_t m) {
+    return (fc_result_void){ mkdir(p, (mode_t)m) == -1 ? (int32_t)errno : 0 };
+}
+```
+
+The cost is exactly the wrapper a user would hand-write, declared visibly in the signature —
+static, stated, no hidden machinery. Because the adapter is *generated C*, it reads `errno`
+directly (`<errno.h>` macro, captured immediately after the call, same thread, nothing able to
+intervene) — dissolving most of the errno-accessor follow-up. `status` emits no adapter at all.
+
+### The irregular tail (deliberately out of scope)
+
+What the closed set excludes is only the tail where *the C API itself* is ambiguous and a human
+must decide what the FC type means: `readdir` (NULL means both end-of-stream and error; needs
+errno zeroed before the call — natural FC type `dirent*?!`, ok(some)=entry, ok(none)=EOF),
+`getpriority` (−1 is a legal success value), `strtol` (sentinel overlaps the value domain). No
+annotation can capture those judgments. The fallback is **not** roll-your-own error types: the
+user declares the raw C signature and hand-writes a 3-line FC wrapper *into the same carrier* —
+`err(T, code)` with the code passed through raw. Carrier, code space, `error_name`,
+`.errcodes`, `x?` all still apply; what's hand-rolled is one adapter, never an error scheme.
+This is why the stdlib keeps a one-line per-platform errno accessor extern
+(`__errno_location` / `__error` / `_errno`, behind the existing conditional-compilation flags)
+for exactly these wrappers. The readdir class has a recognizable sub-pattern (POSIX's own
+"zero errno before the call" protocol) that could become an `errno0(null)` protocol later —
+door open, not now.
+
+### Rejected alternatives (extern mapping)
+
+- **A general predicate language** (arbitrary failure tests / code expressions in the
+  annotation) — the 20% it would add over the closed set is exactly the per-function-judgment
+  tail no annotation can capture anyway; the cost is a mini-DSL in the grammar forever.
+- **Inferring the protocol from the return type shape** (`any*!` ⇒ errno(null), `i32!` ⇒
+  errno(-1)) — reads as magic, collides immediately (`i32!` is `open`'s errno(-1), a status
+  return, an HRESULT, or a Winsock call), and hides the one fact the reader needs at the
+  boundary.
+- **`i32!`-carrying-0 instead of `void!`** — creates the meaningless value it claims to avoid;
+  see §`void!`.
+- **Negating `neg_errno` codes into the passthrough range** — code arithmetic breaks
+  "the debugger shows the same number the platform produced"; wild-west passthrough below
+  65536 is the simpler contract.
+- **Extern-only `void!`** — a user function propagating `mkdir(p)?` must itself return `void!`;
+  restricting the type to extern signatures is incoherent.
+- **Hand-written wrappers as the only mechanism** (the Zig school) — re-opens per-wrapper
+  improvisation, and FC code cannot even read `errno` without a shim; see the precedent
+  landscape.
+
 ## Rejected alternatives (carrier type)
 
 - **Generic error type (`result<'a, 'b>`)** — the Rust path; see precedent analysis. The
@@ -367,8 +539,14 @@ lives in a static table, same rule as string literals.)*
    `error` declarations; see "Error-code organization" above. ✅ IMPLEMENTED 2026-07-06
    (tests in `tests/cases/errors/` + `backtraces/err_unwrap_named`; spec §Named error codes;
    grammar `error_decl`/const-path pattern/`error` type atom/`error_name_expr`).
-4. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
-   trails the feature, lands on this branch before merge into `develop`.
+4. **C-interop extern result mapping** — ✅ DESIGNED 2026-07-06: closed protocol set +
+   `from <protocol>` extern tail + `void!`; see "C interop: extern result mapping" above.
+   Implementation pending (tests: each protocol × payload/void, protocol/type agreement
+   errors, `void!` semantics incl. bare-`ok` matching and cannot-bind, `status` repr identity,
+   `err == 0` guard on buggy libraries, Windows protocols under conditional compilation).
+5. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
+   trails the feature, lands on this branch before merge into `develop`. Consumes items 2
+   and 4: externs move to `T!`/`void!` returns via protocols; wrappers propagate with `x?`.
 
 ## Revisit conditions
 
