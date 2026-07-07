@@ -881,9 +881,13 @@ let main = (args: str[]) ->
     // C Interop
     // --------------------------------------------------------
 
-    // Extern functions
+    // Extern functions — a bare C symbol, so it can only be *called*, never
+    // used as a value (an extern has no FC fat-pointer form). Wrap it in a
+    // lambda to bind, pass, or return it as a function value.
     assert(c_stdlib.abs(-42) == 42)
     assert(c_stdlib.abs(0) == 0)
+    let abs_fn = (x: i32) -> c_stdlib.abs(x)   // (i32) -> i32 — a real value
+    assert(abs_fn(-5) == 5)
 
     // Extern constants (C macros imported as typed values)
     assert(c_stdlib.EXIT_SUCCESS == 0)

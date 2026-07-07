@@ -1,0 +1,8 @@
+// Passing an extern function where a function value is expected is rejected.
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+
+let apply = (f: (i32) -> i32, n: i32) -> f(n)
+
+let main = (args: str[]) ->
+    apply(c.abs, 0 - 5)

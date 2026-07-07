@@ -3144,6 +3144,36 @@ static Type *check_pointer_field(CheckCtx *ctx, Expr *e, Type *ptr_type) {
     return e->type;
 }
 
+/* If `e` reads an extern *function* as a value (rather than calling it),
+ * return that function's Symbol; otherwise NULL. A function type is required so
+ * extern *constants* (non-function externs), which are legitimate values, are
+ * excluded. Both name-delivery forms are covered: a bare imported name
+ * (EXPR_IDENT.resolved_sym) and qualified module access
+ * (EXPR_FIELD.resolved_member, set in check_expr_inner for every member kind). */
+static Symbol *extern_fn_value_symbol(Expr *e, Type *t) {
+    if (!t || t->kind != TYPE_FUNC) return NULL;
+    Symbol *s = NULL;
+    if (e->kind == EXPR_IDENT) s = e->ident.resolved_sym;
+    else if (e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD) s = e->field.resolved_member;
+    return (s && s->kind == DECL_EXTERN) ? s : NULL;
+}
+
+/* Best-effort source spelling of a name-bearing expr for a diagnostic:
+ * "abs" for a bare ident, "c.abs" for module-qualified access. A deeper object
+ * chain collapses to the field name (still unambiguous with the error loc). */
+static const char *value_ref_display(Expr *e, char *buf, size_t n) {
+    if (e->kind == EXPR_IDENT)
+        snprintf(buf, n, "%s", e->ident.name);
+    else if ((e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD) &&
+             e->field.object && e->field.object->kind == EXPR_IDENT)
+        snprintf(buf, n, "%s.%s", e->field.object->ident.name, e->field.name);
+    else if (e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD)
+        snprintf(buf, n, "%s", e->field.name);
+    else
+        snprintf(buf, n, "?");
+    return buf;
+}
+
 /* Wrapper around the per-kind type checker. Consumes the one-shot
  * `in_callee_position` / `in_reflection_position` flags and rejects a generic
  * function used as a value (anywhere other than directly in call position or a
@@ -3152,7 +3182,10 @@ static Type *check_pointer_field(CheckCtx *ctx, Expr *e, Type *ptr_type) {
  * uncompilable C. The idiomatic pattern is a wrapper lambda that instantiates
  * it at the required type. */
 static Type *check_expr(CheckCtx *ctx, Expr *e) {
-    bool allow_generic = ctx->in_callee_position || ctx->in_reflection_position;
+    /* Callee and reflection positions are not value positions, so the two
+     * function-value guards below are suppressed there (a direct call and a
+     * `%T` type slot are both fine). */
+    bool in_value_position = !(ctx->in_callee_position || ctx->in_reflection_position);
     ctx->in_callee_position = false;
     ctx->in_reflection_position = false;
     Type *t = check_expr_inner(ctx, e);
@@ -3162,11 +3195,29 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
      * that mentions type variables, since a function-typed parameter like
      * `f: ('a) -> 'b` legitimately carries the enclosing generic's type vars and
      * is concrete at each instantiation. */
-    if (!allow_generic && t && t->kind == TYPE_FUNC && e->kind == EXPR_IDENT &&
+    if (in_value_position && t && t->kind == TYPE_FUNC && e->kind == EXPR_IDENT &&
         e->ident.resolved_sym && e->ident.resolved_sym->is_generic) {
         diag_error(e->loc,
             "generic function '%s' cannot be used as a value; wrap it in a lambda "
             "that instantiates it, e.g. (x) -> %s(x)", e->ident.name, e->ident.name);
+        e->type = type_error();
+        return e->type;
+    }
+    /* Reject an extern *function* used as a value. Every FC function value is a
+     * fat pointer whose C signature carries a trailing `void*` context param
+     * (the closure channel); a plain extern C function's ABI has no such param,
+     * so binding/passing/returning one — or taking `&` of it — emits
+     * incompatible-pointer C under -Werror. There is no context to bridge, so
+     * the fix is to call it directly or route it through an FC lambda (whose
+     * body calls the extern). This mirrors the fat-pointer-only reach of the
+     * `&f` C-interop escape hatch (spec §Address-of). */
+    if (in_value_position && extern_fn_value_symbol(e, t)) {
+        char nm[128];
+        value_ref_display(e, nm, sizeof nm);
+        diag_error(e->loc,
+            "extern function '%s' cannot be used as a value; call it directly, "
+            "e.g. %s(...), or wrap it in a lambda that calls it, e.g. (x) -> %s(x)",
+            nm, nm, nm);
         e->type = type_error();
         return e->type;
     }

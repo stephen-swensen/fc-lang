@@ -5128,6 +5128,26 @@ let mut free_fn = (ptr: any*) -> free(ptr)   // (any*) -> void — addressable, 
 
 The `extern as` form is shown here for completeness and is more relevant when a C library has a function named `alloc`, `sizeof`, or `default`.
 
+### Extern functions are called, not passed
+
+An extern function is a bare C symbol, not an FC value. It may appear **only in call position** — `c.abs(x)`. Binding it (`let f = c.abs`), passing it as an argument, returning it, or taking its address (`&c.abs`) is a compile error:
+
+```fc
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+
+let f = c.abs          // error: extern function 'abs' cannot be used as a value
+let p = &c.abs         // error: same — an extern is not a fat pointer to reach into
+```
+
+The reason is the calling convention. Every FC function *value* is a fat pointer whose C signature carries a trailing `void*` context param (the closure channel, see §Closures). A plain extern C function's ABI has no such param, so there is nothing to wrap it into — and `&f`'s escape hatch (§Address-of) extracts the `fn_ptr` field of a fat pointer, which an extern does not have. The fix is to route the extern through an FC lambda, which *is* a real function value:
+
+```fc
+let f = (x: i32) -> c.abs(x)   // (i32) -> i32 — binds, passes, and is addressable
+```
+
+This is the same wrapper-lambda pattern used above for `free` as a function-pointer value.
+
 ### Null return values from C
 
 C functions that can return null must be declared with a `?` return type. This keeps null out of FC's type system — the programmer is forced to handle the absent case explicitly before using the value:

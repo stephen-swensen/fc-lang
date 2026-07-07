@@ -1,0 +1,12 @@
+// The documented escape: wrap the extern in an FC lambda that calls it. The
+// lambda is a real FC function value, so it binds, passes, and calls fine.
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+
+let apply = (f: (i32) -> i32, n: i32) -> f(n)
+
+let main = (args: str[]) ->
+    let f = (x: i32) -> c.abs(x)
+    assert(f(0 - 10) == 10)
+    assert(apply(f, 0 - 7) == 7)
+    0
