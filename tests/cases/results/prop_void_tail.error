@@ -1,0 +1,1 @@
+to return a result type, but it returns void; construct the result explicitly on the success paths — ok(...)/err(...), or a bare 'ok' for void!

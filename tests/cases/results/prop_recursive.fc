@@ -1,0 +1,20 @@
+// Recursion composes with '?' when the carrier is constructed explicitly —
+// the base branch anchors the return type to i32! before self-calls resolve.
+error rc_err =
+    | negative
+
+let check = (n: i32) ->
+    if n < 0 then err(i32, rc_err.negative) else ok(n)
+
+let fact = (n: i32) ->
+    let v = check(n)?
+    if v <= 1 then ok(1) else ok(v * fact(v - 1)?)
+
+let main = (args: str[]) ->
+    match fact(5) with
+    | ok(v) -> assert(v == 120)
+    | err(e) -> assert(false, "expected ok")
+    match fact(-2) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == rc_err.negative)
+    0

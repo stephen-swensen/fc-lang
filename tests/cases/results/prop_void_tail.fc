@@ -1,0 +1,8 @@
+let mut sink = 0
+let source = (n: i32) -> if n < 0 then err(i32, 5) else ok(n)
+let record = (n: i32) ->
+    let v = source(n)?
+    sink = v
+let main = (args: str[]) ->
+    record(3)
+    0

@@ -1,0 +1,7 @@
+let source = (n: i32) -> if n < 0 then err(i32, 5) else ok(n)
+let doubled = (n: i32) ->
+    let v = source(n)?
+    v * 2
+let main = (args: str[]) ->
+    let r = doubled(3)
+    0

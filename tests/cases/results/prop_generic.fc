@@ -1,0 +1,32 @@
+// Propagation inside a generic function: 'a! propagates through a 'b!-returning
+// caller unchanged (the err code needs no conversion), monomorphized per type.
+error pg_err =
+    | empty
+
+let first = (xs: 'a[]) ->
+    if xs.len == 0 then err('a, pg_err.empty) else ok(xs[0])
+
+// generic body with '?': explicit ok(...) tails anchor 'a!
+let first_of_pair = (xs: 'a[], ys: 'a[]) ->
+    let x = first(xs)?
+    let y = first(ys)?
+    if xs.len > ys.len then ok(x) else ok(y)
+
+let main = (args: str[]) ->
+    let is = i32[2] { 4, 9 }
+    let empty_is = i32[0] {}
+    let bs = bool[1] { true }
+
+    match first_of_pair(is, is) with
+    | ok(v) -> assert(v == 4)
+    | err(e) -> assert(false, "expected ok")
+
+    match first_of_pair(is, empty_is) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == pg_err.empty)
+
+    match first_of_pair(bs, bs) with
+    | ok(v) -> assert(v == true)
+    | err(e) -> assert(false, "expected ok")
+
+    0

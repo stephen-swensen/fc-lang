@@ -1,0 +1,9 @@
+let f = () -> ok(1)
+let use_it = (x: i32) -> assert(x > 0)
+let g = () ->
+    defer use_it(f()?)
+    let v = f()?
+    v
+let main = (args: str[]) ->
+    let r = g()
+    0

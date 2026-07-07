@@ -1,0 +1,33 @@
+// A '?'-bearing body mixes all three exits explicitly: propagated err,
+// explicit err return, explicit ok returns/tail — all of type i32!.
+error mx_err =
+    | negative
+    | huge
+
+let source = (n: i32) ->
+    if n < 0 then err(i32, mx_err.negative) else ok(n)
+
+let mixed = (n: i32) ->
+    let v = source(n)?
+    if v > 100 then return err(i32, mx_err.huge)
+    if v == 0 then return ok(7)
+    ok(v)
+
+let main = (args: str[]) ->
+    match mixed(5) with
+    | ok(v) -> assert(v == 5)
+    | err(e) -> assert(false, "expected ok tail")
+
+    match mixed(0) with
+    | ok(v) -> assert(v == 7)
+    | err(e) -> assert(false, "expected ok")
+
+    match mixed(200) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == mx_err.huge, "explicit err return passes through")
+
+    match mixed(-3) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == mx_err.negative, "propagated err")
+
+    0

@@ -149,8 +149,13 @@ struct Expr {
         /* EXPR_UNARY_PREFIX */
         struct { TokenKind op; Expr *operand; } unary_prefix;
 
-        /* EXPR_UNARY_POSTFIX */
-        struct { TokenKind op; Expr *operand; const char *expr_text; int expr_text_len; } unary_postfix;
+        /* EXPR_UNARY_POSTFIX — x! (unwrap-or-abort) and x? (propagation).
+         * expr_text: operand source text for the unwrap abort message (x! only).
+         * prop_fn_ret: for x?, the enclosing function's resolved return type,
+         * stamped by pass2 once the body is checked; codegen builds the
+         * early-return failure value (err(code)/none) at this type. */
+        struct { TokenKind op; Expr *operand; const char *expr_text; int expr_text_len;
+                 Type *prop_fn_ret; } unary_postfix;
 
         /* EXPR_CALL */
         struct {

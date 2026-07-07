@@ -2783,7 +2783,7 @@ Use `x!` when you are certain a value is present and want to crash loudly if not
 file.fc:3: unwrap failed: x
 ```
 
-For safe unwrapping, use a `match` expression.
+For safe unwrapping, use a `match` expression. To hand the absence to your caller instead of crashing, use propagation — `x?` unwraps a `some` and returns `none` from the enclosing function otherwise (see §Propagation under Result Types; the operator works uniformly on options and results).
 
 > **Transpilation**
 > Option types transpile differently depending on whether the underlying type is a pointer:
@@ -2873,6 +2873,79 @@ Under `--backtraces`, the abort also names a declared error alongside its code (
 ```
 file.fc:3: unwrap failed: r (error code 65537: file_io.not_found)
 ```
+
+### Propagation: `x?`
+
+`x?` is unwrap's forgiving twin. The two postfix operators complete a 2×2 grid with the two type suffixes — types and expressions are disjoint grammatical contexts, so each spelling is unambiguous:
+
+|      | type suffix            | expression postfix              |
+|------|------------------------|---------------------------------|
+| `?`  | `T?` — may be absent   | `x?` — unwrap or propagate      |
+| `!`  | `T!` — may fail        | `x!` — unwrap or abort          |
+
+Both expression operators work uniformly on both types. On success, `x?` yields the payload exactly as `x!` does. On failure, instead of aborting, it **returns the failure from the enclosing function**: a result's `err(code)` travels upward as-is (the error type is `i32` on both sides by construction, so no conversion ever happens — the point of the fixed code space), and an option's `none` travels upward as `none`.
+
+```fc
+error config_err =
+    | missing_port
+
+let parse_port = (s: str) -> ...           // str -> i32!
+
+let load_config = (path: str) ->
+    let text = read_file(path)?            // read_file: str -> str!; err returns here
+    let port = parse_port(text)?           // any err code passes through unchanged
+    ok(make_config(port))                  // explicit ok anchors the type: config!
+```
+
+`x?` is a pure local desugar of the match you would have written:
+
+```fc
+let port = match parse_port(text) with
+| ok(p) -> p
+| err(e) -> return err(config, e)
+```
+
+Because the failure path is a `return`, it unwinds **all pending `defer`s** on its way out, exactly like any other return. And because it is a return, `x?` may not appear inside a `defer` expression, at top level, or in `main` (whose return type is pinned to `i32`).
+
+**The enclosing function must already return the carrier.** `?` contributes nothing to type inference — the function's return type is anchored the way every FC return type is anchored: by what the success paths explicitly construct. For result propagation that means `ok(...)`/`err(...)` (or a bare `ok` for `void!`); for option propagation, `some(...)`/`none(T)`. A `?` in a body whose success paths yield a plain `T` (or void) is a compile error naming the fix:
+
+```fc
+let doubled = (n: i32) ->
+    let v = parse_port(s)?
+    v * 2          // error: result propagation (?) requires the enclosing function
+                   // to return a result type, but it returns i32; construct the
+                   // result explicitly on the success paths — ok(...)/err(...)
+
+let doubled = (n: i32) ->
+    let v = parse_port(s)?
+    ok(v * 2)      // (i32) -> i32!
+```
+
+The void-shaped case anchors with bare `ok` — one visible token, on the same principle. Note that `?` is only needed when work *follows* the fallible call; a fallible call in tail position is already the function's result and passes through with no `?` at all:
+
+```fc
+let make_dirs = (a: str, b: str) ->
+    io.mkdir(a, 493u32)?              // must succeed before we go on
+    io.mkdir(b, 493u32)               // tail: its void! IS the result — no ?, no ok
+
+let ensure_dir = (path: str) ->
+    if exists(path) then return ok
+    io.mkdir(path, 493u32)?           // propagate a real errno, or continue
+    log_created(path)
+    ok                                 // (str) -> void!
+```
+
+An implicit alternative — inferring `T!` from the presence of `?` and auto-wrapping the success paths — was considered and rejected: it writes a return type the source never spells and inserts constructions the programmer never wrote, violating FC's explicitness. The full trade-off is recorded in `spec/result-type-design.md` §Propagation operator.
+
+Because the carrier is always explicit, the rest follows with no special cases: return paths mix `return ok(v)`, `return err(T, code)`, and propagation freely (they are all the same type); recursion works (the base case anchors the carrier before self-calls resolve, e.g. `if v <= 1 then ok(1) else ok(v * fact(v - 1)?)`); and a tail that is already a result — a call to another fallible function — passes through untouched.
+
+Restrictions, all compile errors:
+
+- **The return type must match the propagation kind**: result propagation in a function returning anything but a result — and option propagation in one not returning an option — is rejected at the `?` with the messages above. This also rules out mixing both kinds in one function: `none` and `err` cannot both re-enter one return type. Convert one side explicitly (`match`) or split the function. (`T?!` compositions are fine: `?` acts on the **top** layer only, so propagating a `u8?!` yields its `u8?` payload.)
+- **`x?` inside `defer`**: a deferred expression must not escape the defer (same rule as `return`).
+
+> **Transpilation**
+> `x?` emits the operand into a temporary, tests the failure condition (`err != 0`, `!has_value`, or a null check for pointer options), and on failure runs pending defers and returns the rebuilt failure at the enclosing function's return type. The success path continues with the payload — no allocation, no unwinding machinery, exactly the `if (ret < 0) return ret;` a kernel C programmer writes by hand.
 
 ### `void!` — the payload-less result
 

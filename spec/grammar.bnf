@@ -624,6 +624,10 @@ guard_expr       = ( "unguarded" | "guarded" | "unchecked" | "checked" )
 postfix_expr     = primary_expr , { postfix_op } ;
 
 postfix_op       = "!"                                         (* option/result unwrap *)
+                 | "?"                                         (* option/result propagation:
+                                                                  unwrap, or return the failure
+                                                                  (none/err) from the enclosing
+                                                                  function *)
                  | "[" , index_or_slice , "]"                  (* index / slice  *)
                  | "." , IDENT                                 (* field access; auto-derefs one pointer level *)
                  | call_args                                   (* function call  *)
@@ -974,10 +978,10 @@ tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}
 (*   This works because type expressions and value expressions are     *)
 (*   syntactically distinct — a bare type name like i32 or f64   *)
 (*   cannot appear as an expression, and type-forming tokens like *    *)
-(*   (postfix), [], and ? after a type name have no expression         *)
+(*   (postfix) and [] after a type name have no expression             *)
 (*   interpretation in that position.                                  *)
 (*                                                                     *)
-(*   The result suffix '!' is the one modifier that IS also a postfix  *)
+(*   The result suffix '!' is one modifier that IS also a postfix      *)
 (*   expression operator (unwrap), so "(x!)" is genuinely ambiguous:   *)
 (*   a cast to type x! vs. a parenthesized unwrap. Resolution: it is a *)
 (*   cast only when the ')' is followed by a token that can start a    *)
@@ -985,6 +989,13 @@ tuple_destruct_pattern  = "{" , pattern , "," , pattern , { "," , pattern } , "}
 (*   and (x!) == y unwrap, while (t!) e casts — redundant parens       *)
 (*   around a bare unwrap are dead syntax (x! binds tightest anyway),  *)
 (*   the same class as the (a*) b resolution above.                    *)
+(*                                                                     *)
+(*   The option suffix '?' is likewise also a postfix expression       *)
+(*   operator (propagation). For built-in type names the cast wins     *)
+(*   ((i32?) x casts), and for dotted paths a trailing '?' triggers a  *)
+(*   cast attempt ((mod.t?) x); a bare "(x?)" on a plain identifier    *)
+(*   parses as a parenthesized propagation — redundant parens around   *)
+(*   a bare propagation, the same dead-syntax class as (x!).           *)
 (*                                                                     *)
 (* Rule 7: Negative pattern literals                                   *)
 (*                                                                     *)

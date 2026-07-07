@@ -1,0 +1,8 @@
+let g = () -> some(2)
+let h = (p: i32*) ->
+    let b = g()?
+    *p = b
+let main = (args: str[]) ->
+    let mut n = 0
+    h(&n)
+    0

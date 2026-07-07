@@ -1,0 +1,7 @@
+let g = () ->
+    defer loop
+        if true then return else break
+    5
+let main = (args: str[]) ->
+    let r = g()
+    0

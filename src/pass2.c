@@ -45,6 +45,13 @@ struct LambdaCtx {
     struct Expr **returns;
     int return_count;
     int return_cap;
+    /* x? propagation sites collected during this function's body check.
+       Once the return type is inferred, each site is validated against it
+       (result-prop needs a result, option-prop an option — see EXPR_FUNC)
+       and stamped with the resolved type for codegen. */
+    struct Expr **props;
+    int prop_count;
+    int prop_cap;
     /* Self-recursion: when this lambda is the init of a `let f = <lambda>` binding,
        self_name/self_codegen_name identify the binding visible within the body, and
        self_referenced records whether it was actually used (gates codegen of the
@@ -2807,82 +2814,129 @@ static bool is_lvalue_expr(Expr *e) {
     }
 }
 
-/* Check if an expression tree contains return/break/continue (forbidden inside defer).
- * Does NOT recurse into nested EXPR_FUNC (lambdas have their own scope). */
-static bool expr_contains_control_flow(Expr *e) {
+/* Check if an expression tree contains control flow that would escape a defer:
+ * return and '?' propagation anywhere (they exit the whole function, even from
+ * inside a nested loop), break/continue only outside a loop (inside a loop/for
+ * they are scoped to that loop and harmless). Does NOT recurse into nested
+ * EXPR_FUNC (lambdas have their own scope). */
+static bool ccf_walk(Expr *e, bool in_loop) {
     if (!e) return false;
     switch (e->kind) {
-    case EXPR_RETURN: case EXPR_BREAK: case EXPR_CONTINUE:
+    case EXPR_RETURN:
         return true;
+    case EXPR_BREAK: case EXPR_CONTINUE:
+        return !in_loop;
     case EXPR_FUNC:
         return false;  /* lambdas have their own scope */
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
-            if (expr_contains_control_flow(e->block.stmts[i])) return true;
+            if (ccf_walk(e->block.stmts[i], in_loop)) return true;
         return false;
     case EXPR_IF:
-        return expr_contains_control_flow(e->if_expr.cond) ||
-               expr_contains_control_flow(e->if_expr.then_body) ||
-               expr_contains_control_flow(e->if_expr.else_body);
+        return ccf_walk(e->if_expr.cond, in_loop) ||
+               ccf_walk(e->if_expr.then_body, in_loop) ||
+               ccf_walk(e->if_expr.else_body, in_loop);
     case EXPR_CALL:
         for (int i = 0; i < e->call.arg_count; i++)
-            if (expr_contains_control_flow(e->call.args[i])) return true;
-        return expr_contains_control_flow(e->call.func);
+            if (ccf_walk(e->call.args[i], in_loop)) return true;
+        return ccf_walk(e->call.func, in_loop);
     case EXPR_BINARY:
-        return expr_contains_control_flow(e->binary.left) ||
-               expr_contains_control_flow(e->binary.right);
+        return ccf_walk(e->binary.left, in_loop) ||
+               ccf_walk(e->binary.right, in_loop);
     case EXPR_UNARY_PREFIX:
-        return expr_contains_control_flow(e->unary_prefix.operand);
+        return ccf_walk(e->unary_prefix.operand, in_loop);
     case EXPR_UNARY_POSTFIX:
-        return expr_contains_control_flow(e->unary_postfix.operand);
+        /* x? propagates by returning from the enclosing function */
+        return e->unary_postfix.op == TOK_QUESTION ||
+               ccf_walk(e->unary_postfix.operand, in_loop);
     case EXPR_ATOMIC_LOAD:
-        return expr_contains_control_flow(e->atomic_load.ptr);
+        return ccf_walk(e->atomic_load.ptr, in_loop);
     case EXPR_ATOMIC_STORE:
-        return expr_contains_control_flow(e->atomic_store.ptr) ||
-               expr_contains_control_flow(e->atomic_store.value);
+        return ccf_walk(e->atomic_store.ptr, in_loop) ||
+               ccf_walk(e->atomic_store.value, in_loop);
     case EXPR_MATCH:
-        if (expr_contains_control_flow(e->match_expr.subject)) return true;
+        if (ccf_walk(e->match_expr.subject, in_loop)) return true;
         for (int i = 0; i < e->match_expr.arm_count; i++)
             for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                if (expr_contains_control_flow(e->match_expr.arms[i].body[j])) return true;
+                if (ccf_walk(e->match_expr.arms[i].body[j], in_loop)) return true;
         return false;
     case EXPR_LOOP:
-        /* break/continue inside a loop are scoped to that loop, not to defer */
+        /* break/continue inside are scoped to this loop; return/? still escape */
+        for (int i = 0; i < e->loop_expr.body_count; i++)
+            if (ccf_walk(e->loop_expr.body[i], true)) return true;
         return false;
     case EXPR_FOR:
-        /* Same — break/continue inside for are scoped to the for loop */
+        if (ccf_walk(e->for_expr.iter, in_loop) ||
+            ccf_walk(e->for_expr.range_end, in_loop)) return true;
+        for (int i = 0; i < e->for_expr.body_count; i++)
+            if (ccf_walk(e->for_expr.body[i], true)) return true;
         return false;
     case EXPR_ASSIGN:
-        return expr_contains_control_flow(e->assign.target) ||
-               expr_contains_control_flow(e->assign.value);
+        return ccf_walk(e->assign.target, in_loop) ||
+               ccf_walk(e->assign.value, in_loop);
     case EXPR_INDEX:
-        return expr_contains_control_flow(e->index.object) ||
-               expr_contains_control_flow(e->index.index);
+        return ccf_walk(e->index.object, in_loop) ||
+               ccf_walk(e->index.index, in_loop);
+    case EXPR_SLICE:
+        return ccf_walk(e->slice.object, in_loop) ||
+               ccf_walk(e->slice.lo, in_loop) ||
+               ccf_walk(e->slice.hi, in_loop);
     case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        return expr_contains_control_flow(e->field.object);
+        return ccf_walk(e->field.object, in_loop);
     case EXPR_CAST:
-        return expr_contains_control_flow(e->cast.operand);
+        return ccf_walk(e->cast.operand, in_loop);
     case EXPR_BITCAST:
-        return expr_contains_control_flow(e->bitcast_expr.operand);
+        return ccf_walk(e->bitcast_expr.operand, in_loop);
     case EXPR_SOME:
-        return expr_contains_control_flow(e->some_expr.value);
+        return ccf_walk(e->some_expr.value, in_loop);
     case EXPR_OK:
-        return expr_contains_control_flow(e->ok_expr.value);
+        return ccf_walk(e->ok_expr.value, in_loop);
     case EXPR_ERROR_NAME:
-        return expr_contains_control_flow(e->error_name_expr.code);
+        return ccf_walk(e->error_name_expr.code, in_loop);
     case EXPR_ERR:
-        return expr_contains_control_flow(e->err_expr.code);
+        return ccf_walk(e->err_expr.code, in_loop);
     case EXPR_DEFER:
-        return expr_contains_control_flow(e->defer_expr.value);
+        return ccf_walk(e->defer_expr.value, in_loop);
+    case EXPR_LET:
+        return ccf_walk(e->let_expr.let_init, in_loop);
+    case EXPR_LET_DESTRUCT:
+        return ccf_walk(e->let_destruct.init, in_loop);
+    case EXPR_ALLOC:
+        return ccf_walk(e->alloc_expr.size_expr, in_loop) ||
+               ccf_walk(e->alloc_expr.init_expr, in_loop);
+    case EXPR_FREE:
+        return ccf_walk(e->free_expr.operand, in_loop);
+    case EXPR_ASSERT:
+        return ccf_walk(e->assert_expr.condition, in_loop);
+    case EXPR_STRUCT_LIT:
+        for (int i = 0; i < e->struct_lit.field_count; i++)
+            if (ccf_walk(e->struct_lit.fields[i].value, in_loop)) return true;
+        return false;
+    case EXPR_ARRAY_LIT:
+        if (ccf_walk(e->array_lit.size_expr, in_loop)) return true;
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            if (ccf_walk(e->array_lit.elems[i], in_loop)) return true;
+        return false;
+    case EXPR_SLICE_LIT:
+        return ccf_walk(e->slice_lit.ptr_expr, in_loop) ||
+               ccf_walk(e->slice_lit.len_expr, in_loop);
+    case EXPR_INTERP_STRING:
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (ccf_walk(e->interp_string.segments[i].expr, in_loop)) return true;
+        return false;
     case EXPR_TUPLE_LIT:
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (expr_contains_control_flow(e->tuple_lit.elems[i])) return true;
+            if (ccf_walk(e->tuple_lit.elems[i], in_loop)) return true;
         return false;
     case EXPR_GUARD:
-        return expr_contains_control_flow(e->guard.body);
+        return ccf_walk(e->guard.body, in_loop);
     default:
         return false;
     }
+}
+
+static bool expr_contains_control_flow(Expr *e) {
+    return ccf_walk(e, false);
 }
 
 /* Is this node one of the three value-precondition guards that `unguarded`
@@ -3936,6 +3990,29 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->prov = e->unary_postfix.operand->prov;
             return e->type;
         }
+        if (e->unary_postfix.op == TOK_QUESTION) {
+            /* Propagation x? — unwraps like x!, but on failure returns the
+               failure (err(code)/none) from the enclosing function instead of
+               aborting. The enclosing function's return type must be the
+               matching carrier (result/option), validated once its body is
+               fully checked; see EXPR_FUNC. */
+            if (!ctx->lambda_ctx) {
+                diag_error(e->loc, "propagation (?) requires an enclosing function");
+                e->type = type_error();
+                return e->type;
+            }
+            if (ot->kind != TYPE_RESULT && ot->kind != TYPE_OPTION) {
+                diag_error(e->loc, "propagation (?) requires option or result type, got %s",
+                    type_name(ot));
+                e->type = type_error();
+                return e->type;
+            }
+            e->type = ot->kind == TYPE_RESULT ? ot->result.inner : ot->option.inner;
+            e->prov = e->unary_postfix.operand->prov;
+            LambdaCtx *lc = ctx->lambda_ctx;
+            DA_APPEND(lc->props, lc->prop_count, lc->prop_cap, e);
+            return e->type;
+        }
         diag_error(e->loc, "unsupported postfix operator");
         e->type = type_error();
         return e->type;
@@ -4150,6 +4227,46 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             ret = type_error();
         }
 
+        /* ---- '?' propagation: validate the enclosing return type ----
+           A body containing x? can exit early with the failure (err(code) or
+           none), so the function's return type must already be the matching
+           carrier at its top layer — a result for result propagation, an
+           option for option propagation — anchored the way every FC return
+           type is anchored: by what the success paths explicitly construct
+           (ok(...)/err(...)/some(...)/none(T), bare `ok` for void!). The '?'
+           itself contributes nothing to inference: an implicit "lift" of T to
+           T!/T? with auto-wrapped success paths was considered and rejected —
+           it writes a return type the source never spells (see
+           spec/result-type-design.md §Propagation operator). Propagation never
+           converts: err's code is i32 on both sides and none carries nothing,
+           so any T!'s failure propagates through any U!-returning function
+           unchanged. */
+        if (lctx.prop_count > 0 && !type_is_error(ret)) {
+            for (int i = 0; i < lctx.prop_count; i++) {
+                Expr *pe = lctx.props[i];
+                Type *pt = pe->unary_postfix.operand->type;
+                if (pt && pt->kind == TYPE_RESULT && ret->kind != TYPE_RESULT) {
+                    diag_error(pe->loc,
+                        "result propagation (?) requires the enclosing function "
+                        "to return a result type, but it returns %s; construct "
+                        "the result explicitly on the success paths — "
+                        "ok(...)/err(...), or a bare 'ok' for void!",
+                        type_name(ret));
+                } else if (pt && pt->kind == TYPE_OPTION &&
+                           ret->kind != TYPE_OPTION) {
+                    diag_error(pe->loc,
+                        "option propagation (?) requires the enclosing function "
+                        "to return an option type, but it returns %s; construct "
+                        "the option explicitly on the success paths — "
+                        "some(...)/none(T)",
+                        type_name(ret));
+                }
+                /* Stamp the resolved return type — codegen builds the
+                   early-return failure value at this type. */
+                pe->unary_postfix.prop_fn_ret = ret;
+            }
+        }
+
         /* Validate every explicit `return [value]` against the inferred return type.
            A bare `return` requires a void-returning function; `return value` requires
            strict type equality with the function's inferred return type. No widening
@@ -4197,6 +4314,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         e->func.capture_count = lctx.count;
         free(lctx.entries);
         free(lctx.returns);
+        free(lctx.props);
 
         /* Record self-recursion result for codegen: materialize the self fat pointer
            only when the name was actually referenced, keeping generated C -Werror-clean. */
@@ -6407,7 +6525,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     case EXPR_DEFER: {
         check_expr(ctx, e->defer_expr.value);
         if (expr_contains_control_flow(e->defer_expr.value)) {
-            diag_error(e->loc, "deferred expression must not contain return, break, or continue");
+            diag_error(e->loc, "deferred expression must not contain return, break, "
+                "continue, or '?' propagation");
         }
         e->type = type_void();
         return e->type;
@@ -8793,7 +8912,9 @@ static bool is_file_init_expr(Expr *e) {
             return false;
         return is_file_init_expr(e->unary_prefix.operand);
     case EXPR_UNARY_POSTFIX:
-        return is_file_init_expr(e->unary_postfix.operand);
+        /* x? needs an enclosing function to return from — never a file init */
+        return e->unary_postfix.op != TOK_QUESTION &&
+               is_file_init_expr(e->unary_postfix.operand);
     case EXPR_BINARY:
         return is_file_init_expr(e->binary.left) && is_file_init_expr(e->binary.right);
     case EXPR_CAST:

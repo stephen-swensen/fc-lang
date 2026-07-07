@@ -16,7 +16,18 @@ generics `'a!`, `default(T!) = ok(default(T))`, equality, LSP hover/completion. 
 followed by an expression start). **`spec/result-type-design.md` remains the single source of
 truth**; don't re-litigate here. Remaining follow-ups, in order:
 
-1. **Propagation operator `x?`** — separate design pass; the `?`/`!` grid reserves the spelling.
+1. **Propagation operator `x?`** — ✅ IMPLEMENTED 2026-07-06 (designed same day; see design
+   doc §Propagation operator incl. implementation notes): postfix `?` on both carriers —
+   unwrap on success, return the failure (err verbatim / none) from the enclosing function on
+   failure; pure local desugar (defers unwind free), top type layer only. **No inference
+   contribution**: the enclosing function must already return the matching carrier, anchored
+   by explicit ok/err/some/none (bare `ok` for void!) on its success paths — an implicit
+   return-type lift was implemented, then rejected same day as an explicitness violation
+   (recorded under the design doc's rejected alternatives; don't re-propose). Errors at the
+   `?` site otherwise (subsumes kind mixing); no `?` in defer (walk also closed the
+   pre-existing return-in-loop-in-defer hole), none in `main`/top level; recursion works
+   (base case anchors the carrier). Tests `results/prop_*` + `options/prop_option_*`; spec
+   §Propagation; grammar postfix `?`.
 2. **Stdlib error-code convention** — ✅ IMPLEMENTED 2026-07-06: compiler-owned code space via
    `error` declarations (hard keyword; groups desugar to pseudo-modules of i32 consts;
    deterministic assignment from 65536, [1, 65535] reserved platform passthrough; qualified
@@ -34,8 +45,8 @@ truth**; don't re-litigate here. Remaining follow-ups, in order:
    passthrough, no arithmetic; call sites wrapped inline (no adapter fns, variadics free).
    Tests `extern/proto_*` + `results/void_result_*`; spec §Extern error protocols + §`void!`.
 4. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
-   lands on this branch before merge into `develop`. Consumes items 1 and 3 (externs move to
-   `T!`/`void!` via protocols; wrappers propagate with `x?`). The errno accessor shim
+   the one remaining follow-up; lands on this branch before merge into `develop`. Consumes
+   items 1 and 3 (externs move to `T!`/`void!` via protocols; wrappers propagate with `x?`). The errno accessor shim
    (`errno` is a macro, not a symbol) shrinks to the irregular-tail wrappers (`readdir`,
    `getpriority`); optionally per-platform named errno const groups behind the
    conditional-compilation flags.

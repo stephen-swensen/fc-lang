@@ -1,0 +1,34 @@
+// A propagation is a return: it unwinds ALL pending defers (function and
+// loop scopes) before returning the failure.
+error pd_err =
+    | bad
+
+let mut trace = 0
+
+let source = (n: i32) ->
+    if n < 0 then err(i32, pd_err.bad) else ok(n)
+
+let run = (n: i32) ->
+    trace = 0
+    defer trace = trace + 1          // function-scope defer
+    for i in 0..3 do
+        defer trace = trace + 10     // per-iteration defer
+        let v = source(n)?
+        trace = trace + 100 * (v + 1)
+    ok(trace + 1000)
+
+let main = (args: str[]) ->
+    // success: 3 iterations x (body 100 + defer 10), tail sees 330,
+    // returns 1330; the function defer runs after the tail is computed.
+    match run(0) with
+    | ok(v) -> assert(v == 1330)
+    | err(e) -> assert(false, "expected ok")
+    assert(trace == 331, "fn defer ran after tail")
+
+    // failure in iteration 0: loop defer (10) and fn defer (1) both unwind
+    match run(-1) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == pd_err.bad)
+    assert(trace == 11, "propagation unwound loop and fn defers")
+
+    0

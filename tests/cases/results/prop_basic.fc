@@ -1,0 +1,29 @@
+// x? on a result: unwraps ok, propagates err. The enclosing function's
+// result type is anchored by its explicit ok(...)/err(...) constructions.
+error basic_err =
+    | too_small
+    | too_big
+
+let classify = (n: i32) ->
+    if n < 0 then return err(i32, basic_err.too_small)
+    if n > 99 then return err(i32, basic_err.too_big)
+    ok(n)
+
+let scaled = (n: i32) ->
+    let v = classify(n)?
+    ok(v * 10)
+
+let main = (args: str[]) ->
+    match scaled(4) with
+    | ok(v) -> assert(v == 40)
+    | err(e) -> assert(false, "expected ok")
+
+    match scaled(-1) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == basic_err.too_small)
+
+    match scaled(100) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == basic_err.too_big)
+
+    0

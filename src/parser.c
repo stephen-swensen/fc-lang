@@ -232,6 +232,7 @@ static Prec infix_prec(TokenKind kind) {
     case TOK_STAR: case TOK_SLASH: case TOK_PERCENT:
                         return PREC_MUL;
     case TOK_BANG:      return PREC_POSTFIX;
+    case TOK_QUESTION:  return PREC_POSTFIX;
     case TOK_LBRACKET:  return PREC_POSTFIX;
     case TOK_DOT:       return PREC_POSTFIX;
     case TOK_ARROW:     return PREC_POSTFIX;
@@ -2368,6 +2369,16 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         }
         e->unary_postfix.expr_text = arena_strdup(p->arena, text_start, text_len);
         e->unary_postfix.expr_text_len = text_len;
+        return e;
+    }
+
+    case TOK_QUESTION: {
+        /* x? — propagation: unwrap on success, early-return the failure
+         * (err/none) from the enclosing function otherwise. No operand text
+         * capture: propagation has no abort message. */
+        Expr *e = alloc_expr(p, EXPR_UNARY_POSTFIX, loc);
+        e->unary_postfix.op = TOK_QUESTION;
+        e->unary_postfix.operand = left;
         return e;
     }
 

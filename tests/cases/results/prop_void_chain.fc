@@ -1,0 +1,47 @@
+// void! propagation as a statement, chained through two levels (bare `ok`
+// anchors void!); and a tail that is already a full result (passthrough).
+error vc_err =
+    | locked
+
+let mut state = 0
+
+let acquire = (n: i32) ->
+    if n < 0 then err(i32, vc_err.locked) else ok(n)
+
+let store = (n: i32) ->
+    let v = acquire(n)?
+    state = v
+    ok
+
+// two statement-shaped propagations in sequence
+let store_twice = (m: i32, n: i32) ->
+    store(m)?
+    store(n)?
+    ok
+
+// tail is already i32! — passes through untouched (no i32!! double wrap)
+let relay = (n: i32) ->
+    store(n)?
+    acquire(n + 1)
+
+let main = (args: str[]) ->
+    state = 0
+    match store_twice(3, 8) with
+    | ok -> assert(state == 8)
+    | err(e) -> assert(false, "expected ok")
+
+    match store_twice(5, -1) with
+    | ok -> assert(false, "expected err")
+    | err(e) ->
+        assert(e == vc_err.locked)
+        assert(state == 5, "first store landed, second propagated")
+
+    match relay(9) with
+    | ok(v) -> assert(v == 10, "tail result passes through")
+    | err(e) -> assert(false, "expected ok")
+
+    match relay(-2) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == vc_err.locked)
+
+    0

@@ -1,0 +1,24 @@
+// Propagation with pointer payloads: T*! uses the uniform struct repr, and
+// the unwrapped pointer flows through; heap provenance survives for free().
+error pp_err =
+    | oom
+
+let make_cell = (v: i32) ->
+    match alloc(i32, 1) with
+    | some(p) ->
+        *p = v
+        ok(p)
+    | none -> err(i32*, pp_err.oom)
+
+let bump_cell = (v: i32) ->
+    let p = make_cell(v)?
+    *p = *p + 1
+    ok(p)
+
+let main = (args: str[]) ->
+    match bump_cell(41) with
+    | ok(p) ->
+        assert(*p == 42)
+        free(p)
+    | err(e) -> assert(false, "expected ok")
+    0

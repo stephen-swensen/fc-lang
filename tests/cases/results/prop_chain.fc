@@ -1,0 +1,77 @@
+// Propagation composes as ordinary postfix: in binary expressions, call
+// arguments, match arms, and string interpolation; left-to-right evaluation
+// stops at the first failure.
+error ch_err =
+    | first
+    | second
+
+let mut calls = 0
+
+let a = (n: i32) ->
+    calls = calls + 1
+    if n < 0 then err(i32, ch_err.first) else ok(n)
+
+let b = (n: i32) ->
+    calls = calls + 1
+    if n > 99 then err(i32, ch_err.second) else ok(n + 1)
+
+let sum = (x: i32, y: i32) ->
+    calls = 0
+    ok(a(x)? + b(y)?)
+
+let nested = (x: i32) ->
+    calls = 0
+    let v = b(a(x)?)?
+    ok(v)
+
+let in_match = (x: i32) ->
+    match a(x)? with
+    | 0 -> ok(100)
+    | n -> ok(n)
+
+let in_interp = (x: i32) ->
+    let s = "v=%d{a(x)?}"
+    ok((i32) s.len)
+
+let main = (args: str[]) ->
+    match sum(2, 3) with
+    | ok(v) -> assert(v == 6)
+    | err(e) -> assert(false, "expected ok")
+    assert(calls == 2)
+
+    // first operand fails: second never evaluated
+    match sum(-1, 3) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == ch_err.first)
+    assert(calls == 1, "b must not run after a's failure propagated")
+
+    match sum(2, 100) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == ch_err.second)
+
+    match nested(4) with
+    | ok(v) -> assert(v == 5)
+    | err(e) -> assert(false, "expected ok")
+
+    match nested(-4) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == ch_err.first)
+    assert(calls == 1, "outer call skipped when inner propagates")
+
+    match in_match(7) with
+    | ok(v) -> assert(v == 7)
+    | err(e) -> assert(false, "expected ok")
+
+    match in_match(0) with
+    | ok(v) -> assert(v == 100)
+    | err(e) -> assert(false, "expected ok")
+
+    match in_interp(12) with
+    | ok(v) -> assert(v == 4, "\"v=12\" has 4 bytes")
+    | err(e) -> assert(false, "expected ok")
+
+    match in_interp(-1) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == ch_err.first)
+
+    0

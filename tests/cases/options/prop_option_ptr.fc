@@ -1,0 +1,41 @@
+// Option propagation across the null-sentinel repr: T*? compiles to a bare
+// pointer on both the operand side (null test) and the return side
+// (none = NULL), so '?' must handle both packed layouts.
+let select = (p: i32*, q: i32*, first: bool) ->
+    if first then some(p) else some(q)
+
+let reject_small = (p: i32*) ->
+    if *p < 10 then none(i32*) else some(p)
+
+// operand null-sentinel, returning null-sentinel (i32*?)
+let pick_big = (p: i32*, q: i32*, first: bool) ->
+    let c = select(p, q, first)?
+    let b = reject_small(c)?
+    some(b)
+
+// operand null-sentinel, returning a struct option (i32?)
+let value_of_big = (p: i32*, q: i32*, first: bool) ->
+    let b = reject_small(select(p, q, first)?)?
+    some(*b + 1)
+
+let main = (args: str[]) ->
+    let mut a = 4
+    let mut b = 40
+
+    match pick_big(&a, &b, false) with
+    | some(p) -> assert(*p == 40)
+    | none -> assert(false, "expected some")
+
+    match pick_big(&a, &b, true) with
+    | some(p) -> assert(false, "small value must propagate none")
+    | none -> assert(true)
+
+    match value_of_big(&a, &b, false) with
+    | some(v) -> assert(v == 41)
+    | none -> assert(false, "expected some")
+
+    match value_of_big(&a, &b, true) with
+    | some(v) -> assert(false, "expected none")
+    | none -> assert(true)
+
+    0

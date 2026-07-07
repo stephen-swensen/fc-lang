@@ -1,0 +1,64 @@
+// The enclosing function's return type is anchored by explicit constructions
+// on the success paths, exactly as without '?': ok(...) on values, an early
+// `return ok(...)` guard clause, bare `ok` / `return ok` for void!.
+error ep_err =
+    | nope
+
+let mut audit = 0
+
+let source = (n: i32) ->
+    if n < 0 then err(i32, ep_err.nope) else ok(n)
+
+let doubled = (n: i32) ->
+    let v = source(n)?
+    ok(v * 2)
+
+let gatekept = (n: i32) ->
+    if n == 0 then return ok(7)
+    let v = source(n)?
+    ok(v + 1)
+
+// void!: bare `ok` on the tail, `return ok` on the early path
+let record_nonzero = (n: i32) ->
+    if n == 0 then return ok
+    let v = source(n)?
+    audit = audit + v
+    ok
+
+let main = (args: str[]) ->
+    match doubled(21) with
+    | ok(v) -> assert(v == 42)
+    | err(e) -> assert(false, "expected ok")
+
+    match doubled(-1) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == ep_err.nope)
+
+    match gatekept(0) with
+    | ok(v) -> assert(v == 7)
+    | err(e) -> assert(false, "expected ok from early return")
+
+    match gatekept(5) with
+    | ok(v) -> assert(v == 6)
+    | err(e) -> assert(false, "expected ok")
+
+    match gatekept(-2) with
+    | ok(v) -> assert(false, "expected err")
+    | err(e) -> assert(e == ep_err.nope)
+
+    audit = 0
+    match record_nonzero(0) with
+    | ok -> assert(audit == 0, "early return ok skips the add")
+    | err(e) -> assert(false, "expected ok")
+
+    match record_nonzero(3) with
+    | ok -> assert(audit == 3)
+    | err(e) -> assert(false, "expected ok")
+
+    match record_nonzero(-1) with
+    | ok -> assert(false, "expected err")
+    | err(e) ->
+        assert(e == ep_err.nope)
+        assert(audit == 3, "err path must not mutate")
+
+    0

@@ -442,14 +442,17 @@ no unit type. So `void!` becomes legal, and it is the **anti-unit** choice:
 - **Repr: a lone `int32_t`** — the tag alone; C's status int reified as a type. This makes the
   `status` protocol a **repr identity** (bit-for-bit, no adapter — the third free mapping after
   `T*?` null-sentinel and errno passthrough).
-- `void!` is a normal type — return position (a user function containing `mkdir(p)?` infers
-  `void!` itself), struct fields, slice elements ("status of last operation" is legitimate
-  data). No extern-only carve-out.
+- `void!` is a normal type — return position (a user function propagating `mkdir(p)?`
+  returns `void!`, anchored by an explicit bare `ok` on its success paths — see §Propagation
+  operator; an earlier draft of this line said the type would be *inferred* from the `?`,
+  which the adopted no-lift model supersedes), struct fields, slice elements ("status of
+  last operation" is legitimate data). No extern-only carve-out.
 - `default(void!) = ok`, zero-filled memory, consistent with the repr section.
 
 With `x?` (follow-up 2) this completes the pipeline for the statement-shaped case:
-`io.mkdir(path, 493u32)?` is one line that propagates a real errno upward or continues as a
-plain void statement.
+`io.mkdir(path, 493u32)?` propagates a real errno upward or continues as a plain void
+statement (the enclosing wrapper spells its own `void!` with a bare `ok` on the success
+paths — see §Propagation operator).
 
 ### Adapter emission and cost
 
@@ -520,6 +523,92 @@ malloc, strcmp; neg_errno/hresult value-driven through atoi/atoll since no libc 
 returns −errno; Windows protocols declare-only) and `tests/cases/results/void_result_*` +
 `ok_bare` + exhaustiveness twins.)*
 
+## Propagation operator `x?` — ADOPTED 2026-07-06, IMPLEMENTED 2026-07-06
+
+*Fourth design pass on this branch, resolving follow-up 2 (the grid's reserved cell). This
+records the decision and the rejected alternatives. An initial implementation shipped with an
+implicit return-type lift; the user rejected it the same day as an explicitness violation and
+the model below (pure desugar, explicit carrier) replaced it — the lift is recorded under
+Rejected alternatives so it isn't re-proposed.*
+
+### The decision
+
+`x?` is a postfix expression operator at unwrap's precedence, working uniformly on both
+carriers: success yields the payload exactly as `x!` does; failure **returns the failure from
+the enclosing function** — `err(code)` upward verbatim (i32 on both sides by construction, no
+conversion ever, the payoff of the fixed code space), `none` upward as `none`. It is a pure
+local desugar of the match-with-diverging-arm, so `defer` unwinding comes free (`return`
+already unwinds), and it acts on the **top layer only** (`?` on `u8?!` yields `u8?`).
+
+**`?` contributes nothing to inference.** The enclosing function must already return the
+matching carrier at its top layer, anchored the way every FC return type is anchored: by the
+explicit constructions on its success paths — `ok(...)`/`err(...)` (bare `ok` for `void!`),
+`some(...)`/`none(T)`. A `?` in a body whose success paths yield a plain `T` or void is a
+compile error at the `?`, naming the fix. The void-shaped wrapper therefore reads:
+
+```fc
+let make_dirs = (a: str, b: str) ->
+    io.mkdir(a, 493u32)?               // must succeed before we go on
+    io.mkdir(b, 493u32)                // tail: its void! IS the result — no ?, no ok
+
+let ensure_dir = (path: str) ->
+    if exists(path) then return ok
+    io.mkdir(path, 493u32)?
+    log_created(path)
+    ok                                 // (str) -> void!
+```
+
+— one visible `ok` token per success exit is the stated price of a signature that is always
+spelled somewhere in the body. And note the price is only paid where `?` is actually needed:
+`?` unwraps mid-body so work can *follow* a fallible call; a fallible call in tail position
+is already the function's result and needs neither `?` nor `ok`. (This supersedes the earlier "a user function containing
+`mkdir(p)?` infers `void!` itself" line in the §`void!` section, which was written with the
+lift in mind.) Everything else follows with zero special cases: return paths mix
+`return ok(v)` / `return err(T, code)` / propagation freely (all the same type); recursion
+works (the base case anchors the carrier before self-calls resolve —
+`if v <= 1 then ok(1) else ok(v * fact(v - 1)?)`); result-typed tails pass through.
+
+**Restrictions** (all compile errors): result propagation in a function not returning a
+result, option propagation in one not returning an option — both reported at the `?` site
+(this subsumes mixing the two kinds in one function: no return type satisfies both); `x?`
+inside `defer` (it is a return; the same walk now also catches a `return` hidden inside a
+loop in a defer, a pre-existing hole); `x?` with no enclosing function, and in `main`
+(pinned to `i32` — wrap the fallible work in a helper and match on it).
+
+### Rejected alternatives (propagation)
+
+- **Return-type lift with implicit ok/some-wrapping** (the Zig coercion school; implemented
+  first, then rejected 2026-07-06) — a body containing `?` whose success paths yielded plain
+  `T` had its return type lifted to `T!`/`T?`, success paths auto-wrapped, void bodies
+  inferring `void!` with `ok` on fall-through. Ergonomic (`mkdir(p)?` as a complete
+  one-liner), and arguably cost-transparent (the wrap is the struct construction an explicit
+  `ok` emits) — but it writes a return type the source never spells and inserts
+  constructions the programmer never wrote, and the scoped return-path coercion it required
+  ("with `?` present, `return 7` and `return err(...)` both accepted") made the return rules
+  mode-dependent. It also forced a recursion restriction (self-calls typed against the
+  pre-lift placeholder go stale — lift + self-reference had to be banned outright).
+  Explicitness won: FC return types are always anchored by visible constructions, `?` or no
+  `?`.
+- **`try`/`orelse` keyword forms** (Zig spelling) — the grid already reserved `?`, and a
+  postfix operator chains (`f(g()?)?`) where a prefix keyword nests.
+- **Propagating an option into a result-returning function** (auto-converting `none` to some
+  blessed code) — a hidden conversion with an invented code; write the `match` (or compose
+  the types as `T?!`) instead.
+
+*(As implemented 2026-07-06: TOK_QUESTION joins the postfix precedence level and reuses
+EXPR_UNARY_POSTFIX — every walker in pass2/codegen/monomorph/lsp rides along; the node gains
+`prop_fn_ret`, stamped by pass2 once the enclosing function's return type is resolved.
+LambdaCtx collects propagation sites like it collects returns; EXPR_FUNC validates each site
+against the derived return type right after return-type derivation (result-prop ⇒ TYPE_RESULT,
+option-prop ⇒ TYPE_OPTION, else diag at the `?`). Codegen emits a GNU statement expression:
+temp, failure test (`err != 0` / `!has_value` / null), pending-defer unwind, `return` of the
+rebuilt failure ((RetC){ .err = t.err } / none / NULL), else the payload —
+return-out-of-statement-expr is documented-permitted GNU C. `x?` reports as side-effectful so
+argument sequencing stays left-to-right around it. Tests: `tests/cases/results/prop_*`,
+`tests/cases/options/prop_option_*`, `tests/cases/defer/defer_return_in_loop`,
+`tests/cases/generics/prop_on_type_var`; spec §Propagation; grammar postfix `?` + Rule 6 note
+on `(x?)`.)*
+
 ## Rejected alternatives (carrier type)
 
 - **Generic error type (`result<'a, 'b>`)** — the Rust path; see precedent analysis. The
@@ -550,8 +639,10 @@ returns −errno; Windows protocols declare-only) and `tests/cases/results/void_
    exhaustiveness, unwrap abort path + exit code, `err(T, 0)` guard both compile-time and
    runtime, composition `T?!`/`T!?`, generics `'a!`, equality, `default(T!)`, pointer payloads,
    `-Werror`-clean emitted C at 16- and 32-bit `int`).
-2. **Propagation operator `x?`** — separate design pass once `T!` is in hand; the grid reserves
-   the spelling.
+2. **Propagation operator `x?`** — ✅ DESIGNED 2026-07-06, ✅ IMPLEMENTED 2026-07-06: pure
+   local desugar over an explicitly-anchored carrier return type (no inference
+   contribution; the implicit lift was rejected); see "Propagation operator `x?`" above
+   (implementation notes at the end of that section).
 3. **Stdlib error-code convention** — ✅ RESOLVED 2026-07-06: compiler-owned code space via
    `error` declarations; see "Error-code organization" above. ✅ IMPLEMENTED 2026-07-06
    (tests in `tests/cases/errors/` + `backtraces/err_unwrap_named`; spec §Named error codes;

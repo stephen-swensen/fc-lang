@@ -1,0 +1,9 @@
+let f = () -> ok(1)
+let g = () -> some(2)
+let h = () ->
+    let a = f()?
+    let b = g()?
+    a + b
+let main = (args: str[]) ->
+    let r = h()
+    0

@@ -599,8 +599,10 @@ bool ptr_value_provably_nonnull(const Expr *e) {
     case EXPR_UNARY_POSTFIX:
         /* p! — unwrap yields the some-payload, which for a pointer option is
          * non-null (some(null) is itself rejected/guarded), and alloc(...)! is
-         * malloc-checked. Only reached here when the result is pointer-typed. */
-        return e->unary_postfix.op == TOK_BANG;
+         * malloc-checked. Only reached here when the result is pointer-typed.
+         * p? passes the same null test before yielding, so it counts too. */
+        return e->unary_postfix.op == TOK_BANG ||
+               e->unary_postfix.op == TOK_QUESTION;
     case EXPR_CSTRING_LIT:
         /* c"..." points into static storage. */
         return true;
@@ -1076,7 +1078,11 @@ static bool expr_has_side_effects(Expr *e) {
         return expr_has_side_effects(e->binary.left) ||
                expr_has_side_effects(e->binary.right);
     case EXPR_UNARY_PREFIX:  return expr_has_side_effects(e->unary_prefix.operand);
-    case EXPR_UNARY_POSTFIX: return expr_has_side_effects(e->unary_postfix.operand);
+    case EXPR_UNARY_POSTFIX:
+        /* x? may return early from the enclosing function — treat as an effect
+         * so argument-evaluation sequencing stays left-to-right around it. */
+        if (e->unary_postfix.op == TOK_QUESTION) return true;
+        return expr_has_side_effects(e->unary_postfix.operand);
     case EXPR_FIELD: case EXPR_DEREF_FIELD:
         return expr_has_side_effects(e->field.object);
     case EXPR_INDEX:
@@ -2538,6 +2544,19 @@ static void emit_checked_int_narrow(Type *from, Type *to, Expr *operand,
     fprintf(out, ")_cv%d; })", tid);
 }
 
+/* Emit the `none` value of an option type: NULL for a pointer-packed option,
+ * a has_value=false compound literal otherwise. Used by x? propagation to
+ * build the early-return failure at the enclosing function's return type. */
+static void emit_none_of_type(Type *opt, FILE *out) {
+    if (is_null_sentinel(opt)) {
+        fprintf(out, "NULL");
+    } else {
+        fprintf(out, "(");
+        emit_type(opt, out);
+        fprintf(out, "){ .has_value = false }");
+    }
+}
+
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -3047,6 +3066,52 @@ static void emit_expr(Expr *e, FILE *out) {
                     emit_c_escaped(e->unary_postfix.expr_text,
                                    e->unary_postfix.expr_text_len, out);
                 fprintf(out, "\\n\"); FC_ABORT(); } _uw%d.value; })", tid);
+            }
+        } else if (e->unary_postfix.op == TOK_QUESTION) {
+            /* Propagation: unwrap on success; on failure run every pending
+             * defer (a propagation is a return) and return the failure rebuilt
+             * at the enclosing function's return type (stamped by pass2).
+             * Jumping out of a GNU statement expression with `return` is
+             * documented-permitted; the temp stays in scope inside the if. */
+            Type *ot = subst_resolve(e->unary_postfix.operand->type);
+            Type *rt = subst_resolve(e->unary_postfix.prop_fn_ret);
+            int tid = temp_counter++;
+            fprintf(out, "({ ");
+            if (ot->kind == TYPE_RESULT) {
+                emit_type(ot, out);
+                fprintf(out, " _pr%d = ", tid);
+                emit_expr(e->unary_postfix.operand, out);
+                fprintf(out, "; if (_pr%d.err != 0) { ", tid);
+                emit_defers_to_func(out);
+                fprintf(out, "return (");
+                emit_type(rt, out);
+                fprintf(out, "){ .err = _pr%d.err }; } ", tid);
+                /* void! propagation yields nothing: the statement expression
+                 * ends with the check and has void type. */
+                if (ot->result.inner && ot->result.inner->kind == TYPE_VOID)
+                    fprintf(out, "})");
+                else
+                    fprintf(out, "_pr%d.value; })", tid);
+            } else if (is_null_sentinel(ot)) {
+                /* T*? → plain pointer; failure test is the null check and the
+                 * value is the pointer itself. */
+                emit_type(ot->option.inner, out);
+                fprintf(out, " _pr%d = ", tid);
+                emit_expr(e->unary_postfix.operand, out);
+                fprintf(out, "; if (!_pr%d) { ", tid);
+                emit_defers_to_func(out);
+                fprintf(out, "return ");
+                emit_none_of_type(rt, out);
+                fprintf(out, "; } _pr%d; })", tid);
+            } else {
+                emit_type(ot, out);
+                fprintf(out, " _pr%d = ", tid);
+                emit_expr(e->unary_postfix.operand, out);
+                fprintf(out, "; if (!_pr%d.has_value) { ", tid);
+                emit_defers_to_func(out);
+                fprintf(out, "return ");
+                emit_none_of_type(rt, out);
+                fprintf(out, "; } _pr%d.value; })", tid);
             }
         }
         break;

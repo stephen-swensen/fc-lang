@@ -1,0 +1,38 @@
+// x? on an option: unwraps some, propagates none. The enclosing function's
+// option type is anchored by its explicit some(...)/none(T) constructions.
+let half_even = (n: i32) ->
+    if n % 2 == 0 then some(n / 2) else none(i32)
+
+// explicit some on the tail anchors i32?
+let quarter_even = (n: i32) ->
+    let h = half_even(n)?
+    let q = half_even(h)?
+    some(q)
+
+// tail is already an option expression — passes through
+let eighth_even = (n: i32) ->
+    let q = quarter_even(n)?
+    half_even(q)
+
+let main = (args: str[]) ->
+    match quarter_even(12) with
+    | some(v) -> assert(v == 3)
+    | none -> assert(false, "expected some")
+
+    match quarter_even(6) with
+    | some(v) -> assert(false, "inner none must propagate")
+    | none -> assert(true)
+
+    match quarter_even(7) with
+    | some(v) -> assert(false, "outer none must propagate")
+    | none -> assert(true)
+
+    match eighth_even(24) with
+    | some(v) -> assert(v == 3)
+    | none -> assert(false, "expected some")
+
+    match eighth_even(20) with
+    | some(v) -> assert(false, "expected none")
+    | none -> assert(true)
+
+    0

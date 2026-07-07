@@ -1,0 +1,6 @@
+let f = (x: 'a) ->
+    let v = x?
+    v
+let main = (args: str[]) ->
+    let r = f(5)
+    0
