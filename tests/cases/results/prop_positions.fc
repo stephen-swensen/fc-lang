@@ -1,0 +1,52 @@
+// x? is an ordinary postfix operator: legal in any expression position —
+// for-range endpoints, if conditions, break values, assert, indices, and
+// nested lambdas (where it binds to the INNERMOST function, like return).
+let get = (n: i32) -> if n < 0 then err(i32, 7) else ok(n)
+let flag = (b: bool) -> if b then ok(true) else err(bool, 8)
+
+// ? in a for-range endpoint
+let sum_to = (n: i32) ->
+    let mut s = 0
+    for i in 0..get(n)? do
+        s = s + i
+    ok(s)
+
+// ? in an if condition
+let gated = (b: bool) ->
+    if flag(b)? then ok(1) else ok(2)
+
+// ? in a break value and inside a loop body
+let first_over = (lim: i32, n: i32) ->
+    let v = loop
+        if get(n)? > lim then break get(n)? * 10
+        return ok(-1)
+    ok(v)
+
+// ? in assert and in an index
+let checked_pick = (xs: i32[], n: i32) ->
+    assert(get(n)? >= 0)
+    ok(xs[get(n)?])
+
+// ? inside a nested lambda: binds to the INNERMOST function —
+// the lambda must return the carrier, outer fn is unaffected
+let via_lambda = (n: i32) ->
+    let helper = (m: i32) ->
+        let v = get(m)?
+        ok(v + 1)
+    match helper(n) with
+    | ok(v) -> v
+    | err(e) -> -1
+
+let main = (args: str[]) ->
+    assert(sum_to(4)! == 6)
+    assert(sum_to(-1).is_err)
+    assert(gated(true)! == 1)
+    assert(gated(false).is_err)
+    assert(first_over(1, 3)! == 30)
+    assert(first_over(1, -2).is_err)
+    let xs = i32[4] { 9, 8, 7, 6 }
+    assert(checked_pick(xs, 2)! == 7)
+    assert(checked_pick(xs, -1).is_err)
+    assert(via_lambda(4) == 5)
+    assert(via_lambda(-3) == -1)
+    0
