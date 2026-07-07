@@ -568,6 +568,35 @@ lift in mind.) Everything else follows with zero special cases: return paths mix
 works (the base case anchors the carrier before self-calls resolve —
 `if v <= 1 then ok(1) else ok(v * fact(v - 1)?)`); result-typed tails pass through.
 
+**The one sanctioned non-local construction.** `?`'s failure exit fabricates a whole value —
+`err` at the enclosing function's return type with the local code injected, or that type's
+`none` — whose type appears nowhere at the site and cannot be spelled there. Nothing else in
+FC constructs a value this way: every other construction is type-anchored on the spot
+(`err(T, code)`, `none(T)`, `default(T)`, struct literals, bare `ok` self-anchoring), and the
+language's two weaker "type from afar" effects — a recursive self-call typed by a base case
+elsewhere in the body, a literal widened by a callee's parameter type — only type a *use* or
+adjust a representation, never synthesize a value. This is recorded as a deliberate, scoped
+exception to directional inference, not a new mode of it, on two grounds. First, the
+non-locality is `return`'s, inherited honestly: `?` desugars to a return, and a return is the
+one construct whose meaning is inherently about the function boundary — every `return v`
+sends a value "afar"; here the compiler merely spells the value. (Rust's `?` and Zig's `try`
+construct their error-returns from the function signature the same way; FC has no signatures,
+which is exactly why the next point matters.) Second, the no-lift rule above is what keeps
+the far anchor visible: the induced type is never *invented* from afar — it is always a type
+the same function body spells explicitly on its success paths, so a reader tracing a `?` has
+a guaranteed in-body place to look, and the diagnostic points there. The construction is also
+constitutive, not conveniencing: without it the operator cannot exist (spelling the payload
+type at each site — `x?(config)` — would duplicate what the body already states and destroy
+chaining; annotations are off the table). One non-local construction, targeting an
+always-spelled type, in exchange for the entire propagation feature.
+
+Together with the fixed-`i32` carrier this closes the original infection anxiety from both
+ends: the fixed code means *nothing needs converting* at any boundary (no `From` ladders, no
+`anyhow`, no error-set algebra), and the body-anchored failure construction means *nothing
+needs restating* at any propagation site (no per-site payload spelling, no nested rethrow
+matches). The manual alternative — the match-with-diverging-arm — remains exactly what `?`
+desugars to, written once in this document instead of at every call site.
+
 **Restrictions** (all compile errors): result propagation in a function not returning a
 result, option propagation in one not returning an option — both reported at the `?` site
 (this subsumes mixing the two kinds in one function: no return type satisfies both); `x?`
