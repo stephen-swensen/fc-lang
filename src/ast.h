@@ -469,6 +469,26 @@ struct MatchArm {
 
 /* ---- Declaration nodes ---- */
 
+/* Extern error protocols — the `from <protocol>` tail on an extern function
+ * returning T!. A closed set, one entry per crisp C failure convention: the
+ * protocol names the failure test and where the error code lives, and codegen
+ * wraps the raw C return into the declared result at the call site. Codes pass
+ * through raw — no arithmetic, ever (spec/result-type-design.md §C interop). */
+typedef enum {
+    EXT_PROTO_NONE = 0,     /* no protocol declared */
+    EXT_PROTO_ERROR,        /* malformed protocol clause; parse error already
+                               reported — pass1 skips agreement checks */
+    EXT_PROTO_ERRNO_NEG1,   /* errno(-1):        ret == -1   → err(errno)         */
+    EXT_PROTO_ERRNO_NULL,   /* errno(null):      ret == NULL → err(errno)         */
+    EXT_PROTO_STATUS,       /* status:           ret != 0    → err(ret); void payload */
+    EXT_PROTO_NEG_ERRNO,    /* neg_errno:        ret < 0     → err(ret), raw      */
+    EXT_PROTO_HRESULT,      /* hresult:          ret < 0     → err(ret), raw      */
+    EXT_PROTO_LASTERR_0,    /* last_error(0):    ret == 0    → err(GetLastError())    */
+    EXT_PROTO_LASTERR_NULL, /* last_error(null): ret == NULL → err(GetLastError())    */
+    EXT_PROTO_LASTERR_NEG1, /* last_error(-1):   ret == -1   → err(GetLastError())    */
+    EXT_PROTO_WSA_NEG1,     /* wsa_error(-1):    ret == -1   → err(WSAGetLastError()) */
+} ExternProtocol;
+
 typedef enum {
     DECL_LET,
     DECL_STRUCT,
@@ -553,6 +573,8 @@ struct Decl {
             const char *name;
             const char *alias;
             Type *type;
+            ExternProtocol protocol;  /* error protocol (`from <protocol>`);
+                                         EXT_PROTO_NONE when absent */
         } ext;
 
         /* DECL_NAMESPACE */

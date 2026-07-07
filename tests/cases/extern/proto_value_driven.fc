@@ -1,0 +1,33 @@
+// neg_errno / hresult: the code is the (negative) return itself, raw — no
+// arithmetic. No libc function returns -errno, but the adapter sees only the
+// value, so atoi/atoll drive both branches deterministically.
+module m from "stdlib.h" =
+    extern atoi as hr_probe: (const cstr) -> i32! from hresult
+    extern atoll as neg_probe: (const cstr) -> i64! from neg_errno
+    extern atoll as neg_probe_v: (const cstr) -> void! from neg_errno
+
+let main = (args: str[]) ->
+    // hresult: nonnegative success value observable (the S_FALSE case)
+    match m.hr_probe(c"1") with
+    | ok(1) -> assert(true)
+    | ok(v) -> assert(false, "expected ok(1), got ok(%d{v})")
+    | err(e) -> assert(false, "expected ok, got err(%d{e})")
+    // hresult failure: the negative return is the raw code
+    match m.hr_probe(c"-7") with
+    | ok(_) -> assert(false, "expected err")
+    | err(e) -> assert(e == -7, "raw negative passthrough, got %d{e}")
+
+    // neg_errno with payload: ok carries the value, err the raw negative
+    match m.neg_probe(c"42") with
+    | ok(n) -> assert(n == 42i64, "payload passthrough")
+    | err(e) -> assert(false, "expected ok, got err(%d{e})")
+    match m.neg_probe(c"-11") with
+    | ok(_) -> assert(false, "expected err")
+    | err(e) -> assert(e == -11, "raw -errno passthrough (never negated), got %d{e}")
+
+    // neg_errno, void payload
+    let v = m.neg_probe_v(c"-11")
+    assert(v.is_err, "negative return is err")
+    let w = m.neg_probe_v(c"0")
+    assert(w.is_ok, "non-negative return is ok")
+    0

@@ -1,0 +1,32 @@
+// void! is a normal type: struct fields, slice elements (zero-fill = ok),
+// option composition, and generic instantiation all work.
+struct op_log =
+    last: void!
+    count: i32
+
+let identity = (x: 'a) -> x
+
+let main = (args: str[]) ->
+    let lg = op_log { last = ok, count = 0 }
+    assert(lg.last.is_ok, "field holds ok")
+    let lg2 = op_log { last = err(void, 7), count = 1 }
+    match lg2.last with
+    | ok -> assert(false, "expected err")
+    | err(7) -> assert(true)
+    | err(_) -> assert(false, "expected 7")
+
+    let rs = void![3] {}
+    assert(rs[0].is_ok, "zero-filled element is ok")
+    assert(rs.len == 3, "len")
+
+    let o = some(ok)
+    match o with
+    | some(r) -> assert(r.is_ok, "some(ok)")
+    | none -> assert(false, "expected some")
+
+    let v = identity(ok)
+    assert(v.is_ok, "identity over void!")
+    match identity(err(void, 9)) with
+    | ok -> assert(false, "expected err")
+    | err(e) -> assert(e == 9, "code through generic")
+    0

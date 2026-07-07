@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let r = ok
+    let x = r!
+    0

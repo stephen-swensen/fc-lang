@@ -1,0 +1,31 @@
+// errno(-1): ret == -1 → err(errno). Payload and void forms, both branches.
+// open/dup/close come from unistd.h (mingw-w64 maps them to the UCRT twins).
+module fs from "unistd.h" =
+    extern dup: (i32) -> i32! from errno(-1)
+    extern close: (i32) -> void! from errno(-1)
+
+module c from "fcntl.h" =
+    extern open: (const cstr, i32) -> i32! from errno(-1)
+
+let main = (args: str[]) ->
+    // err path with payload type: ENOENT is 2 on every supported platform
+    match c.open(c"fc-definitely-nonexistent-file", 0) with
+    | ok(_) -> assert(false, "expected open to fail")
+    | err(2) -> assert(true)
+    | err(e) -> assert(false, "expected ENOENT (2), got %d{e}")
+
+    // ok path with payload: dup stderr, then close it (void! ok path)
+    let r = fs.dup(2)
+    assert(r.is_ok, "dup failed")
+    let fd = r!
+    assert(fd >= 0, "dup yields a real fd")
+    match fs.close(fd) with
+    | ok -> assert(true)
+    | err(e) -> assert(false, "close failed: %d{e}")
+
+    // err path, void payload: closing an already-closed fd is EBADF (9)
+    match fs.close(fd) with
+    | ok -> assert(false, "expected close to fail")
+    | err(9) -> assert(true)
+    | err(e) -> assert(false, "expected EBADF (9), got %d{e}")
+    0

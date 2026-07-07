@@ -2807,6 +2807,7 @@ i32!        // result: ok(i32) | err(code)
 handle!     // "opening may fail, and failure has a reason"
 u8?!        // result of option — "fallible read of an optional byte"
 point*!     // result carrying a pointer
+void!       // payload-less result — "can fail, returns nothing" (see below)
 ```
 
 Options and results answer different questions and stay separate types: `dict.get(k) -> v?` says absence is *normal*; `io.open(path) -> handle!` says failure has a *reason*. Composition provides unification where it's wanted: in `u8?!`, `ok(some(b))` is a byte, `ok(none(u8))` is a clean EOF, and `err(u8?, code)` is an I/O error. Both suffix orders are legal (`u8!?` is an option of a result), but `T?!` is the idiomatic one.
@@ -2872,6 +2873,28 @@ Under `--backtraces`, the abort also names a declared error alongside its code (
 ```
 file.fc:3: unwrap failed: r (error code 65537: file_io.not_found)
 ```
+
+### `void!` — the payload-less result
+
+The largest class of fallible operations returns nothing on success — `mkdir`, `close`, `unlink`, every "do it or tell me why not" call. Their type is `void!`: a result whose `ok` arm carries **no payload at all**.
+
+```fc
+let validate = (n: i32) ->
+    if n < 0 then err(void, 22) else ok      // inferred return type: void!
+
+match validate(x) with
+| ok -> proceed()          // bare ok — binds nothing (the `| empty` precedent)
+| err(e) -> fail(e)
+
+validate(x)!               // assert success: a plain void statement, aborts with the code on err
+```
+
+- **Construction**: bare `ok` (no parens) and `err(void, code)`. `ok(v)` with a void-typed `v` is a compile error pointing at the bare form.
+- **Matching**: the bare `ok` pattern, exactly like a payload-less union variant. `ok(v)` on a `void!` is a compile error, and bare `ok` on any other result is too — the pattern shape always tells you whether a payload exists.
+- **No void value exists.** `r!` is a void expression (legal exactly where a void call is); `let x = r!` is the usual "cannot bind void" error. There is no `void?`, no void parameter, and `void` remains invalid as a generic type argument — `void!` is not a unit type, it is a result with a bare variant.
+- **Representation**: the `i32` tag alone — C's status integer reified as a type. `default(void!)` is `ok`, zero-filled memory is `ok`, equality compares the codes.
+
+`void!` composes like any type: struct fields, slice elements (`void![N] {}` zero-fills to `ok`), `void!?`, and generic instantiation (`identity(ok)`) all work.
 
 ### Named error codes: `error` declarations
 
@@ -5120,15 +5143,47 @@ match buf with
 
 The programmer is responsible for correctly declaring which C functions can return null. A bare `T*` return type is treated as non-nullable — the compiler assumes the function always returns a valid pointer. Getting this wrong (declaring a nullable return as non-nullable) is the same class of bug as in C itself.
 
-For C functions that signal failure via a sentinel integer value (such as `-1`), declare the return type as a plain integer and check the sentinel directly — do not use `?`:
+For C functions that signal failure via a sentinel value plus an error code (`-1` + `errno`, `NULL` + `errno`, a status return), declare the return as a **result** with an error protocol — see the next section. A plain integer return with a manual sentinel check remains available for functions whose failure carries no code.
+
+### Extern error protocols: mapping C failures to `T!`
+
+An extern function whose declared return type is a result **must** name how the C function signals failure — the *error protocol* — in a `from <protocol>` tail. The compiler then wraps the raw C return into the declared `T!` at each call site: call, test the protocol's failure convention, capture the code, build the result. It is exactly the adapter you would hand-write, generated from one declaration (the C# P/Invoke `SetLastError` school):
 
 ```fc
-module posix from "fcntl.h" =
-    extern open: (const cstr, i32) -> i32    // returns -1 on failure, not null; const cstr accepts c"..." literals
+module c from "fcntl.h" =
+    extern open: (const cstr, i32) -> i32! from errno(-1)
 
-let fd = posix.open(c"file.txt", 0)
-if fd == -1 then handle_error()
+module fs from "sys/stat.h" =
+    extern mkdir: (const cstr, u32) -> void! from errno(-1)
+
+match c.open(c"data.bin", 0) with
+| ok(fd) -> use(fd)
+| err(2) -> create_it()          // ENOENT, passed through raw
+| err(e) -> fail(e)
+
+fs.mkdir(c"out", 493u32)!        // assert success; aborts with the errno on failure
 ```
+
+The protocol set is **closed** — one entry per crisp, documented C convention:
+
+| protocol | failure test | code source | payload kinds |
+|---|---|---|---|
+| `errno(-1)` | `ret == -1` | `errno` | signed integer, or `void` |
+| `errno(null)` | `ret == NULL` | `errno` | pointer |
+| `status` | `ret != 0` | `ret` itself | `void` only |
+| `neg_errno` | `ret < 0` | `ret` itself, raw | signed integer, or `void` |
+| `hresult` | `ret < 0` | `ret` itself, raw | `i32`, or `void` |
+| `last_error(0 / null / -1)` | `ret == sentinel` | `GetLastError()` | integer / pointer / signed integer, or `void` |
+| `wsa_error(-1)` | `ret == -1` | `WSAGetLastError()` | signed integer, or `void` |
+
+- **Payload-ness is declared by the return type**, orthogonal to the protocol: `i32! from errno(-1)` for `open` (the fd is data), `void! from errno(-1)` for `mkdir` (the 0 is noise). `i32! from hresult` keeps the success-mode HRESULT observable (`ok(1)` = `S_FALSE`); `void! from hresult` discards it. The payload kind is compile-checked against the protocol (see the table); a `T!` return without a protocol, or a protocol without a `T!` return, is a compile error.
+- **Codes pass through raw — no arithmetic, ever.** The number in the result is the number the platform produced: errno values land in the reserved `[1, 65535]` passthrough range, HRESULTs and kernel-style `-errno` stay negative. Per-call provenance interprets them (the caller knows which call produced the code); `error_name` returns `none` for all of them.
+- **Sentinel tokens are protocol syntax, not expressions** — the `null` in `errno(null)` exists only inside a protocol clause; FC still has no null literal.
+- **The err-path payload is `default(T)`**, never the sentinel — the sentinel is protocol noise, not data.
+- **The `err == 0` guard applies**: a C library that reports failure but leaves the code 0 (a broken errno contract) aborts at the boundary, exactly like a buggy hand-wrapper. `status`, `neg_errno`, and `hresult` codes are non-zero by their failure tests, so they need (and pay for) no guard.
+- **Cost**: a handful of generated C lines per call site — a temp, one comparison, a struct build. `status` is a *repr identity*: `void!` is a lone `int32_t` and the return value already **is** the tag, so the wrap is a single cast. The compiler adds `#include <errno.h>` when an errno protocol is called; the Windows protocols rely on the module's own `from "windows.h"`/`from "winsock2.h"` header.
+
+What the closed set excludes is only the irregular tail where the C API itself is ambiguous — `readdir` (NULL means both end-of-stream and error), `getpriority` (−1 is a legal success value), `strtol` (sentinel overlaps the value domain). Wrap those by hand *into the same carrier*: declare the raw C signature and write a 3-line FC function returning `err(T, code)` with the code passed through raw. The design record (including the rejected alternatives) is `spec/result-type-design.md` §C interop.
 
 ### Null arguments to C
 

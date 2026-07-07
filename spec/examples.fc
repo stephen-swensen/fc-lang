@@ -135,6 +135,14 @@ module c_signal from "signal.h" define "_POSIX_C_SOURCE" "200809L" =
 module c_stdio from "stdio.h" =
     extern snprintf: (cstr, usize, const cstr, ...) -> i32
 
+// Error protocols — an extern returning T! names how the C function signals
+// failure (from <protocol>); the compiler wraps the raw return into the
+// result at each call site, capturing the platform code (errno here) raw.
+// void! is the payload-less result for "can fail, returns nothing" calls.
+module c_files from "stdio.h" =
+    extern fopen: (const cstr, const cstr) -> any*! from errno(null)
+    extern remove: (const cstr) -> void! from errno(-1)
+
 // ============================================================
 // Entry point — main receives command-line args as str[]
 // Return value becomes the process exit code.
@@ -677,6 +685,20 @@ let main = (args: str[]) ->
     | some(n) -> assert(n == "file_io.invalid_path")
     | none -> assert(false)
     assert(error_name(13).is_none)   // errno range — belongs to the platform
+
+    // void! — the payload-less result ("can fail, returns nothing"). Bare
+    // `ok` constructs it, err(void, code) is the failure, and the bare `ok`
+    // pattern matches it — no void value ever materializes. This is the
+    // shape of C status calls: see the `c_files.remove` protocol extern
+    // above (extern error protocols wrap C failures into T! automatically).
+    let cleanup = (dry_run: bool) ->
+        if dry_run then ok else c_files.remove(c"examples-no-such-file")
+    match cleanup(true) with
+    | ok -> assert(true)
+    | err(_) -> assert(false)
+    let failed = cleanup(false)       // ENOENT passes through raw
+    assert(failed.is_err)
+    assert(default(void!).is_ok)      // zero-filled memory is the ok tag
 
     // --------------------------------------------------------
     // Pointers

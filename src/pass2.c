@@ -6007,6 +6007,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         Type *inner = check_expr(ctx, e->some_expr.value);
         if (reject_unresolved_recursive_value(e->some_expr.value)) { e->type = type_error(); return e->type; }
         if (type_is_error(inner)) { e->type = type_error(); return e->type; }
+        if (inner->kind == TYPE_VOID) {
+            /* An option of void has no repr (`void value;` is not C) and no
+             * meaning — absence of nothing. void composes with `!` only. */
+            diag_error(e->loc, "some() payload is a void expression; "
+                "there is no void option type");
+            e->type = type_error();
+            return e->type;
+        }
         e->type = type_option(ctx->arena, inner);
         e->prov = e->some_expr.value->prov;
         /* Null-sentinel options (T*?, any*?, cstr?) represent none as a null
@@ -6024,9 +6032,20 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_OK: {
+        /* Bare `ok` (no payload) constructs the payload-less void! result. */
+        if (!e->ok_expr.value) {
+            e->type = type_result(ctx->arena, type_void());
+            return e->type;
+        }
         Type *inner = check_expr(ctx, e->ok_expr.value);
         if (reject_unresolved_recursive_value(e->ok_expr.value)) { e->type = type_error(); return e->type; }
         if (type_is_error(inner)) { e->type = type_error(); return e->type; }
+        if (inner->kind == TYPE_VOID) {
+            diag_error(e->loc, "ok() payload is a void expression; a void! "
+                "result is constructed with bare `ok` (no parens)");
+            e->type = type_error();
+            return e->type;
+        }
         e->type = type_result(ctx->arena, inner);
         e->prov = e->ok_expr.value->prov;
         return e->type;
@@ -6809,14 +6828,31 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             return;
         }
         break;
-    case PAT_OK:
+    case PAT_OK: {
         if (type->kind != TYPE_RESULT) {
             diag_error(pat->loc, "ok pattern on non-result type %s", type_name(type));
+            return;
+        }
+        /* Bare `ok` matches exactly the payload-less ok of void! (the
+         * `| empty` precedent); a payload pattern is required — and bare ok
+         * rejected — everywhere else. A type-var inner ('a!) is never void,
+         * so it takes the payload form. */
+        bool void_inner = type->result.inner &&
+                          type->result.inner->kind == TYPE_VOID;
+        if (pat->some_pat.inner && void_inner) {
+            diag_error(pat->loc, "ok of %s carries no payload; write bare `ok`",
+                type_name(type));
+            return;
+        }
+        if (!pat->some_pat.inner && !void_inner) {
+            diag_error(pat->loc, "ok pattern on %s needs a payload pattern; "
+                "write ok(<pattern>)", type_name(type));
             return;
         }
         if (pat->some_pat.inner)
             check_match_pattern(ctx, pat->some_pat.inner, type->result.inner, reject_bindings);
         break;
+    }
     case PAT_ERR:
         if (type->kind != TYPE_RESULT) {
             diag_error(pat->loc, "err pattern on non-result type %s", type_name(type));

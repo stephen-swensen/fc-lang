@@ -1,0 +1,5 @@
+let f = (x: void?) ->
+    0
+
+let main = (args: str[]) ->
+    0

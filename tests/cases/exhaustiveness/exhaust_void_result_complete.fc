@@ -1,0 +1,6 @@
+// Bare ok + err binding exhausts void! exactly like ok(v) exhausts T!.
+let main = (args: str[]) ->
+    let r = err(void, 3)
+    match r with
+    | ok -> 1
+    | err(e) -> if e == 3 then 0 else 2

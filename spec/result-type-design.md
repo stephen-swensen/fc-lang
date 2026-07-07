@@ -503,6 +503,23 @@ door open, not now.
   improvisation, and FC code cannot even read `errno` without a shim; see the precedent
   landscape.
 
+*(As implemented 2026-07-06: the protocol is an `ExternProtocol` enum on `DECL_EXTERN`
+(`d->ext.protocol`), parsed by `parse_extern_protocol` in `src/parser.c` (sentinels are
+protocol-local token checks, no expression machinery); agreement checks live in pass1's
+`validate_extern_protocol`. No named adapter functions are emitted — codegen wraps each call
+site inline in a statement expression (`emit_protocol_extern_call` in `src/codegen.c`, sharing
+`emit_raw_extern_call` with plain extern calls, so the cstr/void* boundary casts are identical),
+which makes variadic protocol externs work for free and keeps prototypes to the C header.
+`status` with `void!` emits a single struct wrap of the return. Guarded protocols reuse the
+existing `fc_zero_err` helper; `#include <errno.h>` is emitted only when an errno-protocol call
+is reachable. `void!` compiles to `struct { int32_t err; }`; bare `ok` is EXPR_OK/PAT_OK with a
+NULL payload throughout (every walker already NULL-guards); the same pass ALSO closed the
+pre-existing `some(<void expr>)` hole, which used to emit invalid C (`void value;`). Tests:
+`tests/cases/extern/proto_*` (runtime protocols via portable libc calls — dup/close, fopen,
+malloc, strcmp; neg_errno/hresult value-driven through atoi/atoll since no libc function
+returns −errno; Windows protocols declare-only) and `tests/cases/results/void_result_*` +
+`ok_bare` + exhaustiveness twins.)*
+
 ## Rejected alternatives (carrier type)
 
 - **Generic error type (`result<'a, 'b>`)** — the Rust path; see precedent analysis. The
@@ -539,11 +556,11 @@ door open, not now.
    `error` declarations; see "Error-code organization" above. ✅ IMPLEMENTED 2026-07-06
    (tests in `tests/cases/errors/` + `backtraces/err_unwrap_named`; spec §Named error codes;
    grammar `error_decl`/const-path pattern/`error` type atom/`error_name_expr`).
-4. **C-interop extern result mapping** — ✅ DESIGNED 2026-07-06: closed protocol set +
-   `from <protocol>` extern tail + `void!`; see "C interop: extern result mapping" above.
-   Implementation pending (tests: each protocol × payload/void, protocol/type agreement
-   errors, `void!` semantics incl. bare-`ok` matching and cannot-bind, `status` repr identity,
-   `err == 0` guard on buggy libraries, Windows protocols under conditional compilation).
+4. **C-interop extern result mapping** — ✅ DESIGNED 2026-07-06, ✅ IMPLEMENTED 2026-07-06:
+   closed protocol set + `from <protocol>` extern tail + `void!`; see "C interop: extern
+   result mapping" above (implementation notes at the end of that section). Tests in
+   `tests/cases/extern/proto_*` and `tests/cases/results/void_result_*`; spec §Extern error
+   protocols + §`void!`; grammar `error_protocol` / `void` type-atom note / bare-`ok` forms.
 5. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
    trails the feature, lands on this branch before merge into `develop`. Consumes items 2
    and 4: externs move to `T!`/`void!` returns via protocols; wrappers propagate with `x?`.

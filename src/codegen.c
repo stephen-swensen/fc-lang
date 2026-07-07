@@ -1249,6 +1249,116 @@ static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     emit_expr(e, out);
 }
 
+/* The raw C call of an extern function: cstr-boundary casts on each arg, and
+ * the char*→uint8_t* return cast keyed on `ret_like` — the extern's declared
+ * return type for plain calls, or the result payload for protocol calls
+ * (whose raw C return is the payload, not the T!). */
+static void emit_raw_extern_call(Expr *e, const char *fn_name, Type *call_ft,
+                                 Type *ret_like, FILE *out) {
+    bool ret_is_cstr = ret_like && is_cstr_type(ret_like);
+    bool ret_is_cstr_opt = ret_like && ret_like->kind == TYPE_OPTION &&
+        is_cstr_type(ret_like->option.inner);
+    bool ret_is_cstr_ptr = ret_like && ret_like->kind == TYPE_POINTER &&
+        is_cstr_type(ret_like->pointer.pointee);
+    if (ret_is_cstr || ret_is_cstr_opt)
+        fprintf(out, "(uint8_t*)");
+    else if (ret_is_cstr_ptr)
+        fprintf(out, "(uint8_t**)");
+    fprintf(out, "%s(", fn_name);
+    for (int i = 0; i < e->call.arg_count; i++) {
+        if (i > 0) fprintf(out, ", ");
+        Type *pt = (call_ft && call_ft->kind == TYPE_FUNC &&
+                    i < call_ft->func.param_count)
+            ? call_ft->func.param_types[i] : NULL;
+        emit_extern_arg(e->call.args[i], pt, out);
+    }
+    fprintf(out, ")");
+}
+
+/* Emit an extern call declared with an error protocol (`from <protocol>`):
+ * call the raw C function, test the protocol's failure convention, capture
+ * the code, and build the declared T! in place — exactly the adapter a
+ * caller would hand-write, emitted where the call stands. The err-path
+ * payload is zero-filled (the sentinel is protocol noise, not data), and
+ * codes pass through raw — no arithmetic, ever. `status` is a repr
+ * identity: the return value IS the err tag, one struct wrap and no branch.
+ * The out-of-band protocols (errno / last_error / wsa_error) run the
+ * err(T,0) runtime guard, so a library that reports failure but leaves the
+ * code 0 aborts exactly like a buggy hand-wrapper. neg_errno/hresult codes
+ * are provably nonzero by the failure test (< 0) — no guard. */
+static void emit_protocol_extern_call(Expr *e, const char *fn_name,
+                                      ExternProtocol proto, Type *call_ft,
+                                      Type *ret_type, FILE *out) {
+    Type *pay = subst_resolve(ret_type->result.inner);
+    bool pay_void = pay && pay->kind == TYPE_VOID;
+
+    if (proto == EXT_PROTO_STATUS) {
+        fprintf(out, "(");
+        emit_type(ret_type, out);
+        fprintf(out, "){ .err = (int32_t)");
+        emit_raw_extern_call(e, fn_name, call_ft, NULL, out);
+        fprintf(out, " }");
+        return;
+    }
+
+    int tid = temp_counter++;
+    fprintf(out, "({ ");
+    /* Raw-return temp: the payload's C type when there is one; a wide signed
+     * integer otherwise (any C status return converts in losslessly). */
+    if (pay_void)
+        fprintf(out, "%s", proto == EXT_PROTO_HRESULT ? "int32_t" : "long long");
+    else
+        emit_type(pay, out);
+    fprintf(out, " _xv%d = ", tid);
+    emit_raw_extern_call(e, fn_name, call_ft, pay_void ? NULL : pay, out);
+    fprintf(out, "; ");
+
+    if (proto == EXT_PROTO_NEG_ERRNO || proto == EXT_PROTO_HRESULT) {
+        /* The code is the (negative) return itself — nonzero by the test */
+        if (pay_void) {
+            fprintf(out, "(");
+            emit_type(ret_type, out);
+            fprintf(out, "){ .err = _xv%d < 0 ? (int32_t)_xv%d : 0 }; })",
+                    tid, tid);
+        } else {
+            fprintf(out, "_xv%d < 0 ? (", tid);
+            emit_type(ret_type, out);
+            fprintf(out, "){ .err = (int32_t)_xv%d } : (", tid);
+            emit_type(ret_type, out);
+            fprintf(out, "){ .err = 0, .value = _xv%d }; })", tid);
+        }
+        return;
+    }
+
+    /* Sentinel-tested protocols with an out-of-band code source */
+    const char *sentinel =
+        (proto == EXT_PROTO_ERRNO_NULL || proto == EXT_PROTO_LASTERR_NULL)
+            ? "NULL"
+        : (proto == EXT_PROTO_LASTERR_0) ? "0" : "-1";
+    const char *code_src =
+        (proto == EXT_PROTO_ERRNO_NEG1 || proto == EXT_PROTO_ERRNO_NULL)
+            ? "errno"
+        : (proto == EXT_PROTO_WSA_NEG1) ? "WSAGetLastError()"
+                                        : "GetLastError()";
+    const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+    fprintf(out, "int32_t _xe%d = 0; if (_xv%d == %s) { _xe%d = (int32_t)%s; "
+                 "if (__builtin_expect(_xe%d == 0, 0)) fc_zero_err(\"",
+            tid, tid, sentinel, tid, code_src, tid);
+    emit_c_escaped(fn, (int)strlen(fn), out);
+    fprintf(out, "\", %d); } ", e->loc.line);
+    if (pay_void) {
+        fprintf(out, "(");
+        emit_type(ret_type, out);
+        fprintf(out, "){ .err = _xe%d }; })", tid);
+    } else {
+        fprintf(out, "_xe%d ? (", tid);
+        emit_type(ret_type, out);
+        fprintf(out, "){ .err = _xe%d } : (", tid);
+        emit_type(ret_type, out);
+        fprintf(out, "){ .err = 0, .value = _xv%d }; })", tid);
+    }
+}
+
 /* Returns true if this pattern produces any condition predicate — false for
    wildcard/binding patterns and for struct/or patterns whose subpatterns are
    all wildcard-only. Used to decide whether an arm needs an `if` at all. */
@@ -2903,7 +3013,12 @@ static void emit_expr(Expr *e, FILE *out) {
                             tid, tid, tid, tid);
                 else
                     fprintf(out, " (error code %%lld)\\n\", (long long)_uw%d.err); ", tid);
-                fprintf(out, "FC_ABORT(); } _uw%d.value; })", tid);
+                /* void! unwrap yields nothing: the statement expression ends
+                 * with the check and has void type. */
+                if (rt->result.inner && rt->result.inner->kind == TYPE_VOID)
+                    fprintf(out, "FC_ABORT(); } })");
+                else
+                    fprintf(out, "FC_ABORT(); } _uw%d.value; })", tid);
             } else if (is_null_sentinel(opt_type)) {
                 /* T*? → plain pointer, unwrap = null check */
                 fprintf(out, "({ ");
@@ -3043,27 +3158,23 @@ static void emit_expr(Expr *e, FILE *out) {
                 if (e->call.arg_count > 0) fprintf(out, ", ");
                 fprintf(out, "NULL)");
             } else if (fn_name) {
-                /* Extern call: cast cstr-aliased params to const char* for C headers,
-                 * and cast cstr/cstr? return values from char* back to uint8_t* */
+                /* Extern call: cast cstr-aliased params to const char* for C
+                 * headers, and cast cstr/cstr? return values from char* back
+                 * to uint8_t*. A protocol extern (from <protocol>) wraps the
+                 * raw return into the declared T! in place. */
                 Type *ret_type = (call_ft && call_ft->kind == TYPE_FUNC)
                     ? call_ft->func.return_type : NULL;
-                bool ret_is_cstr = ret_type && is_cstr_type(ret_type);
-                bool ret_is_cstr_opt = ret_type && ret_type->kind == TYPE_OPTION &&
-                    is_cstr_type(ret_type->option.inner);
-                bool ret_is_cstr_ptr = ret_type && ret_type->kind == TYPE_POINTER &&
-                    is_cstr_type(ret_type->pointer.pointee);
-                if (ret_is_cstr || ret_is_cstr_opt)
-                    fprintf(out, "(uint8_t*)");
-                else if (ret_is_cstr_ptr)
-                    fprintf(out, "(uint8_t**)");
-                fprintf(out, "%s(", fn_name);
-                for (int i = 0; i < e->call.arg_count; i++) {
-                    if (i > 0) fprintf(out, ", ");
-                    Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
-                        ? call_ft->func.param_types[i] : NULL;
-                    emit_extern_arg(e->call.args[i], pt, out);
-                }
-                fprintf(out, ")");
+                Decl *ext_decl = (e->call.resolved_callee &&
+                                  e->call.resolved_callee->kind == DECL_EXTERN)
+                    ? e->call.resolved_callee->decl : NULL;
+                ExternProtocol proto = ext_decl ? ext_decl->ext.protocol
+                                                : EXT_PROTO_NONE;
+                if (proto > EXT_PROTO_ERROR && ret_type &&
+                    ret_type->kind == TYPE_RESULT)
+                    emit_protocol_extern_call(e, fn_name, proto, call_ft,
+                                              ret_type, out);
+                else
+                    emit_raw_extern_call(e, fn_name, call_ft, ret_type, out);
             } else {
                 /* Fallback: emit normally */
                 emit_expr(e->call.func, out);
@@ -3526,9 +3637,14 @@ static void emit_expr(Expr *e, FILE *out) {
     }
 
     case EXPR_OK:
-        /* ok(v) — err = 0 is the ok tag. Always the struct repr. */
+        /* ok(v) — err = 0 is the ok tag. Always the struct repr. Bare `ok`
+         * (void! — no payload field) initializes the tag alone. */
         fprintf(out, "(");
         emit_type(e->type, out);
+        if (!e->ok_expr.value) {
+            fprintf(out, "){ .err = 0 }");
+            break;
+        }
         fprintf(out, "){ .err = 0, .value = ");
         emit_expr(e->ok_expr.value, out);
         fprintf(out, " }");
@@ -6038,7 +6154,12 @@ static void emit_eq_func(Type *t, FILE *out) {
         fprintf(out, ";\n");
         break;
     case TYPE_RESULT:
-        /* Equal iff same variant; ok payloads compared, err codes ARE the tag */
+        /* Equal iff same variant; ok payloads compared, err codes ARE the tag.
+         * void! has no payload — the tag comparison is the whole answer. */
+        if (t->result.inner && t->result.inner->kind == TYPE_VOID) {
+            fprintf(out, "    return a.err == b.err;\n");
+            break;
+        }
         fprintf(out, "    if (a.err != b.err) return false;\n");
         fprintf(out, "    if (a.err != 0) return true;\n");
         fprintf(out, "    return ");
@@ -6121,9 +6242,14 @@ static void emit_wrapper_bodies(WrapEmit *we) {
             if (!wrap_inner_complete(we, r->result.inner)) continue;
             fprintf(we->out, "struct fc_result_");
             emit_type_ident(r->result.inner, we->out);
-            fprintf(we->out, " { int32_t err; ");
-            emit_type(r->result.inner, we->out);
-            fprintf(we->out, " value; };\n");
+            if (r->result.inner && r->result.inner->kind == TYPE_VOID) {
+                /* void! — the payload-less result is the tag alone */
+                fprintf(we->out, " { int32_t err; };\n");
+            } else {
+                fprintf(we->out, " { int32_t err; ");
+                emit_type(r->result.inner, we->out);
+                fprintf(we->out, " value; };\n");
+            }
             we->res_done[i] = true;
             progress = true;
         }
@@ -6285,6 +6411,7 @@ static void collect_defines(Decl *d, CDefine *defs, int *count, int cap) {
 static bool g_needs_stdio;
 static bool g_needs_math;
 static bool g_needs_float;
+static bool g_needs_errno;   /* an errno-protocol extern call is reachable */
 /* g_backtraces / g_uses_error_name / g_errname_emitted are declared at the
  * top of the file — the result-unwrap emitter reads them. */
 
@@ -6350,7 +6477,8 @@ static const char *fmt_lambda_display(Arena *arena, const char *file, int line) 
 
 static void detect_features_expr(Expr *e) {
     if (!e) return;
-    if (g_needs_stdio && g_needs_math && g_needs_float) return; /* all found */
+    if (g_needs_stdio && g_needs_math && g_needs_float && g_needs_errno)
+        return; /* all found */
 
     switch (e->kind) {
     case EXPR_ERROR:   /* unreachable: error nodes never reach codegen */
@@ -6403,6 +6531,27 @@ static void detect_features_expr(Expr *e) {
         detect_features_expr(e->unary_postfix.operand);
         return;
     case EXPR_CALL:
+        /* A protocol extern call (from <protocol>) may need <errno.h> and,
+         * for the out-of-band code sources (errno / GetLastError / WSA),
+         * emits the err(T,0) guard (fc_zero_err → stderr). */
+        if (e->call.resolved_callee &&
+            e->call.resolved_callee->kind == DECL_EXTERN &&
+            e->call.resolved_callee->decl) {
+            switch (e->call.resolved_callee->decl->ext.protocol) {
+            case EXT_PROTO_ERRNO_NEG1:
+            case EXT_PROTO_ERRNO_NULL:
+                g_needs_errno = true;
+                g_needs_stdio = true;
+                break;
+            case EXT_PROTO_LASTERR_0:
+            case EXT_PROTO_LASTERR_NULL:
+            case EXT_PROTO_LASTERR_NEG1:
+            case EXT_PROTO_WSA_NEG1:
+                g_needs_stdio = true;
+                break;
+            default: break;
+            }
+        }
         detect_features_expr(e->call.func);
         for (int i = 0; i < e->call.arg_count; i++)
             detect_features_expr(e->call.args[i]);
@@ -6747,6 +6896,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_needs_stdio = false;
     g_needs_math = false;
     g_needs_float = false;
+    g_needs_errno = false;
     g_uses_error_name = false;
     g_errname_emitted = false;
     for (int i = 0; i < all_count; i++)
@@ -6787,6 +6937,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     if (g_needs_stdio || g_backtraces) fprintf(out, "#include <stdio.h>\n");
     if (g_needs_math)  fprintf(out, "#include <math.h>\n");
     if (g_needs_float) fprintf(out, "#include <float.h>\n");
+    if (g_needs_errno) fprintf(out, "#include <errno.h>\n");
 
     /* Emit #include for each unique from_lib in extern modules */
     for (int i = 0; i < from_lib_count; i++) {
@@ -6800,6 +6951,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (g_needs_stdio && strcmp(from_libs[i], "stdio.h") == 0) continue;
         if (g_needs_math  && strcmp(from_libs[i], "math.h") == 0) continue;
         if (g_needs_float && strcmp(from_libs[i], "float.h") == 0) continue;
+        if (g_needs_errno && strcmp(from_libs[i], "errno.h") == 0) continue;
         fprintf(out, "#include <%s>\n", from_libs[i]);
     }
     fprintf(out, "\n");

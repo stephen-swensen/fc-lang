@@ -1,0 +1,17 @@
+// A user function whose body produces bare ok / err(void, code) infers a
+// void! return — the wrapper shape stdlib fallible-void functions will use.
+let validate = (n: i32) ->
+    if n < 0 then err(void, 22) else ok
+
+let main = (args: str[]) ->
+    match validate(5) with
+    | ok -> assert(true)
+    | err(_) -> assert(false, "expected ok")
+    match validate(0 - 1) with
+    | ok -> assert(false, "expected err")
+    | err(22) -> assert(true)
+    | err(e) -> assert(false, "expected 22, got %d{e}")
+
+    // unwrap on the ok path is a plain void statement
+    validate(1)!
+    0

@@ -392,7 +392,21 @@ module_item      = let_decl
 
 (* --- extern ------------------------------------------------------- *)
 
-extern_decl      = "extern" , IDENT , [ "as" , IDENT ] , ":" , type_expr ;
+(* An extern function whose return type is a result (T!) must declare how   *)
+(* the C function signals failure: the error-protocol tail. The protocol    *)
+(* names the failure test and the code source; codegen wraps the raw C      *)
+(* return into T! at each call site. Sentinel tokens (-1 / 0 / null) are    *)
+(* protocol-local syntax, not expressions — "null" exists only here.        *)
+extern_decl      = "extern" , IDENT , [ "as" , IDENT ] , ":" , type_expr ,
+                   [ "from" , error_protocol ] ;
+
+error_protocol   = "errno" , "(" , ( "-1" | "null" ) , ")"     (* POSIX: errno after sentinel  *)
+                 | "status"                                    (* ret is the code; void! only  *)
+                 | "neg_errno"                                 (* ret < 0 is the raw code      *)
+                 | "hresult"                                   (* ret < 0 is the raw code      *)
+                 | "last_error" , "(" , ( "0" | "null" | "-1" ) , ")"  (* Win32 GetLastError    *)
+                 | "wsa_error" , "(" , "-1" , ")"              (* Winsock WSAGetLastError      *)
+                 ;
 
 extern_struct    = "extern" , "struct" , IDENT , [ "as" , IDENT ] , "="
                  , INDENT , struct_fields , DEDENT ;
@@ -454,7 +468,9 @@ type_postfix     = "*"                           (* pointer type:  T*     *)
                  ;
 
 type_atom        = builtin_type                  (* i32, str, cstr, ... *)
-                 | "void"
+                 | "void"                        (* takes only the "!" postfix: void! is the
+                                                    payload-less result (repr: the i32 tag alone);
+                                                    void? / void* / void[] are errors *)
                  | "error"                       (* i32 display alias for error codes *)
                  | "any" , "*"                   (* any*  — opaque pointer *)
                  | IDENT , [ "<" , type_arg_list , ">" ]   (* user-defined, possibly generic *)
@@ -801,7 +817,9 @@ some_expr        = "some" , "(" , expr , ")" ;
 none_expr        = "none" , "(" , type_expr , ")" ;
 
 (* ok(x) constructs the success case of a result T! (error code 0).      *)
-ok_expr          = "ok" , "(" , expr , ")" ;
+(* Bare `ok` (no parens) constructs the payload-less void! — the          *)
+(* expression twin of the bare `ok` pattern; no void value materializes.  *)
+ok_expr          = "ok" , [ "(" , expr , ")" ] ;
 
 (* err(T, code) constructs the failure case of a T! — T is the SUCCESS    *)
 (* payload type (type-anchored, like none(T)); code is a non-zero i32.    *)
@@ -871,7 +889,7 @@ pattern_atom     = "_"                                   (* wildcard           *
                  | STR_LIT                               (* string literal     *)
                  | [ "-" ] , INT_LIT                     (* integer literal, possibly negative *)
                  | "some" , "(" , pattern , ")"          (* some(pattern)      *)
-                 | "ok" , "(" , pattern , ")"            (* ok(pattern)        *)
+                 | "ok" , [ "(" , pattern , ")" ]        (* ok(pattern); bare `ok` matches void! only *)
                  | "err" , "(" , pattern , ")"           (* err(pattern) — pattern matches the i32 code *)
                  | IDENT , "(" , pattern , ")"           (* variant(pattern)   *)
                  | struct_destruct_pattern               (* { field = pat }    *)

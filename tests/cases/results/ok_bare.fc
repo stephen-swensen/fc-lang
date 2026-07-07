@@ -1,3 +1,7 @@
+// Bare `ok` (no parens) constructs the payload-less void! result —
+// the expression twin of the bare `ok` pattern.
 let main = (args: str[]) ->
     let r = ok
-    0
+    match r with
+    | ok -> 0
+    | err(_) -> 1

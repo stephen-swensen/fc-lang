@@ -1,0 +1,5 @@
+module m from "stdlib.h" =
+    extern getenv: (const cstr) -> cstr! from errno(-1)
+
+let main = (args: str[]) ->
+    0

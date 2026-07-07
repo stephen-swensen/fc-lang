@@ -1,0 +1,32 @@
+// void! — the payload-less result. Bare `ok` constructs it, err(void, code)
+// is the failure form, and the bare `ok` pattern matches it. No void value
+// exists anywhere: ok binds nothing, and both variants are just the tag.
+let main = (args: str[]) ->
+    let a = ok
+    assert(a.is_ok, "bare ok is ok")
+    assert(!a.is_err, "not err")
+
+    let b = err(void, 7)
+    assert(b.is_err, "err(void, 7) is err")
+    match b with
+    | ok -> assert(false, "expected err")
+    | err(7) -> assert(true)
+    | err(e) -> assert(false, "expected 7, got %d{e}")
+
+    // equality: same variant, codes ARE the tag
+    let c = ok
+    assert(a == c, "two oks are equal")
+    assert(a != b, "ok != err")
+    assert(b == err(void, 7), "same code equal")
+    assert(b != err(void, 8), "different codes differ")
+
+    // default(void!) = ok — zero-filled memory is the ok tag
+    let d = default(void!)
+    assert(d.is_ok, "default(void!) is ok")
+    assert(a == d, "ok == default")
+
+    // branch merge infers void! across bare ok / err
+    let pick = (fail: bool) -> if fail then err(void, 3) else ok
+    assert(pick(true).is_err, "err branch")
+    assert(pick(false).is_ok, "ok branch")
+    0

@@ -1,0 +1,6 @@
+let noop = (n: i32) ->
+    assert(n == n)
+
+let main = (args: str[]) ->
+    let r = ok(noop(1))
+    0

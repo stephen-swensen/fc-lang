@@ -486,6 +486,14 @@ static Type *parse_type(Parser *p) {
 
     if (t->kind == TOK_VOID) {
         advance_p(p);
+        /* `void` takes exactly one suffix: `!`. void! is the payload-less
+         * result (repr: the i32 tag alone); further suffixes then compose on
+         * the result as usual (void!?). A bare option, pointer, or slice of
+         * void stays illegal — void is not a value type. */
+        if (check(p, TOK_BANG)) {
+            advance_p(p);
+            return parse_type_suffix(p, type_result(p->arena, type_void()));
+        }
         return type_void();
     }
 
@@ -1792,7 +1800,16 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_OK: {
         advance_p(p);
-        expect(p, TOK_LPAREN);
+        /* Bare `ok` (no parens) constructs the payload-less void! result —
+         * the expression twin of the bare `ok` pattern (the `| empty`
+         * precedent). No void value materializes: the ok arm of void! has
+         * no payload at all. */
+        if (!check(p, TOK_LPAREN)) {
+            Expr *e = alloc_expr(p, EXPR_OK, loc);
+            e->ok_expr.value = NULL;
+            return e;
+        }
+        advance_p(p); /* ( */
         Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_OK, loc);
@@ -1914,6 +1931,14 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_VOID: {
+        /* void![N] {...} — slice literal with the payload-less result element
+         * type, mirroring the built-in type names (error[N]{...}). */
+        if (peek_at(p, 1)->kind == TOK_BANG &&
+            peek_at(p, 2)->kind == TOK_LBRACKET) {
+            advance_p(p); /* void */
+            advance_p(p); /* ! */
+            return parse_array_lit_body(p, type_result(p->arena, type_void()), loc);
+        }
         /* `void()` — the void-typed expression.  `void` alone (without the
          * trailing `()`) is still only valid in type position, so we require
          * the parentheses here and emit a targeted diagnostic otherwise. */
@@ -2691,10 +2716,16 @@ static Pattern *parse_pattern_atom(Parser *p) {
 
     if (check(p, TOK_OK)) {
         advance_p(p);
-        expect(p, TOK_LPAREN);
         pat->kind = PAT_OK;
-        pat->some_pat.inner = parse_pattern(p);
-        expect(p, TOK_RPAREN);
+        if (check(p, TOK_LPAREN)) {
+            advance_p(p);
+            pat->some_pat.inner = parse_pattern(p);
+            expect(p, TOK_RPAREN);
+        } else {
+            /* Bare `ok` — matches the payload-less ok of a void! result
+             * (pass2 rejects it on non-void results, and ok(<pat>) on void!). */
+            pat->some_pat.inner = NULL;
+        }
         return pat;
     }
 
@@ -3250,12 +3281,16 @@ static Decl *parse_module_decl(Parser *p) {
     expect(p, TOK_MODULE);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
 
-    /* Optional from "lib" clause */
+    /* Optional from "lib" clause. `expect` is non-fatal (error recovery):
+     * on a mismatch it reports and returns the offending token WITHOUT
+     * consuming, so gate the quote-stripping slice on the token kind —
+     * slicing a 1-char token by length-2 underflows the intern length. */
     const char *from_lib = NULL;
     if (check(p, TOK_FROM)) {
         advance_p(p);
         Token *lib_tok = expect(p, TOK_STRING_LIT);
-        from_lib = intern(p->intern, lib_tok->start + 1, lib_tok->length - 2);
+        if (lib_tok->kind == TOK_STRING_LIT)
+            from_lib = intern(p->intern, lib_tok->start + 1, lib_tok->length - 2);
     }
 
     /* Optional define "MACRO" "VALUE" clause (only valid with from) */
@@ -3266,9 +3301,11 @@ static Decl *parse_module_decl(Parser *p) {
         memcmp(current(p)->start, "define", 6) == 0) {
         advance_p(p);
         Token *macro_tok = expect(p, TOK_STRING_LIT);
-        define_macro = intern(p->intern, macro_tok->start + 1, macro_tok->length - 2);
+        if (macro_tok->kind == TOK_STRING_LIT)
+            define_macro = intern(p->intern, macro_tok->start + 1, macro_tok->length - 2);
         Token *value_tok = expect(p, TOK_STRING_LIT);
-        define_value = intern(p->intern, value_tok->start + 1, value_tok->length - 2);
+        if (value_tok->kind == TOK_STRING_LIT)
+            define_value = intern(p->intern, value_tok->start + 1, value_tok->length - 2);
     }
 
     expect(p, TOK_EQ);
@@ -3516,6 +3553,91 @@ static Decl *parse_namespace_decl(Parser *p) {
     return d;
 }
 
+/* Parse the error-protocol tail of an extern declaration: `from <protocol>`.
+ * The sentinel tokens (-1 / null / 0) are protocol-local syntax, not
+ * expressions — `null` in particular exists only here and does not introduce
+ * a null literal to the language. Returns EXT_PROTO_ERROR after reporting a
+ * malformed clause so pass1 skips the agreement checks (no cascade). */
+static ExternProtocol parse_extern_protocol(Parser *p) {
+    Token *t = current(p);
+    SrcLoc loc = loc_from_token(t);
+    loc.filename = p->filename;
+    if (t->kind != TOK_IDENT) {
+        diag_error(loc, "expected error protocol name after 'from' "
+            "(errno(-1), errno(null), status, neg_errno, hresult, "
+            "last_error(<sentinel>), wsa_error(-1)), got %s",
+            token_kind_name(t->kind));
+        return EXT_PROTO_ERROR;
+    }
+    const char *name = tok_intern(p, t);
+    advance_p(p);
+
+    /* Sentinel argument: -1, 0, or null. SENT_NONE = no parens present. */
+    enum { SENT_NONE, SENT_NEG1, SENT_ZERO, SENT_NULL, SENT_BAD } sent = SENT_NONE;
+    if (check(p, TOK_LPAREN)) {
+        advance_p(p);
+        Token *s = current(p);
+        if (s->kind == TOK_MINUS && peek_at(p, 1)->kind == TOK_INT_LIT &&
+            peek_at(p, 1)->length == 1 && peek_at(p, 1)->start[0] == '1') {
+            advance_p(p); advance_p(p);
+            sent = SENT_NEG1;
+        } else if (s->kind == TOK_INT_LIT && s->length == 1 && s->start[0] == '0') {
+            advance_p(p);
+            sent = SENT_ZERO;
+        } else if (s->kind == TOK_IDENT && strncmp(s->start, "null", 4) == 0 &&
+                   s->length == 4) {
+            advance_p(p);
+            sent = SENT_NULL;
+        } else {
+            diag_error(loc, "invalid protocol sentinel; expected -1, 0, or null");
+            sent = SENT_BAD;
+            /* leaf-bump so the item loop makes progress on garbage */
+            if (!check(p, TOK_RPAREN) && !check(p, TOK_NEWLINE) &&
+                !check(p, TOK_DEDENT) && !at_end_p(p))
+                advance_p(p);
+        }
+        expect(p, TOK_RPAREN);
+        if (sent == SENT_BAD) return EXT_PROTO_ERROR;
+    }
+
+    if (strcmp(name, "errno") == 0) {
+        if (sent == SENT_NEG1) return EXT_PROTO_ERRNO_NEG1;
+        if (sent == SENT_NULL) return EXT_PROTO_ERRNO_NULL;
+        diag_error(loc, "errno protocol needs its sentinel: errno(-1) or errno(null)");
+        return EXT_PROTO_ERROR;
+    }
+    if (strcmp(name, "last_error") == 0) {
+        if (sent == SENT_ZERO) return EXT_PROTO_LASTERR_0;
+        if (sent == SENT_NULL) return EXT_PROTO_LASTERR_NULL;
+        if (sent == SENT_NEG1) return EXT_PROTO_LASTERR_NEG1;
+        diag_error(loc, "last_error protocol needs its sentinel: "
+            "last_error(0), last_error(null), or last_error(-1)");
+        return EXT_PROTO_ERROR;
+    }
+    if (strcmp(name, "wsa_error") == 0) {
+        if (sent == SENT_NEG1) return EXT_PROTO_WSA_NEG1;
+        diag_error(loc, "wsa_error protocol takes exactly the -1 sentinel: wsa_error(-1)");
+        return EXT_PROTO_ERROR;
+    }
+    ExternProtocol bare = strcmp(name, "status") == 0    ? EXT_PROTO_STATUS
+                        : strcmp(name, "neg_errno") == 0 ? EXT_PROTO_NEG_ERRNO
+                        : strcmp(name, "hresult") == 0   ? EXT_PROTO_HRESULT
+                        : EXT_PROTO_ERROR;
+    if (bare == EXT_PROTO_ERROR) {
+        diag_error(loc, "unknown error protocol '%s'; valid protocols: errno(-1), "
+            "errno(null), status, neg_errno, hresult, last_error(<sentinel>), "
+            "wsa_error(-1)", name);
+        return EXT_PROTO_ERROR;
+    }
+    if (sent != SENT_NONE) {
+        diag_error(loc, "protocol '%s' takes no sentinel (the failure test is "
+            "fixed: %s)", name,
+            bare == EXT_PROTO_STATUS ? "ret != 0" : "ret < 0");
+        return EXT_PROTO_ERROR;
+    }
+    return bare;
+}
+
 static Decl *parse_extern_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
@@ -3592,6 +3714,13 @@ static Decl *parse_extern_decl(Parser *p) {
     }
     expect(p, TOK_COLON);
     Type *type = parse_type(p);
+    /* Optional error-protocol tail — required (checked in pass1) exactly when
+     * the declared return type is a result. */
+    ExternProtocol proto = EXT_PROTO_NONE;
+    if (check(p, TOK_FROM)) {
+        advance_p(p);
+        proto = parse_extern_protocol(p);
+    }
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
     d->kind = DECL_EXTERN;
     d->loc = loc;
@@ -3599,6 +3728,7 @@ static Decl *parse_extern_decl(Parser *p) {
     d->ext.name = name;
     d->ext.alias = alias;
     d->ext.type = type;
+    d->ext.protocol = proto;
     return d;
 }
 

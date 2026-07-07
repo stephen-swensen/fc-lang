@@ -1,0 +1,5 @@
+// Unwrapping an err void! aborts with the code in the message.
+let main = (args: str[]) ->
+    let r = err(void, 5)
+    r!
+    0

@@ -1,0 +1,22 @@
+// errno(null): ret == NULL → err(errno). Pointer payloads: err path via
+// fopen of a nonexistent file (ENOENT = 2 everywhere), ok path via malloc.
+module fio from "stdio.h" =
+    extern fopen: (const cstr, const cstr) -> any*! from errno(null)
+    extern fclose: (any*) -> void! from errno(-1)
+
+module mem from "stdlib.h" =
+    extern malloc: (usize) -> any*! from errno(null)
+    extern free as c_free: (any*) -> void
+
+let main = (args: str[]) ->
+    match fio.fopen(c"fc-definitely-nonexistent-file", c"r") with
+    | ok(h) ->
+        fio.fclose(h)!
+        assert(false, "expected fopen to fail")
+    | err(2) -> assert(true)
+    | err(e) -> assert(false, "expected ENOENT (2), got %d{e}")
+
+    match mem.malloc(64usize) with
+    | ok(p) -> mem.c_free(p)
+    | err(e) -> assert(false, "malloc(64) failed: %d{e}")
+    0

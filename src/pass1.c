@@ -655,6 +655,77 @@ static const char *make_qualified(InternTable *intern, const char *prefix, const
     return result;
 }
 
+/* Protocol / result-return agreement for extern function declarations
+ * (spec/result-type-design.md §C interop): a result return requires an error
+ * protocol, a protocol requires a result return, and the declared payload
+ * kind must fit the protocol — the sentinel must be comparable to the raw C
+ * return (-1/0 need an integer or void payload, null needs a pointer),
+ * `status` carries no payload at all (the return value IS the code), and
+ * neg_errno/hresult read the code out of a signed return. */
+static void validate_extern_protocol(Decl *d, const char *src_name) {
+    ExternProtocol proto = d->ext.protocol;
+    if (proto == EXT_PROTO_ERROR) return;  /* malformed clause already reported */
+    Type *ret = d->ext.type->func.return_type;
+    bool ret_result = ret && ret->kind == TYPE_RESULT;
+    if (proto == EXT_PROTO_NONE) {
+        if (ret_result)
+            diag_error(d->loc, "extern '%s' returns %s but declares no error "
+                "protocol; add `from <protocol>` after the type (errno(-1), "
+                "errno(null), status, neg_errno, hresult, last_error(<sentinel>), "
+                "wsa_error(-1))", src_name, type_name(ret));
+        return;
+    }
+    if (!ret_result) {
+        diag_error(d->loc, "extern '%s' declares an error protocol but returns "
+            "%s, not a result type (T!)", src_name,
+            ret ? type_name(ret) : "void");
+        return;
+    }
+    Type *pay = ret->result.inner;
+    bool pay_void = pay && pay->kind == TYPE_VOID;
+    bool pay_int = pay && type_is_integer(pay);
+    bool pay_sint = pay_int && type_is_signed(pay);
+    bool pay_ptr = pay && (pay->kind == TYPE_POINTER || pay->kind == TYPE_ANY_PTR);
+    switch (proto) {
+    case EXT_PROTO_ERRNO_NEG1:
+    case EXT_PROTO_LASTERR_NEG1:
+    case EXT_PROTO_WSA_NEG1:
+        if (!pay_void && !pay_sint)
+            diag_error(d->loc, "extern '%s': the -1 sentinel needs a signed "
+                "integer or void payload, got %s", src_name, type_name(pay));
+        break;
+    case EXT_PROTO_ERRNO_NULL:
+    case EXT_PROTO_LASTERR_NULL:
+        if (!pay_ptr)
+            diag_error(d->loc, "extern '%s': the null sentinel needs a pointer "
+                "payload, got %s", src_name, type_name(pay));
+        break;
+    case EXT_PROTO_STATUS:
+        if (!pay_void)
+            diag_error(d->loc, "extern '%s': the status protocol carries no "
+                "payload (the return value IS the error code); declare void!, "
+                "got %s", src_name, type_name(pay));
+        break;
+    case EXT_PROTO_NEG_ERRNO:
+        if (!pay_void && !pay_sint)
+            diag_error(d->loc, "extern '%s': neg_errno reads the code from a "
+                "negative return; the payload must be a signed integer or void, "
+                "got %s", src_name, type_name(pay));
+        break;
+    case EXT_PROTO_HRESULT:
+        if (!pay_void && !(pay && pay->kind == TYPE_INT32))
+            diag_error(d->loc, "extern '%s': hresult payload must be i32 (the "
+                "success-mode HRESULT) or void, got %s", src_name, type_name(pay));
+        break;
+    case EXT_PROTO_LASTERR_0:
+        if (!pay_void && !pay_int)
+            diag_error(d->loc, "extern '%s': the 0 sentinel needs an integer "
+                "or void payload, got %s", src_name, type_name(pay));
+        break;
+    default: break;
+    }
+}
+
 static void register_module_members(Decl *d, const char *mangle_prefix,
                                     const char *display_prefix,
                                     SymbolTable *members, InternTable *intern,
@@ -825,7 +896,15 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                         "extern constant '%s' cannot have %s type '%s'",
                         child->ext.name, reason, type_name(et));
                 }
+                if (child->ext.protocol != EXT_PROTO_NONE &&
+                    child->ext.protocol != EXT_PROTO_ERROR) {
+                    diag_error(child->loc, "extern constant '%s' cannot declare "
+                        "an error protocol — protocols apply to extern functions "
+                        "returning a result type (T!)", src_name);
+                }
             }
+            if (et && et->kind == TYPE_FUNC)
+                validate_extern_protocol(child, src_name);
             break;
         }
         case DECL_MODULE: {

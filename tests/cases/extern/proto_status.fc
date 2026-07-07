@@ -1,0 +1,14 @@
+// status: the return value IS the err tag (0 = ok) — a repr identity, no
+// adapter. strcmp drives both branches deterministically and portably; the
+// nonzero "code" is whatever the C library returned, passed through raw.
+module s from "string.h" =
+    extern strcmp: (const cstr, const cstr) -> void! from status
+
+let main = (args: str[]) ->
+    match s.strcmp(c"same", c"same") with
+    | ok -> assert(true)
+    | err(e) -> assert(false, "equal strings gave status %d{e}")
+
+    let r = s.strcmp(c"aaa", c"bbb")
+    assert(r.is_err, "unequal strings give a nonzero status")
+    0

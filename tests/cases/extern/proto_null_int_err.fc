@@ -1,0 +1,5 @@
+module m from "stdlib.h" =
+    extern abs: (i32) -> i32! from errno(null)
+
+let main = (args: str[]) ->
+    0

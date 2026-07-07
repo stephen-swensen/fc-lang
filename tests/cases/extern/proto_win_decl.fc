@@ -1,0 +1,11 @@
+// Windows protocols parse and validate on every platform; the adapter (and
+// its GetLastError()/WSAGetLastError() reference) is emitted only at call
+// sites, so declaring without calling stays portable C.
+module w from "stdlib.h" =
+    extern atoi as le_null: (const cstr) -> any*! from last_error(null)
+    extern atoi as le_zero: (const cstr) -> u32! from last_error(0)
+    extern atoi as le_neg: (const cstr) -> i32! from last_error(-1)
+    extern atoi as wsa: (const cstr) -> i32! from wsa_error(-1)
+
+let main = (args: str[]) ->
+    0

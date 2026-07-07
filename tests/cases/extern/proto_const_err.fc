@@ -1,0 +1,5 @@
+module m from "stdlib.h" =
+    extern EOF as c_eof: i32 from status
+
+let main = (args: str[]) ->
+    0

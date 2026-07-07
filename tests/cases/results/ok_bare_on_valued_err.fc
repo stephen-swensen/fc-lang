@@ -1,0 +1,5 @@
+let main = (args: str[]) ->
+    let r = ok(5)
+    match r with
+    | ok -> 1
+    | err(_) -> 0
