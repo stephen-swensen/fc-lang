@@ -239,6 +239,22 @@ module io =
         map_void(st.mkdir(alloca((cstr) path), 493))
 #end
 
+    // Creates a directory, treating an already-existing one as success.
+    // Where mkdir surfaces err(file.exists) when the path is already there,
+    // ensure_dir folds that into ok — so the only err is a genuine failure
+    // (file.denied, file.no_space, ...). Idempotent: this is the call for
+    // "make sure this directory exists before I write into it", safe to run on
+    // every launch. Creates one level only, like mkdir — build a nested path
+    // by ensuring each ancestor in turn.
+    // path: const str — directory path to create if missing.
+    // returns: void! — ok if the directory now exists (freshly created or
+    //   already present); err only on a real failure.
+    let ensure_dir = (path: const str) ->
+        match mkdir(path) with
+        | ok -> ok
+        | err(file.exists) -> ok
+        | err(e) -> err(void, e)
+
     // Checks whether a file or directory exists at path.
     // path: const str — file path to check.
     // returns: bool — true if the path exists.

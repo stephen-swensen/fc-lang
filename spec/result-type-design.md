@@ -858,6 +858,19 @@ fail the build.
   entire tree was three stdlib tests (best-effort `io.remove` cleanup → `let _`) and the
   demos' highscore close/mkdir calls — evidence the rule's cost is near zero while the demos
   audit found it catching real drops (furl discarded every HTTP send result).
+- **Follow-up (2026-07-08), `io.ensure_dir`:** migrating the wolf-fc port surfaced that the
+  `mkdir`-ensure discard was two patterns wearing one spelling. Genuine best-effort (a diag
+  log's `flush`/`sync`, deleting a stale screenshot) is correctly `let _ =`. But
+  `let _ = mkdir(dir)` on a "make sure this dir exists" path swallows *every* failure —
+  including a real `denied`/`no_space` — to ignore the expected `err(file.exists)`; the drop
+  reads as deliberate while hiding real errors, and where there is no downstream gate (e.g. a
+  helper that then returns `true` unconditionally) the failure vanishes. The fix is a stdlib
+  affordance, not new discard syntax: `ensure_dir` folds `file.exists` into `ok` and surfaces
+  everything else, so the call becomes an honest `void!` the caller can `?`/`!`/match. This is
+  the general principle for the discard rule's ergonomic pressure — answer it with an API that
+  returns a meaningful result, not with a quieter way to drop one. (`let _ =` stays the idiom
+  for the truly-don't-care case; a `discard` keyword was considered — Nim's exact-rule
+  precedent — and held in reserve, since `let _ =` already covers it without a second spelling.)
 
 ### Empty match arms — REJECTED (adopted briefly, rolled back same day)
 

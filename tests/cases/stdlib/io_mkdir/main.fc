@@ -14,7 +14,24 @@ let main = (args: str[]) ->
     | ok -> return 1
     | err(e) -> assert(e == io.file.exists)
 
-    // Should be able to create a file inside it
+    // ensure_dir folds file.exists into ok — idempotent on an existing dir,
+    // so this unwrap does NOT abort even though the directory is already there.
+    io.ensure_dir(dir)!
+
+    // ensure_dir also creates a missing directory...
+    let dir2 = alloca("%s{tmp}/fc_test_ensure_dir")
+    io.ensure_dir(dir2)!
+    assert(io.exists(dir2))
+    // ...and stays ok on a repeat call.
+    io.ensure_dir(dir2)!
+
+    // A genuine failure still surfaces: creating a directory whose parent is
+    // missing errors (file.not_found), it is not folded away like file.exists.
+    match io.ensure_dir(alloca("%s{tmp}/fc_test_ed_absent/child")) with
+    | ok -> return 3
+    | err(_) -> void()
+
+    // Should be able to create a file inside the first dir
     match io.open(file, "w") with
     | ok(f) ->
         io.write("hello", f)
@@ -24,6 +41,7 @@ let main = (args: str[]) ->
     // Clean up
     io.remove(file)!
     c.rmdir(alloca(c"%s{dir}"))
+    c.rmdir(alloca(c"%s{dir2}"))
 
     0
 
