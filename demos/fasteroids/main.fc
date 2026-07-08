@@ -815,7 +815,7 @@ let load_high_score = () ->
         | ok(fp) ->
             let mut buf = u8[32] { }
             io.read(buf, 32, fp)
-            let _ = io.close(fp)  // best-effort: contents already read
+            discard io.close(fp)  // best-effort: contents already read
             match text.parse_i32((const str) buf) with
             | ok(v) -> v
             | err(_) -> 0
@@ -825,11 +825,11 @@ let load_high_score = () ->
 let save_high_score = (score: i32) ->
     match sys.home_dir() with
     | some(hd) ->
-        let _ = io.mkdir(alloca("%s{hd}/.fasteroids"))  // may already exist
+        discard io.mkdir(alloca("%s{hd}/.fasteroids"))  // may already exist
         match io.open(alloca("%s{hd}/.fasteroids/highscore.txt"), "w") with
         | ok(fp) ->
             io.write("%d{score}\n", fp)
-            let _ = io.close(fp)  // best-effort: a lost high score is not an error
+            discard io.close(fp)  // best-effort: a lost high score is not an error
             return
         | err(_) -> return
     | none -> return

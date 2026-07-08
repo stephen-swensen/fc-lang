@@ -868,9 +868,33 @@ fail the build.
   affordance, not new discard syntax: `ensure_dir` folds `file.exists` into `ok` and surfaces
   everything else, so the call becomes an honest `void!` the caller can `?`/`!`/match. This is
   the general principle for the discard rule's ergonomic pressure — answer it with an API that
-  returns a meaningful result, not with a quieter way to drop one. (`let _ =` stays the idiom
-  for the truly-don't-care case; a `discard` keyword was considered — Nim's exact-rule
-  precedent — and held in reserve, since `let _ =` already covers it without a second spelling.)
+  returns a meaningful result, not with a quieter way to drop one.
+- **Follow-up (2026-07-08), the `discard` keyword — ADOPTED & IMPLEMENTED** (1897 tests green
+  gcc+clang + LSP): `discard expr` evaluates its operand for side effects and yields `void`.
+  Two jobs: (1) the explicit result discard (`discard io.close(f)`), and (2) — the deciding
+  one — voiding a **value-returning tail** so a block needs no trailing `void()` (the
+  `io.write(...)` × N then `void()` shape was ~39 sites in the wolf-fc port alone; `io.write`
+  returns `i64`, so `let _ =` can't help a tail — a `let` isn't a tail expression). Precedent:
+  Nim's `discard`, which pairs with the exact statement-discard-is-an-error rule FC adopted.
+  Modeled on `defer`/`return`: a prefix keyword parsed in `parse_block_item` (so it works in
+  statement, branch, and tail positions but never as a nested sub-expression), `EXPR_DISCARD`
+  with one operand, typed `void`, emitted `(void)(operand)`. Redundancy guard: operand must be
+  non-void/non-never (`discard void()` errors "nothing to discard"), mirroring the `!`/guard
+  "must mean something" rule. **Family placement (the load-bearing decision):** `discard` is a
+  per-value operator alongside `!`/`?`, NOT a block-scoped mode like `checked`/`unguarded`. The
+  user raised the consistency question — those DO take blocks and govern everything inside. The
+  line, drawn from the spec's own rules for that family: block-markers **select among ≥2 real
+  runtime behaviors** (wrap vs. trap; bounds-check vs. skip) and **must change emitted code**
+  (the redundancy rule). A dropped result has exactly ONE runtime behavior, and a `discard`
+  region would emit byte-identical C to per-site `discard` — it would only silence a
+  *diagnostic* across a span, re-opening the bulk-silent-failure hole the rule closes. So
+  `discard` voids exactly the one expression it prefixes and never reaches into a block. `let _
+  =` stays legal (can't remove wildcard let-bindings) but `discard` is the blessed effect-
+  discard; the discard-rule diagnostic now names `discard` first. Migrated: stdlib (no `let _
+  =` sites), all 3 highscore demos (`let _ =`→`discard`), wolf-fc (~39 tail voids + best-effort
+  sites). Tests: results/discard_keyword (+ discard_void_err); spec §Results cannot be silently
+  discarded rewritten (three escapes; unary-not-region rationale); examples.fc demo; fc.vim +
+  tmLanguage keyword lists.
 
 ### Empty match arms — REJECTED (adopted briefly, rolled back same day)
 

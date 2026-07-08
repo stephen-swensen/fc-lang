@@ -2979,13 +2979,16 @@ A result in **statement position** — anywhere its value is dropped without bei
 io.close(f)                 // error: void! result discarded: a dropped result
                             // silently loses its failure; match on it, propagate
                             // with '?', unwrap with '!', or discard explicitly
-                            // with 'let _ = ...'
+                            // with 'discard ...' (or 'let _ = ...')
 ```
 
-The discarded positions are the non-tail statements of any block, the tail of a `loop` or `for` body (discarded every iteration), and the then-branch of an else-less `if`. Every observing form satisfies the rule — `match`, `x?`, `x!`, `.is_ok`/`.is_err`, binding with `let` — and two deliberate escapes exist:
+The discarded positions are the non-tail statements of any block, the tail of a `loop` or `for` body (discarded every iteration), and the then-branch of an else-less `if`. Every observing form satisfies the rule — `match`, `x?`, `x!`, `.is_ok`/`.is_err`, binding with `let` — and three deliberate escapes exist:
 
-- **`let _ = fallible()`** — the explicit discard, for best-effort calls whose failure is genuinely ignorable (removing a leftover temp file, closing a handle after the data is already read). The intent is visible at the call site.
+- **`discard fallible()`** — the explicit discard, for best-effort calls whose failure is genuinely ignorable (removing a leftover temp file, closing a handle after the data is already read). `discard expr` evaluates its operand for side effects and yields `void`; the intent is visible at the call site. It belongs to the per-value operator family alongside `!` and `?` — one value at a time, never a region (see below).
+- **`let _ = fallible()`** — the same discard spelled as a binding. `discard` is preferred for a whole-value effect-discard; `let _ =` remains natural where you are already destructuring or binding.
 - **`defer close(f)`** — `defer` discards by contract (§Defer): cleanup at scope exit is best-effort by nature. A caller who cares writes `close(f)?` before the scope ends.
+
+Because `discard` yields `void`, it does double duty: a value-returning call in **tail** position — say the last of several `io.write` calls in a `match` arm — is voided by prefixing `discard`, so the block needs no trailing `void()`. `discard` is a strictly unary value operator, not a block-scoped mode like `unguarded`/`checked`: it voids exactly the one expression it prefixes and never reaches inside a block to silence the checks on the statements there (each dropped failure is still acknowledged individually — the whole point of the rule). Discarding an operand that already produces no value (`discard void()`) is itself an error, mirroring the requirement that `!` and guard markers must mean something wherever they appear.
 
 Only results are guarded. A plain value in statement position — a byte count from `write`, an ignored return — stays legal, C-style: values are data you may not need, results are the error channel. (Precedent: Zig makes discarding an error union a hard error with `_ =` as the escape; Rust warns via `#[must_use]`. FC has no warning severity, and this is important enough to fail the build.)
 

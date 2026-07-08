@@ -411,6 +411,9 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
     case EXPR_DEFER:
         pretaint_walk(scope, e->defer_expr.value, changed);
         break;
+    case EXPR_DISCARD:
+        pretaint_walk(scope, e->discard_expr.value, changed);
+        break;
     case EXPR_BINARY:
         pretaint_walk(scope, e->binary.left, changed);
         pretaint_walk(scope, e->binary.right, changed);
@@ -664,6 +667,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
         return false;
     case EXPR_RETURN:       return e->return_expr.value && expr_refs_self(e->return_expr.value, self);
     case EXPR_BREAK:        return e->break_expr.value && expr_refs_self(e->break_expr.value, self);
+    case EXPR_DISCARD:      return expr_refs_self(e->discard_expr.value, self);
     /* Other forms (literals, nested EXPR_FUNC, struct/tuple/slice literals, …) do
        not contribute a self-recursive call to a value position we order against;
        treat them as self-free. */
@@ -1159,7 +1163,7 @@ static void check_result_discard(Expr *stmt, Type *t) {
     Expr *site = discard_site(stmt);
     diag_error(site->loc, "%s result discarded: a dropped result silently loses its "
         "failure; match on it, propagate with '?', unwrap with '!', or discard "
-        "explicitly with 'let _ = ...'", type_name(t));
+        "explicitly with 'discard ...' (or 'let _ = ...')", type_name(t));
 }
 
 /* tail_used: whether the last statement's value flows onward (function return
@@ -2774,6 +2778,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_DEFER:
         ok &= validate_generic_body(e->defer_expr.value, arena, type_params, bindings, ntp, frame);
         break;
+    case EXPR_DISCARD:
+        ok &= validate_generic_body(e->discard_expr.value, arena, type_params, bindings, ntp, frame);
+        break;
     case EXPR_SOME:
         ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, frame);
         break;
@@ -2931,6 +2938,8 @@ static bool ccf_walk(Expr *e, bool in_loop) {
         return ccf_walk(e->err_expr.code, in_loop);
     case EXPR_DEFER:
         return ccf_walk(e->defer_expr.value, in_loop);
+    case EXPR_DISCARD:
+        return ccf_walk(e->discard_expr.value, in_loop);
     case EXPR_LET:
         return ccf_walk(e->let_expr.let_init, in_loop);
     case EXPR_LET_DESTRUCT:
@@ -3179,6 +3188,8 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
         return guard_subtree_has_effect(e->break_expr.value);
     case EXPR_DEFER:
         return guard_subtree_has_effect(e->defer_expr.value);
+    case EXPR_DISCARD:
+        return guard_subtree_has_effect(e->discard_expr.value);
     case EXPR_ASSIGN:
         return guard_subtree_has_effect(e->assign.target) ||
                guard_subtree_has_effect(e->assign.value);
@@ -6563,6 +6574,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (expr_contains_control_flow(e->defer_expr.value)) {
             diag_error(e->loc, "deferred expression must not contain return, break, "
                 "continue, or '?' propagation");
+        }
+        e->type = type_void();
+        return e->type;
+    }
+
+    case EXPR_DISCARD: {
+        /* Evaluate the operand for its side effects and yield void. This is the
+         * explicit discard for a result (like `let _ =`) and also voids a value-
+         * returning tail so a block needs no trailing `void()`. Redundant when
+         * the operand already produces no value — that is an error, mirroring the
+         * `!`/guard "must mean something" rule. */
+        Type *vt = check_expr(ctx, e->discard_expr.value);
+        if (vt && (vt->kind == TYPE_VOID || vt->kind == TYPE_NEVER)) {
+            diag_error(e->loc, "nothing to discard: this expression already "
+                "produces no value");
         }
         e->type = type_void();
         return e->type;

@@ -33,6 +33,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_CONTINUE]     = "'continue'",
     [TOK_RETURN]       = "'return'",
     [TOK_DEFER]        = "'defer'",
+    [TOK_DISCARD]      = "'discard'",
     [TOK_SOME]         = "'some'",
     [TOK_TRUE]         = "'true'",
     [TOK_FALSE]        = "'false'",

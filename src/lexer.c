@@ -117,6 +117,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"continue",  8,  TOK_CONTINUE},
         {"return",    6,  TOK_RETURN},
         {"defer",     5,  TOK_DEFER},
+        {"discard",   7,  TOK_DISCARD},
         {"some",      4,  TOK_SOME},
         {"true",      4,  TOK_TRUE},
         {"false",     5,  TOK_FALSE},

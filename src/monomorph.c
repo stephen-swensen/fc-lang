@@ -509,6 +509,9 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
     case EXPR_DEFER:
         discover_in_expr(e->defer_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
         return;
+    case EXPR_DISCARD:
+        discover_in_expr(e->discard_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
+        return;
     case EXPR_INTERP_STRING:
         for (int i = 0; i < e->interp_string.segment_count; i++) {
             if (!e->interp_string.segments[i].is_literal)
