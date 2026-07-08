@@ -44,12 +44,16 @@ truth**; don't re-litigate here. Remaining follow-ups, in order:
    expression + pattern, repr = lone `int32_t`, `status` is a repr identity); raw code
    passthrough, no arithmetic; call sites wrapped inline (no adapter fns, variadics free).
    Tests `extern/proto_*` + `results/void_result_*`; spec §Extern error protocols + §`void!`.
-4. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
-   the one remaining follow-up; lands on this branch before merge into `develop`. Consumes
-   items 1 and 3 (externs move to `T!`/`void!` via protocols; wrappers propagate with `x?`). The errno accessor shim
-   (`errno` is a macro, not a symbol) shrinks to the irregular-tail wrappers (`readdir`,
-   `getpriority`); optionally per-platform named errno const groups behind the
-   conditional-compilation flags.
+4. **Stdlib migration** — ✅ IMPLEMENTED 2026-07-07 (design record: design doc §Stdlib error
+   contract): operations return `T!`/`void!` via protocol externs, predicates stay `bool`,
+   absence stays `T?`; wrappers map branchable platform codes to curated named conditions
+   (`io.file.*`, `net.conn.*`, `net.dns.*`, `text.parse.*` — the latter all-named, fixing the
+   invisible-overflow and i64-truncation holes in `parse_*`) with raw passthrough for the
+   uncurated tail; `read_char` is the `u8?!` showcase; `read`/`write` stay raw counts. The
+   errno accessor shim works via a scoped lexer/parser change: the extern C-name position
+   admits `__` identifiers (with mandatory `as` alias) so `__errno_location`/`__error` are
+   declarable (grammar note + spec §Reserved identifiers; tests `extern/dunder_*`). Spec
+   Part 9 updated; demos migrated; tests `stdlib/*` reworked + `stdlib/net_error_paths`.
 
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 

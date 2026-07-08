@@ -6,16 +6,14 @@ let main = (args: str[]) ->
     let path = alloca("%s{tmp}/fc_test_eof.txt")
 
     // Write a small file
-    let f = io.open(path, "w")
-    match f with
-    | some(wf) ->
+    match io.open(path, "w") with
+    | ok(wf) ->
         io.write("hi", wf)
-        io.close(wf)
-    | none -> return 1
+        io.close(wf)!
+    | err(_) -> return 1
 
-    let f2 = io.open(path, "r")
-    match f2 with
-    | some(rf) ->
+    match io.open(path, "r") with
+    | ok(rf) ->
         // Not at EOF yet
         assert(io.eof(rf) == false)
 
@@ -26,8 +24,8 @@ let main = (args: str[]) ->
         // After reading past end, eof should be true
         assert(io.eof(rf) == true)
 
-        io.close(rf)
-    | none -> return 2
+        io.close(rf)!
+    | err(_) -> return 2
 
-    io.remove(path)
+    io.remove(path)!
     0

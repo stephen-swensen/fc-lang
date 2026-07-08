@@ -7,20 +7,22 @@ let main = (args: str[]) ->
     let file = alloca("%s{tmp}/fc_test_mkdir/test.txt")
 
     // Create a directory
-    assert(io.mkdir(dir) == true)
+    io.mkdir(dir)!
 
-    // Creating again should fail (already exists)
-    assert(io.mkdir(dir) == false)
+    // Creating again fails with the named condition
+    match io.mkdir(dir) with
+    | ok -> return 1
+    | err(e) -> assert(e == io.file.exists)
 
     // Should be able to create a file inside it
     match io.open(file, "w") with
-    | some(f) ->
+    | ok(f) ->
         io.write("hello", f)
-        io.close(f)
-    | none -> return 1
+        io.close(f)!
+    | err(_) -> return 2
 
     // Clean up
-    io.remove(file)
+    io.remove(file)!
     c.rmdir(alloca(c"%s{dir}"))
 
     0

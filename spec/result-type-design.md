@@ -731,6 +731,100 @@ means — `match alloc(...) with | some(p) -> … | none -> err(T, …)`, or `!`
 forced by allocation; it enters only if the genuinely multi-reason modules (`io`, `net`) want
 named conditions, decided when the migration reaches them.
 
+## Stdlib error contract: named conditions at the wrapper boundary — ADOPTED 2026-07-07
+
+*Fifth design pass on this branch, decided at the start of the stdlib migration. The question:
+do the stdlib's public wrappers hand callers raw platform codes (the passthrough the extern
+machinery produces), or map them to declared FC errors? Decided in discussion 2026-07-07:
+**named conditions, curated, with raw fallthrough**. This exercises the door the
+code-organization section left open ("translation stays available to the stdlib where a named
+contract is worth it") — it does not revise the machinery, which stays passthrough.*
+
+### The decisive argument
+
+Raw platform codes **cannot be pattern-matched portably in FC at all.** Match patterns need
+compile-time constants; the only compile-time error constants FC has are declared ones. A
+caller wanting `| err(<connection refused>) -> retry()` against a passthrough `std::net` has no
+way to write it — `ECONNREFUSED` is 111 on Linux, 61 on macOS, 10061 on Windows, and an extern
+const (whose value arrives from headers at C-compile time) cannot appear in a pattern. Even C
+never asks anyone to match raw numbers: portable C matches `errno == ECONNRESET`, a
+platform-resolved *name*. Somebody must own the name table; the stdlib writes it once or every
+user writes it badly. The stdlib is also already FC's portability layer (winsock-vs-POSIX,
+`_mkdir`-vs-`mkdir`) — raw codes would leak per-platform numbering through the exact seam the
+wrappers exist to seal (`list_dir` would yield GetLastError codes on Windows and errno on
+POSIX from the same FC function).
+
+### Precedent landscape
+
+- **Zig** translates totally (`std.posix` switches every errno into named sets) with an
+  `unexpectedErrno` dead end for unmapped codes — a known wart.
+- **Rust** is a hybrid: `io::Error` carries the raw OS code *and* a curated portable
+  `ErrorKind` (`Uncategorized` tail); you match kinds, the number survives for diagnostics.
+- **Go** matches named sentinels (`errors.Is(err, fs.ErrNotExist)`) over a preserved raw
+  `syscall.Errno`.
+- **C** itself: portable code matches E-*names*; the numbers were never the interface.
+
+Rust and Go keep both channels because their error is a struct; FC's `err` is one `i32`, so
+each value is either the named code or the raw one.
+
+### The decision: curated names, raw fallthrough
+
+- **Extraction stays automated:** externs declare protocols (`from errno(-1)` etc.) exactly as
+  designed; that machinery's passthrough output is the *input* to the wrapper's map.
+- **The lowest FC wrapper maps once**, via a private cold-path `map_err` that runs only on
+  failure; everything above propagates with `?` verbatim. Mapping never happens twice.
+- **Curation principle:** a condition gets a name only if a caller plausibly *branches* on it
+  (ENOENT drives create-if-missing; ECONNREFUSED/EAGAIN drive retry loops). Everything else
+  falls through **raw** — the code-space partition makes the result self-describing (≥ 65536:
+  named FC condition, matchable, `error_name`/`--backtraces` render it; < 65536: platform
+  original, print it, per-call provenance). No catch-all `other` code: that would destroy the
+  number irrecoverably for the tail, forfeiting the one fidelity property worth keeping. A
+  name added later is non-breaking (codes are not build-stable anyway).
+- **No hand-maintained numbers:** the map compares against extern consts
+  (`extern ECONNREFUSED as refused: i32`), so the platform's own headers supply the values at
+  C-compile time; the per-OS `#if` split handles `WSAE*` spellings. The table cannot rot.
+- **Group naming:** groups nest inside their module and are named for the failing *domain*
+  (`error file` in io → `io.file.not_found`; `error conn`/`error dns` in net; `error parse`
+  in text) — a group is a module, so `error net` inside `module net` would collide/stutter.
+- **A module with zero declared errors is the model working**, not a gap: io's failures are
+  all platform-coded, so io names only the branchable few and declares nothing io-specific
+  beyond them.
+
+### Scope decisions (same discussion)
+
+- **Operations → results** (`open`, `close`, `flush`, `sync`, `seek`, `tell`, `remove`,
+  `rename`, `mkdir`, `read_all`, `list_dir`; net's lifecycle/transfer calls). **Predicates
+  stay `bool`** (`exists`, `can_read`, `can_write`, `eof`) — false is an answer, not a
+  failure. **Absence stays `T?`** (`env`, `temp_dir`, `home_dir`, `index_of`, `data`'s
+  get/pop). `math`/`random`/`data` are untouched.
+- **`read_char` → `u8?!`** — the composition showcase: `ok(some(b))` byte, `ok(none)` EOF,
+  `err(e)` real error (`fgetc` is the irregular tail; hand-wrapped via `ferror` + the errno
+  accessor).
+- **`parse_i32/i64/f32/f64` → `T!`** with `error parse = | invalid | overflow | too_long` —
+  the Rust/Zig school (parse failure has reasons); fixes the pre-existing holes where
+  overflow was invisible (`ERANGE` ignored) and `parse_i32` silently truncated the i64.
+  All parse errors are FC-judged, so this module is all-named, no passthrough.
+- **`read`/`write` stay raw byte counts** — partial I/O is data, not an error, and
+  `fread`/`fwrite` have no sentinel for a protocol to test. A `write_all: void!` convenience
+  is an open door, not this migration.
+- **`close`/`flush` → `void!`** — `fclose` failure is real (buffered writes lost). `defer
+  close(f)` keeps compiling (defer discards by contract — the honest best-effort-cleanup
+  reading); a caller who cares writes `close(f)?`.
+- **Windows `FindFirstFileA` stays hand-wrapped** (pointer return with `INVALID_HANDLE_VALUE`
+  sentinel — the `-1`-sentinel protocols correctly demand integer payloads), reading
+  `GetLastError()` directly and mapping through a Win32-specific table. The irregular tail
+  working as designed.
+
+### Rejected alternatives (stdlib contract)
+
+- **Raw passthrough as the public contract** (the initial migration sketch) — founders on the
+  match-cliff above; portability of error *handling* is the wrappers' job.
+- **Total mapping with a catch-all** (`io.other`) — Zig's `unexpectedErrno` wart; destroys
+  the raw number for the unmapped tail.
+- **Per-platform named errno const groups for callers to match** (the doc's earlier optional
+  follow-up) — pushes the mapping table to every consumer, multiplied per platform, and
+  extern consts still can't appear in patterns.
+
 ## Follow-ups (in order)
 
 1. **Implementation** of `T!` per this document, with tests (new `tests/cases/results/`
@@ -751,10 +845,17 @@ named conditions, decided when the migration reaches them.
    result mapping" above (implementation notes at the end of that section). Tests in
    `tests/cases/extern/proto_*` and `tests/cases/results/void_result_*`; spec §Extern error
    protocols + §`void!`; grammar `error_protocol` / `void` type-atom note / bare-`ok` forms.
-5. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
-   trails the feature, lands on this branch before merge into `develop`. Consumes items 2
-   and 4: externs move to `T!`/`void!` returns via protocols; wrappers propagate with `x?`.
-   `alloc` is explicitly *not* in scope — it stays `T?` (see "`alloc` stays `T?`" above).
+5. **Stdlib migration** — ✅ DESIGNED 2026-07-07 (see "Stdlib error contract" above),
+   ✅ IMPLEMENTED 2026-07-07: io/net operations to `T!`/`void!` via protocol externs with
+   curated named-condition mapping (`error file` in io; `error conn`/`error dns` in net),
+   `text.parse_*` to `T!` with the all-named `error parse` (fixing invisible ERANGE overflow
+   and `parse_i32`'s silent i64 truncation), `read_char` to `u8?!` (hand-wrapped via
+   `ferror` + errno accessor). Enabler: the extern C-name position now admits `__`
+   identifiers with a mandatory `as` alias (lexer lookbehind + parser check; grammar +
+   spec §Reserved identifiers; tests `extern/dunder_*`) so `__errno_location`/`__error` are
+   declarable. Predicates stay `bool`; `read`/`write` stay raw counts; `alloc` stays `T?`
+   (see above). Spec Part 9 documents the contract; stdlib tests reworked with err-path
+   coverage (+ `stdlib/net_error_paths`); all five demos migrated.
 
 ## Revisit conditions
 

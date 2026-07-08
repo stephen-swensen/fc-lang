@@ -1,0 +1,29 @@
+import net from std::
+
+// The stdlib error contract: branchable platform failures arrive as named
+// FC conditions (net.conn.*), portable across POSIX errno and WSA codes.
+let main = (args: str[]) ->
+    // Grab a loopback port, then free it by closing the listener.
+    let server = net.open_tcp()!
+    net.set_reuse_addr(server)!
+    net.bind_addr(server, net.make_addr(net.inaddr_loopback, 0u16))!
+    net.listen(server, 1)!
+    let port = net.local_port(server)!
+
+    // in_use: a second socket binding the same port without SO_REUSEADDR.
+    let dup = net.open_tcp()!
+    match net.bind_addr(dup, net.make_addr(net.inaddr_loopback, port)) with
+    | ok -> return 1
+    | err(e) -> assert(e == net.conn.in_use)
+    net.close(dup)!
+
+    net.close(server)!
+
+    // refused: nothing listens on that port anymore.
+    let client = net.open_tcp()!
+    match net.connect_addr(client, net.make_addr(net.inaddr_loopback, port)) with
+    | ok -> return 2
+    | err(e) -> assert(e == net.conn.refused)
+    net.close(client)!
+
+    0

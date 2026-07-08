@@ -7,27 +7,33 @@ let main = (args: str[]) ->
 
     // Write a tiny known payload.
     match io.open(path, "w") with
-    | none -> return 1
-    | some(wf) ->
+    | err(_) -> return 1
+    | ok(wf) ->
         io.write("ab", wf)
-        io.close(wf)
+        io.close(wf)!
 
     match io.open(path, "r") with
-    | none -> return 2
-    | some(rf) ->
-        // Two bytes available, then EOF.
+    | err(_) -> return 2
+    | ok(rf) ->
+        // Two bytes available, then EOF. read_char is u8?!:
+        // ok(some(byte)) = data, ok(none) = EOF, err = real read error.
         match io.read_char(rf) with
-        | none -> return 3
-        | some(c) -> assert(c == 'a')
+        | ok(some(c)) -> assert(c == 'a')
+        | ok(none) -> return 3
+        | err(_) -> return 4
 
         match io.read_char(rf) with
-        | none -> return 4
-        | some(c) -> assert(c == 'b')
+        | ok(some(c)) -> assert(c == 'b')
+        | ok(none) -> return 5
+        | err(_) -> return 6
 
-        // Past end → none.
-        assert(io.read_char(rf).is_none)
+        // Past end → ok(none), not an error.
+        match io.read_char(rf) with
+        | ok(none) -> assert(true)
+        | ok(some(_)) -> return 7
+        | err(_) -> return 8
 
-        io.close(rf)
+        io.close(rf)!
 
-    io.remove(path)
+    io.remove(path)!
     0

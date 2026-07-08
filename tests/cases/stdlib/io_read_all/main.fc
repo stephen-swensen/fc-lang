@@ -8,15 +8,15 @@ let main = (args: str[]) ->
 
     // Write a known payload.
     match io.open(path, "w") with
-    | none -> return 1
-    | some(wf) ->
+    | err(_) -> return 1
+    | ok(wf) ->
         io.write(payload, wf)
-        io.close(wf)
+        io.close(wf)!
 
     // read_all returns the whole file as a heap-allocated str.
     match io.read_all(path) with
-    | none -> return 2
-    | some(buf) ->
+    | err(_) -> return 2
+    | ok(buf) ->
         assert(buf.len == payload.len)
         let mut i = 0i64
         loop
@@ -25,10 +25,12 @@ let main = (args: str[]) ->
             i = i + 1
         free(buf)
 
-    io.remove(path)
+    io.remove(path)!
 
-    // read_all on a missing path should return none rather than crash.
+    // read_all on a missing path reports the named condition.
     let missing = alloca("%s{tmp}/fc_test_read_all_does_not_exist.txt")
-    assert(io.read_all(missing).is_none)
+    match io.read_all(missing) with
+    | ok(_) -> return 3
+    | err(e) -> assert(e == io.file.not_found)
 
     0

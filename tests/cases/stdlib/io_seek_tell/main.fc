@@ -6,40 +6,43 @@ let main = (args: str[]) ->
     let path = alloca("%s{tmp}/fc_test_seek_tell.txt")
 
     // Write a test file
-    let f = io.open(path, "w")
-    match f with
-    | some(wf) ->
+    match io.open(path, "w") with
+    | ok(wf) ->
         io.write("abcdefghij", wf)
-        io.close(wf)
-    | none -> return 1
+        io.close(wf)!
+    | err(_) -> return 1
 
     // Read it back with seek/tell
-    let f2 = io.open(path, "r")
-    match f2 with
-    | some(rf) ->
+    match io.open(path, "r") with
+    | ok(rf) ->
         // tell at start should be 0
-        assert(io.tell(rf) == 0i64)
+        assert(io.tell(rf)! == 0i64)
 
         // seek to position 5
-        assert(io.seek(rf, 5i64, io.seek_set) == 0)
-        assert(io.tell(rf) == 5i64)
+        io.seek(rf, 5i64, io.seek_set)!
+        assert(io.tell(rf)! == 5i64)
 
         // read 3 bytes from position 5 -> "fgh"
         let mut buf = u8[3] {}
         let n = io.read(buf, 3, rf)
         assert(n == 3i64)
-        assert(io.tell(rf) == 8i64)
+        assert(io.tell(rf)! == 8i64)
 
         // seek relative to current (-2)
-        assert(io.seek(rf, -2i64, io.seek_cur) == 0)
-        assert(io.tell(rf) == 6i64)
+        io.seek(rf, -2i64, io.seek_cur)!
+        assert(io.tell(rf)! == 6i64)
 
         // seek from end
-        assert(io.seek(rf, -3i64, io.seek_end) == 0)
-        assert(io.tell(rf) == 7i64)
+        io.seek(rf, -3i64, io.seek_end)!
+        assert(io.tell(rf)! == 7i64)
 
-        io.close(rf)
-    | none -> return 2
+        // an invalid whence is a real error, reported not swallowed
+        match io.seek(rf, 0i64, 99) with
+        | ok -> return 3
+        | err(e) -> assert(e > 0)
 
-    io.remove(path)
+        io.close(rf)!
+    | err(_) -> return 2
+
+    io.remove(path)!
     0

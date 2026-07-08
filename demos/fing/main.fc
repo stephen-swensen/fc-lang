@@ -69,7 +69,7 @@ let main = (args: str[]) ->
 
     // Resolve hostname / IP
     let ip_opt = net.resolve(host)
-    if ip_opt.is_none then
+    if ip_opt.is_err then
         io.write(alloca("fing: unknown host %s{host}\n"), stderr)
         sys.exit(1)
     let ip = ip_opt!
@@ -82,7 +82,7 @@ let main = (args: str[]) ->
 
     // Open ICMP socket
     let fd_opt = net.open_icmp()
-    if fd_opt.is_none then
+    if fd_opt.is_err then
         io.write("fing: cannot open ICMP socket (try: sudo setcap cap_net_raw+ep /tmp/fing-bin)\n", stderr)
         sys.exit(1)
     let fd = fd_opt!
@@ -109,13 +109,15 @@ let main = (args: str[]) ->
         build_echo_request(pkt, id, (u16) seq)
 
         let start = now_usec()
-        let n_sent = net.send_to(fd, pkt, addr)
-        if n_sent < 0 then
+        if net.send_to(fd, pkt, addr).is_err then
             io.write("send failed for icmp_seq=%d{seq}\n", stderr)
         else
             sent = sent + 1
             let mut reply = u8[128] {}
-            let n_recv = net.recv_from(fd, reply, 128)
+            // a receive timeout arrives as err(conn.would_block)
+            let n_recv = match net.recv_from(fd, reply, 128) with
+                         | ok(v) -> v
+                         | err(_) -> -1i64
             let elapsed = now_usec() - start
             // SOCK_RAW: reply has IP header + ICMP packet
             let ihl = (i32) (reply[0] & 0x0Fu8) * 4

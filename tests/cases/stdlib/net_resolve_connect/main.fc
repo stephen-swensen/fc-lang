@@ -6,26 +6,26 @@ let main = (args: str[]) ->
 
     // Set up a server using the resolved address
     let server = net.open_tcp()!
-    assert(net.set_reuse_addr(server))
-    assert(net.bind_addr(server, net.make_addr(net.net_to_host32(ip), 0u16)))
-    assert(net.listen(server, 1))
+    net.set_reuse_addr(server)!
+    net.bind_addr(server, net.make_addr(net.net_to_host32(ip), 0u16))!
+    net.listen(server, 1)!
     let port = net.local_port(server)!
 
     // Connect a client using the resolved address
     let client = net.open_tcp()!
-    assert(net.connect_addr(client, net.make_addr(net.net_to_host32(ip), port)))
+    net.connect_addr(client, net.make_addr(net.net_to_host32(ip), port))!
 
     // Accept and exchange data
     let peer = net.accept(server)!
     let msg = "resolved"
-    assert(net.send_bytes(client, msg) == (i64) msg.len)
+    assert(net.send_bytes(client, msg)! == (i64) msg.len)
 
     let mut buf = u8[32] {}
-    let n = net.recv_bytes(peer, buf, 32)
+    let n = net.recv_bytes(peer, buf, 32)!
     assert(n == (i64) msg.len)
     assert(buf[0i64..n] == msg)
 
-    net.close(peer)
-    net.close(client)
-    net.close(server)
+    net.close(peer)!
+    net.close(client)!
+    net.close(server)!
     0

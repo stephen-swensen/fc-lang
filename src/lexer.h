@@ -30,6 +30,14 @@ typedef struct Lexer {
     const struct Flag *flags;
     int flag_count;
 
+    /* Last two significant token kinds emitted (raw scan order). Lets
+     * scan_identifier recognize the extern C-name position — `extern NAME`
+     * / `extern struct|union NAME` — where a C symbol may legitimately
+     * contain '__' (the C implementation-reserved namespace, e.g.
+     * __errno_location). Everywhere else '__' stays a lex error. */
+    TokenKind prev_kind;
+    TokenKind prev_prev_kind;
+
     /* Optional abort-cleanup hooks (in-process server / LSP mode). When
      * non-NULL, the lexer publishes its in-progress malloc'd token arrays
      * through these caller-owned slots, so an analysis that aborts via longjmp

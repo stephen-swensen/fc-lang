@@ -3664,6 +3664,12 @@ static Decl *parse_extern_decl(Parser *p) {
             advance_p(p);
             fc_name = tok_intern(p, expect(p, TOK_IDENT));
         }
+        /* Same rule as extern functions: a '__' C tag needs a clean FC alias. */
+        if (fc_name == c_name && strstr(c_name, "__") != NULL) {
+            diag_fatal(loc, "extern C name '%s' contains '__', which is reserved in "
+                "FC names; give it an alias: `extern %s %s as <name> = ...`",
+                c_name, is_c_union ? "union" : "struct", c_name);
+        }
         expect(p, TOK_EQ);
         expect(p, TOK_INDENT);
         StructField *fields = NULL;
@@ -3722,6 +3728,13 @@ static Decl *parse_extern_decl(Parser *p) {
     if (!alias && name_tok->kind != TOK_IDENT) {
         diag_fatal(loc, "extern declaration uses reserved name '%s', which would be "
             "unreferenceable; give it an alias: `extern %s as <name>: ...`", name, name);
+    }
+    /* A C name containing '__' (implementation-reserved namespace, e.g.
+     * __errno_location) is emitted verbatim, but the FC-visible name must stay
+     * clean of the mangling separator — require an alias. */
+    if (!alias && strstr(name, "__") != NULL) {
+        diag_fatal(loc, "extern C name '%s' contains '__', which is reserved in FC "
+            "names; give it an alias: `extern %s as <name>: ...`", name, name);
     }
     expect(p, TOK_COLON);
     Type *type = parse_type(p);

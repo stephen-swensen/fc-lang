@@ -3,17 +3,23 @@ import net from std::
 let main = (args: str[]) ->
     // resolve dotted-decimal IP (inet_addr path)
     let lo = net.resolve("127.0.0.1")
-    assert(lo.is_some)
+    assert(lo.is_ok)
     assert(lo! == net.host_to_net32(net.inaddr_loopback))
 
     // resolve 0.0.0.0
     let any_ip = net.resolve("0.0.0.0")
-    assert(any_ip.is_some)
+    assert(any_ip.is_ok)
     assert(any_ip! == 0u32)
 
     // resolve "localhost" (gethostbyname path)
     let local = net.resolve("localhost")
-    assert(local.is_some)
+    assert(local.is_ok)
     assert(local! == net.host_to_net32(net.inaddr_loopback))
+
+    // an unresolvable name reports the named condition (.invalid is the
+    // RFC 6761 reserved TLD that resolvers must fail)
+    match net.resolve("fc-no-such-host.invalid") with
+    | ok(_) -> return 1
+    | err(e) -> assert(e == net.dns.host_not_found)
 
     0

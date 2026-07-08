@@ -1,0 +1,7 @@
+// Same rule for extern struct tags: a '__' C tag needs a clean FC alias.
+module w from "stdio.h" =
+    extern struct __weird_tag =
+        x: i32
+
+let main = (args: str[]) ->
+    0

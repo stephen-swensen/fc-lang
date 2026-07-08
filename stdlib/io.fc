@@ -1,6 +1,54 @@
 namespace std::
 
 module io =
+    // Named I/O failure conditions. Wrappers map the branchable platform
+    // codes to these; anything without a curated name passes through raw
+    // (a code >= 65536 is a named FC error, below is a platform original).
+    error file =
+        | not_found
+        | denied
+        | exists
+        | no_space
+
+    // Platform errno values for the conditions the map names. The values
+    // come from the platform's own <errno.h> at C-compile time, so the
+    // mapping never hardcodes numbers.
+    private module ec from "errno.h" =
+        extern ENOENT as enoent: i32
+        extern EACCES as eacces: i32
+        extern EPERM as eperm: i32
+        extern EEXIST as eexist: i32
+        extern ENOSPC as enospc: i32
+
+    // errno is a C macro, not a symbol, so reading it from FC goes through
+    // the per-platform accessor function behind the macro.
+#if os == "windows"
+    private module er from "errno.h" =
+        extern _errno as loc: () -> i32*
+#else if os == "macos" || os == "freebsd"
+    private module er from "errno.h" =
+        extern __error as loc: () -> i32*
+#else
+    private module er from "errno.h" =
+        extern __errno_location as loc: () -> i32*
+#end
+
+    // Maps a platform errno value to its named io condition; codes without
+    // a curated name pass through raw. Cold path — runs only on failure.
+    private let map_err = (e: i32) ->
+        if e == ec.enoent then file.not_found
+        else if e == ec.eacces then file.denied
+        else if e == ec.eperm then file.denied
+        else if e == ec.eexist then file.exists
+        else if e == ec.enospc then file.no_space
+        else e
+
+    // Rebuilds a void! failure with the platform code mapped through map_err.
+    private let map_void = (r: void!) ->
+        match r with
+        | ok -> ok
+        | err(e) -> err(void, map_err(e))
+
 #if os == "windows"
     // Windows: _access lives in <io.h> under the MSVCRT/UCRT convention.
     // Same mode flags (0=exists, 2=write, 4=read); execute-bit (X_OK) is
@@ -19,14 +67,15 @@ module io =
     private module c from "stdio.h" =
         extern fwrite: (const any*, usize, usize, any*) -> usize
         extern fread: (any*, usize, usize, any*) -> usize
-        extern fopen: (const cstr, const cstr) -> any*?
-        extern fclose: (any*) -> i32
-        extern fflush: (any*) -> i32
-        extern fseek: (any*, isize, i32) -> i32
-        extern ftell: (any*) -> isize
+        extern fopen: (const cstr, const cstr) -> any*! from errno(null)
+        extern fclose: (any*) -> void! from errno(-1)
+        extern fflush: (any*) -> void! from errno(-1)
+        extern fseek: (any*, isize, i32) -> void! from errno(-1)
+        extern ftell: (any*) -> isize! from errno(-1)
         extern feof: (any*) -> i32
-        extern remove: (const cstr) -> i32
-        extern rename: (const cstr, const cstr) -> i32
+        extern ferror: (any*) -> i32
+        extern remove: (const cstr) -> void! from errno(-1)
+        extern rename: (const cstr, const cstr) -> void! from errno(-1)
         extern fgetc: (any*) -> i32
 
     // Seek origin constants for use with seek().
@@ -52,23 +101,27 @@ module io =
     // Opens a file at path with the given mode (e.g. "r", "w", "rb").
     // path: const str — file path; const because open only reads it.
     // mode: const str — fopen mode string; const because open only reads it.
-    // returns: any*? — opaque FILE* on success, none on failure.
+    // returns: any*! — ok(FILE*) on success; err on failure (e.g.
+    //   file.not_found, file.denied, or a raw platform code).
     let open = (path: const str, mode: const str) ->
-        c.fopen(alloca((cstr) path), alloca((cstr) mode))
+        match c.fopen(alloca((cstr) path), alloca((cstr) mode)) with
+        | ok(f) -> ok(f)
+        | err(e) -> err(any*, map_err(e))
 
-    // Closes a file handle. The handle must not be used after this call.
+    // Closes a file handle. The handle must not be used after this call,
+    // even on failure. A close error means buffered data may not have made
+    // it to the file (e.g. disk full): close(f)? observes it, while
+    // defer close(f) discards it (best-effort cleanup).
     // f: any* — opaque FILE* handle to close.
-    // returns: void.
+    // returns: void! — ok on success.
     let close = (f: any*) ->
-        c.fclose(f)
-        return
+        map_void(c.fclose(f))
 
     // Flushes any buffered output on file handle f.
     // f: any* — opaque FILE* handle to flush.
-    // returns: void.
+    // returns: void! — ok on success.
     let flush = (f: any*) ->
-        c.fflush(f)
-        return
+        map_void(c.fflush(f))
 
     // Flushes buffered output AND forces it all the way to the physical
     // disk, so the bytes survive a power loss or kernel panic. flush() only
@@ -78,40 +131,42 @@ module io =
     // flush — reserve it for durability boundaries (e.g. after writing a save
     // file you must not lose).
     // f: any* — opaque FILE* handle.
-    // returns: bool — true if the data reached disk, false on error.
+    // returns: void! — ok once the data reached disk.
 #if os == "windows"
     // _fileno (stdio.h, already included) yields the fd; _commit (io.h) is the
     // platter-flush equivalent of POSIX fsync. Neither needs a feature macro
     // under UCRT.
     private module sy from "io.h" =
         extern _fileno as fileno: (any*) -> i32
-        extern _commit as commit: (i32) -> i32
+        extern _commit as commit: (i32) -> void! from errno(-1)
 #else
     // fileno lives in stdio.h and fsync in unistd.h; both are POSIX, so the
     // module opts in to _POSIX_C_SOURCE (hoisted above every #include) to keep
     // them visible under -std=c11. stdio.h is already pulled in by module c.
     private module sy from "unistd.h" define "_POSIX_C_SOURCE" "200809L" =
         extern fileno: (any*) -> i32
-        extern fsync as commit: (i32) -> i32
+        extern fsync as commit: (i32) -> void! from errno(-1)
 #end
 
     let sync = (f: any*) ->
-        c.fflush(f)
-        sy.commit(sy.fileno(f)) == 0
+        flush(f)?
+        map_void(sy.commit(sy.fileno(f)))
 
     // Repositions the file position indicator.
     // f: any* — opaque FILE* handle.
     // offset: i64 — byte offset relative to whence.
     // whence: i32 — seek_set (start), seek_cur (current), or seek_end (end).
-    // returns: i32 — 0 on success, nonzero on error.
+    // returns: void! — ok on success.
     let seek = (f: any*, offset: i64, whence: i32) ->
-        c.fseek(f, (isize) offset, whence)
+        map_void(c.fseek(f, (isize) offset, whence))
 
     // Returns the current file position indicator.
     // f: any* — opaque FILE* handle.
-    // returns: i64 — byte offset from start, or -1 on error.
+    // returns: i64! — ok(byte offset from start) on success.
     let tell = (f: any*) ->
-        (i64) c.ftell(f)
+        match c.ftell(f) with
+        | ok(pos) -> ok((i64) pos)
+        | err(e) -> err(i64, map_err(e))
 
     // Tests end-of-file indicator on a file handle.
     // f: any* — opaque FILE* handle.
@@ -121,20 +176,21 @@ module io =
 
     // Deletes a file at the given path.
     // path: const str — file path to delete.
-    // returns: bool — true on success.
+    // returns: void! — ok on success (e.g. err(file.not_found) if absent).
     let remove = (path: const str) ->
-        c.remove(alloca((cstr) path)) == 0
+        map_void(c.remove(alloca((cstr) path)))
 
     // Renames or moves a file.
     // old_path: const str — current file path.
     // new_path: const str — new file path.
-    // returns: bool — true on success.
+    // returns: void! — ok on success.
     let rename = (old_path: const str, new_path: const str) ->
-        c.rename(alloca((cstr) old_path), alloca((cstr) new_path)) == 0
+        map_void(c.rename(alloca((cstr) old_path), alloca((cstr) new_path)))
 
     // Reads an entire file into a heap-allocated string.
     // path: const str — file path to read.
-    // returns: str? — some(contents) on success, none if the file cannot be opened. Caller must free.
+    // returns: str! — ok(contents) on success; err with the failing step's
+    //   condition otherwise. Caller must free.
     //
     // Opens in binary mode: text mode on Windows translates CRLF→LF during
     // read, so the buffer (sized to the on-disk byte count from tell()) is
@@ -144,41 +200,41 @@ module io =
     // keeps the buffer length and read length aligned; callers that care
     // about line endings can normalise CR/LF themselves.
     let read_all = (path: const str) ->
-        match open(path, "rb") with
-        | none -> default(str?)
-        | some(handle) ->
-            defer close(handle)
-            seek(handle, 0i64, seek_end)
-            let size = tell(handle)
-            seek(handle, 0i64, seek_set)
-            let buf = alloc(u8[size] {})!
-            read(buf, size, handle)
-            some(buf)
+        let handle = open(path, "rb")?
+        defer close(handle)
+        seek(handle, 0i64, seek_end)?
+        let size = tell(handle)?
+        seek(handle, 0i64, seek_set)?
+        let buf = alloc(u8[size] {})!
+        read(buf, size, handle)
+        ok(buf)
 
     // Reads a single byte from a file handle.
     // f: any* — opaque FILE* handle (e.g. stdin, or from open).
-    // returns: u8? — the byte read, or none on EOF.
+    // returns: u8?! — ok(some(byte)) on success, ok(none) at end of file,
+    //   err on a real read error (distinguished from EOF via ferror).
     let read_char = (f: any*) ->
         let ch = c.fgetc(f)
-        if ch == -1 then default(u8?)
-        else some((u8) ch)
+        if ch != -1 then ok(some((u8) ch))
+        else if c.ferror(f) != 0 then err(u8?, map_err(*er.loc()))
+        else ok(none(u8))
 
     // Creates a directory at the given path.
     // path: const str — directory path to create.
-    // returns: bool — true on success, false if it already exists or on error.
+    // returns: void! — ok on success (e.g. err(file.exists) if already there).
 #if os == "windows"
     private module d from "direct.h" =
-        extern _mkdir as win_mkdir: (const cstr) -> i32
+        extern _mkdir as win_mkdir: (const cstr) -> void! from errno(-1)
 
     let mkdir = (path: const str) ->
-        d.win_mkdir(alloca((cstr) path)) == 0
+        map_void(d.win_mkdir(alloca((cstr) path)))
 #else
     // POSIX mkdir needs _POSIX_C_SOURCE under -std=c11 (see access above).
     private module st from "sys/stat.h" define "_POSIX_C_SOURCE" "200809L" =
-        extern mkdir: (const cstr, i32) -> i32
+        extern mkdir: (const cstr, i32) -> void! from errno(-1)
 
     let mkdir = (path: const str) ->
-        st.mkdir(alloca((cstr) path), 493) == 0
+        map_void(st.mkdir(alloca((cstr) path), 493))
 #end
 
     // Checks whether a file or directory exists at path.
@@ -201,13 +257,16 @@ module io =
 
     // List the entries in a directory, excluding "." and "..".
     // path: const str — directory path to list.
-    // returns: str[]? — some(names) on success, none if the directory cannot be
-    //   opened. The outer array and each name are heap-allocated; the caller
-    //   frees each name, then the array.
+    // returns: str[]! — ok(names) on success, err if the directory cannot
+    //   be opened. The outer array and each name are heap-allocated; the
+    //   caller frees each name, then the array.
 #if os == "windows"
     // WIN32_FIND_DATAA layout (windows.h). We only read cFileName; the
     // preceding fields are declared with their exact sizes to keep the
     // struct layout correct for FindFirstFileA / FindNextFileA to populate.
+    // FindFirstFileA reports failure through GetLastError with a pointer
+    // sentinel (INVALID_HANDLE_VALUE), which no protocol covers — the
+    // wrapper below tests the handle and reads GetLastError itself.
     private module win from "windows.h" define "WIN32_LEAN_AND_MEAN" "1" =
         extern struct _WIN32_FIND_DATAA as WIN32_FIND_DATAA =
             _dwFileAttributes: u32
@@ -223,6 +282,18 @@ module io =
         extern FindFirstFileA as find_first: (const cstr, WIN32_FIND_DATAA*) -> any*
         extern FindNextFileA as find_next: (any*, WIN32_FIND_DATAA*) -> i32
         extern FindClose as find_close: (any*) -> i32
+        extern GetLastError as get_last_error: () -> u32
+        extern ERROR_FILE_NOT_FOUND as error_file_not_found: i32
+        extern ERROR_PATH_NOT_FOUND as error_path_not_found: i32
+        extern ERROR_ACCESS_DENIED as error_access_denied: i32
+
+    // Maps a Win32 GetLastError code (the Find* family reports through it,
+    // not errno) to its named io condition; unrecognized codes pass raw.
+    private let map_win_err = (e: i32) ->
+        if e == win.error_file_not_found then file.not_found
+        else if e == win.error_path_not_found then file.not_found
+        else if e == win.error_access_denied then file.denied
+        else e
 
     let list_dir = (path: const str) ->
         // FindFirstFileA wants a search pattern, not a directory path.
@@ -239,7 +310,7 @@ module io =
         let mut fd = default(win.WIN32_FIND_DATAA)
         let h = win.find_first((cstr) pat.ptr, &fd)
         // FindFirstFileA returns INVALID_HANDLE_VALUE (-1) on failure.
-        if (isize) h == -1isize then default(str[]?)
+        if (isize) h == -1isize then err(str[], map_win_err((i32) win.get_last_error()))
         else
             defer win.find_close(h)
             let mut cap = 16i64
@@ -273,14 +344,16 @@ module io =
             for j in 0..count do
                 result[j] = names[j]
             free(names)
-            some(result)
+            ok(result)
 #else
     // POSIX dirent layout (glibc Linux / musl / macOS; d_name must be the
     // last named field and large enough to hold NAME_MAX+1 bytes). On some
     // platforms d_name is a flexible array member, but declaring a fixed
     // upper bound here is safe because we only read up to the first NUL.
     // opendir/readdir/closedir and struct dirent are POSIX — same
-    // _POSIX_C_SOURCE requirement as access/mkdir above.
+    // _POSIX_C_SOURCE requirement as access/mkdir above. readdir keeps its
+    // raw option type: NULL means both end-of-stream and error (the
+    // irregular tail no protocol covers), and the loop treats it as end.
     private module dir from "dirent.h" define "_POSIX_C_SOURCE" "200809L" =
         extern struct dirent =
             _d_ino: u64
@@ -288,14 +361,14 @@ module io =
             _d_reclen: u16
             _d_type: u8
             d_name: u8[256]
-        extern opendir: (const cstr) -> any*?
+        extern opendir: (const cstr) -> any*! from errno(null)
         extern readdir: (any*) -> dirent*?
         extern closedir: (any*) -> i32
 
     let list_dir = (path: const str) ->
         match dir.opendir(alloca((cstr) path)) with
-        | none -> default(str[]?)
-        | some(d) ->
+        | err(e) -> err(str[], map_err(e))
+        | ok(d) ->
             defer dir.closedir(d)
             let mut cap = 16i64
             let mut count = 0i64
@@ -332,6 +405,5 @@ module io =
             for j in 0..count do
                 result[j] = names[j]
             free(names)
-            some(result)
+            ok(result)
 #end
-

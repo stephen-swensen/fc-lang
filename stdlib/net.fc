@@ -1,6 +1,22 @@
 namespace std::
 
 module net =
+    // Named connection-level failure conditions. Wrappers map the branchable
+    // platform codes (errno on POSIX, WSA codes on Windows) to these;
+    // anything without a curated name passes through raw.
+    error conn =
+        | refused
+        | reset
+        | timed_out
+        | unreachable
+        | in_use
+        | would_block
+
+    // Named name-resolution failures (the h_errno/WSA lookup domain has no
+    // raw passthrough — its values collide with errno's).
+    error dns =
+        | host_not_found
+
 #if os == "windows"
     private module sock from "winsock2.h" define "WIN32_LEAN_AND_MEAN" "1" =
         extern AF_INET as af_inet: i32
@@ -12,19 +28,32 @@ module net =
         extern SD_RECEIVE as shut_rd: i32
         extern SD_SEND as shut_wr: i32
         extern SD_BOTH as shut_rdwr: i32
-        extern socket: (i32, i32, i32) -> i32
-        extern bind: (i32, const any*, i32) -> i32
-        extern listen: (i32, i32) -> i32
-        extern accept: (i32, any*?, any*?) -> i32
-        extern connect: (i32, const any*, i32) -> i32
-        extern send: (i32, const any*, i32, i32) -> i32
-        extern recv: (i32, any*, i32, i32) -> i32
-        extern sendto: (i32, const any*, i32, i32, const any*, i32) -> i32
-        extern recvfrom: (i32, any*, i32, i32, any*?, any*?) -> i32
-        extern setsockopt: (i32, i32, i32, const any*, i32) -> i32
-        extern getsockname: (i32, any*, any*) -> i32
-        extern shutdown: (i32, i32) -> i32
+        extern socket: (i32, i32, i32) -> i32! from wsa_error(-1)
+        extern bind: (i32, const any*, i32) -> void! from wsa_error(-1)
+        extern listen: (i32, i32) -> void! from wsa_error(-1)
+        extern accept: (i32, any*?, any*?) -> i32! from wsa_error(-1)
+        extern connect: (i32, const any*, i32) -> void! from wsa_error(-1)
+        extern send: (i32, const any*, i32, i32) -> i32! from wsa_error(-1)
+        extern recv: (i32, any*, i32, i32) -> i32! from wsa_error(-1)
+        extern sendto: (i32, const any*, i32, i32, const any*, i32) -> i32! from wsa_error(-1)
+        extern recvfrom: (i32, any*, i32, i32, any*?, any*?) -> i32! from wsa_error(-1)
+        extern setsockopt: (i32, i32, i32, const any*, i32) -> void! from wsa_error(-1)
+        extern getsockname: (i32, any*, any*) -> void! from wsa_error(-1)
+        extern shutdown: (i32, i32) -> void! from wsa_error(-1)
         extern WSAStartup as wsa_startup: (u16, any*) -> i32
+
+    // WSA error values for the conditions the map names — from winsock2.h at
+    // C-compile time, never hardcoded. Winsock has no EAGAIN distinct from
+    // EWOULDBLOCK, so both spellings alias WSAEWOULDBLOCK.
+    private module ec from "winsock2.h" =
+        extern WSAECONNREFUSED as refused: i32
+        extern WSAECONNRESET as reset: i32
+        extern WSAETIMEDOUT as timed_out: i32
+        extern WSAEHOSTUNREACH as host_unreach: i32
+        extern WSAENETUNREACH as net_unreach: i32
+        extern WSAEADDRINUSE as in_use: i32
+        extern WSAEWOULDBLOCK as again: i32
+        extern WSAEWOULDBLOCK as would_block: i32
 
     private module inet from "winsock2.h" =
         extern INADDR_ANY as inaddr_any: u32
@@ -45,7 +74,7 @@ module net =
         extern ntohl: (u32) -> u32
         extern inet_addr: (const cstr) -> u32
 
-    private module dns from "winsock2.h" =
+    private module nsl from "winsock2.h" =
         extern struct hostent =
             h_name: cstr
             h_aliases: any*
@@ -57,7 +86,7 @@ module net =
     // closesocket lives in winsock2.h aliased as `close` so the public
     // wrapper below can call `u.close(fd)` on both platforms.
     private module u from "winsock2.h" =
-        extern closesocket as close: (i32) -> i32
+        extern closesocket as close: (i32) -> void! from wsa_error(-1)
 
     // WSAStartup must be called once before any socket call. Top-level
     // mutable guard checked by ensure_init below; on POSIX this is a no-op.
@@ -80,18 +109,31 @@ module net =
         extern SHUT_RD as shut_rd: i32
         extern SHUT_WR as shut_wr: i32
         extern SHUT_RDWR as shut_rdwr: i32
-        extern socket: (i32, i32, i32) -> i32
-        extern bind: (i32, const any*, i32) -> i32
-        extern listen: (i32, i32) -> i32
-        extern accept: (i32, any*?, any*?) -> i32
-        extern connect: (i32, const any*, i32) -> i32
-        extern send: (i32, const any*, i32, i32) -> i32
-        extern recv: (i32, any*, i32, i32) -> i32
-        extern sendto: (i32, const any*, i32, i32, const any*, i32) -> i32
-        extern recvfrom: (i32, any*, i32, i32, any*?, any*?) -> i32
-        extern setsockopt: (i32, i32, i32, const any*, i32) -> i32
-        extern getsockname: (i32, any*, any*) -> i32
-        extern shutdown: (i32, i32) -> i32
+        extern socket: (i32, i32, i32) -> i32! from errno(-1)
+        extern bind: (i32, const any*, i32) -> void! from errno(-1)
+        extern listen: (i32, i32) -> void! from errno(-1)
+        extern accept: (i32, any*?, any*?) -> i32! from errno(-1)
+        extern connect: (i32, const any*, i32) -> void! from errno(-1)
+        extern send: (i32, const any*, i32, i32) -> i32! from errno(-1)
+        extern recv: (i32, any*, i32, i32) -> i32! from errno(-1)
+        extern sendto: (i32, const any*, i32, i32, const any*, i32) -> i32! from errno(-1)
+        extern recvfrom: (i32, any*, i32, i32, any*?, any*?) -> i32! from errno(-1)
+        extern setsockopt: (i32, i32, i32, const any*, i32) -> void! from errno(-1)
+        extern getsockname: (i32, any*, any*) -> void! from errno(-1)
+        extern shutdown: (i32, i32) -> void! from errno(-1)
+
+    // errno values for the conditions the map names — from the platform's
+    // own <errno.h> at C-compile time, never hardcoded. EAGAIN and
+    // EWOULDBLOCK may share a value; the map handles both.
+    private module ec from "errno.h" =
+        extern ECONNREFUSED as refused: i32
+        extern ECONNRESET as reset: i32
+        extern ETIMEDOUT as timed_out: i32
+        extern EHOSTUNREACH as host_unreach: i32
+        extern ENETUNREACH as net_unreach: i32
+        extern EADDRINUSE as in_use: i32
+        extern EAGAIN as again: i32
+        extern EWOULDBLOCK as would_block: i32
 
     private module inet from "netinet/in.h" =
         extern INADDR_ANY as inaddr_any: u32
@@ -112,7 +154,7 @@ module net =
         extern ntohl: (u32) -> u32
         extern inet_addr: (const cstr) -> u32
 
-    private module dns from "netdb.h" define "_POSIX_C_SOURCE" "200809L" =
+    private module nsl from "netdb.h" define "_POSIX_C_SOURCE" "200809L" =
         extern struct hostent =
             h_name: cstr
             h_aliases: any*
@@ -122,11 +164,42 @@ module net =
         extern gethostbyname: (const cstr) -> hostent*?
 
     private module u from "unistd.h" =
-        extern close: (i32) -> i32
+        extern close: (i32) -> void! from errno(-1)
 
     private let ensure_init = () ->
         return
 #end
+
+    // Maps a platform socket error code to its named conn condition; codes
+    // without a curated name pass through raw. Cold path — failure only.
+    private let map_err = (e: i32) ->
+        if e == ec.refused then conn.refused
+        else if e == ec.reset then conn.reset
+        else if e == ec.timed_out then conn.timed_out
+        else if e == ec.host_unreach then conn.unreachable
+        else if e == ec.net_unreach then conn.unreachable
+        else if e == ec.in_use then conn.in_use
+        else if e == ec.again then conn.would_block
+        else if e == ec.would_block then conn.would_block
+        else e
+
+    // Rebuilds a void! failure with the platform code mapped through map_err.
+    private let map_void = (r: void!) ->
+        match r with
+        | ok -> ok
+        | err(e) -> err(void, map_err(e))
+
+    // Rebuilds a fd-carrying result with the failure code mapped.
+    private let map_fd = (r: i32!) ->
+        match r with
+        | ok(fd) -> ok(fd)
+        | err(e) -> err(i32, map_err(e))
+
+    // Rebuilds a byte-count result as i64! with the failure code mapped.
+    private let map_len = (r: i32!) ->
+        match r with
+        | ok(n) -> ok((i64) n)
+        | err(e) -> err(i64, map_err(e))
 
     // --- Constants (from C headers via extern) ---
 
@@ -191,125 +264,123 @@ module net =
     // --- Socket lifecycle ---
 
     // Create a TCP (stream) socket.
-    // returns: some(fd) on success, none on failure.
+    // returns: i32! — ok(fd) on success.
     let open_tcp = () ->
         ensure_init()
-        let fd = sock.socket(sock.af_inet, sock.sock_stream, 0)
-        if fd >= 0 then some(fd) else default(i32?)
+        map_fd(sock.socket(sock.af_inet, sock.sock_stream, 0))
 
     // Create a UDP (datagram) socket.
-    // returns: some(fd) on success, none on failure.
+    // returns: i32! — ok(fd) on success.
     let open_udp = () ->
         ensure_init()
-        let fd = sock.socket(sock.af_inet, sock.sock_dgram, 0)
-        if fd >= 0 then some(fd) else default(i32?)
+        map_fd(sock.socket(sock.af_inet, sock.sock_dgram, 0))
 
     // Create a raw ICMP socket (requires cap_net_raw or root).
-    // returns: some(fd) on success, none on failure.
+    // returns: i32! — ok(fd) on success (err(conn... or raw EPERM) without privilege).
     let open_icmp = () ->
         ensure_init()
-        let fd = sock.socket(sock.af_inet, sock.sock_raw, inet.ipproto_icmp)
-        if fd >= 0 then some(fd) else default(i32?)
+        map_fd(sock.socket(sock.af_inet, sock.sock_raw, inet.ipproto_icmp))
 
-    // Close a socket.
+    // Close a socket. The descriptor must not be used after this call.
+    // returns: void! — ok on success; defer close(fd) discards the result
+    //   (best-effort cleanup).
     let close = (fd: i32) ->
-        u.close(fd)
-        return
+        map_void(u.close(fd))
 
     // Shut down part or all of a socket connection.
     // how: shut_rd, shut_wr, or shut_rdwr.
-    // returns: true on success.
+    // returns: void! — ok on success.
     let shutdown = (fd: i32, how: i32) ->
-        sock.shutdown(fd, how) == 0
+        map_void(sock.shutdown(fd, how))
 
     // --- Socket options ---
 
     // Enable SO_REUSEADDR on a socket.
-    // returns: true on success.
+    // returns: void! — ok on success.
     let set_reuse_addr = (fd: i32) ->
         let mut val = 1
-        sock.setsockopt(fd, sock.sol_socket, sock.so_reuseaddr, (const any*) &val, 4) == 0
+        map_void(sock.setsockopt(fd, sock.sol_socket, sock.so_reuseaddr, (const any*) &val, 4))
 
     // --- TCP operations ---
 
     // Bind a socket to an address.
-    // returns: true on success.
+    // returns: void! — ok on success (err(conn.in_use) if the port is taken).
     let bind_addr = (fd: i32, addr: inet.sockaddr_in) ->
         let mut a = addr
-        sock.bind(fd, (const any*) &a, 16) == 0
+        map_void(sock.bind(fd, (const any*) &a, 16))
 
     // Start listening for connections.
     // backlog: maximum pending connection queue length.
-    // returns: true on success.
+    // returns: void! — ok on success.
     let listen = (fd: i32, backlog: i32) ->
-        sock.listen(fd, backlog) == 0
+        map_void(sock.listen(fd, backlog))
 
     // Accept a connection on a listening socket.
-    // returns: some(client_fd) on success, none on failure.
+    // returns: i32! — ok(client_fd) on success (err(conn.would_block) when
+    //   a nonblocking listener has nothing pending).
     let accept = (fd: i32) ->
-        let client = sock.accept(fd, default(any*?), default(i32*?))
-        if client >= 0 then some(client) else default(i32?)
+        map_fd(sock.accept(fd, default(any*?), default(i32*?)))
 
     // Connect a socket to a remote address.
-    // returns: true on success.
+    // returns: void! — ok on success (e.g. err(conn.refused), err(conn.timed_out)).
     let connect_addr = (fd: i32, addr: inet.sockaddr_in) ->
         let mut a = addr
-        sock.connect(fd, (const any*) &a, 16) == 0
+        map_void(sock.connect(fd, (const any*) &a, 16))
 
     // --- Data transfer ---
 
     // Send data on a connected socket.
     // data: const u8[] — the bytes to send.
-    // returns: number of bytes sent, or -1 on error.
+    // returns: i64! — ok(bytes sent) on success (e.g. err(conn.reset)).
     let send_bytes = (fd: i32, data: const u8[]) ->
-        (i64) sock.send(fd, (const any*) data.ptr, (i32) data.len, 0)
+        map_len(sock.send(fd, (const any*) data.ptr, (i32) data.len, 0))
 
     // Receive data from a connected socket.
     // buf: u8[] — destination buffer.
     // max: i64 — maximum bytes to receive.
-    // returns: bytes received, 0 if peer closed, or -1 on error.
+    // returns: i64! — ok(bytes received; 0 means the peer closed), or err
+    //   (err(conn.would_block) when a receive timeout/nonblocking read expires).
     let recv_bytes = (fd: i32, buf: u8[], max: i64) ->
-        (i64) sock.recv(fd, (any*) buf.ptr, (i32) max, 0)
+        map_len(sock.recv(fd, (any*) buf.ptr, (i32) max, 0))
 
     // --- UDP operations ---
 
     // Send a datagram to a specific address.
     // data: const u8[] — the bytes to send.
     // addr: destination address.
-    // returns: number of bytes sent, or -1 on error.
+    // returns: i64! — ok(bytes sent) on success.
     let send_to = (fd: i32, data: const u8[], addr: inet.sockaddr_in) ->
         let mut a = addr
-        (i64) sock.sendto(fd, (const any*) data.ptr, (i32) data.len, 0, (const any*) &a, 16)
+        map_len(sock.sendto(fd, (const any*) data.ptr, (i32) data.len, 0, (const any*) &a, 16))
 
     // Receive a datagram (discards source address).
     // buf: u8[] — destination buffer.
     // max: i64 — maximum bytes to receive.
-    // returns: bytes received, or -1 on error.
+    // returns: i64! — ok(bytes received) on success.
     let recv_from = (fd: i32, buf: u8[], max: i64) ->
-        (i64) sock.recvfrom(fd, (any*) buf.ptr, (i32) max, 0, default(any*?), default(i32*?))
+        map_len(sock.recvfrom(fd, (any*) buf.ptr, (i32) max, 0, default(any*?), default(i32*?)))
 
     // --- Utility ---
 
     // Get the locally bound port of a socket.
-    // returns: some(port) in host byte order, or none on error.
+    // returns: u16! — ok(port) in host byte order.
     let local_port = (fd: i32) ->
         let mut addr = default(inet.sockaddr_in)
         let mut len = 16i32
-        if sock.getsockname(fd, (any*) &addr, (any*) &len) == 0 then
-            some(net_to_host16(addr.sin_port))
-        else
-            default(u16?)
+        map_void(sock.getsockname(fd, (any*) &addr, (any*) &len))?
+        ok(net_to_host16(addr.sin_port))
 
     // --- DNS ---
 
     // Resolve a hostname or dotted-decimal IPv4 string to a network-byte-order address.
     // Tries inet_addr first (for "1.2.3.4" style), falls back to gethostbyname for hostnames.
-    // returns: some(ip) in network byte order, or none if resolution fails.
+    // returns: u32! — ok(ip) in network byte order, err(dns.host_not_found)
+    //   if resolution fails.
     let resolve = (host: const str) ->
         ensure_init()
         let ip = arpa.inet_addr(alloca((cstr) host))
-        if ip != 0xFFFFFFFFu32 then some(ip)
+        if ip != 0xFFFFFFFFu32 then ok(ip)
         else
-            match dns.gethostbyname(alloca((cstr) host)) with
-            | some(h) -> some(**((u32**) h.h_addr_list))
-            | none -> default(u32?)
+            match nsl.gethostbyname(alloca((cstr) host)) with
+            | some(h) -> ok(**((u32**) h.h_addr_list))
+            | none -> err(u32, dns.host_not_found)

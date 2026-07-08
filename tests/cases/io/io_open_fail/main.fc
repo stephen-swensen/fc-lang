@@ -4,9 +4,10 @@ let main = (args: str[]) ->
     let _result =
         let f = io.open("nonexistent_xyz_path/fc_open_fail_file.txt", "r")
         match f with
-        | some(v) ->
-            io.close(v)
+        | ok(v) ->
+            io.close(v)!
             1
-        | none -> 42
+        | err(io.file.not_found) -> 42
+        | err(_) -> 2
     assert(_result == 42)
     0

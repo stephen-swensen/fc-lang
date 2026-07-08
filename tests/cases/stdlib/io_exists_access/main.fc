@@ -16,10 +16,10 @@ let main = (args: str[]) ->
 
     // Create a regular file.
     match io.open(path, "w") with
-    | none -> return 1
-    | some(f) ->
+    | err(_) -> return 1
+    | ok(f) ->
         io.write("x", f)
-        io.close(f)
+        io.close(f)!
 
     // Existing file: exists / can_read / can_write all true. Newly created
     // files are owned by the caller, so write permission is implied.
@@ -30,5 +30,5 @@ let main = (args: str[]) ->
     // exists also covers directories, not just regular files.
     assert(io.exists(tmp))
 
-    io.remove(path)
+    io.remove(path)!
     0

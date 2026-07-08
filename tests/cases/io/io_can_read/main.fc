@@ -10,12 +10,12 @@ let main = (args: str[]) ->
     // write a temp file and verify it's readable
     let path = alloca("%s{tmp}/fc_test_can_read.txt")
     match io.open(path, "w") with
-    | some(wf) ->
+    | ok(wf) ->
         io.write("test", wf)
-        io.close(wf)
-    | none -> assert(false)
+        io.close(wf)!
+    | err(_) -> assert(false)
 
     assert(io.can_read(path))
-    io.remove(path)
+    io.remove(path)!
 
     0

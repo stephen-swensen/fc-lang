@@ -7,19 +7,19 @@ let main = (args: str[]) ->
     let _result =
         let f = io.open(path, "w")
         match f with
-        | some(wf) ->
+        | ok(wf) ->
             io.write("abcde", wf)
-            io.close(wf)
+            io.close(wf)!
             let f2 = io.open(path, "r")
             match f2 with
-            | some(rf) ->
+            | ok(rf) ->
                 let mut buf = u8[16] {}
                 let n = io.read(buf, 16, rf)
-                io.close(rf)
+                io.close(rf)!
                 if n == 5i64 then 42
                 else (i32) n
-            | none -> 2
-        | none -> 1
+            | err(_) -> 2
+        | err(_) -> 1
     assert(_result == 42)
-    io.remove(path)
+    io.remove(path)!
     0

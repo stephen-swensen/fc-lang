@@ -1,66 +1,114 @@
 namespace std::
 
 module text =
+    // Named parse failure conditions. Parse errors are FC-judged (the
+    // platform has no code for "not a number"), so every failure is named —
+    // this module passes nothing through raw.
+    error parse =
+        | invalid
+        | overflow
+        | too_long
+
     private module c from "stdlib.h" =
         extern strtoll: (const cstr, cstr*, i32) -> i64
         extern strtod: (const cstr, cstr*) -> f64
         extern strtof: (const cstr, cstr*) -> f32
 
+    // strtoll/strtod report range errors through errno (ERANGE). The value
+    // comes from <errno.h> at C-compile time.
+    private module ec from "errno.h" =
+        extern ERANGE as erange: i32
+
+    // errno is a C macro, not a symbol, so reading (and clearing) it from FC
+    // goes through the per-platform accessor function behind the macro.
+#if os == "windows"
+    private module er from "errno.h" =
+        extern _errno as loc: () -> i32*
+#else if os == "macos" || os == "freebsd"
+    private module er from "errno.h" =
+        extern __error as loc: () -> i32*
+#else
+    private module er from "errno.h" =
+        extern __errno_location as loc: () -> i32*
+#end
+
     // Numeric parsing converts s to a null-terminated cstr, which copies it
     // onto the stack (an alloca of s.len + 1). An unbounded length would risk a
     // stack overflow — undefined behavior, not a clean failure — so inputs
-    // longer than this cap parse as none. 512 bytes comfortably holds any real
-    // numeric token (i64 is at most 20 digits; even full-decimal f64
-    // extremes fit), so only pathological/corrupt input is ever rejected.
+    // longer than this cap fail with parse.too_long. 512 bytes comfortably
+    // holds any real numeric token (i64 is at most 20 digits; even
+    // full-decimal f64 extremes fit), so only pathological/corrupt input is
+    // ever rejected.
     private let max_parse_len = 512i64
 
     // Parses a string as a 32-bit signed integer (base 10).
-    // returns: i32? — some(value) on success, none if the string is not a
-    // valid integer or is longer than max_parse_len.
+    // returns: i32! — ok(value) on success; err(parse.invalid) if s has no
+    //   leading integer, err(parse.overflow) if the value doesn't fit i32,
+    //   err(parse.too_long) past max_parse_len.
     let parse_i32 = (s: const str) ->
-        if s.len > max_parse_len then default(i32?)
+        if s.len > max_parse_len then err(i32, parse.too_long)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
+            let ep = er.loc()
+            *ep = 0
             let val = c.strtoll(cs, &endptr, 10)
-            if endptr == cs then default(i32?)
-            else some((i32) val)
+            if endptr == cs then err(i32, parse.invalid)
+            else if *ep == ec.erange then err(i32, parse.overflow)
+            else if val > i32.max || val < i32.min then err(i32, parse.overflow)
+            else ok((i32) val)
 
     // Parses a string as a 64-bit signed integer (base 10).
-    // returns: i64? — some(value) on success, none if the string is not a
-    // valid integer or is longer than max_parse_len.
+    // returns: i64! — ok(value) on success; err(parse.invalid) if s has no
+    //   leading integer, err(parse.overflow) if the value doesn't fit i64,
+    //   err(parse.too_long) past max_parse_len.
     let parse_i64 = (s: const str) ->
-        if s.len > max_parse_len then default(i64?)
+        if s.len > max_parse_len then err(i64, parse.too_long)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
+            let ep = er.loc()
+            *ep = 0
             let val = c.strtoll(cs, &endptr, 10)
-            if endptr == cs then default(i64?)
-            else some(val)
+            if endptr == cs then err(i64, parse.invalid)
+            else if *ep == ec.erange then err(i64, parse.overflow)
+            else ok(val)
 
     // Parses a string as a 32-bit float.
-    // returns: f32? — some(value) on success, none if the string is not a
-    // valid number or is longer than max_parse_len.
+    // returns: f32! — ok(value) on success; err(parse.invalid) if s has no
+    //   leading number, err(parse.overflow) if the magnitude exceeds f32
+    //   (underflow to zero/denormal is NOT an error), err(parse.too_long)
+    //   past max_parse_len.
     let parse_f32 = (s: const str) ->
-        if s.len > max_parse_len then default(f32?)
+        if s.len > max_parse_len then err(f32, parse.too_long)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
+            let ep = er.loc()
+            *ep = 0
             let val = c.strtof(cs, &endptr)
-            if endptr == cs then default(f32?)
-            else some(val)
+            if endptr == cs then err(f32, parse.invalid)
+            else if *ep == ec.erange && (val == f32.inf || val == f32.neg_inf) then
+                err(f32, parse.overflow)
+            else ok(val)
 
     // Parses a string as a 64-bit float.
-    // returns: f64? — some(value) on success, none if the string is not a
-    // valid number or is longer than max_parse_len.
+    // returns: f64! — ok(value) on success; err(parse.invalid) if s has no
+    //   leading number, err(parse.overflow) if the magnitude exceeds f64
+    //   (underflow to zero/denormal is NOT an error), err(parse.too_long)
+    //   past max_parse_len.
     let parse_f64 = (s: const str) ->
-        if s.len > max_parse_len then default(f64?)
+        if s.len > max_parse_len then err(f64, parse.too_long)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
+            let ep = er.loc()
+            *ep = 0
             let val = c.strtod(cs, &endptr)
-            if endptr == cs then default(f64?)
-            else some(val)
+            if endptr == cs then err(f64, parse.invalid)
+            else if *ep == ec.erange && (val == f64.inf || val == f64.neg_inf) then
+                err(f64, parse.overflow)
+            else ok(val)
 
     // Returns a heap-allocated copy of a string. Caller must free.
     let copy = (s: const str) ->

@@ -22,6 +22,8 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern,
     memset(l->interp_brace, 0, sizeof(l->interp_brace));
     l->flags = flags;
     l->flag_count = flag_count;
+    l->prev_kind = TOK_EOF;
+    l->prev_prev_kind = TOK_EOF;
     l->abort_slot_raw = NULL;
     l->abort_slot_layout = NULL;
 }
@@ -151,9 +153,18 @@ static Token scan_identifier(Lexer *l) {
     while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
     int len = (int)(l->current - l->start);
     /* Reject identifiers containing __ (double underscore) — reserved for
-     * the compiler's name mangling of namespace/module hierarchies. */
+     * the compiler's name mangling of namespace/module hierarchies. The one
+     * exception is the extern C-name position (`extern NAME` /
+     * `extern struct|union NAME`): C symbols in the implementation-reserved
+     * namespace (e.g. __errno_location) are emitted verbatim, never mangled.
+     * The parser requires an `as` alias there so the FC-visible name stays
+     * clean. */
+    bool extern_c_name_pos =
+        l->prev_kind == TOK_EXTERN ||
+        ((l->prev_kind == TOK_STRUCT || l->prev_kind == TOK_UNION) &&
+         l->prev_prev_kind == TOK_EXTERN);
     TokenKind kw = check_keyword(l->start, len);
-    if (kw == TOK_IDENT) {
+    if (kw == TOK_IDENT && !extern_c_name_pos) {
         for (int i = 0; i + 1 < len; i++) {
             if (l->start[i] == '_' && l->start[i + 1] == '_') {
                 SrcLoc loc = { .line = l->line, .col = l->start_col };
@@ -621,6 +632,8 @@ static Token *raw_tokenize(Lexer *l, int *out_count) {
         }
 
         DA_APPEND(tokens, len, cap, t);
+        l->prev_prev_kind = l->prev_kind;
+        l->prev_kind = t.kind;
         if (t.kind == TOK_EOF) break;
     }
 

@@ -1,0 +1,6 @@
+// The alias is an ordinary FC identifier — '__' stays rejected there.
+module e from "errno.h" =
+    extern _errno as my__alias: () -> i32*
+
+let main = (args: str[]) ->
+    0

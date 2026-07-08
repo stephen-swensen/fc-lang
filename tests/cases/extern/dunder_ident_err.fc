@@ -1,0 +1,5 @@
+// Ordinary identifiers still reject '__' — the extern C-name position is
+// the only exception.
+let main = (args: str[]) ->
+    let my__var = 1
+    my__var - 1

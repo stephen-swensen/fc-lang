@@ -1060,14 +1060,14 @@ let load_high_score = () ->
     match sys.home_dir() with
     | some(hd) ->
         match io.open(alloca("%s{hd}/.face-invaders/highscore.txt"), "r") with
-        | some(fp) ->
+        | ok(fp) ->
             let mut buf = u8[32] { }
             io.read(buf, 32, fp)
             io.close(fp)
             match text.parse_i32((const str) buf) with
-            | some(v) -> v
-            | none -> 0
-        | none -> 0
+            | ok(v) -> v
+            | err(_) -> 0
+        | err(_) -> 0
     | none -> 0
 
 let save_high_score = (score: i32) ->
@@ -1075,10 +1075,11 @@ let save_high_score = (score: i32) ->
     | some(hd) ->
         io.mkdir(alloca("%s{hd}/.face-invaders"))
         match io.open(alloca("%s{hd}/.face-invaders/highscore.txt"), "w") with
-        | some(fp) ->
+        | ok(fp) ->
             io.write("%d{score}\n", fp)
             io.close(fp)
-        | none -> return
+            return
+        | err(_) -> return
     | none -> return
 
 // ============================================================

@@ -1,0 +1,7 @@
+// A '__' C name requires an alias: without one the FC-visible name would
+// carry the mangling separator.
+module e from "errno.h" =
+    extern __errno_location: () -> i32*
+
+let main = (args: str[]) ->
+    0

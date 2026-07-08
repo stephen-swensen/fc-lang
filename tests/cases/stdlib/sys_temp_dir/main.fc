@@ -13,11 +13,11 @@ let main = (args: str[]) ->
         // round-tripping a file through it.
         let path = alloca("%s{tmp}/fc_test_temp_dir_probe.txt")
         match io.open(path, "w") with
-        | none -> return 2
-        | some(f) ->
+        | err(_) -> return 2
+        | ok(f) ->
             io.write("ok", f)
-            io.close(f)
-        io.remove(path)
+            io.close(f)!
+        io.remove(path)!
         void()
 
     0

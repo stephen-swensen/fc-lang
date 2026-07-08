@@ -97,7 +97,12 @@ ident_start   = letter | underscore ;
 ident_cont    = letter | digit | underscore ;
 IDENT         = ident_start , { ident_cont } ;
 (* Constraint not expressible in BNF: IDENT must not contain "__"         *)
-(* (double underscore). Reserved for compiler name mangling.              *)
+(* (double underscore). Reserved for compiler name mangling. One          *)
+(* exception: the C-name position of an extern declaration (`extern NAME` *)
+(* / `extern struct|union NAME`) admits "__" — C's implementation-        *)
+(* reserved namespace (e.g. __errno_location) is emitted verbatim, never  *)
+(* mangled — but then an `as` alias is required so the FC-visible name    *)
+(* stays clean.                                                           *)
 
 (* Type variable names begin with an apostrophe, then a letter.        *)
 TYPE_VAR      = "'" , letter , { ident_cont } ;

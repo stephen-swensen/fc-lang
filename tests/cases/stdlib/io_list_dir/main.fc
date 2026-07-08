@@ -24,35 +24,35 @@ let main = (args: str[]) ->
     let missing = alloca("%s{tmp}/fc_test_list_dir_does_not_exist")
 
     // Start fresh: remove any leftover files from a prior run and (re)create.
-    // If the directory doesn't exist yet, remove() calls are no-ops.
+    // If the directory doesn't exist yet, the discarded errs are no-ops.
     io.remove(path_a)
     io.remove(path_b)
     io.remove(path_c)
     c.rmdir(alloca(c"%s{dir}"))
-    assert(io.mkdir(dir))
+    io.mkdir(dir)!
 
-    // Listing an empty directory should return some([]).
+    // Listing an empty directory should return ok([]).
     match io.list_dir(dir) with
-    | none -> return 1
-    | some(names) ->
+    | err(_) -> return 1
+    | ok(names) ->
         assert(names.len == 0)
         free(names)
 
     // Create three files.
     let touch = (name: const str) ->
         match io.open(name, "w") with
-        | some(f) ->
-            io.close(f)
+        | ok(f) ->
+            io.close(f)!
             true
-        | none -> false
+        | err(_) -> false
     if !touch(path_a) then return 2
     if !touch(path_b) then return 2
     if !touch(path_c) then return 2
 
     // List and verify: expect exactly a.txt, b.txt, c.txt (no ".", "..").
     match io.list_dir(dir) with
-    | none -> return 3
-    | some(names) ->
+    | err(_) -> return 3
+    | ok(names) ->
         assert(names.len == 3)
         let mut saw_a = false
         let mut saw_b = false
@@ -67,14 +67,15 @@ let main = (args: str[]) ->
             free(n)
         free(names)
 
-    // Listing a nonexistent directory should return none.
-    let nonexistent = io.list_dir(missing)
-    assert(nonexistent.is_none)
+    // Listing a nonexistent directory reports the named condition.
+    match io.list_dir(missing) with
+    | ok(_) -> return 5
+    | err(e) -> assert(e == io.file.not_found)
 
     // Cleanup.
-    io.remove(path_a)
-    io.remove(path_b)
-    io.remove(path_c)
+    io.remove(path_a)!
+    io.remove(path_b)!
+    io.remove(path_c)!
     c.rmdir(alloca(c"%s{dir}"))
 
     0

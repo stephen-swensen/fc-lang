@@ -7,11 +7,11 @@ let main = (args: str[]) ->
     let _result =
         let f = io.open(path, "w")
         match f with
-        | some(v) ->
+        | ok(v) ->
             io.write("test\n", v)
-            io.close(v)
+            io.close(v)!
             42
-        | none -> 1
+        | err(_) -> 1
     assert(_result == 42)
-    io.remove(path)
+    io.remove(path)!
     0

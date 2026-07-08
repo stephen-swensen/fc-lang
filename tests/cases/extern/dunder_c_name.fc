@@ -1,0 +1,24 @@
+// A C name containing '__' (the C implementation-reserved namespace) is
+// legal in the extern C-name position when given a clean FC alias — this is
+// how FC reaches symbols like glibc's __errno_location. Everywhere else,
+// '__' in an identifier stays a lex error.
+#if os == "windows"
+module e from "errno.h" =
+    extern _errno as errno_loc: () -> i32*
+#else if os == "macos" || os == "freebsd"
+module e from "errno.h" =
+    extern __error as errno_loc: () -> i32*
+#else
+module e from "errno.h" =
+    extern __errno_location as errno_loc: () -> i32*
+#end
+
+let main = (args: str[]) ->
+    // errno is zero at program startup (C11), and writable through the
+    // accessor — the exact pattern the stdlib's errno shim uses.
+    let p = e.errno_loc()
+    assert(*p == 0)
+    *p = 7
+    assert(*p == 7)
+    *p = 0
+    0

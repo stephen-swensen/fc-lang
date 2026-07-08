@@ -11,14 +11,16 @@ let main = (args: str[]) ->
     assert(io.exists("."))
     assert(io.can_read("."))
 
-    // mkdir path (<sys/stat.h>) — "." already exists, so this is a harmless
-    // no-op that returns false but still references the mkdir symbol.
-    assert(!io.mkdir("."))
+    // mkdir path (<sys/stat.h>) — "." already exists, so this fails with the
+    // named condition while still referencing the mkdir symbol.
+    match io.mkdir(".") with
+    | ok -> assert(false)
+    | err(e) -> assert(e == io.file.exists)
 
     // dirent path (<dirent.h>) — listing "." must succeed; free the result.
     match io.list_dir(".") with
-    | none -> assert(false)
-    | some(names) ->
+    | err(_) -> assert(false)
+    | ok(names) ->
         for n in names do
             free(n)
         free(names)

@@ -6,18 +6,18 @@ let main = (args: str[]) ->
     assert(fd >= 0)
 
     // Set reuse addr
-    assert(net.set_reuse_addr(fd))
+    net.set_reuse_addr(fd)!
 
     // Bind to loopback on any port
-    assert(net.bind_addr(fd, net.make_addr(net.inaddr_loopback, 0u16)))
+    net.bind_addr(fd, net.make_addr(net.inaddr_loopback, 0u16))!
 
     // Listen
-    assert(net.listen(fd, 1))
+    net.listen(fd, 1)!
 
     // Get the kernel-assigned port
     let port = net.local_port(fd)!
     assert(port > 0u16)
 
     // Close
-    net.close(fd)
+    net.close(fd)!
     0

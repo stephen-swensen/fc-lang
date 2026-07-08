@@ -91,7 +91,7 @@ let main = (args: str[]) ->
         host = authority[0..colon_opt!]
         let port_str = authority[colon_opt! + 1..authority.len]
         let p = text.parse_i32(port_str)
-        if p.is_none then
+        if p.is_err then
             io.write("furl: invalid port\n", stderr)
             sys.exit(1)
         port = p!
@@ -102,21 +102,21 @@ let main = (args: str[]) ->
 
     // --- DNS resolution ---
     let ip_opt = net.resolve(host)
-    if ip_opt.is_none then
+    if ip_opt.is_err then
         io.write(alloca("furl: could not resolve host %s{host}\n"), stderr)
         sys.exit(1)
     let ip = ip_opt!
 
     // --- Connect ---
     let fd_opt = net.open_tcp()
-    if fd_opt.is_none then
+    if fd_opt.is_err then
         io.write("furl: could not create socket\n", stderr)
         sys.exit(1)
     let fd = fd_opt!
     defer net.close(fd)
 
     let addr = net.make_addr(net.net_to_host32(ip), (u16) port)
-    if !net.connect_addr(fd, addr) then
+    if net.connect_addr(fd, addr).is_err then
         io.write(alloca("furl: connection to %s{host} port %d{port} failed\n"), stderr)
         sys.exit(1)
 
@@ -175,15 +175,17 @@ let main = (args: str[]) ->
     let mut out_opened = false
     if out_file.len > 0 then
         let f = io.open(out_file, "w")
-        if f.is_none then
+        if f.is_err then
             io.write(alloca("furl: could not open %s{out_file}\n"), stderr)
             sys.exit(1)
         out = f!
         out_opened = true
 
     loop
-        let n = net.recv_bytes(fd, recv_buf, 4096)
-        if n <= 0 then break
+        let n = match net.recv_bytes(fd, recv_buf, 4096) with
+                | ok(v) -> v
+                | err(_) -> break
+        if n == 0 then break
 
         if in_headers then
             // Accumulate into header buffer
@@ -220,5 +222,5 @@ let main = (args: str[]) ->
             if !head_only then
                 io.write(recv_buf[0..n], out)
 
-    if out_opened then io.close(out)
+    if out_opened then io.close(out)!
     0

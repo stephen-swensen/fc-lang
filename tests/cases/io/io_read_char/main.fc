@@ -7,30 +7,31 @@ let main = (args: str[]) ->
 
     // write a test file
     match io.open(path, "w") with
-    | some(wf) ->
+    | ok(wf) ->
         io.write("AB", wf)
-        io.close(wf)
-    | none -> assert(false)
+        io.close(wf)!
+    | err(_) -> assert(false)
 
-    // read chars back one at a time
+    // read chars back one at a time. read_char is u8?!: unwrapping the
+    // result layer with ! leaves the option layer (some = byte, none = EOF).
     match io.open(path, "r") with
-    | some(rf) ->
+    | ok(rf) ->
         // first char is 'A' (65)
-        let c1 = io.read_char(rf)
+        let c1 = io.read_char(rf)!
         assert(c1.is_some)
         assert(c1! == 65u8)
 
         // second char is 'B' (66)
-        let c2 = io.read_char(rf)
+        let c2 = io.read_char(rf)!
         assert(c2.is_some)
         assert(c2! == 66u8)
 
-        // third read is EOF
-        let c3 = io.read_char(rf)
+        // third read is EOF: ok(none), not an error
+        let c3 = io.read_char(rf)!
         assert(c3.is_none)
 
-        io.close(rf)
-    | none -> assert(false)
+        io.close(rf)!
+    | err(_) -> assert(false)
 
-    io.remove(path)
+    io.remove(path)!
     0

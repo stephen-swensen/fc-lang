@@ -2,42 +2,56 @@ import text from std::
 
 let main = (args: str[]) ->
     // parse_i32 — success
-    assert(text.parse_i32("42") == some(42))
-    assert(text.parse_i32("-7") == some(-7))
-    assert(text.parse_i32("0") == some(0))
+    assert(text.parse_i32("42") == ok(42))
+    assert(text.parse_i32("-7") == ok(-7))
+    assert(text.parse_i32("0") == ok(0))
 
-    // parse_i32 — failure
-    assert(text.parse_i32("abc") == none(i32))
-    assert(text.parse_i32("") == none(i32))
+    // parse_i32 — invalid input
+    assert(text.parse_i32("abc") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("") == err(i32, text.parse.invalid))
+
+    // parse_i32 — overflow: the i32-range check the wrapper applies, and the
+    // i64-range case strtoll itself reports via ERANGE. The extremes parse.
+    assert(text.parse_i32("2147483648") == err(i32, text.parse.overflow))
+    assert(text.parse_i32("-2147483649") == err(i32, text.parse.overflow))
+    assert(text.parse_i32("99999999999999999999") == err(i32, text.parse.overflow))
+    assert(text.parse_i32("2147483647") == ok(i32.max))
 
     // parse_i64 — success
-    assert(text.parse_i64("1000000000000") == some(1000000000000i64))
-    assert(text.parse_i64("-999") == some(-999i64))
+    assert(text.parse_i64("1000000000000") == ok(1000000000000i64))
+    assert(text.parse_i64("-999") == ok(-999i64))
+    assert(text.parse_i64("9223372036854775807") == ok(i64.max))
 
     // parse_i64 — failure
-    assert(text.parse_i64("xyz") == none(i64))
-    assert(text.parse_i64("") == none(i64))
+    assert(text.parse_i64("xyz") == err(i64, text.parse.invalid))
+    assert(text.parse_i64("") == err(i64, text.parse.invalid))
+    assert(text.parse_i64("9223372036854775808") == err(i64, text.parse.overflow))
+    assert(text.parse_i64("-9223372036854775809") == err(i64, text.parse.overflow))
 
     // parse_f64 — success
-    assert(text.parse_f64("3.14") != none(f64))
-    assert(text.parse_f64("0.0") == some(0.0))
-    assert(text.parse_f64("-1.5") == some(-1.5))
+    assert(text.parse_f64("3.14").is_ok)
+    assert(text.parse_f64("0.0") == ok(0.0))
+    assert(text.parse_f64("-1.5") == ok(-1.5))
 
-    // parse_f64 — failure
-    assert(text.parse_f64("bad") == none(f64))
-    assert(text.parse_f64("") == none(f64))
+    // parse_f64 — failure; underflow to zero/denormal is NOT an error
+    assert(text.parse_f64("bad") == err(f64, text.parse.invalid))
+    assert(text.parse_f64("") == err(f64, text.parse.invalid))
+    assert(text.parse_f64("1e999") == err(f64, text.parse.overflow))
+    assert(text.parse_f64("-1e999") == err(f64, text.parse.overflow))
+    assert(text.parse_f64("1e-999").is_ok)
 
     // parse_f32 — success
-    assert(text.parse_f32("2.5") == some(2.5f32))
-    assert(text.parse_f32("0.0") == some(0.0f32))
+    assert(text.parse_f32("2.5") == ok(2.5f32))
+    assert(text.parse_f32("0.0") == ok(0.0f32))
 
-    // parse_f32 — failure
-    assert(text.parse_f32("bad") == none(f32))
-    assert(text.parse_f32("") == none(f32))
+    // parse_f32 — failure; 1e50 fits f64 but overflows f32
+    assert(text.parse_f32("bad") == err(f32, text.parse.invalid))
+    assert(text.parse_f32("") == err(f32, text.parse.invalid))
+    assert(text.parse_f32("1e50") == err(f32, text.parse.overflow))
 
-    // over-length input returns none rather than overflowing the stack.
-    // build a 600-byte run of '0' digits — a "valid" number far past the
-    // max_parse_len cap, so every parse_* must reject it.
+    // over-length input fails with too_long rather than overflowing the
+    // stack. build a 600-byte run of '0' digits — a "valid" number far past
+    // the max_parse_len cap, so every parse_* must reject it.
     let big = alloc(u8[600] {})!
     defer free(big)
     let mut i = 0i64
@@ -45,15 +59,15 @@ let main = (args: str[]) ->
         if i >= big.len then break
         big[i] = 48u8   // '0'
         i = i + 1i64
-    assert(text.parse_i32(big) == none(i32))
-    assert(text.parse_i64(big) == none(i64))
-    assert(text.parse_f32(big) == none(f32))
-    assert(text.parse_f64(big) == none(f64))
+    assert(text.parse_i32(big) == err(i32, text.parse.too_long))
+    assert(text.parse_i64(big) == err(i64, text.parse.too_long))
+    assert(text.parse_f32(big) == err(f32, text.parse.too_long))
+    assert(text.parse_f64(big) == err(f64, text.parse.too_long))
 
     // the cap is inclusive: a 512-byte run still parses, 513 does not.
-    assert(text.parse_i32(big[0..512]) == some(0))
-    assert(text.parse_i64(big[0..512]) == some(0i64))
-    assert(text.parse_i32(big[0..513]) == none(i32))
-    assert(text.parse_i64(big[0..513]) == none(i64))
+    assert(text.parse_i32(big[0..512]) == ok(0))
+    assert(text.parse_i64(big[0..512]) == ok(0i64))
+    assert(text.parse_i32(big[0..513]) == err(i32, text.parse.too_long))
+    assert(text.parse_i64(big[0..513]) == err(i64, text.parse.too_long))
 
     0
