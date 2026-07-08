@@ -1,0 +1,7 @@
+// A statement-position match whose arms all yield results discards one — error.
+let fallible = (n: i32) -> if n > 0 then ok(n) else err(i32, 3)
+let main = (args: str[]) ->
+    match args.len with
+    | 0 -> fallible(1)
+    | _ -> fallible(2)
+    0

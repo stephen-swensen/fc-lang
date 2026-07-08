@@ -1,0 +1,5 @@
+// A result in statement position is a silently dropped failure — error.
+let fallible = () -> if true then ok(1) else err(i32, 3)
+let main = (args: str[]) ->
+    fallible()
+    0

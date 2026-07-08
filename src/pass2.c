@@ -1133,11 +1133,45 @@ static Symbol *resolve_symbol_kind(CheckCtx *ctx, const char *name, DeclKind kin
     return global_lookup_kind(ctx->symtab, name, kind, ctx->current_ns);
 }
 
-static Type *check_block(CheckCtx *ctx, Expr **stmts, int count) {
+/* Walk into trailing blocks / guard wrappers so a discard diagnostic lands on
+ * the expression that actually produced the value, not the enclosing block. */
+static Expr *discard_site(Expr *stmt) {
+    for (;;) {
+        if (stmt->kind == EXPR_BLOCK && stmt->block.count > 0) {
+            stmt = stmt->block.stmts[stmt->block.count - 1];
+        } else if (stmt->kind == EXPR_GUARD) {
+            stmt = stmt->guard.body;
+        } else {
+            break;
+        }
+    }
+    return stmt;
+}
+
+/* A result in statement position is a silently dropped failure — the one
+ * outcome the carrier exists to prevent. Discarding it is an error (decided
+ * 2026-07-08); `let _ = expr` is the explicit discard, and `defer` is exempt
+ * by contract (its value expression is checked outside the statement funnel,
+ * so it never reaches this check). Only results are guarded: a plain value
+ * (e.g. a byte count) in statement position stays legal, C-style. */
+static void check_result_discard(Expr *stmt, Type *t) {
+    if (!t || t->kind != TYPE_RESULT) return;
+    Expr *site = discard_site(stmt);
+    diag_error(site->loc, "%s result discarded: a dropped result silently loses its "
+        "failure; match on it, propagate with '?', unwrap with '!', or discard "
+        "explicitly with 'let _ = ...'", type_name(t));
+}
+
+/* tail_used: whether the last statement's value flows onward (function return
+ * value, block value). Loop/for bodies pass false — their tails are discarded
+ * every iteration (a loop's value comes only from `break v`). */
+static Type *check_block(CheckCtx *ctx, Expr **stmts, int count, bool tail_used) {
     if (count == 0) return type_void();
     Type *last = type_void();
     for (int i = 0; i < count; i++) {
         last = check_expr(ctx, stmts[i]);
+        if (i < count - 1 || !tail_used)
+            check_result_discard(stmts[i], last);
     }
     return last;
 }
@@ -4166,7 +4200,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->recursive_self_name = my_recursive_self;
         Scope *saved = ctx->scope;
         ctx->scope = inner;
-        Type *ret = check_block(ctx, e->func.body, e->func.body_count);
+        Type *ret = check_block(ctx, e->func.body, e->func.body_count, /*tail_used=*/true);
         ctx->scope = saved;
         ctx->recursive_ret = saved_recursive_ret;
         ctx->recursive_self_name = saved_recursive_self;
@@ -4840,7 +4874,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             else
                 e->prov = merge_prov(e->if_expr.then_body->prov, e->if_expr.else_body->prov);
         } else {
-            /* No else → void */
+            /* No else → void; the then-branch's value (if any) is discarded,
+               so a result there would be a silently dropped failure. */
+            check_result_discard(e->if_expr.then_body, tt);
             e->type = type_void();
         }
         return e->type;
@@ -4850,7 +4886,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         Scope *inner = scope_new(ctx->arena, ctx->scope);
         Scope *saved = ctx->scope;
         ctx->scope = inner;
-        e->type = check_block(ctx, e->block.stmts, e->block.count);
+        e->type = check_block(ctx, e->block.stmts, e->block.count, /*tail_used=*/true);
         if (e->block.count > 0)
             e->prov = e->block.stmts[e->block.count - 1]->prov;
         ctx->scope = saved;
@@ -6281,7 +6317,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->in_for = false;
 
         pretaint_loop_body(ctx->scope, e->loop_expr.body, e->loop_expr.body_count);
-        check_block(ctx, e->loop_expr.body, e->loop_expr.body_count);
+        check_block(ctx, e->loop_expr.body, e->loop_expr.body_count, /*tail_used=*/false);
 
         ctx->scope = saved;
         ctx->loop_break_type = saved_break;
@@ -6375,7 +6411,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->in_for = true;
 
         pretaint_loop_body(ctx->scope, e->for_expr.body, e->for_expr.body_count);
-        check_block(ctx, e->for_expr.body, e->for_expr.body_count);
+        check_block(ctx, e->for_expr.body, e->for_expr.body_count, /*tail_used=*/false);
 
         ctx->scope = saved;
         ctx->loop_break_type = saved_break;
@@ -8029,7 +8065,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         }
 
         /* Type-check arm body */
-        Type *arm_type = check_block(ctx, arm->body, arm->body_count);
+        Type *arm_type = check_block(ctx, arm->body, arm->body_count, /*tail_used=*/true);
         Provenance arm_prov = PROV_UNKNOWN;
         if (arm->body_count > 0)
             arm_prov = arm->body[arm->body_count - 1]->prov;

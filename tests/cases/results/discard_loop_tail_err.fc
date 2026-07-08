@@ -1,0 +1,7 @@
+// A loop body's tail is discarded every iteration; a result there is an error.
+let fallible = () -> if true then ok(1) else err(i32, 3)
+let main = (args: str[]) ->
+    loop
+        if args.len > 0 then break
+        fallible()
+    0

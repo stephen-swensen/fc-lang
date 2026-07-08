@@ -190,7 +190,9 @@ module io =
     // Reads an entire file into a heap-allocated string.
     // path: const str — file path to read.
     // returns: str! — ok(contents) on success; err with the failing step's
-    //   condition otherwise. Caller must free.
+    //   condition otherwise. Caller must free. Aborts if the buffer
+    //   allocation itself fails — err always means the I/O failed, never
+    //   out-of-memory (the stdlib-wide contract; see spec Part 9).
     //
     // Opens in binary mode: text mode on Windows translates CRLF→LF during
     // read, so the buffer (sized to the on-disk byte count from tell()) is

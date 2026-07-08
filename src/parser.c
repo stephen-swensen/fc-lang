@@ -3018,7 +3018,9 @@ static Expr *parse_match_expr(Parser *p) {
 
         advance_p(p); /* consume -> */
 
-        /* Parse arm body */
+        /* Parse arm body. (An empty body after `->` was briefly supported as
+           a no-op arm and rolled back 2026-07-08: `void()` is the one no-op
+           spelling — see result-type-design.md §Post-migration review.) */
         arm.body = parse_body(p, &arm.body_count);
 
         DA_APPEND(arms, arm_count, arm_cap, arm);

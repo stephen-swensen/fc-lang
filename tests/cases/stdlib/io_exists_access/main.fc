@@ -7,7 +7,7 @@ let main = (args: str[]) ->
     let missing = alloca("%s{tmp}/fc_test_exists_access_does_not_exist.txt")
 
     // Clean up any leftover from a prior run.
-    io.remove(path)
+    let _ = io.remove(path)
 
     // Missing path: every predicate returns false.
     assert(io.exists(missing) == false)

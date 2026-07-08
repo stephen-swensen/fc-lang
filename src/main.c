@@ -32,6 +32,17 @@ static char *read_file(const char *path) {
     return buf;
 }
 
+/* A build whose C output goes to the null device is a check-only build:
+ * there is no artifact for the .errcodes map to describe (and deriving a
+ * sibling path from /dev/null would try to create /dev/null.errcodes). */
+static bool output_is_null_device(const char *path) {
+#if defined(_WIN32)
+    return _stricmp(path, "NUL") == 0 || _stricmp(path, "NUL:") == 0;
+#else
+    return strcmp(path, "/dev/null") == 0;
+#endif
+}
+
 static char *change_extension(const char *path, const char *new_ext) {
     int len = (int)strlen(path);
     int dot = len;
@@ -225,9 +236,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
         remove(output_path);
         /* Keep the error-code map in step with the .c it describes. */
-        char *stale_map = change_extension(output_path, ".errcodes");
-        remove(stale_map);
-        free(stale_map);
+        if (!output_is_null_device(output_path)) {
+            char *stale_map = change_extension(output_path, ".errcodes");
+            remove(stale_map);
+            free(stale_map);
+        }
         return 1;
     }
 
@@ -239,8 +252,9 @@ int main(int argc, char **argv) {
      * the map across builds to see exactly which codes shifted. Reserved-range
      * passthrough codes (errno / Win32) belong to the platform's own
      * documentation and are not listed. A build that declares no errors
-     * removes any stale map so it can never lie about the current build. */
-    {
+     * removes any stale map so it can never lie about the current build.
+     * Check-only builds (output to the null device) skip the channel. */
+    if (!output_is_null_device(output_path)) {
         char *map_path = change_extension(output_path, ".errcodes");
         if (error_code_count() > 0) {
             FILE *mf = fopen(map_path, "w");

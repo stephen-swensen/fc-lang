@@ -8,8 +8,8 @@ let main = (args: str[]) ->
 
     // Clean up any leftovers from a prior run (Windows rename() fails if dst
     // exists). The discarded results are fine: absent files just err.
-    io.remove(src)
-    io.remove(dst)
+    let _ = io.remove(src)
+    let _ = io.remove(dst)
 
     // Create a file
     match io.open(src, "w") with

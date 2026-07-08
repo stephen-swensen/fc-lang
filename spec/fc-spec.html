@@ -1712,7 +1712,7 @@ let x = if c then return 1 else return 2   // error: every path returns
 
 ### `void()` — the explicit void value
 
-`void()` is a built-in primary expression that produces a `void` value. It is the canonical way to produce a void-typed expression where one is required — most commonly as a fall-through arm in a statement-level `match` where some arms do real work and others should do nothing:
+`void()` is a built-in primary expression that produces a `void` value. It is the canonical way to produce a void-typed expression where one is required — most commonly as a do-nothing arm in a statement-level `match` where some arms do real work and others should do nothing:
 
 ```fc
 match phase with
@@ -1720,6 +1720,8 @@ match phase with
 | paused -> render_overlay()
 | _ -> void()          // every other phase: do nothing
 ```
+
+(An empty arm body after `->` was considered and rejected — `void()` is the one no-op spelling; an absent body reads as an editing accident, and two spellings for one meaning is not FC.)
 
 Unlike `return`, `void()` does not transfer control — it is an inert value. This matters inside a `match` that gets lowered to a GCC statement expression: a bare `return` there would exit the *enclosing function*, not the match. `void()` produces a genuine void value and lets the match complete normally.
 
@@ -2968,6 +2970,24 @@ validate(x)!               // assert success: a plain void statement, aborts wit
 - **Representation**: the `i32` tag alone — C's status integer reified as a type. `default(void!)` is `ok`, zero-filled memory is `ok`, equality compares the codes.
 
 `void!` composes like any type: struct fields, slice elements (`void![N] {}` zero-fills to `ok`), `void!?`, and generic instantiation (`identity(ok)`) all work.
+
+### Results cannot be silently discarded
+
+A result in **statement position** — anywhere its value is dropped without being looked at — is a compile error. A dropped result is a silently lost failure, the exact outcome the carrier exists to prevent:
+
+```fc
+io.close(f)                 // error: void! result discarded: a dropped result
+                            // silently loses its failure; match on it, propagate
+                            // with '?', unwrap with '!', or discard explicitly
+                            // with 'let _ = ...'
+```
+
+The discarded positions are the non-tail statements of any block, the tail of a `loop` or `for` body (discarded every iteration), and the then-branch of an else-less `if`. Every observing form satisfies the rule — `match`, `x?`, `x!`, `.is_ok`/`.is_err`, binding with `let` — and two deliberate escapes exist:
+
+- **`let _ = fallible()`** — the explicit discard, for best-effort calls whose failure is genuinely ignorable (removing a leftover temp file, closing a handle after the data is already read). The intent is visible at the call site.
+- **`defer close(f)`** — `defer` discards by contract (§Defer): cleanup at scope exit is best-effort by nature. A caller who cares writes `close(f)?` before the scope ends.
+
+Only results are guarded. A plain value in statement position — a byte count from `write`, an ignored return — stays legal, C-style: values are data you may not need, results are the error channel. (Precedent: Zig makes discarding an error union a hard error with `_ =` as the escape; Rust warns via `#[must_use]`. FC has no warning severity, and this is important enough to fail the build.)
 
 ### Named error codes: `error` declarations
 
@@ -5515,6 +5535,8 @@ The resulting `str` shares memory with the original C string — no allocation o
 All standard library modules live in the `std::` namespace and are written in regular FC wrapping C standard library functions. Import with `import <module> from std::`. Source files are in `stdlib/`.
 
 **Error contract.** Fallible *operations* return results (`T!`/`void!`); *predicates* (`exists`, `eof`, …) return `bool`; genuine *absence* (`env`, `index_of`, `data`'s `get`/`pop`) stays `T?`. On failure, the branchable platform conditions arrive as **named FC errors** declared in per-module error groups (`io.file.not_found`, `net.conn.refused`, `text.parse.invalid`) — portable across POSIX errno and Windows error codes, matchable in patterns, rendered by `error_name` and `--backtraces`. A platform code without a curated name passes through **raw**, so nothing is ever lost: a code at or above 65536 is a named FC condition, below it is the platform's own number (interpreted per call, printable as-is). The mapping compares against extern consts supplied by the platform's own headers, so no numbers are hardcoded anywhere.
+
+**Allocation failure aborts.** Stdlib functions that heap-allocate internally (`read_all`, `list_dir`, `text.copy`/`split`/`join`/`to_upper`/`to_lower`, `data`'s containers) unwrap their allocations with `alloc(...)!` and **abort** if the allocator fails — out-of-memory is not reported through the result channel. Allocation failure is one bit with no discriminable reason (`alloc` is `T?`, not `T!` — see the design record), so a function's `err` always means its *operation* failed, never that memory ran out. This is the Rust default-allocator school; callers who need fallible allocation allocate their own buffers with `alloc` and match on it.
 
 ## std::io
 

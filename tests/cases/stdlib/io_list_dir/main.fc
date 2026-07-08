@@ -25,9 +25,9 @@ let main = (args: str[]) ->
 
     // Start fresh: remove any leftover files from a prior run and (re)create.
     // If the directory doesn't exist yet, the discarded errs are no-ops.
-    io.remove(path_a)
-    io.remove(path_b)
-    io.remove(path_c)
+    let _ = io.remove(path_a)
+    let _ = io.remove(path_b)
+    let _ = io.remove(path_c)
     c.rmdir(alloca(c"%s{dir}"))
     io.mkdir(dir)!
 

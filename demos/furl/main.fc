@@ -7,6 +7,60 @@ import io from std::
 import sys from std::
 import text from std::
 
+// Prints "furl: <msg> (<condition>)" — the named FC condition when the code
+// has one (error_name), the raw platform number otherwise — and returns the
+// process exit code, so err arms can read `return fail(...)`.
+let fail = (msg: const str, e: i32) ->
+    match error_name(e) with
+    | some(n) -> io.write(alloca("furl: %s{msg} (%s{n})\n"), stderr)
+    | none -> io.write(alloca("furl: %s{msg} (error %d{e})\n"), stderr)
+    1
+
+// Sends the full HTTP request. Every send propagates its failure upward with
+// `?`, so the first broken write surfaces at the call site as this void!.
+let send_request = (fd: i32, method: const str, path: const str, host: const str,
+                    hdrs: const str[], body: const str, verbose: bool) ->
+    // Request line + Host header
+    let req_line = alloc("%s{method} %s{path} HTTP/1.0\r\nHost: %s{host}\r\n")!
+    defer free(req_line)
+    if verbose then
+        io.write(alloca("> %s{method} %s{path} HTTP/1.0\n"), stderr)
+        io.write(alloca("> Host: %s{host}\n"), stderr)
+    net.send_bytes(fd, req_line)?
+
+    // Fixed headers
+    net.send_bytes(fd, "User-Agent: furl/1.0\r\n")?
+    if verbose then io.write("> User-Agent: furl/1.0\n", stderr)
+
+    net.send_bytes(fd, "Accept: */*\r\n")?
+    if verbose then io.write("> Accept: */*\n", stderr)
+
+    net.send_bytes(fd, "Connection: close\r\n")?
+    if verbose then io.write("> Connection: close\n", stderr)
+
+    // Custom headers
+    for hdr in hdrs do
+        let hdr_line = alloc("%s{hdr}\r\n")!
+        defer free(hdr_line)
+        if verbose then io.write(alloca("> %s{hdr}\n"), stderr)
+        net.send_bytes(fd, hdr_line)?
+
+    // Content-Length if body present
+    if body.len > 0 then
+        let cl = alloc("Content-Length: %d{body.len}\r\n")!
+        defer free(cl)
+        if verbose then io.write("> Content-Length: %d{body.len}\n", stderr)
+        net.send_bytes(fd, cl)?
+
+    // End of headers
+    net.send_bytes(fd, "\r\n")?
+    if verbose then io.write(">\n", stderr)
+
+    // Send body
+    if body.len > 0 then
+        net.send_bytes(fd, body)?
+    ok
+
 let main = (args: str[]) ->
     // --- Argument parsing ---
     let mut verbose = false
@@ -90,79 +144,39 @@ let main = (args: str[]) ->
     if colon_opt.is_some then
         host = authority[0..colon_opt!]
         let port_str = authority[colon_opt! + 1..authority.len]
-        let p = text.parse_i32(port_str)
-        if p.is_err then
-            io.write("furl: invalid port\n", stderr)
-            sys.exit(1)
-        port = p!
+        port = match text.parse_i32(port_str) with
+               | ok(v) -> v
+               | err(e) -> return fail(alloca("invalid port '%s{port_str}'"), e)
 
     if host.len == 0 then
         io.write("furl: empty hostname\n", stderr)
         sys.exit(1)
 
     // --- DNS resolution ---
-    let ip_opt = net.resolve(host)
-    if ip_opt.is_err then
-        io.write(alloca("furl: could not resolve host %s{host}\n"), stderr)
-        sys.exit(1)
-    let ip = ip_opt!
+    let ip = match net.resolve(host) with
+             | ok(v) -> v
+             | err(e) -> return fail(alloca("could not resolve host %s{host}"), e)
 
     // --- Connect ---
-    let fd_opt = net.open_tcp()
-    if fd_opt.is_err then
-        io.write("furl: could not create socket\n", stderr)
-        sys.exit(1)
-    let fd = fd_opt!
+    let fd = match net.open_tcp() with
+             | ok(v) -> v
+             | err(e) -> return fail("could not create socket", e)
     defer net.close(fd)
 
     let addr = net.make_addr(net.net_to_host32(ip), (u16) port)
-    if net.connect_addr(fd, addr).is_err then
-        io.write(alloca("furl: connection to %s{host} port %d{port} failed\n"), stderr)
-        sys.exit(1)
+    match net.connect_addr(fd, addr) with
+    | ok -> void()
+    | err(net.conn.refused) ->
+        io.write(alloca("furl: %s{host}:%d{port} refused the connection — is the server listening?\n"), stderr)
+        return 1
+    | err(e) -> return fail(alloca("connection to %s{host} port %d{port} failed"), e)
 
     // --- Build and send HTTP request ---
     let actual_method = if head_only && method == "GET" then "HEAD" else method
-
-    // Request line + Host header
-    let req_line = alloc("%s{actual_method} %s{path} HTTP/1.0\r\nHost: %s{host}\r\n")!
-    defer free(req_line)
-    if verbose then
-        io.write(alloca("> %s{actual_method} %s{path} HTTP/1.0\n"), stderr)
-        io.write(alloca("> Host: %s{host}\n"), stderr)
-    net.send_bytes(fd, req_line)
-
-    // Fixed headers
-    net.send_bytes(fd, "User-Agent: furl/1.0\r\n")
-    if verbose then io.write("> User-Agent: furl/1.0\n", stderr)
-
-    net.send_bytes(fd, "Accept: */*\r\n")
-    if verbose then io.write("> Accept: */*\n", stderr)
-
-    net.send_bytes(fd, "Connection: close\r\n")
-    if verbose then io.write("> Connection: close\n", stderr)
-
-    // Custom headers
-    for hi in 0..num_hdrs do
-        let hdr = custom_hdrs[hi]
-        let hdr_line = alloc("%s{hdr}\r\n")!
-        defer free(hdr_line)
-        if verbose then io.write(alloca("> %s{hdr}\n"), stderr)
-        net.send_bytes(fd, hdr_line)
-
-    // Content-Length if body present
-    if body_data.len > 0 then
-        let cl = alloc("Content-Length: %d{body_data.len}\r\n")!
-        defer free(cl)
-        if verbose then io.write("> Content-Length: %d{body_data.len}\n", stderr)
-        net.send_bytes(fd, cl)
-
-    // End of headers
-    net.send_bytes(fd, "\r\n")
-    if verbose then io.write(">\n", stderr)
-
-    // Send body
-    if body_data.len > 0 then
-        net.send_bytes(fd, body_data)
+    match send_request(fd, actual_method, path, host,
+                       custom_hdrs[0..num_hdrs], body_data, verbose) with
+    | ok -> void()
+    | err(e) -> return fail("failed to send request", e)
 
     // --- Read response ---
     let mut header_buf = u8[8192] {}
@@ -174,17 +188,15 @@ let main = (args: str[]) ->
     let mut out = stdout
     let mut out_opened = false
     if out_file.len > 0 then
-        let f = io.open(out_file, "w")
-        if f.is_err then
-            io.write(alloca("furl: could not open %s{out_file}\n"), stderr)
-            sys.exit(1)
-        out = f!
+        out = match io.open(out_file, "w") with
+              | ok(f) -> f
+              | err(e) -> return fail(alloca("could not open %s{out_file}"), e)
         out_opened = true
 
     loop
         let n = match net.recv_bytes(fd, recv_buf, 4096) with
                 | ok(v) -> v
-                | err(_) -> break
+                | err(e) -> return fail("receive failed", e)
         if n == 0 then break
 
         if in_headers then
@@ -222,5 +234,10 @@ let main = (args: str[]) ->
             if !head_only then
                 io.write(recv_buf[0..n], out)
 
-    if out_opened then io.close(out)!
+    // A close failure on the output file means buffered response data may not
+    // have reached disk — observe it rather than discard it.
+    if out_opened then
+        match io.close(out) with
+        | ok -> void()
+        | err(e) -> return fail(alloca("failed to finish writing %s{out_file}"), e)
     0

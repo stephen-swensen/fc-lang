@@ -825,6 +825,83 @@ each value is either the named code or the raw one.
   follow-up) — pushes the mapping table to every consumer, multiplied per platform, and
   extern consts still can't appear in patterns.
 
+## Post-migration design review — DECIDED 2026-07-08, IMPLEMENTED 2026-07-08
+
+*Sixth design pass: a full design review of the shipped feature (design/use audit against the
+migrated stdlib, demos, and live probes) confirmed the load-bearing decisions and surfaced one
+substantive gap plus polish items. Decided in discussion 2026-07-08; recorded here so none of
+it is re-litigated.*
+
+### Discarding a result is a compile error
+
+A result (`T!`/`void!`) in **statement position** — non-tail block statements, the tail of a
+`loop`/`for` body (discarded every iteration), the then-branch of an else-less `if` — is a
+compile error: a dropped result is a silently lost failure, the exact outcome the carrier
+exists to prevent, and it was the one place the feature's own thesis went unenforced (before
+this rule, `io.close(f)` as a bare statement compiled and dropped the error invisibly).
+Precedent: Zig hard-errors on discarded error unions (`_ =` escape); Rust warns via
+`#[must_use]`; FC has no warning severity, and by its own rule this is important enough to
+fail the build.
+
+- **Scope is results only.** A plain value in statement position (a byte count from `write`)
+  stays legal, C-style: values are data you may not need, results are the error channel.
+  Extending the rule to `T?` or all values was not adopted.
+- **Escapes:** `let _ = fallible()` is the explicit discard (already compiled before this
+  change — `_` is an ordinary binding with codegen's unused-silencer; now it is also the
+  blessed idiom, used by the stdlib tests' best-effort cleanup). `defer close(f)` stays legal:
+  defer discards by contract, and its value expression is checked outside the statement
+  funnel, so the carve-out is structural, not special-cased.
+- Implementation: `check_result_discard` in `src/pass2.c`, called from `check_block` (which
+  gained a `tail_used` flag — function bodies/blocks/arm bodies pass true, loop/for bodies
+  false) and from the else-less-if branch; a `discard_site` walk descends trailing
+  blocks/guards so the diagnostic lands on the producing expression. Fallout across the
+  entire tree was three stdlib tests (best-effort `io.remove` cleanup → `let _`) and the
+  demos' highscore close/mkdir calls — evidence the rule's cost is near zero while the demos
+  audit found it catching real drops (furl discarded every HTTP send result).
+
+### Empty match arms — REJECTED (adopted briefly, rolled back same day)
+
+The review flagged "no way to write a do-nothing `ok` arm in a void match" as a friction
+point, and `| pat ->` with nothing after the arrow was implemented as an explicit empty arm.
+Both halves of that were mistaken, and the user rolled it back on clarification:
+
+- The flagged friction was a **misunderstanding**: the reviewer believed the bare `ok`
+  pattern couldn't head an arm in a `void!` match. It can — the missing piece was only the
+  no-op *body*, and **`void()` already exists as the blessed spelling for exactly that**
+  (spec §`void()`; face-invaders used `| _ -> void()` throughout). That neither participant
+  recalled `void()` during the review is a discoverability data point, not a design gap.
+- With `void()` in the language, an empty arm is a **second spelling for the same meaning** —
+  the one-way-to-do-it violation — and an absent body reads as an editing accident rather
+  than a decision. `| ok -> void()` states the no-op; `| ok ->` merely omits it.
+
+So: `void()` is the do-nothing arm, empty arm bodies are a parse error, and the grammar's arm
+body after `->` stays mandatory. Recorded here so the empty arm isn't re-proposed; if arm
+no-op ergonomics ever come up again, the answer is `void()`'s discoverability (docs,
+diagnostics), not new grammar.
+
+### Consciously declined (same review)
+
+- **`unwrap_or` / `ok_or` stdlib adapters** — the or-default consumer shape (3-line match) is
+  writable as a plain generic function today (verified: `(r: 'a!, d: 'a)` monomorphizes fine);
+  shipping stdlib adapters was declined for now — match remains the idiom, and the tiny
+  helpers invite an adapter-zoo. Revisit only if lived use shows the 3-line match dominating
+  real code.
+- **Changing `alloc`-failure behavior in stdlib functions** — internally-allocating stdlib
+  functions (`read_all`, `list_dir`, `text.copy`/`split`/`join`, …) abort on allocation
+  failure (`alloc(...)!`); kept as-is and now **documented** as the stdlib-wide contract
+  (spec Part 9 intro + `read_all` doc comment): a function's `err` always means its operation
+  failed, never out-of-memory. The Rust default-allocator school.
+
+### Demos brought onto the feature (same review)
+
+furl was rewritten idiomatically: `.is_err`+`!` ladders → match with diverging arms
+(`return fail(...)`), a `fail` helper rendering `error_name` with numeric fallback, a
+`send_request` helper propagating every send with `?`, a named-condition branch
+(`| err(net.conn.refused)`), and observed output-file close (do-nothing `ok` arms spelled
+`| ok -> void()`). fing distinguishes `err(net.conn.would_block)` (expected timeout) from
+real receive failures (reported via `error_name`). The games' highscore paths use `let _ =`
+best-effort discards.
+
 ## Follow-ups (in order)
 
 1. **Implementation** of `T!` per this document, with tests (new `tests/cases/results/`
@@ -856,6 +933,13 @@ each value is either the named code or the raw one.
    declarable. Predicates stay `bool`; `read`/`write` stay raw counts; `alloc` stays `T?`
    (see above). Spec Part 9 documents the contract; stdlib tests reworked with err-path
    coverage (+ `stdlib/net_error_paths`); all five demos migrated.
+6. **Post-migration design review** — ✅ DECIDED & IMPLEMENTED 2026-07-08: discarding a
+   result in statement position is a compile error (`let _ =` explicit discard, defer exempt
+   by contract); empty match arms adopted then ROLLED BACK same day (`void()` is the one
+   no-op arm spelling — see the review section); `unwrap_or`-style adapters and
+   `alloc`-abort changes consciously declined; stdlib OOM-abort contract documented; demos
+   made idiomatic; check-only builds (`-o /dev/null`) skip the `.errcodes` map. Tests
+   `tests/cases/results/discard_*`; spec §Results cannot be silently discarded.
 
 ## Revisit conditions
 

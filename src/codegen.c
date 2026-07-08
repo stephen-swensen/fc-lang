@@ -4380,6 +4380,15 @@ static void emit_expr(Expr *e, FILE *out) {
                     } else {
                         emit_expr(arm->body[s], out);
                         fprintf(out, ";\n");
+                        if (arm->body[s]->kind == EXPR_LET) {
+                            /* Same -Wunused-variable silencer emit_block_stmts
+                             * uses; this path emits arm statements directly. */
+                            const char *vn = arm->body[s]->let_expr.codegen_name
+                                ? arm->body[s]->let_expr.codegen_name
+                                : arm->body[s]->let_expr.let_name;
+                            emit_indent(out);
+                            fprintf(out, "(void)%s;\n", vn);
+                        }
                     }
                 }
                 defer_scope_pop();

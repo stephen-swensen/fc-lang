@@ -114,10 +114,17 @@ let main = (args: str[]) ->
         else
             sent = sent + 1
             let mut reply = u8[128] {}
-            // a receive timeout arrives as err(conn.would_block)
+            // The receive window expiring is the expected miss — it arrives as
+            // the named condition conn.would_block and counts as a lost reply.
+            // Anything else is a real receive failure, reported by name or code.
             let n_recv = match net.recv_from(fd, reply, 128) with
                          | ok(v) -> v
-                         | err(_) -> -1i64
+                         | err(net.conn.would_block) -> -1i64
+                         | err(e) ->
+                             match error_name(e) with
+                             | some(nm) -> io.write(alloca("recv failed (%s{nm})\n"), stderr)
+                             | none -> io.write(alloca("recv failed (error %d{e})\n"), stderr)
+                             -1i64
             let elapsed = now_usec() - start
             // SOCK_RAW: reply has IP header + ICMP packet
             let ihl = (i32) (reply[0] & 0x0Fu8) * 4

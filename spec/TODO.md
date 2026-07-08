@@ -55,6 +55,20 @@ truth**; don't re-litigate here. Remaining follow-ups, in order:
    declarable (grammar note + spec §Reserved identifiers; tests `extern/dunder_*`). Spec
    Part 9 updated; demos migrated; tests `stdlib/*` reworked + `stdlib/net_error_paths`.
 
+## `text.parse_*` trailing-garbage acceptance — whole-string consumption question
+
+`parse_i32("99xyz")` returns `ok(99)`: the parsers follow the strtoll leading-token contract
+(err only when *no* leading number exists), so trailing garbage is silently accepted —
+surfaced 2026-07-08 when furl accepted the URL port `99xyz` as 99. The Rust/Zig school
+errors unless the whole string is consumed (`endptr` must reach the terminator), which is
+almost always what a caller means by "parse this string as a number". Not a one-line flip:
+fasteroids/fibbles/face-invaders parse highscores from zero-padded fixed buffers
+(`"123\n\0\0…"`) and depend on trailing-junk tolerance, so whole-string consumption needs a
+companion story — trailing-whitespace(+NUL?) tolerance in the parsers, a documented
+"trim/slice before parsing" contract for callers, or a separate lenient form. Decide the
+contract, update `error parse` docs (`parse.invalid` for unconsumed tail?), migrate the
+demos, and add err-path tests for `"99xyz"`, `"1.5"` (parse_i32), `""`, and padded buffers.
+
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 
 `atomic_load_acquire` / `atomic_store_release` (shipped 2026-06-10, see archived TODO) accept
