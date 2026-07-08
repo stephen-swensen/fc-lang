@@ -661,6 +661,76 @@ on `(x?)`.)*
   inside-out noise; and `!` remains prefix boolean-not regardless, so the rename buys no
   single-purpose token — only migration churn.
 
+## `alloc` stays `T?` — the option/result boundary for allocation — DECIDED 2026-07-07
+
+*Raised at the top of the stdlib migration (follow-up 5): now that `T!` exists, should the
+`alloc` intrinsic move from the option family (`T*?`/`T[]?`/`str?`) to the result family
+(`T*!`)? Decided in discussion 2026-07-07 to **keep it an option**; recorded here so the
+migration doesn't reopen it.*
+
+### The decision: `alloc` remains `T?`
+
+Allocation failure is **one bit** — the allocator returned NULL — with no discriminable reason.
+`malloc`/`calloc` (what `alloc` lowers to) have exactly one failure signal; C11 doesn't even
+guarantee `errno` is set on failure (POSIX guarantees `ENOMEM`, a single value). The one
+arguable second reason, `calloc(n, size)` **overflow**, surfaces as the same NULL and properly
+belongs to the *size computation* — FC's `checked` overflow axis — not to the allocator's error
+channel. So the failure carries no menu to branch on, which is precisely the contract of `T?`
+under this document's own signature-legibility rule (`v?` = absence, one bit; `handle!` =
+failure has a reason). Typing `alloc` as `T!` would promise a discriminable reason and deliver a
+lone constant — the same signature dishonesty the "Error codes on `none`" rejection guards
+against, run in reverse.
+
+Two reinforcing costs, both this branch's stated priorities:
+
+- **Repr.** `T*?` is the null-sentinel — zero-overhead, a repr identity. `T*!` is
+  `{ int32_t err; T* value; }` — strictly bigger and *not* a repr identity for the pointer case
+  — paid on `alloc(u8[n] {})!`, the most common idiom in the language, and felt most on the
+  16-bit-int targets. Carrying a reason that doesn't exist is exactly the unsought machinery FC
+  declines.
+- **Idiom family.** Keeping `alloc` an option keeps its `!` meaning "unwrap the present value,"
+  consistent with every other option, rather than splitting the canonical allocation idiom onto
+  the result rail.
+
+### Precedent
+
+Every serious language treats allocation failure as a single condition, and none hands back a
+reason menu: **Rust** aborts by default (`Box::new`) and its fallible `AllocError` is a
+*zero-field unit struct* — the "you asked for too much" case (`CapacityOverflow`) lives one
+layer up in the collection's size logic, mirroring FC's overflow-is-`checked` split; **Zig**'s
+`Allocator.Error` is the *single-member* set `error{OutOfMemory}`, so what its `!T` buys is
+`try`-uniformity, not reason-conveyance (a result whose `err` is a foregone conclusion);
+**kernel C** returns NULL and the *caller* synthesizes `-ENOMEM`; **C++** `new` throws a
+payload-less `bad_alloc`.
+
+### The `x?` gap is intentional, not a wart
+
+Because `alloc` is an option, a function returning `foo!` cannot write `alloc(...)?` (option
+propagation into a result-returning function is a compile error by design). Closing that gap
+would require `none → err(code)` — the invented-code hidden conversion the propagation section
+already rejects. The friction is the no-implicit-rewriting rule working: an allocation failure
+that must travel upward as a result is spelled explicitly at the site that *decides* what it
+means — `match alloc(...) with | some(p) -> … | none -> err(T, …)`, or `!` to abort.
+
+### Rejected / deferred
+
+- **`alloc : T!` with a lone `sys.out_of_memory` code** — a result whose `err` case is a
+  foregone conclusion is an option in a costume, at strictly higher repr cost; see the decision
+  above. If allocation ever grows a genuinely multi-reason story (custom allocators:
+  arena-exhausted vs system-OOM vs overflow), it arrives as a *separate, explicitly-`T!`*
+  allocator surface — Rust's `try_new`/`try_reserve` beside the abort-y default — with a blessed
+  `error sys` group at that point, not by taxing every `alloc` now. Door open, not now.
+- **Raw errno passthrough on allocation failure** (had `alloc` gone `T!`) — rejected in favor of
+  a blessed named condition *if* a code were ever needed: FC owns `alloc` (an intrinsic with
+  escape analysis and zero-init, not a bare extern), allocation's condition is platform-uniform,
+  and errno-after-malloc is not C11-guaranteed. Raw passthrough (`from errno(null)`) is for the
+  extern boundary where the platform produced the number; a language-owned intrinsic's failure
+  is a language-owned named condition. (Moot while `alloc` stays `T?`.)
+
+*Consequence for the migration:* `alloc` is untouched. A blessed `error sys` group is **not**
+forced by allocation; it enters only if the genuinely multi-reason modules (`io`, `net`) want
+named conditions, decided when the migration reaches them.
+
 ## Follow-ups (in order)
 
 1. **Implementation** of `T!` per this document, with tests (new `tests/cases/results/`
@@ -684,6 +754,7 @@ on `(x?)`.)*
 5. **Stdlib migration** (`io`'s conflating options, `net`'s `-1` sentinels, `mkdir`'s bool) —
    trails the feature, lands on this branch before merge into `develop`. Consumes items 2
    and 4: externs move to `T!`/`void!` returns via protocols; wrappers propagate with `x?`.
+   `alloc` is explicitly *not* in scope — it stays `T?` (see "`alloc` stays `T?`" above).
 
 ## Revisit conditions
 
