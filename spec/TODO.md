@@ -192,6 +192,56 @@ unchanged.
   confirm the capture-a-pointer idiom composes (it should: same as capturing any `let` pointer,
   programmer owns the lifetime).
 
+## Union companion modules don't resolve at top level — variant fall-through gap
+
+Surfaced 2026-07-09 during wolf-fc's main.fc split. Spec §Type-associated modules says "a
+module may share a name with a struct or union in the same scope" and, for unions, that
+module members take priority with fall-through to variant construction on a member miss.
+The *struct* form works at top level, even across files (wolf-fc: `struct level` +
+`module level` in `level.fc`, referenced project-wide). The *union* form does not: a
+top-level companion module shadows the union's variants with no fall-through, so every
+existing construction site breaks. Minimal repro (single file):
+
+```fc
+union thing =
+    | alpha
+    | beta
+
+module thing =
+    let code = (t: thing) ->
+        match t with
+        | alpha -> 0
+        | beta -> 1
+
+let main = (args: str[]) ->
+    let t = thing.beta        // error: module 'thing' has no member 'beta'
+    thing.code(t)
+```
+
+Both spec examples happen to nest the pair inside an enclosing module, which is the one
+configuration where fall-through works — so either implement the fall-through for
+top-level (namespace-scope) companions to match the spec's "same scope" wording, or
+narrow the spec to say union companions are module-nested only. wolf-fc worked around it
+by homing the helper elsewhere (`diag.phase_code` instead of `game_phase.code`).
+
+## fcc emits invalid C instead of a diagnostic for an unresolved type in a struct field
+
+Also surfaced 2026-07-09 in the wolf-fc split: a top-level struct was moved to a new file
+that lacked the `import random from std::` its field type needed —
+
+```fc
+// no `import random from std::` in this file
+struct game =
+    rng_enemy: random.pcg_random
+```
+
+fcc exited 0 and emitted the unresolved name into the generated C; the failure only
+surfaced downstream as cc errors (`expected specifier-qualifier-list before 'random'`,
+`'fc__game' has no member named 'rng_enemy'`). An unresolvable type in a struct field
+should be an FC-level "unknown type" diagnostic at the field's source location — the
+same treatment function signatures already get. Likely scoped to field-type resolution
+of top-level structs referencing file-level imports that aren't present.
+
 ---
 
 ## Editor / LSP server (`fcc --lsp`)
