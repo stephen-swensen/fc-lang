@@ -162,7 +162,7 @@ tax on nearly every line of the boundary. A knowing, documented trade — flagge
 because the friction is visible even in the spec's showcase examples, which suggests
 users will feel it constantly.
 
-### 6. Loop-condition inversion
+### 6. Loop-condition inversion ✅ RESOLVED (deferred) 2026-07-08
 
 With no `while`, the idiom is `loop / if not_ready() then break / ...` — every condition
 reads negated relative to intent. `for` covers the common cases and the one-construct
