@@ -473,6 +473,8 @@ This works because of four mutually reinforcing design decisions:
 
 **A note on numeric operators** — `+`, `*`, and friends work across all numeric types, which might appear to be a form of overloading. It is not. When the compiler encounters `a + b`, both `a` and `b` are already fully typed by their own bottom-up inference before the operator is consulted. Operator resolution is a post-inference step — a type-indexed dispatch table, not a constraint to be solved. The implicit widening rule (`i32 + i64` widens the narrower operand) is the one bounded exception: it is applied after both operands are independently typed, flows only in one direction (narrow to wide), and never reinterprets a literal. The type of `42` is always `i32` regardless of what it is added to. This is why integer-to-float conversion is always an explicit cast in FC — allowing `42` to silently become `f64` based on context would be a genuine violation of the directional model.
 
+The only other place the model bends is the propagation operator `x?` (§Propagation: `x?`), whose failure exit constructs the enclosing function's `err`/`none` — a value whose type is spelled not at the site but on the same function's explicit success paths. Widening adjusts a representation after types are known; `?` is the language's one sanctioned non-local *construction*, and §Propagation states the two grounds on which it is sanctioned.
+
 Other languages with more powerful type systems — Haskell, ML, Rust — require global inference or bidirectional checking because features like type classes, trait resolution, and lifetime inference create dependencies that flow *downward* from context as well as upward from structure. FC is deliberately designed to avoid those features, not because inference power is undesirable but because the language is more predictable, more understandable, and easier to implement correctly when the inference algorithm is a single directional pass.
 
 The one nuance is mutually recursive top-level functions: since the first compiler pass collects names without evaluating bodies, two functions that call each other must be type-checked as a system. In practice the base cases anchor the types and the mutual calls are consistent with them — the compiler resolves mutually recursive groups together. This is a bounded technical complexity, not an exception to the model.
@@ -666,7 +668,7 @@ Type variable names begin with an apostrophe (`'`) followed by a letter, then ze
 
 The following are **reserved words** and may not be used as identifiers:
 
-`let`, `mut`, `const`, `struct`, `union`, `error`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `defer`, `some`, `true`, `false`, `none`, `ok`, `err`, `void`
+`let`, `mut`, `const`, `struct`, `union`, `error`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `defer`, `discard`, `some`, `true`, `false`, `none`, `ok`, `err`, `void`
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
@@ -2912,32 +2914,34 @@ Because the failure path is a `return`, it unwinds **all pending `defer`s** on i
 **The enclosing function must already return the carrier.** `?` contributes nothing to type inference — the function's return type is anchored the way every FC return type is anchored: by what the success paths explicitly construct. For result propagation that means `ok(...)`/`err(...)` (or a bare `ok` for `void!`); for option propagation, `some(...)`/`none(T)`. A `?` in a body whose success paths yield a plain `T` (or void) is a compile error naming the fix:
 
 ```fc
-let doubled = (n: i32) ->
+let doubled = (s: str) ->
     let v = parse_port(s)?
     v * 2          // error: result propagation (?) requires the enclosing function
                    // to return a result type, but it returns i32; construct the
                    // result explicitly on the success paths — ok(...)/err(...)
 
-let doubled = (n: i32) ->
+let doubled = (s: str) ->
     let v = parse_port(s)?
-    ok(v * 2)      // (i32) -> i32!
+    ok(v * 2)      // (str) -> i32!
 ```
 
 The void-shaped case anchors with bare `ok` — one visible token, on the same principle. Note that `?` is only needed when work *follows* the fallible call; a fallible call in tail position is already the function's result and passes through with no `?` at all:
 
 ```fc
 let make_dirs = (a: str, b: str) ->
-    io.mkdir(a, 493u32)?              // must succeed before we go on
-    io.mkdir(b, 493u32)               // tail: its void! IS the result — no ?, no ok
+    io.mkdir(a)?                      // must succeed before we go on
+    io.mkdir(b)                       // tail: its void! IS the result — no ?, no ok
 
-let ensure_dir = (path: str) ->
-    if exists(path) then return ok
-    io.mkdir(path, 493u32)?           // propagate a real errno, or continue
+let prepare_dir = (path: str) ->
+    if io.exists(path) then return ok
+    io.mkdir(path)?                   // propagate a real failure, or continue
     log_created(path)
     ok                                 // (str) -> void!
 ```
 
 An implicit alternative — inferring `T!` from the presence of `?` and auto-wrapping the success paths — was considered and rejected: it writes a return type the source never spells and inserts constructions the programmer never wrote, violating FC's explicitness. The full trade-off is recorded in `spec/result-type-design.md` §Propagation operator.
+
+**The one sanctioned non-local construction.** Even with the carrier explicit, `x?` remains a deliberate, scoped exception to directional inference: its failure exit constructs a whole value — the enclosing function's `err` with the local code injected, or that type's `none` — whose type appears nowhere at the site. Nothing else in FC builds a value this way; every other construction is type-anchored on the spot (`err(T, code)`, `none(T)`, `default(T)`, struct literals, bare `ok` self-anchoring). The exception is sanctioned on two grounds. First, the non-locality is `return`'s, inherited honestly: `?` desugars to a return, and a return is the one construct whose meaning is inherently about the function boundary — every `return v` sends a value afar; here the compiler merely spells the value being sent. Second, the anchoring rule above is what keeps the far anchor visible: the induced type is never *invented* from a distance — it is always a type the same function body spells explicitly on its success paths, so a reader tracing a `?` has a guaranteed in-body place to look, and the diagnostic points there. One non-local construction, targeting an always-spelled type, in exchange for the entire propagation feature.
 
 Because the carrier is always explicit, the rest follows with no special cases: return paths mix `return ok(v)`, `return err(T, code)`, and propagation freely (they are all the same type); recursion works (the base case anchors the carrier before self-calls resolve, e.g. `if v <= 1 then ok(1) else ok(v * fact(v - 1)?)`); and a tail that is already a result — a call to another fallible function — passes through untouched.
 
@@ -3034,7 +3038,7 @@ Assignment is deterministic: fully-qualified declared names are sorted and numbe
 
 **Codes are not stable across builds**: adding or renaming a declared error shifts every code after it in sort order. Accepted, as Zig accepts it — the mitigation is printing *names*, not persisting numbers, through three channels, each with its own cost home:
 
-- **`error_name(e)`** — an intrinsic yielding `str?`: `some` of the fully-qualified name (`"file_io.not_found"`) for a declared code, `none` for reserved-range and negative codes (format the number yourself — returning a formatted string would hide an allocation). Backed by a whole-program static table emitted **only when `error_name` is used**; a lean binary that never asks pays nothing.
+- **`error_name(e)`** — an intrinsic yielding `const str?`: `some` of the fully-qualified name (`"file_io.not_found"`) for a declared code, `none` for reserved-range and negative codes (format the number yourself — returning a formatted string would hide an allocation). The payload is `const str` for the same reason a string literal is: the name lives in a static table, emitted **only when `error_name` is used** — a lean binary that never asks pays nothing.
 - **`--backtraces` aborts** — the flag's existing contract is "pay static data for readable failures", so with it on, the name table is emitted unconditionally and the `x!` abort prints the qualified name alongside the code. Lean builds keep numbers. No dedicated flag: one diagnostic-fidelity-vs-size axis, one knob.
 - **The `.errcodes` map** — the "strip the binary, keep the map" channel (the linker-map school): every successful compile that declares errors automatically writes `<output>.errcodes` next to the C output (`out.c` → `out.errcodes`), one `code<TAB>qualified_name<TAB>file:line` line per declared error. It is not opt-in *because* codes are not build-stable: the map is the durable record, and an opt-in flag's only failure mode is discovering you needed it after the incident, when the map for the shipped build doesn't exist. Zero binary cost; deterministic and diffable, so CI can see exactly which codes shifted when a declaration was added. A build that declares no errors removes any stale map, so the map next to a `.c` always describes that build.
 
