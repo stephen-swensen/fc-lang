@@ -60,7 +60,7 @@ concentrated in two places: **error propagation** and **closures that can't esca
 
 ## Glaring frictions
 
-### 1. Error propagation (the big one)
+### 1. Error propagation (the big one) ✅ RESOLVED 2026-07-08
 
 FC leans on options and `result`-style unions, but offers no propagation affordance. The
 unwrap-or-bail idiom is a 3-line `match` with a diverging arm, *per fallible call*.
@@ -263,7 +263,7 @@ may store this pointer") would be more in FC's spirit than whole-program analysi
 ## Ranked priorities
 
 1. **Error-propagation sugar** — pure desugar, huge ergonomic payoff, zero cost-model
-   violation.
+   violation. ✅ RESOLVED 2026-07-08
 2. **An explicit heap-closure escape hatch** — the `alloc` symmetry already exists in the
    language's vocabulary. ✅ RESOLVED 2026-07-03 (see item 2 above).
 3. **The markers-in-generics spec gap** — cheap to specify now, annoying to retrofit.
