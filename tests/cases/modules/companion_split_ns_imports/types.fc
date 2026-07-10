@@ -1,0 +1,6 @@
+// The union half of the pair, in namespace `types::`.
+namespace types::
+
+union thing =
+    | alpha
+    | beta

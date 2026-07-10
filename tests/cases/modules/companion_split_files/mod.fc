@@ -1,0 +1,6 @@
+// Companion module for `thing`, in a different file from the union declaration.
+module thing =
+    let code = (t: thing) ->
+        match t with
+        | alpha -> 0
+        | beta -> 1

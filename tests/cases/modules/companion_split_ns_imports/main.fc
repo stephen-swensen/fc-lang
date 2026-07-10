@@ -1,0 +1,11 @@
+// Two namespace imports of the same name from different namespaces bring the two
+// halves into one lexical scope: the union from `types::`, the companion module
+// from `ops::`. The module import must not clobber the type import (they are
+// different kinds and coexist), so variant construction keeps its fall-through.
+import thing from types::
+import thing from ops::
+
+let main = (args: str[]) ->
+    assert(thing.code(thing.alpha) == 0)
+    assert(thing.code(thing.beta) == 1)
+    0

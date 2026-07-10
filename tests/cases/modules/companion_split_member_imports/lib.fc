@@ -1,0 +1,16 @@
+// The two halves of a companion pair live in different modules: the union in
+// `defs`, the companion module in `ops`. They are brought together at the use
+// site by two separate member imports (see main.fc). Because companionship is a
+// co-visibility rule, the imported name resolves to both.
+module defs =
+    union thing =
+        | alpha
+        | beta
+
+module ops =
+    import thing from defs
+    module thing =
+        let code = (t: thing) ->
+            match t with
+            | alpha -> 0
+            | beta -> 1

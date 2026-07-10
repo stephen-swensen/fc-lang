@@ -1,0 +1,11 @@
+// `import phase from game::` brings both the union `phase` and its companion
+// module `phase` into scope. Member calls resolve to the module; variant names
+// fall through to construction.
+import phase from game::
+
+let main = (args: str[]) ->
+    let p = phase.running
+    assert(phase.code(p) == 20)
+    assert(phase.code(phase.setup) == 10)
+    assert(phase.code(phase.done) == 30)
+    0

@@ -1,0 +1,6 @@
+// The union and its companion module are declared in separate files — they are
+// never written side by side, only co-visible at global scope. Companionship is
+// a resolution property, so the fall-through still applies.
+union thing =
+    | alpha
+    | beta

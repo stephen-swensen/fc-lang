@@ -1,0 +1,13 @@
+// A top-level union and its companion module, living together in a library file
+// and referenced from another file (the wolf-fc main.fc split scenario).
+union phase =
+    | setup
+    | running
+    | done
+
+module phase =
+    let code = (p: phase) ->
+        match p with
+        | setup -> 1
+        | running -> 2
+        | done -> 3

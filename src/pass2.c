@@ -1137,6 +1137,24 @@ static Symbol *resolve_symbol_kind(CheckCtx *ctx, const char *name, DeclKind kin
     return global_lookup_kind(ctx->symtab, name, kind, ctx->current_ns);
 }
 
+/* An identifier that resolves to a module may name a type-associated (companion)
+ * module — a struct/union sharing its name in the same scope. When it does, bind
+ * the EXPR_IDENT to the TYPE with the module recorded as its companion (the shape
+ * EXPR_FIELD/find_callee_symbol expect: try module members first, fall through to
+ * variant construction on a miss). Whether a name-lookup returns the type or the
+ * module first is registration-order-dependent — the type branches above record
+ * the companion module symmetrically, so this closes the module-first direction.
+ * `companion_type` is the same-scope struct/union symbol (NULL if none, in which
+ * case this is a plain module and the function is a no-op). Returns true and sets
+ * e->type when it bound a companion type. */
+static bool bind_companion_type(Expr *e, Symbol *mod_sym, Symbol *companion_type) {
+    if (!companion_type || !companion_type->type) return false;
+    e->ident.resolved_sym = companion_type;
+    e->ident.companion_module = mod_sym;
+    e->type = companion_type->type;
+    return true;
+}
+
 /* Walk into trailing blocks / guard wrappers so a discard diagnostic lands on
  * the expression that actually produced the value, not the enclosing block. */
 static Expr *discard_site(Expr *stmt) {
@@ -1270,6 +1288,15 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
                 else if (sym->type->kind == TYPE_UNION) canon = sym->type->unio.name;
                 if (canon && canon != t->stub.name)
                     t->stub.name = canon;
+            } else if (!type_contains_type_var(t)) {
+                /* A concrete (non-generic) stub that resolves to no struct or
+                 * union is a genuinely unknown type. Left alone, the raw name
+                 * leaks verbatim into the generated C and fails the C compile
+                 * downstream; report a clean FC diagnostic instead — the same
+                 * treatment resolve_type gives an unknown function-parameter
+                 * type. (Stubs still carrying type variables are generic
+                 * templates resolved later at monomorphization, so skip those.) */
+                diag_error(ctx->type_loc, "unknown type name '%s'", t->stub.name);
             }
         }
         return;
@@ -1277,14 +1304,20 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     }
 }
 
-/* Canonicalize stub names in all field/payload types of a struct/union decl. */
+/* Canonicalize stub names in all field/payload types of a struct/union decl.
+ * ctx->type_loc is set to each field/variant's source loc first so an unknown
+ * field type is reported at that field rather than a stale location. */
 static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
     if (d->kind == DECL_STRUCT) {
-        for (int i = 0; i < d->struc.field_count; i++)
+        for (int i = 0; i < d->struc.field_count; i++) {
+            ctx->type_loc = d->struc.fields[i].loc;
             canonicalize_field_stubs(ctx, d->struc.fields[i].type);
+        }
     } else if (d->kind == DECL_UNION) {
-        for (int i = 0; i < d->unio.variant_count; i++)
+        for (int i = 0; i < d->unio.variant_count; i++) {
+            ctx->type_loc = d->unio.variants[i].loc;
             canonicalize_field_stubs(ctx, d->unio.variants[i].payload);
+        }
     }
 }
 
@@ -3445,6 +3478,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     return e->type;
                 }
                 if (msym->kind == DECL_MODULE) {
+                    Symbol *ct = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_STRUCT);
+                    if (!ct) ct = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_UNION);
+                    if (bind_companion_type(e, msym, ct)) return e->type;
                     e->ident.resolved_sym = msym;
                     e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
                     return e->type;
@@ -3499,6 +3535,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         return e->type;
                     }
                     if (isym->kind == DECL_MODULE) {
+                        Symbol *ct = import_scope_lookup_kind_until(imp, e->ident.name, DECL_STRUCT, stop);
+                        if (!ct) ct = import_scope_lookup_kind_until(imp, e->ident.name, DECL_UNION, stop);
+                        if (bind_companion_type(e, isym, ct)) return e->type;
                         e->ident.resolved_sym = isym;
                         e->type = type_void();
                         return e->type;
@@ -3545,6 +3584,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         return e->type;
                     }
                     if (psym->kind == DECL_MODULE) {
+                        Symbol *ct = symtab_lookup_kind(p->members, e->ident.name, DECL_STRUCT);
+                        if (!ct) ct = symtab_lookup_kind(p->members, e->ident.name, DECL_UNION);
+                        if (bind_companion_type(e, psym, ct)) return e->type;
                         e->ident.resolved_sym = psym;
                         e->type = type_void();
                         return e->type;
@@ -3630,6 +3672,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
+            /* Type-associated (companion) module: a file-scope struct/union may
+             * share its name with a module. `global_lookup` returns whichever
+             * pass1 registered first — modules are collected before top-level
+             * types, so it hands back the module and the companion link is lost.
+             * Resolve to the TYPE with the module recorded as its companion (the
+             * same shape the module-scoped companion paths above produce) so that
+             * member access `t.x` tries the module first and falls through to
+             * variant construction on a miss. */
+            Symbol *ct = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_STRUCT, ctx->current_ns);
+            if (!ct) ct = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_UNION, ctx->current_ns);
+            if (bind_companion_type(e, ns_mod, ct)) return e->type;
             e->ident.resolved_sym = ns_mod;
             e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
             return e->type;

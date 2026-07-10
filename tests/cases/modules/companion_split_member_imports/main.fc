@@ -1,0 +1,10 @@
+// Two separate member imports of the same name from different modules: the
+// union half from `defs`, the module half from `ops`. Neither hides the other —
+// `thing.beta` constructs a variant, `thing.code` calls a module member.
+import thing from defs
+import thing from ops
+
+let main = (args: str[]) ->
+    assert(thing.code(thing.alpha) == 0)
+    assert(thing.code(thing.beta) == 1)
+    0

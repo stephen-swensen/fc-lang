@@ -1,0 +1,16 @@
+// A namespace-scope union and its companion module. Imported by name into
+// another file, variant construction on the imported name must fall through to
+// the union just as it does for a same-file top-level companion.
+namespace game::
+
+union phase =
+    | setup
+    | running
+    | done
+
+module phase =
+    let code = (p: phase) ->
+        match p with
+        | setup -> 10
+        | running -> 20
+        | done -> 30

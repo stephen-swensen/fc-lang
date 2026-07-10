@@ -1,0 +1,9 @@
+// A union variant payload whose type resolves to nothing must be reported as an
+// unknown type at the variant, mirroring the struct-field diagnostic — not
+// leaked verbatim into the generated C.
+union event =
+    | tick
+    | payload(no_such_type)
+
+let main = (args: str[]) ->
+    0

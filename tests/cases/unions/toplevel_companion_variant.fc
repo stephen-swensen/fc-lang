@@ -1,0 +1,40 @@
+// Top-level (file/namespace-scope) union companion module: variant construction
+// must fall through to the companion union when the module has no matching
+// member, exactly as it does for a module-nested companion pair. Regression for
+// the case where a top-level `module shape` shadowed the union's variants with
+// no fall-through.
+union shape =
+    | circle(i32)
+    | rect(i32)
+    | empty
+
+module shape =
+    // Module members take priority; variant names (circle/rect/empty) fall through.
+    let area = (s: shape) ->
+        match s with
+        | circle(r) -> r * r
+        | rect(w) -> w * w
+        | empty -> 0
+
+    // Internal use: variant construction from within the companion module.
+    let make_circle = (r: i32) -> shape.circle(r)
+
+    // A module member that stores a no-payload variant.
+    let origin = shape.empty
+
+let main = (args: str[]) ->
+    // External fall-through: payload and no-payload variant construction.
+    let c = shape.circle(5)
+    assert(shape.area(c) == 25)
+
+    let r = shape.rect(3)
+    assert(shape.area(r) == 9)
+
+    let e = shape.empty
+    assert(shape.area(e) == 0)
+
+    // Internal-construction helper and module-member-held variant.
+    let c2 = shape.make_circle(7)
+    assert(shape.area(c2) == 49)
+    assert(shape.area(shape.origin) == 0)
+    0

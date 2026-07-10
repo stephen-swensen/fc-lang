@@ -1,0 +1,5 @@
+// Neither half hides the other: `thing.beta` constructs a variant (type.fc),
+// `thing.code` calls a module member (mod.fc), in the same lexical scope.
+let main = (args: str[]) ->
+    let x = thing.beta
+    thing.code(x)

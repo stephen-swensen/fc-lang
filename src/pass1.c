@@ -306,33 +306,17 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
 }
 
 /* Add a whole-module import to an import table.
- * source_name = module's name in global symtab (for lookup).
- * module_members = the imported module's member table (for dotted access). */
+ *
+ * A top-level module lives in the global symtab, so this is just import_table_add
+ * with source_members = the global symtab, source_name = the module's name, and
+ * kind = DECL_MODULE (a module never carries generic metadata, so passing mod_sym
+ * through leaves those fields empty). Delegating keeps the (local_name, kind)
+ * dedup rule — a later module import shadows an earlier one, but a same-named
+ * struct/union import coexists (the companion pattern) — owned in one place, so
+ * the two entry points can't drift apart. */
 static void import_table_add_module(ImportTable *tbl, const char *local_name,
                                      Symbol *mod_sym, SymbolTable *global_symtab) {
-    for (int i = 0; i < tbl->count; i++) {
-        if (tbl->entries[i].local_name == local_name) {
-            tbl->entries[i].kind = DECL_MODULE;
-            tbl->entries[i].source_members = global_symtab;
-            tbl->entries[i].source_name = mod_sym->name;
-            tbl->entries[i].ns_prefix = mod_sym->ns_prefix;
-            tbl->entries[i].module_members = mod_sym->members;
-            tbl->entries[i].is_generic = false;
-            tbl->entries[i].type_params = NULL;
-            tbl->entries[i].type_param_count = 0;
-            tbl->entries[i].explicit_type_param_count = 0;
-            return;
-        }
-    }
-    ImportRef ref = {
-        .local_name = local_name,
-        .kind = DECL_MODULE,
-        .source_members = global_symtab,
-        .source_name = mod_sym->name,
-        .ns_prefix = mod_sym->ns_prefix,
-        .module_members = mod_sym->members,
-    };
-    DA_APPEND(tbl->entries, tbl->count, tbl->capacity, ref);
+    import_table_add(tbl, local_name, mod_sym->name, DECL_MODULE, global_symtab, mod_sym);
 }
 
 /* Find or create a per-file import scope */

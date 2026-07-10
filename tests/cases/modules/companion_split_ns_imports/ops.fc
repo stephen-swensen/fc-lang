@@ -1,0 +1,10 @@
+// The companion module half of the pair, in a *different* namespace `ops::`.
+namespace ops::
+
+import thing from types::
+
+module thing =
+    let code = (t: thing) ->
+        match t with
+        | alpha -> 0
+        | beta -> 1

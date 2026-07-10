@@ -1,0 +1,9 @@
+// Construct companion-union variants and call companion-module members across a
+// file boundary. Top-level (no-namespace) declarations are globally visible, so
+// no import is needed — this is the wolf-fc main.fc/lib.fc split verbatim.
+let main = (args: str[]) ->
+    let p = phase.running       // variant construction (fall-through)
+    assert(phase.code(p) == 2)
+    assert(phase.code(phase.setup) == 1)
+    assert(phase.code(phase.done) == 3)
+    0

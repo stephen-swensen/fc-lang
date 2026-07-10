@@ -1,0 +1,20 @@
+// The top-level union companion must resolve regardless of declaration order:
+// here the companion `module thing` is written *before* the `union thing`.
+// Resolution is order-independent because pass1 registers all modules before
+// top-level types; the companion link is recovered either way.
+module thing =
+    let code = (t: thing) ->
+        match t with
+        | alpha -> 0
+        | beta -> 1
+
+let main = (args: str[]) ->
+    let a = thing.alpha           // fall-through to variant construction
+    let b = thing.beta
+    assert(thing.code(a) == 0)
+    assert(thing.code(b) == 1)
+    0
+
+union thing =
+    | alpha
+    | beta

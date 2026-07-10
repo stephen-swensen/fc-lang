@@ -4272,6 +4272,8 @@ module game =
 
 When a module and union share a name, **module members take priority**. If a name is not found in the module, the compiler falls through to check if it matches a variant of the companion union. This means `shape.area(s)` resolves to the module function, while `shape.circle(5)` resolves to variant construction (since there is no module member named `circle`). If a module member and a variant share the same name, the module member wins.
 
+Companionship is a rule of *name resolution*, not of declaration: a `module` and a same-named `struct` or `union` never shadow each other. The scope at which each half is declared does not matter — they may sit inside an enclosing module (as above), at file top level, or at namespace scope, and they need not be declared or imported together. Wherever both halves are visible under one name in a lexical scope — written side by side, imported as a pair (`import shape from ns::` brings both), or imported separately from different locations (the type from one, the module from another) — the name refers to both at once: `shape.member` checks the module's members first and falls through to a same-named variant on a miss.
+
 ### Qualified type names in diagnostics
 
 Types defined inside modules display with their fully qualified path in error messages:

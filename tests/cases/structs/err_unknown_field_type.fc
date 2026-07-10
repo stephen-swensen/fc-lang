@@ -1,0 +1,9 @@
+// A struct field whose type resolves to no struct or union must be an FC-level
+// "unknown type name" diagnostic at the field, not invalid C emitted downstream.
+// (Regression: fcc used to exit 0 and leak the raw name into the generated C,
+// so the failure only surfaced as a cc error.)
+struct game =
+    rng: random.pcg_random
+
+let main = (args: str[]) ->
+    0
