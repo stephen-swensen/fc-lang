@@ -801,7 +801,7 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_expr(e->assert_expr.message, c);
             break;
         case EXPR_DEFER: find_in_expr(e->defer_expr.value, c); break;
-        case EXPR_DISCARD: find_in_expr(e->discard_expr.value, c); break;
+        case EXPR_IGNORE: find_in_expr(e->ignore_expr.value, c); break;
         case EXPR_ATOMIC_LOAD:
             consider_builtin(c, e);
             find_in_expr(e->atomic_load.ptr, c);
@@ -1670,7 +1670,7 @@ static void lens_expr(Expr *e, LensCtx *lc) {
         case EXPR_ERR:    lens_expr(e->err_expr.code, lc); break;
         case EXPR_ERROR_NAME: lens_expr(e->error_name_expr.code, lc); break;
         case EXPR_DEFER:  lens_expr(e->defer_expr.value, lc); break;
-        case EXPR_DISCARD: lens_expr(e->discard_expr.value, lc); break;
+        case EXPR_IGNORE: lens_expr(e->ignore_expr.value, lc); break;
         case EXPR_GUARD:  lens_expr(e->guard.body, lc); break;
         case EXPR_ASSERT:
             lens_expr(e->assert_expr.condition, lc);
@@ -1747,7 +1747,7 @@ static const char *KEYWORDS[] = {
     /* mirrors lexer.c keyword set + builtins + primitive type names */
     "let", "mut", "struct", "union", "module", "namespace", "import", "from",
     "as", "extern", "private", "match", "with", "when", "if", "then", "else",
-    "for", "in", "loop", "do", "break", "continue", "return", "defer", "some",
+    "for", "in", "loop", "do", "break", "continue", "return", "defer", "ignore", "some",
     "true", "false", "none", "void", "guarded", "unguarded", "checked",
     "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "bitcast",
     "default", "const", "assert", "atomic_load_acquire", "atomic_store_release",
@@ -1861,7 +1861,7 @@ static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
         case EXPR_ERR: harvest_expr(e->err_expr.code, names, n, cap); break;
         case EXPR_ERROR_NAME: harvest_expr(e->error_name_expr.code, names, n, cap); break;
         case EXPR_DEFER: harvest_expr(e->defer_expr.value, names, n, cap); break;
-        case EXPR_DISCARD: harvest_expr(e->discard_expr.value, names, n, cap); break;
+        case EXPR_IGNORE: harvest_expr(e->ignore_expr.value, names, n, cap); break;
         case EXPR_GUARD: harvest_expr(e->guard.body, names, n, cap); break;
         default: break;
     }

@@ -299,8 +299,8 @@ static void collect_hoisted_bindings(Expr *e) {
     case EXPR_DEFER:
         collect_hoisted_bindings(e->defer_expr.value);
         break;
-    case EXPR_DISCARD:
-        collect_hoisted_bindings(e->discard_expr.value);
+    case EXPR_IGNORE:
+        collect_hoisted_bindings(e->ignore_expr.value);
         break;
     case EXPR_CAST:
         /* (cstr[N]) bounded str→cstr cast: hoist a fixed uint8[N] backing to
@@ -4500,11 +4500,11 @@ static void emit_expr(Expr *e, FILE *out) {
         }
         break;
 
-    case EXPR_DISCARD:
-        /* Evaluate the operand for its side effects, discard the value, yield
+    case EXPR_IGNORE:
+        /* Evaluate the operand for its side effects, ignore the value, yield
          * void. Valid as a bare statement and as a (void-typed) block tail. */
         fprintf(out, "(void)(");
-        emit_expr(e->discard_expr.value, out);
+        emit_expr(e->ignore_expr.value, out);
         fprintf(out, ")");
         break;
 
@@ -5605,8 +5605,8 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
         if (e->assert_expr.message)
             collect_types_expr(e->assert_expr.message, slices, options, fns);
         break;
-    case EXPR_DISCARD:
-        collect_types_expr(e->discard_expr.value, slices, options, fns);
+    case EXPR_IGNORE:
+        collect_types_expr(e->ignore_expr.value, slices, options, fns);
         break;
     case EXPR_DEFER:
         collect_types_expr(e->defer_expr.value, slices, options, fns);
@@ -5941,8 +5941,8 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
         if (e->assert_expr.message)
             collect_trampolines_expr(e->assert_expr.message, ts);
         break;
-    case EXPR_DISCARD:
-        collect_trampolines_expr(e->discard_expr.value, ts);
+    case EXPR_IGNORE:
+        collect_trampolines_expr(e->ignore_expr.value, ts);
         break;
     case EXPR_DEFER:
         collect_trampolines_expr(e->defer_expr.value, ts);
@@ -6084,8 +6084,8 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
         if (e->assert_expr.message)
             collect_lambdas_expr(e->assert_expr.message, ls);
         break;
-    case EXPR_DISCARD:
-        collect_lambdas_expr(e->discard_expr.value, ls);
+    case EXPR_IGNORE:
+        collect_lambdas_expr(e->ignore_expr.value, ls);
         break;
     case EXPR_DEFER:
         collect_lambdas_expr(e->defer_expr.value, ls);
@@ -6762,8 +6762,8 @@ static void detect_features_expr(Expr *e) {
         if (e->assert_expr.message)
             detect_features_expr(e->assert_expr.message);
         return;
-    case EXPR_DISCARD:
-        detect_features_expr(e->discard_expr.value);
+    case EXPR_IGNORE:
+        detect_features_expr(e->ignore_expr.value);
         return;
     case EXPR_DEFER:
         detect_features_expr(e->defer_expr.value);

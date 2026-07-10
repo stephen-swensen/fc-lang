@@ -1,0 +1,43 @@
+// `ignore expr` evaluates its operand for side effects and yields void. It is
+// the blessed explicit ignore for a result (like `let _ =`) and, being void-
+// typed, also voids a value-returning tail so a block needs no trailing
+// `void()`. Covers: value operand, void! and T! results, T? option, and the
+// statement / match-arm-tail / if-branch-tail / block-tail positions.
+let fallible = () -> if true then ok(1) else err(i32, 3)
+let fallible_void = () -> if true then ok else err(void, 3)
+let maybe = (x: i32) -> if x > 0 then some(x) else none(i32)
+let ival = (x: i32, sink: i32*) ->
+    *sink = *sink + x
+    (i64) x
+
+// void-returning helper whose last statements are ignores (no trailing void()).
+let dump = (sink: i32*) ->
+    ignore ival(1, sink)          // ignore a plain value in statement position
+    ignore fallible_void()        // ignore a void! result (the acknowledgment)
+    ignore fallible()             // ignore a T! result
+    ignore maybe(9)               // ignore a T? option
+    if *sink > 100 then
+        ignore ival(2, sink)      // then-branch tail voided
+    else
+        ignore ival(4, sink)      // else-branch tail voided
+
+let main = (args: str[]) ->
+    let mut acc = 0
+    dump(&acc)
+    assert(acc == 1 + 4)
+
+    // ignore as a match-arm tail: both arms are void, so the match is void.
+    match fallible_void() with
+    | ok -> ignore ival(8, &acc)
+    | err(_) -> ignore ival(16, &acc)
+    assert(acc == 5 + 8)
+
+    // ignore as the void tail of a nested block.
+    let r = match fallible() with
+            | ok(x) ->
+                ignore ival(32, &acc)
+                x + 1
+            | err(_) -> 0
+    assert(r == 2)
+    assert(acc == 13 + 32)
+    0

@@ -895,6 +895,20 @@ fail the build.
   sites). Tests: results/discard_keyword (+ discard_void_err); spec §Results cannot be silently
   discarded rewritten (three escapes; unary-not-region rationale); examples.fc demo; fc.vim +
   tmLanguage keyword lists.
+- **Rename (2026-07-10): `discard` → `ignore`.** The keyword introduced above is now spelled
+  `ignore` (semantics, family placement, and the statement-drop-is-an-error rule are all
+  unchanged — this is a pure spelling/vocabulary swap). Rationale: the author kept mis-recalling
+  `discard`, and at a glance it collides with `defer` — both prefix keywords in statement
+  position with adjacent "handle a result without observing it" meanings, so mixing them up is a
+  real bug, not a typo. `ignore` also matches F#/OCaml muscle memory (though note those spell it
+  as a `'a -> unit` *function* silencing a soft warning; FC keeps Nim's hard-error-with-explicit-
+  escape mechanism — the name is ML, the mechanism is Nim). The whole feature's prose moved from
+  "discard/discarded" to "ignore/ignored" (spec §Results cannot be silently ignored); the general
+  block/loop/`;`/defer value-drop vocabulary stays "discard" as ordinary English, since dropping a
+  block's non-tail value is a distinct concept from the `ignore` keyword. AST node `EXPR_DISCARD`
+  → `EXPR_IGNORE`, token `TOK_DISCARD` → `TOK_IGNORE`, diagnostics "result ignored" / "nothing to
+  ignore", `results/discard_*` tests → `results/ignore_*`. Also added `ignore` to the LSP
+  completion keyword list (the original `discard` was never listed there — a pre-existing gap).
 
 ### Empty match arms — REJECTED (adopted briefly, rolled back same day)
 

@@ -1,5 +1,5 @@
-// `let _ = expr` is the explicit discard for a result whose failure is
-// deliberately ignored (best-effort calls); defer discards by contract.
+// `let _ = expr` is the explicit ignore for a result whose failure is
+// deliberately ignored (best-effort calls); defer ignores by contract.
 // The valued-match arm exercises the unused-let silencer in the emitted C
 // (the arm-statement emission path, distinct from plain block statements).
 let fallible = () -> if true then ok(1) else err(i32, 3)

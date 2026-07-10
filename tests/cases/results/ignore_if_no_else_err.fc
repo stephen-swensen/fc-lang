@@ -1,4 +1,4 @@
-// The then-branch of an else-less if is discarded; a result there is an error.
+// The then-branch of an else-less if is ignored; a result there is an error.
 let fallible = () -> if true then ok(1) else err(i32, 3)
 let main = (args: str[]) ->
     if args.len > 0 then fallible()

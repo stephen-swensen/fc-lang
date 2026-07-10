@@ -1,4 +1,4 @@
-// A for body's tail is discarded every iteration; a result there is an error.
+// A for body's tail is ignored every iteration; a result there is an error.
 let fallible_void = () -> if true then ok else err(void, 3)
 let main = (args: str[]) ->
     for i in 0..3 do

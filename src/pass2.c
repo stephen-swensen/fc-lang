@@ -411,8 +411,8 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
     case EXPR_DEFER:
         pretaint_walk(scope, e->defer_expr.value, changed);
         break;
-    case EXPR_DISCARD:
-        pretaint_walk(scope, e->discard_expr.value, changed);
+    case EXPR_IGNORE:
+        pretaint_walk(scope, e->ignore_expr.value, changed);
         break;
     case EXPR_BINARY:
         pretaint_walk(scope, e->binary.left, changed);
@@ -667,7 +667,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
         return false;
     case EXPR_RETURN:       return e->return_expr.value && expr_refs_self(e->return_expr.value, self);
     case EXPR_BREAK:        return e->break_expr.value && expr_refs_self(e->break_expr.value, self);
-    case EXPR_DISCARD:      return expr_refs_self(e->discard_expr.value, self);
+    case EXPR_IGNORE:      return expr_refs_self(e->ignore_expr.value, self);
     /* Other forms (literals, nested EXPR_FUNC, struct/tuple/slice literals, …) do
        not contribute a self-recursive call to a value position we order against;
        treat them as self-free. */
@@ -1155,9 +1155,9 @@ static bool bind_companion_type(Expr *e, Symbol *mod_sym, Symbol *companion_type
     return true;
 }
 
-/* Walk into trailing blocks / guard wrappers so a discard diagnostic lands on
+/* Walk into trailing blocks / guard wrappers so an ignore diagnostic lands on
  * the expression that actually produced the value, not the enclosing block. */
-static Expr *discard_site(Expr *stmt) {
+static Expr *ignore_site(Expr *stmt) {
     for (;;) {
         if (stmt->kind == EXPR_BLOCK && stmt->block.count > 0) {
             stmt = stmt->block.stmts[stmt->block.count - 1];
@@ -1171,17 +1171,17 @@ static Expr *discard_site(Expr *stmt) {
 }
 
 /* A result in statement position is a silently dropped failure — the one
- * outcome the carrier exists to prevent. Discarding it is an error (decided
- * 2026-07-08); `let _ = expr` is the explicit discard, and `defer` is exempt
+ * outcome the carrier exists to prevent. Ignoring it is an error (decided
+ * 2026-07-08); `let _ = expr` is the explicit ignore, and `defer` is exempt
  * by contract (its value expression is checked outside the statement funnel,
  * so it never reaches this check). Only results are guarded: a plain value
  * (e.g. a byte count) in statement position stays legal, C-style. */
-static void check_result_discard(Expr *stmt, Type *t) {
+static void check_result_ignore(Expr *stmt, Type *t) {
     if (!t || t->kind != TYPE_RESULT) return;
-    Expr *site = discard_site(stmt);
-    diag_error(site->loc, "%s result discarded: a dropped result silently loses its "
-        "failure; match on it, propagate with '?', unwrap with '!', or discard "
-        "explicitly with 'discard ...' (or 'let _ = ...')", type_name(t));
+    Expr *site = ignore_site(stmt);
+    diag_error(site->loc, "%s result ignored: a dropped result silently loses its "
+        "failure; match on it, propagate with '?', unwrap with '!', or ignore "
+        "explicitly with 'ignore ...' (or 'let _ = ...')", type_name(t));
 }
 
 /* tail_used: whether the last statement's value flows onward (function return
@@ -1193,7 +1193,7 @@ static Type *check_block(CheckCtx *ctx, Expr **stmts, int count, bool tail_used)
     for (int i = 0; i < count; i++) {
         last = check_expr(ctx, stmts[i]);
         if (i < count - 1 || !tail_used)
-            check_result_discard(stmts[i], last);
+            check_result_ignore(stmts[i], last);
     }
     return last;
 }
@@ -2811,8 +2811,8 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     case EXPR_DEFER:
         ok &= validate_generic_body(e->defer_expr.value, arena, type_params, bindings, ntp, frame);
         break;
-    case EXPR_DISCARD:
-        ok &= validate_generic_body(e->discard_expr.value, arena, type_params, bindings, ntp, frame);
+    case EXPR_IGNORE:
+        ok &= validate_generic_body(e->ignore_expr.value, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_SOME:
         ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, frame);
@@ -2971,8 +2971,8 @@ static bool ccf_walk(Expr *e, bool in_loop) {
         return ccf_walk(e->err_expr.code, in_loop);
     case EXPR_DEFER:
         return ccf_walk(e->defer_expr.value, in_loop);
-    case EXPR_DISCARD:
-        return ccf_walk(e->discard_expr.value, in_loop);
+    case EXPR_IGNORE:
+        return ccf_walk(e->ignore_expr.value, in_loop);
     case EXPR_LET:
         return ccf_walk(e->let_expr.let_init, in_loop);
     case EXPR_LET_DESTRUCT:
@@ -3221,8 +3221,8 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
         return guard_subtree_has_effect(e->break_expr.value);
     case EXPR_DEFER:
         return guard_subtree_has_effect(e->defer_expr.value);
-    case EXPR_DISCARD:
-        return guard_subtree_has_effect(e->discard_expr.value);
+    case EXPR_IGNORE:
+        return guard_subtree_has_effect(e->ignore_expr.value);
     case EXPR_ASSIGN:
         return guard_subtree_has_effect(e->assign.target) ||
                guard_subtree_has_effect(e->assign.value);
@@ -4940,7 +4940,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         } else {
             /* No else → void; the then-branch's value (if any) is discarded,
                so a result there would be a silently dropped failure. */
-            check_result_discard(e->if_expr.then_body, tt);
+            check_result_ignore(e->if_expr.then_body, tt);
             e->type = type_void();
         }
         return e->type;
@@ -6632,15 +6632,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
-    case EXPR_DISCARD: {
+    case EXPR_IGNORE: {
         /* Evaluate the operand for its side effects and yield void. This is the
-         * explicit discard for a result (like `let _ =`) and also voids a value-
+         * explicit ignore for a result (like `let _ =`) and also voids a value-
          * returning tail so a block needs no trailing `void()`. Redundant when
          * the operand already produces no value — that is an error, mirroring the
          * `!`/guard "must mean something" rule. */
-        Type *vt = check_expr(ctx, e->discard_expr.value);
+        Type *vt = check_expr(ctx, e->ignore_expr.value);
         if (vt && (vt->kind == TYPE_VOID || vt->kind == TYPE_NEVER)) {
-            diag_error(e->loc, "nothing to discard: this expression already "
+            diag_error(e->loc, "nothing to ignore: this expression already "
                 "produces no value");
         }
         e->type = type_void();

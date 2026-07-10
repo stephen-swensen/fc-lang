@@ -235,7 +235,7 @@ let main = (args: str[]) ->
                 io.write(recv_buf[0..n], out)
 
     // A close failure on the output file means buffered response data may not
-    // have reached disk — observe it rather than discard it.
+    // have reached disk — observe it rather than ignore it.
     if out_opened then
         match io.close(out) with
         | ok -> void()

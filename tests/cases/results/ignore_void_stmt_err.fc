@@ -1,4 +1,4 @@
-// void! is a result too: discarding it in statement position is an error.
+// void! is a result too: ignoreing it in statement position is an error.
 let fallible_void = () -> if true then ok else err(void, 3)
 let main = (args: str[]) ->
     fallible_void()

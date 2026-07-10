@@ -282,7 +282,7 @@ module net =
         map_fd(sock.socket(sock.af_inet, sock.sock_raw, inet.ipproto_icmp))
 
     // Close a socket. The descriptor must not be used after this call.
-    // returns: void! — ok on success; defer close(fd) discards the result
+    // returns: void! — ok on success; defer close(fd) ignores the result
     //   (best-effort cleanup).
     let close = (fd: i32) ->
         map_void(u.close(fd))

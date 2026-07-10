@@ -1099,12 +1099,12 @@ static Expr *parse_block_item(Parser *p) {
         return e;
     }
 
-    if (check(p, TOK_DISCARD)) {
+    if (check(p, TOK_IGNORE)) {
         SrcLoc loc = loc_from_token(current(p));
         advance_p(p);
         Expr *value = parse_expr(p, PREC_NONE + 1);
-        Expr *e = alloc_expr(p, EXPR_DISCARD, loc);
-        e->discard_expr.value = value;
+        Expr *e = alloc_expr(p, EXPR_IGNORE, loc);
+        e->ignore_expr.value = value;
         return e;
     }
 

@@ -700,19 +700,19 @@ let main = (args: str[]) ->
     assert(failed.is_err)
     assert(default(void!).is_ok)      // zero-filled memory is the ok tag
 
-    // `discard expr` evaluates its operand for side effects and yields void.
+    // `ignore expr` evaluates its operand for side effects and yields void.
     // It is the explicit way to drop a result whose failure is deliberately
     // ignored (best-effort) — the acknowledgment the "a result can't be
     // silently dropped" rule requires — and, being void-typed, it also voids a
     // value-returning tail so a block needs no trailing `void()`.
-    discard cleanup(true)             // drop a void! result on purpose
+    ignore cleanup(true)             // drop a void! result on purpose
     let step = (n: i32, sink: i32*) ->
         *sink = *sink + n
         n                             // returns i32
     let mut steps = 0
-    discard step(3, &steps)           // its value is dropped here
+    ignore step(3, &steps)           // its value is dropped here
     if steps > 0 then
-        discard step(4, &steps)       // discard voids the then-branch tail
+        ignore step(4, &steps)       // ignore voids the then-branch tail
     else
         void()
     assert(steps == 7)
@@ -743,12 +743,12 @@ let main = (args: str[]) ->
     assert(hundredth(300)! == 3)
     assert(hundredth(30).is_none)
 
-    // Results cannot be silently discarded: `cleanup(false)` alone as a
+    // Results cannot be silently ignored: `cleanup(false)` alone as a
     // statement is a compile error (a dropped result loses its failure).
-    // Observe it (match / ? / !) or discard explicitly with `let _ =`;
-    // `defer` discards by contract (best-effort cleanup). In a statement
+    // Observe it (match / ? / !) or ignore explicitly with `let _ =`;
+    // `defer` ignores by contract (best-effort cleanup). In a statement
     // match, a do-nothing arm is spelled void().
-    let _ = cleanup(false)            // explicit best-effort discard
+    let _ = cleanup(false)            // explicit best-effort ignore
     match cleanup(false) with
     | err(_) -> void()                // expected: nothing to clean up
     | ok -> void()

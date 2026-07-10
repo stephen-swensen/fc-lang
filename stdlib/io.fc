@@ -111,7 +111,7 @@ module io =
     // Closes a file handle. The handle must not be used after this call,
     // even on failure. A close error means buffered data may not have made
     // it to the file (e.g. disk full): close(f)? observes it, while
-    // defer close(f) discards it (best-effort cleanup).
+    // defer close(f) ignores it (best-effort cleanup).
     // f: any* — opaque FILE* handle to close.
     // returns: void! — ok on success.
     let close = (f: any*) ->

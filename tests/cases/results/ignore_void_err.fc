@@ -1,7 +1,7 @@
-// `discard` must have a value to discard: an already-void operand is rejected,
+// `ignore` must have a value to ignore: an already-void operand is rejected,
 // mirroring the rule that `!` and guard markers must mean something where they
 // appear.
 let noop = () -> void()
 let main = (args: str[]) ->
-    discard noop()
+    ignore noop()
     0

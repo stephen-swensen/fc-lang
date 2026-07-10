@@ -46,7 +46,7 @@
       "patterns": [
         {
           "name": "keyword.control.fc",
-          "match": "\\b(match|with|when|if|then|else|for|in|loop|do|break|continue|return|defer|discard)\\b"
+          "match": "\\b(match|with|when|if|then|else|for|in|loop|do|break|continue|return|defer|ignore)\\b"
         },
         {
           "name": "keyword.other.fc",

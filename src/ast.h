@@ -62,7 +62,7 @@ typedef enum {
     EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
     EXPR_ASSERT,
     EXPR_DEFER,
-    EXPR_DISCARD,       /* discard expr — evaluate for effect, yield void */
+    EXPR_IGNORE,       /* ignore expr — evaluate for effect, yield void */
     EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
     EXPR_ATOMIC_STORE,  /* atomic_store_release(p, v) */
     EXPR_GUARD,         /* guarded/unguarded (precondition guards) OR checked/unchecked (overflow) */
@@ -404,8 +404,8 @@ struct Expr {
         /* EXPR_DEFER */
         struct { Expr *value; } defer_expr;
 
-        /* EXPR_DISCARD */
-        struct { Expr *value; } discard_expr;
+        /* EXPR_IGNORE */
+        struct { Expr *value; } ignore_expr;
 
         /* EXPR_ATOMIC_LOAD — atomic_load_acquire(p) */
         struct { Expr *ptr; } atomic_load;
