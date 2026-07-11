@@ -512,6 +512,17 @@ typedef struct {
     const BuiltinDoc *builtin;      /* set when the winning node is a built-in intrinsic
                                        (alloc/some/.../stdin); hover renders its doc instead
                                        of a `name: type` line. Cleared by every consider() win. */
+    Symbol *type_ref_sym;           /* set when the winning token names a TYPE or MODULE
+                                       (struct/union/enum/module reference); hover renders a
+                                       declaration-form header (`enum dir of i32`) instead of
+                                       `name: type`. Cleared by every consider() win. */
+    Symbol *companion;              /* companion module of a type_ref_sym hit (pass2's
+                                       ident.companion_module); hover appends its doc as a
+                                       labeled second section. Cleared by every consider() win. */
+    Decl   *decl_site;              /* set when the winning token is a declaration-site
+                                       NAME (struct/union/enum/module header line); carries
+                                       kind + repr for the header when there is no Symbol.
+                                       Cleared by every consider() win. */
 
     /* Member-completion hook: the operator (`.`/`->`) position of an in-progress
      * member access. During the walk, the EXPR_FIELD/EXPR_DEREF_FIELD node whose
@@ -544,6 +555,9 @@ static void consider(FindCtx *c, int line, int col, int span, Type *type,
     c->doc_loc = doc_loc;
     c->doc_is_field = doc_is_field;
     c->builtin = NULL;   /* a plain node wins; consider_builtin re-sets this when it wins */
+    c->type_ref_sym = NULL;   /* post-set by the EXPR_IDENT/EXPR_FIELD/decl-site winners */
+    c->companion = NULL;
+    c->decl_site = NULL;
 }
 
 /* Reads the contiguous identifier/keyword token at `loc` from source into `buf`,
@@ -623,6 +637,17 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
                      e->type, e->ident.name, e->ident.resolved_sym,
                      e->ident.resolved_local_loc, e->ident.resolved_local_loc, false);
+            /* Type/module reference: render a declaration-form hover header, and
+             * carry the companion module so both docs merge into one hover. */
+            if (e->ident.resolved_sym && c->found &&
+                c->start_line == e->loc.line && c->start_col == e->loc.col &&
+                (e->ident.resolved_sym->kind == DECL_STRUCT ||
+                 e->ident.resolved_sym->kind == DECL_UNION ||
+                 e->ident.resolved_sym->kind == DECL_ENUM ||
+                 e->ident.resolved_sym->kind == DECL_MODULE)) {
+                c->type_ref_sym = e->ident.resolved_sym;
+                c->companion = e->ident.companion_module;
+            }
             /* Built-in globals (stdin/stdout/stderr) resolve to no Symbol and no
              * local binding. If the cursor landed on one, attach its doc. (Keyword
              * builtins can't appear as idents, so only these globals match here.) */
@@ -691,6 +716,18 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                 consider(c, e->field.name_loc.line, e->field.name_loc.col,
                          (int)strlen(e->field.name), e->type, e->field.name,
                          def, field_def, doc_loc, doc_is_field);
+                /* Module-member TYPE reference (m.point, gfx.mode): the member
+                 * itself is a type/module, not a value — declaration-form header.
+                 * Variant constructors and type properties keep their value hover
+                 * (their `def` may be the enum/union symbol, so gate on the flags). */
+                if (c->found && def && !e->field.is_variant_constructor &&
+                    !e->field.is_type_property &&
+                    c->start_line == e->field.name_loc.line &&
+                    c->start_col == e->field.name_loc.col &&
+                    (def->kind == DECL_STRUCT || def->kind == DECL_UNION ||
+                     def->kind == DECL_ENUM || def->kind == DECL_MODULE)) {
+                    c->type_ref_sym = def;
+                }
             }
             break;
         case EXPR_BINARY:
@@ -754,11 +791,18 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             break;
         case EXPR_STRUCT_LIT:
             /* The type name (at the node's loc) goes to the struct declaration. */
-            if (e->struct_lit.type_name)
+            if (e->struct_lit.type_name) {
                 consider(c, e->loc.line, e->loc.col,
                          (int)strlen(e->struct_lit.type_name), e->type,
                          e->struct_lit.type_name, e->struct_lit.resolved_sym,
                          NO_LOC, NO_LOC, false);
+                /* The token names the type: declaration-form hover header. */
+                if (c->found && e->struct_lit.resolved_sym &&
+                    c->start_line == e->loc.line && c->start_col == e->loc.col &&
+                    (e->struct_lit.resolved_sym->kind == DECL_STRUCT ||
+                     e->struct_lit.resolved_sym->kind == DECL_UNION))
+                    c->type_ref_sym = e->struct_lit.resolved_sym;
+            }
             for (int i = 0; i < e->struct_lit.field_count; i++)
                 find_in_expr(e->struct_lit.fields[i].value, c);
             break;
@@ -844,6 +888,38 @@ static void find_in_expr(Expr *e, FindCtx *c) {
 
 static void find_in_decls(Decl **decls, int n, FindCtx *c);
 
+/* Column (1-based) of the name that follows a declaration keyword of length
+ * kw_len at (line, col). `private` is consumed before the keyword loc is
+ * stamped, so the keyword is always first. */
+static int kw_name_col(const FindCtx *c, int line, int col, int kw_len) {
+    int off = c->idx->starts[line - 1] + (col - 1) + kw_len;
+    int end = c->idx->len;
+    while (off < end && (c->src[off] == ' ' || c->src[off] == '\t')) off++;
+    return (off - c->idx->starts[line - 1]) + 1;
+}
+
+/* pass1 mangles type-decl names in place (dir -> fc__dir / m__dir); the source
+ * spelling is the suffix after the last "__" (FC identifiers cannot contain a
+ * double underscore, so the split is unambiguous). Module names are unmangled. */
+static const char *unmangled_name(const char *n) {
+    const char *last = NULL;
+    for (const char *p = n; (p = strstr(p, "__")) != NULL; p += 2) last = p;
+    return last ? last + 2 : n;
+}
+
+/* Hover for the NAME on a struct/union/enum/module declaration line. There is
+ * no Symbol at hand here; decl_site carries the Decl so hover can render the
+ * declaration-form header and read the attached doc comment. */
+static void consider_decl_name(FindCtx *c, Decl *d, int kw_len, const char *decl_name) {
+    if (!decl_name) return;
+    const char *src_name = unmangled_name(decl_name);
+    int col = kw_name_col(c, d->loc.line, d->loc.col, kw_len);
+    consider(c, d->loc.line, col, (int)strlen(src_name),
+             NULL, src_name, NULL, NO_LOC, d->loc, false);
+    if (c->found && c->start_line == d->loc.line && c->start_col == col)
+        c->decl_site = d;
+}
+
 static void find_in_decl(Decl *d, FindCtx *c) {
     if (!d) return;
     /* The merged program holds decls from several files with overlapping line
@@ -859,7 +935,20 @@ static void find_in_decl(Decl *d, FindCtx *c) {
             find_in_expr(d->let.init, c);
             break;
         case DECL_MODULE:
+            /* Error groups are parser-desugared modules; their keyword is
+             * `error` (5 chars), a real module's is `module` (6). */
+            consider_decl_name(c, d, d->module.is_error_group ? 5 : 6, d->module.name);
             find_in_decls(d->module.decls, d->module.decl_count, c);
+            break;
+        case DECL_STRUCT:
+            if (!d->struc.is_extern)
+                consider_decl_name(c, d, 6, d->struc.name);
+            break;
+        case DECL_UNION:
+            consider_decl_name(c, d, 5, d->unio.name);
+            break;
+        case DECL_ENUM:
+            consider_decl_name(c, d, 4, d->enu.name);
             break;
         default: break;
     }
@@ -1437,7 +1526,8 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
-    if (!locate(doc, &idx, (int)line, (int)ch, &hit) || (!hit.type && !hit.builtin)) {
+    if (!locate(doc, &idx, (int)line, (int)ch, &hit) ||
+        (!hit.type && !hit.builtin && !hit.decl_site)) {
         lsp_reply(a, id, json_null(a));
         return;
     }
@@ -1457,9 +1547,6 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
         md = arena_alloc(a, (size_t)need);
         snprintf(md, (size_t)need, fmt, bd->sig, bd->doc, rt);
     } else {
-        char tn[512];
-        copy_type_name(hit.type, tn, sizeof tn);
-
         /* Doc comment at the definition site. The site may live in another file (a
          * sibling or the stdlib), so read whichever buffer backs it; reuse the open
          * doc's line index when the site is in the open file. */
@@ -1482,10 +1569,69 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
         }
 
         const char *nm = hit.name ? hit.name : "";
-        const char *fmt = doc_md ? "```fc\n%s: %s\n```\n\n%s" : "```fc\n%s: %s\n```";
-        int need = snprintf(NULL, 0, fmt, nm, tn, doc_md) + 1;
-        md = arena_alloc(a, (size_t)need);
-        snprintf(md, (size_t)need, fmt, nm, tn, doc_md);
+
+        if (hit.type_ref_sym || hit.decl_site) {
+            /* The hovered token names a TYPE or MODULE, not a value: render a
+             * declaration-form header (`enum dir of i32`, `module sfx`) instead
+             * of the value form `name: type`. When the name is one half of a
+             * companion pair, append the module's doc as a second, labeled
+             * section so both halves of the pair read as one hover. */
+            Decl *dd = hit.type_ref_sym ? hit.type_ref_sym->decl : hit.decl_site;
+            DeclKind dk = hit.type_ref_sym ? hit.type_ref_sym->kind
+                                           : hit.decl_site->kind;
+            char header[600];
+            if (dk == DECL_ENUM) {
+                Type *repr = (dd && dd->kind == DECL_ENUM && dd->enu.repr)
+                           ? dd->enu.repr : type_int32();
+                snprintf(header, sizeof header, "enum %s of %s", nm, type_name(repr));
+            } else {
+                const char *kw = dk == DECL_STRUCT ? "struct"
+                               : dk == DECL_UNION  ? "union"
+                               : (dd && dd->kind == DECL_MODULE &&
+                                  dd->module.is_error_group) ? "error"
+                               : "module";
+                snprintf(header, sizeof header, "%s %s", kw, nm);
+            }
+
+            /* Companion module's doc, read at its own declaration line. */
+            char *comp_md = NULL;
+            if (hit.companion && hit.companion->decl &&
+                hit.companion->decl->loc.line > 0) {
+                SrcLoc csite = hit.companion->decl->loc;
+                int flen = 0; bool owned = false;
+                const char *ftext = doc_file_text(S, doc, csite.filename, &flen, &owned);
+                if (ftext) {
+                    LineIndex fidx = (ftext == doc->text) ? idx
+                                   : line_index_build(a, ftext, flen);
+                    comp_md = extract_doc_comment(a, ftext, flen, &fidx, csite.line, false);
+                    if (owned) free((void *)ftext);
+                }
+            }
+
+            if (comp_md) {
+                const char *fmt = doc_md
+                    ? "```fc\n%s\n```\n\n%s\n\n```fc\nmodule %s\n```\n\n%s"
+                    : "```fc\n%s\n```\n\n```fc\nmodule %s\n```\n\n%s";
+                int need = doc_md
+                    ? snprintf(NULL, 0, fmt, header, doc_md, nm, comp_md) + 1
+                    : snprintf(NULL, 0, fmt, header, nm, comp_md) + 1;
+                md = arena_alloc(a, (size_t)need);
+                if (doc_md) snprintf(md, (size_t)need, fmt, header, doc_md, nm, comp_md);
+                else        snprintf(md, (size_t)need, fmt, header, nm, comp_md);
+            } else {
+                const char *fmt = doc_md ? "```fc\n%s\n```\n\n%s" : "```fc\n%s\n```";
+                int need = snprintf(NULL, 0, fmt, header, doc_md) + 1;
+                md = arena_alloc(a, (size_t)need);
+                snprintf(md, (size_t)need, fmt, header, doc_md);
+            }
+        } else {
+            char tn[512];
+            copy_type_name(hit.type, tn, sizeof tn);
+            const char *fmt = doc_md ? "```fc\n%s: %s\n```\n\n%s" : "```fc\n%s: %s\n```";
+            int need = snprintf(NULL, 0, fmt, nm, tn, doc_md) + 1;
+            md = arena_alloc(a, (size_t)need);
+            snprintf(md, (size_t)need, fmt, nm, tn, doc_md);
+        }
     }
 
     int sl, sc, el, ec;

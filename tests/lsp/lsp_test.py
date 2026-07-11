@@ -1416,5 +1416,52 @@ check("hover 'enum_of' shows the builtin doc",
 check("hover a binding initialized from an enum variant shows the enum type",
       "color" in en_hover(5), en_hover(5))
 
+# ---- declaration-form hovers + companion doc merge ----
+CP = (
+    "// Eight compass directions.\n"             # 0
+    "enum dir of u8 =\n"                         # 1  decl-site enum name
+    "    | east\n"                               # 2
+    "    | nodir\n"                              # 3
+    "\n"                                         # 4
+    "// Companion tables for dir.\n"             # 5
+    "module dir =\n"                             # 6  decl-site module name
+    "    let dx = i32[2] { 1, 0 }\n"             # 7
+    "\n"                                         # 8
+    "// Sound helpers.\n"                        # 9
+    "module sfx =\n"                             # 10
+    "    let volume = 3\n"                       # 11
+    "\n"                                         # 12
+    "let main = (args: str[]) ->\n"              # 13
+    "    let d = dir.east\n"                     # 14  ref 'dir' -> merged hover
+    "    let v = sfx.volume\n"                   # 15  ref 'sfx' -> module header
+    "    (i32) d + v\n"                          # 16
+)
+cp = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, CP),
+    hover(2, 14, CP.split("\n")[14].index("dir") + 1),   # ref with companion
+    hover(3, 1, CP.split("\n")[1].index("dir") + 1),     # enum decl site
+    hover(4, 6, CP.split("\n")[6].index("dir") + 1),     # module decl site
+    hover(5, 15, CP.split("\n")[15].index("sfx") + 1),   # pure module ref
+    req(9, "shutdown", None), note("exit", None),
+]
+cpresp, _, _, _, _ = run_session(cp)
+def cp_hover(rid):
+    res = cpresp.get(rid, {}).get("result") or {}
+    return ((res.get("contents") or {}).get("value")) or ""
+check("hover a companion-pair name merges both docs with labeled sections",
+      "enum dir of u8" in cp_hover(2) and "module dir" in cp_hover(2)
+      and "Companion tables for dir." in cp_hover(2)
+      and "Eight compass directions." in cp_hover(2), cp_hover(2))
+check("hover the enum name at its declaration site shows the decl form + doc",
+      "enum dir of u8" in cp_hover(3) and "Eight compass directions." in cp_hover(3),
+      cp_hover(3))
+check("hover the module name at its declaration site shows the decl form + doc",
+      "module dir" in cp_hover(4) and "Companion tables for dir." in cp_hover(4),
+      cp_hover(4))
+check("hover a plain module reference shows `module m`, not `m: void`",
+      "module sfx" in cp_hover(5) and "Sound helpers." in cp_hover(5)
+      and "void" not in cp_hover(5), cp_hover(5))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)
