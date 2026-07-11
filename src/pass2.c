@@ -297,6 +297,7 @@ static bool expr_may_yield_stack(Scope *scope, Expr *e) {
     case EXPR_CAST:
         return expr_may_yield_stack(scope, e->cast.operand);
     case EXPR_BITCAST:
+    case EXPR_ENUM_OF:
         return false;   /* scalar result — never a stack pointer */
     case EXPR_GUARD:
         return expr_may_yield_stack(scope, e->guard.body);
@@ -447,6 +448,9 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
         break;
     case EXPR_BITCAST:
         pretaint_walk(scope, e->bitcast_expr.operand, changed);
+        break;
+    case EXPR_ENUM_OF:
+        pretaint_walk(scope, e->enum_of_expr.operand, changed);
         break;
     case EXPR_GUARD:
         pretaint_walk(scope, e->guard.body, changed);
@@ -608,6 +612,7 @@ typedef struct {
 static Type *check_expr(CheckCtx *ctx, Expr *e);
 static Type *check_expr_inner(CheckCtx *ctx, Expr *e);
 static void check_decl_let(CheckCtx *ctx, Decl *d);
+static Expr *const_fold_expr(CheckCtx *ctx, Expr *e);
 
 /* ---- Recursive return-type inference: branch ordering ----
  * A recursive function's return type is inferred from its base cases. The base
@@ -644,6 +649,7 @@ static bool expr_refs_self(Expr *e, const char *self) {
                                    (e->slice.hi && expr_refs_self(e->slice.hi, self));
     case EXPR_CAST:         return expr_refs_self(e->cast.operand, self);
     case EXPR_BITCAST:      return expr_refs_self(e->bitcast_expr.operand, self);
+    case EXPR_ENUM_OF:      return expr_refs_self(e->enum_of_expr.operand, self);
     case EXPR_GUARD:        return expr_refs_self(e->guard.body, self);
     case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
     case EXPR_OK:           return expr_refs_self(e->ok_expr.value, self);
@@ -1155,6 +1161,25 @@ static bool bind_companion_type(Expr *e, Symbol *mod_sym, Symbol *companion_type
     return true;
 }
 
+/* True when an already-checked expression denotes a TYPE, not a value: a bare
+ * struct/union/enum name (or a module-member path to one) that no consumer
+ * (field access, variant construction, struct literal) claimed. Binding one
+ * would leak the raw type name into the emitted C. */
+static bool expr_is_type_ref(Expr *e) {
+    if (e->kind == EXPR_IDENT && e->ident.resolved_sym &&
+        (e->ident.resolved_sym->kind == DECL_STRUCT ||
+         e->ident.resolved_sym->kind == DECL_UNION ||
+         e->ident.resolved_sym->kind == DECL_ENUM))
+        return true;
+    if (e->kind == EXPR_FIELD && e->field.resolved_member &&
+        !e->field.is_variant_constructor && !e->field.is_type_property &&
+        (e->field.resolved_member->kind == DECL_STRUCT ||
+         e->field.resolved_member->kind == DECL_UNION ||
+         e->field.resolved_member->kind == DECL_ENUM))
+        return true;
+    return false;
+}
+
 /* Walk into trailing blocks / guard wrappers so an ignore diagnostic lands on
  * the expression that actually produced the value, not the enclosing block. */
 static Expr *ignore_site(Expr *stmt) {
@@ -1225,6 +1250,7 @@ static Symbol *resolve_dotted_name_ex(CheckCtx *ctx, const char *dotted_name,
     const char *member_name = intern_cstr(ctx->intern, path);
     Symbol *sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_STRUCT);
     if (!sym) sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_UNION);
+    if (!sym) sym = symtab_lookup_kind(mod_sym->members, member_name, DECL_ENUM);
     if (!sym) sym = symtab_lookup(mod_sym->members, member_name);
     return sym;
 }
@@ -1282,10 +1308,13 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
                 sym = resolve_symbol_kind(ctx, t->stub.name, DECL_STRUCT);
             if (!sym)
                 sym = resolve_symbol_kind(ctx, t->stub.name, DECL_UNION);
+            if (!sym)
+                sym = resolve_symbol_kind(ctx, t->stub.name, DECL_ENUM);
             if (sym && sym->type) {
                 const char *canon = NULL;
                 if (sym->type->kind == TYPE_STRUCT) canon = sym->type->struc.name;
                 else if (sym->type->kind == TYPE_UNION) canon = sym->type->unio.name;
+                else if (sym->type->kind == TYPE_ENUM) canon = sym->type->enu.name;
                 if (canon && canon != t->stub.name)
                     t->stub.name = canon;
             } else if (!type_contains_type_var(t)) {
@@ -1438,6 +1467,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
             sym = resolve_symbol_kind(ctx, t->stub.name, DECL_STRUCT);
         if (!sym)
             sym = resolve_symbol_kind(ctx, t->stub.name, DECL_UNION);
+        if (!sym)
+            sym = resolve_symbol_kind(ctx, t->stub.name, DECL_ENUM);
         if (!sym)
             sym = resolve_symbol(ctx, t->stub.name);
         if (sym && sym->type) {
@@ -2551,7 +2582,10 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                 ok = false;
             }
         } else if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
-            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+            if (lt->kind == TYPE_ENUM && rt->kind == TYPE_ENUM && type_eq(lt, rt)) {
+                /* same-enum ordering is admissible (lockstep with the
+                 * concrete checker's enum-ordering branch) */
+            } else if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
                 gen_inst_diag(frame, e->loc, "ordering comparison requires numeric or pointer types, got %s and %s",
                     type_name(lt), type_name(rt));
                 ok = false;
@@ -2753,6 +2787,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         break;
     case EXPR_BITCAST:
         ok &= validate_generic_body(e->bitcast_expr.operand, arena, type_params, bindings, ntp, frame);
+        break;
+    case EXPR_ENUM_OF:
+        ok &= validate_generic_body(e->enum_of_expr.operand, arena, type_params, bindings, ntp, frame);
         break;
     case EXPR_IF:
         ok &= validate_generic_body(e->if_expr.cond, arena, type_params, bindings, ntp, frame);
@@ -2961,6 +2998,8 @@ static bool ccf_walk(Expr *e, bool in_loop) {
         return ccf_walk(e->cast.operand, in_loop);
     case EXPR_BITCAST:
         return ccf_walk(e->bitcast_expr.operand, in_loop);
+    case EXPR_ENUM_OF:
+        return ccf_walk(e->enum_of_expr.operand, in_loop);
     case EXPR_SOME:
         return ccf_walk(e->some_expr.value, in_loop);
     case EXPR_OK:
@@ -3094,7 +3133,8 @@ static bool expr_node_is_governed_overflow(Expr *e) {
                type_maybe_signed(e->type);
     case EXPR_CAST: {
         if (e->cast.buffer_size > 0) return true;   /* (cstr[N]): clips past N-1 */
-        Type *from = e->cast.operand->type, *to = e->cast.target;
+        Type *from = type_enum_underlying(e->cast.operand->type);
+        Type *to = e->cast.target;
         return from && to && type_is_integer(from) && type_is_integer(to) &&
                !type_can_widen(from, to);   /* potentially-lossy narrowing */
     }
@@ -3175,6 +3215,8 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
         return guard_subtree_has_effect(e->cast.operand);
     case EXPR_BITCAST:
         return guard_subtree_has_effect(e->bitcast_expr.operand);
+    case EXPR_ENUM_OF:
+        return guard_subtree_has_effect(e->enum_of_expr.operand);
     case EXPR_SOME:
         return guard_subtree_has_effect(e->some_expr.value);
     case EXPR_OK:
@@ -3471,7 +3513,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (ctx->module_symtab) {
             Symbol *msym = symtab_lookup(ctx->module_symtab, e->ident.name);
             if (msym) {
-                if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+                if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION ||
+                    msym->kind == DECL_ENUM) {
                     e->ident.resolved_sym = msym;
                     e->ident.companion_module = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_MODULE);
                     e->type = msym->type;
@@ -3480,6 +3523,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 if (msym->kind == DECL_MODULE) {
                     Symbol *ct = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_STRUCT);
                     if (!ct) ct = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_UNION);
+                    if (!ct) ct = symtab_lookup_kind(ctx->module_symtab, e->ident.name, DECL_ENUM);
                     if (bind_companion_type(e, msym, ct)) return e->type;
                     e->ident.resolved_sym = msym;
                     e->type = type_void();  /* placeholder; resolved by EXPR_FIELD */
@@ -3528,7 +3572,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 /* Check imports at this level */
                 Symbol *isym = import_scope_lookup_until(imp, e->ident.name, stop);
                 if (isym) {
-                    if (isym->kind == DECL_STRUCT || isym->kind == DECL_UNION) {
+                    if (isym->kind == DECL_STRUCT || isym->kind == DECL_UNION ||
+                        isym->kind == DECL_ENUM) {
                         e->ident.resolved_sym = isym;
                         e->ident.companion_module = import_scope_lookup_kind_until(imp, e->ident.name, DECL_MODULE, stop);
                         e->type = isym->type;
@@ -3537,6 +3582,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     if (isym->kind == DECL_MODULE) {
                         Symbol *ct = import_scope_lookup_kind_until(imp, e->ident.name, DECL_STRUCT, stop);
                         if (!ct) ct = import_scope_lookup_kind_until(imp, e->ident.name, DECL_UNION, stop);
+                        if (!ct) ct = import_scope_lookup_kind_until(imp, e->ident.name, DECL_ENUM, stop);
                         if (bind_companion_type(e, isym, ct)) return e->type;
                         e->ident.resolved_sym = isym;
                         e->type = type_void();
@@ -3577,7 +3623,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 /* Check parent members at this level */
                 Symbol *psym = symtab_lookup(p->members, e->ident.name);
                 if (psym) {
-                    if (psym->kind == DECL_STRUCT || psym->kind == DECL_UNION) {
+                    if (psym->kind == DECL_STRUCT || psym->kind == DECL_UNION ||
+                        psym->kind == DECL_ENUM) {
                         e->ident.resolved_sym = psym;
                         e->ident.companion_module = symtab_lookup_kind(p->members, e->ident.name, DECL_MODULE);
                         e->type = psym->type;
@@ -3586,6 +3633,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     if (psym->kind == DECL_MODULE) {
                         Symbol *ct = symtab_lookup_kind(p->members, e->ident.name, DECL_STRUCT);
                         if (!ct) ct = symtab_lookup_kind(p->members, e->ident.name, DECL_UNION);
+                        if (!ct) ct = symtab_lookup_kind(p->members, e->ident.name, DECL_ENUM);
                         if (bind_companion_type(e, psym, ct)) return e->type;
                         e->ident.resolved_sym = psym;
                         e->type = type_void();
@@ -3656,7 +3704,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         /* For struct/union type names used in expressions (e.g., variant construction),
          * return the type itself */
-        if (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION) {
+        if (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION ||
+            sym->kind == DECL_ENUM) {
             e->ident.resolved_sym = sym;
             e->ident.companion_module = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
             e->type = sym->type;
@@ -3682,6 +3731,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
              * variant construction on a miss. */
             Symbol *ct = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_STRUCT, ctx->current_ns);
             if (!ct) ct = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_UNION, ctx->current_ns);
+            if (!ct) ct = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_ENUM, ctx->current_ns);
             if (bind_companion_type(e, ns_mod, ct)) return e->type;
             e->ident.resolved_sym = ns_mod;
             e->type = type_void();  /* placeholder; real type determined by EXPR_FIELD */
@@ -3752,6 +3802,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 /* Arithmetic/bitwise: result is the type var type */
                 e->type = (lt->kind == TYPE_TYPE_VAR) ? lt : rt;
             }
+            return e->type;
+        }
+
+        /* Enums are not numeric: arithmetic/bitwise/shift on an enum operand
+         * is rejected up front with a cast-out hint (the numeric gates below
+         * would reject it anyway, with a less helpful message). */
+        if ((lt->kind == TYPE_ENUM || rt->kind == TYPE_ENUM) &&
+            (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
+             op == TOK_SLASH || op == TOK_PERCENT || op == TOK_AMP ||
+             op == TOK_PIPE || op == TOK_CARET || op == TOK_LTLT ||
+             op == TOK_GTGT)) {
+            Type *et = lt->kind == TYPE_ENUM ? lt : rt;
+            diag_error(e->loc, "enum '%s' is not numeric; cast out first: (%s) x",
+                type_name(et), type_name(type_enum_underlying(et)));
+            e->type = type_error();
             return e->type;
         }
 
@@ -3848,6 +3913,20 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (lt->kind == TYPE_POINTER && rt->kind == TYPE_POINTER) {
                 if (!type_eq(lt, rt)) {
                     diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+                    e->type = type_error();
+                    return e->type;
+                }
+                e->type = type_bool();
+                return e->type;
+            }
+            /* Enum ordering: both operands must be the same enum type (the
+             * declared values are public and ordered; cross-enum or enum-vs-
+             * int comparisons require casting out). */
+            if (lt->kind == TYPE_ENUM || rt->kind == TYPE_ENUM) {
+                if (!type_eq(lt, rt)) {
+                    diag_error(e->loc, "ordering comparison requires both operands "
+                        "to be the same enum type, got %s and %s",
+                        type_name(lt), type_name(rt));
                     e->type = type_error();
                     return e->type;
                 }
@@ -3975,6 +4054,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Defer unary minus and bitwise not on type variables to monomorphization */
         if (ot->kind == TYPE_TYPE_VAR && (op == TOK_MINUS || op == TOK_TILDE)) {
             e->type = ot;
+            return e->type;
+        }
+        if (ot->kind == TYPE_ENUM && (op == TOK_MINUS || op == TOK_TILDE || op == TOK_BANG)) {
+            diag_error(e->loc, "enum '%s' is not numeric; cast out first: (%s) x",
+                type_name(ot), type_name(type_enum_underlying(ot)));
+            e->type = type_error();
             return e->type;
         }
         if (op == TOK_MINUS) {
@@ -5057,6 +5142,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
 
         Type *t = check_expr(ctx, e->let_expr.let_init);
+        if (expr_is_type_ref(e->let_expr.let_init)) {
+            diag_error(e->let_expr.let_init->loc, "'%s' is a type, not a value",
+                type_name(t));
+            t = type_error();
+        }
 
         /* Restore the channels. EXPR_FUNC clears them on consumption, but restore
            unconditionally so error paths and non-lambda inits leave them clean. */
@@ -5284,6 +5374,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         e->cast.target = to;
         bool from_num = type_is_numeric(from);
         bool to_num = type_is_numeric(to);
+        /* Enum → numeric is total: the value IS its repr. Int → enum is the
+         * one partial direction and has exactly one spelling, enum_of. */
+        bool enum_out = (from->kind == TYPE_ENUM && to_num);
+        if (to->kind == TYPE_ENUM) {
+            diag_error(e->loc, "cannot cast %s to enum '%s'; the only "
+                "integer->enum conversion is enum_of(%s, x), returning %s?",
+                type_name(from), type_name(to), type_name(to), type_name(to));
+            e->type = type_error();
+            return e->type;
+        }
         bool from_ptr = (from->kind == TYPE_POINTER || from->kind == TYPE_ANY_PTR);
         bool to_ptr = (to->kind == TYPE_POINTER || to->kind == TYPE_ANY_PTR);
         bool from_int = type_is_integer(from);
@@ -5323,7 +5423,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Allowed: identity, numeric <-> numeric, bool -> numeric (0/1),
          * pointer <-> pointer, pointer <-> usize/isize, str <-> cstr, slice
          * const cast. NOT allowed: numeric -> bool (ambiguous: !=0 vs 0/1?). */
-        if (!(same_type || (from_num && to_num) || bool_to_num || (from_ptr && to_ptr) ||
+        if (!(same_type || (from_num && to_num) || enum_out || bool_to_num ||
+              (from_ptr && to_ptr) ||
               (from_ptr && to_ptrwidth_int) || (from_ptrwidth_int && to_ptr) ||
               str_to_cstr || cstr_to_str || const_change_slice)) {
             diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
@@ -5399,6 +5500,37 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Size-matched scalar reinterpretation is a pure value with no
          * provenance and no runtime failure mode. */
         e->type = to;
+        return e->type;
+    }
+
+    case EXPR_ENUM_OF: {
+        Type *target = resolve_type(ctx, e->enum_of_expr.target);
+        e->enum_of_expr.target = target;
+        Type *ot = check_expr(ctx, e->enum_of_expr.operand);
+        if (type_is_error(ot) || type_is_error(target)) {
+            e->type = type_error();
+            return e->type;
+        }
+        if (target->kind != TYPE_ENUM) {
+            diag_error(e->loc, "enum_of requires an enum type, got %s",
+                type_name(target));
+            e->type = type_error();
+            return e->type;
+        }
+        if (ot->kind == TYPE_ENUM) {
+            diag_error(e->loc, "enum_of operand is already enum '%s'; cast "
+                "out first: (%s) x", type_name(ot),
+                type_name(type_enum_underlying(ot)));
+            e->type = type_error();
+            return e->type;
+        }
+        if (!type_is_integer(ot)) {
+            diag_error(e->loc, "enum_of requires an integer operand, got %s",
+                type_name(ot));
+            e->type = type_error();
+            return e->type;
+        }
+        e->type = type_option(ctx->arena, target);
         return e->type;
     }
 
@@ -5717,7 +5849,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 if (e->field.object->kind == EXPR_IDENT &&
                     e->field.object->ident.resolved_sym &&
                     (e->field.object->ident.resolved_sym->kind == DECL_UNION ||
-                     e->field.object->ident.resolved_sym->kind == DECL_STRUCT))
+                     e->field.object->ident.resolved_sym->kind == DECL_STRUCT ||
+                     e->field.object->ident.resolved_sym->kind == DECL_ENUM))
                     companion = e->field.object->ident.resolved_sym;
                 /* For EXPR_FIELD chains (outer.shape.variant), the companion type
                  * is a sibling of the module in the parent's members table */
@@ -5725,6 +5858,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     companion = symtab_lookup_kind(mod_owner, mod_sym->name, DECL_UNION);
                 if (!companion && mod_owner)
                     companion = symtab_lookup_kind(mod_owner, mod_sym->name, DECL_STRUCT);
+                if (!companion && mod_owner)
+                    companion = symtab_lookup_kind(mod_owner, mod_sym->name, DECL_ENUM);
                 if (companion && companion->type && companion->type->kind == TYPE_UNION) {
                     Type *ut = companion->type;
                     for (int v = 0; v < ut->unio.variant_count; v++) {
@@ -5733,6 +5868,24 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                             e->field.is_variant_constructor = true;
                             return e->type;
                         }
+                    }
+                }
+                if (companion && companion->type && companion->type->kind == TYPE_ENUM) {
+                    Type *et = companion->type;
+                    for (int v = 0; v < et->enu.variant_count; v++) {
+                        if (et->enu.variants[v].name == e->field.name) {
+                            e->type = et;
+                            e->field.is_variant_constructor = true;
+                            return e->type;
+                        }
+                    }
+                    if (strcmp(e->field.name, "count") == 0) {
+                        char *cbuf = arena_alloc(ctx->arena, 24);
+                        snprintf(cbuf, 24, "%d", et->enu.variant_count);
+                        e->field.codegen_name = cbuf;
+                        e->field.is_type_property = true;
+                        e->type = type_int32();
+                        return e->type;
                     }
                 }
                 diag_error(e->loc, "module '%s' has no member '%s'",
@@ -5753,6 +5906,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             /* Submodule access: return void sentinel for further chaining */
             if (member->kind == DECL_MODULE) {
                 e->type = type_void();
+                return e->type;
+            }
+            /* Enum type member: m.E — resolves to the enum type itself for a
+             * following .variant / .count access. Enums take no type args. */
+            if (member->kind == DECL_ENUM) {
+                if (e->field.type_arg_count > 0) {
+                    diag_error(e->loc, "enum types take no type arguments");
+                    e->type = type_error();
+                    return e->type;
+                }
+                e->type = member->type;
                 return e->type;
             }
             /* Struct/union type member — handle generic instantiation if type args present */
@@ -5849,6 +6013,46 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             e->type = member->type;
+            return e->type;
+        }
+
+        /* Enum type name: E.variant construction or the E.count type property.
+         * Only fires when the object denotes the TYPE (a resolved enum symbol or
+         * a module-member chain m.E) — a field access on an enum VALUE falls
+         * through to the non-struct error below. */
+        if (obj_type->kind == TYPE_ENUM &&
+            ((e->field.object->kind == EXPR_IDENT &&
+              e->field.object->ident.resolved_sym &&
+              e->field.object->ident.resolved_sym->kind == DECL_ENUM) ||
+             (e->field.object->kind == EXPR_FIELD &&
+              e->field.object->field.resolved_member &&
+              e->field.object->field.resolved_member->kind == DECL_ENUM))) {
+            Type *et = obj_type;
+            if (e->field.type_arg_count > 0) {
+                diag_error(e->loc, "enum types take no type arguments");
+                e->type = type_error();
+                return e->type;
+            }
+            for (int v = 0; v < et->enu.variant_count; v++) {
+                if (et->enu.variants[v].name == e->field.name) {
+                    e->field.is_variant_constructor = true;
+                    e->type = et;
+                    return e->type;
+                }
+            }
+            /* A declared variant named `count` wins above; otherwise `count`
+             * is the variant-count type property (an i32 constant). */
+            if (strcmp(e->field.name, "count") == 0) {
+                char *cbuf = arena_alloc(ctx->arena, 24);
+                snprintf(cbuf, 24, "%d", et->enu.variant_count);
+                e->field.codegen_name = cbuf;
+                e->field.is_type_property = true;
+                e->type = type_int32();
+                return e->type;
+            }
+            diag_error(e->loc, "enum '%s' has no variant '%s'",
+                type_name(et), e->field.name);
+            e->type = type_error();
             return e->type;
         }
 
@@ -6104,7 +6308,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
-        if (!type_is_integer(idx_type)) {
+        /* Enum indices ride directly: the value IS its repr (dir.dx[d]).
+         * Index position is unambiguous — no second operand, no literal to
+         * magic-number against — so this is the one implicit use of the
+         * underlying value. */
+        if (!type_is_integer(idx_type) && idx_type->kind != TYPE_ENUM) {
             diag_error(e->loc, "index must be integer, got %s", type_name(idx_type));
             e->type = type_error();
             return e->type;
@@ -6166,7 +6374,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->type = type_error();
             return e->type;
         }
-        /* Length must be a compile-time constant (integer literal) */
+        /* Length must be a compile-time constant (integer literal). A
+         * constant expression that isn't literal yet — E.count, i32.bits,
+         * arithmetic over them — is folded first. */
+        if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
+            Expr *folded = const_fold_expr(ctx, e->array_lit.size_expr);
+            if (folded && folded->kind == EXPR_INT_LIT)
+                e->array_lit.size_expr = folded;
+        }
         if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
             diag_error(e->array_lit.size_expr->loc,
                 "slice literal length must be a compile-time constant");
@@ -7048,6 +7263,17 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
                 }
             }
         }
+        /* Enum subjects: a bare name matching a variant is that variant. */
+        if (type->kind == TYPE_ENUM) {
+            for (int v = 0; v < type->enu.variant_count; v++) {
+                if (type->enu.variants[v].name == pat->binding.name) {
+                    pat->kind = PAT_VARIANT;
+                    pat->variant.variant = pat->binding.name;
+                    pat->variant.payload = NULL;
+                    return;
+                }
+            }
+        }
         if (reject_bindings) {
             diag_error(pat->loc, "or-pattern alternatives cannot bind variables: '%s'",
                 pat->binding.name);
@@ -7056,6 +7282,11 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
         scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false, pat->loc);
         break;
     case PAT_INT_LIT:
+        if (type->kind == TYPE_ENUM) {
+            diag_error(pat->loc, "integer pattern on enum type %s — match its "
+                "variants by name", type_name(type));
+            return;
+        }
         if (!type_is_integer(type)) {
             diag_error(pat->loc, "integer pattern on non-integer type %s", type_name(type));
             return;
@@ -7149,6 +7380,25 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             check_match_pattern(ctx, pat->some_pat.inner, type_error_code(), reject_bindings);
         break;
     case PAT_VARIANT: {
+        if (type->kind == TYPE_ENUM) {
+            if (pat->variant.payload) {
+                diag_error(pat->loc, "enum variant '%s' carries no payload",
+                    pat->variant.variant);
+                return;
+            }
+            bool efound = false;
+            for (int v = 0; v < type->enu.variant_count; v++) {
+                if (type->enu.variants[v].name == pat->variant.variant) {
+                    efound = true;
+                    break;
+                }
+            }
+            if (!efound) {
+                diag_error(pat->loc, "enum '%s' has no variant '%s'",
+                    type_name(type), pat->variant.variant);
+            }
+            return;
+        }
         if (type->kind != TYPE_UNION) {
             diag_error(pat->loc, "variant pattern on non-union type %s", type_name(type));
             return;
@@ -7666,6 +7916,20 @@ static int type_ctors_list(CheckCtx *ctx, Type *type, Ctor **out) {
         }
         return n;
     }
+    if (type->kind == TYPE_ENUM) {
+        /* A closed set: one arity-0 constructor per variant. Name identity ≡
+         * value identity (duplicate names and values are both compile errors). */
+        int n = type->enu.variant_count;
+        *out = arena_alloc(a, n * sizeof(Ctor));
+        for (int i = 0; i < n; i++) {
+            (*out)[i] = (Ctor){
+                .kind = CTOR_VARIANT,
+                .name = type->enu.variants[i].name,
+                .arity = 0,
+            };
+        }
+        return n;
+    }
     if (type->kind == TYPE_STRUCT) {
         *out = arena_alloc(a, sizeof(Ctor));
         (*out)[0] = (Ctor){
@@ -8024,6 +8288,9 @@ static void report_witness(CheckCtx *ctx, SrcLoc loc, MatPat *witness, Type *sub
     case CTOR_VARIANT:
         if (witness_type && witness_type->kind == TYPE_UNION)
             diag_error(loc, "non-exhaustive match: missing variant '%s' of union '%s'",
+                interesting->ctor.name, type_name(witness_type));
+        else if (witness_type && witness_type->kind == TYPE_ENUM)
+            diag_error(loc, "non-exhaustive match: missing variant '%s' of enum '%s'",
                 interesting->ctor.name, type_name(witness_type));
         else
             diag_error(loc, "non-exhaustive match: missing variant '%s'",
@@ -8440,6 +8707,16 @@ static Expr *const_make_bool(CheckCtx *ctx, Type *t, bool v, SrcLoc loc) {
 static Expr *const_fold_type_property(CheckCtx *ctx, Expr *e) {
     if (!e->field.is_type_property || e->field.object->kind != EXPR_IDENT)
         return NULL;
+    /* Enum count: the variant count is a compile-time i32. */
+    {
+        Symbol *osym = e->field.object->ident.resolved_sym;
+        if (osym && osym->kind == DECL_ENUM && osym->type &&
+            osym->type->kind == TYPE_ENUM &&
+            strcmp(e->field.name, "count") == 0) {
+            return const_make_int(ctx, type_int32(),
+                (uint64_t)osym->type->enu.variant_count, e->loc);
+        }
+    }
     Type *t = type_from_name(e->field.object->ident.name,
                              (int)strlen(e->field.object->ident.name));
     if (!t) return NULL;
@@ -9068,8 +9345,9 @@ static bool is_file_init_expr(Expr *e) {
         }
         return false;
     case EXPR_FIELD:
-        /* Allow no-payload union variant constructors */
-        if (e->type && e->type->kind == TYPE_UNION)
+        /* Allow no-payload union variant constructors and enum variants
+         * (both compile to constants; enum count rides is_type_property) */
+        if (e->type && (e->type->kind == TYPE_UNION || e->type->kind == TYPE_ENUM))
             return true;
         /* Allow extern constants (C macros/enums) and static type properties
          * (int32.min, float64.nan, ...) */
@@ -9126,6 +9404,10 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     ctx->pending_recursive_ret = recursive_ret;
     ctx->pending_recursive_self = recursive_ret ? d->let.name : NULL;
     Type *t = check_expr(ctx, d->let.init);
+    if (expr_is_type_ref(d->let.init)) {
+        diag_error(d->let.init->loc, "'%s' is a type, not a value", type_name(t));
+        t = type_error();
+    }
     ctx->pending_recursive_ret = saved_prr;
     ctx->pending_recursive_self = saved_prs;
     ctx->is_top_level_init = saved_top;

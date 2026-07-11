@@ -1,0 +1,18 @@
+// Basic enum: declaration, construction, equality, count, default
+enum difficulty =
+    | baby
+    | easy
+    | medium
+    | hard
+
+let main = (args: str[]) ->
+    let d = difficulty.medium
+    assert(d == difficulty.medium)
+    assert(d != difficulty.baby)
+    assert(difficulty.count == 4)
+    let z = default(difficulty)
+    assert(z == difficulty.baby)
+    let mut m = difficulty.easy
+    m = difficulty.hard
+    assert(m == difficulty.hard)
+    0

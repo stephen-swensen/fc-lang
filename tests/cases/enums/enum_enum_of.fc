@@ -1,0 +1,42 @@
+// enum_of: membership-checked int->enum conversion yielding E?
+enum door_lock of u8 =
+    | normal_a
+    | gold_key = 1
+    | silver_key
+    | elevator_b = 5
+
+enum signed_set of i16 =
+    | neg = -3
+    | zero = 0
+    | pos = 7
+
+let main = (args: str[]) ->
+    match enum_of(door_lock, 2) with
+    | some(l) -> assert(l == door_lock.silver_key)
+    | none -> assert(false)
+    match enum_of(door_lock, 3) with
+    | some(l) -> assert(false)
+    | none -> void()
+    match enum_of(door_lock, -1) with
+    | some(l) -> assert(false)
+    | none -> void()
+    match enum_of(door_lock, 256) with
+    | some(l) -> assert(false)
+    | none -> void()
+    match enum_of(signed_set, -3) with
+    | some(v) -> assert(v == signed_set.neg)
+    | none -> assert(false)
+    // operand widths: u64/usize take the unsigned path
+    let big = 18446744073709551615u64
+    match enum_of(door_lock, big) with
+    | some(l) -> assert(false)
+    | none -> void()
+    let uz = 5usize
+    match enum_of(door_lock, uz) with
+    | some(l) -> assert(l == door_lock.elevator_b)
+    | none -> assert(false)
+    let iz = -3isize
+    match enum_of(signed_set, iz) with
+    | some(v) -> assert(v == signed_set.neg)
+    | none -> assert(false)
+    0

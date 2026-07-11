@@ -1,0 +1,13 @@
+namespace game
+
+enum weapon of u8 =
+    | knife
+    | pistol
+    | machine_gun
+
+module weapons =
+    let damage = (w: weapon) ->
+        match w with
+        | knife -> 5
+        | pistol -> 15
+        | machine_gun -> 30

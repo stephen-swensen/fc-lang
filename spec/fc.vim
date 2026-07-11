@@ -8,13 +8,13 @@ if exists("b:current_syntax")
 endif
 
 " Keywords
-syn keyword fcKeyword let mut struct union error module namespace import from as
+syn keyword fcKeyword let mut struct union enum error module namespace import from as
 syn keyword fcKeyword extern private match with if then else for in loop do
 syn keyword fcKeyword break continue return defer ignore define
 
 " Built-in operators (reserved identifiers)
 syn keyword fcBuiltin alloc free sizeof alignof default assert some ok err
-syn keyword fcBuiltin error_name
+syn keyword fcBuiltin error_name enum_of bitcast
 
 " Boolean and none literals
 syn keyword fcBoolean true false

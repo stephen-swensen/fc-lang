@@ -1239,9 +1239,9 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 
 ### Statements vs. expressions
 
-At the top level of a file, `let`, `let mut`, `struct`, `union`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `module`, `import`, and `extern`.
+At the top level of a file, `let`, `let mut`, `struct`, `union`, `enum`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `enum`, `module`, `import`, and `extern`.
 
-**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`i32.min`, `f64.nan`, `isize.bits`, …), struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
+**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`i32.min`, `f64.nan`, `isize.bits`, …), enum variants and `E.count`, struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
 
 **Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine. Static type properties follow the same split: a fixed-width integer `.min`, `.max`, or `.bits` is folded to its literal value (so it can take part in const division/modulo and comparisons, e.g. `i32.min / 2`), while float properties and the target-defined `isize`/`usize` `.min`/`.max`/`.bits` are emitted as their C macro and left to the C compiler.
 
@@ -2601,6 +2601,85 @@ let r = parse_outcome.success(42)
 
 ---
 
+## Enums
+
+An **enum** is a closed set of named integer constants over a declared fixed-width representation. It joins the two halves of C's `enum` that unions and constant modules each cover only one of: like a payload-free union, an enum is a distinct nominal type whose matches are exhaustiveness-checked; like a module of integer constants, every variant has a declared numeric value — so enums index tables, compare with ordering operators, and cast to any numeric type.
+
+```fc
+enum difficulty =            // repr defaults to i32; values auto-number from 0
+    | baby
+    | easy
+    | medium
+    | hard
+
+enum door_lock of u8 =       // declared repr; explicit values, C-style continuation
+    | normal_a               // 0 (auto)
+    | gold_key = 1
+    | silver_key             // 2 (continues from the previous value)
+    | elevator_b = 5         // values may be sparse
+```
+
+### Values and representation
+
+- The representation (`of <type>`) must be a fixed-width integer type, `i8`–`u64`; the default is `i32`. `isize`/`usize` are excluded: an enum's representation is part of its layout contract (a `u8` enum field is one byte in a struct, on every target), and a target-defined width would contradict that.
+- Values are integer literals; unary minus is allowed on signed representations. Literals carry no type suffix — the enum already declares its representation. An omitted value continues C-style: the first variant defaults to `0`, each later one to the previous value plus one.
+- Every value must fit the representation. Duplicate values and duplicate names are both compile errors — two names for one value would make value identity and match identity diverge.
+- **Every enum must declare a variant with value 0.** Zero-filled memory is the default value of every FC type (§Default Values); an enum with no zero variant would make a zero-filled struct field an *invalid* value, and exhaustive matching over invalid values is unsound. `default(E)` is the zero variant, wherever it appears in the declaration. Auto-numbered enums satisfy this for free; a wire format that reserves 0 names its reserved state as a variant — the kernel-C `_NONE = 0` convention, promoted to a rule.
+- Enums take no type parameters, and variants carry no payload — a variant that carries data is a union.
+
+### Construction and matching
+
+Construction is qualified, like union variants; match arms use bare names and are exhaustiveness-checked, exactly like a payload-free union. Or-patterns, wildcards, and binding arms all work.
+
+```fc
+let d = difficulty.medium
+let label = match d with
+            | baby | easy -> "casual"
+            | medium -> "normal"
+            | hard -> "ouch"
+```
+
+Exhaustiveness is *sound*, not advisory: `enum_of` (below) is the only way an integer becomes an enum, so every value of an enum type is a declared variant, and a match that covers all variants needs no `_` arm. This is the property that C, C++ `enum class`, and F# enums forfeit by letting casts inject out-of-set values — their switches always need a default case; FC's don't.
+
+### Operations
+
+| Operation | Rule |
+|-----------|------|
+| `==` `!=` `<` `<=` `>` `>=` | Between **same-enum** operands only. Cross-enum and enum↔integer comparisons are compile errors — the operand that is "just a number" must say so with a cast. |
+| Slice index | `table[d]` — an enum value is accepted directly in index position. Indexing is the one implicit use of the underlying value: the position is unambiguous (there is no second operand to confuse, no literal to magic-number against). |
+| Cast out | `(i32) e` — explicit and **total**: the value *is* its representation. Any numeric target works; a narrowing cast follows the same `checked`/`unchecked` rules as narrowing from the representation type itself. |
+| Conversion in | `enum_of(E, x)` — see below. A plain cast `(E) x` is a compile error. |
+| `E.count` | The number of declared variants, as an `i32` constant expression (usable in slice-literal lengths and module-level initializers). A declared variant named `count` takes precedence over the property. |
+| `default(E)` | The zero variant. |
+| Arithmetic, bitwise, shifts, unary ops | Compile errors on enum operands — any operation that could produce a value outside the declared set would break the closedness that makes exhaustive matching sound. Cast out first: `(i32) e + 1`. |
+
+Enums participate in generics as type **arguments**: the universal tier (`==`, `default`, `sizeof`/`alignof`) works for any enum, and the built-in ordering constraint admits same-enum operands. The numeric and bitwise constraints do not — an instantiation that adds or masks type-variable operands rejects an enum argument, with the usual instantiation-chain diagnostic.
+
+### `enum_of` — checked conversion in
+
+Integers enter an enum through exactly one door:
+
+```fc
+enum_of(door_lock, tile_code)     // door_lock? — some(variant) or none
+```
+
+`enum_of(E, x)` accepts any integer type for `x` and returns `E?`: `some` of the matching variant when `x` equals a declared value, `none` otherwise. This is the boundary operation for everything C-shaped — bytes from a data file, an int from an extern call, a parsed configuration value — and it is why exhaustive matching survives contact with the outside world: the check happens once, at the edge, and everything downstream is a closed set.
+
+```fc
+let lock = match enum_of(door_lock, tile) with
+           | some(l) -> l
+           | none -> door_lock.normal_a     // explicit policy for out-of-set input
+```
+
+### Sparse enums and tables
+
+The `E.count`-sized lookup table (`let dx = i32[dir.count]{ ... }` indexed by `dir` values) is the idiom for contiguous, auto-numbered enums — `count` equals every index bound exactly. A sparse enum (explicit, non-contiguous values, common in protocol code) still has a `count`, but it is the *variant* count, not the value range; sparse enums are matched and `enum_of`-checked, not table-indexed.
+
+> **Transpilation**
+> An enum transpiles to a fixed-width integer typedef — **never a C `enum`**, whose width is implementation-defined (and whose backing `int` is 16 bits on small embedded targets): `enum door_lock of u8` becomes `typedef uint8_t door_lock;`. Variant references emit as cast integer literals (`((door_lock)5)`), match arms compare scalar values, and `==` is C's native `==` — no tag struct, no generated equality function. `enum_of` compiles to a small static function containing a `switch` over the declared values, which C compilers reduce to a range check when the values are contiguous.
+
+---
+
 ## Tuples
 
 A **tuple** is an anonymous, positional product type — a lightweight way to group or return several values without declaring a named struct for the occasion. Tuples are *synthesized structs*: semantically and at runtime they behave exactly like a `struct`, and they inherit structural equality, `default`, by-value copy, and nesting from the struct machinery. They are not a distinct kind of type — `{i32, str}` is just a struct the compiler writes for you.
@@ -3585,6 +3664,8 @@ f64.bits    // 64
 - **Float `.inf`/`.neg_inf`**: positive/negative infinity
 - **Float `.nan`**: not-a-number
 - **`.bits`**: bit width of the type as `i32` (8, 16, 32, or 64; for `isize`/`usize`, the platform pointer width — 64 on a 64-bit target, 32 on a 32-bit target)
+
+Enum types add one property of their own: **`E.count`**, the number of declared variants as an `i32`. Like the fixed-width integer properties it folds to a literal, so it sizes slice literals (`i32[dir.count]{ … }`) and takes part in constant arithmetic (see §Enums).
 
 > **Transpilation**
 > Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `i32.max` becomes `INT32_MAX`, `f64.nan` becomes `((double) NAN)`. Because each is a constant expression, type properties may be used in module-level and file-level constant initializers (see §Statements vs. expressions); fixed-width integer properties additionally fold to a literal so they can take part in const division/modulo.
@@ -4633,7 +4714,7 @@ let rgb = u8[3] { 255u8, 0u8, 128u8 }  // stack slice, exhaustive element list
 
 Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
 
-`N` in `T[N] { }` must be a compile-time integer literal for stack-allocated slices. FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
+`N` in `T[N] { }` must be a compile-time integer constant for stack-allocated slices — a literal or a constant expression the compiler folds to one (`i32[1 + 2]`, `bool[i32.bits]`, `i32[dir.count]`). FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
 
 > **Transpilation**
 > `i32[128] { }` transpiles to `i32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
@@ -5403,26 +5484,32 @@ c.fprintf(stdout, c"value: %d name: %s\n", val, c"hello")
 
 ### Mapping C enums
 
-C enums are integer constants. In pure FC, use union types for sum types. When interoperating with a C API that uses an enum, model it as a module of `i32` constants and declare the extern function with an `i32` parameter:
+C enums are integer constants. Which FC tool models one depends on who owns the values and how they behave:
+
+**FC-owned closed sets use `enum`** (§Enums). When FC code declares the values itself — mirroring a documented protocol or file format, or modeling its own states passed through a C boundary — an `enum` with explicit values gives exhaustive matching on the inside and a total cast at the edge. An integer coming *from* C re-enters through `enum_of`, which forces an explicit policy for out-of-range input:
 
 ```fc
-module af =                    // address family constants (from sys/socket.h)
-    let inet  = 2
-    let inet6 = 10
-
-module sock =                  // socket type constants
-    let stream = 1
-    let dgram  = 2
-    let raw    = 3
+enum sock_type of i32 =
+    | unspecified = 0          // the reserved-zero state (see §Enums)
+    | stream = 1
+    | dgram = 2
+    | raw = 3
 
 module c_socket from "sys/socket.h" =
     extern socket: (i32, i32, i32) -> i32    // returns fd or -1
 
-let fd = c_socket.socket(af.inet, sock.stream, 0)
-if fd == -1 then handle_error()
+let fd = c_socket.socket(2, (i32) sock_type.stream, 0)   // AF_INET = 2
 ```
 
-For bit flag enums, the same pattern applies and values combine naturally with bitwise operators:
+**C-owned values stay extern constants.** When the header owns the values (`SDLK_UP`, `SIGINT`) FC cannot know them at compile time, so they cannot form a closed set — declare them as extern constants with their exact C width and use them as the integers they are:
+
+```fc
+module sdl2 from "SDL2/SDL.h" =
+    extern SDL_INIT_VIDEO as init_video: u32
+    extern SDL_WINDOW_SHOWN as window_shown: u32
+```
+
+**Bit-flag enums are integers, not enums.** A flag set's values (`read | write`) are combinations *outside* any declared set, which is exactly the property `enum` exists to exclude. Model flags as extern constants (C-owned, as above) or a module of integer constants (FC-owned), and combine them with the bitwise operators:
 
 ```fc
 module file_mode =
@@ -5765,7 +5852,7 @@ hljs.registerLanguage('fc', function(hljs) {
       },
       {
         className: 'keyword',
-        begin: '\\b(let|mut|struct|union|module|namespace|import|from|as|extern|private|match|with|if|then|else|for|in|loop|break|continue|return|default|some|alloc|free|sizeof|assert)\\b'
+        begin: '\\b(let|mut|struct|union|enum|module|namespace|import|from|as|extern|private|match|with|if|then|else|for|in|loop|break|continue|return|default|some|alloc|free|sizeof|assert|enum_of|bitcast)\\b'
       },
       { className: 'literal', begin: '\\b(true|false|none|void)\\b' }
     ]

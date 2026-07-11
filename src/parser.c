@@ -173,7 +173,7 @@ static void recover_progress(Parser *p, int guard_pos) {
    recovery resyncs on layout (NEWLINE/DEDENT) via leaf-bump + the watchdog instead,
    since a statement keyword is not a reliable in-block anchor. */
 static const TokenKind DECL_START[] = {
-    TOK_LET, TOK_STRUCT, TOK_UNION, TOK_ERROR_KW, TOK_MODULE,
+    TOK_LET, TOK_STRUCT, TOK_UNION, TOK_ENUM, TOK_ERROR_KW, TOK_MODULE,
     TOK_IMPORT, TOK_EXTERN, TOK_NAMESPACE, TOK_PRIVATE,
 };
 
@@ -1185,7 +1185,8 @@ static bool token_starts_prefix_expr(TokenKind k) {
     case TOK_IDENT: case TOK_TYPE_VAR:
     case TOK_SOME: case TOK_NONE: case TOK_OK: case TOK_ERR:
     case TOK_ALLOC: case TOK_ALLOCA: case TOK_FREE:
-    case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_DEFAULT:
+    case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_ENUM_OF:
+    case TOK_DEFAULT:
     case TOK_ASSERT: case TOK_ERROR_NAME:
     case TOK_ATOMIC_LOAD: case TOK_ATOMIC_STORE:
     case TOK_GUARDED: case TOK_UNGUARDED: case TOK_CHECKED: case TOK_UNCHECKED:
@@ -2027,6 +2028,21 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_BITCAST, loc);
         e->bitcast_expr.target = ty;
         e->bitcast_expr.operand = operand;
+        return e;
+    }
+
+    case TOK_ENUM_OF: {
+        /* enum_of(E, x) — a type argument plus a value, like bitcast. The
+         * membership-checked integer→enum conversion; yields E?. */
+        advance_p(p);
+        expect(p, TOK_LPAREN);
+        Type *ty = parse_type(p);
+        expect(p, TOK_COMMA);
+        Expr *operand = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        Expr *e = alloc_expr(p, EXPR_ENUM_OF, loc);
+        e->enum_of_expr.target = ty;
+        e->enum_of_expr.operand = operand;
         return e;
     }
 
@@ -3229,6 +3245,110 @@ static Decl *parse_union_decl(Parser *p) {
     return d;
 }
 
+/* enum <name> [of <repr>] =
+ *     | variant [= value]
+ *     | variant
+ *
+ * Closed set of named integer constants over a declared fixed-width repr
+ * (default i32). `of` is contextual (an ordinary identifier here), not a
+ * reserved word. Values are integer literals (unary minus allowed); omitted
+ * values continue C-style from the previous one. pass1 resolves/validates the
+ * values (repr fit, duplicates, mandatory zero variant). */
+static Decl *parse_enum_decl(Parser *p) {
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    expect(p, TOK_ENUM);
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+
+    if (check(p, TOK_LT)) {
+        diag_error(loc_from_token(current(p)), "enum types take no type parameters");
+    }
+
+    Type *repr = NULL;
+    if (check(p, TOK_IDENT) && current(p)->length == 2 &&
+        memcmp(current(p)->start, "of", 2) == 0) {
+        advance_p(p);
+        Token *rt = expect(p, TOK_IDENT);
+        if (rt->kind == TOK_IDENT) {
+            Type *r = type_from_name(rt->start, rt->length);
+            if (r && r->kind >= TYPE_INT8 && r->kind <= TYPE_UINT64) {
+                repr = r;
+            } else {
+                diag_error(loc_from_token(rt),
+                    "enum repr must be a fixed-width integer type (i8..u64), got '%.*s'",
+                    rt->length, rt->start);
+            }
+        }
+    }
+
+    expect(p, TOK_EQ);
+    expect(p, TOK_INDENT);
+
+    EnumVariant *variants = NULL;
+    int variant_count = 0, variant_cap = 0;
+
+    while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
+        skip_newlines(p);
+        if (check(p, TOK_DEDENT)) break;
+
+        int guard = p->pos;
+        expect(p, TOK_PIPE);
+        Token *vtok = expect(p, TOK_IDENT);
+        const char *vname = tok_intern(p, vtok);
+        SrcLoc vloc = loc_from_token(vtok);
+        vloc.filename = p->filename;
+        if (check(p, TOK_LPAREN)) {
+            diag_error(loc_from_token(current(p)),
+                "enum variants carry no payload — use a union for variants with data");
+            /* Consume the (type) so recovery doesn't cascade a second error. */
+            advance_p(p);
+            parse_type(p);
+            if (check(p, TOK_RPAREN)) advance_p(p);
+        }
+
+        EnumVariant v = { .name = vname, .loc = vloc };
+        if (check(p, TOK_EQ)) {
+            advance_p(p);
+            v.has_explicit = true;
+            if (check(p, TOK_MINUS)) {
+                advance_p(p);
+                v.negative = true;
+            }
+            Token *nt = expect(p, TOK_INT_LIT);
+            if (nt->kind == TOK_INT_LIT) {
+                for (int i = 0; i < nt->length; i++) {
+                    if (nt->start[i] == 'i' || nt->start[i] == 'u') {
+                        diag_error(loc_from_token(nt),
+                            "enum values take no type suffix — the enum declares its repr");
+                        break;
+                    }
+                }
+                bool oor = false;
+                v.value_bits = parse_int_value(nt->start, nt->length, &oor);
+                if (oor)
+                    diag_error(loc_from_token(nt), "enum value out of range");
+            }
+        }
+        DA_APPEND(variants, variant_count, variant_cap, v);
+        recover_progress(p, guard);  /* a fully malformed variant line consumes nothing */
+        skip_newlines(p);
+    }
+    expect(p, TOK_DEDENT);
+
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_ENUM;
+    d->loc = loc;
+    d->enu.name = name;
+    d->enu.repr = repr;
+    d->enu.variant_count = variant_count;
+    if (variant_count > 0) {
+        d->enu.variants = arena_alloc(p->arena, sizeof(EnumVariant) * (size_t)variant_count);
+        memcpy(d->enu.variants, variants, sizeof(EnumVariant) * (size_t)variant_count);
+        free(variants);
+    }
+    return d;
+}
+
 /* error <name> =
  *     | member
  *     | member
@@ -3781,6 +3901,7 @@ static Decl *parse_decl(Parser *p) {
     if (check(p, TOK_LET)) return parse_let_decl(p);
     if (check(p, TOK_STRUCT)) return parse_struct_decl(p);
     if (check(p, TOK_UNION)) return parse_union_decl(p);
+    if (check(p, TOK_ENUM)) return parse_enum_decl(p);
     if (check(p, TOK_ERROR_KW)) return parse_error_decl(p);
     if (check(p, TOK_MODULE)) return parse_module_decl(p);
     if (check(p, TOK_IMPORT)) return parse_import_decl(p);

@@ -1,0 +1,34 @@
+// Enums inside slices, options, results, tuples, union payloads
+enum color =
+    | red
+    | green
+    | blue
+
+union pick =
+    | chosen(color)
+    | nothing
+
+let main = (args: str[]) ->
+    let cs = color[3]{ color.red, color.green, color.blue }
+    let mut n = 0
+    for c in cs do
+        n = n + match c with
+                | red -> 1
+                | green -> 10
+                | blue -> 100
+    assert(n == 111)
+    let oc = some(color.blue)
+    match oc with
+    | some(c) -> assert(c == color.blue)
+    | none -> assert(false)
+    let p = pick.chosen(color.green)
+    match p with
+    | chosen(c) -> assert(c == color.green)
+    | nothing -> assert(false)
+    let t = { color.red, 42 }
+    assert(t[0] == color.red)
+    let ok_val = ok(color.blue)
+    match ok_val with
+    | ok(c) -> assert(c == color.blue)
+    | err(e) -> assert(false)
+    0

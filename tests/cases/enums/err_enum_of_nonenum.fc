@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    let x = enum_of(i32, 1)
+    0

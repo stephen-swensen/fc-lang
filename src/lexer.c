@@ -96,6 +96,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"mut",       3,  TOK_MUT},
         {"struct",    6,  TOK_STRUCT},
         {"union",     5,  TOK_UNION},
+        {"enum",      4,  TOK_ENUM},
         {"module",    6,  TOK_MODULE},
         {"namespace", 9,  TOK_NAMESPACE},
         {"import",    6,  TOK_IMPORT},
@@ -136,6 +137,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"sizeof",    6,  TOK_SIZEOF},
         {"alignof",   7,  TOK_ALIGNOF},
         {"bitcast",   7,  TOK_BITCAST},
+        {"enum_of",   7,  TOK_ENUM_OF},
         {"default",   7,  TOK_DEFAULT},
         {"const",     5,  TOK_CONST},
         {"assert",    6,  TOK_ASSERT},
@@ -1052,8 +1054,8 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
 
         /* Track context for the `=` block-former detection */
         if (t.kind == TOK_LET || t.kind == TOK_STRUCT ||
-            t.kind == TOK_UNION || t.kind == TOK_ERROR_KW ||
-            t.kind == TOK_MODULE) {
+            t.kind == TOK_UNION || t.kind == TOK_ENUM ||
+            t.kind == TOK_ERROR_KW || t.kind == TOK_MODULE) {
             saw_decl_keyword = true;
         }
     }

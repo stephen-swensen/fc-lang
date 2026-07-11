@@ -1,0 +1,13 @@
+// Wildcard satisfies enum exhaustiveness
+enum color =
+    | red
+    | green
+    | blue
+
+let main = (args: str[]) ->
+    let c = color.green
+    let r = match c with
+            | red -> 1
+            | _ -> 9
+    assert(r == 9)
+    0

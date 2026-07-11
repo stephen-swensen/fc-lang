@@ -1374,5 +1374,47 @@ check("hover 'error_name' shows the builtin doc",
 check("hover a binding initialized from an error constant shows type error",
       "error" in es_hover(5), es_hover(5))
 
+# ---- enums: hover, member completion (variants + count), enum_of builtin ----
+EN = (
+    "enum color of u8 =\n"                       # 0
+    "    | red        // stop signal\n"          # 1
+    "    | green\n"                              # 2
+    "    | blue\n"                               # 3
+    "\n"                                         # 4
+    "let main = (args: str[]) ->\n"              # 5
+    "    let c = color.red\n"                    # 6  hover variant; completion after 'color.'
+    "    let n = enum_of(color, 1)\n"            # 7  hover 'enum_of'
+    "    match n with\n"                         # 8
+    "    | some(x) -> (i32) x\n"                 # 9
+    "    | none -> 0\n"                          # 10
+)
+en = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, EN),
+    hover(2, 6, EN.split("\n")[6].index("red") + 1),
+    req(3, "textDocument/completion",
+        {"textDocument": {"uri": URI},
+         "position": {"line": 6, "character": EN.split("\n")[6].index("color.") + 6}}),
+    hover(4, 7, EN.split("\n")[7].index("enum_of") + 1),
+    hover(5, 6, EN.split("\n")[6].index("c =")),
+    req(9, "shutdown", None), note("exit", None),
+]
+enresp, _, _, _, _ = run_session(en)
+def en_hover(rid):
+    res = enresp.get(rid, {}).get("result") or {}
+    return ((res.get("contents") or {}).get("value")) or ""
+def en_labels(rid):
+    res = enresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return set(it.get("label") for it in (its or []))
+check("hover an enum variant shows the enum type and the variant's doc comment",
+      "color" in en_hover(2) and "stop signal" in en_hover(2), en_hover(2))
+check("completion: 'color.' offers variants plus count",
+      en_labels(3) == {"red", "green", "blue", "count"}, str(en_labels(3)))
+check("hover 'enum_of' shows the builtin doc",
+      "enum_of(E, x) -> E?" in en_hover(4), en_hover(4))
+check("hover a binding initialized from an enum variant shows the enum type",
+      "color" in en_hover(5), en_hover(5))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

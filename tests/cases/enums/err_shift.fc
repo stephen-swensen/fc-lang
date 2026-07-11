@@ -1,0 +1,7 @@
+enum e of u8 =
+    | a
+    | b
+
+let main = (args: str[]) ->
+    let x = e.b << 1
+    0

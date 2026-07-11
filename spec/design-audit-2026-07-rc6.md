@@ -197,11 +197,19 @@ inverted-condition idiom is a recurring cost rather than an acclimation bump.*
   shift-packing). Because a size-matched reinterpretation is statically total, `bitcast`
   sits on neither the checked/unchecked nor the bounded/unbounded axis. See §bitcast in the
   spec; implementation record in `spec/hist/archived-todos.md`.*
-- **No C-style enum / integer exhaustiveness.** The "module of i32 constants" pattern for
+- **No C-style enum / integer exhaustiveness.** ✅ RESOLVED 2026-07-10 (shipped). The "module of i32 constants" pattern for
   C enums is fine at the boundary, but matching on such constants can't be
   exhaustiveness-checked — you always need `_`. Pure-FC code has unions, so this only
   bites interop-heavy code; acceptable, but one of FC's headline safety features
   (exhaustive match) goes dark exactly where C values enter.
+  *Resolution: shipped `enum` declarations — closed sets of named integer constants over a
+  declared fixed-width repr, with union-style exhaustive matching, same-enum ordering, direct
+  slice indexing, a total cast out, and `enum_of(E, x) -> E?` as the sole integer→enum
+  conversion. The checked conversion at the boundary is what turns exhaustiveness back on
+  where C values enter: the check happens once, at the edge, and everything downstream is a
+  closed set. Mandatory zero variant preserves default ≡ zero-filled. See §Enums in the spec;
+  the module-of-constants pattern remains correct for C-owned values and bit flags
+  (Part 8 §Mapping C enums).*
 - **Numeric option bridging.** ✅ RESOLVED 2026-07-03 (example fixed; limitation kept).
   `i32?` not widening to `i64?` is representation-honest,
   but the prescribed bridge (`if x.is_some then some((i64) x!) else none(i64)`) is clunky

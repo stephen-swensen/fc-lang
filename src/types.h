@@ -25,6 +25,7 @@ typedef enum {
     TYPE_FUNC,
     TYPE_STRUCT,
     TYPE_UNION,
+    TYPE_ENUM,
     TYPE_ANY_PTR,
     TYPE_TYPE_VAR,
     TYPE_FIXED_ARRAY, /* fixed-size inline array: T[N] */
@@ -42,6 +43,7 @@ typedef enum {
 typedef struct Type Type;
 typedef struct StructField StructField;
 typedef struct UnionVariant UnionVariant;
+typedef struct EnumVariant EnumVariant;
 
 struct StructField {
     const char *name;
@@ -53,6 +55,15 @@ struct UnionVariant {
     const char *name;
     Type *payload;  /* NULL if no payload */
     SrcLoc loc;     /* source loc of the variant name (editor go-to-definition); {0} if synthesized */
+};
+
+struct EnumVariant {
+    const char *name;
+    uint64_t value_bits;  /* variant value as two's-complement bits truncated to the repr width
+                             (canonical form: duplicate detection and codegen both read this) */
+    bool negative;        /* explicit negative literal (parser); pass1 range-checks against repr */
+    bool has_explicit;    /* declared `= N`; pass1 auto-numbers the rest C-style (prev+1) */
+    SrcLoc loc;           /* source loc of the variant name (editor go-to-definition/doc) */
 };
 
 struct Type {
@@ -93,6 +104,14 @@ struct Type {
             int type_arg_count;
             struct Symbol *resolved_sym; /* template type symbol, set by pass1/pass2; used by mono to avoid symtab re-lookup */
         } unio;
+        struct {
+            const char *name;            /* mangled C name (fc__difficulty / m__door_lock) */
+            const char *qualified_name;  /* fully qualified FC path for diagnostics */
+            Type *repr;                  /* underlying type: i8..u64 singleton; i32 default */
+            EnumVariant *variants;
+            int variant_count;
+            struct Symbol *resolved_sym; /* set by pass1/pass2 */
+        } enu;
         struct { Type *elem; int64_t size; } fixed_array;
         struct { const char *name; } type_var;
         /* TYPE_STUB: unresolved type reference created by the parser.
@@ -170,6 +189,9 @@ bool type_can_widen(Type *from, Type *to);
 
 /* Find the common (wider) numeric type for two types, or NULL if no widening possible */
 Type *type_common_numeric(Type *a, Type *b);
+
+/* The underlying integer type of an enum (its declared repr); identity for all other types. */
+Type *type_enum_underlying(Type *t);
 
 /* Map a type suffix string (e.g., "i8", "u64") to a type, or NULL */
 Type *type_from_int_suffix(const char *suffix, int len);

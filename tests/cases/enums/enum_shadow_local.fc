@@ -1,0 +1,16 @@
+// A local binding shadows the enum name for value use; the type is unaffected
+enum color =
+    | red
+    | green
+
+let paint = (c: color) ->
+    match c with
+    | red -> 1
+    | green -> 2
+
+let main = (args: str[]) ->
+    let color = 42
+    assert(color == 42)
+    let c = paint(default(color))
+    assert(c == 1)
+    0

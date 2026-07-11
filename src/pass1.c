@@ -398,7 +398,8 @@ static void process_member_import(Decl *d, ImportTable *target,
                          mod_sym->members, msym);
         /* Type-associated module: if importing a type, also import its
          * associated module under the same name. */
-        if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) {
+        if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION ||
+            msym->kind == DECL_ENUM) {
             Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members,
                 d->import.name, DECL_MODULE);
             if (assoc_mod && !assoc_mod->is_private) {
@@ -557,6 +558,8 @@ static Type *resolve_type_stubs(Arena *arena, Type *t, SymbolTable *members) {
         if (sym && sym->type) return sym->type;
         sym = symtab_lookup_kind(members, t->stub.name, DECL_UNION);
         if (sym && sym->type) return sym->type;
+        sym = symtab_lookup_kind(members, t->stub.name, DECL_ENUM);
+        if (sym && sym->type) return sym->type;
     }
     return t;
 }
@@ -626,6 +629,155 @@ static Type *register_union_sym(SymbolTable *tab, InternTable *intern, Decl *d) 
     sym2->type = ut;
     detect_generic_union(intern->arena, d, sym2);
     return ut;
+}
+
+/* Format an enum variant's canonical bits as a signed/unsigned decimal for
+ * diagnostics. */
+static void enum_val_str(char *buf, size_t cap, uint64_t bits, Type *repr) {
+    uint64_t w = 0;
+    switch (repr->kind) {
+    case TYPE_INT8: case TYPE_UINT8:  w = 8;  break;
+    case TYPE_INT16: case TYPE_UINT16: w = 16; break;
+    case TYPE_INT64: case TYPE_UINT64: w = 64; break;
+    default: w = 32; break;
+    }
+    uint64_t mask = (w == 64) ? UINT64_MAX : ((1ULL << w) - 1);
+    if (type_is_signed(repr) && bits > (mask >> 1)) {
+        snprintf(buf, cap, "-%llu", (unsigned long long)((mask - bits) + 1));
+    } else {
+        snprintf(buf, cap, "%llu", (unsigned long long)bits);
+    }
+}
+
+/* Resolve and validate an enum's variant values in place: C-style
+ * auto-numbering (first = 0, otherwise previous + 1), normalization to
+ * two\'s-complement bits truncated to the repr width, repr-fit checks,
+ * duplicate-value/name checks, and the mandatory zero variant (zero-filled
+ * memory must be a valid value, so default(E) exists). All diag_error, never
+ * fatal: a malformed enum still ends up with well-formed values so later
+ * passes never chase garbage. Must run before the decl name is mangled so
+ * messages show the source name. */
+static void resolve_enum_values(Decl *d) {
+    if (d->enu.values_resolved) return;
+    d->enu.values_resolved = true;
+    if (!d->enu.repr) d->enu.repr = type_int32();
+    Type *repr = d->enu.repr;
+    const char *ename = d->enu.name;
+    int w;
+    switch (repr->kind) {
+    case TYPE_INT8: case TYPE_UINT8:  w = 8;  break;
+    case TYPE_INT16: case TYPE_UINT16: w = 16; break;
+    case TYPE_INT64: case TYPE_UINT64: w = 64; break;
+    default: w = 32; break;
+    }
+    bool sign = type_is_signed(repr);
+    uint64_t mask = (w == 64) ? UINT64_MAX : ((1ULL << w) - 1);
+    uint64_t max_pos = sign ? (mask >> 1) : mask;   /* largest positive value */
+    uint64_t min_mag = sign ? (mask >> 1) + 1 : 0;  /* |most negative| (signed) */
+
+    if (d->enu.variant_count == 0) {
+        diag_error(d->loc, "enum '%s' must declare at least one variant", ename);
+        return;
+    }
+
+    bool have_prev = false;
+    uint64_t prev = 0;
+    bool *any_poisoned = calloc((size_t)d->enu.variant_count, sizeof(bool));
+    for (int i = 0; i < d->enu.variant_count; i++) {
+        EnumVariant *v = &d->enu.variants[i];
+        uint64_t bits = 0;
+        bool poisoned = false;
+        if (v->has_explicit) {
+            uint64_t mag = v->value_bits;
+            if (v->negative && mag > 0) {
+                if (!sign) {
+                    diag_error(v->loc, "enum value -%llu does not fit repr %s",
+                        (unsigned long long)mag, type_name(repr));
+                    poisoned = true;
+                } else if (mag > min_mag) {
+                    diag_error(v->loc, "enum value -%llu does not fit repr %s",
+                        (unsigned long long)mag, type_name(repr));
+                    poisoned = true;
+                } else {
+                    bits = (0 - mag) & mask;
+                }
+            } else {
+                if (mag > max_pos) {
+                    diag_error(v->loc, "enum value %llu does not fit repr %s",
+                        (unsigned long long)mag, type_name(repr));
+                    poisoned = true;
+                } else {
+                    bits = mag & mask;
+                }
+            }
+        } else if (!have_prev) {
+            bits = 0;
+        } else if (prev == max_pos) {
+            diag_error(v->loc, "enum value for '%s' overflows repr %s "
+                "(previous variant holds the largest %s value)",
+                v->name, type_name(repr), type_name(repr));
+            poisoned = true;
+        } else {
+            bits = (prev + 1) & mask;
+        }
+        v->value_bits = bits;
+        if (poisoned) any_poisoned[i] = true;
+        prev = bits;
+        have_prev = true;
+    }
+
+    bool has_zero = false;
+    for (int i = 0; i < d->enu.variant_count; i++) {
+        EnumVariant *vi = &d->enu.variants[i];
+        if (vi->value_bits == 0) has_zero = true;
+        if (any_poisoned[i]) continue;  /* fit errors already reported; don't cascade */
+        for (int j = 0; j < i; j++) {
+            EnumVariant *vj = &d->enu.variants[j];
+            if (any_poisoned[j]) continue;
+            if (vi->name == vj->name) {
+                diag_error(vi->loc, "duplicate variant name '%s' in enum '%s'",
+                    vi->name, ename);
+            } else if (vi->value_bits == vj->value_bits) {
+                char valbuf[32];
+                enum_val_str(valbuf, sizeof valbuf, vi->value_bits, repr);
+                diag_error(vi->loc,
+                    "duplicate value %s in enum '%s': variants '%s' and '%s'",
+                    valbuf, ename, vj->name, vi->name);
+            }
+        }
+    }
+    if (!has_zero) {
+        diag_error(d->loc, "enum '%s' must have a variant with value 0 "
+            "(zero-filled memory must be a valid value; default(%s) is that variant)",
+            ename, ename);
+    }
+    free(any_poisoned);
+}
+
+/* Register an enum type symbol and return the created type */
+static Type *register_enum_sym(SymbolTable *tab, InternTable *intern, Decl *d) {
+    /* See register_struct_sym: file-scope enum types are mangled into the
+     * `fc__` namespace so their typedef cannot collide with C keywords or
+     * libc names at C file scope. */
+    resolve_enum_values(d);
+    const char *src_name = d->enu.name;
+    const char *mangled = make_mangled(intern, "fc", src_name);
+    d->enu.name = mangled;
+    symtab_add(tab, src_name, DECL_ENUM, d);
+    Symbol *sym = &tab->symbols[tab->count - 1];
+    Type *et = arena_alloc(intern->arena, sizeof(Type));
+    et->kind = TYPE_ENUM;
+    et->enu.name = mangled;
+    et->enu.qualified_name = src_name;
+    et->enu.repr = d->enu.repr;
+    et->enu.variants = d->enu.variants;
+    et->enu.variant_count = d->enu.variant_count;
+    sym->type = et;
+    /* resolved_sym deferred to set_type_resolved_syms — see register_struct_sym. */
+    symtab_add(tab, mangled, DECL_ENUM, d);
+    Symbol *sym2 = &tab->symbols[tab->count - 1];
+    sym2->type = et;
+    return et;
 }
 
 /* Register module members: compute mangled names, populate sub-symtab */
@@ -839,6 +991,34 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             }
             break;
         }
+        case DECL_ENUM: {
+            resolve_enum_values(child);
+            const char *src_name = child->enu.name;
+            const char *mangled = make_mangled(intern, mangle_prefix, src_name);
+            child->enu.name = mangled;
+            if (symtab_lookup(members, src_name)) {
+                diag_error(child->loc, "redefinition of '%s' in module '%s'",
+                    src_name, mod_name);
+            } else {
+                symtab_add(members, src_name, DECL_ENUM, child);
+                Symbol *msym = symtab_lookup(members, src_name);
+                msym->is_private = child->is_private;
+                Type *et = arena_alloc(intern->arena, sizeof(Type));
+                et->kind = TYPE_ENUM;
+                et->enu.name = mangled;
+                et->enu.qualified_name = make_qualified(intern, display_prefix, src_name);
+                et->enu.repr = child->enu.repr;
+                et->enu.variants = child->enu.variants;
+                et->enu.variant_count = child->enu.variant_count;
+                msym->type = et;
+                /* Also register under mangled name (see struct case above) */
+                symtab_add(members, mangled, DECL_ENUM, child);
+                Symbol *msym2 = &members->symbols[members->count - 1];
+                msym2->is_private = child->is_private;
+                msym2->type = et;
+            }
+            break;
+        }
         case DECL_EXTERN: {
             const char *src_name = child->ext.alias ? child->ext.alias : child->ext.name;
             if (symtab_lookup(members, src_name)) {
@@ -897,7 +1077,8 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             const char *sub_prefix = make_mangled(intern, mangle_prefix, sub_name);
 
             Symbol *existing = symtab_lookup(members, sub_name);
-            if (existing && (existing->kind == DECL_STRUCT || existing->kind == DECL_UNION)) {
+            if (existing && (existing->kind == DECL_STRUCT || existing->kind == DECL_UNION ||
+                             existing->kind == DECL_ENUM)) {
                 /* Type-associated module: struct/union with same name already registered.
                  * Add a second entry with kind=DECL_MODULE under the same name.
                  * Use symtab_lookup_kind to distinguish. */
@@ -984,15 +1165,20 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             msym->type->struc.resolved_sym = msym;
         if (msym->kind == DECL_UNION && msym->type && msym->type->kind == TYPE_UNION)
             msym->type->unio.resolved_sym = msym;
+        if (msym->kind == DECL_ENUM && msym->type && msym->type->kind == TYPE_ENUM)
+            msym->type->enu.resolved_sym = msym;
     }
 
     /* Register module-scoped struct/union types in the global symbol table under
      * their mangled names, so resolve_type can find them from any context. */
     for (int j = 0; j < members->count; j++) {
         Symbol *msym = &members->symbols[j];
-        if ((msym->kind == DECL_STRUCT || msym->kind == DECL_UNION) && msym->type) {
+        if ((msym->kind == DECL_STRUCT || msym->kind == DECL_UNION ||
+             msym->kind == DECL_ENUM) && msym->type) {
             const char *mangled_name = (msym->kind == DECL_STRUCT)
-                ? msym->type->struc.name : msym->type->unio.name;
+                ? msym->type->struc.name
+                : (msym->kind == DECL_UNION) ? msym->type->unio.name
+                                             : msym->type->enu.name;
             symtab_add(global_symtab, mangled_name, msym->kind, msym->decl);
             Symbol *gsym = &global_symtab->symbols[global_symtab->count - 1];
             gsym->type = msym->type;
@@ -1082,6 +1268,9 @@ static void set_type_resolved_syms(SymbolTable *tab) {
         else if (s->kind == DECL_UNION && s->type && s->type->kind == TYPE_UNION
                  && !s->type->unio.resolved_sym)
             s->type->unio.resolved_sym = s;
+        else if (s->kind == DECL_ENUM && s->type && s->type->kind == TYPE_ENUM
+                 && !s->type->enu.resolved_sym)
+            s->type->enu.resolved_sym = s;
     }
 }
 
@@ -1269,8 +1458,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         /* Check for duplicate module name within the same namespace */
         Symbol *existing = symtab_lookup_module(symtab, mod_name, ns_prefix);
         if (existing) {
-            /* Type-associated module: allow struct/union + module with same name */
-            if (existing->kind == DECL_STRUCT || existing->kind == DECL_UNION) {
+            /* Type-associated module: allow struct/union/enum + module with same name */
+            if (existing->kind == DECL_STRUCT || existing->kind == DECL_UNION ||
+                existing->kind == DECL_ENUM) {
                 /* Register the module alongside the type.
                  * The type is already in the symtab. We need a separate symbol
                  * for the module. Use a special mangled key for the symtab,
@@ -1410,6 +1600,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 if (!existing)
                     existing = symtab_lookup_kind_ns(symtab, d->struc.name,
                         DECL_UNION, current_ns);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->struc.name,
+                        DECL_ENUM, current_ns);
                 if (existing) {
                     diag_error(d->loc, "redefinition of '%s'", d->struc.name);
                     break;
@@ -1454,6 +1647,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 if (!existing)
                     existing = symtab_lookup_kind_ns(symtab, d->struc.name,
                         DECL_UNION, NULL);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->struc.name,
+                        DECL_ENUM, NULL);
                 if (existing) {
                     diag_error(d->loc, "redefinition of '%s'", d->struc.name);
                 } else {
@@ -1469,6 +1665,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 if (!existing)
                     existing = symtab_lookup_kind_ns(symtab, d->unio.name,
                         DECL_STRUCT, current_ns);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->unio.name,
+                        DECL_ENUM, current_ns);
                 if (existing) {
                     diag_error(d->loc, "redefinition of '%s'", d->unio.name);
                     break;
@@ -1507,10 +1706,70 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 if (!existing)
                     existing = symtab_lookup_kind_ns(symtab, d->unio.name,
                         DECL_STRUCT, NULL);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->unio.name,
+                        DECL_ENUM, NULL);
                 if (existing) {
                     diag_error(d->loc, "redefinition of '%s'", d->unio.name);
                 } else {
                     register_union_sym(symtab, intern, d);
+                }
+            }
+            break;
+        }
+        case DECL_ENUM: {
+            resolve_enum_values(d);
+            if (current_ns) {
+                Symbol *existing = symtab_lookup_kind_ns(symtab, d->enu.name,
+                    DECL_ENUM, current_ns);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->enu.name,
+                        DECL_STRUCT, current_ns);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->enu.name,
+                        DECL_UNION, current_ns);
+                if (existing) {
+                    diag_error(d->loc, "redefinition of '%s'", d->enu.name);
+                    break;
+                }
+                const char *src_name = d->enu.name;
+                const char *mangled = make_mangled(intern, current_ns, src_name);
+                d->enu.name = mangled;
+                symtab_add(symtab, src_name, DECL_ENUM, d);
+                Symbol *sym = &symtab->symbols[symtab->count - 1];
+                sym->ns_prefix = current_ns;
+                Type *et = arena_alloc(intern->arena, sizeof(Type));
+                et->kind = TYPE_ENUM;
+                et->enu.name = mangled;
+                {
+                    int needed = snprintf(NULL, 0, "%s::%s", current_ns, src_name) + 1;
+                    char *buf = malloc((size_t)needed);
+                    snprintf(buf, (size_t)needed, "%s::%s", current_ns, src_name);
+                    et->enu.qualified_name = intern_cstr(intern, buf);
+                    free(buf);
+                }
+                et->enu.repr = d->enu.repr;
+                et->enu.variants = d->enu.variants;
+                et->enu.variant_count = d->enu.variant_count;
+                sym->type = et;
+                /* resolved_sym deferred to set_type_resolved_syms (stable addr). */
+                /* Also register under the mangled name (see struct case). */
+                symtab_add(symtab, mangled, DECL_ENUM, d);
+                Symbol *sym2 = &symtab->symbols[symtab->count - 1];
+                sym2->type = et;
+            } else {
+                Symbol *existing = symtab_lookup_kind_ns(symtab, d->enu.name,
+                    DECL_ENUM, NULL);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->enu.name,
+                        DECL_STRUCT, NULL);
+                if (!existing)
+                    existing = symtab_lookup_kind_ns(symtab, d->enu.name,
+                        DECL_UNION, NULL);
+                if (existing) {
+                    diag_error(d->loc, "redefinition of '%s'", d->enu.name);
+                } else {
+                    register_enum_sym(symtab, intern, d);
                 }
             }
             break;
@@ -1581,6 +1840,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             Symbol *type_sym = symtab_lookup_kind_ns(symtab, name, DECL_STRUCT, from_ns);
             if (!type_sym)
                 type_sym = symtab_lookup_kind_ns(symtab, name, DECL_UNION, from_ns);
+            if (!type_sym)
+                type_sym = symtab_lookup_kind_ns(symtab, name, DECL_ENUM, from_ns);
             if (!mod && !type_sym) {
                 diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, from_ns);
                 continue;
@@ -1684,6 +1945,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                         break;
                     case EXPR_CAST: PUSH(ex->cast.operand); break;
                     case EXPR_BITCAST: PUSH(ex->bitcast_expr.operand); break;
+                    case EXPR_ENUM_OF: PUSH(ex->enum_of_expr.operand); break;
                     case EXPR_SOME: PUSH(ex->some_expr.value); break;
                     case EXPR_OK: PUSH(ex->ok_expr.value); break;
                     case EXPR_ERR: PUSH(ex->err_expr.code); break;

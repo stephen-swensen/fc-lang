@@ -1,0 +1,22 @@
+// Enum struct fields: literals, equality (generated eq), nested match
+enum phase =
+    | menu
+    | playing
+    | dead
+
+struct game =
+    ph: phase
+    score: i32
+
+let main = (args: str[]) ->
+    let g1 = game { ph = phase.playing, score = 10 }
+    let g2 = game { ph = phase.playing, score = 10 }
+    let g3 = game { ph = phase.dead, score = 10 }
+    assert(g1 == g2)
+    assert(g1 != g3)
+    let r = match g1.ph with
+            | menu -> 0
+            | playing -> 1
+            | dead -> 2
+    assert(r == 1)
+    0

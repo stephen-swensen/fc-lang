@@ -1,0 +1,13 @@
+// Global lets initialized with variant values and count arithmetic
+enum mode =
+    | off
+    | slow
+    | fast
+
+let start_mode = mode.slow
+let mode_total = mode.count * 2
+
+let main = (args: str[]) ->
+    assert(start_mode == mode.slow)
+    assert(mode_total == 6)
+    0

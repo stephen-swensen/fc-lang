@@ -1,0 +1,5 @@
+enum e of usize =
+    | a
+
+let main = (args: str[]) ->
+    0

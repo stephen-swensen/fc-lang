@@ -1,0 +1,10 @@
+enum e =
+    | a
+    | b
+
+let main = (args: str[]) ->
+    let x = e.a
+    match x with
+    | 0 -> void()
+    | _ -> void()
+    0

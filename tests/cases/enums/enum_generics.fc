@@ -1,0 +1,24 @@
+// Enums as generic type args: universal tier + ordering constraint
+enum color of u8 =
+    | red
+    | green
+    | blue
+
+struct box =
+    item: 'a
+    tag: i32
+
+let same = (x: 'a, y: 'a) -> x == y
+
+let pick_max = (x: 'a, y: 'a) -> if x > y then x else y
+
+let main = (args: str[]) ->
+    assert(same(color.red, color.red))
+    assert(!same(color.red, color.blue))
+    assert(sizeof(color) == 1)
+    assert(default(color) == color.red)
+    assert(pick_max(color.green, color.blue) == color.blue)
+    let b1 = box { item = color.green, tag = 1 }
+    let b2 = box { item = color.green, tag = 1 }
+    assert(b1 == b2)
+    0

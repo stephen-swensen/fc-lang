@@ -1,0 +1,1 @@
+ordering comparison requires both operands to be the same enum type, got e and i32

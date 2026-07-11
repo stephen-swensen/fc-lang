@@ -1,0 +1,6 @@
+enum e =
+    | a
+    | b
+
+let main = (args: str[]) ->
+    if e.a then 1 else 0

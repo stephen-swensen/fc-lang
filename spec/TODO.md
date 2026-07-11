@@ -4,6 +4,31 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
+## Enum declarations — IMPLEMENTED 2026-07-10
+
+Closed sets of named integer constants over a declared fixed-width repr (`enum door_lock of u8 =
+| normal_a | gold_key = 1 …`): union-style exhaustive matching (sound — `enum_of(E, x) -> E?` is
+the only integer→enum path), qualified construction, same-enum ordering, direct slice indexing,
+total cast out to any numeric type, `E.count` const-foldable type property, mandatory zero
+variant (`default(E)` = zero-filled ≡ default invariant). Transpiles to a fixed-width integer
+typedef (never a C `enum` — impl-defined width; 16-bit-int targets). First-class
+`DECL_ENUM`/`TYPE_ENUM` through the whole pipeline incl. LSP. Tests in `tests/cases/enums/` +
+`exhaustiveness/exhaust_enum_*`; spec §Enums (Part 4), §Static Type Properties (`count`),
+Part 8 §Mapping C enums rewritten. Slice-literal lengths were generalized from "integer
+literal" to "const-foldable constant expression" to admit `E.count` (also unlocks `i32.bits`,
+`1 + 2`). Resolves the rc.6 audit item "No C-style enum / integer exhaustiveness".
+
+Follow-ups (deliberately additive, not blocking):
+- Reflection-lite: `enum_name(e)` (static name table, pay-when-used — the `error_name`
+  design) and variant iteration; wanted for logging and CLI/config parsing.
+- `extern enum` verification: FC-side redeclaration with emitted `_Static_assert` against
+  the C header's values. C-owned sets stay extern-constant modules until then.
+- Flags remain integers by design (a flag combination is outside any closed set); if
+  embedded/driver work ever needs bit-precise register fields, that is a packed-struct
+  feature, not an enum feature.
+
+---
+
 ## Result type `T!` — IMPLEMENTED 2026-07-06 (branch `result-type`); follow-ups open
 
 The carrier is in: built-in `T!` = `ok('a) | err(i32)` with intrinsic constructors `ok(v)` /

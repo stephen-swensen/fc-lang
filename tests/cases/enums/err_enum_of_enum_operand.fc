@@ -1,0 +1,6 @@
+enum e =
+    | a
+
+let main = (args: str[]) ->
+    let x = enum_of(e, e.a)
+    0

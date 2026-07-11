@@ -432,6 +432,16 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
       "type-pun that compilers fold to a register move (zero cost); it is *not* the "
       "strict-aliasing UB of a pointer-cast reinterpret." },
 
+    { "enum_of", "enum_of(E, x) -> E?",
+      "The membership-checked integer\u2192enum conversion \u2014 and the **only** one: a plain "
+      "cast `(E) x` is a compile error. Accepts any integer type for `x` and yields `E?`: "
+      "`some` of the matching variant when `x` equals a declared value, `none` otherwise.\n\n"
+      "This is the boundary operation for C-shaped input (bytes from a data file, an int from "
+      "an extern call): the check happens once at the edge, so every value of an enum type is "
+      "a declared variant and matches over enums stay exhaustive without `_`. Lowers to a "
+      "small static `switch` over the declared values (a range check when they are "
+      "contiguous)." },
+
     { "assert", "assert(cond: bool[, msg: str]) -> void",
       "Checks `cond` at runtime; if it is false, prints the source file, line, and the failing "
       "condition text (plus the optional `msg`) to stderr and calls `abort()`.\n\n"
@@ -654,6 +664,18 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                             break;
                         }
                 }
+                if (!def && e->field.is_variant_constructor &&
+                    e->type && e->type->kind == TYPE_ENUM) {
+                    /* Enum variant: same shape — def on the enum decl, doc from
+                     * the variant's own line. */
+                    def = e->type->enu.resolved_sym;
+                    for (int i = 0; i < e->type->enu.variant_count; i++)
+                        if (e->type->enu.variants[i].name == e->field.name) {
+                            doc_loc = e->type->enu.variants[i].loc;
+                            doc_is_field = true;
+                            break;
+                        }
+                }
                 SrcLoc field_def = NO_LOC;
                 if (!def && e->field.object) {
                     Type *ot = peel_to_aggregate(e->field.object->type);
@@ -694,6 +716,10 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         case EXPR_BITCAST:
             consider_builtin(c, e);   /* the bitcast keyword */
             find_in_expr(e->bitcast_expr.operand, c);
+            break;
+        case EXPR_ENUM_OF:
+            consider_builtin(c, e);   /* the enum_of keyword */
+            find_in_expr(e->enum_of_expr.operand, c);
             break;
         case EXPR_IF:
             find_in_expr(e->if_expr.cond, c);
@@ -1642,6 +1668,7 @@ static void lens_expr(Expr *e, LensCtx *lc) {
             break;
         case EXPR_CAST: lens_expr(e->cast.operand, lc); break;
         case EXPR_BITCAST: lens_expr(e->bitcast_expr.operand, lc); break;
+        case EXPR_ENUM_OF: lens_expr(e->enum_of_expr.operand, lc); break;
         case EXPR_IF:
             lens_expr(e->if_expr.cond, lc);
             lens_expr(e->if_expr.then_body, lc);
@@ -1745,13 +1772,13 @@ static void handle_inlayhint(LspServer *S, JsonValue *id, JsonValue *params) {
 
 static const char *KEYWORDS[] = {
     /* mirrors lexer.c keyword set + builtins + primitive type names */
-    "let", "mut", "struct", "union", "module", "namespace", "import", "from",
+    "let", "mut", "struct", "union", "enum", "module", "namespace", "import", "from",
     "as", "extern", "private", "match", "with", "when", "if", "then", "else",
     "for", "in", "loop", "do", "break", "continue", "return", "defer", "ignore", "some",
     "true", "false", "none", "void", "guarded", "unguarded", "checked",
     "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "bitcast",
     "default", "const", "assert", "atomic_load_acquire", "atomic_store_release",
-    "ok", "err", "error", "error_name",
+    "ok", "err", "error", "error_name", "enum_of",
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
     "isize", "usize", "f32", "f64", "bool", "char", "str", "cstr", "any",
 };
@@ -1776,6 +1803,7 @@ static int sym_kind_to_cik(const Symbol *s) {
         case DECL_MODULE: return CIK_MODULE;
         case DECL_STRUCT: return CIK_STRUCT;
         case DECL_UNION:  return CIK_ENUM;
+        case DECL_ENUM:   return CIK_ENUM;
         case DECL_LET:
             return (s->type && s->type->kind == TYPE_FUNC) ? CIK_FUNCTION : CIK_VARIABLE;
         default:          return CIK_VARIABLE;
@@ -1797,13 +1825,16 @@ static bool sym_is_mangled_type_twin(const Symbol *s) {
         return s->name == s->type->struc.name;
     if (s->kind == DECL_UNION && s->type->kind == TYPE_UNION)
         return s->name == s->type->unio.name;
+    if (s->kind == DECL_ENUM && s->type->kind == TYPE_ENUM)
+        return s->name == s->type->enu.name;
     return false;
 }
 
 /* Peel option/pointer one level to reach a struct/union for member access. */
 static Type *peel_to_aggregate(Type *t) {
     for (int i = 0; t && i < 4; i++) {
-        if (t->kind == TYPE_STRUCT || t->kind == TYPE_UNION) return t;
+        if (t->kind == TYPE_STRUCT || t->kind == TYPE_UNION ||
+            t->kind == TYPE_ENUM) return t;
         if (t->kind == TYPE_OPTION)  { t = t->option.inner; continue; }
         if (t->kind == TYPE_RESULT)  { t = t->result.inner; continue; }
         if (t->kind == TYPE_POINTER) { t = t->pointer.pointee; continue; }
@@ -1839,6 +1870,7 @@ static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
         case EXPR_SLICE: harvest_expr(e->slice.object, names, n, cap); harvest_expr(e->slice.lo, names, n, cap); harvest_expr(e->slice.hi, names, n, cap); break;
         case EXPR_CAST: harvest_expr(e->cast.operand, names, n, cap); break;
         case EXPR_BITCAST: harvest_expr(e->bitcast_expr.operand, names, n, cap); break;
+        case EXPR_ENUM_OF: harvest_expr(e->enum_of_expr.operand, names, n, cap); break;
         case EXPR_IF: harvest_expr(e->if_expr.cond, names, n, cap); harvest_expr(e->if_expr.then_body, names, n, cap); harvest_expr(e->if_expr.else_body, names, n, cap); break;
         case EXPR_MATCH:
             harvest_expr(e->match_expr.subject, names, n, cap);
@@ -2017,6 +2049,19 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
             add_item(a, arr, t->unio.variants[i].name, CIK_ENUMMEMBER, NULL);
         return true;
     }
+    /* Enum variants + the count type property (a declared `count` variant wins,
+     * mirroring pass2's precedence, so dedup by name-first ordering). */
+    if (t->kind == TYPE_ENUM) {
+        bool has_count_variant = false;
+        for (int i = 0; i < t->enu.variant_count; i++) {
+            add_item(a, arr, t->enu.variants[i].name, CIK_ENUMMEMBER, NULL);
+            if (strcmp(t->enu.variants[i].name, "count") == 0)
+                has_count_variant = true;
+        }
+        if (!has_count_variant)
+            add_item(a, arr, "count", CIK_FIELD, "i32");
+        return true;
+    }
     return false;
 }
 
@@ -2036,6 +2081,7 @@ static int import_kind_to_cik(DeclKind k) {
         case DECL_MODULE: return CIK_MODULE;
         case DECL_STRUCT: return CIK_STRUCT;
         case DECL_UNION:  return CIK_ENUM;
+        case DECL_ENUM:   return CIK_ENUM;
         default:          return CIK_VARIABLE;
     }
 }

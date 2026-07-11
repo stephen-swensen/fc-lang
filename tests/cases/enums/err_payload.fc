@@ -1,0 +1,6 @@
+enum e =
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    0

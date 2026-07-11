@@ -50,6 +50,22 @@ error file_io =
     | not_found
     | invalid_path
 
+// Enums — a closed set of named integer constants over a fixed-width repr
+// (default i32; values auto-number from 0). Exhaustive matching like a
+// payload-free union, plus a public numeric value: table indexing, ordering,
+// total cast out. Some variant must have value 0 (default(E) is that variant).
+enum difficulty =
+    | baby
+    | easy
+    | medium
+    | hard
+
+enum door_lock of u8 =       // declared repr; explicit values, C-style continuation
+    | normal_a               // 0 (auto)
+    | gold_key = 1
+    | silver_key             // 2 (continues)
+    | elevator_b = 5         // values may be sparse
+
 let identity = (x: 'a) -> x
 
 let swap = (p: pair<'a, 'b>) ->
@@ -591,6 +607,32 @@ let main = (args: str[]) ->
     // Default is first variant with zeroed payload
     let d = default(shape)
     assert(describe(d) == 0)   // circle(0) → 0 * 0
+
+    // --------------------------------------------------------
+    // Enums — closed sets with numeric values
+    // --------------------------------------------------------
+
+    // Qualified construction; bare-name arms; no `_` needed — the compiler
+    // proves the match covers every variant
+    let diff = difficulty.medium
+    let bonus = match diff with
+                | baby | easy -> 0
+                | medium -> 10
+                | hard -> 25
+    assert(bonus == 10)
+
+    // Same-enum ordering, count-sized tables indexed by the enum directly
+    assert(difficulty.hard > difficulty.medium)
+    let par = i32[difficulty.count]{ 90, 70, 50, 30 }
+    assert(par[diff] == 50)
+
+    // Cast out is total; enum_of is the only integer->enum door (yields E?)
+    assert((i32) door_lock.elevator_b == 5)
+    let lock = match enum_of(door_lock, 2) with
+               | some(l) -> l
+               | none -> door_lock.normal_a
+    assert(lock == door_lock.silver_key)
+    assert(default(door_lock) == door_lock.normal_a)
 
     // --------------------------------------------------------
     // Option types — T? replaces null

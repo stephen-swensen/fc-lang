@@ -1,0 +1,14 @@
+// A match covering every enum variant is exhaustive without a wildcard
+enum color =
+    | red
+    | green
+    | blue
+
+let main = (args: str[]) ->
+    let c = color.blue
+    let r = match c with
+            | red -> 1
+            | green -> 2
+            | blue -> 3
+    assert(r == 3)
+    0

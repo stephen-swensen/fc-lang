@@ -1,0 +1,22 @@
+// Module-scoped enum: qualified access, count, enum_of, exhaustive match
+module gfx =
+    enum mode of u16 =
+        | text
+        | vga = 19
+        | vesa
+
+    let describe = (m: mode) ->
+        match m with
+        | text -> 1
+        | vga -> 2
+        | vesa -> 3
+
+let main = (args: str[]) ->
+    let m = gfx.mode.vga
+    assert(gfx.describe(m) == 2)
+    assert((i32) gfx.mode.vesa == 20)
+    assert(gfx.mode.count == 3)
+    match enum_of(gfx.mode, 19) with
+    | some(x) -> assert(x == gfx.mode.vga)
+    | none -> assert(false)
+    0

@@ -1,0 +1,19 @@
+// Cast out is total: any numeric target via the underlying value
+enum offset of i8 =
+    | zero
+    | back = -2
+
+enum big =
+    | start
+    | huge = 100000
+
+let main = (args: str[]) ->
+    assert((i32) offset.back == -2)
+    assert((i64) offset.back == -2)
+    assert((f64) big.huge > 99999.5)
+    // sign behavior through unsigned target follows the repr value
+    assert((u8) offset.zero == 0u8)
+    // in-range checked narrowing passes
+    let b = checked (u8) big.start
+    assert(b == 0u8)
+    0

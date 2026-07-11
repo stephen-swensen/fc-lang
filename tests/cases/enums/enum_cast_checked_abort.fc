@@ -1,0 +1,9 @@
+// checked narrowing cast aborts when the enum's value does not fit the target
+enum big =
+    | zero
+    | huge = 300
+
+let main = (args: str[]) ->
+    let e = big.huge
+    let b = checked (u8) e
+    (i32) b

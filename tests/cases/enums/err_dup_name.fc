@@ -1,0 +1,6 @@
+enum e =
+    | a
+    | a = 1
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,9 @@
+enum color =
+    | red
+    | green
+
+let add = (x: 'a, y: 'a) -> x + y
+
+let main = (args: str[]) ->
+    let x = add(color.red, color.green)
+    0

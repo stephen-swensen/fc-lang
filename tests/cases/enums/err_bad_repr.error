@@ -1,0 +1,1 @@
+enum repr must be a fixed-width integer type (i8..u64), got 'f32'

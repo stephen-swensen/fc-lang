@@ -1,0 +1,6 @@
+enum e of u8 =
+    | a
+    | b = 300
+
+let main = (args: str[]) ->
+    0

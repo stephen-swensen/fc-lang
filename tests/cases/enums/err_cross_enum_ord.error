@@ -1,0 +1,1 @@
+ordering comparison requires both operands to be the same enum type, got e1 and e2

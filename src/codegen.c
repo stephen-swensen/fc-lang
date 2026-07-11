@@ -34,6 +34,7 @@ static SymbolTable *g_symtab = NULL;
 typedef struct TypeSet TypeSet;
 static TypeSet *g_eq_set = NULL;
 static TypeSet *g_results_set = NULL;   /* result (T!) types needing typedefs */
+static TypeSet *g_enum_of_set = NULL;   /* enum types needing an enum_of helper */
 
 static int indent_level = 0;
 static int temp_counter = 0;
@@ -122,6 +123,7 @@ static void emit_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
+static void emit_enum_variant_literal(Type *et, const char *vname, FILE *out);
 static bool type_valueless(Type *t);
 static bool interp_const_buffer_size(Expr *e, int64_t *out_size);
 static void emit_c_escaped(const char *text, int len, FILE *out);
@@ -318,6 +320,9 @@ static void collect_hoisted_bindings(Expr *e) {
         break;
     case EXPR_BITCAST:
         collect_hoisted_bindings(e->bitcast_expr.operand);
+        break;
+    case EXPR_ENUM_OF:
+        collect_hoisted_bindings(e->enum_of_expr.operand);
         break;
     case EXPR_SOME:
         collect_hoisted_bindings(e->some_expr.value);
@@ -897,6 +902,9 @@ static void emit_type(Type *t, FILE *out) {
         }
         fprintf(out, "%s", t->unio.name);
         break;
+    case TYPE_ENUM:
+        fprintf(out, "%s", t->enu.name);
+        break;
     case TYPE_FUNC:
         fprintf(out, "fc_fn_");
         emit_fn_type_suffix(t, out);
@@ -974,6 +982,9 @@ static void emit_type_ident(Type *t, FILE *out) {
             fprintf(out, "%s", mangle_generic_with_subst(t->unio.name, t));
         else
             fprintf(out, "%s", t->unio.name);
+        break;
+    case TYPE_ENUM:
+        fprintf(out, "%s", t->enu.name);
         break;
     case TYPE_SLICE:
         if (slice_is_str_under_subst(t)) {
@@ -1097,6 +1108,7 @@ static bool expr_has_side_effects(Expr *e) {
                expr_has_side_effects(e->slice.hi);
     case EXPR_CAST: return expr_has_side_effects(e->cast.operand);
     case EXPR_BITCAST: return expr_has_side_effects(e->bitcast_expr.operand);
+    case EXPR_ENUM_OF: return expr_has_side_effects(e->enum_of_expr.operand);
     case EXPR_GUARD: return expr_has_side_effects(e->guard.body);
     case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
     case EXPR_OK:   return expr_has_side_effects(e->ok_expr.value);
@@ -1470,6 +1482,11 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     case PAT_VARIANT: {
         if (!*first) fprintf(out, " && ");
         *first = false;
+        if (type->kind == TYPE_ENUM) {
+            fprintf(out, "%s == ", expr);
+            emit_enum_variant_literal(type, pat->variant.variant, out);
+            break;
+        }
         const char *uname = type->unio.name;
         if (g_subst && type_contains_type_var(type)) {
             uname = mangle_generic_with_subst(uname, type);
@@ -3405,12 +3422,16 @@ static void emit_expr(Expr *e, FILE *out) {
              * cast below. */
             float_to_int_emit(&f2i_info, e->cast.operand, out);
         } else if (g_overflow_checked && e->cast.operand->type &&
-                   type_is_integer(e->cast.operand->type) &&
+                   type_is_integer(type_enum_underlying(e->cast.operand->type)) &&
                    type_is_integer(e->cast.target) &&
-                   !type_can_widen(e->cast.operand->type, e->cast.target)) {
+                   !type_can_widen(type_enum_underlying(e->cast.operand->type),
+                                   e->cast.target)) {
             /* checked: an integer narrowing cast that can lose information aborts
-             * out of range, instead of the bare (truncating) C cast below. */
-            emit_checked_int_narrow(e->cast.operand->type, e->cast.target,
+             * out of range, instead of the bare (truncating) C cast below.
+             * An enum operand narrows exactly as its repr does (lockstep with
+             * pass2's expr_node_is_governed_overflow). */
+            emit_checked_int_narrow(type_enum_underlying(e->cast.operand->type),
+                                    e->cast.target,
                                     e->cast.operand, e->loc, out);
         } else if (e->cast.operand->type &&
                    ((cast_is_ptr_kind(e->cast.operand->type) && type_is_integer(e->cast.target)) ||
@@ -3456,6 +3477,10 @@ static void emit_expr(Expr *e, FILE *out) {
         }
         /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
         if (e->field.is_variant_constructor) {
+            if (e->type && e->type->kind == TYPE_ENUM) {
+                emit_enum_variant_literal(e->type, e->field.name, out);
+                break;
+            }
             const char *union_name = e->type->unio.name;
             if (g_subst && type_contains_type_var(e->type)) {
                 union_name = mangle_generic_with_subst(union_name, e->type);
@@ -4543,6 +4568,18 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
     }
 
+    case EXPR_ENUM_OF: {
+        /* Membership check via the per-enum helper pair. u64/usize operands
+         * take the unsigned entry point; everything else fits int64. */
+        Type *ot = e->enum_of_expr.operand->type;
+        bool unsigned_wide = ot && (ot->kind == TYPE_UINT64 || ot->kind == TYPE_USIZE);
+        fprintf(out, "fc_enum_of_%s_%s(", e->enum_of_expr.target->enu.name,
+            unsigned_wide ? "u" : "i");
+        emit_expr(e->enum_of_expr.operand, out);
+        fprintf(out, ")");
+        break;
+    }
+
     case EXPR_DEFAULT: {
         Type *t = e->default_expr.target;
         switch (t->kind) {
@@ -4564,6 +4601,10 @@ static void emit_expr(Expr *e, FILE *out) {
         case TYPE_POINTER:
         case TYPE_ANY_PTR:
             fprintf(out, "NULL");
+            break;
+        case TYPE_ENUM:
+            /* The mandatory zero variant: default ≡ zero-filled memory. */
+            fprintf(out, "((%s)0)", t->enu.name);
             break;
         case TYPE_OPTION:
             if (is_null_sentinel(t))
@@ -5217,6 +5258,46 @@ static void emit_struct_def(Decl *d, FILE *out) {
     fprintf(out, " };\n");
 }
 
+/* Render an enum variant reference as a cast integer literal ((fc__E)N) in
+ * the repr's signedness. INT64_MIN needs C's two-token spelling; 64-bit
+ * magnitudes carry LL/ULL suffixes so the literal never exceeds `int`. */
+static void emit_enum_variant_literal(Type *et, const char *vname, FILE *out) {
+    uint64_t bits = 0;
+    for (int i = 0; i < et->enu.variant_count; i++) {
+        if (et->enu.variants[i].name == vname) {
+            bits = et->enu.variants[i].value_bits;
+            break;
+        }
+    }
+    Type *repr = et->enu.repr ? et->enu.repr : type_int32();
+    fprintf(out, "((%s)", et->enu.name);
+    if (type_is_signed(repr)) {
+        int w = repr->kind == TYPE_INT8 ? 8 : repr->kind == TYPE_INT16 ? 16
+              : repr->kind == TYPE_INT32 ? 32 : 64;
+        uint64_t mask = (w == 64) ? UINT64_MAX : ((1ULL << w) - 1);
+        if (bits > (mask >> 1)) {
+            int64_t sv = (int64_t)(bits | ~mask);   /* sign-extend */
+            if (sv == INT64_MIN) fprintf(out, "(-9223372036854775807LL - 1)");
+            else fprintf(out, "-%lldLL", (long long)-sv);
+        } else {
+            fprintf(out, "%lldLL", (long long)bits);
+        }
+    } else {
+        fprintf(out, "%lluULL", (unsigned long long)bits);
+    }
+    fprintf(out, ")");
+}
+
+/* An enum is a fixed-width integer typedef, never a C `enum`: C enum width is
+ * implementation-defined (and `int`-sized ints are 16 bits on some FC targets),
+ * while the declared repr is part of the language contract. Variant references
+ * are emitted as cast literals, so the typedef is the whole definition. */
+static void emit_enum_typedef(Decl *d, FILE *out) {
+    fprintf(out, "typedef ");
+    emit_type(d->enu.repr, out);
+    fprintf(out, " %s;\n", d->enu.name);
+}
+
 static void emit_union_forward(Decl *d, FILE *out) {
     fprintf(out, "typedef struct %s %s;\n", d->unio.name, d->unio.name);
 }
@@ -5363,7 +5444,8 @@ static Type *resolve_struct_stub(Type *t) {
         Symbol *sym = symtab_lookup(g_symtab, t->stub.name);
         if (sym && sym->type) {
             if ((sym->type->kind == TYPE_STRUCT && sym->type->struc.field_count > 0) ||
-                (sym->type->kind == TYPE_UNION && sym->type->unio.variant_count > 0))
+                (sym->type->kind == TYPE_UNION && sym->type->unio.variant_count > 0) ||
+                sym->type->kind == TYPE_ENUM)
                 return sym->type;
         }
         if (g_mono) {
@@ -5534,6 +5616,13 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
     case EXPR_BITCAST:
         /* target is a scalar (no typedef); walk the operand for nested types */
         collect_types_expr(e->bitcast_expr.operand, slices, options, fns);
+        break;
+    case EXPR_ENUM_OF:
+        /* the result type E? needs its option typedef, and the enum needs its
+         * membership-check helper pair */
+        collect_types_in_type(e->type, slices, options, fns);
+        if (g_enum_of_set) typeset_add(g_enum_of_set, e->enum_of_expr.target);
+        collect_types_expr(e->enum_of_expr.operand, slices, options, fns);
         break;
     case EXPR_GUARD:
         collect_types_expr(e->guard.body, slices, options, fns);
@@ -5763,6 +5852,9 @@ static void collect_const_backings(Expr *e) {
     case EXPR_BITCAST:
         collect_const_backings(e->bitcast_expr.operand);
         break;
+    case EXPR_ENUM_OF:
+        collect_const_backings(e->enum_of_expr.operand);
+        break;
     case EXPR_GUARD:
         collect_const_backings(e->guard.body);
         break;
@@ -5875,6 +5967,9 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
         break;
     case EXPR_BITCAST:
         collect_trampolines_expr(e->bitcast_expr.operand, ts);
+        break;
+    case EXPR_ENUM_OF:
+        collect_trampolines_expr(e->enum_of_expr.operand, ts);
         break;
     case EXPR_GUARD:
         collect_trampolines_expr(e->guard.body, ts);
@@ -6018,6 +6113,9 @@ static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
     case EXPR_BITCAST:
         collect_lambdas_expr(e->bitcast_expr.operand, ls);
         break;
+    case EXPR_ENUM_OF:
+        collect_lambdas_expr(e->enum_of_expr.operand, ls);
+        break;
     case EXPR_GUARD:
         collect_lambdas_expr(e->guard.body, ls);
         break;
@@ -6124,6 +6222,58 @@ static void emit_value_eq(Type *t, const char *a_expr, const char *b_expr, FILE 
         fprintf(out, "(%s, %s)", a_expr, b_expr);
     } else {
         fprintf(out, "%s == %s", a_expr, b_expr);
+    }
+}
+
+/* enum_of(E, x) membership check: a signed/unsigned helper pair per enum.
+ * The switch lives in whichever domain covers the repr; the other clamps and
+ * delegates, so enum_of(E_i8, u64max) and enum_of(E_u64, -1) are both none
+ * without any implementation-defined conversion. Call sites pick _u for
+ * u64/usize operands, _i otherwise. */
+static void emit_enum_of_helpers(Type *et, FILE *out) {
+    const char *en = et->enu.name;
+    Type *repr = et->enu.repr ? et->enu.repr : type_int32();
+    bool u64_repr = (repr->kind == TYPE_UINT64);
+    /* option typedef name: fc_option_<enum> */
+    if (!u64_repr) {
+        /* switch in the signed (int64) domain; every non-u64 repr's values fit */
+        fprintf(out, "%sfc_option_%s fc_enum_of_%s_i(int64_t v) {\n", g_fn_attr, en, en);
+        fprintf(out, "    switch (v) {\n");
+        for (int i = 0; i < et->enu.variant_count; i++) {
+            uint64_t bits = et->enu.variants[i].value_bits;
+            int64_t sv;
+            if (type_is_signed(repr)) {
+                int w = repr->kind == TYPE_INT8 ? 8 : repr->kind == TYPE_INT16 ? 16
+                      : repr->kind == TYPE_INT32 ? 32 : 64;
+                uint64_t mask = (w == 64) ? UINT64_MAX : ((1ULL << w) - 1);
+                sv = (bits > (mask >> 1)) ? (int64_t)(bits | ~mask) : (int64_t)bits;
+            } else {
+                sv = (int64_t)bits;
+            }
+            if (sv == INT64_MIN)
+                fprintf(out, "    case (-9223372036854775807LL - 1):\n");
+            else
+                fprintf(out, "    case %lldLL:\n", (long long)sv);
+        }
+        fprintf(out, "        return (fc_option_%s){ .value = (%s)v, .has_value = true };\n", en, en);
+        fprintf(out, "    default: return (fc_option_%s){ .has_value = false };\n", en);
+        fprintf(out, "    }\n}\n");
+        fprintf(out, "%sfc_option_%s fc_enum_of_%s_u(uint64_t v) {\n", g_fn_attr, en, en);
+        fprintf(out, "    if (v > (uint64_t)INT64_MAX) return (fc_option_%s){ .has_value = false };\n", en);
+        fprintf(out, "    return fc_enum_of_%s_i((int64_t)v);\n}\n", en);
+    } else {
+        /* u64 repr: switch in the unsigned domain */
+        fprintf(out, "%sfc_option_%s fc_enum_of_%s_u(uint64_t v) {\n", g_fn_attr, en, en);
+        fprintf(out, "    switch (v) {\n");
+        for (int i = 0; i < et->enu.variant_count; i++)
+            fprintf(out, "    case %lluULL:\n",
+                (unsigned long long)et->enu.variants[i].value_bits);
+        fprintf(out, "        return (fc_option_%s){ .value = (%s)v, .has_value = true };\n", en, en);
+        fprintf(out, "    default: return (fc_option_%s){ .has_value = false };\n", en);
+        fprintf(out, "    }\n}\n");
+        fprintf(out, "%sfc_option_%s fc_enum_of_%s_i(int64_t v) {\n", g_fn_attr, en, en);
+        fprintf(out, "    if (v < 0) return (fc_option_%s){ .has_value = false };\n", en);
+        fprintf(out, "    return fc_enum_of_%s_u((uint64_t)v);\n}\n", en);
     }
 }
 
@@ -6655,6 +6805,9 @@ static void detect_features_expr(Expr *e) {
         return;
     case EXPR_BITCAST:
         detect_features_expr(e->bitcast_expr.operand);
+        return;
+    case EXPR_ENUM_OF:
+        detect_features_expr(e->enum_of_expr.operand);
         return;
     case EXPR_GUARD:
         /* A `checked` body emits fc_overflow (stderr) on overflow. pass2 rejects a
@@ -7225,8 +7378,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     TypeSet results = {0};
     TypeSet fns = {0};
     TypeSet eqs = {0};
+    TypeSet enum_ofs = {0};
     g_eq_set = &eqs;
     g_results_set = &results;
+    g_enum_of_set = &enum_ofs;
 
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
@@ -7273,6 +7428,14 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
     g_eq_set = NULL;
     g_results_set = NULL;
+
+    /* Enum typedefs — complete scalar types with no dependencies, emitted
+       before every forward declaration so struct fields, option/result inners,
+       and slice elements can use them as complete types. */
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
+        if (d->kind == DECL_ENUM) emit_enum_typedef(d, out);
+    }
 
     /* Emit forward declarations for all structs and unions (skip generics) */
     for (int i = 0; i < all_count; i++) {
@@ -7490,11 +7653,16 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     for (int i = 0; i < eqs.count; i++)
         emit_eq_func(eqs.types[i], out);
 
+    /* Emit enum_of membership-check helpers */
+    for (int i = 0; i < enum_ofs.count; i++)
+        emit_enum_of_helpers(enum_ofs.types[i], out);
+
     free(slices.types);
     free(options.types);
     free(results.types);
     free(fns.types);
     free(eqs.types);
+    free(enum_ofs.types);
 
     fprintf(out, "\n");
 

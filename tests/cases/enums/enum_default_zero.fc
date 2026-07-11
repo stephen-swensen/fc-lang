@@ -1,0 +1,22 @@
+// The zero variant need not be declared first; zero-fill paths agree
+enum state of u8 =
+    | running = 1
+    | idle = 0
+    | stopped = 2
+
+struct machine =
+    st: state
+    ticks: i32
+
+let main = (args: str[]) ->
+    assert(default(state) == state.idle)
+    let m = machine { ticks = 5 }
+    assert(m.st == state.idle)
+    let z = machine { }
+    assert(z.st == state.idle)
+    let hp = alloc(machine)!
+    assert(hp.st == state.idle)
+    free(hp)
+    let arr = state[3]{ }
+    assert(arr[1] == state.idle)
+    0

@@ -1,0 +1,16 @@
+// Same-enum ordering: all four operators
+enum difficulty =
+    | baby
+    | easy
+    | medium
+    | hard
+
+let main = (args: str[]) ->
+    assert(difficulty.baby < difficulty.easy)
+    assert(difficulty.hard > difficulty.medium)
+    assert(difficulty.easy <= difficulty.easy)
+    assert(difficulty.medium >= difficulty.easy)
+    let d = difficulty.medium
+    assert(d >= difficulty.medium)
+    assert(!(d > difficulty.hard))
+    0

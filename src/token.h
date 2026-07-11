@@ -17,6 +17,7 @@ typedef enum {
     TOK_MUT,
     TOK_STRUCT,
     TOK_UNION,
+    TOK_ENUM,
     TOK_ERROR_KW,       /* 'error' — error-group declaration / the i32 display alias in type position */
     TOK_MODULE,
     TOK_NAMESPACE,
@@ -59,6 +60,7 @@ typedef enum {
     TOK_SIZEOF,
     TOK_ALIGNOF,
     TOK_BITCAST,
+    TOK_ENUM_OF,        /* enum_of(E, x) — checked integer→enum conversion, yields E? */
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,

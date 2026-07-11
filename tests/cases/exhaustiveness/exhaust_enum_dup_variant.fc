@@ -1,0 +1,15 @@
+// Duplicate variant arms should still be exhaustive if all variants covered
+enum color =
+    | red
+    | green
+    | blue
+
+let main = (args: str[]) ->
+    let c = color.red
+    let r = match c with
+            | red -> 1
+            | green -> 2
+            | blue -> 3
+            | red -> 4
+    assert(r == 1)
+    0

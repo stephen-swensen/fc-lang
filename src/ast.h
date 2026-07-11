@@ -49,6 +49,7 @@ typedef enum {
     EXPR_SIZEOF,
     EXPR_ALIGNOF,
     EXPR_BITCAST,       /* bitcast(T, x) — reinterpret x's bits as scalar type T */
+    EXPR_ENUM_OF,       /* enum_of(E, x) — checked integer→enum conversion, yields E? */
     EXPR_DEFAULT,
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
@@ -324,6 +325,10 @@ struct Expr {
          * pass2); no runtime failure mode, so no guard/checked variant. */
         struct { Type *target; Expr *operand; } bitcast_expr;
 
+        /* EXPR_ENUM_OF — enum_of(E, x): membership-checked conversion of an
+         * integer to enum E; yields E? (some on a declared value, none otherwise). */
+        struct { Type *target; Expr *operand; } enum_of_expr;
+
         /* EXPR_DEFAULT */
         struct { Type *target; } default_expr;
 
@@ -502,6 +507,7 @@ typedef enum {
     DECL_LET,
     DECL_STRUCT,
     DECL_UNION,
+    DECL_ENUM,
     DECL_MODULE,
     DECL_IMPORT,
     DECL_EXTERN,
@@ -553,6 +559,17 @@ struct Decl {
             int type_param_count;
             bool is_generic;
         } unio;
+
+        /* DECL_ENUM — closed set of named integer constants over a declared repr.
+         * variants is the same array pass1 wires into the TYPE_ENUM, so values
+         * resolved there are visible everywhere. */
+        struct {
+            const char *name;
+            Type *repr;             /* declared `of` repr (i8..u64); NULL = i32 default */
+            EnumVariant *variants;
+            int variant_count;
+            bool values_resolved;   /* pass1 guard: value normalization runs once */
+        } enu;
 
         /* DECL_MODULE */
         struct {

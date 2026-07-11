@@ -1,0 +1,12 @@
+import weapon from game::
+import weapons from game::
+
+let main = (args: str[]) ->
+    let w = weapon.pistol
+    assert(weapons.damage(w) == 15)
+    assert(weapon.count == 3)
+    assert((i32) weapon.machine_gun == 2)
+    match enum_of(weapon, 1) with
+    | some(x) -> assert(x == weapon.pistol)
+    | none -> assert(false)
+    0

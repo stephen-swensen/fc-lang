@@ -1,0 +1,1 @@
+enum_of operand is already enum 'e'; cast out first: (i32) x

@@ -1,0 +1,9 @@
+enum e1 =
+    | a
+
+enum e2 =
+    | b
+
+let main = (args: str[]) ->
+    let x = e1.a < e2.b
+    0

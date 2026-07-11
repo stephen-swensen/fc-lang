@@ -329,6 +329,7 @@ static const char *type_udt_name(Type *t) {
     if (t->kind == TYPE_STUB) return t->stub.name;
     if (t->kind == TYPE_STRUCT) return t->struc.name;
     if (t->kind == TYPE_UNION) return t->unio.name;
+    if (t->kind == TYPE_ENUM) return t->enu.name;
     return NULL;
 }
 
@@ -364,6 +365,7 @@ bool type_eq(Type *a, Type *b) {
         }
         return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
+    case TYPE_ENUM:    return a->enu.name == b->enu.name;
     case TYPE_STUB:    return a->stub.name == b->stub.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
     case TYPE_FUNC:
@@ -403,6 +405,7 @@ bool type_eq_ignore_const(Type *a, Type *b) {
         }
         return a->struc.name == b->struc.name;
     case TYPE_UNION:   return a->unio.name == b->unio.name;
+    case TYPE_ENUM:    return a->enu.name == b->enu.name;
     case TYPE_STUB:    return a->stub.name == b->stub.name;
     case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
     case TYPE_FUNC:
@@ -575,6 +578,9 @@ const char *type_name(Type *t) {
         if (t->unio.qualified_name) return t->unio.qualified_name;
         return t->unio.name;
     }
+    case TYPE_ENUM:
+        if (t->enu.qualified_name) return t->enu.qualified_name;
+        return t->enu.name;
     case TYPE_STUB: {
         if (t->stub.qualified_name) return t->stub.qualified_name;
         return t->stub.name;
@@ -672,6 +678,11 @@ Type *type_common_numeric(Type *a, Type *b) {
     if (type_can_widen(a, b)) return b;
     if (type_can_widen(b, a)) return a;
     return NULL;
+}
+
+Type *type_enum_underlying(Type *t) {
+    if (t && t->kind == TYPE_ENUM) return t->enu.repr ? t->enu.repr : type_int32();
+    return t;
 }
 
 Type *type_from_int_suffix(const char *suffix, int len) {
@@ -1089,6 +1100,7 @@ char *mangle_type_name(Type *t) {
     case TYPE_NEVER:   return str_dup("never"); /* defensive: never monomorphized */
     case TYPE_STRUCT:  return str_dup(t->struc.name);
     case TYPE_UNION:   return str_dup(t->unio.name);
+    case TYPE_ENUM:    return str_dup(t->enu.name);
     case TYPE_STUB:
         /* A generic-instance stub (box<i32>) must mangle identically to its
          * monomorphized struct (box__3_i32): base "__" lp(arg)*, mirroring

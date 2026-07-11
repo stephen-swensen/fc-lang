@@ -1,0 +1,31 @@
+// Declared reprs, explicit values, C-style continuation, sparse values
+enum door_lock of u8 =
+    | normal_a
+    | gold_key = 1
+    | silver_key
+    | elevator_b = 5
+
+enum offset of i8 =
+    | none_dir = 0
+    | back = -2
+    | back_one
+    | fwd = 1
+
+enum wide of i64 =
+    | zero
+    | big = 4611686018427387904
+
+enum lone =
+    | only
+
+let main = (args: str[]) ->
+    assert((i32) door_lock.silver_key == 2)
+    assert((i32) door_lock.elevator_b == 5)
+    assert((i32) offset.back == -2)
+    assert((i32) offset.back_one == -1)
+    assert((i32) offset.fwd == 1)
+    assert((i64) wide.big == 4611686018427387904i64)
+    assert(lone.count == 1)
+    match lone.only with
+    | only -> void()
+    0

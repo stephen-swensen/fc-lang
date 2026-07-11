@@ -1,3 +1,6 @@
+// A slice literal length may be any compile-time-constant expression —
+// it is folded before the literal check (1 + 2, i32.bits, E.count, ...).
 let main = (args: str[]) ->
     let s = i32[1 + 2] { 10, 20, 30 }
-    s[0]
+    assert(s.len == 3)
+    s[0] - 10

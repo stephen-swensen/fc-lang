@@ -1,0 +1,7 @@
+enum e of i8 =
+    | zero
+    | top = 127
+    | next
+
+let main = (args: str[]) ->
+    0

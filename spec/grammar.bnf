@@ -115,7 +115,7 @@ TYPE_VAR      = "'" , letter , { ident_cont } ;
 (* ------------------------------------------------------------------ *)
 
 (* Reserved words — may not be used as identifiers.                    *)
-keyword = "let" | "mut" | "struct" | "union" | "error" | "module"
+keyword = "let" | "mut" | "struct" | "union" | "enum" | "error" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
         | "private" | "const" | "match" | "with" | "when" | "if" | "then" | "else"
         | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
@@ -126,6 +126,7 @@ keyword = "let" | "mut" | "struct" | "union" | "error" | "module"
 (* Reserved identifiers — built-in compile-time operators.             *)
 (* These may not be shadowed by user-defined bindings.                 *)
 reserved_ident = "alloc" | "alloca" | "free" | "sizeof" | "alignof" | "default" | "assert"
+               | "bitcast" | "enum_of" | "error_name"
                | "atomic_load_acquire" | "atomic_store_release" ;
 
 (* Built-in globals — predefined identifiers typed any*.                *)
@@ -299,6 +300,7 @@ top_level_item   = import_decl
                  | let_decl
                  | struct_decl
                  | union_decl
+                 | enum_decl
                  | error_decl
                  | module_decl
                  | cond_comp_block
@@ -359,6 +361,22 @@ union_body       = variant_decl , { NEWLINE , variant_decl } ;
 
 variant_decl     = "|" , IDENT , [ "(" , type_expr , ")" ] ;
 
+(* --- enum --------------------------------------------------------- *)
+(* A closed set of named integer constants over a fixed-width repr    *)
+(* (default i32). `of` is contextual, not a reserved word. Values are  *)
+(* integer literals (no type suffix); an omitted value continues       *)
+(* C-style from the previous one (first defaults to 0). Some variant   *)
+(* must have value 0; duplicate names/values are compile errors.       *)
+
+enum_decl        = [ "private" ] , "enum" , IDENT , [ "of" , enum_repr ] ,
+                   "=" , INDENT , enum_body , DEDENT ;
+
+enum_repr        = "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" ;
+
+enum_body        = enum_variant , { NEWLINE , enum_variant } ;
+
+enum_variant     = "|" , IDENT , [ "=" , [ "-" ] , INT_LIT ] ;
+
 (* --- error group -------------------------------------------------- *)
 (* An error group declares named i32 error constants (no payloads).    *)
 (* The group is a pseudo-module of constants, not a type: members are  *)
@@ -386,6 +404,7 @@ module_body      = { module_item , NEWLINE } ;
 module_item      = let_decl
                  | struct_decl
                  | union_decl
+                 | enum_decl
                  | error_decl
                  | module_decl
                  | extern_decl       (* only valid when enclosing module has "from" *)
@@ -683,6 +702,8 @@ primary_expr     = INT_LIT
                  | none_expr
                  | ok_expr
                  | err_expr
+                 | bitcast_expr
+                 | enum_of_expr
                  | struct_literal
                  | tuple_literal
                  | slice_literal
@@ -841,6 +862,15 @@ err_expr         = "err" , "(" , type_expr , "," , expr , ")" ;
 (* (platform passthrough) and negative codes. Backed by a static name     *)
 (* table emitted only when used (or unconditionally under --backtraces).  *)
 error_name_expr  = "error_name" , "(" , expr , ")" ;
+
+(* bitcast(T, x) reinterprets x's bytes as the equal-size fixed-width  *)
+(* scalar type T (see §bitcast).                                       *)
+bitcast_expr     = "bitcast" , "(" , type_expr , "," , expr , ")" ;
+
+(* enum_of(E, x) is the membership-checked integer->enum conversion:   *)
+(* yields E? — some(variant) when x equals a declared value, none      *)
+(* otherwise. The only integer->enum path (casts to enum are errors).  *)
+enum_of_expr     = "enum_of" , "(" , type_expr , "," , expr , ")" ;
 
 
 (* ------------------------------------------------------------------ *)

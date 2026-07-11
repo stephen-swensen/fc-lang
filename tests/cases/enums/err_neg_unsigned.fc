@@ -1,0 +1,6 @@
+enum e of u16 =
+    | a
+    | b = -1
+
+let main = (args: str[]) ->
+    0

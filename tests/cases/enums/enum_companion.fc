@@ -1,0 +1,19 @@
+// Companion module sharing the enum's name resolves both ways
+enum weapon =
+    | knife
+    | pistol
+    | chain_gun
+
+module weapon =
+    let damage = (w: weapon) ->
+        match w with
+        | knife -> 5
+        | pistol -> 15
+        | chain_gun -> 40
+
+let main = (args: str[]) ->
+    let w = weapon.pistol
+    assert(weapon.damage(w) == 15)
+    assert(weapon.count == 3)
+    assert((i32) weapon.chain_gun == 2)
+    0

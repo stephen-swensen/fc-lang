@@ -1,0 +1,14 @@
+// u64 repr at the extremes: values above INT64_MAX, negative operands
+enum flags64 of u64 =
+    | zero
+    | top = 18446744073709551615
+
+let main = (args: str[]) ->
+    assert((u64) flags64.top == 18446744073709551615u64)
+    match enum_of(flags64, 18446744073709551615u64) with
+    | some(f) -> assert(f == flags64.top)
+    | none -> assert(false)
+    match enum_of(flags64, -1) with
+    | some(f) -> assert(false)
+    | none -> void()
+    0

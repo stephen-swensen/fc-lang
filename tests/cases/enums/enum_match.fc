@@ -1,0 +1,25 @@
+// Exhaustive match: bare-name arms, or-patterns, wildcard, binding arm
+enum color =
+    | red
+    | green
+    | blue
+
+let score = (c: color) ->
+    match c with
+    | red -> 1
+    | green -> 2
+    | blue -> 3
+
+let main = (args: str[]) ->
+    assert(score(color.red) == 1)
+    assert(score(color.blue) == 3)
+    let c = color.green
+    let a = match c with
+            | red | green -> 10
+            | other -> 20
+    assert(a == 10)
+    let b = match c with
+            | blue -> 1
+            | _ -> 2
+    assert(b == 2)
+    0

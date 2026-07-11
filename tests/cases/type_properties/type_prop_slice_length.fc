@@ -1,0 +1,7 @@
+// Type properties are compile-time constants usable as slice literal lengths
+let main = (args: str[]) ->
+    let flags = bool[i32.bits]{ }
+    assert(flags.len == 32)
+    let bytes = u8[u8.bits]{ }
+    assert(bytes.len == 8)
+    0
