@@ -511,6 +511,11 @@ typedef struct {
                                        variant line. */
     bool doc_is_field;              /* doc_loc is a struct/union field/variant line
                                        (enables trailing-comment extraction) */
+    bool no_doc;                    /* suppress the hover doc scan entirely — the winning
+                                       node keeps its def_loc (for go-to-def) but has no doc
+                                       of its own. Set for function parameters, whose line
+                                       above holds the function decl, not the param's doc.
+                                       Cleared by every consider() win. */
     const BuiltinDoc *builtin;      /* set when the winning node is a built-in intrinsic
                                        (alloc/some/.../stdin); hover renders its doc instead
                                        of a `name: type` line. Cleared by every consider() win. */
@@ -556,6 +561,7 @@ static void consider(FindCtx *c, int line, int col, int span, Type *type,
     c->def_loc = def_loc;
     c->doc_loc = doc_loc;
     c->doc_is_field = doc_is_field;
+    c->no_doc = false;   /* post-set by the EXPR_IDENT winner for parameters */
     c->builtin = NULL;   /* a plain node wins; consider_builtin re-sets this when it wins */
     c->type_ref_sym = NULL;   /* post-set by the EXPR_IDENT/EXPR_FIELD/decl-site winners */
     c->companion = NULL;
@@ -607,6 +613,7 @@ static void consider_builtin(FindCtx *c, const Expr *e) {
     c->def_loc = NO_LOC;
     c->doc_loc = NO_LOC;
     c->doc_is_field = false;
+    c->no_doc = false;
     c->builtin = bd;
 }
 
@@ -723,10 +730,18 @@ static void find_in_exprs(Expr **arr, int n, FindCtx *c) {
 static void find_in_expr(Expr *e, FindCtx *c) {
     if (!e) return;
     switch (e->kind) {
-        case EXPR_IDENT:
+        case EXPR_IDENT: {
             consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
                      e->type, e->ident.name, e->ident.resolved_sym,
                      e->ident.resolved_local_loc, e->ident.resolved_local_loc, false);
+            /* Block-locals carry a doc site (the line above their binding) so a
+             * `// comment` over a `let` shows on hover. A parameter is the one
+             * exception: the line above it holds the function decl or an earlier
+             * param, never the param's own doc, so suppress the doc scan — it
+             * hovers as name: type. Go-to-def still uses resolved_local_loc. */
+            if (e->ident.resolved_local_is_param && c->found &&
+                c->start_line == e->loc.line && c->start_col == e->loc.col)
+                c->no_doc = true;
             /* Type/module reference: render a declaration-form hover header, and
              * carry the companion module so both docs merge into one hover. */
             if (e->ident.resolved_sym && c->found &&
@@ -747,6 +762,7 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                 if (bd) c->builtin = bd;
             }
             break;
+        }
         case EXPR_FIELD:
         case EXPR_DEREF_FIELD:
             find_in_expr(e->field.object, c);
@@ -1709,7 +1725,7 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
          * sibling or the stdlib), so read whichever buffer backs it; reuse the open
          * doc's line index when the site is in the open file. */
         char *doc_md = NULL;
-        {
+        if (!hit.no_doc) {
             SrcLoc site = NO_LOC; bool site_is_field = false;
             if (hit.doc_loc.line > 0)          { site = hit.doc_loc; site_is_field = hit.doc_is_field; }
             else if (hit.def_loc.line > 0)     { site = hit.def_loc; }

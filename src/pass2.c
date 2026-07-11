@@ -16,6 +16,8 @@ typedef struct {
     Provenance prov;            /* provenance of the bound value */
     SrcLoc def_loc;             /* source loc where this name is introduced (editor
                                    go-to-def on a block-local); {0} if synthesized */
+    bool is_param;              /* this binding is a function parameter — the LSP renders
+                                   its hover as name: type with no doc-comment scan */
     Expr *lambda_init;          /* the EXPR_FUNC this (immutable) binding was initialized
                                    with, NULL otherwise — lets alloc(f) see the context
                                    layout through the binding */
@@ -80,7 +82,7 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
 
 static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
                            Type *type, bool is_mut, Provenance prov, SrcLoc def_loc) {
-    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, def_loc, NULL };
+    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, def_loc, false, NULL };
     /* Grow arena-side so the locals array is reclaimed with the AST arena
      * (a long-running server frees it; the CLI frees it at the end). */
     if (s->local_count >= s->local_cap) {
@@ -106,7 +108,7 @@ static void scope_add(Scope *s, const char *name, const char *codegen_name,
    bindings are resolved by the interleaved parent/import loop in EXPR_IDENT. */
 static Type *scope_lookup_capture(Scope *s, const char *name,
     const char **out_codegen_name, bool *out_is_mut, int *out_crossings,
-    bool *out_is_global, SrcLoc *out_def_loc)
+    bool *out_is_global, SrcLoc *out_def_loc, bool *out_is_param)
 {
     int crossings = 0;
     for (Scope *sc = s; sc; sc = sc->parent) {
@@ -118,6 +120,7 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
                 if (out_crossings) *out_crossings = sc->is_global ? 0 : crossings;
                 if (out_is_global) *out_is_global = sc->is_global;
                 if (out_def_loc) *out_def_loc = sc->locals[i].def_loc;
+                if (out_is_param) *out_is_param = sc->locals[i].is_param;
                 return sc->locals[i].type;
             }
         }
@@ -133,6 +136,7 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
     if (out_crossings) *out_crossings = 0;
     if (out_is_global) *out_is_global = false;
     if (out_def_loc) *out_def_loc = (SrcLoc){0};
+    if (out_is_param) *out_is_param = false;
     return NULL;
 }
 
@@ -280,7 +284,7 @@ static bool expr_may_yield_stack(Scope *scope, Expr *e) {
             Expr *operand = e->unary_prefix.operand;
             if (operand->kind == EXPR_IDENT) {
                 Type *ot = scope_lookup_capture(scope, operand->ident.name,
-                    NULL, NULL, NULL, NULL, NULL);
+                    NULL, NULL, NULL, NULL, NULL, NULL);
                 if (ot && ot->kind == TYPE_FUNC) return false;
             }
             return true;
@@ -3456,8 +3460,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         int boundary_crossings = 0;
         bool is_global_binding = false;
         SrcLoc local_def_loc = {0};
+        bool local_is_param = false;
         Type *t = scope_lookup_capture(ctx->scope, e->ident.name,
-            &cg_name, &is_mut, &boundary_crossings, &is_global_binding, &local_def_loc);
+            &cg_name, &is_mut, &boundary_crossings, &is_global_binding, &local_def_loc,
+            &local_is_param);
         if (t) {
             if (boundary_crossings > 0) {
                 if (is_mut) {
@@ -3503,8 +3509,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             /* Record the binding's definition site for editor go-to-definition.
              * Only for block-locals (params, lets, for-vars, match bindings);
              * global bindings resolve through resolved_sym below. */
-            if (!is_global_binding)
+            if (!is_global_binding) {
                 e->ident.resolved_local_loc = local_def_loc;
+                e->ident.resolved_local_is_param = local_is_param;
+            }
             /* For global-scope bindings (module-level or top-level lets),
              * look up the Symbol so EXPR_FIELD and EXPR_CALL can use it
              * without re-resolving.  Local bindings (parameters, block-scoped
@@ -4115,7 +4123,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
                 bool op_is_mut = false;
                 scope_lookup_capture(ctx->scope, operand->ident.name,
-                    NULL, &op_is_mut, NULL, NULL, NULL);
+                    NULL, &op_is_mut, NULL, NULL, NULL, NULL);
                 if (!op_is_mut) {
                     diag_error(e->loc, "address-of requires mutable binding");
                     e->type = type_error();
@@ -4300,6 +4308,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             scope_add(inner, e->func.params[i].name,
                 c_safe_ident(ctx->intern, e->func.params[i].name), ptypes[i], false,
                 e->func.params[i].loc);
+            /* Flag it a parameter so the LSP hovers it as name: type with no
+             * doc-comment scan (a param has no doc of its own; the line above
+             * it holds the function decl or an earlier param, never the param's
+             * doc). Other block-locals (let/for/match) keep their doc scan. */
+            inner->locals[inner->local_count - 1].is_param = true;
         }
 
         /* Consume the pending-self channel set by an enclosing EXPR_LET so this
@@ -6970,7 +6983,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (e->alloc_expr.init_expr->kind == EXPR_IDENT) {
                 const char *name = e->alloc_expr.init_expr->ident.name;
                 Type *var_type = scope_lookup_capture(ctx->scope, name,
-                    NULL, NULL, NULL, NULL, NULL);
+                    NULL, NULL, NULL, NULL, NULL, NULL);
                 if (!var_type) {
                     Symbol *sym = global_lookup(ctx->symtab, name, ctx->current_ns);
                     if (sym && sym->kind == DECL_LET) var_type = sym->type;

@@ -143,6 +143,8 @@ struct Expr {
             struct Symbol *companion_module;   /* non-NULL when resolved_sym is a struct/union with a companion module */
             SrcLoc resolved_local_loc;         /* def loc of a resolved block-local binding (param, let, for-var,
                                                   match pattern) for editor go-to-def; {0} if global/unresolved */
+            bool resolved_local_is_param;      /* the block-local is a function parameter — hover shows name: type
+                                                  only (a param has no doc comment of its own to scan for) */
         } ident;
 
         /* EXPR_BINARY */

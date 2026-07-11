@@ -600,6 +600,59 @@ check("hover on top-level 'twice' shows the doc comment above its definition",
 check("hover on block-local 'total' shows the comment above its let binding",
       "running total" in dval(3), dval(3))
 
+# --- parameter hover: a function parameter renders as `name: type` with NO
+# doc-comment scan, consistently whether it sits on the function's decl line or a
+# continuation line. A param has no doc of its own — the line above it holds the
+# function decl or an earlier param, never the param's doc — so the old behavior
+# of decl-line params "inheriting" the function's doc (while continuation-line
+# params didn't) was an accident of layout. Go-to-def still resolves the param.
+pd = tempfile.mkdtemp(prefix="fc_lsp_param_")
+PARAMS = (
+    "// doubles and offsets\n"                   # line 0: function doc comment
+    "// (second line of the doc)\n"              # line 1
+    "let scale = (factor: i32, base: i32,\n"     # line 2: 'factor' name at char 13
+    "             extra: i32) ->\n"              # line 3: 'extra' name at char 13
+    "    factor * base + extra\n"                # line 4: 'factor' char 4, 'extra' char 20
+    "let main = (args: str[]) ->\n"              # line 5
+    "    let r = scale(2, 3, 4)\n"               # line 6
+    "    return r\n"                             # line 7
+)
+puri = "file://" + os.path.join(pd, "doc.fc")
+def phov(i, l, c): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": puri}, "position": {"line": l, "character": c}})
+def pdef(i, l, c): return req(i, "textDocument/definition",
+    {"textDocument": {"uri": puri}, "position": {"line": l, "character": c}})
+pm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": puri, "languageId": "fc",
+         "version": 1, "text": PARAMS}}),
+    phov(2, 4, 4),      # 'factor' use — decl-line param
+    phov(3, 4, 20),     # 'extra'  use — continuation-line param
+    pdef(4, 4, 4),      # 'factor' use -> its declaration (line 2)
+    pdef(5, 4, 20),     # 'extra'  use -> its declaration (line 3)
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+presp, _, _, _, _ = run_session(pm)
+def pval(iid):
+    return (presp.get(iid, {}).get("result") or {}).get("contents", {}).get("value", "")
+def pline(iid):
+    r = presp.get(iid, {}).get("result")
+    return r.get("range", {}).get("start", {}).get("line") if isinstance(r, dict) else None
+check("hover on decl-line param 'factor' shows 'factor: i32'",
+      "factor: i32" in pval(2), pval(2))
+check("hover on decl-line param 'factor' does NOT inherit the function's doc comment",
+      "doubles and offsets" not in pval(2), pval(2))
+check("hover on continuation-line param 'extra' shows 'extra: i32'",
+      "extra: i32" in pval(3), pval(3))
+check("hover on continuation-line param 'extra' has no doc comment (consistent with decl-line)",
+      "doubles and offsets" not in pval(3), pval(3))
+check("go-to-def on decl-line param 'factor' -> its declaration (line 2)",
+      pline(4) == 2, str(presp.get(4, {}).get("result")))
+check("go-to-def on continuation-line param 'extra' -> its declaration (line 3)",
+      pline(5) == 3, str(presp.get(5, {}).get("result")))
+
 # --- stale-overlay retention: typing through a transient unrecoverable state
 # (a parse abort, or a pass1 error that gates pass2) must NOT blank type-aware
 # overlays. The fresh analysis still drives diagnostics (the squiggle stays
