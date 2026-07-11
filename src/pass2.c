@@ -1311,12 +1311,25 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
             if (!sym)
                 sym = resolve_symbol_kind(ctx, t->stub.name, DECL_ENUM);
             if (sym && sym->type) {
-                const char *canon = NULL;
-                if (sym->type->kind == TYPE_STRUCT) canon = sym->type->struc.name;
-                else if (sym->type->kind == TYPE_UNION) canon = sym->type->unio.name;
-                else if (sym->type->kind == TYPE_ENUM) canon = sym->type->enu.name;
-                if (canon && canon != t->stub.name)
+                const char *canon = NULL, *qname = NULL;
+                if (sym->type->kind == TYPE_STRUCT) {
+                    canon = sym->type->struc.name;
+                    qname = sym->type->struc.qualified_name;
+                } else if (sym->type->kind == TYPE_UNION) {
+                    canon = sym->type->unio.name;
+                    qname = sym->type->unio.qualified_name;
+                } else if (sym->type->kind == TYPE_ENUM) {
+                    canon = sym->type->enu.name;
+                    qname = sym->type->enu.qualified_name;
+                }
+                /* Rewrite the parser's source name to the mangled C name for
+                 * codegen, but keep the source spelling as qualified_name so
+                 * diagnostics and LSP hover/completion never show `fc__weapon`.
+                 * Mirrors pass1's canonicalize_stub_names. */
+                if (canon && canon != t->stub.name) {
                     t->stub.name = canon;
+                    if (qname) t->stub.qualified_name = qname;
+                }
             } else if (!type_contains_type_var(t)) {
                 /* A concrete (non-generic) stub that resolves to no struct or
                  * union is a genuinely unknown type. Left alone, the raw name

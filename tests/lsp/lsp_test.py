@@ -1077,6 +1077,50 @@ check("completion: after 'vgagraph.' the member type is 'huffnode' once, no mang
       mem_labels.count("huffnode") == 1 and "helper" in mem_labels
       and "vgagraph__huffnode" not in mem_labels, str(mem_labels))
 
+# --- completion: a field's TYPE DETAIL never shows the mangled C name ----------
+# A struct field whose type is a file-scope struct (`weapon` -> `fc__weapon`) or a
+# module-scoped struct (`inv.slot` -> `inv__slot`) is stored as a stub that pass2
+# canonicalizes to the mangled C name for codegen. Completion renders each field's
+# type as the item `detail`; that render must show the SOURCE spelling, never the
+# `fc__`/`__` twin — even through pointer/slice/option decorations.
+FDET = (
+    "struct weapon =\n"                 # 0
+    "    damage: i32\n"                  # 1
+    "module inv =\n"                     # 2
+    "    struct slot =\n"                # 3
+    "        count: i32\n"               # 4
+    "struct game =\n"                    # 5
+    "    best: weapon\n"                 # 6
+    "    ptr: weapon*\n"                 # 7
+    "    many: weapon[]\n"               # 8
+    "    maybe: weapon?\n"               # 9
+    "    slot: inv.slot\n"               # 10
+    "let use_it = (g: game*) ->\n"       # 11
+    "    let x = g.best\n"               # 12  cursor after 'g.'
+    "    return\n"                       # 13
+    "let main = (args: str[]) ->\n"      # 14
+    "    return 0\n"                     # 15
+)
+fd = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, FDET),
+    req(2, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 12, "character": 14}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+fdresp, _, _, _, _ = run_session(fd)
+fres = fdresp.get(2, {}).get("result") or {}
+fits = fres.get("items") if isinstance(fres, dict) else fres
+fdetail = {it.get("label"): it.get("detail") for it in (fits or [])}
+check("completion: field type detail demangles a file-scope struct",
+      fdetail.get("best") == "weapon", str(fdetail))
+check("completion: field type detail demangles through pointer/slice/option",
+      fdetail.get("ptr") == "weapon*" and fdetail.get("many") == "weapon[]"
+      and fdetail.get("maybe") == "weapon?", str(fdetail))
+check("completion: field type detail shows a module-scoped struct qualified, not mangled",
+      fdetail.get("slot") == "inv.slot", str(fdetail))
+check("completion: no field detail leaks a mangled '__' twin",
+      all("__" not in (v or "") for v in fdetail.values()), str(fdetail))
+
 # --- completion: lexical scope at the cursor (module siblings + function locals)
 # Inside a module function, its sibling members are in scope as bare names, and
 # the enclosing function's params/lets are in scope — completion must offer both.
