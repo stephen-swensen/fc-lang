@@ -1431,18 +1431,27 @@ CP = (
     "module sfx =\n"                             # 10
     "    let volume = 3\n"                       # 11
     "\n"                                         # 12
-    "let main = (args: str[]) ->\n"              # 13
-    "    let d = dir.east\n"                     # 14  ref 'dir' -> merged hover
-    "    let v = sfx.volume\n"                   # 15  ref 'sfx' -> module header
-    "    (i32) d + v\n"                          # 16
+    "struct box =\n"                             # 13
+    "    d: dir\n"                               # 14  field type annotation
+    "\n"                                         # 15
+    "let use = (k: dir) -> (i32) k\n"            # 16  param type annotation
+    "\n"                                         # 17
+    "let main = (args: str[]) ->\n"              # 18
+    "    let d = dir.east\n"                     # 19  ref 'dir' -> merged hover
+    "    let v = sfx.volume\n"                   # 20  ref 'sfx' -> module header
+    "    (i32) d + v + use(dir.nodir)\n"         # 21
 )
 cp = [
     req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
     open_doc(1, CP),
-    hover(2, 14, CP.split("\n")[14].index("dir") + 1),   # ref with companion
+    hover(2, 19, CP.split("\n")[19].index("dir") + 1),   # ref with companion
     hover(3, 1, CP.split("\n")[1].index("dir") + 1),     # enum decl site
     hover(4, 6, CP.split("\n")[6].index("dir") + 1),     # module decl site
-    hover(5, 15, CP.split("\n")[15].index("sfx") + 1),   # pure module ref
+    hover(5, 20, CP.split("\n")[20].index("sfx") + 1),   # pure module ref
+    hover(6, 14, CP.split("\n")[14].index("dir") + 1),   # struct field annotation
+    hover(7, 16, CP.split("\n")[16].index("dir") + 1),   # param annotation
+    req(8, "textDocument/definition", {"textDocument": {"uri": URI},
+        "position": {"line": 16, "character": CP.split("\n")[16].index("dir") + 1}}),
     req(9, "shutdown", None), note("exit", None),
 ]
 cpresp, _, _, _, _ = run_session(cp)
@@ -1453,15 +1462,29 @@ check("hover a companion-pair name merges both docs with labeled sections",
       "enum dir of u8" in cp_hover(2) and "module dir" in cp_hover(2)
       and "Companion tables for dir." in cp_hover(2)
       and "Eight compass directions." in cp_hover(2), cp_hover(2))
+check("merged companion hover separates the sections with a visible rule",
+      "\n────" in cp_hover(2), cp_hover(2))
 check("hover the enum name at its declaration site shows the decl form + doc",
       "enum dir of u8" in cp_hover(3) and "Eight compass directions." in cp_hover(3),
       cp_hover(3))
+check("declaration-site hovers do not merge the companion (references only)",
+      "module dir" not in cp_hover(3) and "enum dir" not in cp_hover(4),
+      cp_hover(3) + " ||| " + cp_hover(4))
 check("hover the module name at its declaration site shows the decl form + doc",
       "module dir" in cp_hover(4) and "Companion tables for dir." in cp_hover(4),
       cp_hover(4))
 check("hover a plain module reference shows `module m`, not `m: void`",
       "module sfx" in cp_hover(5) and "Sound helpers." in cp_hover(5)
       and "void" not in cp_hover(5), cp_hover(5))
+check("hover a struct-field type annotation shows the type's merged decl hover",
+      "enum dir of u8" in cp_hover(6) and "module dir" in cp_hover(6), cp_hover(6))
+check("hover a param type annotation shows the type's decl-form hover",
+      "enum dir of u8" in cp_hover(7)
+      and "Eight compass directions." in cp_hover(7), cp_hover(7))
+cp_def = (cpresp.get(8, {}).get("result") or {})
+check("go-to-definition from a param type annotation lands on the enum decl",
+      isinstance(cp_def, dict) and cp_def.get("range", {}).get("start", {}).get("line") == 1,
+      str(cp_def))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

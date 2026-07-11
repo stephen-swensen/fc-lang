@@ -492,6 +492,8 @@ typedef struct {
     const char *src;
     const LineIndex *idx;
     const char *file;              /* only descend into decls from this file */
+    SymbolTable *symtab;           /* analysis global symtab (resolves TYPE_STUB
+                                      annotations left unresolved in the Decl tree) */
 
     bool found;
     int  best_span;
@@ -624,6 +626,94 @@ static int let_name_col(const FindCtx *c, int let_line, int let_col, bool is_mut
     return (i - c->idx->starts[let_line - 1]) + 1;
 }
 
+static const char *unmangled_name(const char *n);   /* defined with the decl-site helpers */
+
+/* A type annotation written in source (a param's `: T`, a slice literal's
+ * element type, a cast/alloc/sizeof/default/enum_of target, a struct field or
+ * union variant payload) resolves to a Type, but the AST records no token loc
+ * for it. Recover the base type-name token textually: scan rightward from
+ * (line, col) for an identifier spelling the named base type (peeling
+ * pointer/slice/option/result/fixed-array layers), stopping where the
+ * annotation context ends (`,` `)` `=` `{` `}` or a comment). A hit registers
+ * like any type reference: declaration-form hover + go-to-definition. */
+static void consider_type_annotation(FindCtx *c, Type *t, int line, int col) {
+    if (line != c->target_line) return;   /* the base name is on the start line */
+    while (t) {
+        if (t->kind == TYPE_POINTER)          t = t->pointer.pointee;
+        else if (t->kind == TYPE_SLICE)       t = t->slice.elem;
+        else if (t->kind == TYPE_OPTION)      t = t->option.inner;
+        else if (t->kind == TYPE_RESULT)      t = t->result.inner;
+        else if (t->kind == TYPE_FIXED_ARRAY) t = t->fixed_array.elem;
+        else break;
+    }
+    if (!t) return;
+    const char *qn = NULL;
+    Symbol *sym = NULL;
+    if (t->kind == TYPE_STRUCT && !t->struc.is_tuple) {
+        qn = t->struc.qualified_name ? t->struc.qualified_name : t->struc.name;
+        sym = t->struc.resolved_sym;
+    } else if (t->kind == TYPE_UNION) {
+        qn = t->unio.qualified_name ? t->unio.qualified_name : t->unio.name;
+        sym = t->unio.resolved_sym;
+    } else if (t->kind == TYPE_ENUM) {
+        qn = t->enu.qualified_name ? t->enu.qualified_name : t->enu.name;
+        sym = t->enu.resolved_sym;
+    } else if (t->kind == TYPE_STUB && c->symtab) {
+        /* Struct-field/variant-payload annotations referencing a type outside
+         * their own module keep their parse-time stub in the Decl tree (only
+         * use-site copies get resolved). Types are dual-registered in the
+         * global symtab under source and mangled names, so the stub's own
+         * name (canonicalized by pass1 where needed) resolves either way. */
+        qn = t->stub.qualified_name ? t->stub.qualified_name : t->stub.name;
+        sym = symtab_lookup_kind(c->symtab, t->stub.name, DECL_STRUCT);
+        if (!sym) sym = symtab_lookup_kind(c->symtab, t->stub.name, DECL_UNION);
+        if (!sym) sym = symtab_lookup_kind(c->symtab, t->stub.name, DECL_ENUM);
+    } else {
+        return;   /* primitives/functions/type-vars: nothing to link */
+    }
+    if (!qn || !sym) return;
+    /* Base name token = last path component of the qualified name
+     * (m.point -> point, std::io.file -> file), unmangled to its source
+     * spelling (a canonicalized stub may read m__point). */
+    const char *base = qn;
+    for (const char *p = qn; *p; p++)
+        if (*p == '.' || *p == ':') base = p + 1;
+    base = unmangled_name(base);
+    int blen = (int)strlen(base);
+    if (blen == 0 || strchr(base, '<')) return;
+
+    int off = c->idx->starts[line - 1] + (col - 1);
+    int end = (line < c->idx->count) ? c->idx->starts[line] : c->idx->len;
+    while (off < end) {
+        char ch = c->src[off];
+        if (ch == ',' || ch == ')' || ch == '=' || ch == '{' || ch == '}' ||
+            ch == '\n')
+            return;
+        if (ch == '/' && off + 1 < end &&
+            (c->src[off + 1] == '/' || c->src[off + 1] == '*'))
+            return;
+        bool ident0 = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                      ch == '_';
+        if (!ident0) { off++; continue; }
+        int tok_start = off;
+        while (off < end) {
+            char tc = c->src[off];
+            bool identc = (tc >= 'a' && tc <= 'z') || (tc >= 'A' && tc <= 'Z') ||
+                          (tc >= '0' && tc <= '9') || tc == '_';
+            if (!identc) break;
+            off++;
+        }
+        if (off - tok_start == blen &&
+            strncmp(c->src + tok_start, base, (size_t)blen) == 0) {
+            int tok_col = (tok_start - c->idx->starts[line - 1]) + 1;
+            consider(c, line, tok_col, blen, t, base, sym, NO_LOC, NO_LOC, false);
+            if (c->found && c->start_line == line && c->start_col == tok_col)
+                c->type_ref_sym = sym;
+            return;   /* first matching token is the annotation's */
+        }
+    }
+}
+
 static void find_in_expr(Expr *e, FindCtx *c);
 
 static void find_in_exprs(Expr **arr, int n, FindCtx *c) {
@@ -749,13 +839,17 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             find_in_expr(e->slice.lo, c);
             find_in_expr(e->slice.hi, c);
             break;
-        case EXPR_CAST:    find_in_expr(e->cast.operand, c); break;
+        case EXPR_CAST:
+            consider_type_annotation(c, e->cast.target, e->loc.line, e->loc.col);
+            find_in_expr(e->cast.operand, c);
+            break;
         case EXPR_BITCAST:
             consider_builtin(c, e);   /* the bitcast keyword */
             find_in_expr(e->bitcast_expr.operand, c);
             break;
         case EXPR_ENUM_OF:
             consider_builtin(c, e);   /* the enum_of keyword */
+            consider_type_annotation(c, e->enum_of_expr.target, e->loc.line, e->loc.col);
             find_in_expr(e->enum_of_expr.operand, c);
             break;
         case EXPR_IF:
@@ -783,9 +877,14 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         case EXPR_FUNC:
             for (int i = 0; i < e->func.param_count; i++) {
                 Param *p = &e->func.params[i];
-                if (p->name)
+                if (p->name) {
                     consider(c, p->loc.line, p->loc.col, (int)strlen(p->name),
                              p->type, p->name, NULL, NO_LOC, NO_LOC, false);
+                    /* The written annotation after `name:` — hover/def on the
+                     * type name itself. */
+                    consider_type_annotation(c, p->type, p->loc.line,
+                                             p->loc.col + (int)strlen(p->name));
+                }
             }
             find_in_exprs(e->func.body, e->func.body_count, c);
             break;
@@ -808,15 +907,21 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             break;
         case EXPR_TUPLE_LIT: find_in_exprs(e->tuple_lit.elems, e->tuple_lit.elem_count, c); break;
         case EXPR_ARRAY_LIT:
+            /* The literal starts with its written element type (`dir[8] {`). */
+            consider_type_annotation(c, e->array_lit.elem_type, e->loc.line, e->loc.col);
             find_in_expr(e->array_lit.size_expr, c);
             find_in_exprs(e->array_lit.elems, e->array_lit.elem_count, c);
             break;
         case EXPR_SLICE_LIT:
+            consider_type_annotation(c, e->slice_lit.elem_type, e->loc.line, e->loc.col);
             find_in_expr(e->slice_lit.ptr_expr, c);
             find_in_expr(e->slice_lit.len_expr, c);
             break;
         case EXPR_ALLOC:
             consider_builtin(c, e);   /* the alloc/alloca keyword */
+            if (e->alloc_expr.alloc_type)   /* alloc(T)/alloc(T,N): written type */
+                consider_type_annotation(c, e->alloc_expr.alloc_type,
+                                         e->loc.line, e->loc.col);
             find_in_expr(e->alloc_expr.size_expr, c);
             find_in_expr(e->alloc_expr.init_expr, c);
             break;
@@ -830,6 +935,17 @@ static void find_in_expr(Expr *e, FindCtx *c) {
             /* sizeof/alignof/default (and `none`, which desugars to EXPR_DEFAULT)
              * take only a type argument — nothing further to descend into. */
             consider_builtin(c, e);
+            {
+                /* The written type argument. `none` shares EXPR_DEFAULT but
+                 * spells no type — read the keyword to tell them apart. */
+                Type *tt = e->kind == EXPR_SIZEOF  ? e->sizeof_expr.target
+                         : e->kind == EXPR_ALIGNOF ? e->alignof_expr.target
+                         :                           e->default_expr.target;
+                char kw[16];
+                read_ident_at(c, e->loc, kw, sizeof kw);
+                if (e->kind != EXPR_DEFAULT || strcmp(kw, "default") == 0)
+                    consider_type_annotation(c, tt, e->loc.line, e->loc.col);
+            }
             break;
         case EXPR_INTERP_STRING:
             for (int i = 0; i < e->interp_string.segment_count; i++)
@@ -941,11 +1057,24 @@ static void find_in_decl(Decl *d, FindCtx *c) {
             find_in_decls(d->module.decls, d->module.decl_count, c);
             break;
         case DECL_STRUCT:
-            if (!d->struc.is_extern)
+            if (!d->struc.is_extern) {
                 consider_decl_name(c, d, 6, d->struc.name);
+                for (int i = 0; i < d->struc.field_count; i++) {
+                    StructField *f = &d->struc.fields[i];
+                    if (f->name && f->loc.line > 0)
+                        consider_type_annotation(c, f->type, f->loc.line,
+                                                 f->loc.col + (int)strlen(f->name));
+                }
+            }
             break;
         case DECL_UNION:
             consider_decl_name(c, d, 5, d->unio.name);
+            for (int i = 0; i < d->unio.variant_count; i++) {
+                UnionVariant *v = &d->unio.variants[i];
+                if (v->name && v->payload && v->loc.line > 0)
+                    consider_type_annotation(c, v->payload, v->loc.line,
+                                             v->loc.col + (int)strlen(v->name));
+            }
             break;
         case DECL_ENUM:
             consider_decl_name(c, d, 4, d->enu.name);
@@ -956,6 +1085,24 @@ static void find_in_decl(Decl *d, FindCtx *c) {
 
 static void find_in_decls(Decl **decls, int n, FindCtx *c) {
     for (int i = 0; i < n; i++) find_in_decl(decls[i], c);
+}
+
+/* Companion module of a type Symbol: the same-scope DECL_MODULE sharing the
+ * type's source name. pass2 stamps this on ident references
+ * (ident.companion_module); this recovers it for reference hits that carry
+ * only the type symbol — annotations, struct-literal type names,
+ * module-member type paths. */
+static Symbol *companion_of_type_sym(AnalysisResult *r, Symbol *ts) {
+    if (!ts) return NULL;
+    if (ts->kind != DECL_STRUCT && ts->kind != DECL_UNION && ts->kind != DECL_ENUM)
+        return NULL;
+    const char *iname = intern_cstr(&r->intern, unmangled_name(ts->name));
+    Symbol *m = ts->parent
+        ? symtab_lookup_kind(ts->parent->members, iname, DECL_MODULE)
+        : symtab_lookup_module(&r->symtab, iname, ts->ns_prefix);
+    if (m && m->decl && m->decl->kind == DECL_MODULE && m->decl->module.is_error_group)
+        return NULL;   /* error groups only look like modules */
+    return m;
 }
 
 /* Run the position lookup against a document's analysis. */
@@ -970,7 +1117,18 @@ static bool locate(LspDoc *doc, const LineIndex *idx, int line0, int char0, Find
     c.src = doc->text;
     c.idx = idx;
     c.file = doc->path;
+    c.symtab = &r->symtab;
     find_in_decls(r->program->decls, r->program->decl_count, &c);
+    /* A type REFERENCE that didn't come through pass2's ident path (a written
+     * annotation, a struct-literal type name, a module-member path) carries no
+     * companion; recover it so every use-site type hover merges the pair.
+     * Declaration-site names deliberately don't merge: a module only becomes
+     * a companion where a reference resolves it as one, so each half's decl
+     * hover shows only its own doc. */
+    if (c.found && !c.companion && c.type_ref_sym) {
+        Symbol *m = companion_of_type_sym(r, c.type_ref_sym);
+        if (m) c.companion = m;
+    }
     *out = c;
     return c.found;
 }
@@ -1609,9 +1767,14 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
             }
 
             if (comp_md) {
+                /* A rule separates the pair's sections. Drawn with U+2500 text
+                 * rather than markdown `---`: VSCode colors a markdown <hr>
+                 * with the theme's editorHoverWidget.border, which is
+                 * invisible in themes that draw borderless hovers. */
+                #define HOVER_RULE "────────────────────────────────"
                 const char *fmt = doc_md
-                    ? "```fc\n%s\n```\n\n%s\n\n```fc\nmodule %s\n```\n\n%s"
-                    : "```fc\n%s\n```\n\n```fc\nmodule %s\n```\n\n%s";
+                    ? "```fc\n%s\n```\n\n%s\n\n" HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s"
+                    : "```fc\n%s\n```\n\n" HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s";
                 int need = doc_md
                     ? snprintf(NULL, 0, fmt, header, doc_md, nm, comp_md) + 1
                     : snprintf(NULL, 0, fmt, header, nm, comp_md) + 1;
