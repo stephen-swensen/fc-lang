@@ -1,4 +1,4 @@
 assertion failed
 backtrace:
-check<int32>
+check<i32>
 main

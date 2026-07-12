@@ -48,6 +48,7 @@ run_one_test() {
     local expected_exit_file="$4"
     local expected_file="$5"
     local fc_flags="$6"
+    local stderr_contains_file="$7"
 
     local slug="${test_display//\//_}"
     local c_file="$TMPDIR/${slug}.c"
@@ -98,25 +99,38 @@ run_one_test() {
         return
     fi
 
+    # Run the binary once, capturing stdout and stderr separately so we can
+    # match .expected (combined stdout+stderr, exact diff) and
+    # .expected_stderr_contains (stderr only, substring lines). Mirrors the
+    # run_bin helper in tests/run_tests.sh.
+    local stdout_file="$TMPDIR/${slug}.stdout"
+    local stderr_file="$TMPDIR/${slug}.run_stderr"
+    local combined_file="$TMPDIR/${slug}.combined"
+    local actual_exit
+    local ran=0
+    run_bin() {
+        set +e
+        "$bin_file" > "$stdout_file" 2>"$stderr_file"
+        actual_exit=$?
+        set -e
+        cat "$stdout_file" "$stderr_file" > "$combined_file" 2>/dev/null || true
+        ran=1
+    }
+
     # Check expected exit code
     if [ -n "$expected_exit_file" ] && [ -f "$expected_exit_file" ]; then
         local expected_exit=$(cat "$expected_exit_file" | tr -d '[:space:]')
-        set +e
-        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
-        local actual_exit=$?
-        set -e
+        run_bin
         if ! exit_matches "$expected_exit" "$actual_exit"; then
             echo "FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
             return
         fi
     fi
 
-    # Check expected stdout
+    # Check expected stdout (matches combined stdout+stderr for back-compat)
     if [ -n "$expected_file" ] && [ -f "$expected_file" ]; then
-        set +e
-        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>&1; } 2>/dev/null
-        set -e
-        if ! diff -u "$expected_file" "$TMPDIR/${slug}.stdout" > "$TMPDIR/${slug}.diff" 2>&1; then
+        [ "$ran" = "1" ] || run_bin
+        if ! diff -u "$expected_file" "$combined_file" > "$TMPDIR/${slug}.diff" 2>&1; then
             echo "FAIL  $test_display (output mismatch)"
             cat "$TMPDIR/${slug}.diff" >&2
             return
@@ -126,13 +140,33 @@ run_one_test() {
     # If no expected_exit and no expected stdout, run and expect exit code 0
     if { [ -z "$expected_exit_file" ] || [ ! -f "$expected_exit_file" ]; } && \
        { [ -z "$expected_file" ] || [ ! -f "$expected_file" ]; }; then
-        set +e
-        { "$bin_file" > "$TMPDIR/${slug}.stdout" 2>"$TMPDIR/${slug}.run_stderr"; } 2>/dev/null
-        local actual_exit=$?
-        set -e
+        [ "$ran" = "1" ] || run_bin
         if [ "$actual_exit" != "0" ]; then
             echo "FAIL  $test_display (exit code: expected 0, got $actual_exit)"
-            cat "$TMPDIR/${slug}.run_stderr" >&2
+            cat "$stderr_file" >&2
+            return
+        fi
+    fi
+
+    # Substring assertions against stderr.  Each non-empty, non-comment line of
+    # expected_stderr_contains must appear (fixed-string) somewhere in stderr.
+    # Used by --backtraces tests where the exact frame layout is variable but
+    # key tokens are stable.
+    if [ -n "$stderr_contains_file" ] && [ -f "$stderr_contains_file" ]; then
+        [ "$ran" = "1" ] || run_bin
+        local missing=""
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "$line" in \#*) continue ;; esac
+            if ! grep -qF -- "$line" "$stderr_file"; then
+                missing="${missing}    missing: ${line}\n"
+            fi
+        done < "$stderr_contains_file"
+        if [ -n "$missing" ]; then
+            echo "FAIL  $test_display (stderr missing expected substrings)"
+            printf "$missing" >&2
+            echo "  ---- actual stderr ----" >&2
+            cat "$stderr_file" >&2
             return
         fi
     fi
@@ -152,7 +186,7 @@ for milestone_dir in "$TESTDIR"/*/; do
     for fc_file in "$milestone_dir"*.fc; do
         [ -f "$fc_file" ] || continue
         test_name=$(basename "$fc_file" .fc)
-        echo "$milestone/$test_name|$fc_file|${milestone_dir}${test_name}.error|${milestone_dir}${test_name}.expected_exit|${milestone_dir}${test_name}.expected|"
+        echo "$milestone/$test_name|$fc_file|${milestone_dir}${test_name}.error|${milestone_dir}${test_name}.expected_exit|${milestone_dir}${test_name}.expected||"
     done
 
     for test_subdir in "$milestone_dir"*/; do
@@ -197,7 +231,7 @@ for milestone_dir in "$TESTDIR"/*/; do
             done < "${test_subdir}fcc_args"
         fi
 
-        echo "$milestone/$test_name|$fc_files|${test_subdir}error|${test_subdir}expected_exit|${test_subdir}expected|$fc_flags"
+        echo "$milestone/$test_name|$fc_files|${test_subdir}error|${test_subdir}expected_exit|${test_subdir}expected|$fc_flags|${test_subdir}expected_stderr_contains"
     done
 done > "$test_list"
 
@@ -210,8 +244,8 @@ fi
 
 # Run tests in parallel, collect output
 results=$(cat "$test_list" | xargs -P "$JOBS" -I {} bash -c '
-    IFS="|" read -r display files err exit exp flags <<< "{}"
-    run_one_test "$display" "$files" "$err" "$exit" "$exp" "$flags"
+    IFS="|" read -r display files err exit exp flags scont <<< "{}"
+    run_one_test "$display" "$files" "$err" "$exit" "$exp" "$flags" "$scont"
 ')
 
 # Tally results
