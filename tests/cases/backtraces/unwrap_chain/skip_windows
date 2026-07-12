@@ -1,0 +1,2 @@
+execinfo backtrace() is glibc/macOS-only; the emitted fc_dump_backtrace is a
+no-op stub on Windows (MSYS2/UCRT), so no "backtrace:" frames are printed.

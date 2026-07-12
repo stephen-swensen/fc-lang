@@ -33,6 +33,7 @@ exit_matches() {
 start_time=$(date +%s%N)
 passed=0
 failed=0
+skipped=0
 errors=""
 
 run_test() {
@@ -207,6 +208,15 @@ for milestone_dir in "$TESTDIR"/*/; do
         fc_files=$(find "$test_subdir" -name "*.fc" | sort | tr '\n' ' ')
         [ -n "$fc_files" ] || continue
 
+        # Platform skips: a skip_windows marker opts a test out on Windows —
+        # e.g. the --backtraces tests, whose frames rely on execinfo backtrace()
+        # (glibc/macOS only; a no-op stub under MSYS2/UCRT).
+        if [ -n "$IS_WINDOWS" ] && [ -f "${test_subdir}skip_windows" ]; then
+            echo "  SKIP  $test_display (windows)"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
         # Append dependency files listed in deps (one path per line, relative to project root)
         if [ -f "${test_subdir}deps" ]; then
             while IFS= read -r dep; do
@@ -249,7 +259,11 @@ elapsed_s=$(( elapsed_ms / 1000 ))
 elapsed_frac=$(( elapsed_ms % 1000 ))
 
 echo ""
-printf "%d passed, %d failed in %d.%03ds\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac"
+if [ "$skipped" -gt 0 ]; then
+    printf "%d passed, %d failed, %d skipped in %d.%03ds\n" "$passed" "$failed" "$skipped" "$elapsed_s" "$elapsed_frac"
+else
+    printf "%d passed, %d failed in %d.%03ds\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac"
+fi
 
 if [ $failed -gt 0 ]; then
     echo -e "Failed tests:\n$errors"

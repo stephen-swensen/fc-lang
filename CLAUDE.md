@@ -179,6 +179,10 @@ Each **multi-file test** is a subdirectory containing:
 - Multiple `.fc` files (e.g. `main.fc`, `lib.fc`) — all compiled together
 - `expected_exit` or `error` (no dot prefix) — the expected result
 - `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
+- `flags` (optional) — one conditional-compilation name per line, each passed as `--flag <name>`
+- `fcc_args` (optional) — literal extra `fcc` args, one per line (`#` comments skipped) — e.g. `--backtraces`
+- `expected_stderr_contains` (optional) — substring lines (fixed-string) that must each appear in the run's stderr; used by `--backtraces` tests where exact frame layout varies but key tokens are stable
+- `skip_windows` (optional) — a marker file (contents ignored) that opts the test out on Windows (MSYS2/UCRT). Used by the `--backtraces` tests: FC's backtrace frames rely on `execinfo` `backtrace()`, which is glibc/macOS-only, so the emitted `fc_dump_backtrace` is a no-op stub on Windows and prints no frames. Skipped tests are reported as `SKIP` and counted separately from pass/fail.
 
 Run with `make check` (or `make test-all`). The test runner compiles FC→C with `./fcc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
 

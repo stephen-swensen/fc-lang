@@ -6,7 +6,10 @@ let main = (args: str[]) ->
     let path = alloca("%s{tmp}/fc_test_sync.txt")
 
     // Write a payload, then force it to stable storage with sync().
-    match io.open(path, "w") with
+    // Binary mode ("wb") keeps the byte count identical across platforms —
+    // text mode on Windows would translate each '\n' to "\r\n", inflating the
+    // on-disk size past the 13 bytes read_all (which opens "rb") reads back.
+    match io.open(path, "wb") with
     | err(_) -> return 1
     | ok(wf) ->
         io.write("durable\n", wf)

@@ -35,6 +35,10 @@ export IS_WINDOWS
 start_time=$(date +%s%N)
 JOBS="${JOBS:-$(nproc)}"
 
+# Platform skips accumulate here (see the skip_windows marker check below).
+skipped=0
+skip_names=""
+
 # run_one_test outputs a single line: PASS or FAIL with details.
 # Each test writes to its own temp files keyed by slug, so no conflicts.
 run_one_test() {
@@ -157,6 +161,17 @@ for milestone_dir in "$TESTDIR"/*/; do
         fc_files=$(find "$test_subdir" -name "*.fc" | sort | tr '\n' ' ')
         [ -n "$fc_files" ] || continue
 
+        # Platform skips: a skip_windows marker opts a test out on Windows —
+        # e.g. the --backtraces tests, whose frames rely on execinfo backtrace()
+        # (glibc/macOS only; a no-op stub under MSYS2/UCRT).
+        if [ -n "$IS_WINDOWS" ] && [ -f "${test_subdir}skip_windows" ]; then
+            if [ -z "$FILTER" ] || printf '%s' "$milestone/$test_name" | grep -q "$FILTER"; then
+                skipped=$((skipped + 1))
+                skip_names="${skip_names}  SKIP  $milestone/$test_name (windows)\n"
+            fi
+            continue
+        fi
+
         if [ -f "${test_subdir}deps" ]; then
             while IFS= read -r dep; do
                 [ -n "$dep" ] || continue
@@ -219,12 +234,20 @@ while IFS= read -r line; do
     fi
 done <<< "$results"
 
+if [ -n "$skip_names" ]; then
+    echo -en "$skip_names"
+fi
+
 elapsed_ms=$(( ($(date +%s%N) - start_time) / 1000000 ))
 elapsed_s=$(( elapsed_ms / 1000 ))
 elapsed_frac=$(( elapsed_ms % 1000 ))
 
 echo ""
-printf "%d passed, %d failed in %d.%03ds (%s)\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac" "${CC:-cc}"
+if [ "$skipped" -gt 0 ]; then
+    printf "%d passed, %d failed, %d skipped in %d.%03ds (%s)\n" "$passed" "$failed" "$skipped" "$elapsed_s" "$elapsed_frac" "${CC:-cc}"
+else
+    printf "%d passed, %d failed in %d.%03ds (%s)\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac" "${CC:-cc}"
+fi
 
 if [ $failed -gt 0 ]; then
     echo -e "Failed tests:\n$fail_lines"
