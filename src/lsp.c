@@ -40,18 +40,30 @@ typedef struct {
     bool            dirty;      /* text changed since last analysis. didOpen/didChange
                                  * only set this; analysis is deferred so a burst of
                                  * keystrokes coalesces into one analyze (see lsp_main). */
-    AnalysisResult *result;     /* latest analysis; NULL until first analyze */
-    AnalysisResult *last_good;  /* most recent analysis that type-checked (result
-                                 * itself when fresh is good), retained so a
-                                 * transient parse/pass1 failure mid-typing does
-                                 * not blank type-aware queries. May alias result.
-                                 * NULL until the first good analysis. */
+    char           *unit_key;   /* owned identity of this doc's compilation unit (see
+                                 * unit_key()); the analysis is owned by the matching
+                                 * UnitEntry, shared by every doc with the same key.
+                                 * Recomputed each flush; NULL until the first. */
 } LspDoc;
 
 typedef struct {
     LspDoc *docs;
     int count, cap;
 } LspDocStore;
+
+/* One shared analysis per compilation unit. Every open document whose unit_key
+ * matches is served from this single result, so a unit is analyzed ONCE per flush
+ * regardless of how many of its files are open (the analysis already merges every
+ * open doc's live buffer). Owns its analyses; keyed by unit_key(). */
+typedef struct {
+    char           *key;        /* owned: the unit identity (see unit_key()) */
+    AnalysisResult *result;     /* latest analysis; NULL until first analyze */
+    AnalysisResult *last_good;  /* most recent analysis that type-checked (result
+                                 * itself when fresh is good), retained so a
+                                 * transient parse/pass1 failure mid-typing does
+                                 * not blank type-aware queries. May alias result.
+                                 * NULL until the first good analysis. */
+} UnitEntry;
 
 typedef struct {
     LspDocStore store;
@@ -68,6 +80,20 @@ typedef struct {
     /* Session-scoped lex cache: feed (stdlib + sibling/lsp.rsp) token arrays,
      * reused across analyses so unchanged sources aren't re-lexed each keystroke. */
     LexCache        lex_cache;
+
+    /* One analysis per compilation unit, shared by all its open documents (see
+     * UnitEntry). Editing any file re-analyzes only its unit, once — not once per
+     * open tab. */
+    UnitEntry      *units;
+    int             unit_count, unit_cap;
+
+    /* URIs we last published NON-EMPTY diagnostics to (owned). A project file that
+     * later goes clean, drops out of the unit, or is closed must be cleared with an
+     * explicit empty publish; this set is what we diff against each cycle to know
+     * which URIs need clearing. Open documents are always (re)published each cycle
+     * regardless, so they don't rely on this. */
+    char          **pub_uris;
+    int             pub_count, pub_cap;
 } LspServer;
 
 static LspDoc *store_find(LspDocStore *s, const char *uri) {
@@ -82,28 +108,37 @@ static LspDoc *store_find_by_path(LspDocStore *s, const char *path) {
     return NULL;
 }
 
-/* The analysis that answers type-aware queries (hover, definition, completion,
- * CodeLens): the fresh result whenever it actually type-checked, otherwise the
- * last one that did. This keeps overlays stable while you type through a
- * transient broken state (`let r2 = `, `... problem_01.`) instead of blanking
- * everything every other keystroke. Diagnostics deliberately do NOT use this —
- * they always come from the fresh `result`, so squiggles stay live. The stale
- * AST carries positions from an earlier revision; consumers locate by current
- * coordinates, so a line you have not touched still resolves while the line
- * under edit may simply miss (the same as a blank, never a crash). May return
- * NULL before the first good analysis. */
-static AnalysisResult *query_result(LspDoc *doc) {
-    if (doc->result && doc->result->typed) return doc->result;
-    return doc->last_good;
+static UnitEntry *unit_find(LspServer *S, const char *key) {
+    if (!key) return NULL;
+    for (int i = 0; i < S->unit_count; i++)
+        if (strcmp(S->units[i].key, key) == 0) return &S->units[i];
+    return NULL;
 }
 
-/* Free both analyses a document may own. result and last_good can alias (when
- * the freshest analysis is the good one), so free the distinct one first. */
-static void doc_free_results(LspDoc *d) {
-    if (d->last_good && d->last_good != d->result) analysis_free(d->last_good);
-    if (d->result) analysis_free(d->result);
-    d->result = NULL;
-    d->last_good = NULL;
+/* The analysis that answers type-aware queries (hover, definition, completion,
+ * CodeLens) for `doc`: its unit's fresh result whenever it actually type-checked,
+ * otherwise the last one that did. This keeps overlays stable while you type
+ * through a transient broken state (`let r2 = `, `... problem_01.`) instead of
+ * blanking everything every other keystroke. Diagnostics deliberately do NOT use
+ * this — they always come from the fresh `result`, so squiggles stay live. The
+ * stale AST carries positions from an earlier revision; consumers locate by
+ * current coordinates, so a line you have not touched still resolves while the
+ * line under edit may simply miss (the same as a blank, never a crash). May
+ * return NULL before the first good analysis. */
+static AnalysisResult *query_result(LspServer *S, LspDoc *doc) {
+    UnitEntry *u = unit_find(S, doc->unit_key);
+    if (!u) return NULL;
+    if (u->result && u->result->typed) return u->result;
+    return u->last_good;
+}
+
+/* Free both analyses a unit may own. result and last_good can alias (when the
+ * freshest analysis is the good one), so free the distinct one first. */
+static void unit_free_results(UnitEntry *u) {
+    if (u->last_good && u->last_good != u->result) analysis_free(u->last_good);
+    if (u->result) analysis_free(u->result);
+    u->result = NULL;
+    u->last_good = NULL;
 }
 
 /* ======================================================================== */
@@ -157,6 +192,28 @@ static char *uri_to_path(const char *uri) {
         } else {
             out[j++] = p[i];
         }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+/* /home/x y.fc -> file:///home/x%20y.fc  (caller frees). Percent-encodes bytes
+ * outside the unreserved set (keeping '/'), mirroring uri_to_path's decode, so a
+ * URI we synthesize for a project file that is NOT open still matches the one the
+ * editor uses for it. */
+static char *path_to_uri(const char *path) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t n = strlen(path);
+    char *out = malloc(7 + n * 3 + 1);          /* "file://" + worst-case %XX each */
+    memcpy(out, "file://", 7);
+    size_t j = 7;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)path[i];
+        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') ||
+                    c == '-' || c == '.' || c == '_' || c == '~' || c == '/';
+        if (safe) out[j++] = (char)c;
+        else { out[j++] = '%'; out[j++] = hex[c >> 4]; out[j++] = hex[c & 0xF]; }
     }
     out[j] = '\0';
     return out;
@@ -1121,9 +1178,9 @@ static Symbol *companion_of_type_sym(AnalysisResult *r, Symbol *ts) {
     return m;
 }
 
-/* Run the position lookup against a document's analysis. */
-static bool locate(LspDoc *doc, const LineIndex *idx, int line0, int char0, FindCtx *out) {
-    AnalysisResult *r = query_result(doc);
+/* Run the position lookup against a document's (unit) analysis. */
+static bool locate(LspServer *S, LspDoc *doc, const LineIndex *idx, int line0, int char0, FindCtx *out) {
+    AnalysisResult *r = query_result(S, doc);
     if (!r || !r->program) return false;
     int line1, col1;
     lsp_to_loc(idx, doc->text, line0, char0, &line1, &col1);
@@ -1153,45 +1210,48 @@ static bool locate(LspDoc *doc, const LineIndex *idx, int line0, int char0, Find
 /* Diagnostics                                                              */
 /* ======================================================================== */
 
-static void publish_diagnostics(LspServer *S, LspDoc *doc) {
+/* One diagnostic pinned to a file, aggregated across every open document's unit
+ * analysis so diagnostics can be published project-wide (not just for the open
+ * buffer). `file`/`msg` borrow arena storage owned by the source analysis. */
+typedef struct { const char *file; int line, col; const char *msg; } AggDiag;
+
+/* Emit one textDocument/publishDiagnostics for `uri`. `ds`/`n` are the diagnostics
+ * for that file (n == 0 clears it — no text needed); `text`/`text_len` supply the
+ * bytes used to map 1-based (line, byte-col) locations to LSP (line, UTF-16-char)
+ * ranges, so it must be the content that was analyzed for this file. */
+static void emit_diagnostics(LspServer *S, const char *uri, const char *text,
+                             int text_len, const AggDiag *ds, int n) {
     Arena *a = &S->msg_arena;
-    LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     JsonValue *arr = json_array(a);
-
-    if (doc->result) {
-        for (int i = 0; i < doc->result->diag_count; i++) {
-            Diagnostic *d = &doc->result->diags[i];
-            /* Keep only diagnostics for the open file (stdlib is presumed clean;
-             * NULL filename defaults to the primary document). */
-            if (d->loc.filename && strcmp(d->loc.filename, doc->path) != 0) continue;
-
-            int line1 = d->loc.line > 0 ? d->loc.line : 1;
-            int col1  = d->loc.col  > 0 ? d->loc.col  : 1;
+    if (n > 0) {
+        LineIndex idx = line_index_build(a, text, text_len);
+        for (int i = 0; i < n; i++) {
+            int line1 = ds[i].line > 0 ? ds[i].line : 1;
+            int col1  = ds[i].col  > 0 ? ds[i].col  : 1;
             int start_byte = loc_byte_offset(&idx, line1, col1);
             /* Extend the squiggle over the identifier/token at the location. */
             int end_byte = start_byte;
-            while (end_byte < doc->text_len &&
-                   (isalnum((unsigned char)doc->text[end_byte]) ||
-                    doc->text[end_byte] == '_'))
+            while (end_byte < text_len &&
+                   (isalnum((unsigned char)text[end_byte]) || text[end_byte] == '_'))
                 end_byte++;
             if (end_byte == start_byte) end_byte = start_byte + 1;
             int end_col1 = col1 + (end_byte - start_byte);
 
             int sl, sc, el, ec;
-            loc_to_lsp(&idx, doc->text, line1, col1, &sl, &sc);
-            loc_to_lsp(&idx, doc->text, line1, end_col1, &el, &ec);
+            loc_to_lsp(&idx, text, line1, col1, &sl, &sc);
+            loc_to_lsp(&idx, text, line1, end_col1, &el, &ec);
 
             JsonValue *diag = json_object(a);
             json_object_set(a, diag, "range", mk_range(a, sl, sc, el, ec));
             json_object_set(a, diag, "severity", json_num(a, 1)); /* Error */
             json_object_set(a, diag, "source", json_str(a, "fcc"));
-            json_object_set(a, diag, "message", json_str(a, d->message));
+            json_object_set(a, diag, "message", json_str(a, ds[i].msg));
             json_array_push(a, arr, diag);
         }
     }
 
     JsonValue *params = json_object(a);
-    json_object_set(a, params, "uri", json_str(a, doc->uri));
+    json_object_set(a, params, "uri", json_str(a, uri));
     json_object_set(a, params, "diagnostics", arr);
     lsp_notify(a, "textDocument/publishDiagnostics", params);
 }
@@ -1268,7 +1328,81 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
 #endif
 }
 
-/* (Re)run analysis for a document and publish diagnostics.
+/* Identity of a document's compilation unit, so docs that resolve to the SAME
+ * unit are analyzed together, once. Two docs share a unit iff they discover the
+ * same `lsp.rsp` (its listed inputs are the unit) or — with no lsp.rsp — live in
+ * the same directory (the sibling-heuristic unit). The `R:`/`D:` prefixes keep an
+ * rsp path from ever colliding with a directory path. Caller frees.
+ *
+ * On Windows the rsp/sibling discovery is compiled out, so each document is its
+ * own unit (keyed by its path) — matching the existing per-file behavior there. */
+static char *unit_key(LspDoc *doc) {
+#if defined(_WIN32)
+    size_t n = strlen(doc->path);
+    char *k = malloc(n + 3);
+    memcpy(k, "F:", 2);
+    memcpy(k + 2, doc->path, n + 1);
+    return k;
+#else
+    char *rsp = find_lsp_rsp(doc->path);
+    if (rsp) {
+        char *c = canon_path(rsp);
+        free(rsp);
+        size_t n = strlen(c);
+        char *k = malloc(n + 3);
+        memcpy(k, "R:", 2);
+        memcpy(k + 2, c, n + 1);
+        free(c);
+        return k;
+    }
+    /* Directory of doc->path (canonicalized so symlinked spellings coincide). */
+    const char *slash = strrchr(doc->path, '/');
+    int dlen = slash ? (int)(slash - doc->path) : 0;
+    char dirbuf[4096];
+    if (dlen <= 0 || dlen >= (int)sizeof dirbuf) {
+        return dup_cstr(doc->path);          /* no directory: unique key */
+    }
+    memcpy(dirbuf, doc->path, (size_t)dlen);
+    dirbuf[dlen] = '\0';
+    char *c = canon_path(dirbuf);
+    size_t n = strlen(c);
+    char *k = malloc(n + 3);
+    memcpy(k, "D:", 2);
+    memcpy(k + 2, c, n + 1);
+    free(c);
+    return k;
+#endif
+}
+
+static UnitEntry *unit_find_or_create(LspServer *S, const char *key) {
+    UnitEntry *u = unit_find(S, key);
+    if (u) return u;
+    UnitEntry e = {0};
+    e.key = dup_cstr(key);
+    DA_APPEND(S->units, S->unit_count, S->unit_cap, e);
+    return &S->units[S->unit_count - 1];
+}
+
+/* Drop every unit no open document references any more (all its files closed),
+ * freeing its analyses. Their now-absent diagnostics are cleared by the next
+ * publish cycle (the URIs fall out of the aggregate and are emptied). */
+static void unit_prune(LspServer *S) {
+    for (int i = 0; i < S->unit_count;) {
+        bool used = false;
+        for (int d = 0; d < S->store.count; d++)
+            if (S->store.docs[d].unit_key &&
+                strcmp(S->store.docs[d].unit_key, S->units[i].key) == 0) { used = true; break; }
+        if (used) { i++; continue; }
+        unit_free_results(&S->units[i]);
+        free(S->units[i].key);
+        S->units[i] = S->units[--S->unit_count];
+    }
+}
+
+/* (Re)run the analysis for one compilation unit, storing it on `u`. `doc` is the
+ * chosen primary document (any open doc in the unit) — the fresh-lexed source;
+ * every OTHER open doc in the unit is merged via the extras below using its live
+ * buffer, so this single analysis serves all of the unit's open documents.
  *
  * The compilation unit comes from one of two sources:
  *   - an `lsp.rsp` response file discovered by walking up from the open file —
@@ -1277,10 +1411,10 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
  *     identically to `fcc @lsp.rsp` on the CLI; or
  *   - (no lsp.rsp) the zero-config heuristic: the open file + its sibling .fc
  *     files (open-buffer text preferred over disk) + the full stdlib feed. */
-static void analyze_doc(LspServer *S, LspDoc *doc) {
+static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
     /* The previous fresh result is retired below, AFTER the new analysis, so it
      * can be kept as last_good when the new one fails to type-check. */
-    AnalysisResult *prev = doc->result;
+    AnalysisResult *prev = u->result;
 
     AnalysisSource *extra = NULL;
     int n = 0, cap = 0;
@@ -1422,8 +1556,8 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
         free(have_len);
     }
 
-    doc->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count,
-                          &S->lex_cache);
+    u->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count,
+                        &S->lex_cache);
 
     /* lsp.rsp existed but couldn't be used: attach one file-level diagnostic so
      * the editor explains the fallback instead of silently differing. */
@@ -1431,9 +1565,9 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
         char m[512];
         snprintf(m, sizeof m, "lsp.rsp ignored: %s", rsp_err);
         Diagnostic d;
-        d.loc = (SrcLoc){ .filename = doc->result->filename, .line = 1, .col = 1 };
-        d.message = arena_strdup(&doc->result->arena, m, (int)strlen(m));
-        DA_APPEND(doc->result->diags, doc->result->diag_count, doc->result->diag_cap, d);
+        d.loc = (SrcLoc){ .filename = u->result->filename, .line = 1, .col = 1 };
+        d.message = arena_strdup(&u->result->arena, m, (int)strlen(m));
+        DA_APPEND(u->result->diags, u->result->diag_count, u->result->diag_cap, d);
         free(rsp_err);
     }
 
@@ -1442,12 +1576,12 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
      * degraded (parse abort or pass1-gated pass2) we hold onto the prior good one
      * so type-aware queries keep answering. prev/last_good may alias, hence the
      * !=-guarded frees so nothing is freed twice or while still in use. */
-    if (doc->result->typed) {
-        if (doc->last_good && doc->last_good != prev) analysis_free(doc->last_good);
-        doc->last_good = doc->result;
-        if (prev && prev != doc->result) analysis_free(prev);
+    if (u->result->typed) {
+        if (u->last_good && u->last_good != prev) analysis_free(u->last_good);
+        u->last_good = u->result;
+        if (prev && prev != u->result) analysis_free(prev);
     } else {
-        if (prev && prev != doc->last_good) analysis_free(prev);
+        if (prev && prev != u->last_good) analysis_free(prev);
     }
 
     for (int i = 0; i < db; i++) free(disk_bufs[i]);
@@ -1461,22 +1595,183 @@ static void analyze_doc(LspServer *S, LspDoc *doc) {
     } else {
         free(flags);
     }
-
-    publish_diagnostics(S, doc);
+    /* Diagnostics are published project-wide once per flush cycle (see
+     * publish_project_diagnostics), not per-document here. */
 }
 
-/* Analyze every document whose text changed since its last analysis (and publish
- * its diagnostics). Called when the input queue drains and before answering any
- * type-aware request, so deferred edits are realized exactly once per quiet
- * point — collapsing a burst of keystrokes into a single analysis. */
-static void flush_dirty(LspServer *S) {
-    for (int i = 0; i < S->store.count; i++) {
-        LspDoc *doc = &S->store.docs[i];
-        if (doc->dirty) {
-            doc->dirty = false;
-            analyze_doc(S, doc);
+/* Publish diagnostics for EVERY file in the project — open buffer or not — so an
+ * edit that breaks (or fixes) a file the user has not opened still surfaces (or
+ * clears) there, and errors cascade to all dependent files. Each unit analysis
+ * computes diagnostics for every file in its unit, keyed by filename; here we
+ * aggregate those across all units (deduped, in case units overlap), then emit one
+ * notification per file's URI. Files that went clean, dropped out of the unit, or
+ * were closed are cleared with an explicit empty publish, diffed against
+ * S->pub_uris (the set we last published NON-EMPTY).
+ *
+ * stdlib feed files are never surfaced: presumed clean, not the user's code, and
+ * often under a read-only install path. (A stdlib file the user actually OPENED is
+ * a normal document, found by store_find_by_path, and handled as one.) */
+static void publish_project_diagnostics(LspServer *S) {
+    /* 1. Aggregate + dedup diagnostics across every unit's fresh analysis, keyed
+     *    by file. */
+    AggDiag *agg = NULL;
+    int an = 0, acap = 0;
+    for (int ui = 0; ui < S->unit_count; ui++) {
+        AnalysisResult *r = S->units[ui].result;
+        if (!r) continue;
+        for (int i = 0; i < r->diag_count; i++) {
+            /* A NULL filename defaults to that analysis's primary document. */
+            const char *file = r->diags[i].loc.filename ? r->diags[i].loc.filename
+                                                        : r->filename;
+            if (!store_find_by_path(&S->store, file)) {   /* not open: drop if stdlib */
+                bool is_std = false;
+                for (int k = 0; k < S->stdlib_count; k++)
+                    if (strcmp(S->stdlib[k].filename, file) == 0) { is_std = true; break; }
+                if (is_std) continue;
+            }
+            int line = r->diags[i].loc.line, col = r->diags[i].loc.col;
+            const char *msg = r->diags[i].message;
+            bool dup = false;
+            for (int j = 0; j < an; j++)
+                if (agg[j].line == line && agg[j].col == col &&
+                    strcmp(agg[j].file, file) == 0 && strcmp(agg[j].msg, msg) == 0) {
+                    dup = true; break;
+                }
+            if (dup) continue;
+            AggDiag ad = { file, line, col, msg };
+            DA_APPEND(agg, an, acap, ad);
         }
     }
+
+    /* 2. One notification per distinct errored file; collect its URI into the new
+     *    NON-EMPTY set `now`. */
+    char **now = NULL;
+    int now_n = 0, now_cap = 0;
+    for (int i = 0; i < an; i++) {
+        bool seen = false;                        /* file already emitted this cycle? */
+        for (int j = 0; j < i; j++)
+            if (strcmp(agg[j].file, agg[i].file) == 0) { seen = true; break; }
+        if (seen) continue;
+
+        const char *file = agg[i].file;
+        AggDiag *fd = NULL;                        /* this file's diagnostics */
+        int fn = 0, fcap = 0;
+        for (int j = i; j < an; j++)
+            if (strcmp(agg[j].file, file) == 0) DA_APPEND(fd, fn, fcap, agg[j]);
+
+        LspDoc *od = store_find_by_path(&S->store, file);
+        char *uri;
+        const char *text;
+        int tlen;
+        char *owned = NULL;
+        if (od) {                                  /* open: use its exact URI + live text */
+            uri = dup_cstr(od->uri);
+            text = od->text;
+            tlen = od->text_len;
+        } else {                                   /* not open: synthesize URI, read disk */
+            uri = path_to_uri(file);
+            owned = read_whole_file(file, &tlen);
+            text = owned;
+        }
+        if (text) {                                /* (a deleted non-open file is skipped
+                                                    * here and cleared via step 4) */
+            emit_diagnostics(S, uri, text, tlen, fd, fn);
+            DA_APPEND(now, now_n, now_cap, dup_cstr(uri));
+        }
+        free(owned);
+        free(uri);
+        free(fd);
+    }
+
+    /* 3. Every OPEN document must be (re)published each cycle: one with no
+     *    diagnostics needs an explicit empty publish to clear a prior squiggle. */
+    for (int d = 0; d < S->store.count; d++) {
+        const char *uri = S->store.docs[d].uri;
+        bool in_now = false;
+        for (int j = 0; j < now_n; j++)
+            if (strcmp(now[j], uri) == 0) { in_now = true; break; }
+        if (!in_now) emit_diagnostics(S, uri, "", 0, NULL, 0);
+    }
+
+    /* 4. Clear any file we published NON-EMPTY last cycle that is neither errored
+     *    now nor an open doc already cleared in step 3. */
+    for (int p = 0; p < S->pub_count; p++) {
+        const char *uri = S->pub_uris[p];
+        bool in_now = false;
+        for (int j = 0; j < now_n; j++)
+            if (strcmp(now[j], uri) == 0) { in_now = true; break; }
+        if (in_now) continue;
+        bool is_open = false;
+        for (int d = 0; d < S->store.count; d++)
+            if (strcmp(S->store.docs[d].uri, uri) == 0) { is_open = true; break; }
+        if (!is_open) emit_diagnostics(S, uri, "", 0, NULL, 0);
+    }
+
+    /* 5. Adopt the new NON-EMPTY set. */
+    for (int p = 0; p < S->pub_count; p++) free(S->pub_uris[p]);
+    free(S->pub_uris);
+    S->pub_uris = now;
+    S->pub_count = now_n;
+    S->pub_cap = now_cap;
+
+    free(agg);
+}
+
+/* Re-analyze every compilation unit that has a changed document, then publish
+ * diagnostics project-wide. Called when the input queue drains and before
+ * answering any type-aware request, so deferred edits are realized exactly once
+ * per quiet point — collapsing a burst of keystrokes into a single analysis.
+ *
+ * A change in one file can create OR clear errors in another file that references
+ * it — e.g. editing a shared `prelude.fc` that `main.fc` imports — so the WHOLE
+ * unit must be re-analyzed, not just the edited file. But because one analysis of
+ * a unit already merges every open document's *live* buffer, we analyze each unit
+ * ONCE (with any of its open docs as the fresh primary), not once per open tab:
+ * N tabs of the same project cost one analysis, not N. Only units containing a
+ * dirty doc are re-run; untouched units keep their result. publish_project_
+ * diagnostics then surfaces every unit's result on all its files, open or not. */
+static void flush_dirty(LspServer *S) {
+    bool any_dirty = false;
+    for (int i = 0; i < S->store.count; i++)
+        if (S->store.docs[i].dirty) { any_dirty = true; break; }
+    if (!any_dirty) return;
+
+    /* Refresh each open doc's unit identity (an lsp.rsp may have appeared/changed). */
+    for (int i = 0; i < S->store.count; i++) {
+        char *k = unit_key(&S->store.docs[i]);
+        free(S->store.docs[i].unit_key);
+        S->store.docs[i].unit_key = k;
+    }
+
+    /* Analyze each DIRTY unit once. A unit is dirty if any of its docs changed;
+     * the primary is the first open doc bearing that key (every other open doc in
+     * the unit is merged live, so the choice only affects which file NULL-located
+     * diagnostics default to). `done` guards against analyzing a unit twice when
+     * several of its docs are dirty. */
+    const char **done = NULL;
+    int dn = 0, dcap = 0;
+    for (int i = 0; i < S->store.count; i++) {
+        if (!S->store.docs[i].dirty) continue;
+        const char *key = S->store.docs[i].unit_key;
+        bool seen = false;
+        for (int j = 0; j < dn; j++)
+            if (strcmp(done[j], key) == 0) { seen = true; break; }
+        if (seen) continue;
+        DA_APPEND(done, dn, dcap, key);
+
+        LspDoc *primary = NULL;
+        for (int p = 0; p < S->store.count; p++)
+            if (S->store.docs[p].unit_key &&
+                strcmp(S->store.docs[p].unit_key, key) == 0) { primary = &S->store.docs[p]; break; }
+        if (!primary) continue;                 /* unreachable: doc i has this key */
+        analyze_unit(S, unit_find_or_create(S, key), primary);
+    }
+    free(done);
+
+    for (int i = 0; i < S->store.count; i++) S->store.docs[i].dirty = false;
+
+    unit_prune(S);                              /* drop units with no open docs */
+    publish_project_diagnostics(S);
 }
 
 /* True if more input is already waiting, so we should keep reading (and coalesce)
@@ -1555,20 +1850,38 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
     JsonValue *td = json_get(params, "textDocument");
     const char *uri = json_get_str(td, "uri");
     if (!uri) return;
+    bool removed = false;
     for (int i = 0; i < S->store.count; i++) {
         if (strcmp(S->store.docs[i].uri, uri) == 0) {
-            /* Clear diagnostics for the closed file. */
-            JsonValue *params2 = json_object(&S->msg_arena);
-            json_object_set(&S->msg_arena, params2, "uri", json_str(&S->msg_arena, uri));
-            json_object_set(&S->msg_arena, params2, "diagnostics", json_array(&S->msg_arena));
-            lsp_notify(&S->msg_arena, "textDocument/publishDiagnostics", params2);
-
             LspDoc *d = &S->store.docs[i];
-            doc_free_results(d);
-            free(d->uri); free(d->path); free(d->text);
+            free(d->uri); free(d->path); free(d->text); free(d->unit_key);
             S->store.docs[i] = S->store.docs[--S->store.count];
-            return;
+            removed = true;
+            break;
         }
+    }
+    if (!removed) return;
+
+    if (S->store.count > 0) {
+        /* The closed file may still be a unit member on disk — its last-saved
+         * content is now authoritative (any unsaved edits are discarded). Re-analyze
+         * the remaining open documents so its diagnostics reflect disk, then
+         * republish project-wide: a still-broken dependency keeps its error; a
+         * now-clean or no-longer-referenced file is cleared by the publish cycle.
+         * (Marking all dirty re-runs each affected unit once — cheap; close is rare.) */
+        for (int i = 0; i < S->store.count; i++) S->store.docs[i].dirty = true;
+        flush_dirty(S);
+    } else {
+        /* Last document closed: nothing anchors the project view, so drop every
+         * unit and clear every URI we published (incl. the just-closed file's). */
+        unit_prune(S);              /* no docs remain -> frees all unit analyses */
+        for (int p = 0; p < S->pub_count; p++)
+            emit_diagnostics(S, S->pub_uris[p], "", 0, NULL, 0);
+        for (int p = 0; p < S->pub_count; p++) free(S->pub_uris[p]);
+        free(S->pub_uris);
+        S->pub_uris = NULL;
+        S->pub_count = S->pub_cap = 0;
+        emit_diagnostics(S, uri, "", 0, NULL, 0);
     }
 }
 
@@ -1700,7 +2013,7 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
-    if (!locate(doc, &idx, (int)line, (int)ch, &hit) ||
+    if (!locate(S, doc, &idx, (int)line, (int)ch, &hit) ||
         (!hit.type && !hit.builtin && !hit.decl_site)) {
         lsp_reply(a, id, json_null(a));
         return;
@@ -1839,7 +2152,7 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
-    if (!locate(doc, &idx, (int)line, (int)ch, &hit)) {
+    if (!locate(S, doc, &idx, (int)line, (int)ch, &hit)) {
         lsp_reply(a, id, json_null(a));
         return;
     }
@@ -2054,7 +2367,7 @@ static void handle_codelens(LspServer *S, JsonValue *id, JsonValue *params) {
     const char *uri = json_get_str(td, "uri");
     LspDoc *doc = uri ? store_find(&S->store, uri) : NULL;
     JsonValue *arr = json_array(a);
-    AnalysisResult *r = doc ? query_result(doc) : NULL;
+    AnalysisResult *r = doc ? query_result(S, doc) : NULL;
     if (r && r->program) {
         LineIndex idx = line_index_build(a, doc->text, doc->text_len);
         LensCtx lc = { .a = a, .arr = arr, .idx = &idx, .src = doc->text,
@@ -2074,7 +2387,7 @@ static void handle_inlayhint(LspServer *S, JsonValue *id, JsonValue *params) {
     const char *uri = json_get_str(td, "uri");
     LspDoc *doc = uri ? store_find(&S->store, uri) : NULL;
     JsonValue *arr = json_array(a);
-    AnalysisResult *r = doc ? query_result(doc) : NULL;
+    AnalysisResult *r = doc ? query_result(S, doc) : NULL;
     if (r && r->program) {
         long lo = 0, hi = (1L << 30);
         JsonValue *range = json_get(params, "range");
@@ -2291,7 +2604,7 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     c.src = doc->text;
     c.idx = idx;
     c.file = doc->path;
-    AnalysisResult *r = query_result(doc);
+    AnalysisResult *r = query_result(S, doc);
     if (!r || !r->program) return false;
     find_in_decls(r->program->decls, r->program->decl_count, &c);
 
@@ -2555,7 +2868,7 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     for (int i = 0; i < KEYWORD_COUNT; i++)
         add_item(a, items, KEYWORDS[i], CIK_KEYWORD, NULL);
 
-    AnalysisResult *r = query_result(doc);
+    AnalysisResult *r = query_result(S, doc);
     if (r) {
         NameSet seen = {0};
 
@@ -2814,17 +3127,24 @@ int lsp_main(void) {
 
     /* Cleanup */
     for (int i = 0; i < S.store.count; i++) {
-        doc_free_results(&S.store.docs[i]);
         free(S.store.docs[i].uri);
         free(S.store.docs[i].path);
         free(S.store.docs[i].text);
+        free(S.store.docs[i].unit_key);
     }
     free(S.store.docs);
+    for (int i = 0; i < S.unit_count; i++) {
+        unit_free_results(&S.units[i]);
+        free(S.units[i].key);
+    }
+    free(S.units);
     for (int i = 0; i < S.stdlib_count; i++) {
         free((void *)S.stdlib[i].filename);
         free((void *)S.stdlib[i].text);
     }
     free(S.stdlib);
+    for (int i = 0; i < S.pub_count; i++) free(S.pub_uris[i]);
+    free(S.pub_uris);
     lexcache_free(&S.lex_cache);
     arena_free(&S.msg_arena);
 

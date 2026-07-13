@@ -97,17 +97,20 @@ static Program *parse_feed_cached(AnalysisResult *r, LexCache *cache,
                                   const Flag *flags, int flag_count, uint64_t flags_sig) {
     LexCacheEntry *e = lexcache_slot(cache, src->filename);
 
-    bool hit = false;
-    if (e && e->flags_sig == flags_sig && e->len == src->len) {
-        if (e->last_src == src->text) hit = true;               /* stable-buffer fast path */
-        else if (e->hash == fnv64(src->text, (size_t)src->len) &&
-                 memcmp(e->text, src->text, (size_t)src->len) == 0) hit = true;
-    }
+    /* A slot hits only when a same-length candidate's CONTENT matches (hash as a
+     * fast reject, memcmp to confirm). We deliberately do NOT trust pointer
+     * identity as a fast path: an open sibling's buffer is freed and re-malloc'd
+     * on every edit, and the allocator routinely hands back the just-freed address
+     * for a new same-length buffer — so a stale pointer can equal a live one that
+     * holds DIFFERENT content (e.g. `double` edited to `triple`), which would serve
+     * stale tokens and break cross-file diagnostic cascade. */
+    bool hit = e && e->flags_sig == flags_sig && e->len == src->len &&
+               e->hash == fnv64(src->text, (size_t)src->len) &&
+               memcmp(e->text, src->text, (size_t)src->len) == 0;
 
     Token *tokens;
     int tc;
     if (hit) {
-        e->last_src = src->text;
         tokens = e->tokens;
         tc = e->token_count;
     } else {
@@ -159,7 +162,6 @@ static Program *parse_feed_cached(AnalysisResult *r, LexCache *cache,
         e->flags_sig = flags_sig;
         e->hash = fnv64(owned, (size_t)src->len);
         e->len = src->len;
-        e->last_src = src->text;
         e->text = owned;
         e->tokens = tokens;
         e->token_count = tc;
@@ -290,17 +292,20 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
      * errors (see above), so this only triggers when the analysis HARD-aborted — i.e.
      * the lexer hit an unrecoverable layout error (tab, unterminated string/comment,
      * inconsistent indentation) and longjmp'd, leaving pass2_ran false and r->aborted
-     * true. In that case every node's resolved type is NULL, so hover / definition /
-     * CodeLens go empty; publish_diagnostics filters to the open file, so an abort in a
-     * *merged* sibling shows the open document NOTHING. Surface one file-level diagnostic
-     * naming the first offending file so the failure is visible, not a dead editor. */
+     * true. In that case every node's resolved type is NULL, so the OPEN document's
+     * hover / definition / CodeLens go empty; if the abort was in a *merged* sibling,
+     * nothing on the open document itself explains why. Surface one file-level
+     * diagnostic on the open document naming the first offending file so the dead
+     * overlays are explained, not a silently dead editor. (Project-wide publishing
+     * still shows the sibling's own error on the sibling — this is about the open
+     * document.) */
     if (!pass2_ran) {
         bool open_has_diag = false;
         const char *other = NULL;
         for (int i = 0; i < r->diag_count; i++) {
             const char *fn = r->diags[i].loc.filename;
-            /* A NULL filename defaults to the open document (publish_diagnostics
-             * shows it), so it already explains the silence — treat as open. */
+            /* A NULL filename defaults to the open document, so it already explains
+             * the silence — treat as open. */
             if (!fn || strcmp(fn, r->filename) == 0) { open_has_diag = true; break; }
             if (!other) other = fn;
         }

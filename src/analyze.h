@@ -53,8 +53,6 @@ typedef struct LexCacheEntry {
     uint64_t    flags_sig;   /* identity of the conditional-compile flag set */
     uint64_t    hash;        /* FNV-1a 64 of the source bytes */
     int         len;         /* source length (with hash, validates content) */
-    const char *last_src;    /* last incoming text ptr that matched (compared only,
-                              * never dereferenced; a fast path for stable buffers) */
     char       *text;        /* owned NUL-terminated copy; tokens point into it */
     Token      *tokens;      /* owned token array (NOT in any result's token_arrays) */
     int         token_count;

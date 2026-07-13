@@ -236,6 +236,154 @@ check("multi-file: main.fc resolves sibling 'prelude' module (no errors)",
 check("multi-file: prelude.fc OK (let main provided by sibling)",
       by_file.get("prelude.fc", [["?"]])[-1] == [], str(by_file.get("prelude.fc")))
 
+# --- cross-file diagnostic propagation: editing prelude.fc must refresh the
+# diagnostics of the *other* open file (main.fc) that depends on it, WITHOUT
+# main.fc itself being touched. Regression for the bug where a fix in prelude.fc
+# left a stale error on main.fc until main.fc was edited: the idle flush now
+# re-analyzes every open document when any one is dirty. Each edit below is
+# followed by a request, forcing a discrete flush so we observe one
+# publishDiagnostics per state (main.fc is never edited after didOpen). ---
+proj2 = tempfile.mkdtemp(prefix="fc_lsp_xprop_")
+PRE_OK  = "module prelude =\n    let double = (n: i32) ->\n        n * 2\n"
+PRE_BAD = "module prelude =\n    let triple = (n: i32) ->\n        n * 2\n"  # no `double`
+MAIN2   = ("import double from prelude\n\nlet main = (args: str[]) ->\n"
+           "    let y = double(21)\n    return y\n")
+with open(os.path.join(proj2, "prelude.fc"), "w") as f: f.write(PRE_OK)
+with open(os.path.join(proj2, "main.fc"),    "w") as f: f.write(MAIN2)
+def p2uri(name): return "file://" + os.path.join(proj2, name)
+def p2open(name, v, text): return note("textDocument/didOpen",
+    {"textDocument": {"uri": p2uri(name), "languageId": "fc", "version": v, "text": text}})
+def p2change(name, v, text): return note("textDocument/didChange",
+    {"textDocument": {"uri": p2uri(name), "version": v}, "contentChanges": [{"text": text}]})
+def p2hover(i, name): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": p2uri(name)}, "position": {"line": 0, "character": 0}})
+xp = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    p2open("main.fc", 1, MAIN2),
+    p2open("prelude.fc", 1, PRE_OK),
+    p2hover(2, "main.fc"),                 # flush #1: both clean -> main.fc []
+    p2change("prelude.fc", 2, PRE_BAD),    # break the member main.fc imports
+    p2hover(3, "prelude.fc"),              # flush #2: main.fc's import now errors
+    p2change("prelude.fc", 3, PRE_OK),     # restore it (main.fc NOT touched)
+    p2hover(4, "prelude.fc"),              # flush #3: main.fc's error must clear
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, xbf, _, _ = run_session(xp)
+xmain = xbf.get("main.fc", [])
+# Editing only prelude.fc republished main.fc's diagnostics 3 times (open, break,
+# fix). On the buggy server main.fc was analyzed only at didOpen -> 1 publish.
+check("cross-file: prelude.fc edits republish the dependent main.fc's diagnostics",
+      len(xmain) >= 3, str(xmain))
+check("cross-file: breaking prelude.fc surfaces an error on main.fc",
+      any(len(d) > 0 for d in xmain), str(xmain))
+check("cross-file: fixing prelude.fc clears main.fc's error without touching main.fc",
+      xmain and xmain[-1] == [], str(xmain))
+
+# --- project-wide diagnostics: a file that is NOT open in the editor but is part
+# of the compilation unit must still receive diagnostics (and have them cascade on
+# edits to the file it depends on). Here ONLY lib.fc is opened; app.fc lives on
+# disk and depends on lib.fc. Breaking lib.fc must surface an error on app.fc even
+# though app.fc was never opened; fixing lib.fc must clear it. ---
+proj3 = tempfile.mkdtemp(prefix="fc_lsp_pw_")
+LIB_OK  = "module lib =\n    let val = (n: i32) ->\n        n * 2\n"
+LIB_BAD = "module lib =\n    let valx = (n: i32) ->\n        n * 2\n"   # `val` renamed away
+APP     = ("import val from lib\n\nlet main = (args: str[]) ->\n"
+           "    let y = val(21)\n    return y\n")
+with open(os.path.join(proj3, "lib.fc"), "w") as f: f.write(LIB_OK)
+with open(os.path.join(proj3, "app.fc"), "w") as f: f.write(APP)   # never opened
+def p3uri(name): return "file://" + os.path.join(proj3, name)
+def p3open(name, v, text): return note("textDocument/didOpen",
+    {"textDocument": {"uri": p3uri(name), "languageId": "fc", "version": v, "text": text}})
+def p3change(name, v, text): return note("textDocument/didChange",
+    {"textDocument": {"uri": p3uri(name), "version": v}, "contentChanges": [{"text": text}]})
+def p3hover(i, name): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": p3uri(name)}, "position": {"line": 0, "character": 0}})
+pw = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    p3open("lib.fc", 1, LIB_OK),           # open ONLY lib.fc; app.fc stays on disk
+    p3hover(2, "lib.fc"),                   # flush #1: app.fc resolves `val` -> clean
+    p3change("lib.fc", 2, LIB_BAD),         # rename the member app.fc imports
+    p3hover(3, "lib.fc"),                   # flush #2: app.fc (unopened) must error
+    p3change("lib.fc", 3, LIB_OK),          # restore it
+    p3hover(4, "lib.fc"),                   # flush #3: app.fc's error must clear
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, pwbf, _, _ = run_session(pw)
+papp = pwbf.get("app.fc", [])
+# app.fc is never opened, yet the server publishes diagnostics for it: absent while
+# clean (flush #1 publishes only the open lib.fc), an error once lib.fc breaks, and
+# an explicit clear once lib.fc is fixed.
+check("project-wide: an unopened dependent file receives an error when its dep breaks",
+      any(len(d) > 0 for d in papp), str(papp))
+check("project-wide: the unopened dependent's error is cleared when the dep is fixed",
+      papp and papp[-1] == [], str(papp))
+# lib.fc itself is well-formed throughout (only app.fc's import breaks), so its own
+# stream is clean the whole time — the error is attributed to the right file.
+check("project-wide: the edited (open) file stays clean; the error lands on the dependent",
+      all(d == [] for d in pwbf.get("lib.fc", [[]])), str(pwbf.get("lib.fc")))
+
+# --- project-wide: a non-open file with its OWN pre-existing error is surfaced as
+# soon as a sibling is opened (not only after an edit). ---
+proj4 = tempfile.mkdtemp(prefix="fc_lsp_pw2_")
+with open(os.path.join(proj4, "broken.fc"), "w") as f:
+    f.write("module broken =\n    let f = (n: i32) ->\n        n + n\n    let g = nope\n")  # `nope` undefined
+with open(os.path.join(proj4, "clean.fc"), "w") as f:
+    f.write("let main = (args: str[]) ->\n    return 0\n")
+pw2 = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + os.path.join(proj4, "clean.fc"),
+         "languageId": "fc", "version": 1, "text": open(os.path.join(proj4, "clean.fc")).read()}}),
+    req(2, "textDocument/hover", {"textDocument": {"uri": "file://" + os.path.join(proj4, "clean.fc")},
+         "position": {"line": 0, "character": 0}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, pw2bf, _, _ = run_session(pw2)
+check("project-wide: an unopened sibling's own pre-existing error is surfaced on open",
+      any(len(d) > 0 for d in pw2bf.get("broken.fc", [])), str(pw2bf.get("broken.fc")))
+check("project-wide: the opened clean file has no diagnostics of its own",
+      pw2bf.get("clean.fc", [["?"]])[-1] == [], str(pw2bf.get("clean.fc")))
+
+# --- didClose with project-wide diagnostics: closing a file that still has an
+# error and is still a unit member must NOT hide the error (it is republished for
+# the now-unopened file); closing the LAST document clears everything. ---
+proj5 = tempfile.mkdtemp(prefix="fc_lsp_close_")
+with open(os.path.join(proj5, "err.fc"), "w") as f:
+    f.write("module err =\n    let g = nope\n")          # `nope` undefined -> err.fc errors
+with open(os.path.join(proj5, "ok.fc"), "w") as f:
+    f.write("let main = (args: str[]) ->\n    return 0\n")
+def c5uri(name): return "file://" + os.path.join(proj5, name)
+def c5open(name): return note("textDocument/didOpen", {"textDocument": {
+    "uri": c5uri(name), "languageId": "fc", "version": 1,
+    "text": open(os.path.join(proj5, name)).read()}})
+def c5close(name): return note("textDocument/didClose",
+    {"textDocument": {"uri": c5uri(name)}})
+cl5 = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    c5open("ok.fc"),
+    c5open("err.fc"),
+    req(2, "textDocument/hover", {"textDocument": {"uri": c5uri("ok.fc")},   # flush: err.fc errors
+        "position": {"line": 0, "character": 0}}),
+    c5close("err.fc"),          # still a broken unit member on disk -> error must persist
+    c5close("ok.fc"),           # last document closed -> clear everything
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, c5bf, _, _ = run_session(cl5)
+cerr = c5bf.get("err.fc", [])
+# err.fc: errored while open, STILL errored right after it was closed (index 1),
+# then cleared ([]) when the final document closed.
+check("didClose: a still-broken, still-referenced closed file keeps its error",
+      len(cerr) >= 2 and cerr[0] != [] and cerr[1] != [], str(cerr))
+check("didClose: closing the last document clears project-wide diagnostics",
+      cerr and cerr[-1] == [], str(cerr))
+
 # --- stdlib feed: every module resolves (regression for the hardcoded list) ---
 sd = tempfile.mkdtemp(prefix="fc_lsp_std_")
 sprog = ("import io from std::\nimport random from std::\nimport text from std::\n\n"
@@ -760,6 +908,40 @@ _, _, bbf, _, _ = run_session(open_main_session(bp))
 bmsgs = bbf.get("main.fc", [["?"]])[-1]
 check("broken lsp.rsp surfaces an 'lsp.rsp ignored' diagnostic (fallback)",
       any("lsp.rsp ignored" in m for m in bmsgs), str(bmsgs))
+
+# 4) project-wide diagnostics through an lsp.rsp unit (the euler-fc setup): open
+# ONLY lib.fc; app.fc is a unit member via the rsp glob but never opened. Breaking
+# lib.fc must surface app.fc's resulting error even though app.fc is not open, and
+# fixing lib.fc must clear it — the lsp.rsp path, distinct from the sibling glob. ---
+pwr = tempfile.mkdtemp(prefix="fc_lsp_rsp_pw_")
+rwrite(os.path.join(pwr, "lsp.rsp"), "*.fc\n")
+rwrite(os.path.join(pwr, "lib.fc"), LIB_OK)          # reused from the heuristic test
+rwrite(os.path.join(pwr, "app.fc"), APP)             # imports `val` from lib; not opened
+def pwr_uri(name): return "file://" + os.path.join(pwr, name)
+def pwr_open(v, text): return note("textDocument/didOpen",
+    {"textDocument": {"uri": pwr_uri("lib.fc"), "languageId": "fc", "version": v, "text": text}})
+def pwr_change(v, text): return note("textDocument/didChange",
+    {"textDocument": {"uri": pwr_uri("lib.fc"), "version": v}, "contentChanges": [{"text": text}]})
+def pwr_hover(i): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": pwr_uri("lib.fc")}, "position": {"line": 0, "character": 0}})
+pwrs = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    pwr_open(1, LIB_OK),
+    pwr_hover(2),                    # flush #1: app.fc resolves `val` -> clean
+    pwr_change(2, LIB_BAD),
+    pwr_hover(3),                    # flush #2: unopened app.fc errors
+    pwr_change(3, LIB_OK),
+    pwr_hover(4),                    # flush #3: app.fc clears
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+_, _, pwrbf, _, _ = run_session(pwrs)
+pwrapp = pwrbf.get("app.fc", [])
+check("lsp.rsp project-wide: an unopened unit member errors when its dep breaks",
+      any(len(d) > 0 for d in pwrapp), str(pwrapp))
+check("lsp.rsp project-wide: the unopened member's error clears when the dep is fixed",
+      pwrapp and pwrapp[-1] == [], str(pwrapp))
 
 # --- built-in intrinsic hover: alloc/alloca/free/some/none/default/sizeof/
 # alignof/assert/atomics and the stdin/stdout/stderr globals are not user
