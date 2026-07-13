@@ -217,6 +217,46 @@ unchanged.
   confirm the capture-a-pointer idiom composes (it should: same as capturing any `let` pointer,
   programmer owns the lifetime).
 
+## Discarded pure value as a no-op error — extend the self-assignment rule
+
+Surfaced 2026-07-12 by a hand-written `factorial` whose `loop` had no `break`: the arm
+`| 0 -> product` was intended to exit the loop with `product`, but a `loop`'s value comes only
+from `break v` (`pass2.c:6632`), so the arm's value was silently discarded, the loop typed
+`void`, and the function inferred `-> void`. The compiler caught it only at the *use* site
+(`cannot bind void expression to 'f'`); at the definition it was silent, because a breakless
+`loop` is the blessed intentional-infinite-loop idiom (`pass2.c:720`) and a void-returning
+function is legal. No "did you forget `break`?" heuristic is wanted — that is warning-shaped,
+and FC has exactly one diagnostic severity (`diag.c` / CLAUDE.md).
+
+There is, however, a *sound* error consistent with FC's existing precedent: **self-assignment
+`x = x` is an error because it is provably a no-op** (`pass2.c`, "self-assignment of 'x' has no
+effect"). A **discarded, statically-effect-free value** is the same category — `| 0 -> product`
+computes a value and throws it away. Today discards are legal C-style for *any* non-result type
+(only `T!` results are guarded — `check_result_ignore`, `pass2.c:1208`, comment at :1207); the
+proposal narrows that to reject discards that are *provably pure*, so the mistake fails the
+build while side-effecting discards (a byte count, a call) stay legal.
+
+Not a one-liner — three things to settle before it's sound:
+
+- **Purity predicate.** Sound only over statically-effect-free expressions: literals,
+  identifiers, field access, casts, `&x`, wrapping arithmetic/comparison. Everything that can
+  abort or mutate is *not* pure and must stay legal discarded — `x!` (unwrap abort), `arr[i]`
+  (bounds abort), `checked …`/guards (overflow abort), assignment, and any call.
+- **Per-arm, with discard propagation.** The whole `match` in the factorial is *not* pure — its
+  `| _ ->` arm mutates `n` via `defer` — so a whole-expression purity check wouldn't fire. The
+  check must propagate "this position is discarded" into match/if arm tails and flag the pure
+  arm (`| 0 -> product`) individually. That plumbing is the bulk of the work.
+- **Diagnostic + the intentional-no-op escape.** An arm that deliberately does nothing is
+  written `void(...)` (the blessed void-typing spelling — *not* bare `()`); the message should
+  name it: "value computed but discarded; wrap in `void(...)` for an intentional no-op arm, or
+  `break`/return it." Mirror the self-assignment wording.
+
+Blast radius is a new error class over shared pass2 code — validate across the full suite +
+stdlib + the sibling euler-fc before trusting the false-positive rate. Rare-mistake / fiddly-win,
+hence backlog, not blocking. (The `never`/bottom-type alternative — typing a breakless loop
+`never` à la Rust `!` / Zig `noreturn` — is a much larger type-system change and, absent
+unreachable-code detection, would make this *more* silent, not less; not pursued.)
+
 ---
 
 ## Editor / LSP server (`fcc --lsp`)
