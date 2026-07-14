@@ -1,0 +1,7 @@
+import fixint from std::
+
+let main = (args: str[]) ->
+    // signed add overflow (max + 1)
+    let smax = fixint.i256.parse("57896044618658097711785492504343953926634992332820282019728792003956564819967")!
+    let _r = fixint.i256.checked_add(smax, fixint.i256.from_i64(1i64))
+    0

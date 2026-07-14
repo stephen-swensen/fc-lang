@@ -245,6 +245,17 @@ module fixint =
             if a[i] != 0u32 then yes = false
         yes
 
+    // Given a 2n-limb magnitude `full` = |x| * |y|, does the product fit a
+    // signed n-limb result whose sign is `neg_result`? A non-negative result
+    // fits when full < 2^(n*32-1); a negative result also admits full ==
+    // 2^(n*32-1) (the value `min`).
+    private let limbs_signed_mul_fits = (full: u32[], neg_result: bool) ->
+        let n = full.len / 2
+        let high_zero = limbs_is_zero(full[n..full.len])
+        let low_top_clear = (full[n - 1] >> 31) == 0u32
+        if neg_result then high_zero && (low_top_clear || limbs_is_min_mag(full[0..n]))
+        else high_zero && low_top_clear
+
     // Value of an ASCII digit in the given radix, or -1 if it is not a digit
     // (or not valid for that radix).
     private let digit_val = (c: u8, radix: u32) ->
@@ -428,6 +439,29 @@ module fixint =
             limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
             { q, r }
 
+        // a + b, aborting on overflow past 128 bits.
+        let checked_add = (a: u128, b: u128) ->
+            let r = default(u128)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            assert(c == 0u32)
+            r
+
+        // a - b, aborting on underflow (a < b).
+        let checked_sub = (a: u128, b: u128) ->
+            let r = default(u128)
+            let bor = limbs_sub(r.limbs, a.limbs, b.limbs)
+            assert(bor == 0u32)
+            r
+
+        // a * b, aborting on overflow past 128 bits.
+        let checked_mul = (a: u128, b: u128) ->
+            let full = u32[8] { }
+            limbs_mul_full(full, a.limbs, b.limbs)
+            assert(limbs_is_zero(full[4..8]))
+            let r = default(u128)
+            limbs_copy(r.limbs, full[0..4])
+            r
+
         // Parse s as an unsigned decimal integer.
         // returns: u128! — ok(value), err(parse.invalid) on empty / bad digit,
         //   err(parse.overflow) past 128 bits.
@@ -562,6 +596,29 @@ module fixint =
             limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
             { q, r }
 
+        // a + b, aborting on overflow past 256 bits.
+        let checked_add = (a: u256, b: u256) ->
+            let r = default(u256)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            assert(c == 0u32)
+            r
+
+        // a - b, aborting on underflow (a < b).
+        let checked_sub = (a: u256, b: u256) ->
+            let r = default(u256)
+            let bor = limbs_sub(r.limbs, a.limbs, b.limbs)
+            assert(bor == 0u32)
+            r
+
+        // a * b, aborting on overflow past 256 bits.
+        let checked_mul = (a: u256, b: u256) ->
+            let full = u32[16] { }
+            limbs_mul_full(full, a.limbs, b.limbs)
+            assert(limbs_is_zero(full[8..16]))
+            let r = default(u256)
+            limbs_copy(r.limbs, full[0..8])
+            r
+
         // Parse s as an unsigned decimal integer.
         // returns: u256! — ok(value), err(parse.invalid) on empty / bad digit,
         //   err(parse.overflow) past 256 bits.
@@ -689,6 +746,29 @@ module fixint =
             limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
             { q, r }
 
+        // a + b, aborting on overflow past 512 bits.
+        let checked_add = (a: u512, b: u512) ->
+            let r = default(u512)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            assert(c == 0u32)
+            r
+
+        // a - b, aborting on underflow (a < b).
+        let checked_sub = (a: u512, b: u512) ->
+            let r = default(u512)
+            let bor = limbs_sub(r.limbs, a.limbs, b.limbs)
+            assert(bor == 0u32)
+            r
+
+        // a * b, aborting on overflow past 512 bits.
+        let checked_mul = (a: u512, b: u512) ->
+            let full = u32[32] { }
+            limbs_mul_full(full, a.limbs, b.limbs)
+            assert(limbs_is_zero(full[16..32]))
+            let r = default(u512)
+            limbs_copy(r.limbs, full[0..16])
+            r
+
         // Parse s as an unsigned decimal integer.
         // returns: u512! — ok(value), err(parse.invalid) on empty / bad digit,
         //   err(parse.overflow) past 512 bits.
@@ -800,6 +880,46 @@ module fixint =
             let qf = if an != bn then i128.neg(q) else q
             let rf = if an then i128.neg(r) else r
             { qf, rf }
+
+        // a + b, aborting on signed overflow.
+        let checked_add = (a: i128, b: i128) ->
+            let r = i128.add(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa == limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa))
+            r
+
+        // a - b, aborting on signed overflow.
+        let checked_sub = (a: i128, b: i128) ->
+            let r = i128.sub(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa != limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa))
+            r
+
+        // a * b, aborting on signed overflow.
+        let checked_mul = (a: i128, b: i128) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i128.neg(a) else a
+            let ub = if bn then i128.neg(b) else b
+            let full = u32[8] { }
+            limbs_mul_full(full, ua.limbs, ub.limbs)
+            assert(limbs_signed_mul_fits(full, an != bn))
+            i128.mul(a, b)
+
+        // -a, aborting when a is min (it has no positive counterpart).
+        let checked_neg = (a: i128) ->
+            assert(!limbs_is_min_mag(a.limbs))
+            i128.neg(a)
+
+        // |a|, aborting when a is min.
+        let checked_abs = (a: i128) ->
+            assert(!limbs_is_min_mag(a.limbs))
+            i128.abs(a)
+
+        // a / b, aborting on min / -1 overflow (and on b == 0, via div).
+        let checked_div = (a: i128, b: i128) ->
+            assert(!(limbs_is_min_mag(a.limbs) && b == i128.from_i64(-1i64)))
+            i128.div(a, b)
 
         let and = (a: i128, b: i128) ->
             let r = default(i128)
@@ -963,6 +1083,46 @@ module fixint =
             let rf = if an then i256.neg(r) else r
             { qf, rf }
 
+        // a + b, aborting on signed overflow.
+        let checked_add = (a: i256, b: i256) ->
+            let r = i256.add(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa == limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa))
+            r
+
+        // a - b, aborting on signed overflow.
+        let checked_sub = (a: i256, b: i256) ->
+            let r = i256.sub(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa != limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa))
+            r
+
+        // a * b, aborting on signed overflow.
+        let checked_mul = (a: i256, b: i256) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i256.neg(a) else a
+            let ub = if bn then i256.neg(b) else b
+            let full = u32[16] { }
+            limbs_mul_full(full, ua.limbs, ub.limbs)
+            assert(limbs_signed_mul_fits(full, an != bn))
+            i256.mul(a, b)
+
+        // -a, aborting when a is min (it has no positive counterpart).
+        let checked_neg = (a: i256) ->
+            assert(!limbs_is_min_mag(a.limbs))
+            i256.neg(a)
+
+        // |a|, aborting when a is min.
+        let checked_abs = (a: i256) ->
+            assert(!limbs_is_min_mag(a.limbs))
+            i256.abs(a)
+
+        // a / b, aborting on min / -1 overflow (and on b == 0, via div).
+        let checked_div = (a: i256, b: i256) ->
+            assert(!(limbs_is_min_mag(a.limbs) && b == i256.from_i64(-1i64)))
+            i256.div(a, b)
+
         let and = (a: i256, b: i256) ->
             let r = default(i256)
             limbs_and(r.limbs, a.limbs, b.limbs)
@@ -1118,6 +1278,46 @@ module fixint =
             let qf = if an != bn then i512.neg(q) else q
             let rf = if an then i512.neg(r) else r
             { qf, rf }
+
+        // a + b, aborting on signed overflow.
+        let checked_add = (a: i512, b: i512) ->
+            let r = i512.add(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa == limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa))
+            r
+
+        // a - b, aborting on signed overflow.
+        let checked_sub = (a: i512, b: i512) ->
+            let r = i512.sub(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa != limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa))
+            r
+
+        // a * b, aborting on signed overflow.
+        let checked_mul = (a: i512, b: i512) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i512.neg(a) else a
+            let ub = if bn then i512.neg(b) else b
+            let full = u32[32] { }
+            limbs_mul_full(full, ua.limbs, ub.limbs)
+            assert(limbs_signed_mul_fits(full, an != bn))
+            i512.mul(a, b)
+
+        // -a, aborting when a is min (it has no positive counterpart).
+        let checked_neg = (a: i512) ->
+            assert(!limbs_is_min_mag(a.limbs))
+            i512.neg(a)
+
+        // |a|, aborting when a is min.
+        let checked_abs = (a: i512) ->
+            assert(!limbs_is_min_mag(a.limbs))
+            i512.abs(a)
+
+        // a / b, aborting on min / -1 overflow (and on b == 0, via div).
+        let checked_div = (a: i512, b: i512) ->
+            assert(!(limbs_is_min_mag(a.limbs) && b == i512.from_i64(-1i64)))
+            i512.div(a, b)
 
         let and = (a: i512, b: i512) ->
             let r = default(i512)
