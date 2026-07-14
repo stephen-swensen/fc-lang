@@ -1,0 +1,74 @@
+import fixint from std::
+
+let h256 = (s: const str) -> fixint.u256.parse_hex(s)!
+
+let main = (args: str[]) ->
+    // ---- from_u64 / try_to_u64 ----
+    let x = fixint.u256.from_u64(0xdeadbeefcafef00du64)
+    assert(fixint.u256.try_to_u64(x)! == 0xdeadbeefcafef00du64)
+    // value that exceeds u64 -> none
+    let big = fixint.u256.shl(fixint.u256.from_u64(1u64), 64u32)   // 2^64
+    assert(fixint.u256.try_to_u64(big).is_none)
+    // exactly u64 max fits
+    assert(fixint.u256.try_to_u64(fixint.u256.from_u64(0xFFFFFFFFFFFFFFFFu64))! == 0xFFFFFFFFFFFFFFFFu64)
+
+    // ---- decimal parse: success (u256 max) + to_str round-trip ----
+    let mx = fixint.u256.parse("115792089237316195423570985008687907853269984665640564039457584007913129639935")!
+    let mxs = fixint.u256.to_str(mx)
+    assert(mxs == "115792089237316195423570985008687907853269984665640564039457584007913129639935")
+    free(mxs)
+    // one past u256 max -> overflow
+    assert(fixint.u256.parse("115792089237316195423570985008687907853269984665640564039457584007913129639936") == err(fixint.u256, fixint.parse.overflow))
+
+    // leading zeros ok
+    let lz = fixint.u256.parse("00000000123")!
+    let lzs = fixint.u256.to_str(lz)
+    assert(lzs == "123")
+    free(lzs)
+    // zero formats as "0"
+    let zs = fixint.u256.to_str(default(fixint.u256))
+    assert(zs == "0")
+    free(zs)
+    let zh = fixint.u256.to_hex(default(fixint.u256))
+    assert(zh == "0")
+    free(zh)
+
+    // ---- invalid inputs -> err(parse.invalid) ----
+    assert(fixint.u256.parse("") == err(fixint.u256, fixint.parse.invalid))
+    assert(fixint.u256.parse("12 3") == err(fixint.u256, fixint.parse.invalid))
+    assert(fixint.u256.parse("12a3") == err(fixint.u256, fixint.parse.invalid))  // 'a' not decimal
+    assert(fixint.u256.parse("-5") == err(fixint.u256, fixint.parse.invalid))
+    assert(fixint.u256.parse_hex("") == err(fixint.u256, fixint.parse.invalid))
+    assert(fixint.u256.parse_hex("0xff") == err(fixint.u256, fixint.parse.invalid))  // no 0x prefix
+    assert(fixint.u256.parse_hex("g1") == err(fixint.u256, fixint.parse.invalid))
+
+    // ---- hex round-trip (upper accepted, lower emitted) ----
+    let h = h256("DEADBEEF")
+    let hs = fixint.u256.to_hex(h)
+    assert(hs == "deadbeef")
+    free(hs)
+    let ds = fixint.u256.to_str(h)
+    assert(ds == "3735928559")
+    free(ds)
+
+    // ---- u128 boundary ----
+    let m128 = fixint.u128.parse("340282366920938463463374607431768211455")!   // 2^128-1
+    let m128h = fixint.u128.to_hex(m128)
+    assert(m128h == "ffffffffffffffffffffffffffffffff")
+    free(m128h)
+    assert(fixint.u128.parse("340282366920938463463374607431768211456") == err(fixint.u128, fixint.parse.overflow))  // 2^128
+    // u128 mul_wide: (2^64-1)^2
+    let f = fixint.u128.from_u64(0xFFFFFFFFFFFFFFFFu64)
+    assert(fixint.u128.mul_wide(f, f) == h256("fffffffffffffffe0000000000000001"))
+
+    // ---- u512: parse, wrap-mul + to_hex, add-carry across full width ----
+    let b512 = fixint.u512.parse("3273390607896141870013189696827599152216642046043064789483291368096133796520466644120586287749475142159574591980830055674857820585342977061241657241657")!
+    let b512h = fixint.u512.to_hex(fixint.u512.mul(b512, fixint.u512.from_u64(1000u64)))
+    assert(b512h == "3e800000000000000000000000000000000000000000000000000000000003e80000000000000000000000000000000000000000000000000000000000bc5ea8")
+    free(b512h)
+    // (2^512 - 1) + 1 wraps to 0 with carry
+    let max512 = fixint.u512.parse_hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")!
+    let { s, carry } = fixint.u512.add_carry(max512, fixint.u512.from_u64(1u64))
+    assert(fixint.u512.is_zero(s))
+    assert(carry)
+    0

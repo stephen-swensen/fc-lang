@@ -2802,12 +2802,16 @@ static void emit_expr(Expr *e, FILE *out) {
                 snprintf(mask_buf, sizeof(mask_buf), "((int)(sizeof(size_t)*8)-1)");
                 mask_expr = mask_buf;
             }
-            if (op == TOK_LTLT && (type_is_signed(rt) || type_is_subint(rt))) {
+            if (op == TOK_LTLT) {
                 /* Left shift through the unsigned counterpart, then cast back to
                  * the result type: makes signed shift well-defined (no overflow
                  * UB) and truncates narrow results that would otherwise promote
                  * to int (200u8 << 1 observes as 144, not 400). Wide unsigned
-                 * types fall to the plain branch below — already full-width. */
+                 * types go through the same form: the cast is idempotent for a
+                 * variable but is what gives an unsigned *literal* left operand
+                 * its type — `1u32 << 31` must be `(uint32_t)1 << 31`, not the
+                 * bare `1 << 31`, which is int-overflow UB (and wrong where int
+                 * is 16-bit). */
                 const char *ut = unsigned_counterpart(rt);
                 fprintf(out, "(");
                 emit_type(rt, out);

@@ -1,0 +1,42 @@
+import fixint from std::
+
+let h = (s: const str) -> fixint.u256.parse_hex(s)!
+
+let main = (args: str[]) ->
+    let a = h("123456789abcdef0fedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0")
+    let b = h("fedcba9876543210")
+
+    // exact quotient/remainder against a known oracle
+    assert(fixint.u256.div(a, b) == h("1249249249249238ec687d6343eb1a20a2ded90d791fbca5"))
+    assert(fixint.u256.rem(a, b) == h("97502fdf0adadda0"))
+    let { q, r } = fixint.u256.divmod(a, b)
+    assert(q == fixint.u256.div(a, b))
+    assert(r == fixint.u256.rem(a, b))
+
+    // division identity: q*b + r == a, and r < b
+    assert(fixint.u256.add(fixint.u256.mul(q, b), r) == a)
+    assert(fixint.u256.cmp(r, b) == -1)
+
+    // edge cases
+    assert(fixint.u256.is_zero(fixint.u256.div(b, a)))          // divide by larger -> 0
+    assert(fixint.u256.rem(b, a) == b)                          // ... remainder is the dividend
+    assert(fixint.u256.div(a, fixint.u256.from_u64(1u64)) == a) // divide by one
+    assert(fixint.u256.div(a, a) == fixint.u256.from_u64(1u64)) // divide by self
+    assert(fixint.u256.is_zero(fixint.u256.rem(a, a)))
+
+    // u128 width: identity holds
+    let c = fixint.u128.parse_hex("deadbeefcafebabe0123456789abcdef")!
+    let d = fixint.u128.from_u64(0x1000000007u64)
+    let { cq, cr } = fixint.u128.divmod(c, d)
+    assert(fixint.u128.add(fixint.u128.mul(cq, d), cr) == c)
+    assert(fixint.u128.cmp(cr, d) == -1)
+
+    // u512 width: (x*y + z) / y == x with remainder z (z < y)
+    let y = fixint.u512.parse("123456789012345678901234567890")!
+    let x = fixint.u512.parse("99999999999999999999999999999999999999999999")!
+    let z = fixint.u512.from_u64(42u64)
+    let n = fixint.u512.add(fixint.u512.mul(x, y), z)
+    let { xq, xr } = fixint.u512.divmod(n, y)
+    assert(xq == x)
+    assert(xr == z)
+    0

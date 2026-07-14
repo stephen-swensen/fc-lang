@@ -1,0 +1,19 @@
+// A wide-unsigned literal used as a left-shift operand must carry its unsigned
+// type into the emitted C: `1u32 << 31` is `(uint32_t)1 << 31`, not the bare
+// `1 << 31`, which is signed int-overflow UB (and computes the wrong value where
+// int is 16-bit). Mutable shift amounts force the runtime codegen path rather
+// than const-eval.
+let main = (args: str[]) ->
+    let mut sh = 0u32
+    sh = sh + 31u32
+    assert((1u32 << sh) == 0x80000000u32)              // top bit of u32
+    assert((2u32 << sh) == 0u32)                       // 2 << 31 wraps to 0
+    assert((3u32 << (sh - 1u32)) == 0xC0000000u32)     // 3 << 30
+
+    let mut sh64 = 0u32
+    sh64 = sh64 + 63u32
+    assert((1u64 << sh64) == 0x8000000000000000u64)    // top bit of u64
+    assert((2u64 << sh64) == 0u64)
+
+    assert((1u16 << (sh - 16u32)) == 0x8000u16)        // sub-int path (u16)
+    0

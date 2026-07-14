@@ -5638,7 +5638,7 @@ All standard library modules live in the `std::` namespace and are written in re
 
 **Error contract.** Fallible *operations* return results (`T!`/`void!`); *predicates* (`exists`, `eof`, …) return `bool`; genuine *absence* (`env`, `index_of`, `data`'s `get`/`pop`) stays `T?`. On failure, the branchable platform conditions arrive as **named FC errors** declared in per-module error groups (`io.file.not_found`, `net.conn.refused`, `text.parse.invalid`) — portable across POSIX errno and Windows error codes, matchable in patterns, rendered by `error_name` and `--backtraces`. A platform code without a curated name passes through **raw**, so nothing is ever lost: a code at or above 65536 is a named FC condition, below it is the platform's own number (interpreted per call, printable as-is). The mapping compares against extern consts supplied by the platform's own headers, so no numbers are hardcoded anywhere.
 
-**Allocation failure aborts.** Stdlib functions that heap-allocate internally (`read_all`, `list_dir`, `text.copy`/`split`/`join`/`to_upper`/`to_lower`, `data`'s containers) unwrap their allocations with `alloc(...)!` and **abort** if the allocator fails — out-of-memory is not reported through the result channel. Allocation failure is one bit with no discriminable reason (`alloc` is `T?`, not `T!` — see §Heap Allocation), so a function's `err` always means its *operation* failed, never that memory ran out. This is the Rust default-allocator school; callers who need fallible allocation allocate their own buffers with `alloc` and match on it.
+**Allocation failure aborts.** Stdlib functions that heap-allocate internally (`read_all`, `list_dir`, `text.copy`/`split`/`join`/`to_upper`/`to_lower`, `fixint`'s `to_str`/`to_hex`, `data`'s containers) unwrap their allocations with `alloc(...)!` and **abort** if the allocator fails — out-of-memory is not reported through the result channel. Allocation failure is one bit with no discriminable reason (`alloc` is `T?`, not `T!` — see §Heap Allocation), so a function's `err` always means its *operation* failed, never that memory ran out. This is the Rust default-allocator school; callers who need fallible allocation allocate their own buffers with `alloc` and match on it.
 
 ## std::io
 
@@ -5653,6 +5653,20 @@ Environment variables, process control, wall-clock time, and sleep. Mostly pure 
 ## std::math
 
 Common mathematical functions wrapping C11 `math.h`, all operating on `f64` (on Linux, link with `-lm`). Includes constants, arithmetic, rounding, trigonometry, exponential/logarithmic, and floating-point classification.
+
+## std::fixint
+
+Fixed-width integers wider than the built-in types, in unsigned (`u128`, `u256`, `u512`) and signed (`i128`, `i256`, `i512`) widths. Each is a by-value struct holding a little-endian array of `u32` limbs, paired with a companion module of the same name that carries its operations — `import fixint from std::`, then `fixint.u256.add(a, b)`. Values behave like any other struct: copy with `=`, compare with `==`/`!=`, and zero-initialize with `default(u256)` (which *is* the value 0). Storage is inline, so a value lives wherever its binding does, with no heap allocation. Unlike the other modules this one is pure FC — it wraps no C library. The signed types share the unsigned storage, interpreted as two's complement.
+
+Because FC has no operator overloading, every operation is a named function, not a symbol: `fixint.u256.mul(a, b)`, never `a * b`. That is deliberate rather than a limitation — a wide-integer multiply is several machine operations, and spelling it as a call keeps that cost visible instead of hiding it behind an atomic-looking `*`.
+
+**Arithmetic wraps modulo 2^width** by default, exactly as the built-in integer types do. `add`, `sub`, and `mul` return the same width; the bits an unsigned wrapping operation would drop are recovered through explicit variants — `add_carry` and `sub_borrow` return `{value, bool}` (the carry or borrow out), and `mul_wide` returns the full double-width product (`u128.mul_wide` → `u256`, `u256.mul_wide` → `u512`; `u512` has none, there being no `u1024`). `div` and `rem` truncate toward zero and `divmod` returns `{quotient, remainder}` in one division; dividing by zero aborts, exactly like the built-in `/`. Bitwise `and`/`or`/`xor`/`not` and shifts `shl`/`shr` (by a `u32` bit count; a shift of the full width or more yields 0) complete the operators. `cmp` returns `-1`/`0`/`1`, and `is_zero` with `==` cover the ordinary comparisons.
+
+The **signed** widths add `neg`, `abs`, and `is_neg`, and adjust the operations that depend on sign: `shr` is arithmetic (the sign bit fills the vacated positions), `cmp` orders by signed value, `div`/`rem` follow C's truncated-division rule (the remainder takes the dividend's sign), and `from_i64`/`try_to_i64` sign-extend. As with the built-in signed types, `min / -1` overflows and wraps back to `min` rather than trapping.
+
+**Conversions.** `from_u64`/`from_i64` widen a machine integer; `try_to_u64`/`try_to_i64` return `u64?`/`i64?` — `some` when the value fits 64 bits, `none` otherwise. `parse` and `parse_hex` return a result — `u256!`, `i256!`, and so on — with named failures in `error parse`: `fixint.parse.invalid` for empty input or a non-digit, `fixint.parse.overflow` outside the target's range. Unsigned `parse` is decimal; signed `parse` accepts an optional leading `-`. `parse_hex` (no `0x` prefix, either letter case) reads the raw two's-complement bit pattern, so `i256.parse_hex` of sixty-four `f`s is `-1`. `to_str` (decimal, with a leading `-` for a negative signed value) and `to_hex` (lowercase hex of the raw bits) return a heap-allocated `str` the caller must free.
+
+See `stdlib/fixint.fc` for the full API.
 
 ## std::text
 
