@@ -10,6 +10,23 @@ let main = (args: str[]) ->
     assert(text.parse_i32("abc") == err(i32, text.parse.invalid))
     assert(text.parse_i32("") == err(i32, text.parse.invalid))
 
+    // strict whole-string contract: every byte must belong to the number —
+    // nothing is skipped in front, nothing may trail
+    assert(text.parse_i32(" 42") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("42 ") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("\t42") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("42\n") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("42abc") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("4 2") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("12-3") == err(i32, text.parse.invalid))
+    assert(text.parse_i32("+42") == ok(42))       // an explicit sign is part of the number
+    assert(text.parse_i32(text.trim(" 42\n")) == ok(42))   // trim first for whitespace-y input
+
+    // an embedded NUL is not part of any number (the C parser would stop
+    // there silently and validate only the prefix)
+    let nul = u8[3] { '1', '2', 0u8 }
+    assert(text.parse_i32(nul) == err(i32, text.parse.invalid))
+
     // parse_i32 — overflow: the i32-range check the wrapper applies, and the
     // i64-range case strtoll itself reports via ERANGE. The extremes parse.
     assert(text.parse_i32("2147483648") == err(i32, text.parse.overflow))
@@ -22,9 +39,11 @@ let main = (args: str[]) ->
     assert(text.parse_i64("-999") == ok(-999i64))
     assert(text.parse_i64("9223372036854775807") == ok(i64.max))
 
-    // parse_i64 — failure
+    // parse_i64 — failure (incl. the strict whole-string contract)
     assert(text.parse_i64("xyz") == err(i64, text.parse.invalid))
     assert(text.parse_i64("") == err(i64, text.parse.invalid))
+    assert(text.parse_i64("123x") == err(i64, text.parse.invalid))
+    assert(text.parse_i64(" 123") == err(i64, text.parse.invalid))
     assert(text.parse_i64("9223372036854775808") == err(i64, text.parse.overflow))
     assert(text.parse_i64("-9223372036854775809") == err(i64, text.parse.overflow))
 
@@ -40,6 +59,14 @@ let main = (args: str[]) ->
     assert(text.parse_f64("-1e999") == err(f64, text.parse.overflow))
     assert(text.parse_f64("1e-999").is_ok)
 
+    // strict whole-string contract for floats: the exponent is part of the
+    // number, whitespace and trailing characters are not
+    assert(text.parse_f64("1e3") == ok(1000.0))
+    assert(text.parse_f64("3.14x") == err(f64, text.parse.invalid))
+    assert(text.parse_f64(" 1.5") == err(f64, text.parse.invalid))
+    assert(text.parse_f64("1.5\n") == err(f64, text.parse.invalid))
+    assert(text.parse_f64("1.5 2.5") == err(f64, text.parse.invalid))
+
     // parse_f32 — success
     assert(text.parse_f32("2.5") == ok(2.5f32))
     assert(text.parse_f32("0.0") == ok(0.0f32))
@@ -48,6 +75,7 @@ let main = (args: str[]) ->
     assert(text.parse_f32("bad") == err(f32, text.parse.invalid))
     assert(text.parse_f32("") == err(f32, text.parse.invalid))
     assert(text.parse_f32("1e50") == err(f32, text.parse.overflow))
+    assert(text.parse_f32("2.5 ") == err(f32, text.parse.invalid))
 
     // over-length input fails with too_long rather than overflowing the
     // stack. build a 600-byte run of '0' digits — a "valid" number far past

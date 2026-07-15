@@ -265,9 +265,11 @@ let load_high_score = () ->
         match io.open(alloca("%s{hd}/.fibbles/highscore.txt"), "r") with
         | ok(fp) ->
             let mut buf = u8[32] { }
-            io.read(buf, 32, fp)
+            let n = io.read(buf, 32, fp)
             ignore io.close(fp)  // best-effort: contents already read
-            match text.parse_i32((const str) buf) with
+            // parse only the bytes read, minus the trailing newline —
+            // text.parse_i32 is whole-string strict
+            match text.parse_i32(text.trim((const str) buf[0..n])) with
             | ok(v) -> v
             | err(_) -> 0
         | err(_) -> 0

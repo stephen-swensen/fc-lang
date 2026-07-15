@@ -5674,7 +5674,7 @@ See `stdlib/fixint.fc` for the full API.
 
 String parsing and manipulation. Numeric parsing (`parse_i32`, etc.), searching, trimming, case conversion, split/join. See `stdlib/text.fc` for the full API.
 
-The `parse_*` functions return results (`i32!`, `i64!`, `f32!`, `f64!`) with fully named failures in `error parse`: `text.parse.invalid` (no leading number), `text.parse.overflow` (value doesn't fit the target type; float underflow to zero/denormal is *not* an error), and `text.parse.too_long` (input beyond the stack-copy cap). Searching (`index_of`) stays `i64?` — not finding a substring is absence, not failure.
+The `parse_*` functions return results (`i32!`, `i64!`, `f32!`, `f64!`) with fully named failures in `error parse`: `text.parse.invalid` (s is not entirely one number), `text.parse.overflow` (value doesn't fit the target type; float underflow to zero/denormal is *not* an error), and `text.parse.too_long` (input beyond the stack-copy cap). Parsing is **whole-string strict**, like `fixint`'s: every byte of the input must belong to the number, so leading whitespace or trailing characters fail with `text.parse.invalid` rather than being silently skipped — `trim` first when the input may carry whitespace. The integer grammar is an optional `+`/`-` sign then decimal digits; the float grammar is C's (optionally signed decimal or hex-float with exponent; `inf`/`nan` accepted). Searching (`index_of`) stays `i64?` — not finding a substring is absence, not failure.
 
 ## std::net
 

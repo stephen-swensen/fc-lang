@@ -41,71 +41,99 @@ module text =
     // ever rejected.
     private let max_parse_len = 512i64
 
-    // Parses a string as a 32-bit signed integer (base 10).
-    // returns: i32! — ok(value) on success; err(parse.invalid) if s has no
-    //   leading integer, err(parse.overflow) if the value doesn't fit i32,
+    // Whole-string pre-check shared by the parse functions. Parsing is strict —
+    // every byte of s must belong to the number — but the C parsers silently
+    // skip leading whitespace and stop at an embedded NUL, so both must be
+    // rejected before s reaches them (the endptr-at-the-terminator check after
+    // the call catches every other stray character).
+    private let strict_reject = (s: const str) ->
+        if s.len == 0 then true
+        else if s[0] == 32u8 || (s[0] >= 9u8 && s[0] <= 13u8) then true
+        else
+            let mut has_nul = false
+            for i in 0..s.len do
+                if s[i] == 0u8 then has_nul = true
+            has_nul
+
+    // Parses a string as a 32-bit signed integer (base 10). Strict: the whole
+    // string must be one integer (an optional +/- sign, then digits) — leading
+    // whitespace or trailing characters fail; trim first if the input may
+    // carry whitespace.
+    // returns: i32! — ok(value) on success; err(parse.invalid) if s is not
+    //   entirely an integer, err(parse.overflow) if the value doesn't fit i32,
     //   err(parse.too_long) past max_parse_len.
     let parse_i32 = (s: const str) ->
         if s.len > max_parse_len then err(i32, parse.too_long)
+        else if strict_reject(s) then err(i32, parse.invalid)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let ep = er.loc()
             *ep = 0
             let val = c.strtoll(cs, &endptr, 10)
-            if endptr == cs then err(i32, parse.invalid)
+            if endptr == cs || *endptr != 0u8 then err(i32, parse.invalid)
             else if *ep == ec.erange then err(i32, parse.overflow)
             else if val > i32.max || val < i32.min then err(i32, parse.overflow)
             else ok((i32) val)
 
-    // Parses a string as a 64-bit signed integer (base 10).
-    // returns: i64! — ok(value) on success; err(parse.invalid) if s has no
-    //   leading integer, err(parse.overflow) if the value doesn't fit i64,
+    // Parses a string as a 64-bit signed integer (base 10). Strict: the whole
+    // string must be one integer (an optional +/- sign, then digits).
+    // returns: i64! — ok(value) on success; err(parse.invalid) if s is not
+    //   entirely an integer, err(parse.overflow) if the value doesn't fit i64,
     //   err(parse.too_long) past max_parse_len.
     let parse_i64 = (s: const str) ->
         if s.len > max_parse_len then err(i64, parse.too_long)
+        else if strict_reject(s) then err(i64, parse.invalid)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let ep = er.loc()
             *ep = 0
             let val = c.strtoll(cs, &endptr, 10)
-            if endptr == cs then err(i64, parse.invalid)
+            if endptr == cs || *endptr != 0u8 then err(i64, parse.invalid)
             else if *ep == ec.erange then err(i64, parse.overflow)
             else ok(val)
 
-    // Parses a string as a 32-bit float.
-    // returns: f32! — ok(value) on success; err(parse.invalid) if s has no
-    //   leading number, err(parse.overflow) if the magnitude exceeds f32
+    // Parses a string as a 32-bit float. Strict: the whole string must be one
+    // number in C's float grammar (optionally signed decimal or hex-float,
+    // exponent allowed; "inf"/"nan" accepted) — leading whitespace or trailing
+    // characters fail.
+    // returns: f32! — ok(value) on success; err(parse.invalid) if s is not
+    //   entirely a number, err(parse.overflow) if the magnitude exceeds f32
     //   (underflow to zero/denormal is NOT an error), err(parse.too_long)
     //   past max_parse_len.
     let parse_f32 = (s: const str) ->
         if s.len > max_parse_len then err(f32, parse.too_long)
+        else if strict_reject(s) then err(f32, parse.invalid)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let ep = er.loc()
             *ep = 0
             let val = c.strtof(cs, &endptr)
-            if endptr == cs then err(f32, parse.invalid)
+            if endptr == cs || *endptr != 0u8 then err(f32, parse.invalid)
             else if *ep == ec.erange && (val == f32.inf || val == f32.neg_inf) then
                 err(f32, parse.overflow)
             else ok(val)
 
-    // Parses a string as a 64-bit float.
-    // returns: f64! — ok(value) on success; err(parse.invalid) if s has no
-    //   leading number, err(parse.overflow) if the magnitude exceeds f64
+    // Parses a string as a 64-bit float. Strict: the whole string must be one
+    // number in C's float grammar (optionally signed decimal or hex-float,
+    // exponent allowed; "inf"/"nan" accepted) — leading whitespace or trailing
+    // characters fail.
+    // returns: f64! — ok(value) on success; err(parse.invalid) if s is not
+    //   entirely a number, err(parse.overflow) if the magnitude exceeds f64
     //   (underflow to zero/denormal is NOT an error), err(parse.too_long)
     //   past max_parse_len.
     let parse_f64 = (s: const str) ->
         if s.len > max_parse_len then err(f64, parse.too_long)
+        else if strict_reject(s) then err(f64, parse.invalid)
         else
             let cs = alloca((cstr) s)
             let mut endptr = default(cstr)
             let ep = er.loc()
             *ep = 0
             let val = c.strtod(cs, &endptr)
-            if endptr == cs then err(f64, parse.invalid)
+            if endptr == cs || *endptr != 0u8 then err(f64, parse.invalid)
             else if *ep == ec.erange && (val == f64.inf || val == f64.neg_inf) then
                 err(f64, parse.overflow)
             else ok(val)
