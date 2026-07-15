@@ -57,6 +57,8 @@ let main = (args: str[]) ->
     assert(m128h == "ffffffffffffffffffffffffffffffff")
     free(m128h)
     assert(fixint.u128.parse("340282366920938463463374607431768211456") == err(fixint.u128, fixint.parse.overflow))  // 2^128
+    assert(m128 == fixint.u128.max())
+    assert(fixint.u128.is_zero(fixint.u128.min()))
     // u128 mul_wide: (2^64-1)^2
     let f = fixint.u128.from_u64(0xFFFFFFFFFFFFFFFFu64)
     assert(fixint.u128.mul_wide(f, f) == h256("fffffffffffffffe0000000000000001"))
@@ -68,6 +70,7 @@ let main = (args: str[]) ->
     free(b512h)
     // (2^512 - 1) + 1 wraps to 0 with carry
     let max512 = fixint.u512.parse_hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")!
+    assert(max512 == fixint.u512.max())
     let { s, carry } = fixint.u512.add_carry(max512, fixint.u512.from_u64(1u64))
     assert(fixint.u512.is_zero(s))
     assert(carry)

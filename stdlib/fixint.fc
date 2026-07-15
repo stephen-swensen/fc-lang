@@ -276,15 +276,12 @@ module fixint =
     // for empty input or a non-digit, err(parse.overflow) past dst's width.
     private let limbs_parse = (dst: u32[], s: const str, radix: u32) ->
         if s.len == 0 then return err(void, parse.invalid)
-        let mut i = 0i64
-        loop
-            if i >= s.len then break
+        for i in 0..s.len do
             let dv = digit_val(s[i], radix)
             if dv < 0 then return err(void, parse.invalid)
             let cm = limbs_mul_small(dst, dst, radix)
             let ca = limbs_add_small(dst, dst, (u32) dv)
             if cm != 0u32 || ca != 0u32 then return err(void, parse.overflow)
-            i = i + 1i64
         ok
 
     // Format work (destroyed in place) into buf at the given radix, returning
@@ -305,22 +302,16 @@ module fixint =
     // Heap-allocated copy of s (caller must free).
     private let heap_copy = (s: const str) ->
         let out = alloc(u8[s.len] {})!
-        let mut i = 0i64
-        loop
-            if i >= s.len then break
-            out[i] = s[i]
-            i = i + 1i64
+        for i, c in s do
+            out[i] = c
         out
 
     // Heap-allocated '-' followed by digits (caller must free).
     private let heap_copy_neg = (digits: const str) ->
         let out = alloc(u8[digits.len + 1i64] {})!
         out[0] = '-'
-        let mut i = 0i64
-        loop
-            if i >= digits.len then break
-            out[i + 1i64] = digits[i]
-            i = i + 1i64
+        for i, c in digits do
+            out[i + 1] = c
         out
 
     // ===================================================================
@@ -342,6 +333,15 @@ module fixint =
                 if a.limbs[i] != 0u32 then hi_zero = false
             if hi_zero then some((u64) a.limbs[0] | ((u64) a.limbs[1] << 32))
             else none(u64)
+
+        // The smallest u128, 0 — the same value as default(u128).
+        let min = () -> default(u128)
+
+        // The largest u128, 2^128 - 1 (all bits set).
+        let max = () ->
+            let r = default(u128)
+            limbs_not(r.limbs, r.limbs)
+            r
 
         // a + b, wrapping mod 2^128.
         let add = (a: u128, b: u128) ->
@@ -493,12 +493,14 @@ module fixint =
     // ===================================================================
 
     module u256 =
+        // A u256 holding x (zero-extended).
         let from_u64 = (x: u64) ->
             let r = default(u256)
             r.limbs[0] = (u32) x
             r.limbs[1] = (u32) (x >> 32)
             r
 
+        // Low 64 bits of a as a u64 if a fits in 64 bits, else none.
         let try_to_u64 = (a: u256) ->
             let mut hi_zero = true
             for i in 2..8 do
@@ -506,22 +508,34 @@ module fixint =
             if hi_zero then some((u64) a.limbs[0] | ((u64) a.limbs[1] << 32))
             else none(u64)
 
+        // The smallest u256, 0 — the same value as default(u256).
+        let min = () -> default(u256)
+
+        // The largest u256, 2^256 - 1 (all bits set).
+        let max = () ->
+            let r = default(u256)
+            limbs_not(r.limbs, r.limbs)
+            r
+
         // a + b, wrapping mod 2^256.
         let add = (a: u256, b: u256) ->
             let r = default(u256)
             limbs_add(r.limbs, a.limbs, b.limbs)
             r
 
+        // a + b as {sum, carry}; carry is true on overflow past 256 bits.
         let add_carry = (a: u256, b: u256) ->
             let r = default(u256)
             let c = limbs_add(r.limbs, a.limbs, b.limbs)
             { r, c != 0u32 }
 
+        // a - b, wrapping mod 2^256.
         let sub = (a: u256, b: u256) ->
             let r = default(u256)
             limbs_sub(r.limbs, a.limbs, b.limbs)
             r
 
+        // a - b as {difference, borrow}; borrow is true when a < b.
         let sub_borrow = (a: u256, b: u256) ->
             let r = default(u256)
             let c = limbs_sub(r.limbs, a.limbs, b.limbs)
@@ -559,16 +573,19 @@ module fixint =
             limbs_not(r.limbs, a.limbs)
             r
 
+        // a << n, wrapping mod 2^256 (n >= 256 yields 0).
         let shl = (a: u256, n: u32) ->
             let r = default(u256)
             limbs_shl(r.limbs, a.limbs, n)
             r
 
+        // a >> n (logical; n >= 256 yields 0).
         let shr = (a: u256, n: u32) ->
             let r = default(u256)
             limbs_shr(r.limbs, a.limbs, n)
             r
 
+        // -1 if a<b, 0 if a==b, 1 if a>b.
         let cmp = (a: u256, b: u256) ->
             limbs_cmp(a.limbs, b.limbs)
 
@@ -627,6 +644,7 @@ module fixint =
             limbs_parse(r.limbs, s, 10u32)?
             ok(r)
 
+        // Parse s as unsigned hexadecimal (no 0x prefix). Same error contract.
         let parse_hex = (s: const str) ->
             let r = default(u256)
             limbs_parse(r.limbs, s, 16u32)?
@@ -649,12 +667,14 @@ module fixint =
     // ===================================================================
 
     module u512 =
+        // A u512 holding x (zero-extended).
         let from_u64 = (x: u64) ->
             let r = default(u512)
             r.limbs[0] = (u32) x
             r.limbs[1] = (u32) (x >> 32)
             r
 
+        // Low 64 bits of a as a u64 if a fits in 64 bits, else none.
         let try_to_u64 = (a: u512) ->
             let mut hi_zero = true
             for i in 2..16 do
@@ -662,22 +682,34 @@ module fixint =
             if hi_zero then some((u64) a.limbs[0] | ((u64) a.limbs[1] << 32))
             else none(u64)
 
+        // The smallest u512, 0 — the same value as default(u512).
+        let min = () -> default(u512)
+
+        // The largest u512, 2^512 - 1 (all bits set).
+        let max = () ->
+            let r = default(u512)
+            limbs_not(r.limbs, r.limbs)
+            r
+
         // a + b, wrapping mod 2^512.
         let add = (a: u512, b: u512) ->
             let r = default(u512)
             limbs_add(r.limbs, a.limbs, b.limbs)
             r
 
+        // a + b as {sum, carry}; carry is true on overflow past 512 bits.
         let add_carry = (a: u512, b: u512) ->
             let r = default(u512)
             let c = limbs_add(r.limbs, a.limbs, b.limbs)
             { r, c != 0u32 }
 
+        // a - b, wrapping mod 2^512.
         let sub = (a: u512, b: u512) ->
             let r = default(u512)
             limbs_sub(r.limbs, a.limbs, b.limbs)
             r
 
+        // a - b as {difference, borrow}; borrow is true when a < b.
         let sub_borrow = (a: u512, b: u512) ->
             let r = default(u512)
             let c = limbs_sub(r.limbs, a.limbs, b.limbs)
@@ -709,16 +741,19 @@ module fixint =
             limbs_not(r.limbs, a.limbs)
             r
 
+        // a << n, wrapping mod 2^512 (n >= 512 yields 0).
         let shl = (a: u512, n: u32) ->
             let r = default(u512)
             limbs_shl(r.limbs, a.limbs, n)
             r
 
+        // a >> n (logical; n >= 512 yields 0).
         let shr = (a: u512, n: u32) ->
             let r = default(u512)
             limbs_shr(r.limbs, a.limbs, n)
             r
 
+        // -1 if a<b, 0 if a==b, 1 if a>b.
         let cmp = (a: u512, b: u512) ->
             limbs_cmp(a.limbs, b.limbs)
 
@@ -777,6 +812,7 @@ module fixint =
             limbs_parse(r.limbs, s, 10u32)?
             ok(r)
 
+        // Parse s as unsigned hexadecimal (no 0x prefix). Same error contract.
         let parse_hex = (s: const str) ->
             let r = default(u512)
             limbs_parse(r.limbs, s, 16u32)?
@@ -818,6 +854,19 @@ module fixint =
             if fits then some((i64) ((u64) a.limbs[0] | ((u64) a.limbs[1] << 32)))
             else none(i64)
 
+        // The most negative i128, -2^127 (only the sign bit set).
+        let min = () ->
+            let r = default(i128)
+            r.limbs[3] = 0x80000000u32
+            r
+
+        // The largest i128, 2^127 - 1 (every bit but the sign set).
+        let max = () ->
+            let r = default(i128)
+            limbs_not(r.limbs, r.limbs)
+            r.limbs[3] = 0x7FFFFFFFu32
+            r
+
         let is_neg = (a: i128) ->
             limbs_sign(a.limbs) == 1u32
 
@@ -831,16 +880,19 @@ module fixint =
         let abs = (a: i128) ->
             if limbs_sign(a.limbs) == 1u32 then i128.neg(a) else a
 
+        // a + b, wrapping mod 2^128.
         let add = (a: i128, b: i128) ->
             let r = default(i128)
             limbs_add(r.limbs, a.limbs, b.limbs)
             r
 
+        // a - b, wrapping mod 2^128.
         let sub = (a: i128, b: i128) ->
             let r = default(i128)
             limbs_sub(r.limbs, a.limbs, b.limbs)
             r
 
+        // a * b, wrapping mod 2^128.
         let mul = (a: i128, b: i128) ->
             let r = default(i128)
             limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
@@ -1005,6 +1057,7 @@ module fixint =
     // ===================================================================
 
     module i256 =
+        // An i256 holding x (sign-extended).
         let from_i64 = (x: i64) ->
             let r = default(i256)
             r.limbs[0] = (u32) x
@@ -1014,6 +1067,7 @@ module fixint =
                 r.limbs[i] = fill
             r
 
+        // a as an i64 if it fits [i64.min, i64.max], else none.
         let try_to_i64 = (a: i256) ->
             let fill = if (a.limbs[1] >> 31) == 1u32 then 0xFFFFFFFFu32 else 0u32
             let mut fits = true
@@ -1022,27 +1076,45 @@ module fixint =
             if fits then some((i64) ((u64) a.limbs[0] | ((u64) a.limbs[1] << 32)))
             else none(i64)
 
+        // The most negative i256, -2^255 (only the sign bit set).
+        let min = () ->
+            let r = default(i256)
+            r.limbs[7] = 0x80000000u32
+            r
+
+        // The largest i256, 2^255 - 1 (every bit but the sign set).
+        let max = () ->
+            let r = default(i256)
+            limbs_not(r.limbs, r.limbs)
+            r.limbs[7] = 0x7FFFFFFFu32
+            r
+
         let is_neg = (a: i256) ->
             limbs_sign(a.limbs) == 1u32
 
+        // -a (two's complement; neg(min) wraps to min).
         let neg = (a: i256) ->
             let r = default(i256)
             limbs_neg(r.limbs, a.limbs)
             r
 
+        // |a| (abs(min) wraps to min).
         let abs = (a: i256) ->
             if limbs_sign(a.limbs) == 1u32 then i256.neg(a) else a
 
+        // a + b, wrapping mod 2^256.
         let add = (a: i256, b: i256) ->
             let r = default(i256)
             limbs_add(r.limbs, a.limbs, b.limbs)
             r
 
+        // a - b, wrapping mod 2^256.
         let sub = (a: i256, b: i256) ->
             let r = default(i256)
             limbs_sub(r.limbs, a.limbs, b.limbs)
             r
 
+        // a * b, wrapping mod 2^256.
         let mul = (a: i256, b: i256) ->
             let r = default(i256)
             limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
@@ -1143,6 +1215,7 @@ module fixint =
             limbs_not(r.limbs, a.limbs)
             r
 
+        // a << n, wrapping mod 2^256 (n >= 256 yields 0).
         let shl = (a: i256, n: u32) ->
             let r = default(i256)
             limbs_shl(r.limbs, a.limbs, n)
@@ -1154,6 +1227,7 @@ module fixint =
             limbs_sar(r.limbs, a.limbs, n)
             r
 
+        // -1 if a<b, 0 if a==b, 1 if a>b (signed).
         let cmp = (a: i256, b: i256) ->
             limbs_cmp_signed(a.limbs, b.limbs)
 
@@ -1179,11 +1253,14 @@ module fixint =
                 if limbs_sign(r.limbs) == 1u32 then err(i256, fixint.parse.overflow)
                 else ok(r)
 
+        // Parse s as raw two's-complement hexadecimal (no 0x prefix); the bit
+        // pattern is taken as-is, so "ff…ff" is -1.
         let parse_hex = (s: const str) ->
             let r = default(i256)
             limbs_parse(r.limbs, s, 16u32)?
             ok(r)
 
+        // Heap-allocated decimal text of a, leading '-' if negative (free it).
         let to_str = (a: i256) ->
             let scratch = u8[80] { }
             if limbs_sign(a.limbs) == 1u32 then
@@ -1192,6 +1269,7 @@ module fixint =
             else
                 heap_copy(limbs_format(scratch, a.limbs, 10u32))
 
+        // Heap-allocated raw two's-complement hex text (caller must free).
         let to_hex = (a: i256) ->
             let scratch = u8[80] { }
             heap_copy(limbs_format(scratch, a.limbs, 16u32))
@@ -1201,6 +1279,7 @@ module fixint =
     // ===================================================================
 
     module i512 =
+        // An i512 holding x (sign-extended).
         let from_i64 = (x: i64) ->
             let r = default(i512)
             r.limbs[0] = (u32) x
@@ -1210,6 +1289,7 @@ module fixint =
                 r.limbs[i] = fill
             r
 
+        // a as an i64 if it fits [i64.min, i64.max], else none.
         let try_to_i64 = (a: i512) ->
             let fill = if (a.limbs[1] >> 31) == 1u32 then 0xFFFFFFFFu32 else 0u32
             let mut fits = true
@@ -1218,27 +1298,45 @@ module fixint =
             if fits then some((i64) ((u64) a.limbs[0] | ((u64) a.limbs[1] << 32)))
             else none(i64)
 
+        // The most negative i512, -2^511 (only the sign bit set).
+        let min = () ->
+            let r = default(i512)
+            r.limbs[15] = 0x80000000u32
+            r
+
+        // The largest i512, 2^511 - 1 (every bit but the sign set).
+        let max = () ->
+            let r = default(i512)
+            limbs_not(r.limbs, r.limbs)
+            r.limbs[15] = 0x7FFFFFFFu32
+            r
+
         let is_neg = (a: i512) ->
             limbs_sign(a.limbs) == 1u32
 
+        // -a (two's complement; neg(min) wraps to min).
         let neg = (a: i512) ->
             let r = default(i512)
             limbs_neg(r.limbs, a.limbs)
             r
 
+        // |a| (abs(min) wraps to min).
         let abs = (a: i512) ->
             if limbs_sign(a.limbs) == 1u32 then i512.neg(a) else a
 
+        // a + b, wrapping mod 2^512.
         let add = (a: i512, b: i512) ->
             let r = default(i512)
             limbs_add(r.limbs, a.limbs, b.limbs)
             r
 
+        // a - b, wrapping mod 2^512.
         let sub = (a: i512, b: i512) ->
             let r = default(i512)
             limbs_sub(r.limbs, a.limbs, b.limbs)
             r
 
+        // a * b, wrapping mod 2^512.
         let mul = (a: i512, b: i512) ->
             let r = default(i512)
             limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
@@ -1339,6 +1437,7 @@ module fixint =
             limbs_not(r.limbs, a.limbs)
             r
 
+        // a << n, wrapping mod 2^512 (n >= 512 yields 0).
         let shl = (a: i512, n: u32) ->
             let r = default(i512)
             limbs_shl(r.limbs, a.limbs, n)
@@ -1350,6 +1449,7 @@ module fixint =
             limbs_sar(r.limbs, a.limbs, n)
             r
 
+        // -1 if a<b, 0 if a==b, 1 if a>b (signed).
         let cmp = (a: i512, b: i512) ->
             limbs_cmp_signed(a.limbs, b.limbs)
 
@@ -1375,11 +1475,14 @@ module fixint =
                 if limbs_sign(r.limbs) == 1u32 then err(i512, fixint.parse.overflow)
                 else ok(r)
 
+        // Parse s as raw two's-complement hexadecimal (no 0x prefix); the bit
+        // pattern is taken as-is, so "ff…ff" is -1.
         let parse_hex = (s: const str) ->
             let r = default(i512)
             limbs_parse(r.limbs, s, 16u32)?
             ok(r)
 
+        // Heap-allocated decimal text of a, leading '-' if negative (free it).
         let to_str = (a: i512) ->
             let scratch = u8[160] { }
             if limbs_sign(a.limbs) == 1u32 then
@@ -1388,6 +1491,7 @@ module fixint =
             else
                 heap_copy(limbs_format(scratch, a.limbs, 10u32))
 
+        // Heap-allocated raw two's-complement hex text (caller must free).
         let to_hex = (a: i512) ->
             let scratch = u8[160] { }
             heap_copy(limbs_format(scratch, a.limbs, 16u32))

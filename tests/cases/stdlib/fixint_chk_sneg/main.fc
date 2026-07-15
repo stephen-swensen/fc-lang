@@ -2,6 +2,5 @@ import fixint from std::
 
 let main = (args: str[]) ->
     // negating min has no representable result
-    let smin = fixint.i256.parse("-57896044618658097711785492504343953926634992332820282019728792003956564819968")!
-    let _r = fixint.i256.checked_neg(smin)
+    let _r = fixint.i256.checked_neg(fixint.i256.min())
     0

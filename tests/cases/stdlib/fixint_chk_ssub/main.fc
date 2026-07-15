@@ -1,0 +1,6 @@
+import fixint from std::
+
+let main = (args: str[]) ->
+    // signed subtract overflow (min - 1)
+    let _r = fixint.i256.checked_sub(fixint.i256.min(), fixint.i256.from_i64(1i64))
+    0

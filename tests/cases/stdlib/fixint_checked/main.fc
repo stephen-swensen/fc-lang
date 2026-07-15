@@ -8,6 +8,8 @@ let main = (args: str[]) ->
     assert(fixint.u256.checked_sub(a, b) == fixint.u256.sub(a, b))
     assert(fixint.u256.checked_mul(a, b) == fixint.u256.mul(a, b))
     let mx = fixint.u256.parse_hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")!
+    assert(mx == fixint.u256.max())          // max() is all bits set
+    assert(fixint.u256.is_zero(fixint.u256.min()))
     assert(fixint.u256.checked_add(mx, default(fixint.u256)) == mx)
     // 2^128 * 2^127 = 2^255 (no overflow); result is 2^255
     let p128 = fixint.u256.shl(fixint.u256.from_u64(1u64), 128u32)
@@ -25,9 +27,11 @@ let main = (args: str[]) ->
     assert(fixint.i256.checked_abs(x) == fixint.i256.abs(x))
     // signed boundaries that must NOT abort
     let smax = fixint.i256.parse("57896044618658097711785492504343953926634992332820282019728792003956564819967")!
+    assert(smax == fixint.i256.max())        // max() is 2^255 - 1
     assert(fixint.i256.checked_add(smax, fixint.i256.from_i64(0i64)) == smax)
     assert(fixint.i256.checked_mul(smax, fixint.i256.from_i64(1i64)) == smax)
     let smin = fixint.i256.parse("-57896044618658097711785492504343953926634992332820282019728792003956564819968")!
+    assert(smin == fixint.i256.min())        // min() is -2^255
     assert(fixint.i256.checked_mul(smin, fixint.i256.from_i64(1i64)) == smin)  // min*1 ok
     assert(fixint.i256.checked_div(smin, fixint.i256.from_i64(1i64)) == smin)  // min/1 ok
     assert(fixint.i256.checked_mul(fixint.i256.from_i64(-3i64), fixint.i256.from_i64(-4i64)) == fixint.i256.from_i64(12i64))
