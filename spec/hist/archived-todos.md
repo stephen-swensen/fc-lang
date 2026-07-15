@@ -4,6 +4,25 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 ---
 
+## `text.parse_*` trailing-garbage acceptance (resolved 2026-07-14 — whole-string strict)
+
+`parse_i32("99xyz")` returned `ok(99)`: the parsers followed strtoll's leading-token
+contract, silently skipping leading whitespace and accepting trailing garbage (surfaced
+2026-07-08 when furl accepted the URL port `99xyz` as 99; re-raised by the std::fixint code
+review, whose `fixint.parse` shipped whole-string strict). Decision: adopt the Rust/Zig
+school across the stdlib — **every byte of the input must belong to the number**, else
+`parse.invalid`; no lenient form. Implementation in `stdlib/text.fc`: a shared
+`strict_reject` pre-check rejects the cases the C parsers absorb silently (empty input,
+leading whitespace, embedded NUL — which truncates the cstr copy), and an
+endptr-at-the-terminator check after the `strto*` call catches every other trailing
+character. An explicit `+` sign stays accepted (part of the validated grammar, Rust
+precedent); floats keep C's full grammar (exponent, hex-float, inf/nan) under whole-string
+consumption. `text.trim` is the documented escape for whitespace-carrying input. The three
+demo high-score loaders were the only lenient-dependent callers (they parsed an entire
+zero-padded 32-byte buffer — a latent bug the strict contract exposed); fixed to slice to
+bytes-read + trim. wolf-fc needed no changes (208/208 green — it parses clean sliced
+tokens). Spec §std::text updated; strict-matrix tests added to `stdlib/text_parse`.
+
 ## Bit reinterpretation — `bitcast(T, x)` builtin (resolved 2026-07-04)
 
 Closed the design-audit "bit reinterpretation" gap (`spec/design-audit-2026-07-rc6.md`):

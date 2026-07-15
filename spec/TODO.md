@@ -4,6 +4,22 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
+## std::fixint wide integers — IMPLEMENTED 2026-07-14; follow-ups open
+
+Wide fixed-width integers (`u128`–`u512`, `i128`–`i512`) as by-value limb structs with
+companion-module operations over a shared private `u32[]` core: wrapping arithmetic,
+carry/borrow and `mul_wide` reporting forms, `checked_*` abort forms, div/rem/divmod,
+bitwise/shifts, signed two's-complement ops, `min()`/`max()`, strict `parse`/`parse_hex`
+(→ `uN!`/`iN!`), `to_str`/`to_hex`. Spec §std::fixint; tests in `tests/cases/stdlib/fixint_*`.
+
+Follow-ups (deliberately additive, not blocking):
+- **Cross-width conversions**: widening (`u128`→`u256`), truncating (`u256`→`u128`), and
+  signed↔unsigned reinterpretation at the same width. Today the only cross-width paths are
+  `mul_wide` or a heap round-trip through `to_hex`/`parse_hex`.
+- **Division core**: `limbs_divmod` is binary long division (O(bits) iterations — correct,
+  simple); a Knuth-D core could replace it without touching any caller if wide division
+  ever becomes hot.
+
 ## Enum declarations — IMPLEMENTED 2026-07-10
 
 Closed sets of named integer constants over a declared fixed-width repr (`enum door_lock of u8 =
@@ -79,20 +95,6 @@ truth**; don't re-litigate here. Remaining follow-ups, in order:
    admits `__` identifiers (with mandatory `as` alias) so `__errno_location`/`__error` are
    declarable (grammar note + spec §Reserved identifiers; tests `extern/dunder_*`). Spec
    Part 9 updated; demos migrated; tests `stdlib/*` reworked + `stdlib/net_error_paths`.
-
-## `text.parse_*` trailing-garbage acceptance — whole-string consumption question
-
-`parse_i32("99xyz")` returns `ok(99)`: the parsers follow the strtoll leading-token contract
-(err only when *no* leading number exists), so trailing garbage is silently accepted —
-surfaced 2026-07-08 when furl accepted the URL port `99xyz` as 99. The Rust/Zig school
-errors unless the whole string is consumed (`endptr` must reach the terminator), which is
-almost always what a caller means by "parse this string as a number". Not a one-line flip:
-fasteroids/fibbles/face-invaders parse highscores from zero-padded fixed buffers
-(`"123\n\0\0…"`) and depend on trailing-junk tolerance, so whole-string consumption needs a
-companion story — trailing-whitespace(+NUL?) tolerance in the parsers, a documented
-"trim/slice before parsing" contract for callers, or a separate lenient form. Decide the
-contract, update `error parse` docs (`parse.invalid` for unconsumed tail?), migrate the
-demos, and add err-path tests for `"99xyz"`, `"1.5"` (parse_i32), `""`, and padded buffers.
 
 ## Atomic pointer publication — `T*` / `any*` pointees for the atomic builtins
 
