@@ -1,0 +1,33 @@
+import wideint from std::
+
+let h256 = (s: const str) -> wideint.u256.parse_hex(s)!
+
+let main = (args: str[]) ->
+    let a = h256("123456789abcdef0fedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0")
+    let b = h256("fedcba9876543210123456789abcdef0a1b2c3d4e5f60718293a4b5c6d7e8f90")
+
+    assert(wideint.u256.and(a, b) == h256("1214121812141210121412181214121001120114415201180112011441528190"))
+    assert(wideint.u256.or(a, b)  == h256("fefcfef8fefcfef0fefcfef8fefcfef0afbeeffceffe6f78afbeeffceffeeff0"))
+    assert(wideint.u256.xor(a, b) == h256("ece8ece0ece8ece0ece8ece0ece8ece0aeaceee8aeac6e60aeaceee8aeac6e60"))
+    assert(wideint.u256.not(a)    == h256("edcba9876543210f0123456789abcdeff0e1d2c3b4a5968778695a4b3c2d1e0f"))
+
+    // shifts across limb boundaries + full-width edges
+    assert(wideint.u256.shl(a, 17u32)  == h256("acf13579bde1fdb97530eca864201e3c5a7896b4d2f10f2d4b6987a5c3e00000"))
+    assert(wideint.u256.shl(a, 64u32)  == h256("fedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f00000000000000000"))
+    assert(wideint.u256.shl(a, 200u32) == h256("96a5b4c3d2e1f000000000000000000000000000000000000000000000000000"))
+    assert(wideint.u256.shr(a, 17u32)  == h256("91a2b3c4d5e6f787f6e5d4c3b2a1908078f169e25ad34bc43cb52da61e9"))
+    assert(wideint.u256.shr(a, 64u32)  == h256("123456789abcdef0fedcba98765432100f1e2d3c4b5a6978"))
+    assert(wideint.u256.shr(a, 200u32) == h256("123456789abcde"))
+    // shift >= width -> 0
+    assert(wideint.u256.is_zero(wideint.u256.shl(a, 256u32)))
+    assert(wideint.u256.is_zero(wideint.u256.shl(a, 999u32)))
+    assert(wideint.u256.is_zero(wideint.u256.shr(a, 256u32)))
+    // round trip shl then shr
+    assert(wideint.u256.shr(wideint.u256.shl(a, 40u32), 40u32) == h256("bcdef0fedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0"))
+
+    // cmp
+    assert(wideint.u256.cmp(a, b) == -1)
+    assert(wideint.u256.cmp(b, a) == 1)
+    assert(wideint.u256.cmp(a, a) == 0)
+    assert(wideint.u256.cmp(wideint.u256.from_u64(5u64), wideint.u256.from_u64(5u64)) == 0)
+    0

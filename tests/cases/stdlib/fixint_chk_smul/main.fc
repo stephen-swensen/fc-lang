@@ -1,7 +1,0 @@
-import fixint from std::
-
-let main = (args: str[]) ->
-    // signed multiply overflow (2^200 * 2^200)
-    let p = fixint.i256.shl(fixint.i256.from_i64(1i64), 200u32)
-    let _r = fixint.i256.checked_mul(p, p)
-    0

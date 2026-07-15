@@ -8,8 +8,8 @@ Resolved design decisions and implementation history, moved from TODO.md on 2026
 
 `parse_i32("99xyz")` returned `ok(99)`: the parsers followed strtoll's leading-token
 contract, silently skipping leading whitespace and accepting trailing garbage (surfaced
-2026-07-08 when furl accepted the URL port `99xyz` as 99; re-raised by the std::fixint code
-review, whose `fixint.parse` shipped whole-string strict). Decision: adopt the Rust/Zig
+2026-07-08 when furl accepted the URL port `99xyz` as 99; re-raised by the std::wideint code
+review, whose `wideint.parse` shipped whole-string strict). Decision: adopt the Rust/Zig
 school across the stdlib — **every byte of the input must belong to the number**, else
 `parse.invalid`; no lenient form. Implementation in `stdlib/text.fc`: a shared
 `strict_reject` pre-check rejects the cases the C parsers absorb silently (empty input,

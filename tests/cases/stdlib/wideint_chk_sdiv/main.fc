@@ -1,0 +1,6 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // signed min / -1 overflow
+    let _r = wideint.i256.checked_div(wideint.i256.min(), wideint.i256.from_i64(-1i64))
+    0

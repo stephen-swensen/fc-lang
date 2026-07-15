@@ -1,0 +1,44 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // unsigned: no-overflow checked == unchecked
+    let a = wideint.u256.from_u64(0xFFFFFFFFFFFFFFFFu64)
+    let b = wideint.u256.from_u64(2u64)
+    assert(wideint.u256.checked_add(a, b) == wideint.u256.add(a, b))
+    assert(wideint.u256.checked_sub(a, b) == wideint.u256.sub(a, b))
+    assert(wideint.u256.checked_mul(a, b) == wideint.u256.mul(a, b))
+    let mx = wideint.u256.parse_hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")!
+    assert(mx == wideint.u256.max())          // max() is all bits set
+    assert(wideint.u256.is_zero(wideint.u256.min()))
+    assert(wideint.u256.checked_add(mx, default(wideint.u256)) == mx)
+    // 2^128 * 2^127 = 2^255 (no overflow); result is 2^255
+    let p128 = wideint.u256.shl(wideint.u256.from_u64(1u64), 128u32)
+    let p127 = wideint.u256.shl(wideint.u256.from_u64(1u64), 127u32)
+    assert(wideint.u256.checked_mul(p128, p127) == wideint.u256.shl(wideint.u256.from_u64(1u64), 255u32))
+
+    // signed: no-overflow checked == unchecked
+    let x = wideint.i256.from_i64(-1000000i64)
+    let y = wideint.i256.from_i64(7i64)
+    assert(wideint.i256.checked_add(x, y) == wideint.i256.add(x, y))
+    assert(wideint.i256.checked_sub(x, y) == wideint.i256.sub(x, y))
+    assert(wideint.i256.checked_mul(x, y) == wideint.i256.mul(x, y))
+    assert(wideint.i256.checked_div(x, y) == wideint.i256.div(x, y))
+    assert(wideint.i256.checked_neg(x) == wideint.i256.neg(x))
+    assert(wideint.i256.checked_abs(x) == wideint.i256.abs(x))
+    // signed boundaries that must NOT abort
+    let smax = wideint.i256.parse("57896044618658097711785492504343953926634992332820282019728792003956564819967")!
+    assert(smax == wideint.i256.max())        // max() is 2^255 - 1
+    assert(wideint.i256.checked_add(smax, wideint.i256.from_i64(0i64)) == smax)
+    assert(wideint.i256.checked_mul(smax, wideint.i256.from_i64(1i64)) == smax)
+    let smin = wideint.i256.parse("-57896044618658097711785492504343953926634992332820282019728792003956564819968")!
+    assert(smin == wideint.i256.min())        // min() is -2^255
+    assert(wideint.i256.checked_mul(smin, wideint.i256.from_i64(1i64)) == smin)  // min*1 ok
+    assert(wideint.i256.checked_div(smin, wideint.i256.from_i64(1i64)) == smin)  // min/1 ok
+    assert(wideint.i256.checked_mul(wideint.i256.from_i64(-3i64), wideint.i256.from_i64(-4i64)) == wideint.i256.from_i64(12i64))
+
+    // width coverage
+    assert(wideint.u128.checked_add(wideint.u128.from_u64(5u64), wideint.u128.from_u64(6u64)) == wideint.u128.from_u64(11u64))
+    assert(wideint.u512.checked_mul(wideint.u512.from_u64(1000000u64), wideint.u512.from_u64(1000000u64)) == wideint.u512.from_u64(1000000000000u64))
+    assert(wideint.i128.checked_neg(wideint.i128.from_i64(42i64)) == wideint.i128.from_i64(-42i64))
+    assert(wideint.i512.checked_sub(wideint.i512.from_i64(10i64), wideint.i512.from_i64(20i64)) == wideint.i512.from_i64(-10i64))
+    0

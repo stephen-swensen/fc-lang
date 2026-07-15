@@ -1,6 +1,0 @@
-import fixint from std::
-
-let main = (args: str[]) ->
-    // signed add overflow (max + 1)
-    let _r = fixint.i256.checked_add(fixint.i256.max(), fixint.i256.from_i64(1i64))
-    0

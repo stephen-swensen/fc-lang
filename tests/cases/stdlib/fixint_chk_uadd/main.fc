@@ -1,6 +1,0 @@
-import fixint from std::
-
-let main = (args: str[]) ->
-    // unsigned add carry
-    let _r = fixint.u256.checked_add(fixint.u256.max(), fixint.u256.from_u64(1u64))
-    0

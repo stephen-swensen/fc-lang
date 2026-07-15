@@ -1,0 +1,6 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // signed add overflow (max + 1)
+    let _r = wideint.i256.checked_add(wideint.i256.max(), wideint.i256.from_i64(1i64))
+    0

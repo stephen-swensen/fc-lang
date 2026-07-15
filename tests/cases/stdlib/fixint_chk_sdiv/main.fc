@@ -1,6 +1,0 @@
-import fixint from std::
-
-let main = (args: str[]) ->
-    // signed min / -1 overflow
-    let _r = fixint.i256.checked_div(fixint.i256.min(), fixint.i256.from_i64(-1i64))
-    0

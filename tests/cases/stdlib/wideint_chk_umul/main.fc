@@ -1,0 +1,7 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // unsigned multiply overflow (2^128 * 2^128 = 2^256)
+    let p = wideint.u256.shl(wideint.u256.from_u64(1u64), 128u32)
+    let _r = wideint.u256.checked_mul(p, p)
+    0

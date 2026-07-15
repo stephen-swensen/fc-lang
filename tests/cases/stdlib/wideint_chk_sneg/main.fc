@@ -1,0 +1,6 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // negating min has no representable result
+    let _r = wideint.i256.checked_neg(wideint.i256.min())
+    0

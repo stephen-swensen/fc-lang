@@ -1,0 +1,74 @@
+import wideint from std::
+
+let hi = (s: const str) -> wideint.i256.parse_hex(s)!
+
+let main = (args: str[]) ->
+    let a = wideint.i256.parse("-1000000000000000000000000000000000000")!
+    let b = wideint.i256.from_i64(7i64)
+
+    // signed decimal round-trip through to_str (keeps the sign)
+    let astr = wideint.i256.to_str(a)
+    assert(astr == "-1000000000000000000000000000000000000")
+    free(astr)
+    assert(wideint.i256.is_neg(a))
+    assert(!wideint.i256.is_neg(b))
+
+    // signed div/rem — C truncation: quotient toward zero, remainder takes the
+    // dividend's sign
+    let q = wideint.i256.div(a, b)
+    let r = wideint.i256.rem(a, b)
+    let qs = wideint.i256.to_str(q)
+    let rs = wideint.i256.to_str(r)
+    assert(qs == "-142857142857142857142857142857142857")
+    assert(rs == "-1")
+    free(qs)
+    free(rs)
+    // identity q*b + r == a
+    assert(wideint.i256.add(wideint.i256.mul(q, b), r) == a)
+
+    // abs / neg
+    assert(wideint.i256.cmp(wideint.i256.abs(a), wideint.i256.neg(a)) == 0)
+    assert(wideint.i256.is_neg(wideint.i256.neg(b)))
+
+    // arithmetic shift right preserves the sign bit
+    assert(wideint.i256.shr(a, 10u32) == hi("ffffffffffffffffffffffffffffffffffffcfda0c610dbe3a932d183c000000"))
+    assert(wideint.i256.shr(wideint.i256.from_i64(-1i64), 100u32) == wideint.i256.from_i64(-1i64))
+
+    // signed compare
+    assert(wideint.i256.cmp(a, b) == -1)
+    assert(wideint.i256.cmp(b, a) == 1)
+    assert(wideint.i256.cmp(wideint.i256.from_i64(-5i64), wideint.i256.from_i64(-3i64)) == -1)
+
+    // min / -1 wraps to min (signed overflow, two's complement)
+    let mn = wideint.i256.parse("-57896044618658097711785492504343953926634992332820282019728792003956564819968")!
+    assert(mn == wideint.i256.min())
+    let mns = wideint.i256.to_str(wideint.i256.div(mn, wideint.i256.from_i64(-1i64)))
+    assert(mns == "-57896044618658097711785492504343953926634992332820282019728792003956564819968")
+    free(mns)
+
+    // parse range: max ok (== max()), max+1 overflow, min-1 overflow
+    assert(wideint.i256.parse("57896044618658097711785492504343953926634992332820282019728792003956564819967")! == wideint.i256.max())
+    assert(wideint.i256.parse("57896044618658097711785492504343953926634992332820282019728792003956564819968") == err(wideint.i256, wideint.parse.overflow))
+    assert(wideint.i256.parse("-57896044618658097711785492504343953926634992332820282019728792003956564819969") == err(wideint.i256, wideint.parse.overflow))
+
+    // parse_hex reads raw two's-complement bits ("ff..ff" == -1)
+    assert(wideint.i256.parse_hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")! == wideint.i256.from_i64(-1i64))
+
+    // try_to_i64 round-trip and out-of-range
+    assert(wideint.i256.try_to_i64(wideint.i256.from_i64(-123456789i64))! == -123456789i64)
+    assert(wideint.i256.try_to_i64(a).is_none)
+
+    // i128 / i512 basics: negative round-trip + div identity
+    let p = wideint.i128.parse("-170141183460469231731687303715884105728")!  // i128 min
+    assert(p == wideint.i128.min())
+    let ph = wideint.i128.to_hex(p)
+    assert(ph == "80000000000000000000000000000000")
+    free(ph)
+    // min/max order and the min == max+1 wrap relation (i512)
+    assert(wideint.i512.cmp(wideint.i512.min(), wideint.i512.max()) == -1)
+    assert(wideint.i512.add(wideint.i512.max(), wideint.i512.from_i64(1i64)) == wideint.i512.min())
+    let e = wideint.i512.from_i64(-1000000i64)
+    let f = wideint.i512.from_i64(-7i64)
+    let { eq, er } = wideint.i512.divmod(e, f)
+    assert(wideint.i512.add(wideint.i512.mul(eq, f), er) == e)
+    0
