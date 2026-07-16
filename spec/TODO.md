@@ -6,11 +6,14 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ## std::wideint (né fixint) wide integers — IMPLEMENTED 2026-07-14; follow-ups open
 
-Wide fixed-width integers (`u128`–`u512`, `i128`–`i512`) as by-value limb structs with
+Wide fixed-width integers (`u128`–`u1024`, `i128`–`i1024`) as by-value limb structs with
 companion-module operations over a shared private `u32[]` core: wrapping arithmetic,
 carry/borrow and `mul_wide` reporting forms, `checked_*` abort forms, div/rem/divmod,
 bitwise/shifts, signed two's-complement ops, `min()`/`max()`, strict `parse`/`parse_hex`
 (→ `uN!`/`iN!`), `to_str`/`to_hex`. Spec §std::wideint; tests in `tests/cases/stdlib/wideint_*`.
+2026-07-16: added the 1024-bit widths (giving `u512.mul_wide` a home), gave every abort
+site a message naming the operation (`u128.checked_mul: overflow past 128 bits`), and
+put doc comments on both companion halves (struct + module) of every width for LSP hover.
 
 Follow-ups (deliberately additive, not blocking):
 - **Cross-width conversions**: widening (`u128`→`u256`), truncating (`u256`→`u128`), and
