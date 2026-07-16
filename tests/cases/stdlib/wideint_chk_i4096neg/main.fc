@@ -1,0 +1,6 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // negating min aborts: it has no positive counterpart
+    let _r = wideint.i4096.checked_neg(wideint.i4096.min())
+    0

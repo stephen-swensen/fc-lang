@@ -6,7 +6,7 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ## std::wideint (né fixint) wide integers — IMPLEMENTED 2026-07-14; follow-ups open
 
-Wide fixed-width integers (`u128`–`u1024`, `i128`–`i1024`) as by-value limb structs with
+Wide fixed-width integers (`u128`–`u4096`, `i128`–`i4096`) as by-value limb structs with
 companion-module operations over a shared private `u32[]` core: wrapping arithmetic,
 carry/borrow and `mul_wide` reporting forms, `checked_*` abort forms, div/rem/divmod,
 bitwise/shifts, signed two's-complement ops, `min()`/`max()`, strict `parse`/`parse_hex`
@@ -14,6 +14,11 @@ bitwise/shifts, signed two's-complement ops, `min()`/`max()`, strict `parse`/`pa
 2026-07-16: added the 1024-bit widths (giving `u512.mul_wide` a home), gave every abort
 site a message naming the operation (`u128.checked_mul: overflow past 128 bits`), and
 put doc comments on both companion halves (struct + module) of every width for LSP hover.
+Same day: added the 2048- and 4096-bit families (RSA-2048/4096 and Rust `ruint`
+`Uint<4096>` precedent — by-value stays right at these sizes since copies scale O(n) vs
+mul's O(n²)), completing the `mul_wide` chain u128→…→u4096 (`u4096` is the top, no
+`u8192`). By-value/heap line: fixed width = value struct; a future arbitrary-precision
+`std::bignum` is the heap tool, not wider structs.
 
 Follow-ups (deliberately additive, not blocking):
 - **Cross-width conversions**: widening (`u128`→`u256`), truncating (`u256`→`u128`), and

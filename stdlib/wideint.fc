@@ -1,8 +1,8 @@
 namespace std::
 
-// Fixed-width integers wider than the built-in types: unsigned u128/u256/
-// u512/u1024 and signed (two's complement) i128/i256/i512/i1024, all with
-// inline, stack-allocated storage. Each width is a struct wrapping a
+// Fixed-width integers wider than the built-in types: unsigned u128 through
+// u4096 and signed (two's complement) i128 through i4096, doubling at each
+// width, all with inline, stack-allocated storage. Each width is a struct wrapping a
 // little-endian array of u32 limbs (limbs[0] is least significant), paired
 // with a companion module of the same name that holds its operations; all
 // arithmetic runs on a shared limb core so the per-width modules are thin,
@@ -44,6 +44,18 @@ module wideint =
     struct u1024 =
         limbs: u32[32]      // little-endian: limbs[0] is least significant
 
+    // A 2048-bit unsigned integer: 64 inline little-endian u32 limbs, no
+    // heap. Plain by-value data — copy with `=`, compare with `==`, zero
+    // with `default(u2048)` (which is the value 0).
+    struct u2048 =
+        limbs: u32[64]      // little-endian: limbs[0] is least significant
+
+    // A 4096-bit unsigned integer: 128 inline little-endian u32 limbs, no
+    // heap. Plain by-value data — copy with `=`, compare with `==`, zero
+    // with `default(u4096)` (which is the value 0).
+    struct u4096 =
+        limbs: u32[128]     // little-endian: limbs[0] is least significant
+
     // A 128-bit signed integer: 4 inline little-endian u32 limbs interpreted
     // as two's complement. Plain by-value data — copy with `=`, compare with
     // `==`, zero with `default(i128)` (which is the value 0).
@@ -67,6 +79,18 @@ module wideint =
     // compare with `==`, zero with `default(i1024)` (which is the value 0).
     struct i1024 =
         limbs: u32[32]      // little-endian two's complement; limbs[0] is least significant
+
+    // A 2048-bit signed integer: 64 inline little-endian u32 limbs
+    // interpreted as two's complement. Plain by-value data — copy with `=`,
+    // compare with `==`, zero with `default(i2048)` (which is the value 0).
+    struct i2048 =
+        limbs: u32[64]      // little-endian two's complement; limbs[0] is least significant
+
+    // A 4096-bit signed integer: 128 inline little-endian u32 limbs
+    // interpreted as two's complement. Plain by-value data — copy with `=`,
+    // compare with `==`, zero with `default(i4096)` (which is the value 0).
+    struct i4096 =
+        limbs: u32[128]     // little-endian two's complement; limbs[0] is least significant
 
     // ===================================================================
     // Shared limb core (private). Every routine works on u32[] slices of
@@ -885,10 +909,10 @@ module wideint =
     // ===================================================================
 
     // Operations on u1024: wrapping add/sub/mul (mod 2^1024), carry-reporting
-    // add_carry/sub_borrow (no mul_wide — there is no u2048), aborting
-    // checked_* forms, div/rem/divmod, bitwise ops and shifts, cmp,
-    // min()/max(), from_u64/try_to_u64, strict parse/parse_hex -> u1024!,
-    // and to_str/to_hex (heap strings, caller frees).
+    // add_carry/sub_borrow, widening mul_wide (-> u2048), aborting checked_*
+    // forms, div/rem/divmod, bitwise ops and shifts, cmp, min()/max(),
+    // from_u64/try_to_u64, strict parse/parse_hex -> u1024!, and
+    // to_str/to_hex (heap strings, caller frees).
     module u1024 =
         // A u1024 holding x (zero-extended).
         let from_u64 = (x: u64) ->
@@ -938,10 +962,16 @@ module wideint =
             let c = limbs_sub(r.limbs, a.limbs, b.limbs)
             { r, c != 0u32 }
 
-        // a * b, wrapping mod 2^1024. (No mul_wide — there is no u2048.)
+        // a * b, wrapping mod 2^1024.
         let mul = (a: u1024, b: u1024) ->
             let r = default(u1024)
             limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
+            r
+
+        // Full 2048-bit product of a and b (no truncation).
+        let mul_wide = (a: u1024, b: u1024) ->
+            let r = default(u2048)
+            limbs_mul_full(r.limbs, a.limbs, b.limbs)
             r
 
         let and = (a: u1024, b: u1024) ->
@@ -1051,6 +1081,358 @@ module wideint =
         let to_hex = (a: u1024) ->
             let work = a
             let scratch = u8[320] { }
+            heap_copy(limbs_format(scratch, work.limbs, 16u32))
+
+    // ===================================================================
+    // u2048 — 2048-bit unsigned (64 x u32 limbs)
+    // ===================================================================
+
+    // Operations on u2048: wrapping add/sub/mul (mod 2^2048), carry-reporting
+    // add_carry/sub_borrow, widening mul_wide (-> u4096), aborting checked_*
+    // forms, div/rem/divmod, bitwise ops and shifts, cmp, min()/max(),
+    // from_u64/try_to_u64, strict parse/parse_hex -> u2048!, and
+    // to_str/to_hex (heap strings, caller frees).
+    module u2048 =
+        // A u2048 holding x (zero-extended).
+        let from_u64 = (x: u64) ->
+            let r = default(u2048)
+            r.limbs[0] = (u32) x
+            r.limbs[1] = (u32) (x >> 32)
+            r
+
+        // Low 64 bits of a as a u64 if a fits in 64 bits, else none.
+        let try_to_u64 = (a: u2048) ->
+            let mut hi_zero = true
+            for i in 2..64 do
+                if a.limbs[i] != 0u32 then hi_zero = false
+            if hi_zero then some((u64) a.limbs[0] | ((u64) a.limbs[1] << 32))
+            else none(u64)
+
+        // The smallest u2048, 0 — the same value as default(u2048).
+        let min = () -> default(u2048)
+
+        // The largest u2048, 2^2048 - 1 (all bits set).
+        let max = () ->
+            let r = default(u2048)
+            limbs_not(r.limbs, r.limbs)
+            r
+
+        // a + b, wrapping mod 2^2048.
+        let add = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            limbs_add(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a + b as {sum, carry}; carry is true on overflow past 2048 bits.
+        let add_carry = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            { r, c != 0u32 }
+
+        // a - b, wrapping mod 2^2048.
+        let sub = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            limbs_sub(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a - b as {difference, borrow}; borrow is true when a < b.
+        let sub_borrow = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            let c = limbs_sub(r.limbs, a.limbs, b.limbs)
+            { r, c != 0u32 }
+
+        // a * b, wrapping mod 2^2048.
+        let mul = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
+            r
+
+        // Full 4096-bit product of a and b (no truncation).
+        let mul_wide = (a: u2048, b: u2048) ->
+            let r = default(u4096)
+            limbs_mul_full(r.limbs, a.limbs, b.limbs)
+            r
+
+        let and = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            limbs_and(r.limbs, a.limbs, b.limbs)
+            r
+
+        let or = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            limbs_or(r.limbs, a.limbs, b.limbs)
+            r
+
+        let xor = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            limbs_xor(r.limbs, a.limbs, b.limbs)
+            r
+
+        let not = (a: u2048) ->
+            let r = default(u2048)
+            limbs_not(r.limbs, a.limbs)
+            r
+
+        // a << n, wrapping mod 2^2048 (n >= 2048 yields 0).
+        let shl = (a: u2048, n: u32) ->
+            let r = default(u2048)
+            limbs_shl(r.limbs, a.limbs, n)
+            r
+
+        // a >> n (logical; n >= 2048 yields 0).
+        let shr = (a: u2048, n: u32) ->
+            let r = default(u2048)
+            limbs_shr(r.limbs, a.limbs, n)
+            r
+
+        // -1 if a<b, 0 if a==b, 1 if a>b.
+        let cmp = (a: u2048, b: u2048) ->
+            limbs_cmp(a.limbs, b.limbs)
+
+        let is_zero = (a: u2048) ->
+            limbs_is_zero(a.limbs)
+
+        // a / b, truncated. Aborts if b is zero.
+        let div = (a: u2048, b: u2048) ->
+            let q = default(u2048)
+            let r = default(u2048)
+            limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
+            q
+
+        // a % b. Aborts if b is zero.
+        let rem = (a: u2048, b: u2048) ->
+            let q = default(u2048)
+            let r = default(u2048)
+            limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
+            r
+
+        // {quotient, remainder} of a / b in one division. Aborts if b is zero.
+        let divmod = (a: u2048, b: u2048) ->
+            let q = default(u2048)
+            let r = default(u2048)
+            limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
+            { q, r }
+
+        // a + b, aborting on overflow past 2048 bits.
+        let checked_add = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            assert(c == 0u32, "u2048.checked_add: overflow past 2048 bits")
+            r
+
+        // a - b, aborting on underflow (a < b).
+        let checked_sub = (a: u2048, b: u2048) ->
+            let r = default(u2048)
+            let bor = limbs_sub(r.limbs, a.limbs, b.limbs)
+            assert(bor == 0u32, "u2048.checked_sub: underflow (a < b)")
+            r
+
+        // a * b, aborting on overflow past 2048 bits.
+        let checked_mul = (a: u2048, b: u2048) ->
+            let full = u32[128] { }
+            limbs_mul_full(full, a.limbs, b.limbs)
+            assert(limbs_is_zero(full[64..128]), "u2048.checked_mul: overflow past 2048 bits")
+            let r = default(u2048)
+            limbs_copy(r.limbs, full[0..64])
+            r
+
+        // Parse s as an unsigned decimal integer.
+        // returns: u2048! — ok(value), err(parse.invalid) on empty / bad digit,
+        //   err(parse.overflow) past 2048 bits.
+        let parse = (s: const str) ->
+            let r = default(u2048)
+            limbs_parse(r.limbs, s, 10u32)?
+            ok(r)
+
+        // Parse s as unsigned hexadecimal (no 0x prefix). Same error contract.
+        let parse_hex = (s: const str) ->
+            let r = default(u2048)
+            limbs_parse(r.limbs, s, 16u32)?
+            ok(r)
+
+        // Heap-allocated decimal text of a (caller must free).
+        let to_str = (a: u2048) ->
+            let work = a
+            let scratch = u8[640] { }
+            heap_copy(limbs_format(scratch, work.limbs, 10u32))
+
+        // Heap-allocated lowercase hex text of a (caller must free).
+        let to_hex = (a: u2048) ->
+            let work = a
+            let scratch = u8[640] { }
+            heap_copy(limbs_format(scratch, work.limbs, 16u32))
+
+    // ===================================================================
+    // u4096 — 4096-bit unsigned (128 x u32 limbs)
+    // ===================================================================
+
+    // Operations on u4096: wrapping add/sub/mul (mod 2^4096), carry-reporting
+    // add_carry/sub_borrow (no mul_wide — there is no u8192), aborting
+    // checked_* forms, div/rem/divmod, bitwise ops and shifts, cmp,
+    // min()/max(), from_u64/try_to_u64, strict parse/parse_hex -> u4096!,
+    // and to_str/to_hex (heap strings, caller frees).
+    module u4096 =
+        // A u4096 holding x (zero-extended).
+        let from_u64 = (x: u64) ->
+            let r = default(u4096)
+            r.limbs[0] = (u32) x
+            r.limbs[1] = (u32) (x >> 32)
+            r
+
+        // Low 64 bits of a as a u64 if a fits in 64 bits, else none.
+        let try_to_u64 = (a: u4096) ->
+            let mut hi_zero = true
+            for i in 2..128 do
+                if a.limbs[i] != 0u32 then hi_zero = false
+            if hi_zero then some((u64) a.limbs[0] | ((u64) a.limbs[1] << 32))
+            else none(u64)
+
+        // The smallest u4096, 0 — the same value as default(u4096).
+        let min = () -> default(u4096)
+
+        // The largest u4096, 2^4096 - 1 (all bits set).
+        let max = () ->
+            let r = default(u4096)
+            limbs_not(r.limbs, r.limbs)
+            r
+
+        // a + b, wrapping mod 2^4096.
+        let add = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            limbs_add(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a + b as {sum, carry}; carry is true on overflow past 4096 bits.
+        let add_carry = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            { r, c != 0u32 }
+
+        // a - b, wrapping mod 2^4096.
+        let sub = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            limbs_sub(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a - b as {difference, borrow}; borrow is true when a < b.
+        let sub_borrow = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            let c = limbs_sub(r.limbs, a.limbs, b.limbs)
+            { r, c != 0u32 }
+
+        // a * b, wrapping mod 2^4096. (No mul_wide — there is no u8192.)
+        let mul = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
+            r
+
+        let and = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            limbs_and(r.limbs, a.limbs, b.limbs)
+            r
+
+        let or = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            limbs_or(r.limbs, a.limbs, b.limbs)
+            r
+
+        let xor = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            limbs_xor(r.limbs, a.limbs, b.limbs)
+            r
+
+        let not = (a: u4096) ->
+            let r = default(u4096)
+            limbs_not(r.limbs, a.limbs)
+            r
+
+        // a << n, wrapping mod 2^4096 (n >= 4096 yields 0).
+        let shl = (a: u4096, n: u32) ->
+            let r = default(u4096)
+            limbs_shl(r.limbs, a.limbs, n)
+            r
+
+        // a >> n (logical; n >= 4096 yields 0).
+        let shr = (a: u4096, n: u32) ->
+            let r = default(u4096)
+            limbs_shr(r.limbs, a.limbs, n)
+            r
+
+        // -1 if a<b, 0 if a==b, 1 if a>b.
+        let cmp = (a: u4096, b: u4096) ->
+            limbs_cmp(a.limbs, b.limbs)
+
+        let is_zero = (a: u4096) ->
+            limbs_is_zero(a.limbs)
+
+        // a / b, truncated. Aborts if b is zero.
+        let div = (a: u4096, b: u4096) ->
+            let q = default(u4096)
+            let r = default(u4096)
+            limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
+            q
+
+        // a % b. Aborts if b is zero.
+        let rem = (a: u4096, b: u4096) ->
+            let q = default(u4096)
+            let r = default(u4096)
+            limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
+            r
+
+        // {quotient, remainder} of a / b in one division. Aborts if b is zero.
+        let divmod = (a: u4096, b: u4096) ->
+            let q = default(u4096)
+            let r = default(u4096)
+            limbs_divmod(q.limbs, r.limbs, a.limbs, b.limbs)
+            { q, r }
+
+        // a + b, aborting on overflow past 4096 bits.
+        let checked_add = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            let c = limbs_add(r.limbs, a.limbs, b.limbs)
+            assert(c == 0u32, "u4096.checked_add: overflow past 4096 bits")
+            r
+
+        // a - b, aborting on underflow (a < b).
+        let checked_sub = (a: u4096, b: u4096) ->
+            let r = default(u4096)
+            let bor = limbs_sub(r.limbs, a.limbs, b.limbs)
+            assert(bor == 0u32, "u4096.checked_sub: underflow (a < b)")
+            r
+
+        // a * b, aborting on overflow past 4096 bits.
+        let checked_mul = (a: u4096, b: u4096) ->
+            let full = u32[256] { }
+            limbs_mul_full(full, a.limbs, b.limbs)
+            assert(limbs_is_zero(full[128..256]), "u4096.checked_mul: overflow past 4096 bits")
+            let r = default(u4096)
+            limbs_copy(r.limbs, full[0..128])
+            r
+
+        // Parse s as an unsigned decimal integer.
+        // returns: u4096! — ok(value), err(parse.invalid) on empty / bad digit,
+        //   err(parse.overflow) past 4096 bits.
+        let parse = (s: const str) ->
+            let r = default(u4096)
+            limbs_parse(r.limbs, s, 10u32)?
+            ok(r)
+
+        // Parse s as unsigned hexadecimal (no 0x prefix). Same error contract.
+        let parse_hex = (s: const str) ->
+            let r = default(u4096)
+            limbs_parse(r.limbs, s, 16u32)?
+            ok(r)
+
+        // Heap-allocated decimal text of a (caller must free).
+        let to_str = (a: u4096) ->
+            let work = a
+            let scratch = u8[1280] { }
+            heap_copy(limbs_format(scratch, work.limbs, 10u32))
+
+        // Heap-allocated lowercase hex text of a (caller must free).
+        let to_hex = (a: u4096) ->
+            let work = a
+            let scratch = u8[1280] { }
             heap_copy(limbs_format(scratch, work.limbs, 16u32))
 
     // ===================================================================
@@ -1979,4 +2361,466 @@ module wideint =
         // Heap-allocated raw two's-complement hex text (caller must free).
         let to_hex = (a: i1024) ->
             let scratch = u8[320] { }
+            heap_copy(limbs_format(scratch, a.limbs, 16u32))
+    // ===================================================================
+    // i2048 — 2048-bit signed (two's complement, 64 x u32 limbs)
+    // ===================================================================
+
+    // Operations on i2048 (two's complement): wrapping add/sub/mul (mod
+    // 2^2048) and neg/abs, truncating div/rem/divmod (remainder takes the
+    // dividend's sign), aborting checked_* forms (incl. neg/abs/div for the
+    // min cases), bitwise ops, shl and arithmetic shr, signed cmp,
+    // min()/max(), from_i64/try_to_i64, strict parse/parse_hex -> i2048!,
+    // and to_str/to_hex (heap strings, caller frees).
+    module i2048 =
+        // An i2048 holding x (sign-extended).
+        let from_i64 = (x: i64) ->
+            let r = default(i2048)
+            r.limbs[0] = (u32) x
+            r.limbs[1] = (u32) (x >> 32)
+            let fill = if x < 0i64 then 0xFFFFFFFFu32 else 0u32
+            for i in 2..64 do
+                r.limbs[i] = fill
+            r
+
+        // a as an i64 if it fits [i64.min, i64.max], else none.
+        let try_to_i64 = (a: i2048) ->
+            let fill = if (a.limbs[1] >> 31) == 1u32 then 0xFFFFFFFFu32 else 0u32
+            let mut fits = true
+            for i in 2..64 do
+                if a.limbs[i] != fill then fits = false
+            if fits then some((i64) ((u64) a.limbs[0] | ((u64) a.limbs[1] << 32)))
+            else none(i64)
+
+        // The most negative i2048, -2^2047 (only the sign bit set).
+        let min = () ->
+            let r = default(i2048)
+            r.limbs[63] = 0x80000000u32
+            r
+
+        // The largest i2048, 2^2047 - 1 (every bit but the sign set).
+        let max = () ->
+            let r = default(i2048)
+            limbs_not(r.limbs, r.limbs)
+            r.limbs[63] = 0x7FFFFFFFu32
+            r
+
+        let is_neg = (a: i2048) ->
+            limbs_sign(a.limbs) == 1u32
+
+        // -a (two's complement; neg(min) wraps to min).
+        let neg = (a: i2048) ->
+            let r = default(i2048)
+            limbs_neg(r.limbs, a.limbs)
+            r
+
+        // |a| (abs(min) wraps to min).
+        let abs = (a: i2048) ->
+            if limbs_sign(a.limbs) == 1u32 then i2048.neg(a) else a
+
+        // a + b, wrapping mod 2^2048.
+        let add = (a: i2048, b: i2048) ->
+            let r = default(i2048)
+            limbs_add(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a - b, wrapping mod 2^2048.
+        let sub = (a: i2048, b: i2048) ->
+            let r = default(i2048)
+            limbs_sub(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a * b, wrapping mod 2^2048.
+        let mul = (a: i2048, b: i2048) ->
+            let r = default(i2048)
+            limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a / b, truncated toward zero. Aborts if b is zero.
+        let div = (a: i2048, b: i2048) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i2048.neg(a) else a
+            let ub = if bn then i2048.neg(b) else b
+            let q = default(i2048)
+            let r = default(i2048)
+            limbs_divmod(q.limbs, r.limbs, ua.limbs, ub.limbs)
+            if an != bn then i2048.neg(q) else q
+
+        // a % b (sign follows the dividend). Aborts if b is zero.
+        let rem = (a: i2048, b: i2048) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i2048.neg(a) else a
+            let ub = if bn then i2048.neg(b) else b
+            let q = default(i2048)
+            let r = default(i2048)
+            limbs_divmod(q.limbs, r.limbs, ua.limbs, ub.limbs)
+            if an then i2048.neg(r) else r
+
+        // {quotient, remainder} of a / b (truncated). Aborts if b is zero.
+        let divmod = (a: i2048, b: i2048) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i2048.neg(a) else a
+            let ub = if bn then i2048.neg(b) else b
+            let q = default(i2048)
+            let r = default(i2048)
+            limbs_divmod(q.limbs, r.limbs, ua.limbs, ub.limbs)
+            let qf = if an != bn then i2048.neg(q) else q
+            let rf = if an then i2048.neg(r) else r
+            { qf, rf }
+
+        // a + b, aborting on signed overflow.
+        let checked_add = (a: i2048, b: i2048) ->
+            let r = i2048.add(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa == limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa),
+                "i2048.checked_add: signed overflow")
+            r
+
+        // a - b, aborting on signed overflow.
+        let checked_sub = (a: i2048, b: i2048) ->
+            let r = i2048.sub(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa != limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa),
+                "i2048.checked_sub: signed overflow")
+            r
+
+        // a * b, aborting on signed overflow.
+        let checked_mul = (a: i2048, b: i2048) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i2048.neg(a) else a
+            let ub = if bn then i2048.neg(b) else b
+            let full = u32[128] { }
+            limbs_mul_full(full, ua.limbs, ub.limbs)
+            assert(limbs_signed_mul_fits(full, an != bn),
+                "i2048.checked_mul: signed overflow")
+            i2048.mul(a, b)
+
+        // -a, aborting when a is min (it has no positive counterpart).
+        let checked_neg = (a: i2048) ->
+            assert(!limbs_is_min_mag(a.limbs), "i2048.checked_neg: a is i2048.min")
+            i2048.neg(a)
+
+        // |a|, aborting when a is min.
+        let checked_abs = (a: i2048) ->
+            assert(!limbs_is_min_mag(a.limbs), "i2048.checked_abs: a is i2048.min")
+            i2048.abs(a)
+
+        // a / b, aborting on min / -1 overflow (and on b == 0, via div).
+        let checked_div = (a: i2048, b: i2048) ->
+            assert(!(limbs_is_min_mag(a.limbs) && b == i2048.from_i64(-1i64)),
+                "i2048.checked_div: i2048.min / -1 overflows")
+            i2048.div(a, b)
+
+        let and = (a: i2048, b: i2048) ->
+            let r = default(i2048)
+            limbs_and(r.limbs, a.limbs, b.limbs)
+            r
+
+        let or = (a: i2048, b: i2048) ->
+            let r = default(i2048)
+            limbs_or(r.limbs, a.limbs, b.limbs)
+            r
+
+        let xor = (a: i2048, b: i2048) ->
+            let r = default(i2048)
+            limbs_xor(r.limbs, a.limbs, b.limbs)
+            r
+
+        let not = (a: i2048) ->
+            let r = default(i2048)
+            limbs_not(r.limbs, a.limbs)
+            r
+
+        // a << n, wrapping mod 2^2048 (n >= 2048 yields 0).
+        let shl = (a: i2048, n: u32) ->
+            let r = default(i2048)
+            limbs_shl(r.limbs, a.limbs, n)
+            r
+
+        // a >> n, arithmetic (sign-extending; n >= 2048 yields 0 or -1).
+        let shr = (a: i2048, n: u32) ->
+            let r = default(i2048)
+            limbs_sar(r.limbs, a.limbs, n)
+            r
+
+        // -1 if a<b, 0 if a==b, 1 if a>b (signed).
+        let cmp = (a: i2048, b: i2048) ->
+            limbs_cmp_signed(a.limbs, b.limbs)
+
+        let is_zero = (a: i2048) ->
+            limbs_is_zero(a.limbs)
+
+        // Parse s as a signed decimal integer (optional leading '-').
+        // returns: i2048! — err(parse.invalid) on empty / bad digit,
+        //   err(parse.overflow) outside [-2^2047, 2^2047-1].
+        let parse = (s: const str) ->
+            if s.len > 0i64 && s[0] == '-' then
+                let mag = default(i2048)
+                limbs_parse(mag.limbs, s[1..s.len], 10u32)?
+                if limbs_sign(mag.limbs) == 1u32 && !limbs_is_min_mag(mag.limbs) then
+                    err(i2048, wideint.parse.overflow)
+                else
+                    let r = default(i2048)
+                    limbs_neg(r.limbs, mag.limbs)
+                    ok(r)
+            else
+                let r = default(i2048)
+                limbs_parse(r.limbs, s, 10u32)?
+                if limbs_sign(r.limbs) == 1u32 then err(i2048, wideint.parse.overflow)
+                else ok(r)
+
+        // Parse s as raw two's-complement hexadecimal (no 0x prefix); the bit
+        // pattern is taken as-is, so "ff…ff" is -1.
+        let parse_hex = (s: const str) ->
+            let r = default(i2048)
+            limbs_parse(r.limbs, s, 16u32)?
+            ok(r)
+
+        // Heap-allocated decimal text of a, leading '-' if negative (free it).
+        let to_str = (a: i2048) ->
+            let scratch = u8[640] { }
+            if limbs_sign(a.limbs) == 1u32 then
+                let mag = i2048.neg(a)
+                heap_copy_neg(limbs_format(scratch, mag.limbs, 10u32))
+            else
+                heap_copy(limbs_format(scratch, a.limbs, 10u32))
+
+        // Heap-allocated raw two's-complement hex text (caller must free).
+        let to_hex = (a: i2048) ->
+            let scratch = u8[640] { }
+            heap_copy(limbs_format(scratch, a.limbs, 16u32))
+    // ===================================================================
+    // i4096 — 4096-bit signed (two's complement, 128 x u32 limbs)
+    // ===================================================================
+
+    // Operations on i4096 (two's complement): wrapping add/sub/mul (mod
+    // 2^4096) and neg/abs, truncating div/rem/divmod (remainder takes the
+    // dividend's sign), aborting checked_* forms (incl. neg/abs/div for the
+    // min cases), bitwise ops, shl and arithmetic shr, signed cmp,
+    // min()/max(), from_i64/try_to_i64, strict parse/parse_hex -> i4096!,
+    // and to_str/to_hex (heap strings, caller frees).
+    module i4096 =
+        // An i4096 holding x (sign-extended).
+        let from_i64 = (x: i64) ->
+            let r = default(i4096)
+            r.limbs[0] = (u32) x
+            r.limbs[1] = (u32) (x >> 32)
+            let fill = if x < 0i64 then 0xFFFFFFFFu32 else 0u32
+            for i in 2..128 do
+                r.limbs[i] = fill
+            r
+
+        // a as an i64 if it fits [i64.min, i64.max], else none.
+        let try_to_i64 = (a: i4096) ->
+            let fill = if (a.limbs[1] >> 31) == 1u32 then 0xFFFFFFFFu32 else 0u32
+            let mut fits = true
+            for i in 2..128 do
+                if a.limbs[i] != fill then fits = false
+            if fits then some((i64) ((u64) a.limbs[0] | ((u64) a.limbs[1] << 32)))
+            else none(i64)
+
+        // The most negative i4096, -2^4095 (only the sign bit set).
+        let min = () ->
+            let r = default(i4096)
+            r.limbs[127] = 0x80000000u32
+            r
+
+        // The largest i4096, 2^4095 - 1 (every bit but the sign set).
+        let max = () ->
+            let r = default(i4096)
+            limbs_not(r.limbs, r.limbs)
+            r.limbs[127] = 0x7FFFFFFFu32
+            r
+
+        let is_neg = (a: i4096) ->
+            limbs_sign(a.limbs) == 1u32
+
+        // -a (two's complement; neg(min) wraps to min).
+        let neg = (a: i4096) ->
+            let r = default(i4096)
+            limbs_neg(r.limbs, a.limbs)
+            r
+
+        // |a| (abs(min) wraps to min).
+        let abs = (a: i4096) ->
+            if limbs_sign(a.limbs) == 1u32 then i4096.neg(a) else a
+
+        // a + b, wrapping mod 2^4096.
+        let add = (a: i4096, b: i4096) ->
+            let r = default(i4096)
+            limbs_add(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a - b, wrapping mod 2^4096.
+        let sub = (a: i4096, b: i4096) ->
+            let r = default(i4096)
+            limbs_sub(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a * b, wrapping mod 2^4096.
+        let mul = (a: i4096, b: i4096) ->
+            let r = default(i4096)
+            limbs_mul_wrap(r.limbs, a.limbs, b.limbs)
+            r
+
+        // a / b, truncated toward zero. Aborts if b is zero.
+        let div = (a: i4096, b: i4096) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i4096.neg(a) else a
+            let ub = if bn then i4096.neg(b) else b
+            let q = default(i4096)
+            let r = default(i4096)
+            limbs_divmod(q.limbs, r.limbs, ua.limbs, ub.limbs)
+            if an != bn then i4096.neg(q) else q
+
+        // a % b (sign follows the dividend). Aborts if b is zero.
+        let rem = (a: i4096, b: i4096) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i4096.neg(a) else a
+            let ub = if bn then i4096.neg(b) else b
+            let q = default(i4096)
+            let r = default(i4096)
+            limbs_divmod(q.limbs, r.limbs, ua.limbs, ub.limbs)
+            if an then i4096.neg(r) else r
+
+        // {quotient, remainder} of a / b (truncated). Aborts if b is zero.
+        let divmod = (a: i4096, b: i4096) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i4096.neg(a) else a
+            let ub = if bn then i4096.neg(b) else b
+            let q = default(i4096)
+            let r = default(i4096)
+            limbs_divmod(q.limbs, r.limbs, ua.limbs, ub.limbs)
+            let qf = if an != bn then i4096.neg(q) else q
+            let rf = if an then i4096.neg(r) else r
+            { qf, rf }
+
+        // a + b, aborting on signed overflow.
+        let checked_add = (a: i4096, b: i4096) ->
+            let r = i4096.add(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa == limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa),
+                "i4096.checked_add: signed overflow")
+            r
+
+        // a - b, aborting on signed overflow.
+        let checked_sub = (a: i4096, b: i4096) ->
+            let r = i4096.sub(a, b)
+            let sa = limbs_sign(a.limbs)
+            assert(!(sa != limbs_sign(b.limbs) && limbs_sign(r.limbs) != sa),
+                "i4096.checked_sub: signed overflow")
+            r
+
+        // a * b, aborting on signed overflow.
+        let checked_mul = (a: i4096, b: i4096) ->
+            let an = limbs_sign(a.limbs) == 1u32
+            let bn = limbs_sign(b.limbs) == 1u32
+            let ua = if an then i4096.neg(a) else a
+            let ub = if bn then i4096.neg(b) else b
+            let full = u32[256] { }
+            limbs_mul_full(full, ua.limbs, ub.limbs)
+            assert(limbs_signed_mul_fits(full, an != bn),
+                "i4096.checked_mul: signed overflow")
+            i4096.mul(a, b)
+
+        // -a, aborting when a is min (it has no positive counterpart).
+        let checked_neg = (a: i4096) ->
+            assert(!limbs_is_min_mag(a.limbs), "i4096.checked_neg: a is i4096.min")
+            i4096.neg(a)
+
+        // |a|, aborting when a is min.
+        let checked_abs = (a: i4096) ->
+            assert(!limbs_is_min_mag(a.limbs), "i4096.checked_abs: a is i4096.min")
+            i4096.abs(a)
+
+        // a / b, aborting on min / -1 overflow (and on b == 0, via div).
+        let checked_div = (a: i4096, b: i4096) ->
+            assert(!(limbs_is_min_mag(a.limbs) && b == i4096.from_i64(-1i64)),
+                "i4096.checked_div: i4096.min / -1 overflows")
+            i4096.div(a, b)
+
+        let and = (a: i4096, b: i4096) ->
+            let r = default(i4096)
+            limbs_and(r.limbs, a.limbs, b.limbs)
+            r
+
+        let or = (a: i4096, b: i4096) ->
+            let r = default(i4096)
+            limbs_or(r.limbs, a.limbs, b.limbs)
+            r
+
+        let xor = (a: i4096, b: i4096) ->
+            let r = default(i4096)
+            limbs_xor(r.limbs, a.limbs, b.limbs)
+            r
+
+        let not = (a: i4096) ->
+            let r = default(i4096)
+            limbs_not(r.limbs, a.limbs)
+            r
+
+        // a << n, wrapping mod 2^4096 (n >= 4096 yields 0).
+        let shl = (a: i4096, n: u32) ->
+            let r = default(i4096)
+            limbs_shl(r.limbs, a.limbs, n)
+            r
+
+        // a >> n, arithmetic (sign-extending; n >= 4096 yields 0 or -1).
+        let shr = (a: i4096, n: u32) ->
+            let r = default(i4096)
+            limbs_sar(r.limbs, a.limbs, n)
+            r
+
+        // -1 if a<b, 0 if a==b, 1 if a>b (signed).
+        let cmp = (a: i4096, b: i4096) ->
+            limbs_cmp_signed(a.limbs, b.limbs)
+
+        let is_zero = (a: i4096) ->
+            limbs_is_zero(a.limbs)
+
+        // Parse s as a signed decimal integer (optional leading '-').
+        // returns: i4096! — err(parse.invalid) on empty / bad digit,
+        //   err(parse.overflow) outside [-2^4095, 2^4095-1].
+        let parse = (s: const str) ->
+            if s.len > 0i64 && s[0] == '-' then
+                let mag = default(i4096)
+                limbs_parse(mag.limbs, s[1..s.len], 10u32)?
+                if limbs_sign(mag.limbs) == 1u32 && !limbs_is_min_mag(mag.limbs) then
+                    err(i4096, wideint.parse.overflow)
+                else
+                    let r = default(i4096)
+                    limbs_neg(r.limbs, mag.limbs)
+                    ok(r)
+            else
+                let r = default(i4096)
+                limbs_parse(r.limbs, s, 10u32)?
+                if limbs_sign(r.limbs) == 1u32 then err(i4096, wideint.parse.overflow)
+                else ok(r)
+
+        // Parse s as raw two's-complement hexadecimal (no 0x prefix); the bit
+        // pattern is taken as-is, so "ff…ff" is -1.
+        let parse_hex = (s: const str) ->
+            let r = default(i4096)
+            limbs_parse(r.limbs, s, 16u32)?
+            ok(r)
+
+        // Heap-allocated decimal text of a, leading '-' if negative (free it).
+        let to_str = (a: i4096) ->
+            let scratch = u8[1280] { }
+            if limbs_sign(a.limbs) == 1u32 then
+                let mag = i4096.neg(a)
+                heap_copy_neg(limbs_format(scratch, mag.limbs, 10u32))
+            else
+                heap_copy(limbs_format(scratch, a.limbs, 10u32))
+
+        // Heap-allocated raw two's-complement hex text (caller must free).
+        let to_hex = (a: i4096) ->
+            let scratch = u8[1280] { }
             heap_copy(limbs_format(scratch, a.limbs, 16u32))

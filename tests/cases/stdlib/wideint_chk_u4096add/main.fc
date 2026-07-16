@@ -1,0 +1,6 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // unsigned add overflow: max + 1
+    let _r = wideint.u4096.checked_add(wideint.u4096.max(), wideint.u4096.from_u64(1u64))
+    0

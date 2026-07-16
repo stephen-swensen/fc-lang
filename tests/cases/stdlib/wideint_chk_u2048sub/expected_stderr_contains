@@ -1,0 +1,1 @@
+u2048.checked_sub: underflow (a < b)

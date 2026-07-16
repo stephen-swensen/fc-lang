@@ -1,0 +1,6 @@
+import wideint from std::
+
+let main = (args: str[]) ->
+    // unsigned subtract underflow: 0 - 1
+    let _r = wideint.u2048.checked_sub(wideint.u2048.min(), wideint.u2048.from_u64(1u64))
+    0
