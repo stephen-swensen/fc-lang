@@ -1765,5 +1765,86 @@ check("go-to-definition from a param type annotation lands on the enum decl",
       isinstance(cp_def, dict) and cp_def.get("range", {}).get("start", {}).get("line") == 1,
       str(cp_def))
 
+# ---- companion members after '.' on a TYPE NAME + doc-less companion hover ----
+# The std::wideint shape: struct + companion module pairs inside a module,
+# pulled in by a wildcard import; the module half has only a blank-separated
+# banner (no attached doc comment). Hover on the type name must still render
+# the `module X` fence (the pairing is visible even without a doc), and
+# completion after `TypeName.` must offer the companion module's members —
+# not the struct's fields, which are invalid on a type name.
+CM_LIB = (
+    "namespace mystd::\n"                        # 0
+    "\n"                                         # 1
+    "module wide =\n"                            # 2
+    "    // A 128-bit integer.\n"                # 3
+    "    struct w128 =\n"                        # 4
+    "        limbs: u32[4]\n"                    # 5
+    "\n"                                         # 6
+    "    // ============================\n"      # 7  banner, blank-separated:
+    "\n"                                         # 8  must NOT attach as doc
+    "    module w128 =\n"                        # 9  companion, no doc comment
+    "        let zero = () ->\n"                 # 10
+    "            default(w128)\n"                # 11
+    "        let parse = (s: str) ->\n"          # 12
+    "            default(w128)\n"                # 13
+    "\n"                                         # 14
+    "    union pkt =\n"                          # 15
+    "        | ping(i32)\n"                      # 16
+    "        | quiet\n"                          # 17
+    "\n"                                         # 18
+    "    module pkt =\n"                         # 19  union companion, no doc
+    "        let mk = () ->\n"                   # 20
+    "            pkt.quiet\n"                    # 21
+)
+CM_MAIN = (
+    "import * from mystd::wide\n"                # 0
+    "\n"                                         # 1
+    "module app =\n"                             # 2
+    "    let go = () ->\n"                       # 3
+    "        let z = w128.zero()\n"              # 4  'w128' ref + member completion
+    "        let k = pkt.mk()\n"                 # 5  union companion completion
+    "        let f = z.limbs\n"                  # 6  VALUE '.': fields (control)
+    "        f.len\n"                            # 7
+    "\n"                                         # 8
+    "let main = (args: str[]) ->\n"              # 9
+    "    (i32) app.go()\n"                       # 10
+)
+cmdir = tempfile.mkdtemp(prefix="fc_lsp_comp_")
+with open(os.path.join(cmdir, "wide.fc"), "w") as f: f.write(CM_LIB)
+with open(os.path.join(cmdir, "main.fc"), "w") as f: f.write(CM_MAIN)
+cmuri = "file://" + os.path.join(cmdir, "main.fc")
+def cm_completion(i, l, c): return req(i, "textDocument/completion",
+    {"textDocument": {"uri": cmuri}, "position": {"line": l, "character": c}})
+cm = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": cmuri, "languageId": "fc",
+         "version": 1, "text": CM_MAIN}}),
+    req(2, "textDocument/hover", {"textDocument": {"uri": cmuri},
+        "position": {"line": 4, "character": CM_MAIN.split("\n")[4].index("w128") + 1}}),
+    cm_completion(3, 4, CM_MAIN.split("\n")[4].index("w128.") + 5),   # after 'w128.'
+    cm_completion(4, 5, CM_MAIN.split("\n")[5].index("pkt.") + 4),    # after 'pkt.'
+    cm_completion(5, 6, CM_MAIN.split("\n")[6].index("z.") + 2),      # after 'z.' (value)
+    req(9, "shutdown", None), note("exit", None),
+]
+cmresp, _, cmbf, _, _ = run_session(cm)
+cm_hov = ((cmresp.get(2, {}).get("result") or {}).get("contents") or {}).get("value") or ""
+def cm_labels(rid):
+    r = cmresp.get(rid, {}).get("result") or {}
+    items = r.get("items") if isinstance(r, dict) else r
+    return [it.get("label") for it in (items or [])]
+check("companion setup: unit is clean",
+      cmbf.get("main.fc", [["?"]])[-1] == [], str(cmbf.get("main.fc")))
+check("hover a type ref merges a DOC-LESS companion module (module fence still shown)",
+      "struct w128" in cm_hov and "module w128" in cm_hov and "\n────" in cm_hov,
+      cm_hov)
+check("completion after '.' on a struct TYPE NAME offers the companion module's members",
+      set(cm_labels(3)) >= {"zero", "parse"}, str(cm_labels(3)))
+check("completion on a struct type name does NOT offer the struct's fields",
+      "limbs" not in cm_labels(3), str(cm_labels(3)))
+check("completion after '.' on a union type name merges companion members and variants",
+      set(cm_labels(4)) >= {"mk", "ping", "quiet"}, str(cm_labels(4)))
+check("completion on a struct VALUE still offers its fields",
+      "limbs" in cm_labels(5) and "zero" not in cm_labels(5), str(cm_labels(5)))
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

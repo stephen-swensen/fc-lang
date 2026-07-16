@@ -2095,21 +2095,30 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
                 }
             }
 
-            if (comp_md) {
-                /* A rule separates the pair's sections. Drawn with U+2500 text
+            if (hit.companion) {
+                /* Render the module half whenever the pair exists — a companion
+                 * without its own doc comment still gets its `module name`
+                 * fence, so the pairing itself is always visible. A rule
+                 * separates the pair's sections. Drawn with U+2500 text
                  * rather than markdown `---`: VSCode colors a markdown <hr>
                  * with the theme's editorHoverWidget.border, which is
                  * invisible in themes that draw borderless hovers. */
                 #define HOVER_RULE "────────────────────────────────"
+                const char *cfmt = comp_md
+                    ? HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s"
+                    : HOVER_RULE "\n\n```fc\nmodule %s\n```";
+                int cneed = snprintf(NULL, 0, cfmt, nm, comp_md) + 1;
+                char *comp_sec = arena_alloc(a, (size_t)cneed);
+                snprintf(comp_sec, (size_t)cneed, cfmt, nm, comp_md);
                 const char *fmt = doc_md
-                    ? "```fc\n%s\n```\n\n%s\n\n" HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s"
-                    : "```fc\n%s\n```\n\n" HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s";
+                    ? "```fc\n%s\n```\n\n%s\n\n%s"
+                    : "```fc\n%s\n```\n\n%s";
                 int need = doc_md
-                    ? snprintf(NULL, 0, fmt, header, doc_md, nm, comp_md) + 1
-                    : snprintf(NULL, 0, fmt, header, nm, comp_md) + 1;
+                    ? snprintf(NULL, 0, fmt, header, doc_md, comp_sec) + 1
+                    : snprintf(NULL, 0, fmt, header, comp_sec) + 1;
                 md = arena_alloc(a, (size_t)need);
-                if (doc_md) snprintf(md, (size_t)need, fmt, header, doc_md, nm, comp_md);
-                else        snprintf(md, (size_t)need, fmt, header, nm, comp_md);
+                if (doc_md) snprintf(md, (size_t)need, fmt, header, doc_md, comp_sec);
+                else        snprintf(md, (size_t)need, fmt, header, comp_sec);
             } else {
                 const char *fmt = doc_md ? "```fc\n%s\n```\n\n%s" : "```fc\n%s\n```";
                 int need = snprintf(NULL, 0, fmt, header, doc_md) + 1;
@@ -2468,6 +2477,21 @@ static bool sym_is_mangled_type_twin(const Symbol *s) {
     return false;
 }
 
+/* Emit a module's public members as completion items (used for both plain
+ * module objects and a companion-typed name's module half). */
+static void emit_module_members(Arena *a, JsonValue *arr, Symbol *mod) {
+    SymbolTable *m = mod->members;
+    for (int i = 0; i < m->count; i++) {
+        if (m->symbols[i].is_private) continue;
+        if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
+        char detail[512];
+        detail[0] = '\0';
+        if (m->symbols[i].type) copy_type_name(m->symbols[i].type, detail, sizeof detail);
+        add_item(a, arr, m->symbols[i].name, sym_kind_to_cik(&m->symbols[i]),
+                 detail[0] ? detail : NULL);
+    }
+}
+
 /* Peel option/pointer one level to reach a struct/union for member access. */
 static Type *peel_to_aggregate(Type *t) {
     for (int i = 0; t && i < 4; i++) {
@@ -2626,15 +2650,53 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
             mod = obj->field.resolved_member;
     }
     if (mod && mod->members) {
-        SymbolTable *m = mod->members;
-        for (int i = 0; i < m->count; i++) {
-            if (m->symbols[i].is_private) continue;
-            if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
-            char detail[512];
-            detail[0] = '\0';
-            if (m->symbols[i].type) copy_type_name(m->symbols[i].type, detail, sizeof detail);
-            add_item(a, arr, m->symbols[i].name, sym_kind_to_cik(&m->symbols[i]),
-                     detail[0] ? detail : NULL);
+        emit_module_members(a, arr, mod);
+        return true;
+    }
+
+    /* Type-NAME object (an ident or module path resolving to a struct/union/
+     * enum): what pass2 accepts after the '.' is the companion module's
+     * members (i128.parse) and, for unions/enums, variant constructors —
+     * never the struct's fields (those need a value, and `i128.limbs` is a
+     * compile error). Mirror that here instead of falling through to the
+     * value dispatch below, which would offer the fields. */
+    Symbol *tsym = NULL;
+    if (!arrow) {
+        if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
+            (obj->ident.resolved_sym->kind == DECL_STRUCT ||
+             obj->ident.resolved_sym->kind == DECL_UNION ||
+             obj->ident.resolved_sym->kind == DECL_ENUM))
+            tsym = obj->ident.resolved_sym;
+        else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
+                 !obj->field.is_variant_constructor && !obj->field.is_type_property &&
+                 (obj->field.resolved_member->kind == DECL_STRUCT ||
+                  obj->field.resolved_member->kind == DECL_UNION ||
+                  obj->field.resolved_member->kind == DECL_ENUM))
+            tsym = obj->field.resolved_member;
+        else if (!obj && c.sym &&
+                 (c.sym->kind == DECL_STRUCT || c.sym->kind == DECL_UNION ||
+                  c.sym->kind == DECL_ENUM))
+            tsym = c.sym;
+    }
+    if (tsym) {
+        Symbol *comp = (obj && obj->kind == EXPR_IDENT)
+                     ? obj->ident.companion_module : NULL;
+        if (!comp) comp = companion_of_type_sym(r, tsym);
+        if (comp && comp->members)
+            emit_module_members(a, arr, comp);
+        Type *tt = tsym->type;
+        if (tt && tt->kind == TYPE_UNION) {
+            for (int i = 0; i < tt->unio.variant_count; i++)
+                add_item(a, arr, tt->unio.variants[i].name, CIK_ENUMMEMBER, NULL);
+        } else if (tt && tt->kind == TYPE_ENUM) {
+            bool has_count_variant = false;
+            for (int i = 0; i < tt->enu.variant_count; i++) {
+                add_item(a, arr, tt->enu.variants[i].name, CIK_ENUMMEMBER, NULL);
+                if (strcmp(tt->enu.variants[i].name, "count") == 0)
+                    has_count_variant = true;
+            }
+            if (!has_count_variant)
+                add_item(a, arr, "count", CIK_FIELD, "i32");
         }
         return true;
     }
