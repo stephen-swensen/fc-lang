@@ -6184,6 +6184,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
+        /* Any type-name object still unclaimed here is an error. Companion
+         * module members, union variant construction, and enum variants /
+         * `count` all returned above, so what remains is a member access that
+         * needs a VALUE — most commonly a struct field spelled on the type
+         * name (`point.x`). Without this check the bare type name would fall
+         * into the value paths below and leak into the emitted C as an
+         * undeclared identifier. */
+        if (expr_is_type_ref(e->field.object)) {
+            diag_error(e->loc, "type '%s' has no member '%s'; fields are "
+                "accessed on a value of the type, not the type name",
+                type_name(obj_type), e->field.name);
+            e->type = type_error();
+            return e->type;
+        }
+
         obj_type = resolve_type(ctx, obj_type);
 
         /* Slice .len and .ptr fields */

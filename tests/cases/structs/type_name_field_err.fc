@@ -1,0 +1,10 @@
+// Field access on a bare struct TYPE NAME (no companion module) is an error:
+// fields belong to values. Before this rule the raw type name leaked into the
+// emitted C as an undeclared identifier.
+struct point =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    let v = point.x
+    v

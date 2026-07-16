@@ -1,0 +1,9 @@
+// Same rule through a module-qualified type path: geo.point names the TYPE,
+// so member access on it (with no companion module) is an error.
+module geo =
+    struct point =
+        x: i32
+
+let main = (args: str[]) ->
+    let v = geo.point.x
+    v

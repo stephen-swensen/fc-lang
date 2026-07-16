@@ -1,0 +1,12 @@
+// With a companion module present, a member access on the type name resolves
+// through the module — a field name that is not a module member stays an error.
+struct point =
+    x: i32
+
+module point =
+    let origin = () ->
+        point{x = 0}
+
+let main = (args: str[]) ->
+    let v = point.x
+    v
