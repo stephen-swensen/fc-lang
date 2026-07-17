@@ -1,0 +1,14 @@
+// Comparison chains that syntactically brush against const-arg lists must
+// keep their comparison reading.
+let f = (x: bool, y: bool) ->
+    if x then 1 else if y then 2 else 0
+
+let main = (args: str[]) ->
+    let a = 1
+    let b = 5
+    assert(f(a < 2, b > 1) == 1)
+    let x = a < 2
+    assert(x)
+    let g = a < b + 3
+    assert(g)
+    0

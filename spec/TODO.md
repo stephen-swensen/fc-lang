@@ -4,6 +4,33 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
+## Const generics (value parameters) — IMPLEMENTED 2026-07-17 on branch `n-const-generics`; evaluation open
+
+Generic parameters over compile-time integers, motivated by std::wideint's hand-enumerated
+width families. Same `'x` sigil as type variables, kind inferred from occurrence position
+(`'n` in a size/value slot = const param); `struct wide = limbs: u32['n / 32]` instantiates
+as `wide<128>`/`wide<256>` from one definition; functions infer const params by unification
+(`(a: wide<'n>)`) or take them via the explicit `<'n>` prefix; const args admit literals,
+const params, named consts, bare `+ - * / %` (parens for shifts); `mul_wide`-style width
+doubling works (`wide<'n * 2>`). Instantiation-time checking (C++/Zig school) with
+instantiation-chain diagnostics; value recursion (`f<'n + 1>`) rejected as an infinite
+family (no compile-time branch pruning). Spec §Const Parameters; grammar `const_expr`;
+tests `tests/cases/generics/const_*` + `wideint_proto` (acceptance: generic wide with
+add/mul_wide at 128/256 from one definition).
+
+Open before merge:
+- **Decision**: keep the feature (and optionally rewrite std::wideint over `wide<'n>`) or
+  abandon the branch — evaluate the prototype's ergonomics vs the enumerated stdlib.
+- Struct literals for const-param structs: `wide { limbs = ... }` cannot infer `'n` from a
+  slice-typed field value; construction is via `default(wide<N>)` + mutation or companion
+  constructors. Consider size inference from array-literal field values later.
+- Named consts inside *field* size slots (`limbs: u32[cfg.words]`) — const args in `< >`
+  fold named consts, field sizes accept only literals/const-param expressions today.
+- LSP: hover shows `wide<256>` via type_name; `'n` hovers as `i32`. No dedicated const-param
+  hover docs yet.
+
+---
+
 ## std::wideint (né fixint) wide integers — IMPLEMENTED 2026-07-14; follow-ups open
 
 Wide fixed-width integers (`u128`–`u4096`, `i128`–`i4096`) as by-value limb structs with

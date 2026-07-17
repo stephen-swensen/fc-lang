@@ -1,0 +1,11 @@
+struct wide =
+    limbs: u32['n]
+
+let f = <'n>() ->
+    let w = default(wide<'n>)
+    let x = 'n.max
+    x
+
+let main = (args: str[]) ->
+    let y = f<8>()
+    0

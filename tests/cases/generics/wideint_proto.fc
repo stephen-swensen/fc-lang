@@ -1,0 +1,52 @@
+// Prototype: one generic definition covering all wideint widths.
+struct wide =
+    limbs: u32['n / 32]
+
+let from_u64 = <'n>(v: u64) ->
+    let mut r = default(wide<'n>)
+    r.limbs[0] = (u32) v
+    if 'n / 32 > 1 then r.limbs[1] = (u32) (v >> 32) else void()
+    r
+
+let add = (a: wide<'n>, b: wide<'n>) ->
+    let mut r = default(wide<'n>)
+    let mut carry = 0u32
+    for i in 0..('n / 32) do
+        let s = (u64) a.limbs[i] + (u64) b.limbs[i] + (u64) carry
+        r.limbs[i] = (u32) s
+        carry = (u32) (s >> 32)
+    r
+
+let mul_wide = (a: wide<'n>, b: wide<'n>) ->
+    let mut r = default(wide<'n * 2>)
+    let words = 'n / 32
+    for i in 0..words do
+        let mut carry = 0u64
+        for j in 0..words do
+            let cur = (u64) r.limbs[i + j] + (u64) a.limbs[i] * (u64) b.limbs[j] + carry
+            r.limbs[i + j] = (u32) cur
+            carry = cur >> 32
+        r.limbs[i + words] = (u32) carry
+    r
+
+let main = (args: str[]) ->
+    let a = from_u64<128>(0xffffffffffffffffu64)
+    let b = from_u64<128>(1u64)
+    let s = add(a, b)
+    assert(s.limbs[0] == 0u32)
+    assert(s.limbs[1] == 0u32)
+    assert(s.limbs[2] == 1u32)
+    // (2^64 - 1)^2 = 2^128 - 2^65 + 1
+    let p = mul_wide(a, a)
+    assert(p.limbs.len == 8)          // wide<256>
+    assert(p.limbs[0] == 1u32)
+    assert(p.limbs[1] == 0u32)
+    assert(p.limbs[2] == 0xfffffffeu32)
+    assert(p.limbs[3] == 0xffffffffu32)
+    assert(p.limbs[4] == 0u32)
+    // a 256-bit instance of the same definition
+    let x = from_u64<256>(7u64)
+    let y = add(x, x)
+    assert(y.limbs[0] == 14u32)
+    assert(y.limbs.len == 8)
+    0

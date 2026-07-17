@@ -1,0 +1,9 @@
+struct wide =
+    limbs: u32['n]
+
+let zero = <'n>() ->
+    default(wide<'n>)
+
+let main = (args: str[]) ->
+    let a = zero()
+    0

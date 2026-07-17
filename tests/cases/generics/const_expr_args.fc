@@ -1,0 +1,26 @@
+// Const-expression arguments: bare arithmetic, parens (full grammar inside,
+// incl. shifts), unary minus, nesting.
+struct wide =
+    limbs: u32['n / 32]
+
+let quarter = <'n>() ->
+    let w = default(wide<('n >> 2)>)
+    w.limbs.len
+
+let double_of = <'n>() ->
+    let w = default(wide<'n * 2>)
+    w.limbs.len
+
+let offset = <'n>() ->
+    let w = default(wide<'n + -32 + 64>)
+    w.limbs.len
+
+let main = (args: str[]) ->
+    assert(quarter<512>() == 4)
+    assert(double_of<64>() == 4)
+    assert(offset<96>() == 4)
+    let direct = default(wide<(2 + 2) * 32>)
+    assert(direct.limbs.len == 4)
+    let nested = default(wide<(((128)))>)
+    assert(nested.limbs.len == 4)
+    0

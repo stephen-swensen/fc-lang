@@ -1,0 +1,9 @@
+let sum_to = <'n>() ->
+    let mut s = 0
+    for i in 0..'n do
+        s = s + i
+    s
+
+let main = (args: str[]) ->
+    let x = sum_to<i32>()
+    0

@@ -1,0 +1,18 @@
+// Explicit const arguments on functions via the <'n> prefix, including a
+// forward reference (call before the definition).
+let main = (args: str[]) ->
+    assert(sum_to<5>() == 10)
+    assert(sum_to<10>() == 45)
+    assert(pick<i64, 3>() == 3i64)
+    0
+
+let sum_to = <'n>() ->
+    let mut s = 0
+    for i in 0..'n do
+        s = s + i
+    s
+
+// mixed explicit params: a type and a const
+let pick = <'a, 'n>() ->
+    let x = 'n + default('a)
+    x

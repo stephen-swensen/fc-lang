@@ -586,6 +586,64 @@ static bool is_null_sentinel(Type *opt_type) {
                      inner->kind == TYPE_ANY_PTR);
 }
 
+/* Concrete element count of a fixed array at emit time: the folded size, or
+ * the symbolic size_ref evaluated under the active monomorphization
+ * substitution (a generic body's template types keep 'n symbolic; g_subst
+ * binds it per instance). */
+static int64_t fixarr_size(Type *t) {
+    if (!t || t->kind != TYPE_FIXED_ARRAY) return 0;
+    if (!t->fixed_array.size_ref) return t->fixed_array.size;
+    Type *r = subst_resolve(t->fixed_array.size_ref);
+    if (r && r->kind == TYPE_CONST_INT) return r->const_int.value;
+    if (g_subst && r) {
+        int64_t v;
+        if (const_type_eval(r, g_subst->var_names, g_subst->concrete,
+                            g_subst->count, &v))
+            return v;
+        SrcLoc dummy; (void)const_eval_take_error(&dummy);  /* defensive: pass2 validated */
+    }
+    return t->fixed_array.size;
+}
+
+/* Number of aggregate levels along the first-member chain of `t`'s C
+ * representation: how many brace levels a fully-braced zero initializer opens
+ * before reaching the first scalar. Used to emit (T){{0}} instead of (T){0}
+ * where the bare-zero idiom would trip gcc's -Wmissing-braces (a compound
+ * literal nested inside another initializer, e.g. a union variant payload). */
+static int zero_agg_depth(Type *t) {
+    t = subst_resolve(t);
+    if (t && t->kind == TYPE_STUB) t = resolve_struct_stub(t);
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_FIXED_ARRAY: return 1 + zero_agg_depth(t->fixed_array.elem);
+    case TYPE_STRUCT:
+        return t->struc.field_count > 0
+            ? 1 + zero_agg_depth(t->struc.fields[0].type) : 1;
+    case TYPE_UNION:   return 1;  /* C repr: struct { tag; union {...} } — tag is scalar */
+    case TYPE_SLICE:   return 1;  /* struct { ptr; len } */
+    case TYPE_RESULT:  return 1;  /* struct { err; value } */
+    case TYPE_FUNC:    return 1;  /* struct { fn_ptr; ctx } */
+    case TYPE_OPTION:  return is_null_sentinel(t) ? 0 : 1;
+    default: return 0;            /* scalars, pointers, enums, any* */
+    }
+}
+
+/* Extra brace levels for the zero in a (T){0}-style compound literal: the
+ * outer braces already exist, so this is the aggregate depth of T's first
+ * member. */
+static int zero_brace_extra(Type *t) {
+    t = subst_resolve(t);
+    if (t && t->kind == TYPE_STUB) t = resolve_struct_stub(t);
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_STRUCT:
+        return t->struc.field_count > 0
+            ? zero_agg_depth(t->struc.fields[0].type) : 0;
+    case TYPE_FIXED_ARRAY: return zero_agg_depth(t->fixed_array.elem);
+    default: return 0;  /* union (tag first), slice/result/fn (scalar first), ... */
+    }
+}
+
 /* Pointer-value null-status predicates (declared in ast.h, shared by pass2 and
  * codegen). A null-sentinel option (T*?, any*?, cstr?) represents none as a null
  * pointer, so some(p) over a null p is indistinguishable from none. pass2 uses
@@ -711,6 +769,23 @@ static void emit_indent(FILE *out) {
 
 /* Compute mangled name for a generic struct/union type under g_subst */
 static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
+    /* When the type carries explicit type args, substitute those — this folds
+     * const-generic expressions (wide<'n * 2> under 'n=128 must mangle as
+     * wide__…k256, not the binding of 'n). The var-collect fallback below
+     * covers arg-less template types, where args and vars coincide. */
+    Type **targs = (t->kind == TYPE_STRUCT) ? t->struc.type_args
+                 : (t->kind == TYPE_UNION)  ? t->unio.type_args
+                 : (t->kind == TYPE_STUB)   ? t->stub.type_args : NULL;
+    int tac = (t->kind == TYPE_STRUCT) ? t->struc.type_arg_count
+            : (t->kind == TYPE_UNION)  ? t->unio.type_arg_count
+            : (t->kind == TYPE_STUB)   ? t->stub.type_arg_count : 0;
+    if (targs && tac > 0) {
+        Type **conc = arena_alloc(g_arena, sizeof(Type*) * (size_t)tac);
+        for (int i = 0; i < tac; i++)
+            conc[i] = type_substitute(g_arena, targs[i], g_subst->var_names,
+                                      g_subst->concrete, g_subst->count);
+        return mangle_generic_name(g_arena, g_intern, base_name, conc, tac);
+    }
     const char **vars = NULL;
     int vc = 0, vcap = 0;
     type_collect_vars(t, &vars, &vc, &vcap);
@@ -912,7 +987,7 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_FIXED_ARRAY:
         /* Emitted as C array type — used by sizeof(T[N]) */
         emit_type(t->fixed_array.elem, out);
-        fprintf(out, "[%lld]", (long long)t->fixed_array.size);
+        fprintf(out, "[%lld]", (long long)fixarr_size(t));
         break;
     case TYPE_ANY_PTR:
         if (t->is_const) fprintf(out, "const ");
@@ -1013,7 +1088,7 @@ static void emit_type_ident(Type *t, FILE *out) {
         else fprintf(out, "void");
         break;
     case TYPE_FIXED_ARRAY:
-        fprintf(out, "fixarr%lld_", (long long)t->fixed_array.size);
+        fprintf(out, "fixarr%lld_", (long long)fixarr_size(t));
         emit_type_ident(t->fixed_array.elem, out);
         break;
     case TYPE_VOID:
@@ -2579,6 +2654,24 @@ static void emit_none_of_type(Type *opt, FILE *out) {
 
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
+    case EXPR_TYPE_VAR_REF: {
+        /* A const generic param in expression position: emit the bound value
+         * as a plain int literal (typed i32 in pass2; range-checked per
+         * instance in validate_generic_body). */
+        Type tv = {0};
+        tv.kind = TYPE_TYPE_VAR;
+        tv.type_var.name = e->type_var_ref.name;
+        Type *bound = subst_resolve(&tv);
+        if (e->type_var_ref.is_const_param && bound &&
+            bound->kind == TYPE_CONST_INT) {
+            fprintf(out, "%" PRId64, bound->const_int.value);
+            break;
+        }
+        /* 'a.prop objects are handled at EXPR_FIELD; a bare non-const 'a
+         * cannot reach codegen (pass2 rejects it). */
+        fprintf(out, "0 /* unresolved type var %s */", e->type_var_ref.name);
+        break;
+    }
     case EXPR_INT_LIT:
         if (e->int_lit.lit_type->kind == TYPE_INT64) {
             /* INT64_MIN cannot be written as a single literal (its magnitude
@@ -3530,7 +3623,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "*)");
             emit_expr(e->field.object, out);
             fprintf(out, ".%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
-                    (long long)fat->fixed_array.size);
+                    (long long)fixarr_size(fat));
             break;
         }
         /* Option .is_some / .is_none synthetic fields */
@@ -3595,7 +3688,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "*)");
             emit_expr(e->field.object, out);
             fprintf(out, "->%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
-                    (long long)fat->fixed_array.size);
+                    (long long)fixarr_size(fat));
             break;
         }
         emit_expr(e->field.object, out);
@@ -4041,12 +4134,12 @@ static void emit_expr(Expr *e, FILE *out) {
                     fprintf(out, " _fas%d = ", sid);
                     emit_expr(e->struct_lit.fields[i].value, out);
                     fprintf(out, "; if (_fas%d.len > %lld) { fprintf(stderr, \"", sid,
-                            (long long)field_type->fixed_array.size);
+                            (long long)fixarr_size(field_type));
                     emit_c_escaped(vfn, vfn_len, out);
                     fprintf(out, ":%d: fixed-array field '%s' overflow: "
                                  "len=%%lld capacity=%lld\\n\", "
                                  "(long long)_fas%d.len); FC_ABORT(); } ",
-                            vloc.line, fname, (long long)field_type->fixed_array.size,
+                            vloc.line, fname, (long long)fixarr_size(field_type),
                             sid);
                     fprintf(out, "memcpy(_sl%d.%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
                             tid, c_safe_ident(g_intern, fname), sid, sid);
@@ -4619,15 +4712,26 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, "){ .has_value = false }");
             }
             break;
-        default:
-            /* Structs, unions, slices — compound literal with {0}. Results
-             * (T!) intentionally ride this path too: all-zeros is err == 0
-             * with a zero-filled payload, i.e. exactly ok(default(T)) —
-             * default ≡ zero-filled memory holds for every FC type. */
+        default: {
+            /* Structs, unions, slices — compound literal with a zero
+             * initializer. Results (T!) intentionally ride this path too:
+             * all-zeros is err == 0 with a zero-filled payload, i.e. exactly
+             * ok(default(T)) — default ≡ zero-filled memory holds for every
+             * FC type. The zero is wrapped in one brace level per aggregate
+             * along the first-member chain ((T){{0}} when the first field is
+             * an array): gcc's -Wmissing-braces accepts the bare (T){0} idiom
+             * at statement level but not nested inside another initializer
+             * (e.g. as a union variant payload). */
+            int extra = zero_brace_extra(t);
             fprintf(out, "(");
             emit_type(t, out);
-            fprintf(out, "){0}");
+            fprintf(out, "){");
+            for (int i = 0; i < extra; i++) fputc('{', out);
+            fputc('0', out);
+            for (int i = 0; i < extra; i++) fputc('}', out);
+            fprintf(out, "}");
             break;
+        }
         }
         break;
     }
@@ -5010,13 +5114,13 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, " _fas%d = ", tid);
             emit_expr(e->assign.value, out);
             fprintf(out, "; if (_fas%d.len > %lld) { fprintf(stderr, \"", tid,
-                    (long long)fat->fixed_array.size);
+                    (long long)fixarr_size(fat));
             emit_c_escaped(fn, fn_len, out);
             fprintf(out, ":%d: fixed-array field '%s' overflow: "
                          "len=%%lld capacity=%lld\\n\", "
                          "(long long)_fas%d.len); abort(); } ",
                     line, target->field.name,
-                    (long long)fat->fixed_array.size, tid);
+                    (long long)fixarr_size(fat), tid);
             /* memcpy the data */
             fprintf(out, "memcpy(_ao%d->%s, _fas%d.ptr, fc_to_size(_fas%d.len) * sizeof(",
                     tid, c_safe_ident(g_intern, target->field.name), tid, tid);
@@ -5025,9 +5129,9 @@ static void emit_expr(Expr *e, FILE *out) {
             /* Zero-fill remainder */
             fprintf(out, "if (_fas%d.len < %lld) memset(_ao%d->%s + _fas%d.len, 0, "
                          "fc_to_size(%lld - _fas%d.len) * sizeof(",
-                    tid, (long long)fat->fixed_array.size, tid,
+                    tid, (long long)fixarr_size(fat), tid,
                     c_safe_ident(g_intern, target->field.name),
-                    tid, (long long)fat->fixed_array.size, tid);
+                    tid, (long long)fixarr_size(fat), tid);
             emit_type(fat->fixed_array.elem, out);
             fprintf(out, ")); })");
             break;
@@ -5245,7 +5349,7 @@ static void emit_struct_field(Type *ft, const char *name, FILE *out) {
     if (ft->kind == TYPE_FIXED_ARRAY) {
         fprintf(out, " ");
         emit_type(ft->fixed_array.elem, out);
-        fprintf(out, " %s[%lld];", name, (long long)ft->fixed_array.size);
+        fprintf(out, " %s[%lld];", name, (long long)fixarr_size(ft));
     } else {
         fprintf(out, " ");
         emit_type(ft, out);
@@ -6317,7 +6421,7 @@ static void emit_eq_func(Type *t, FILE *out) {
                             /* Element-wise comparison for complex types */
                             fprintf(out, "({ bool _eq = true; "
                                     "for (int _k = 0; _k < %lld; _k++) if (!",
-                                    (long long)ft->fixed_array.size);
+                                    (long long)fixarr_size(ft));
                             if (type_needs_eq_func(elem)) {
                                 emit_eq_func_name(elem, out);
                                 fprintf(out, "(a.%s[_k], b.%s[_k])", fname, fname);

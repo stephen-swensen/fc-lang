@@ -3579,14 +3579,17 @@ The field maps directly to `u8_t s6_addr[16]` in the C header.
 
 ### Generics
 
-Generic structs may use fixed arrays with a type variable element:
+Generic structs may use fixed arrays with a type variable element, a const-parameter size, or both (see §Const Parameters):
 
 ```fc
 struct buffer =
     data: 'a[256]
+
+struct ring =
+    buf: 'a['cap]
 ```
 
-Each monomorphized instance (e.g. `buffer<i32>`) produces a concrete C struct with the appropriate inline array.
+Each monomorphized instance (e.g. `buffer<i32>`, `ring<u8, 64>`) produces a concrete C struct with the appropriate inline array.
 
 ---
 
@@ -3863,6 +3866,56 @@ let make_none    = (x: 'a) -> default('a?)     // ok — produces 'a? with no va
 ```
 
 A call site that provides a type without the required property is a monomorphization error — the same rule as for unsupported operators.
+
+---
+
+## Const Parameters
+
+A generic may be parameterized by a compile-time **integer value** as well as by types. Const parameters use the same `'x` sigil as type variables and are likewise inferred from occurrence — the *position* decides the kind. A variable in a type position (`first: 'a`) is a type parameter; a variable in a size or value position (`limbs: u32['n]`) is a const parameter. Parameter order is first appearance, exactly as for type variables, and the two kinds mix freely:
+
+```fc
+struct wide =
+    limbs: u32['n / 32]      // 'n is a const parameter (size position)
+
+struct ring =
+    buf: 'a['cap]            // 'a is a type parameter, 'cap a const parameter
+    head: i32
+
+let a = default(wide<128>)       // limbs: u32[4]
+let b = default(wide<256>)       // limbs: u32[8] — a distinct type from wide<128>
+let r = default(ring<u8, 64>)
+```
+
+Using one variable in both kinds of position within a declaration is an error. When a variable is passed along to another generic's parameter (`inner: wide<'k>`), it inherits that parameter's kind.
+
+**Const arguments.** Where a const parameter expects an argument, the following forms are accepted directly: an integer literal (`wide<256>`), a const parameter (`wide<'n>`), a named constant — a module-level immutable `let` whose initializer is a compile-time constant, bare or dotted (`wide<cfg.block_bits>`) — and bare arithmetic over these with `+ - * / %` and unary minus (`wide<'n * 2>`, `wide<cfg.block_bits + 32>`). Shift, comparison, and bitwise operators require parentheses — `wide<('n >> 2)>` — inside which the full constant-expression grammar applies. Const arguments are evaluated in the 64-bit signed integer domain with two's-complement wraparound and masked shifts; division or modulo by zero in a const expression is a compile-time error. Only integer const parameters exist; there are no type-level floats, bools, or strings.
+
+The same expression forms serve as fixed-array sizes inside a generic definition: `u32['n]`, `u32['n / 32]`, `u32[('n + 31) / 32]`.
+
+**Const parameters on functions.** A function acquires const parameters the same two ways it acquires type variables — through its parameter types, inferred at the call site by unification (`(a: wide<'n>, b: wide<'n>)` pins `'n` from the arguments), or through the explicit `<...>` prefix, supplied at the call site (`sum_to<10>()`):
+
+```fc
+let add = (a: wide<'n>, b: wide<'n>) ->
+    let mut r = default(wide<'n>)
+    let mut carry = 0u32
+    for i in 0..('n / 32) do
+        let s = (u64) a.limbs[i] + (u64) b.limbs[i] + (u64) carry
+        r.limbs[i] = (u32) s
+        carry = (u32) (s >> 32)
+    r
+
+let mul_wide = (a: wide<'n>, b: wide<'n>) ->
+    let mut r = default(wide<'n * 2>)     // the result is the next width up
+    ...
+```
+
+**In expression position**, a const parameter behaves exactly like an integer literal of its bound value: it is typed `i32`, participates in the usual implicit widening, and each instantiation checks the bound value fits (`for i in 0..'n`, `let words = 'n / 32`). A const parameter is a value, not a type — it has no properties (`'n.max` is an error) and cannot appear where a type is required.
+
+**Checking is per instantiation**, like all generic validation: the concrete value is substituted and every consequence is checked with the usual instantiation-chain diagnostics — a fixed array or slice literal sized by a const expression must come out positive, element lists must match the folded length, and a division by zero in a size expression is reported at the instantiating call site.
+
+**Instances are distinct types.** `wide<128>` and `wide<256>` are unrelated types: assignment, comparison, and calls do not convert between them. Each concrete instantiation is monomorphized once, program-wide, no matter how many sites name it.
+
+**No value recursion.** A generic may not instantiate itself — directly or through a cycle — with a *changed* const argument (`f<'n + 1>` inside `f`). Every such chain denotes an infinite family of instances: FC evaluates no branches at compile time, so a "bounded" recursion (`if 'n > 100 then 0 else f<'n + 1>()`) still names infinitely many instances and is rejected. Recursion at the *same* instantiation (`f<'n>`, or plain `f(...)`) is ordinary recursion and fine. Compile-time iteration is not what const parameters are for; they parameterize **layout** — the loop belongs at runtime, over the laid-out data.
 
 ---
 

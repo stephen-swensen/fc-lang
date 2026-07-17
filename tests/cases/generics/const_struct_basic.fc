@@ -1,0 +1,19 @@
+// Const generic parameter on a struct: 'n in a size slot is a value parameter,
+// inferred from occurrence (like 'a in a type slot). wide<8> and wide<4> are
+// distinct monomorphized instances of one definition.
+struct wide =
+    limbs: u32['n]
+
+let main = (args: str[]) ->
+    let mut a = default(wide<8>)
+    assert(a.limbs.len == 8)
+    assert(sizeof(wide<8>) == 32)
+    let b = default(wide<4>)
+    assert(b.limbs.len == 4)
+    assert(sizeof(wide<4>) == 16)
+    a.limbs[7] = 42u32
+    assert(a.limbs[7] == 42u32)
+    let c = a
+    assert(c == a)
+    assert(c.limbs[7] == 42u32)
+    0

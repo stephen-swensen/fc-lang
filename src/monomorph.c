@@ -28,6 +28,12 @@
  * hundreds of thousands, of instances). */
 #define MONO_MAX_INSTANTIATION_DEPTH 128
 #define MONO_MAX_INSTANCES           200000
+/* Per-template cap: value-recursive const generics (f calling f<'n + 1>) grow
+ * an infinite family whose members all have type-arg depth 1, invisible to the
+ * depth guard. No finite program instantiates one template thousands of times
+ * with distinct const values; cap well below MONO_MAX_INSTANCES so the
+ * diagnostic is fast and names the template. */
+#define MONO_MAX_PER_TEMPLATE        2048
 
 /* Structural nesting depth of a type's *type arguments*: the axis along which a
  * divergent instantiation grows. Recurses through wrapper constructors and into
@@ -111,7 +117,20 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         int d = mono_type_arg_depth(type_args[i]);
         if (d > arg_depth) arg_depth = d;
     }
-    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES) {
+    /* Per-template count (value-recursion guard, see MONO_MAX_PER_TEMPLATE).
+     * Only counted when a const argument is present — type-only instantiation
+     * counts are bounded by the depth guard. */
+    int tmpl_count = 0;
+    if (tmpl) {
+        bool has_const_arg = false;
+        for (int i = 0; i < count; i++)
+            if (type_is_const_arg(type_args[i])) { has_const_arg = true; break; }
+        if (has_const_arg)
+            for (int i = 0; i < t->count; i++)
+                if (t->entries[i].template_decl == tmpl) tmpl_count++;
+    }
+    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES ||
+        tmpl_count >= MONO_MAX_PER_TEMPLATE) {
         /* Prefer the source-level name over the mangled C name for the message. */
         const char *disp = name;
         SrcLoc loc = {0};
@@ -127,13 +146,21 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
             else if (tmpl->kind == DECL_UNION)
                 disp = tmpl->unio.name;
         }
-        diag_error(loc,
-            "infinite generic instantiation of '%s': it is instantiated with an "
-            "unbounded family of ever-deeper type arguments (exceeded depth %d / "
-            "%d instances). A generic function or type that instantiates itself "
-            "with a growing type argument (e.g. f(some(x)), or a non-uniform "
-            "recursive type) requires infinitely many monomorphized copies.",
-            disp, MONO_MAX_INSTANTIATION_DEPTH, MONO_MAX_INSTANCES);
+        if (tmpl_count >= MONO_MAX_PER_TEMPLATE)
+            diag_error(loc,
+                "infinite generic instantiation of '%s': it is instantiated with an "
+                "unbounded family of distinct const arguments (exceeded %d instances). "
+                "A generic that calls itself with a changing const argument (e.g. "
+                "f<'n + 1>) requires infinitely many monomorphized copies.",
+                disp, MONO_MAX_PER_TEMPLATE);
+        else
+            diag_error(loc,
+                "infinite generic instantiation of '%s': it is instantiated with an "
+                "unbounded family of ever-deeper type arguments (exceeded depth %d / "
+                "%d instances). A generic function or type that instantiates itself "
+                "with a growing type argument (e.g. f(some(x)), or a non-uniform "
+                "recursive type) requires infinitely many monomorphized copies.",
+                disp, MONO_MAX_INSTANTIATION_DEPTH, MONO_MAX_INSTANCES);
         return mangled;
     }
 

@@ -29,6 +29,9 @@ typedef enum {
     TYPE_ANY_PTR,
     TYPE_TYPE_VAR,
     TYPE_FIXED_ARRAY, /* fixed-size inline array: T[N] */
+    TYPE_CONST_INT,  /* a resolved compile-time integer used as a generic argument (wide<256>) */
+    TYPE_CONST_EXPR, /* a symbolic const-generic expression over const params (wide<'n * 2>);
+                        folds to TYPE_CONST_INT at substitution time */
     TYPE_STUB,       /* unresolved type reference: name only, resolved by pass1/pass2 */
     TYPE_ERROR,      /* poison type for error recovery */
     TYPE_NEVER,      /* bottom type: return/break/continue — absorbed by any branch sibling */
@@ -44,6 +47,12 @@ typedef struct Type Type;
 typedef struct StructField StructField;
 typedef struct UnionVariant UnionVariant;
 typedef struct EnumVariant EnumVariant;
+
+/* Kind of a generic parameter: a type variable ('a used in a type position) or
+ * a const (value) parameter ('n used in a size/value position). GP_UNKNOWN is a
+ * transient state during pass1/pass2 kind inference; unconstrained params
+ * finalize to GP_TYPE. Stored as uint8_t arrays parallel to type_params. */
+typedef enum { GP_TYPE = 0, GP_CONST = 1, GP_UNKNOWN = 2 } GenParamKind;
 
 struct StructField {
     const char *name;
@@ -112,8 +121,15 @@ struct Type {
             int variant_count;
             struct Symbol *resolved_sym; /* set by pass1/pass2 */
         } enu;
-        struct { Type *elem; int64_t size; } fixed_array;
+        struct {
+            Type *elem;
+            int64_t size;    /* concrete element count; valid when size_ref == NULL */
+            Type *size_ref;  /* symbolic size (TYPE_TYPE_VAR const param or TYPE_CONST_EXPR)
+                                inside a generic template; NULL once concrete */
+        } fixed_array;
         struct { const char *name; } type_var;
+        struct { int64_t value; } const_int;              /* TYPE_CONST_INT */
+        struct { struct Expr *expr; } const_expr;         /* TYPE_CONST_EXPR */
         /* TYPE_STUB: unresolved type reference created by the parser.
          * Resolved to TYPE_STRUCT or TYPE_UNION by pass1/pass2. */
         struct {
@@ -202,6 +218,30 @@ Type *type_from_name(const char *s, int len);
 /* Type variable constructor */
 Type *type_type_var(Arena *a, const char *name);
 
+/* Const-generic constructors */
+Type *type_const_int(Arena *a, int64_t value);
+Type *type_const_expr(Arena *a, struct Expr *expr);
+Type *type_fixed_array_sym(Arena *a, Type *elem, Type *size_ref);
+
+/* True for TYPE_CONST_INT / TYPE_CONST_EXPR (a value argument, not a type). */
+bool type_is_const_arg(Type *t);
+
+/* Evaluate a fixed array's size: concrete `size`, or a fully-substituted
+ * size_ref (TYPE_CONST_INT). Returns false if still symbolic. */
+bool type_fixed_array_size(Type *t, int64_t *out);
+
+/* Evaluate a const-arg carrier (TYPE_CONST_INT / TYPE_CONST_EXPR / a const
+ * param TYPE_TYPE_VAR) under name→Type bindings where const params bind to
+ * TYPE_CONST_INT. Context-free i64 evaluation (two's-complement wrap, masked
+ * shifts, div-by-zero = error). Returns false when still symbolic (no error)
+ * or on a hard failure (error stashed — see const_eval_take_error). */
+bool const_type_eval(Type *t, const char **var_names, Type **concrete,
+                     int count, int64_t *out);
+
+/* Take (and clear) the last const-generic evaluation error, or NULL if none.
+ * The caller owning a diagnostic site reports it with the returned loc. */
+const char *const_eval_take_error(SrcLoc *loc);
+
 /* Does this type need a generated eq function (as opposed to C native ==)? */
 bool type_needs_eq_func(Type *t);
 
@@ -210,6 +250,15 @@ bool type_contains_type_var(Type *t);
 
 /* Collect unique type variable names from a type in order of first appearance */
 void type_collect_vars(Type *t, const char ***vars, int *count, int *cap);
+
+/* Like type_collect_vars, but also records each variable's inferred kind
+ * (GP_TYPE for type positions, GP_CONST for size/value positions, GP_UNKNOWN
+ * for positions whose kind depends on another symbol's params, e.g. a stub's
+ * type-arg slot). A var seen in conflicting kinds sets *conflict_var to its
+ * name (first conflict wins). `kinds` is a malloc'd/realloc'd array parallel
+ * to `vars`, grown with the same cap. */
+void type_collect_vars_kinds(Type *t, const char ***vars, uint8_t **kinds,
+                             int *count, int *cap, const char **conflict_var);
 
 /* Substitute type variables: replace TYPE_TYPE_VAR with concrete types */
 Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete, int count);

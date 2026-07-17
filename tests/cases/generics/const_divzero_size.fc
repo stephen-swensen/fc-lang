@@ -1,0 +1,6 @@
+struct wide =
+    limbs: u32[32 / 'n]
+
+let main = (args: str[]) ->
+    let w = default(wide<0>)
+    0

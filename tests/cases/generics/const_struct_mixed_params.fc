@@ -1,0 +1,15 @@
+// Type and const parameters coexist; param order is first occurrence.
+struct ring =
+    buf: 'a['cap]
+    head: i32
+
+let main = (args: str[]) ->
+    let mut r = default(ring<u8, 64>)
+    assert(r.buf.len == 64)
+    assert(r.head == 0)
+    assert(sizeof(ring<u8, 64>) == 68)
+    r.buf[63] = 7u8
+    assert(r.buf[63] == 7u8)
+    let s = default(ring<i64, 4>)
+    assert(s.buf.len == 4)
+    0

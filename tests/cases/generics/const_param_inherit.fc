@@ -1,0 +1,15 @@
+// Kind inheritance through a type-arg slot: 'k is const because it is passed
+// where wide's 'n (a const param) is expected — resolved by the pass1 fixpoint
+// even across forward references.
+struct outer =
+    inner: wide<'k>
+    tag: i32
+
+struct wide =
+    limbs: u32['n]
+
+let main = (args: str[]) ->
+    let o = default(outer<4>)
+    assert(o.inner.limbs.len == 4)
+    assert(o.tag == 0)
+    0

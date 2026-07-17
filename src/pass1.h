@@ -19,6 +19,9 @@ typedef struct Symbol {
     const char **type_params;    /* ["'a", "'b"] — explicit vars first, then implicit */
     int type_param_count;
     int explicit_type_param_count;  /* how many of type_params are from <> decl */
+    uint8_t *param_kinds;        /* GenParamKind per type_params entry; NULL = all GP_TYPE.
+                                    Mutable: pass1's fixpoint and pass2's lazy body
+                                    inference refine GP_UNKNOWN entries in place. */
 } Symbol;
 
 struct SymbolTable {
@@ -39,6 +42,7 @@ typedef struct ImportRef {
     const char **type_params;
     int type_param_count;
     int explicit_type_param_count;
+    uint8_t *param_kinds;          /* mirrors the source Symbol's param_kinds */
 } ImportRef;
 
 typedef struct ImportTable {

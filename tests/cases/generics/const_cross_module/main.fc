@@ -1,0 +1,9 @@
+import wide from mathlib::
+
+let main = (args: str[]) ->
+    let a = wide<128>.from_u64(5u64)
+    assert(a.limbs[0] == 5u32)
+    assert(a.limbs.len == 4)
+    let b = default(wide<256>)
+    assert(b.limbs.len == 8)
+    0

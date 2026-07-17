@@ -15,39 +15,84 @@ static const char **arena_dup_names(Arena *a, const char **src, int n) {
     return out;
 }
 
+static uint8_t *arena_dup_kinds(Arena *a, const uint8_t *src, int n) {
+    uint8_t *out = arena_alloc(a, (size_t)n);
+    for (int i = 0; i < n; i++) out[i] = src[i];
+    return out;
+}
+
+/* Internal kind value marking an already-reported type-vs-const conflict, so
+ * the fixpoint doesn't re-report it every iteration. Finalizes to GP_TYPE. */
+#define GP_CONFLICT 3
+
+static void diag_kind_conflict(SrcLoc loc, const char *var, const char *owner_name) {
+    diag_error(loc, "generic parameter %s is used both as a type and as a constant in '%s'",
+               var, owner_name);
+}
+
 /* Detect generics: scan fields/params for type variables */
 static void detect_generic_struct(Arena *arena, Decl *d, Symbol *sym) {
+    if (d->struc.is_generic && d->struc.param_kinds) {
+        /* Twin registration (mangled alias / global twin): share the decl's
+         * arrays so kind-inference updates are visible through every Symbol. */
+        sym->is_generic = true;
+        sym->type_params = d->struc.type_params;
+        sym->type_param_count = d->struc.type_param_count;
+        sym->param_kinds = d->struc.param_kinds;
+        return;
+    }
     const char **vars = NULL;
+    uint8_t *kinds = NULL;
     int vcount = 0, vcap = 0;
+    const char *conflict = NULL;
     for (int i = 0; i < d->struc.field_count; i++)
-        type_collect_vars(d->struc.fields[i].type, &vars, &vcount, &vcap);
+        type_collect_vars_kinds(d->struc.fields[i].type, &vars, &kinds, &vcount, &vcap, &conflict);
+    (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
     if (vcount > 0) {
         const char **av = arena_dup_names(arena, vars, vcount);
+        uint8_t *ak = arena_dup_kinds(arena, kinds, vcount);
         d->struc.is_generic = true;
         d->struc.type_params = av;
         d->struc.type_param_count = vcount;
+        d->struc.param_kinds = ak;
         sym->is_generic = true;
         sym->type_params = av;
         sym->type_param_count = vcount;
+        sym->param_kinds = ak;
     }
     free(vars);
+    free(kinds);
 }
 
 static void detect_generic_union(Arena *arena, Decl *d, Symbol *sym) {
+    if (d->unio.is_generic && d->unio.param_kinds) {
+        sym->is_generic = true;
+        sym->type_params = d->unio.type_params;
+        sym->type_param_count = d->unio.type_param_count;
+        sym->param_kinds = d->unio.param_kinds;
+        return;
+    }
     const char **vars = NULL;
+    uint8_t *kinds = NULL;
     int vcount = 0, vcap = 0;
+    const char *conflict = NULL;
     for (int i = 0; i < d->unio.variant_count; i++)
-        type_collect_vars(d->unio.variants[i].payload, &vars, &vcount, &vcap);
+        type_collect_vars_kinds(d->unio.variants[i].payload, &vars, &kinds, &vcount, &vcap, &conflict);
+    (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
     if (vcount > 0) {
         const char **av = arena_dup_names(arena, vars, vcount);
+        uint8_t *ak = arena_dup_kinds(arena, kinds, vcount);
         d->unio.is_generic = true;
         d->unio.type_params = av;
         d->unio.type_param_count = vcount;
+        d->unio.param_kinds = ak;
         sym->is_generic = true;
         sym->type_params = av;
         sym->type_param_count = vcount;
+        sym->param_kinds = ak;
     }
     free(vars);
+    free(kinds);
 }
 
 /* ---- Reject non-uniform recursive type definitions (audit item 14) ----
@@ -183,23 +228,37 @@ static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
     if (!d->let.init || d->let.init->kind != EXPR_FUNC) return;
     Expr *fn = d->let.init;
     const char **vars = NULL;
+    uint8_t *kinds = NULL;
     int vcount = 0, vcap = 0;
+    const char *conflict = NULL;
 
-    /* Collect from explicit type vars */
-    for (int i = 0; i < fn->func.explicit_type_var_count; i++)
-        DA_APPEND(vars, vcount, vcap, fn->func.explicit_type_vars[i]);
+    /* Collect from explicit type vars (kind unknown until an occurrence
+     * pins it — a prefix var may be used only in the body) */
+    for (int i = 0; i < fn->func.explicit_type_var_count; i++) {
+        if (vcount >= vcap) {
+            vcap = vcap ? vcap * 2 : 8;
+            vars = realloc(vars, (size_t)vcap * sizeof(*vars));
+            kinds = realloc(kinds, (size_t)vcap * sizeof(*kinds));
+        }
+        vars[vcount] = fn->func.explicit_type_vars[i];
+        kinds[vcount] = GP_UNKNOWN;
+        vcount++;
+    }
 
     /* Collect from parameter types */
     for (int i = 0; i < fn->func.param_count; i++)
-        type_collect_vars(fn->func.params[i].type, &vars, &vcount, &vcap);
+        type_collect_vars_kinds(fn->func.params[i].type, &vars, &kinds, &vcount, &vcap, &conflict);
+    (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
 
     if (vcount > 0) {
         sym->is_generic = true;
         sym->type_params = arena_dup_names(arena, vars, vcount);
         sym->type_param_count = vcount;
         sym->explicit_type_param_count = fn->func.explicit_type_var_count;
+        sym->param_kinds = arena_dup_kinds(arena, kinds, vcount);
     }
     free(vars);
+    free(kinds);
 }
 
 void symtab_init(SymbolTable *t) {
@@ -287,6 +346,7 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
             tbl->entries[i].type_params = msym->type_params;
             tbl->entries[i].type_param_count = msym->type_param_count;
             tbl->entries[i].explicit_type_param_count = msym->explicit_type_param_count;
+            tbl->entries[i].param_kinds = msym->param_kinds;
             return;
         }
     }
@@ -301,6 +361,7 @@ static void import_table_add(ImportTable *tbl, const char *local_name,
         .type_params = msym->type_params,
         .type_param_count = msym->type_param_count,
         .explicit_type_param_count = msym->explicit_type_param_count,
+        .param_kinds = msym->param_kinds,
     };
     DA_APPEND(tbl->entries, tbl->count, tbl->capacity, ref);
 }
@@ -1186,6 +1247,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             gsym->type_params = msym->type_params;
             gsym->type_param_count = msym->type_param_count;
             gsym->explicit_type_param_count = msym->explicit_type_param_count;
+            gsym->param_kinds = msym->param_kinds;
         }
     }
 }
@@ -1384,6 +1446,170 @@ static void resolve_nested_module_imports(SymbolTable *members,
         process_module_level_imports(ms, global_symtab, intern);
         resolve_nested_module_imports(ms->members, global_symtab, intern);
     }
+}
+
+/* ---- Const-generic parameter kind inference (fixpoint) ----
+ *
+ * A parameter's kind (type vs const) is inferred from its occurrences. Direct
+ * syntactic positions are decided at collection time (type slot vs array-size
+ * slot); a var appearing in another generic's type-arg slot ("wide<'n>")
+ * inherits that parameter's kind from the referenced symbol. Because symbols
+ * reference each other in any order (forward refs, mutual refs, cross-module),
+ * this runs as a whole-symtab fixpoint after collection. Unconstrained params
+ * finalize to GP_TYPE (backward compatible); function params keep GP_UNKNOWN
+ * for pass2's lazy body inference (a prefix var may be used only in the body). */
+
+typedef struct {
+    SymbolTable *global;
+    Symbol *owner;
+    bool changed;
+} KindInferCtx;
+
+static Symbol *kind_ref_sym(SymbolTable *global, const char *name) {
+    Symbol *s = symtab_lookup_kind(global, name, DECL_STRUCT);
+    if (!s) s = symtab_lookup_kind(global, name, DECL_UNION);
+    return s;
+}
+
+static void kind_merge(KindInferCtx *kc, const char *var, uint8_t k) {
+    if (k == GP_UNKNOWN) return;
+    Symbol *o = kc->owner;
+    if (!o->param_kinds) return;
+    for (int i = 0; i < o->type_param_count; i++) {
+        if (o->type_params[i] != var) continue;
+        uint8_t cur = o->param_kinds[i];
+        if (cur == GP_CONFLICT || cur == k) return;
+        if (cur == GP_UNKNOWN) {
+            o->param_kinds[i] = k;
+            kc->changed = true;
+        } else {
+            o->param_kinds[i] = GP_CONFLICT;
+            kc->changed = true;
+            diag_kind_conflict(o->decl ? o->decl->loc : (SrcLoc){0}, var, o->name);
+        }
+        return;
+    }
+}
+
+static void kind_walk_expr(KindInferCtx *kc, Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF: kind_merge(kc, e->type_var_ref.name, GP_CONST); return;
+    case EXPR_UNARY_PREFIX: kind_walk_expr(kc, e->unary_prefix.operand); return;
+    case EXPR_BINARY:
+        kind_walk_expr(kc, e->binary.left);
+        kind_walk_expr(kc, e->binary.right);
+        return;
+    case EXPR_CAST: kind_walk_expr(kc, e->cast.operand); return;
+    default: return;
+    }
+}
+
+/* The kind a bare var would take in each type-arg slot of a reference to
+ * symbol `r` (NULL when unknown): the referenced parameter's own kind. */
+static uint8_t kind_arg_slot(Symbol *r, int i) {
+    if (!r || !r->is_generic || i >= r->type_param_count) return GP_UNKNOWN;
+    if (!r->param_kinds) return GP_TYPE;   /* generic with no const params */
+    uint8_t k = r->param_kinds[i];
+    return (k == GP_CONFLICT) ? GP_UNKNOWN : k;
+}
+
+static void kind_walk(KindInferCtx *kc, Type *t, uint8_t pos_kind) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_TYPE_VAR: kind_merge(kc, t->type_var.name, pos_kind); return;
+    case TYPE_POINTER: kind_walk(kc, t->pointer.pointee, GP_TYPE); return;
+    case TYPE_SLICE:   kind_walk(kc, t->slice.elem, GP_TYPE); return;
+    case TYPE_OPTION:  kind_walk(kc, t->option.inner, GP_TYPE); return;
+    case TYPE_RESULT:  kind_walk(kc, t->result.inner, GP_TYPE); return;
+    case TYPE_FIXED_ARRAY:
+        kind_walk(kc, t->fixed_array.elem, GP_TYPE);
+        kind_walk(kc, t->fixed_array.size_ref, GP_CONST);
+        return;
+    case TYPE_CONST_EXPR: kind_walk_expr(kc, t->const_expr.expr); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            kind_walk(kc, t->func.param_types[i], GP_TYPE);
+        kind_walk(kc, t->func.return_type, GP_TYPE);
+        return;
+    case TYPE_STUB: {
+        Symbol *r = kind_ref_sym(kc->global, t->stub.name);
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            kind_walk(kc, t->stub.type_args[i], kind_arg_slot(r, i));
+        return;
+    }
+    case TYPE_STRUCT: {
+        Symbol *r = t->struc.resolved_sym;
+        if (!r) r = kind_ref_sym(kc->global, t->struc.name);
+        for (int i = 0; i < t->struc.field_count; i++)
+            kind_walk(kc, t->struc.fields[i].type, GP_TYPE);
+        for (int i = 0; i < t->struc.type_arg_count; i++)
+            kind_walk(kc, t->struc.type_args[i], kind_arg_slot(r, i));
+        return;
+    }
+    case TYPE_UNION: {
+        Symbol *r = t->unio.resolved_sym;
+        if (!r) r = kind_ref_sym(kc->global, t->unio.name);
+        for (int i = 0; i < t->unio.variant_count; i++)
+            kind_walk(kc, t->unio.variants[i].payload, GP_TYPE);
+        for (int i = 0; i < t->unio.type_arg_count; i++)
+            kind_walk(kc, t->unio.type_args[i], kind_arg_slot(r, i));
+        return;
+    }
+    default: return;
+    }
+}
+
+static void kind_walk_sym(KindInferCtx *kc, Symbol *s) {
+    if (!s->is_generic || !s->decl || !s->param_kinds) return;
+    kc->owner = s;
+    Decl *d = s->decl;
+    if (d->kind == DECL_STRUCT) {
+        for (int i = 0; i < d->struc.field_count; i++)
+            kind_walk(kc, d->struc.fields[i].type, GP_TYPE);
+    } else if (d->kind == DECL_UNION) {
+        for (int i = 0; i < d->unio.variant_count; i++)
+            kind_walk(kc, d->unio.variants[i].payload, GP_TYPE);
+    } else if (d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC) {
+        Expr *fn = d->let.init;
+        for (int i = 0; i < fn->func.param_count; i++)
+            kind_walk(kc, fn->func.params[i].type, GP_TYPE);
+    }
+}
+
+static void kind_walk_table(KindInferCtx *kc, SymbolTable *t) {
+    for (int i = 0; i < t->count; i++) {
+        kind_walk_sym(kc, &t->symbols[i]);
+        if (t->symbols[i].members)
+            kind_walk_table(kc, t->symbols[i].members);
+    }
+}
+
+static void kind_finalize_table(SymbolTable *t) {
+    for (int i = 0; i < t->count; i++) {
+        Symbol *s = &t->symbols[i];
+        if (s->is_generic && s->param_kinds) {
+            bool is_func = s->kind == DECL_LET;
+            for (int j = 0; j < s->type_param_count; j++) {
+                if (s->param_kinds[j] == GP_CONFLICT)
+                    s->param_kinds[j] = GP_TYPE;   /* error already reported */
+                else if (s->param_kinds[j] == GP_UNKNOWN && !is_func)
+                    s->param_kinds[j] = GP_TYPE;   /* unconstrained — backward compatible */
+                /* function GP_UNKNOWN entries stay: pass2's body check pins them */
+            }
+        }
+        if (s->members) kind_finalize_table(s->members);
+    }
+}
+
+static void infer_param_kinds(SymbolTable *global) {
+    KindInferCtx kc = { global, NULL, false };
+    int rounds = 0;
+    do {
+        kc.changed = false;
+        kind_walk_table(&kc, global);
+    } while (kc.changed && ++rounds < 64);   /* bound: kinds only ever tighten */
+    kind_finalize_table(global);
 }
 
 void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
@@ -2045,6 +2271,11 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
      * after all symtab mutations are complete so Symbol pointers are stable. */
     set_type_resolved_syms(symtab);
     set_module_parents(symtab, NULL);
+
+    /* Infer const-vs-type kinds for generic parameters (whole-symtab fixpoint;
+     * see infer_param_kinds above). Runs after all symbols and their
+     * type_params/param_kinds arrays exist. */
+    infer_param_kinds(symtab);
 
     /* Assign deterministic codes to declared error constants (error groups).
      * Whole-program by construction: runs on the merged Program. */

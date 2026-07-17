@@ -1,0 +1,9 @@
+// A generic calling itself with a changing const argument is an infinite
+// monomorphized family: FC does not prune branches at compile time, so even a
+// "bounded" value recursion diverges and is rejected.
+let runaway = <'n>() ->
+    if 'n > 1000 then 0 else runaway<'n + 1>()
+
+let main = (args: str[]) ->
+    let x = runaway<0>()
+    0

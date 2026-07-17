@@ -582,6 +582,13 @@ typedef struct {
        be generic (locals have no instantiation machinery). */
     const char **active_type_vars;
     int active_type_var_count;
+    /* The Symbol of the top-level generic function whose body is being checked
+       (its param_kinds classify each active var as type vs const; a body-only
+       use of a prefix var pins its kind lazily here). NULL outside a top-level
+       function body. pending_fn_sym is the hand-off channel from check_decl_let
+       to that decl's own EXPR_FUNC (mirrors pending_recursive_ret). */
+    struct Symbol *active_fn_sym;
+    struct Symbol *pending_fn_sym;
     MonoTable *mono_table;       /* global instantiation registry */
     InternTable *intern;         /* for name mangling */
     ImportScope *import_scope;   /* lexically scoped import chain */
@@ -1391,6 +1398,211 @@ static void register_concrete_tuple(CheckCtx *ctx, Type *tup) {
     }
 }
 
+/* Does this (already-checked) expression reference a const generic param? */
+static bool expr_refs_const_param(Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF: return e->type_var_ref.is_const_param;
+    case EXPR_UNARY_PREFIX: return expr_refs_const_param(e->unary_prefix.operand);
+    case EXPR_BINARY: return expr_refs_const_param(e->binary.left) ||
+                             expr_refs_const_param(e->binary.right);
+    case EXPR_CAST: return expr_refs_const_param(e->cast.operand);
+    default: return false;
+    }
+}
+
+/* A size expression deferred to per-instance folding must stay inside the
+ * node set the context-free evaluator supports (const_expr_eval in types.c):
+ * integer literals, const params, + - * / % & | ^ << >>, unary -/~, and
+ * fixed-width integer casts. Reports and returns false otherwise. */
+static bool check_const_size_shape(Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_INT_LIT: return true;
+    case EXPR_TYPE_VAR_REF:
+        if (e->type_var_ref.is_const_param) return true;
+        break;
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_MINUS || e->unary_prefix.op == TOK_TILDE)
+            return check_const_size_shape(e->unary_prefix.operand);
+        break;
+    case EXPR_BINARY:
+        switch (e->binary.op) {
+        case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
+        case TOK_PERCENT: case TOK_AMP: case TOK_PIPE: case TOK_CARET:
+        case TOK_LTLT: case TOK_GTGT:
+            return check_const_size_shape(e->binary.left) &&
+                   check_const_size_shape(e->binary.right);
+        default: break;
+        }
+        break;
+    case EXPR_CAST:
+        if (e->cast.target && e->cast.target->kind >= TYPE_INT8 &&
+            e->cast.target->kind <= TYPE_UINT64)
+            return check_const_size_shape(e->cast.operand);
+        break;
+    default: break;
+    }
+    diag_error(e->loc,
+        "a size expression using const generic parameters may only combine "
+        "integer literals, const parameters, arithmetic/bitwise operators, "
+        "and fixed-width integer casts");
+    return false;
+}
+
+static Type *resolve_type(CheckCtx *ctx, Type *t);
+
+/* Normalize a const-generic expression tree: type-check it, fold every
+ * const-param-free subtree to an integer literal (named consts, i32.bits,
+ * enum counts — via the existing const_fold machinery), and verify the
+ * symbolic residue stays inside the node set the context-free evaluator
+ * supports. Returns NULL after reporting on failure. */
+static Expr *normalize_const_expr(CheckCtx *ctx, Expr *e) {
+    if (!e) return NULL;
+    if (!expr_refs_const_param(e)) {
+        Expr *folded = const_fold_expr(ctx, e);
+        if (folded && folded->kind == EXPR_INT_LIT) return folded;
+        diag_error(e->loc, "const generic argument must be a compile-time constant");
+        return NULL;
+    }
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF:
+        return e;
+    case EXPR_UNARY_PREFIX: {
+        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_TILDE) break;
+        Expr *op = normalize_const_expr(ctx, e->unary_prefix.operand);
+        if (!op) return NULL;
+        if (op == e->unary_prefix.operand) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->unary_prefix.operand = op;
+        return n;
+    }
+    case EXPR_BINARY: {
+        switch (e->binary.op) {
+        case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
+        case TOK_PERCENT: case TOK_AMP: case TOK_PIPE: case TOK_CARET:
+        case TOK_LTLT: case TOK_GTGT:
+            break;
+        default: goto bad;
+        }
+        Expr *l = normalize_const_expr(ctx, e->binary.left);
+        Expr *r = normalize_const_expr(ctx, e->binary.right);
+        if (!l || !r) return NULL;
+        if (l == e->binary.left && r == e->binary.right) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->binary.left = l;
+        n->binary.right = r;
+        return n;
+    }
+    case EXPR_CAST: {
+        if (!e->cast.target || e->cast.target->kind < TYPE_INT8 ||
+            e->cast.target->kind > TYPE_UINT64) break;
+        Expr *op = normalize_const_expr(ctx, e->cast.operand);
+        if (!op) return NULL;
+        if (op == e->cast.operand) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->cast.operand = op;
+        return n;
+    }
+    default: break;
+    }
+bad:
+    diag_error(e->loc,
+        "a const generic expression may only combine integer literals, const "
+        "parameters, named constants, arithmetic/bitwise operators, and "
+        "fixed-width integer casts");
+    return NULL;
+}
+
+/* Check a const-generic argument expression ('n * 2, block_bits + 1, -4):
+ * fully concrete → TYPE_CONST_INT; over const params → normalized
+ * TYPE_CONST_EXPR; ill-formed → TYPE_ERROR (reported). */
+static Type *check_const_type_expr(CheckCtx *ctx, Expr *e) {
+    Type *t = check_expr(ctx, e);
+    if (type_is_error(t)) return type_error();
+    if (!type_is_integer(t)) {
+        diag_error(e->loc, "const generic argument must be an integer expression, got %s",
+                   type_name(t));
+        return type_error();
+    }
+    Expr *norm = normalize_const_expr(ctx, e);
+    if (!norm) return type_error();
+    if (norm->kind == EXPR_INT_LIT)
+        return type_const_int(ctx->arena, (int64_t)norm->int_lit.value);
+    return type_const_expr(ctx->arena, norm);
+}
+
+/* Try to interpret a bare name used where a const argument is expected
+ * (wide<block_bits>) as a foldable named constant. Returns NULL silently when
+ * the name doesn't resolve to one (caller falls back to type resolution and
+ * the kind gate reports). */
+static Type *try_named_const_arg(CheckCtx *ctx, const char *name, SrcLoc loc) {
+    Symbol *s = strchr(name, '.') ? resolve_dotted_name(ctx, name)
+                                  : resolve_symbol(ctx, name);
+    if (!s || s->kind != DECL_LET || !s->decl) return NULL;
+    Expr *ref = arena_alloc(ctx->arena, sizeof(Expr));
+    ref->kind = EXPR_IDENT;
+    ref->loc = loc;
+    ref->ident.name = name;
+    ref->ident.resolved_sym = s;
+    Expr *folded = const_fold_expr(ctx, ref);
+    if (!folded || folded->kind != EXPR_INT_LIT) return NULL;
+    return type_const_int(ctx->arena, (int64_t)folded->int_lit.value);
+}
+
+/* Resolve one generic argument against its parameter's kind. */
+static Type *resolve_generic_arg(CheckCtx *ctx, Type *raw, uint8_t want, SrcLoc loc) {
+    if (!raw) return type_error();
+    if (raw->kind == TYPE_CONST_INT) return raw;
+    if (raw->kind == TYPE_CONST_EXPR)
+        return check_const_type_expr(ctx, raw->const_expr.expr);
+    if (want == GP_CONST && raw->kind == TYPE_STUB && raw->stub.type_arg_count == 0) {
+        Type *c = try_named_const_arg(ctx, raw->stub.name, loc);
+        if (c) return c;
+    }
+    return resolve_type(ctx, raw);
+}
+
+/* Validate the sizes in a fully-substituted (concrete) instance type: every
+ * fixed array must have folded to a positive size. Recurses through value
+ * constructors and the instance's own fields/payloads, but not into
+ * referenced types (stubs) — those are validated at their own instantiation.
+ * Reports and returns false on the first violation. */
+static bool check_inst_sizes(Type *t, SrcLoc loc) {
+    if (!t) return true;
+    switch (t->kind) {
+    case TYPE_FIXED_ARRAY: {
+        int64_t sz;
+        if (type_fixed_array_size(t, &sz) && sz <= 0) {
+            diag_error(loc, "fixed array size must be positive, got %lld (in '%s')",
+                       (long long)sz, type_name(t));
+            return false;
+        }
+        return check_inst_sizes(t->fixed_array.elem, loc);
+    }
+    case TYPE_POINTER: return check_inst_sizes(t->pointer.pointee, loc);
+    case TYPE_SLICE:   return check_inst_sizes(t->slice.elem, loc);
+    case TYPE_OPTION:  return check_inst_sizes(t->option.inner, loc);
+    case TYPE_RESULT:  return check_inst_sizes(t->result.inner, loc);
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++)
+            if (!check_inst_sizes(t->struc.fields[i].type, loc)) return false;
+        return true;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++)
+            if (!check_inst_sizes(t->unio.variants[i].payload, loc)) return false;
+        return true;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            if (!check_inst_sizes(t->func.param_types[i], loc)) return false;
+        return check_inst_sizes(t->func.return_type, loc);
+    default: return true;
+    }
+}
+
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
 
@@ -1449,6 +1661,12 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     }
     if (t->kind == TYPE_FIXED_ARRAY) {
         Type *inner = resolve_type(ctx, t->fixed_array.elem);
+        if (t->fixed_array.size_ref) {
+            /* Symbolic size — stays symbolic here; instantiation folds it. */
+            if (inner != t->fixed_array.elem)
+                return type_fixed_array_sym(ctx->arena, inner, t->fixed_array.size_ref);
+            return t;
+        }
         if (inner != t->fixed_array.elem)
             return type_fixed_array(ctx->arena, inner, t->fixed_array.size);
         return t;
@@ -1494,9 +1712,59 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 /* Resolve each type arg */
                 int ntp = sym->type_param_count;
                 int nta = t->stub.type_arg_count;
+                if (nta != ntp) {
+                    diag_error(ctx->type_loc,
+                        "wrong number of generic arguments for '%s': expected %d, got %d",
+                        t->stub.name, ntp, nta);
+                    return type_error();
+                }
                 Type **resolved_args = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)nta);
                 for (int i = 0; i < nta; i++) {
-                    resolved_args[i] = resolve_type(ctx, t->stub.type_args[i]);
+                    uint8_t want_k = (sym->param_kinds && i < ntp) ? sym->param_kinds[i] : GP_TYPE;
+                    resolved_args[i] = resolve_generic_arg(ctx, t->stub.type_args[i],
+                                                           want_k, ctx->type_loc);
+                    if (type_is_error(resolved_args[i])) return type_error();
+                }
+
+                /* Kind gate: each argument must match its parameter's kind
+                 * (type vs const). A type var argument is not checked here —
+                 * but the slot's kind is evidence for the *enclosing*
+                 * function's param (lazy body inference: wide<'n> in a body
+                 * pins the enclosing 'n to const). */
+                for (int i = 0; i < nta && i < ntp; i++) {
+                    uint8_t want = sym->param_kinds ? sym->param_kinds[i] : GP_TYPE;
+                    Type *arg = resolved_args[i];
+                    if (type_is_error(arg)) continue;
+                    if (arg->kind == TYPE_TYPE_VAR) {
+                        Symbol *fs = ctx->active_fn_sym;
+                        if (fs && fs->param_kinds && want != GP_UNKNOWN) {
+                            for (int j = 0; j < fs->type_param_count; j++) {
+                                if (fs->type_params[j] != arg->type_var.name) continue;
+                                if (fs->param_kinds[j] == GP_UNKNOWN)
+                                    fs->param_kinds[j] = want;
+                                else if (fs->param_kinds[j] != want) {
+                                    diag_error(ctx->type_loc,
+                                        "generic parameter %s is used both as a type and as a constant",
+                                        arg->type_var.name);
+                                    return type_error();
+                                }
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    if (want == GP_CONST && !type_is_const_arg(arg)) {
+                        diag_error(ctx->type_loc,
+                            "parameter %s of '%s' is a constant, but a type argument was given (%s)",
+                            sym->type_params[i], t->stub.name, type_name(arg));
+                        return type_error();
+                    }
+                    if (want != GP_CONST && type_is_const_arg(arg)) {
+                        diag_error(ctx->type_loc,
+                            "parameter %s of '%s' is a type, but a constant argument was given (%s)",
+                            sym->type_params[i], t->stub.name, type_name(arg));
+                        return type_error();
+                    }
                 }
 
                 /* Check if any resolved arg contains type vars */
@@ -1513,6 +1781,18 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                     sym->type_params, resolved_args,
                     ntp < nta ? ntp : nta);
 
+                /* Surface a const-generic evaluation failure from substitution
+                 * (e.g. division by zero in a size expression). */
+                {
+                    SrcLoc eloc = {0};
+                    const char *emsg = const_eval_take_error(&eloc);
+                    if (emsg) {
+                        diag_error(eloc.filename ? eloc : ctx->type_loc,
+                            "%s (in instantiation of '%s')", emsg, t->stub.name);
+                        return type_error();
+                    }
+                }
+
                 /* Ensure we don't mutate the original type */
                 if (concrete == sym->type) {
                     concrete = type_copy(ctx->arena, sym->type);
@@ -1526,6 +1806,9 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                     concrete->unio.type_args = resolved_args;
                     concrete->unio.type_arg_count = nta;
                 }
+
+                if (!has_tv && !check_inst_sizes(concrete, ctx->type_loc))
+                    return type_error();
 
                 if (!has_tv) {
                     /* Register mono instance only with concrete types.
@@ -1695,7 +1978,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e);
 
 /* Unify a (possibly generic) parameter type against a concrete argument type.
  * Binds type variables in var_names/bindings. Returns true on success. */
-static bool unify(Type *param_type, Type *arg_type,
+static bool unify(Arena *arena, Type *param_type, Type *arg_type,
                   const char **var_names, Type **bindings, int var_count) {
     if (!param_type || !arg_type) return param_type == arg_type;
     if (arg_type->kind == TYPE_ERROR) return true;
@@ -1736,7 +2019,7 @@ static bool unify(Type *param_type, Type *arg_type,
                            : arg_type->stub.type_args;
             if (pa > 0 && pa == aa) {
                 for (int i = 0; i < pa; i++)
-                    if (!unify(pt_args[i], at_args[i], var_names, bindings, var_count))
+                    if (!unify(arena, pt_args[i], at_args[i], var_names, bindings, var_count))
                         return false;
                 return true;
             }
@@ -1750,7 +2033,7 @@ static bool unify(Type *param_type, Type *arg_type,
         }
         /* Fixed-array field accepts slice of matching element type */
         if (param_type->kind == TYPE_FIXED_ARRAY && arg_type->kind == TYPE_SLICE)
-            return unify(param_type->fixed_array.elem, arg_type->slice.elem,
+            return unify(arena, param_type->fixed_array.elem, arg_type->slice.elem,
                          var_names, bindings, var_count);
         return false;
     }
@@ -1761,39 +2044,65 @@ static bool unify(Type *param_type, Type *arg_type,
             if (param_type->is_const && !arg_type->is_const) { /* non-const→const ok */ }
             else return false;
         }
-        return unify(param_type->pointer.pointee, arg_type->pointer.pointee,
+        return unify(arena, param_type->pointer.pointee, arg_type->pointer.pointee,
                      var_names, bindings, var_count);
     case TYPE_SLICE:
         if (param_type->is_const != arg_type->is_const) {
             if (param_type->is_const && !arg_type->is_const) { /* non-const→const ok */ }
             else return false;
         }
-        return unify(param_type->slice.elem, arg_type->slice.elem,
+        return unify(arena, param_type->slice.elem, arg_type->slice.elem,
                      var_names, bindings, var_count);
     case TYPE_OPTION:
-        return unify(param_type->option.inner, arg_type->option.inner,
+        return unify(arena, param_type->option.inner, arg_type->option.inner,
                      var_names, bindings, var_count);
     case TYPE_RESULT:
-        return unify(param_type->result.inner, arg_type->result.inner,
+        return unify(arena, param_type->result.inner, arg_type->result.inner,
                      var_names, bindings, var_count);
-    case TYPE_FIXED_ARRAY:
-        if (param_type->fixed_array.size != arg_type->fixed_array.size) return false;
-        return unify(param_type->fixed_array.elem, arg_type->fixed_array.elem,
+    case TYPE_FIXED_ARRAY: {
+        /* Size unification. A symbolic param size binds against the argument's
+         * concrete count (as a TYPE_CONST_INT) or unifies with its symbolic
+         * size; an expression-form param size is checked by evaluation once
+         * its vars are bound (args unify left-to-right, so a plain wide<'n>
+         * param earlier in the list has already pinned 'n). */
+        Type *pref = param_type->fixed_array.size_ref;
+        Type *aref = arg_type->fixed_array.size_ref;
+        if (pref) {
+            Type *asize = aref ? aref : type_const_int(arena, arg_type->fixed_array.size);
+            if (pref->kind == TYPE_TYPE_VAR) {
+                if (!unify(arena, pref, asize, var_names, bindings, var_count))
+                    return false;
+            } else {
+                /* TYPE_CONST_EXPR: evaluate under current bindings and compare */
+                int64_t pv, av;
+                if (!const_type_eval(pref, var_names, bindings, var_count, &pv)) {
+                    SrcLoc d; (void)const_eval_take_error(&d);
+                    return false;   /* unresolvable here — conservative fail */
+                }
+                if (asize->kind != TYPE_CONST_INT || asize->const_int.value != pv)
+                    return false;
+                (void)av;
+            }
+        } else if (aref || param_type->fixed_array.size != arg_type->fixed_array.size) {
+            return false;
+        }
+        return unify(arena, param_type->fixed_array.elem, arg_type->fixed_array.elem,
                      var_names, bindings, var_count);
+    }
     case TYPE_FUNC:
         if (param_type->func.param_count != arg_type->func.param_count) return false;
         for (int i = 0; i < param_type->func.param_count; i++)
-            if (!unify(param_type->func.param_types[i], arg_type->func.param_types[i],
+            if (!unify(arena, param_type->func.param_types[i], arg_type->func.param_types[i],
                        var_names, bindings, var_count))
                 return false;
-        return unify(param_type->func.return_type, arg_type->func.return_type,
+        return unify(arena, param_type->func.return_type, arg_type->func.return_type,
                      var_names, bindings, var_count);
     case TYPE_STRUCT:
         /* If both have type_args, unify them (covers same-name and different-name cases) */
         if (param_type->struc.type_arg_count > 0 &&
             arg_type->struc.type_arg_count == param_type->struc.type_arg_count) {
             for (int i = 0; i < param_type->struc.type_arg_count; i++) {
-                if (!unify(param_type->struc.type_args[i], arg_type->struc.type_args[i],
+                if (!unify(arena, param_type->struc.type_args[i], arg_type->struc.type_args[i],
                            var_names, bindings, var_count))
                     return false;
             }
@@ -1805,7 +2114,7 @@ static bool unify(Type *param_type, Type *arg_type,
         if (param_type->struc.field_count > 0 &&
             param_type->struc.field_count == arg_type->struc.field_count) {
             for (int i = 0; i < param_type->struc.field_count; i++) {
-                if (!unify(param_type->struc.fields[i].type, arg_type->struc.fields[i].type,
+                if (!unify(arena, param_type->struc.fields[i].type, arg_type->struc.fields[i].type,
                            var_names, bindings, var_count))
                     return false;
             }
@@ -1817,7 +2126,7 @@ static bool unify(Type *param_type, Type *arg_type,
         if (param_type->unio.type_arg_count > 0 &&
             arg_type->unio.type_arg_count == param_type->unio.type_arg_count) {
             for (int i = 0; i < param_type->unio.type_arg_count; i++) {
-                if (!unify(param_type->unio.type_args[i], arg_type->unio.type_args[i],
+                if (!unify(arena, param_type->unio.type_args[i], arg_type->unio.type_args[i],
                            var_names, bindings, var_count))
                     return false;
             }
@@ -1829,7 +2138,7 @@ static bool unify(Type *param_type, Type *arg_type,
         if (param_type->unio.variant_count > 0 &&
             param_type->unio.variant_count == arg_type->unio.variant_count) {
             for (int i = 0; i < param_type->unio.variant_count; i++) {
-                if (!unify(param_type->unio.variants[i].payload, arg_type->unio.variants[i].payload,
+                if (!unify(arena, param_type->unio.variants[i].payload, arg_type->unio.variants[i].payload,
                            var_names, bindings, var_count))
                     return false;
             }
@@ -1841,7 +2150,7 @@ static bool unify(Type *param_type, Type *arg_type,
         if (param_type->stub.type_arg_count > 0 &&
             arg_type->stub.type_arg_count == param_type->stub.type_arg_count) {
             for (int i = 0; i < param_type->stub.type_arg_count; i++) {
-                if (!unify(param_type->stub.type_args[i], arg_type->stub.type_args[i],
+                if (!unify(arena, param_type->stub.type_args[i], arg_type->stub.type_args[i],
                            var_names, bindings, var_count))
                     return false;
             }
@@ -1995,14 +2304,14 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
             if (t->kind == TYPE_STRUCT && tmpl_type->kind == TYPE_STRUCT) {
                 for (int fi = 0; fi < tmpl_type->struc.field_count &&
                                  fi < t->struc.field_count; fi++) {
-                    unify(tmpl_type->struc.fields[fi].type, t->struc.fields[fi].type,
+                    unify(ctx->arena, tmpl_type->struc.fields[fi].type, t->struc.fields[fi].type,
                           type_sym->type_params, type_bindings, tntp);
                 }
             } else if (t->kind == TYPE_UNION && tmpl_type->kind == TYPE_UNION) {
                 for (int vi = 0; vi < tmpl_type->unio.variant_count &&
                                  vi < t->unio.variant_count; vi++) {
                     if (tmpl_type->unio.variants[vi].payload && t->unio.variants[vi].payload) {
-                        unify(tmpl_type->unio.variants[vi].payload, t->unio.variants[vi].payload,
+                        unify(ctx->arena, tmpl_type->unio.variants[vi].payload, t->unio.variants[vi].payload,
                               type_sym->type_params, type_bindings, tntp);
                     }
                 }
@@ -2381,7 +2690,25 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
             if (pos > cap) pos = cap; \
         } \
     } while (0)
-    FGI_APPEND("%s(", func_name);
+    FGI_APPEND("%s", func_name);
+    /* When any binding is a const argument, spell the full binding list —
+     * "f<3>(...)" — both for the diagnostic and because this descriptor keys
+     * the gen_seen memo: instances differing only in a const value must not
+     * alias. (Gated so type-only instantiations keep the historical form.) */
+    {
+        bool any_const = false;
+        for (int i = 0; i < ntp; i++)
+            if (bindings[i] && type_is_const_arg(bindings[i])) any_const = true;
+        if (any_const) {
+            FGI_APPEND("<");
+            for (int i = 0; i < ntp; i++) {
+                if (i > 0) FGI_APPEND(", ");
+                FGI_APPEND("%s", bindings[i] ? type_name(bindings[i]) : "?");
+            }
+            FGI_APPEND(">");
+        }
+    }
+    FGI_APPEND("(");
     if (func_type && func_type->kind == TYPE_FUNC) {
         for (int i = 0; i < func_type->func.param_count; i++) {
             if (i > 0) FGI_APPEND(", ");
@@ -2553,6 +2880,53 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
     diag_error(primary, "%s", buf);
 }
 
+/* Frame-aware twin of check_inst_sizes: reports through the instantiation
+ * chain. Same walk contract (no descent into referenced stubs). */
+static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) {
+    if (!t) return true;
+    switch (t->kind) {
+    case TYPE_FIXED_ARRAY: {
+        int64_t sz;
+        if (type_fixed_array_size(t, &sz) && sz <= 0) {
+            gen_inst_diag(frame, loc, "fixed array size must be positive, got %lld (in '%s')",
+                          (long long)sz, type_name(t));
+            return false;
+        }
+        return check_inst_sizes_frame(t->fixed_array.elem, frame, loc);
+    }
+    case TYPE_POINTER: return check_inst_sizes_frame(t->pointer.pointee, frame, loc);
+    case TYPE_SLICE:   return check_inst_sizes_frame(t->slice.elem, frame, loc);
+    case TYPE_OPTION:  return check_inst_sizes_frame(t->option.inner, frame, loc);
+    case TYPE_RESULT:  return check_inst_sizes_frame(t->result.inner, frame, loc);
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++)
+            if (!check_inst_sizes_frame(t->struc.fields[i].type, frame, loc)) return false;
+        return true;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++)
+            if (!check_inst_sizes_frame(t->unio.variants[i].payload, frame, loc)) return false;
+        return true;
+    default: return true;
+    }
+}
+
+/* Per-instance validation of a type operand (default/alloc/sizeof/alignof
+ * target) in a generic body: substitute the concrete bindings, surface any
+ * const-expression evaluation failure, and check folded sizes are positive. */
+static bool check_inst_type_operand(const InstFrame *frame, Arena *arena, Type *t,
+                                    const char **type_params, Type **bindings,
+                                    int ntp, SrcLoc loc) {
+    if (!t) return true;
+    Type *conc = type_substitute(arena, t, type_params, bindings, ntp);
+    SrcLoc eloc = {0};
+    const char *emsg = const_eval_take_error(&eloc);
+    if (emsg) {
+        gen_inst_diag(frame, eloc.filename ? eloc : loc, "%s", emsg);
+        return false;
+    }
+    return check_inst_sizes_frame(conc, frame, loc);
+}
+
 /* Walk a generic function body with concrete type bindings and validate
  * operations that were deferred during template type-checking (i.e. binary
  * operations on type variables and type property access).
@@ -2721,7 +3095,7 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                 /* Resolve the argument's type under the CURRENT instantiation. */
                 Type *aconc = type_substitute(arena, araw, type_params, bindings, ntp);
                 if (type_contains_type_var(aconc) ||
-                    !unify(cft->func.param_types[i], aconc, callee->type_params, cbind, cntp))
+                    !unify(arena, cft->func.param_types[i], aconc, callee->type_params, cbind, cntp))
                     unified = false;
             }
             if (unified) {
@@ -2846,6 +3220,20 @@ static bool validate_generic_body(Expr *e, Arena *arena,
             ok &= validate_generic_body(e->alloc_expr.init_expr, arena, type_params, bindings, ntp, frame);
         if (e->alloc_expr.size_expr)
             ok &= validate_generic_body(e->alloc_expr.size_expr, arena, type_params, bindings, ntp, frame);
+        ok &= check_inst_type_operand(frame, arena, e->alloc_expr.alloc_type,
+                                      type_params, bindings, ntp, e->loc);
+        break;
+    case EXPR_DEFAULT:
+        ok &= check_inst_type_operand(frame, arena, e->default_expr.target,
+                                      type_params, bindings, ntp, e->loc);
+        break;
+    case EXPR_SIZEOF:
+        ok &= check_inst_type_operand(frame, arena, e->sizeof_expr.target,
+                                      type_params, bindings, ntp, e->loc);
+        break;
+    case EXPR_ALIGNOF:
+        ok &= check_inst_type_operand(frame, arena, e->alignof_expr.target,
+                                      type_params, bindings, ntp, e->loc);
         break;
     case EXPR_FREE:
         ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, frame);
@@ -2884,14 +3272,74 @@ static bool validate_generic_body(Expr *e, Arena *arena,
         ok &= validate_generic_body(e->assign.target, arena, type_params, bindings, ntp, frame);
         ok &= validate_generic_body(e->assign.value, arena, type_params, bindings, ntp, frame);
         break;
+    case EXPR_TYPE_VAR_REF:
+        /* A const param in expression position behaves as an i32 literal —
+         * check the bound value fits per instance. */
+        if (e->type_var_ref.is_const_param) {
+            for (int i = 0; i < ntp; i++) {
+                if (type_params[i] != e->type_var_ref.name) continue;
+                if (bindings[i] && bindings[i]->kind == TYPE_CONST_INT) {
+                    int64_t v = bindings[i]->const_int.value;
+                    if (v < INT32_MIN || v > INT32_MAX) {
+                        gen_inst_diag(frame, e->loc,
+                            "const parameter %s = %lld does not fit i32 in expression position "
+                            "(cast the use site if a wider value is required)",
+                            e->type_var_ref.name, (long long)v);
+                        ok = false;
+                    }
+                } else if (bindings[i] && bindings[i]->kind != TYPE_TYPE_VAR &&
+                           bindings[i]->kind != TYPE_CONST_EXPR) {
+                    /* Backstop: bound to a type — the call-site kind gate
+                     * normally catches this; ordering holes must not slip
+                     * through to codegen. */
+                    gen_inst_diag(frame, e->loc,
+                        "const parameter %s is bound to a type (%s), not a constant",
+                        e->type_var_ref.name, type_name(bindings[i]));
+                    ok = false;
+                }
+                break;
+            }
+        }
+        break;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
             ok &= validate_generic_body(e->struct_lit.fields[i].value, arena, type_params, bindings, ntp, frame);
         break;
-    case EXPR_ARRAY_LIT:
+    case EXPR_ARRAY_LIT: {
         for (int i = 0; i < e->array_lit.elem_count; i++)
             ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, frame);
+        /* A size expression deferred at template time (it uses const generic
+         * params) is folded and checked per instance. */
+        if (e->array_lit.size_expr && e->array_lit.size_expr->kind != EXPR_INT_LIT) {
+            Type wrapper = {0};
+            wrapper.kind = TYPE_CONST_EXPR;
+            wrapper.const_expr.expr = e->array_lit.size_expr;
+            int64_t sz;
+            if (const_type_eval(&wrapper, type_params, bindings, ntp, &sz)) {
+                if (sz <= 0) {
+                    gen_inst_diag(frame, e->array_lit.size_expr->loc,
+                        "slice literal length must be positive, got %lld", (long long)sz);
+                    ok = false;
+                } else if (e->array_lit.elem_count > 0 &&
+                           (int64_t)e->array_lit.elem_count != sz) {
+                    gen_inst_diag(frame, e->loc,
+                        "slice literal has %d element%s but declared length is %lld; "
+                        "the element list must be exhaustive (or use `{ }` to zero-initialize)",
+                        e->array_lit.elem_count,
+                        e->array_lit.elem_count == 1 ? "" : "s", (long long)sz);
+                    ok = false;
+                }
+            } else {
+                SrcLoc eloc = {0};
+                const char *emsg = const_eval_take_error(&eloc);
+                if (emsg) {
+                    gen_inst_diag(frame, eloc.filename ? eloc : e->loc, "%s", emsg);
+                    ok = false;
+                }
+            }
+        }
         break;
+    }
     case EXPR_TUPLE_LIT:
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
             ok &= validate_generic_body(e->tuple_lit.elems[i], arena, type_params, bindings, ntp, frame);
@@ -4355,6 +4803,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
            them; lambdas inherit the enclosing set unchanged. */
         const char **saved_atv = ctx->active_type_vars;
         int saved_atvc = ctx->active_type_var_count;
+        Symbol *saved_afs = ctx->active_fn_sym;
         const char **atv = NULL;
         if (is_top) {
             int atvc = 0, atvcap = 0;
@@ -4364,6 +4813,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 DA_APPEND(atv, atvc, atvcap, e->func.explicit_type_vars[i]);
             ctx->active_type_vars = atv;
             ctx->active_type_var_count = atvc;
+            /* Consume the kind-context channel (this EXPR_FUNC is the decl's
+               own init; a nested lambda keeps the enclosing set). */
+            ctx->active_fn_sym = ctx->pending_fn_sym;
+            ctx->pending_fn_sym = NULL;
         }
 
         /* Type-check body in inner scope. recursive_ret/self_name are scoped to
@@ -4382,6 +4835,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (is_top) {
             ctx->active_type_vars = saved_atv;
             ctx->active_type_var_count = saved_atvc;
+            ctx->active_fn_sym = saved_afs;
             free(atv);
         }
 
@@ -4799,7 +5253,35 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     return e->type;
                 }
                 for (int i = 0; i < n_explicit; i++) {
-                    bindings[i] = resolve_type(ctx, e->call.type_args[i]);
+                    uint8_t want_k = callee_sym->param_kinds
+                        ? callee_sym->param_kinds[i] : GP_TYPE;
+                    bindings[i] = resolve_generic_arg(ctx, e->call.type_args[i],
+                                                      want_k, e->loc);
+                }
+                /* Kind gate: an explicit argument must match its parameter's
+                 * kind (type vs const). GP_UNKNOWN (a prefix var with no
+                 * kind-determining occurrence) accepts either. */
+                if (callee_sym->param_kinds) {
+                    for (int i = 0; i < n_explicit; i++) {
+                        uint8_t want = callee_sym->param_kinds[i];
+                        Type *arg = bindings[i];
+                        if (!arg || type_is_error(arg) || arg->kind == TYPE_TYPE_VAR)
+                            continue;
+                        if (want == GP_CONST && !type_is_const_arg(arg)) {
+                            diag_error(e->loc,
+                                "parameter %s of '%s' is a constant, but a type argument was given (%s)",
+                                callee_sym->type_params[i], callee_sym->name, type_name(arg));
+                            e->type = type_error();
+                            return e->type;
+                        }
+                        if (want == GP_TYPE && type_is_const_arg(arg)) {
+                            diag_error(e->loc,
+                                "parameter %s of '%s' is a type, but a constant argument was given (%s)",
+                                callee_sym->type_params[i], callee_sym->name, type_name(arg));
+                            e->type = type_error();
+                            return e->type;
+                        }
+                    }
                 }
             }
 
@@ -4816,7 +5298,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             for (int i = 0; i < e->call.arg_count; i++) {
                 Type *at = check_expr(ctx, e->call.args[i]);
                 if (type_is_error(at)) { arg_err = true; continue; }
-                if (!unify(ft->func.param_types[i], at,
+                if (!unify(ctx->arena, ft->func.param_types[i], at,
                            callee_sym->type_params, bindings, ntp)) {
                     /* Unify failed — try implicit widening for concrete params */
                     Type *pt = ft->func.param_types[i];
@@ -4834,7 +5316,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             /* Check all type vars resolved */
             for (int i = 0; i < ntp; i++) {
                 if (!bindings[i]) {
-                    diag_error(e->loc, "could not infer type variable %s",
+                    bool is_const = callee_sym->param_kinds &&
+                                    callee_sym->param_kinds[i] == GP_CONST;
+                    diag_error(e->loc, "could not infer %s %s",
+                        is_const ? "const parameter" : "type variable",
                         callee_sym->type_params[i]);
                     e->type = type_error();
                     return e->type;
@@ -5653,7 +6138,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 FieldInit *fi = &e->struct_lit.fields[i];
                 for (int j = 0; j < st->struc.field_count; j++) {
                     if (st->struc.fields[j].name == fi->name) {
-                        if (!unify(st->struc.fields[j].type, fi->value->type,
+                        if (!unify(ctx->arena, st->struc.fields[j].type, fi->value->type,
                                    sym->type_params, bindings, ntp)) {
                             diag_error(fi->value->loc, "field '%s': type mismatch in generic struct",
                                 fi->name);
@@ -5761,6 +6246,25 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_TYPE_VAR_REF: {
+        /* A const generic param used as a value: behaves like an i32 integer
+         * literal of the bound value (per-instance range check in
+         * validate_generic_body; codegen emits the literal). A standalone use
+         * is itself kind evidence — a prefix var with no other occurrence is
+         * pinned to const here. */
+        Symbol *fs = ctx->active_fn_sym;
+        if (fs && fs->param_kinds) {
+            for (int i = 0; i < fs->type_param_count; i++) {
+                if (fs->type_params[i] != e->type_var_ref.name) continue;
+                if (fs->param_kinds[i] == GP_UNKNOWN)
+                    fs->param_kinds[i] = GP_CONST;
+                if (fs->param_kinds[i] == GP_CONST) {
+                    e->type_var_ref.is_const_param = true;
+                    e->type = type_int32();
+                    return e->type;
+                }
+                break;
+            }
+        }
         /* 'a used standalone (not as 'a.property) — error */
         diag_error(e->loc, "type variable '%s' cannot be used as a value",
             e->type_var_ref.name);
@@ -5795,6 +6299,25 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (e->field.object->kind == EXPR_TYPE_VAR_REF) {
             const char *prop = e->field.name;
             const char *tv_name = e->field.object->type_var_ref.name;
+            /* A const param is a value, not a type — it has no properties.
+             * Property access is itself type-kind evidence: it pins an
+             * as-yet-unknown prefix var to type. */
+            if (ctx->active_fn_sym && ctx->active_fn_sym->param_kinds) {
+                Symbol *fs = ctx->active_fn_sym;
+                for (int i = 0; i < fs->type_param_count; i++) {
+                    if (fs->type_params[i] != tv_name) continue;
+                    if (fs->param_kinds[i] == GP_UNKNOWN)
+                        fs->param_kinds[i] = GP_TYPE;
+                    else if (fs->param_kinds[i] == GP_CONST) {
+                        diag_error(e->loc,
+                            "const parameter %s is a value, not a type — it has no property '%s'",
+                            tv_name, prop);
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    break;
+                }
+            }
             bool is_bits = (strcmp(prop, "bits") == 0);
             bool is_value_prop = (strcmp(prop, "min") == 0 ||
                                   strcmp(prop, "max") == 0 ||
@@ -6418,33 +6941,46 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Length must be a compile-time constant (integer literal). A
          * constant expression that isn't literal yet — E.count, i32.bits,
          * arithmetic over them — is folded first. */
+        bool size_deferred = false;
         if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
             Expr *folded = const_fold_expr(ctx, e->array_lit.size_expr);
             if (folded && folded->kind == EXPR_INT_LIT)
                 e->array_lit.size_expr = folded;
         }
         if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
-            diag_error(e->array_lit.size_expr->loc,
-                "slice literal length must be a compile-time constant");
-            e->type = type_error();
-            return e->type;
+            /* A size over const generic params can't fold at template time —
+             * defer the value checks to per-instance validation. */
+            if (expr_refs_const_param(e->array_lit.size_expr)) {
+                if (!check_const_size_shape(e->array_lit.size_expr)) {
+                    e->type = type_error();
+                    return e->type;
+                }
+                size_deferred = true;
+            } else {
+                diag_error(e->array_lit.size_expr->loc,
+                    "slice literal length must be a compile-time constant");
+                e->type = type_error();
+                return e->type;
+            }
         }
         /* Element count must match the declared length exactly. The empty
          * form `{ }` (elem_count == 0) zero-initializes all elements and is
          * always allowed; an explicit element list must be exhaustive. Without
          * this check, a short list leaves elements uninitialized and an
          * over-long list writes past the alloca/malloc backing buffer. */
-        uint64_t declared_size = e->array_lit.size_expr->int_lit.value;
-        if (e->array_lit.elem_count > 0 &&
-            (uint64_t) e->array_lit.elem_count != declared_size) {
-            diag_error(e->loc,
-                "slice literal has %d element%s but declared length is %" PRIu64
-                "; the element list must be exhaustive (or use `{ }` to zero-initialize)",
-                e->array_lit.elem_count,
-                e->array_lit.elem_count == 1 ? "" : "s",
-                declared_size);
-            e->type = type_error();
-            return e->type;
+        if (!size_deferred) {
+            uint64_t declared_size = e->array_lit.size_expr->int_lit.value;
+            if (e->array_lit.elem_count > 0 &&
+                (uint64_t) e->array_lit.elem_count != declared_size) {
+                diag_error(e->loc,
+                    "slice literal has %d element%s but declared length is %" PRIu64
+                    "; the element list must be exhaustive (or use `{ }` to zero-initialize)",
+                    e->array_lit.elem_count,
+                    e->array_lit.elem_count == 1 ? "" : "s",
+                    declared_size);
+                e->type = type_error();
+                return e->type;
+            }
         }
         /* Type-check elements */
         Type *elem_type = resolve_type(ctx, e->array_lit.elem_type);
@@ -9017,6 +9553,16 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
                 return n;
             }
         }
+        /* Dotted module-const access (cfg.block_bits): pass2 resolved the
+         * member symbol — fold through the same path as a bare ident ref. */
+        if (e->field.resolved_member && e->field.resolved_member->kind == DECL_LET) {
+            Expr *ref = arena_alloc(ctx->arena, sizeof(Expr));
+            ref->kind = EXPR_IDENT;
+            ref->loc = e->loc;
+            ref->ident.name = e->field.name;
+            ref->ident.resolved_sym = e->field.resolved_member;
+            return const_fold_expr(ctx, ref);
+        }
         return NULL;
     case EXPR_STRUCT_LIT: {
         bool changed = false;
@@ -9435,8 +9981,11 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     }
 
     bool saved_top = ctx->is_top_level_init;
-    if (d->let.init && d->let.init->kind == EXPR_FUNC)
+    Symbol *saved_pending_fn = ctx->pending_fn_sym;
+    if (d->let.init && d->let.init->kind == EXPR_FUNC) {
         ctx->is_top_level_init = true;
+        ctx->pending_fn_sym = sym;   /* kind context for const params in the body */
+    }
 
     /* Hand the placeholder to the function's own EXPR_FUNC via the recursion
        channel (consumed there, which scopes it to that body — see EXPR_FUNC). */
@@ -9452,6 +10001,7 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     ctx->pending_recursive_ret = saved_prr;
     ctx->pending_recursive_self = saved_prs;
     ctx->is_top_level_init = saved_top;
+    ctx->pending_fn_sym = saved_pending_fn;
 
     /* If we pre-registered a recursive function type, patch the return type */
     if (recursive_ret) {

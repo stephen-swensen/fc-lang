@@ -1,0 +1,7 @@
+let short_lit = <'n>() ->
+    let b = i32['n] { 1, 2 }
+    b.len
+
+let main = (args: str[]) ->
+    assert(short_lit<3>() == 3)
+    0

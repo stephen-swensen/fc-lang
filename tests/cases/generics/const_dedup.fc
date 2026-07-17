@@ -1,0 +1,19 @@
+// The same const instantiation reached from two paths is one instance:
+// values from both paths are assignment- and equality-compatible.
+struct wide =
+    limbs: u32['n]
+
+struct pair_of =
+    lo: wide<'k>
+    hi: wide<'k>
+
+let main = (args: str[]) ->
+    let mut p = default(pair_of<8>)
+    let mut w = default(wide<8>)
+    w.limbs[0] = 5u32
+    p.lo = w
+    assert(p.lo == w)
+    assert(p.lo.limbs[0] == 5u32)
+    p.hi = p.lo
+    assert(p.hi.limbs.len == 8)
+    0

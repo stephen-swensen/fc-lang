@@ -1,0 +1,11 @@
+struct wide =
+    limbs: u32['n]
+
+let add = (a: wide<'n>, b: wide<'n>) ->
+    a
+
+let main = (args: str[]) ->
+    let a = default(wide<4>)
+    let b = default(wide<8>)
+    let s = add(a, b)
+    0

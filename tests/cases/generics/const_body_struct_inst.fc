@@ -1,0 +1,20 @@
+// A generic body naming wide<'n> with the caller's own const param: the
+// symbolic instantiation renames through and folds per instance.
+struct wide =
+    limbs: u32['n]
+
+let ones = <'n>() ->
+    let mut w = default(wide<'n>)
+    for i in 0..'n do
+        w.limbs[i] = 1u32
+    w
+
+let main = (args: str[]) ->
+    let a = ones<128>()
+    assert(a.limbs.len == 128)
+    assert(a.limbs[127] == 1u32)
+    let b = ones<4>()
+    assert(b.limbs.len == 4)
+    assert(b.limbs[3] == 1u32)
+    assert(a.limbs[0] == b.limbs[0])
+    0

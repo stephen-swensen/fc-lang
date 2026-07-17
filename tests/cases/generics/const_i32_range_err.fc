@@ -1,0 +1,7 @@
+let use_n = <'n>() ->
+    let x = 'n
+    x
+
+let main = (args: str[]) ->
+    assert(use_n<2147483648>() == 0)
+    0

@@ -397,8 +397,10 @@ struct Expr {
             const char *tmp_name;   /* codegen temp name for the RHS */
         } let_destruct;
 
-        /* EXPR_TYPE_VAR_REF — 'a in expression position (for 'a.min etc.) */
-        struct { const char *name; } type_var_ref;
+        /* EXPR_TYPE_VAR_REF — 'a in expression position (for 'a.min etc.),
+         * or a const generic param 'n used as a value (is_const_param, typed
+         * i32; codegen emits the bound value as a literal). */
+        struct { const char *name; bool is_const_param; } type_var_ref;
 
         /* EXPR_ASSERT */
         struct {
@@ -549,6 +551,7 @@ struct Decl {
             int field_count;
             const char **type_params;   /* type var names, e.g. ["'a", "'b"] */
             int type_param_count;
+            uint8_t *param_kinds;       /* GenParamKind per param; NULL = all GP_TYPE */
             bool is_generic;
         } struc;
 
@@ -559,6 +562,7 @@ struct Decl {
             int variant_count;
             const char **type_params;
             int type_param_count;
+            uint8_t *param_kinds;       /* GenParamKind per param; NULL = all GP_TYPE */
             bool is_generic;
         } unio;
 

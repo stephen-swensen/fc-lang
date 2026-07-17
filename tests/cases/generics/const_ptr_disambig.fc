@@ -1,0 +1,14 @@
+// `t*` (pointer type arg) and `a * 2` (const arithmetic) disambiguate by the
+// token after `*`: a const atom can never continue a pointer type.
+struct box =
+    value: 'a
+
+struct wide =
+    limbs: u32['n / 32]
+
+let main = (args: str[]) ->
+    let p = default(box<i32*>)
+    assert(p.value == default(i32*))
+    let w = default(wide<64 * 2>)
+    assert(w.limbs.len == 4)
+    0

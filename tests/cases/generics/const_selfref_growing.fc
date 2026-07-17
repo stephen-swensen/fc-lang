@@ -1,0 +1,7 @@
+struct s =
+    limbs: u32['n]
+    next: s<'n * 2>*
+
+let main = (args: str[]) ->
+    let a = default(s<4>)
+    0

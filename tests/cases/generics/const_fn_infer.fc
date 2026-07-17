@@ -1,0 +1,30 @@
+// Const params on functions, inferred by unification from argument types:
+// passing wide<4> to (a: wide<'n>) binds 'n = 4.
+struct wide =
+    limbs: u32['n]
+
+let add = (a: wide<'n>, b: wide<'n>) ->
+    let mut r = default(wide<'n>)
+    for i in 0..'n do
+        r.limbs[i] = a.limbs[i] + b.limbs[i]
+    r
+
+let total = (a: wide<'n>) ->
+    let mut t = 0u32
+    for i in 0..'n do
+        t = t + a.limbs[i]
+    t
+
+let main = (args: str[]) ->
+    let mut a = default(wide<4>)
+    a.limbs[0] = 40u32
+    a.limbs[3] = 1u32
+    let s = add(a, a)
+    assert(s.limbs[0] == 80u32)
+    assert(s.limbs[3] == 2u32)
+    assert(total(s) == 82u32)
+    let mut b = default(wide<8>)
+    b.limbs[7] = 5u32
+    assert(total(b) == 5u32)
+    assert(total(add(b, b)) == 10u32)
+    0

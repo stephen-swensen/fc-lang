@@ -1,4 +1,5 @@
 #include "types.h"
+#include "ast.h"    /* Expr — TYPE_CONST_EXPR carries a const-generic expression tree */
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -324,6 +325,29 @@ bool type_is_numeric(Type *t) {
     return type_is_integer(t) || type_is_float(t);
 }
 
+/* Structural equality of two const-generic expression trees (the pass2-
+ * normalized restricted node set). Conservative: unknown node kinds compare
+ * unequal, which only means two textually different spellings of the same
+ * value get separate template-side identities — instances fold to
+ * TYPE_CONST_INT before keying, so this can never split a concrete instance. */
+static bool const_expr_eq(Expr *a, Expr *b) {
+    if (a == b) return true;
+    if (!a || !b || a->kind != b->kind) return false;
+    switch (a->kind) {
+    case EXPR_INT_LIT:      return a->int_lit.value == b->int_lit.value;
+    case EXPR_TYPE_VAR_REF: return a->type_var_ref.name == b->type_var_ref.name;
+    case EXPR_UNARY_PREFIX: return a->unary_prefix.op == b->unary_prefix.op &&
+                                   const_expr_eq(a->unary_prefix.operand, b->unary_prefix.operand);
+    case EXPR_BINARY:       return a->binary.op == b->binary.op &&
+                                   const_expr_eq(a->binary.left, b->binary.left) &&
+                                   const_expr_eq(a->binary.right, b->binary.right);
+    case EXPR_CAST:         return a->cast.target && b->cast.target &&
+                                   a->cast.target->kind == b->cast.target->kind &&
+                                   const_expr_eq(a->cast.operand, b->cast.operand);
+    default: return false;
+    }
+}
+
 /* Extract the name from a type for stub comparison purposes */
 static const char *type_udt_name(Type *t) {
     if (t->kind == TYPE_STUB) return t->stub.name;
@@ -350,8 +374,16 @@ bool type_eq(Type *a, Type *b) {
                               type_eq(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq(a->option.inner, b->option.inner);
     case TYPE_RESULT:  return type_eq(a->result.inner, b->result.inner);
-    case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
-                                  type_eq(a->fixed_array.elem, b->fixed_array.elem);
+    case TYPE_FIXED_ARRAY:
+        if (a->fixed_array.size_ref || b->fixed_array.size_ref) {
+            if (!a->fixed_array.size_ref || !b->fixed_array.size_ref) return false;
+            return type_eq(a->fixed_array.size_ref, b->fixed_array.size_ref) &&
+                   type_eq(a->fixed_array.elem, b->fixed_array.elem);
+        }
+        return a->fixed_array.size == b->fixed_array.size &&
+               type_eq(a->fixed_array.elem, b->fixed_array.elem);
+    case TYPE_CONST_INT:  return a->const_int.value == b->const_int.value;
+    case TYPE_CONST_EXPR: return const_expr_eq(a->const_expr.expr, b->const_expr.expr);
     case TYPE_ANY_PTR: return a->is_const == b->is_const;
     case TYPE_STRUCT:
         /* Tuples compare structurally (arity + element types), independent of when
@@ -393,8 +425,16 @@ bool type_eq_ignore_const(Type *a, Type *b) {
     case TYPE_SLICE:   return type_eq_ignore_const(a->slice.elem, b->slice.elem);
     case TYPE_OPTION:  return type_eq_ignore_const(a->option.inner, b->option.inner);
     case TYPE_RESULT:  return type_eq_ignore_const(a->result.inner, b->result.inner);
-    case TYPE_FIXED_ARRAY: return a->fixed_array.size == b->fixed_array.size &&
-                                  type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
+    case TYPE_FIXED_ARRAY:
+        if (a->fixed_array.size_ref || b->fixed_array.size_ref) {
+            if (!a->fixed_array.size_ref || !b->fixed_array.size_ref) return false;
+            return type_eq(a->fixed_array.size_ref, b->fixed_array.size_ref) &&
+                   type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
+        }
+        return a->fixed_array.size == b->fixed_array.size &&
+               type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
+    case TYPE_CONST_INT:  return a->const_int.value == b->const_int.value;
+    case TYPE_CONST_EXPR: return const_expr_eq(a->const_expr.expr, b->const_expr.expr);
     case TYPE_STRUCT:
         if (a->struc.is_tuple || b->struc.is_tuple) {
             if (!a->struc.is_tuple || !b->struc.is_tuple) return false;
@@ -439,6 +479,49 @@ static const char *primitive_names[] = {
     [TYPE_ERROR]   = "<error>",
     [TYPE_NEVER]   = "never",
 };
+
+/* Print a const-generic expression tree for diagnostics/hover: binary nodes
+ * parenthesized ("('n * 2)"), matching the required source spelling. */
+static void const_expr_print(char *buf, int *pos, int cap, Expr *e) {
+    if (!e) { tn_appendf(buf, pos, cap, "?"); return; }
+    switch (e->kind) {
+    case EXPR_INT_LIT:
+        tn_appendf(buf, pos, cap, "%lld", (long long)e->int_lit.value);
+        return;
+    case EXPR_TYPE_VAR_REF:
+        tn_appendf(buf, pos, cap, "%s", e->type_var_ref.name);
+        return;
+    case EXPR_UNARY_PREFIX:
+        tn_appendf(buf, pos, cap, "%s", e->unary_prefix.op == TOK_TILDE ? "~" : "-");
+        const_expr_print(buf, pos, cap, e->unary_prefix.operand);
+        return;
+    case EXPR_BINARY: {
+        const char *op = "?";
+        switch (e->binary.op) {
+        case TOK_PLUS: op = "+"; break;   case TOK_MINUS: op = "-"; break;
+        case TOK_STAR: op = "*"; break;   case TOK_SLASH: op = "/"; break;
+        case TOK_PERCENT: op = "%"; break;
+        case TOK_AMP: op = "&"; break;    case TOK_PIPE: op = "|"; break;
+        case TOK_CARET: op = "^"; break;
+        case TOK_LTLT: op = "<<"; break;  case TOK_GTGT: op = ">>"; break;
+        default: break;
+        }
+        tn_appendf(buf, pos, cap, "(");
+        const_expr_print(buf, pos, cap, e->binary.left);
+        tn_appendf(buf, pos, cap, " %s ", op);
+        const_expr_print(buf, pos, cap, e->binary.right);
+        tn_appendf(buf, pos, cap, ")");
+        return;
+    }
+    case EXPR_CAST:
+        tn_appendf(buf, pos, cap, "(%s) ", type_name(e->cast.target));
+        const_expr_print(buf, pos, cap, e->cast.operand);
+        return;
+    default:
+        tn_appendf(buf, pos, cap, "?");
+        return;
+    }
+}
 
 const char *type_name(Type *t) {
     if (!t) return "<null-type>";
@@ -500,8 +583,27 @@ const char *type_name(Type *t) {
         static char fabufs[4][256];
         static int faidx = 0;
         char *buf = fabufs[faidx & 3]; faidx++;
-        snprintf(buf, 256, "%s[%lld]", type_name(t->fixed_array.elem),
-                 (long long)t->fixed_array.size);
+        if (t->fixed_array.size_ref)
+            snprintf(buf, 256, "%s[%s]", type_name(t->fixed_array.elem),
+                     type_name(t->fixed_array.size_ref));
+        else
+            snprintf(buf, 256, "%s[%lld]", type_name(t->fixed_array.elem),
+                     (long long)t->fixed_array.size);
+        return buf;
+    }
+    case TYPE_CONST_INT: {
+        static char cibufs[4][32];
+        static int ciidx = 0;
+        char *buf = cibufs[ciidx & 3]; ciidx++;
+        snprintf(buf, 32, "%lld", (long long)t->const_int.value);
+        return buf;
+    }
+    case TYPE_CONST_EXPR: {
+        static char cebufs[4][256];
+        static int ceidx = 0;
+        char *buf = cebufs[ceidx & 3]; ceidx++;
+        int pos = 0;
+        const_expr_print(buf, &pos, 256, t->const_expr.expr);
         return buf;
     }
     case TYPE_FUNC: {
@@ -731,6 +833,207 @@ Type *type_type_var(Arena *a, const char *name) {
     return t;
 }
 
+Type *type_const_int(Arena *a, int64_t value) {
+    Type *t = arena_alloc(a, sizeof(Type));
+    t->kind = TYPE_CONST_INT;
+    t->const_int.value = value;
+    return t;
+}
+
+Type *type_const_expr(Arena *a, struct Expr *expr) {
+    Type *t = arena_alloc(a, sizeof(Type));
+    t->kind = TYPE_CONST_EXPR;
+    t->const_expr.expr = expr;
+    return t;
+}
+
+Type *type_fixed_array_sym(Arena *a, Type *elem, Type *size_ref) {
+    Type *t = arena_alloc(a, sizeof(Type));
+    t->kind = TYPE_FIXED_ARRAY;
+    t->fixed_array.elem = elem;
+    t->fixed_array.size = 0;
+    t->fixed_array.size_ref = size_ref;
+    return t;
+}
+
+bool type_is_const_arg(Type *t) {
+    return t && (t->kind == TYPE_CONST_INT || t->kind == TYPE_CONST_EXPR);
+}
+
+bool type_fixed_array_size(Type *t, int64_t *out) {
+    if (!t || t->kind != TYPE_FIXED_ARRAY) return false;
+    if (!t->fixed_array.size_ref) { *out = t->fixed_array.size; return true; }
+    if (t->fixed_array.size_ref->kind == TYPE_CONST_INT) {
+        *out = t->fixed_array.size_ref->const_int.value;
+        return true;
+    }
+    return false;
+}
+
+/* ---- Const-generic expression evaluation ----
+ *
+ * A TYPE_CONST_EXPR carries a pass2-normalized expression tree whose only
+ * nodes are integer literals, const-param references (EXPR_TYPE_VAR_REF),
+ * binary arithmetic/bitwise ops, unary -/~, and fixed-width integer casts.
+ * Evaluation is context-free over int64_t with two's-complement wrap and
+ * masked shifts, mirroring pass2's try_eval_const semantics — so it can run
+ * inside type_substitute (types.c) and monomorph's substitute_type_args,
+ * which have no pass2 context. On failure the error is stashed in a
+ * single-slot last-error (the compiler is single-threaded); the caller that
+ * owns a diagnostic site reports it via const_eval_take_error. */
+static const char *g_const_eval_err = NULL;
+static SrcLoc g_const_eval_err_loc;
+
+const char *const_eval_take_error(SrcLoc *loc) {
+    const char *msg = g_const_eval_err;
+    if (msg && loc) *loc = g_const_eval_err_loc;
+    g_const_eval_err = NULL;
+    return msg;
+}
+
+static void const_eval_fail(Expr *e, const char *msg) {
+    /* First failure wins: it names the innermost real cause. */
+    if (!g_const_eval_err) { g_const_eval_err = msg; g_const_eval_err_loc = e->loc; }
+}
+
+/* Truncate/sign-extend a two's-complement bit pattern to a fixed-width int
+ * kind. Returns false for non-fixed-width targets. */
+static bool const_eval_mask(TypeKind k, int64_t v, int64_t *out) {
+    uint64_t u = (uint64_t)v;
+    switch (k) {
+    case TYPE_INT8:   *out = (int8_t)u;   return true;
+    case TYPE_INT16:  *out = (int16_t)u;  return true;
+    case TYPE_INT32:  *out = (int32_t)u;  return true;
+    case TYPE_INT64:  *out = (int64_t)u;  return true;
+    case TYPE_UINT8:  *out = (int64_t)(uint8_t)u;  return true;
+    case TYPE_UINT16: *out = (int64_t)(uint16_t)u; return true;
+    case TYPE_UINT32: *out = (int64_t)(uint32_t)u; return true;
+    case TYPE_UINT64: *out = (int64_t)u; return true;   /* bit pattern, i64 domain */
+    default: return false;
+    }
+}
+
+/* Evaluate `e` with const params bound through (var_names, concrete, count),
+ * where a binding for a const param is a TYPE_CONST_INT. Returns false and
+ * stashes the last-error on a hard failure; returns false WITHOUT an error
+ * when a referenced var is simply unbound (still-symbolic template context —
+ * the caller keeps the expression symbolic). */
+static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
+                            int count, int64_t *out) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_INT_LIT:
+        *out = (int64_t)e->int_lit.value;
+        return true;
+    case EXPR_TYPE_VAR_REF: {
+        for (int i = 0; i < count; i++) {
+            if (var_names[i] == e->type_var_ref.name) {
+                if (concrete[i]->kind == TYPE_CONST_INT) {
+                    *out = concrete[i]->const_int.value;
+                    return true;
+                }
+                /* Bound to another symbolic param (a generic body naming
+                 * wide<'n> with the caller's own 'n) — stays symbolic. */
+                if (concrete[i]->kind == TYPE_TYPE_VAR ||
+                    concrete[i]->kind == TYPE_CONST_EXPR)
+                    return false;
+                const_eval_fail(e, "generic parameter used as a constant is bound to a type");
+                return false;
+            }
+        }
+        return false;   /* unbound — stay symbolic, no error */
+    }
+    case EXPR_UNARY_PREFIX: {
+        int64_t v;
+        if (!const_expr_eval(e->unary_prefix.operand, var_names, concrete, count, &v))
+            return false;
+        switch (e->unary_prefix.op) {
+        case TOK_MINUS: *out = (int64_t)(0 - (uint64_t)v); return true;
+        case TOK_TILDE: *out = (int64_t)(~(uint64_t)v);    return true;
+        default:
+            const_eval_fail(e, "operator not allowed in a const-generic expression");
+            return false;
+        }
+    }
+    case EXPR_BINARY: {
+        int64_t l, r;
+        if (!const_expr_eval(e->binary.left, var_names, concrete, count, &l)) return false;
+        if (!const_expr_eval(e->binary.right, var_names, concrete, count, &r)) return false;
+        uint64_t ul = (uint64_t)l, ur = (uint64_t)r;
+        switch (e->binary.op) {
+        case TOK_PLUS:    *out = (int64_t)(ul + ur); return true;
+        case TOK_MINUS:   *out = (int64_t)(ul - ur); return true;
+        case TOK_STAR:    *out = (int64_t)(ul * ur); return true;
+        case TOK_AMP:     *out = (int64_t)(ul & ur); return true;
+        case TOK_PIPE:    *out = (int64_t)(ul | ur); return true;
+        case TOK_CARET:   *out = (int64_t)(ul ^ ur); return true;
+        case TOK_LTLT:    *out = (int64_t)(ul << (ur & 63)); return true;
+        case TOK_GTGT:    *out = l >> (ur & 63); return true;  /* arithmetic (i64 domain) */
+        case TOK_SLASH:
+        case TOK_PERCENT:
+            if (r == 0) {
+                const_eval_fail(e, e->binary.op == TOK_SLASH
+                    ? "division by zero in const-generic expression"
+                    : "modulo by zero in const-generic expression");
+                return false;
+            }
+            if (l == INT64_MIN && r == -1) {
+                const_eval_fail(e, "overflow in const-generic expression (i64.min / -1)");
+                return false;
+            }
+            *out = (e->binary.op == TOK_SLASH) ? l / r : l % r;
+            return true;
+        default:
+            const_eval_fail(e, "operator not allowed in a const-generic expression");
+            return false;
+        }
+    }
+    case EXPR_CAST: {
+        int64_t v;
+        if (!const_expr_eval(e->cast.operand, var_names, concrete, count, &v)) return false;
+        if (!e->cast.target || !const_eval_mask(e->cast.target->kind, v, out)) {
+            const_eval_fail(e, "cast in a const-generic expression must target a fixed-width integer type");
+            return false;
+        }
+        return true;
+    }
+    default:
+        const_eval_fail(e, "expression not allowed in a const-generic argument");
+        return false;
+    }
+}
+
+/* Public entry: evaluate a const-arg carrier type (TYPE_CONST_INT or
+ * TYPE_CONST_EXPR, or a TYPE_TYPE_VAR const param) under the given bindings.
+ * Same failure contract as const_expr_eval. */
+bool const_type_eval(Type *t, const char **var_names, Type **concrete,
+                     int count, int64_t *out) {
+    if (!t) return false;
+    if (t->kind == TYPE_CONST_INT) { *out = t->const_int.value; return true; }
+    if (t->kind == TYPE_TYPE_VAR) {
+        for (int i = 0; i < count; i++) {
+            if (var_names[i] != t->type_var.name) continue;
+            if (concrete[i]->kind == TYPE_CONST_INT) {
+                *out = concrete[i]->const_int.value;
+                return true;
+            }
+            /* Bound to another symbolic param — stays symbolic, no error. */
+            if (concrete[i]->kind == TYPE_TYPE_VAR ||
+                concrete[i]->kind == TYPE_CONST_EXPR)
+                return false;
+            if (!g_const_eval_err) {
+                g_const_eval_err = "generic parameter used as a constant is bound to a type";
+                g_const_eval_err_loc = (SrcLoc){0};
+            }
+            return false;
+        }
+        return false;
+    }
+    if (t->kind == TYPE_CONST_EXPR)
+        return const_expr_eval(t->const_expr.expr, var_names, concrete, count, out);
+    return false;
+}
+
 bool type_needs_eq_func(Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -800,7 +1103,12 @@ static bool type_contains_type_var_memo(Type *t, TypeVarCleanSet *clean) {
     case TYPE_SLICE:    return type_contains_type_var_memo(t->slice.elem, clean);
     case TYPE_OPTION:   return type_contains_type_var_memo(t->option.inner, clean);
     case TYPE_RESULT:   return type_contains_type_var_memo(t->result.inner, clean);
-    case TYPE_FIXED_ARRAY: return type_contains_type_var_memo(t->fixed_array.elem, clean);
+    case TYPE_FIXED_ARRAY:
+        if (t->fixed_array.size_ref &&
+            type_contains_type_var_memo(t->fixed_array.size_ref, clean)) return true;
+        return type_contains_type_var_memo(t->fixed_array.elem, clean);
+    case TYPE_CONST_INT:  return false;
+    case TYPE_CONST_EXPR: return true;   /* exists only while symbolic — never memo-clean */
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
             if (type_contains_type_var_memo(t->func.param_types[i], clean)) return true;
@@ -841,6 +1149,25 @@ bool type_contains_type_var(Type *t) {
     return r;
 }
 
+/* Collect const-param names referenced by a const-generic expression tree. */
+static void const_expr_collect_vars(Expr *e, const char ***vars, int *count, int *cap) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF:
+        for (int i = 0; i < *count; i++)
+            if ((*vars)[i] == e->type_var_ref.name) return;
+        DA_APPEND(*vars, *count, *cap, e->type_var_ref.name);
+        return;
+    case EXPR_UNARY_PREFIX: const_expr_collect_vars(e->unary_prefix.operand, vars, count, cap); return;
+    case EXPR_BINARY:
+        const_expr_collect_vars(e->binary.left, vars, count, cap);
+        const_expr_collect_vars(e->binary.right, vars, count, cap);
+        return;
+    case EXPR_CAST: const_expr_collect_vars(e->cast.operand, vars, count, cap); return;
+    default: return;
+    }
+}
+
 void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
     if (!t) return;
     switch (t->kind) {
@@ -854,7 +1181,13 @@ void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
     case TYPE_SLICE:   type_collect_vars(t->slice.elem, vars, count, cap); return;
     case TYPE_OPTION:  type_collect_vars(t->option.inner, vars, count, cap); return;
     case TYPE_RESULT:  type_collect_vars(t->result.inner, vars, count, cap); return;
-    case TYPE_FIXED_ARRAY: type_collect_vars(t->fixed_array.elem, vars, count, cap); return;
+    case TYPE_FIXED_ARRAY:
+        type_collect_vars(t->fixed_array.elem, vars, count, cap);
+        type_collect_vars(t->fixed_array.size_ref, vars, count, cap);
+        return;
+    case TYPE_CONST_EXPR:
+        const_expr_collect_vars(t->const_expr.expr, vars, count, cap);
+        return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
             type_collect_vars(t->func.param_types[i], vars, count, cap);
@@ -880,6 +1213,159 @@ void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
     }
 }
 
+/* ---- Kind-aware variable collection (const generics) ---- */
+
+static void ck_add(const char ***vars, uint8_t **kinds, int *count, int *cap,
+                   const char *name, uint8_t kind, const char **conflict_var) {
+    for (int i = 0; i < *count; i++) {
+        if ((*vars)[i] == name) {
+            if ((*kinds)[i] == GP_UNKNOWN) (*kinds)[i] = kind;
+            else if (kind != GP_UNKNOWN && kind != (*kinds)[i] && !*conflict_var)
+                *conflict_var = name;
+            return;
+        }
+    }
+    if (*count >= *cap) {
+        *cap = *cap ? *cap * 2 : 8;
+        *vars = realloc(*vars, (size_t)*cap * sizeof(**vars));
+        *kinds = realloc(*kinds, (size_t)*cap * sizeof(**kinds));
+    }
+    (*vars)[*count] = name;
+    (*kinds)[*count] = kind;
+    (*count)++;
+}
+
+static void ck_collect_expr(Expr *e, const char ***vars, uint8_t **kinds,
+                            int *count, int *cap, const char **conflict_var) {
+    if (!e) return;
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF:
+        ck_add(vars, kinds, count, cap, e->type_var_ref.name, GP_CONST, conflict_var);
+        return;
+    case EXPR_UNARY_PREFIX: ck_collect_expr(e->unary_prefix.operand, vars, kinds, count, cap, conflict_var); return;
+    case EXPR_BINARY:
+        ck_collect_expr(e->binary.left, vars, kinds, count, cap, conflict_var);
+        ck_collect_expr(e->binary.right, vars, kinds, count, cap, conflict_var);
+        return;
+    case EXPR_CAST: ck_collect_expr(e->cast.operand, vars, kinds, count, cap, conflict_var);
+        return;
+    default: return;
+    }
+}
+
+/* pos_kind: the kind a bare TYPE_TYPE_VAR occurring here would have.
+ * GP_UNKNOWN marks type-arg slots of named type references, where the kind
+ * depends on the referenced symbol's own params (pass1's infer_param_kinds
+ * fixpoint refines those). */
+static void ck_collect(Type *t, uint8_t pos_kind, const char ***vars, uint8_t **kinds,
+                       int *count, int *cap, const char **conflict_var) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_TYPE_VAR:
+        ck_add(vars, kinds, count, cap, t->type_var.name, pos_kind, conflict_var);
+        return;
+    case TYPE_POINTER: ck_collect(t->pointer.pointee, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
+    case TYPE_SLICE:   ck_collect(t->slice.elem, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
+    case TYPE_OPTION:  ck_collect(t->option.inner, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
+    case TYPE_RESULT:  ck_collect(t->result.inner, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
+    case TYPE_FIXED_ARRAY:
+        ck_collect(t->fixed_array.elem, GP_TYPE, vars, kinds, count, cap, conflict_var);
+        ck_collect(t->fixed_array.size_ref, GP_CONST, vars, kinds, count, cap, conflict_var);
+        return;
+    case TYPE_CONST_EXPR:
+        ck_collect_expr(t->const_expr.expr, vars, kinds, count, cap, conflict_var);
+        return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            ck_collect(t->func.param_types[i], GP_TYPE, vars, kinds, count, cap, conflict_var);
+        ck_collect(t->func.return_type, GP_TYPE, vars, kinds, count, cap, conflict_var);
+        return;
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++)
+            ck_collect(t->struc.fields[i].type, GP_TYPE, vars, kinds, count, cap, conflict_var);
+        for (int i = 0; i < t->struc.type_arg_count; i++)
+            ck_collect(t->struc.type_args[i], GP_UNKNOWN, vars, kinds, count, cap, conflict_var);
+        return;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++)
+            ck_collect(t->unio.variants[i].payload, GP_TYPE, vars, kinds, count, cap, conflict_var);
+        for (int i = 0; i < t->unio.type_arg_count; i++)
+            ck_collect(t->unio.type_args[i], GP_UNKNOWN, vars, kinds, count, cap, conflict_var);
+        return;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            ck_collect(t->stub.type_args[i], GP_UNKNOWN, vars, kinds, count, cap, conflict_var);
+        return;
+    default: return;
+    }
+}
+
+void type_collect_vars_kinds(Type *t, const char ***vars, uint8_t **kinds,
+                             int *count, int *cap, const char **conflict_var) {
+    ck_collect(t, GP_TYPE, vars, kinds, count, cap, conflict_var);
+}
+
+/* Partially substitute a const-generic expression: bound const params become
+ * integer literal nodes, unbound ones stay symbolic. Returns the original
+ * node when nothing changed. */
+static Expr *const_expr_subst(Arena *a, Expr *e, const char **var_names,
+                              Type **concrete, int count) {
+    if (!e) return NULL;
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF: {
+        for (int i = 0; i < count; i++) {
+            if (var_names[i] != e->type_var_ref.name) continue;
+            if (concrete[i]->kind == TYPE_CONST_INT) {
+                Expr *lit = arena_alloc(a, sizeof(Expr));
+                lit->kind = EXPR_INT_LIT;
+                lit->loc = e->loc;
+                lit->int_lit.value = (uint64_t)concrete[i]->const_int.value;
+                return lit;
+            }
+            if (concrete[i]->kind == TYPE_TYPE_VAR &&
+                concrete[i]->type_var.name != e->type_var_ref.name) {
+                /* Renamed to the instantiating context's own const param. */
+                Expr *ref = arena_alloc(a, sizeof(Expr));
+                *ref = *e;
+                ref->type_var_ref.name = concrete[i]->type_var.name;
+                return ref;
+            }
+            if (concrete[i]->kind == TYPE_CONST_EXPR)
+                return concrete[i]->const_expr.expr;  /* splice the caller's expression */
+            return e;  /* same name / kind error — caught by the gate/eval */
+        }
+        return e;
+    }
+    case EXPR_UNARY_PREFIX: {
+        Expr *op = const_expr_subst(a, e->unary_prefix.operand, var_names, concrete, count);
+        if (op == e->unary_prefix.operand) return e;
+        Expr *n = arena_alloc(a, sizeof(Expr));
+        *n = *e;
+        n->unary_prefix.operand = op;
+        return n;
+    }
+    case EXPR_BINARY: {
+        Expr *l = const_expr_subst(a, e->binary.left, var_names, concrete, count);
+        Expr *r = const_expr_subst(a, e->binary.right, var_names, concrete, count);
+        if (l == e->binary.left && r == e->binary.right) return e;
+        Expr *n = arena_alloc(a, sizeof(Expr));
+        *n = *e;
+        n->binary.left = l;
+        n->binary.right = r;
+        return n;
+    }
+    case EXPR_CAST: {
+        Expr *op = const_expr_subst(a, e->cast.operand, var_names, concrete, count);
+        if (op == e->cast.operand) return e;
+        Expr *n = arena_alloc(a, sizeof(Expr));
+        *n = *e;
+        n->cast.operand = op;
+        return n;
+    }
+    default: return e;
+    }
+}
+
 Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete, int count) {
     if (!t) return NULL;
     switch (t->kind) {
@@ -888,6 +1374,18 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
             if (var_names[i] == t->type_var.name)
                 return concrete[i];
         return t; /* unbound type var — leave as is */
+    case TYPE_CONST_INT:
+        return t;
+    case TYPE_CONST_EXPR: {
+        int64_t v;
+        const char *pre_err = g_const_eval_err;
+        if (const_type_eval(t, var_names, concrete, count, &v))
+            return type_const_int(a, v);
+        if (g_const_eval_err != pre_err) return type_error();  /* caller reports via const_eval_take_error */
+        Expr *ne = const_expr_subst(a, t->const_expr.expr, var_names, concrete, count);
+        if (ne == t->const_expr.expr) return t;
+        return type_const_expr(a, ne);
+    }
     case TYPE_POINTER: {
         Type *inner = type_substitute(a, t->pointer.pointee, var_names, concrete, count);
         if (inner == t->pointer.pointee) return t;
@@ -914,8 +1412,20 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
     }
     case TYPE_FIXED_ARRAY: {
         Type *inner = type_substitute(a, t->fixed_array.elem, var_names, concrete, count);
-        if (inner == t->fixed_array.elem) return t;
-        return type_fixed_array(a, inner, t->fixed_array.size);
+        if (!t->fixed_array.size_ref) {
+            if (inner == t->fixed_array.elem) return t;
+            return type_fixed_array(a, inner, t->fixed_array.size);
+        }
+        /* Symbolic size: fold to concrete when the bindings resolve it. */
+        int64_t v;
+        const char *pre_err = g_const_eval_err;
+        if (const_type_eval(t->fixed_array.size_ref, var_names, concrete, count, &v))
+            return type_fixed_array(a, inner, v);
+        if (g_const_eval_err != pre_err) return type_error();  /* hard failure — caller reports via const_eval_take_error */
+        Type *nref = type_substitute(a, t->fixed_array.size_ref, var_names, concrete, count);
+        if (type_is_error(nref)) return type_error();
+        if (inner == t->fixed_array.elem && nref == t->fixed_array.size_ref) return t;
+        return type_fixed_array_sym(a, inner, nref);
     }
     case TYPE_FUNC: {
         bool changed = false;
@@ -1145,6 +1655,16 @@ char *mangle_type_name(Type *t) {
         return r;
     }
     case TYPE_FIXED_ARRAY: {
+        /* A symbolic size only exists in template types, which are never
+         * emitted; mangle the size_ref's display form defensively. */
+        if (t->fixed_array.size_ref) {
+            char *inner = mangle_type_name(t->fixed_array.elem);
+            char *r = mangle_cat(str_dup("__as"), type_name(t->fixed_array.size_ref));
+            r = mangle_cat(r, "_");
+            r = mangle_cat(r, inner);
+            free(inner);
+            return r;
+        }
         char *inner = mangle_type_name(t->fixed_array.elem);
         char hdr[32];
         snprintf(hdr, sizeof(hdr), "__a%lld_", (long long)t->fixed_array.size);
@@ -1152,6 +1672,20 @@ char *mangle_type_name(Type *t) {
         free(inner);
         return r;
     }
+    case TYPE_CONST_INT: {
+        /* "__k<value>" (or "__kn<abs>" for negatives — '-' is not a C
+         * identifier char). Injective alongside "__a…": the tag letter
+         * differs, and the value is all digits. */
+        char hdr[32];
+        if (t->const_int.value < 0)
+            snprintf(hdr, sizeof(hdr), "__kn%llu",
+                     (unsigned long long)(0 - (uint64_t)t->const_int.value));
+        else
+            snprintf(hdr, sizeof(hdr), "__k%lld", (long long)t->const_int.value);
+        return str_dup(hdr);
+    }
+    case TYPE_CONST_EXPR:
+        return str_dup("__unk");   /* defensive: never registered/emitted symbolic */
     case TYPE_FUNC: {
         /* "__f" <nparams> "_" lp(param)* lp(ret) [ "_v" if variadic ]. The
          * param count tells the join where the params end and the return type

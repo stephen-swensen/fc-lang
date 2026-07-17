@@ -1,0 +1,18 @@
+// Const generic parameter flowing through a union's variant payload.
+struct wide =
+    limbs: u32['n]
+
+union maybe_wide =
+    | got(wide<'n>)
+    | nothing
+
+let main = (args: str[]) ->
+    let m = maybe_wide<4>.got(default(wide<4>))
+    match m with
+    | got(w) -> assert(w.limbs.len == 4)
+    | nothing -> assert(false)
+    let e = maybe_wide<8>.nothing
+    match e with
+    | got(w) -> assert(false)
+    | nothing -> void()
+    0

@@ -1,0 +1,10 @@
+struct wide =
+    limbs: u32['n / 32]
+
+let shrink = <'n>() ->
+    let w = default(wide<'n - 120>)
+    w.limbs.len
+
+let main = (args: str[]) ->
+    assert(shrink<128>() == 0)
+    0

@@ -1,0 +1,29 @@
+// A union variant constructed from default(S) where S's first field is a
+// fixed array: the emitted compound literal must brace the zero initializer
+// ((S){{0}}) — the bare (S){0} idiom trips -Wmissing-braces when nested
+// inside another initializer.
+struct holder =
+    data: u32[4]
+    tag: i32
+
+struct nested =
+    inner: holder
+    extra: bool
+
+union maybe =
+    | got(holder)
+    | deep(nested)
+    | nothing
+
+let main = (args: str[]) ->
+    let m = maybe.got(default(holder))
+    match m with
+    | got(h) -> assert(h.data.len == 4)
+    | deep(n) -> assert(false)
+    | nothing -> assert(false)
+    let d = maybe.deep(default(nested))
+    match d with
+    | got(h) -> assert(false)
+    | deep(n) -> assert(n.inner.data[0] == 0u32)
+    | nothing -> assert(false)
+    0

@@ -159,6 +159,14 @@ match x with
 | none -> fallback()
 ```
 
+### Const Generics
+- Generic parameters may be compile-time **integer values** as well as types: same `'x` sigil, kind inferred from occurrence position (`'a` in a type slot = type param; `'n` in a size/value slot = const param). One var in both kinds of position is a compile error.
+- `struct wide = limbs: u32['n / 32]` instantiates as `wide<128>`, `wide<256>` — distinct types, one definition. Functions infer const params from argument types (`(a: wide<'n>)`) or take them explicitly via the `<'n>` prefix.
+- Const args: int literals, `'n`, named module consts (bare or dotted), bare `+ - * / %` arithmetic; shifts/comparisons need parens (`wide<('n >> 2)>`). i64 domain, two's-complement wrap; div-by-zero and non-positive array sizes are per-instance errors with instantiation-chain diagnostics.
+- In expression position `'n` behaves as an i32 literal of the bound value (widening applies; fit checked per instance).
+- **No value recursion**: `f<'n + 1>` inside `f` (directly or mutually) is an infinite instance family and is rejected (`MONO_MAX_PER_TEMPLATE` cap) — FC prunes no branches at compile time. Const params parameterize layout, not compile-time iteration.
+- Representation: `TYPE_CONST_INT`/`TYPE_CONST_EXPR` ride the existing `Type**` type-arg arrays; `fixed_array.size_ref` carries symbolic sizes, folded by `type_substitute` via the context-free `const_type_eval` (types.c). Param kinds live in `param_kinds` arrays (`GenParamKind`) parallel to `type_params` on Symbol/Decl/ImportRef, inferred by a pass1 fixpoint + pass2 lazy body evidence. Mangling: `__k<value>` (`wide<256>` → `wide__6___k256`).
+
 ### Naming Conventions (FC code)
 - All user-defined names use **lowercase snake_case**: `let my_func`, `struct my_point`, `union my_shape`, `module my_module`
 - This applies to struct names, union names, variant names, function names, module names, variable names

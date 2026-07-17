@@ -1,0 +1,9 @@
+let ping = <'n>() ->
+    if 'n > 100 then 0 else pong<'n + 1>()
+
+let pong = <'n>() ->
+    if 'n > 100 then 0 else ping<'n + 1>()
+
+let main = (args: str[]) ->
+    let x = ping<1>()
+    0

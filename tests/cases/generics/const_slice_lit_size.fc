@@ -1,0 +1,13 @@
+// Slice-literal sizes over const params: zero-filled and exhaustive forms,
+// checked per instance.
+let zeros = <'n>() ->
+    let b = u32['n] { }
+    assert(b.len == 'n)
+    b[b.len - 1]
+
+let main = (args: str[]) ->
+    assert(zeros<7>() == 0u32)
+    assert(zeros<64>() == 0u32)
+    let filled = i32[3] { 1, 2, 3 }
+    assert(filled[2] == 3)
+    0

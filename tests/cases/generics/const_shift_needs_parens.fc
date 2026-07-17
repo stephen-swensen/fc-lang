@@ -1,0 +1,10 @@
+struct wide =
+    limbs: u32['n / 32]
+
+let f = <'n>() ->
+    let w = default(wide<'n >> 2>)
+    w.limbs.len
+
+let main = (args: str[]) ->
+    assert(f<512>() == 4)
+    0

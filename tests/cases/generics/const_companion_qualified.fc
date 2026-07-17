@@ -1,0 +1,26 @@
+// Companion-module constructors with const args, both qualification forms.
+struct wide =
+    limbs: u32['n / 32]
+
+module wide =
+    let from_u64 = <'n>(v: u64) ->
+        let mut r = default(wide<'n>)
+        r.limbs[0] = (u32) v
+        r
+
+    let is_zero = (a: wide<'n>) ->
+        let mut z = true
+        for i in 0..('n / 32) do
+            if a.limbs[i] != 0u32 then z = false else void()
+        z
+
+let main = (args: str[]) ->
+    let a = wide<128>.from_u64(7u64)
+    assert(a.limbs[0] == 7u32)
+    assert(a.limbs.len == 4)
+    assert(!wide.is_zero(a))
+    let b = wide.from_u64<256>(9u64)
+    assert(b.limbs.len == 8)
+    let z = wide<256>.from_u64(0u64)
+    assert(wide.is_zero(z))
+    0

@@ -285,6 +285,8 @@ static Expr **arena_copy_exprs(Parser *p, Expr **arr, int count) {
 /* ---- Type parsing ---- */
 
 static Type *parse_type(Parser *p);
+static Type *parse_type_arg(Parser *p);
+static Expr *parse_const_arith(Parser *p, int min_prec);
 
 /* Check if a token kind is valid inside a type argument list <...> */
 static bool is_type_arg_token(TokenKind k) {
@@ -299,6 +301,8 @@ static bool is_type_arg_token(TokenKind k) {
     case TOK_LBRACE: case TOK_RBRACE:   /* tuple type {T1, T2} as a generic arg */
     case TOK_ARROW:
     case TOK_CONST:
+    case TOK_INT_LIT: case TOK_MINUS:   /* const generic argument: wide<256>, wide<-1> */
+    case TOK_PLUS: case TOK_SLASH: case TOK_PERCENT:  /* bare const arithmetic: wide<'n * 2> */
         return true;
     default:
         return false;
@@ -311,8 +315,19 @@ static bool is_type_arg_token(TokenKind k) {
 static bool generic_call_scan(Parser *p, int start) {
     int scan = start;
     int depth = 1;
+    int paren = 0;
     while (scan < p->token_count && depth > 0) {
         TokenKind k = p->tokens[scan].kind;
+        /* Inside parentheses any token is admitted (a parenthesized const
+         * expression carries the full grammar, incl. shifts and comparisons)
+         * and angle tokens don't count toward the <...> depth. */
+        if (k == TOK_LPAREN) { paren++; scan++; continue; }
+        if (k == TOK_RPAREN) { if (--paren < 0) return false; scan++; continue; }
+        if (paren > 0) {
+            if (k == TOK_NEWLINE || k == TOK_EOF) return false;
+            scan++;
+            continue;
+        }
         if (k == TOK_LT) { depth++; scan++; continue; }
         if (k == TOK_GT) { depth--; scan++; continue; }
         if (k == TOK_GTGT) {
@@ -325,6 +340,7 @@ static bool generic_call_scan(Parser *p, int start) {
         if (!is_type_arg_token(k)) return false;
         scan++;
     }
+    if (paren != 0) return false;
     /* depth reached 0; `scan` now sits just past the closing '>' / '>>', which
      * must be followed by '(' (call) or '.' (variant). */
     return depth == 0 && scan < p->token_count &&
@@ -347,8 +363,16 @@ static bool generic_call_scan(Parser *p, int start) {
 static bool bare_inst_scan(Parser *p, int start) {
     int scan = start;
     int depth = 1;
+    int paren = 0;
     while (scan < p->token_count && depth > 0) {
         TokenKind k = p->tokens[scan].kind;
+        if (k == TOK_LPAREN) { paren++; scan++; continue; }
+        if (k == TOK_RPAREN) { if (--paren < 0) return false; scan++; continue; }
+        if (paren > 0) {
+            if (k == TOK_NEWLINE || k == TOK_EOF) return false;
+            scan++;
+            continue;
+        }
         if (k == TOK_LT) { depth++; scan++; continue; }
         if (k == TOK_GT) { depth--; scan++; continue; }
         if (k == TOK_GTGT) {
@@ -360,6 +384,7 @@ static bool bare_inst_scan(Parser *p, int start) {
         if (!is_type_arg_token(k)) return false;
         scan++;
     }
+    if (paren != 0) return false;
     if (depth != 0 || scan >= p->token_count) return false;
     switch (p->tokens[scan].kind) {
     case TOK_NEWLINE: case TOK_DEDENT: case TOK_EOF:
@@ -411,7 +436,8 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             continue;
         }
         /* T[N] — fixed-size inline array, only in struct/extern field declarations */
-        if (p->allow_fixed_array && check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_INT_LIT) {
+        if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
+            peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
             advance_p(p); /* consume [ */
             Token *size_tok = current(p);
             bool size_oor = false;
@@ -424,6 +450,30 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             advance_p(p); /* consume INT_LIT */
             expect(p, TOK_RBRACKET);
             base = type_fixed_array(p->arena, base, size);
+            continue;
+        }
+        /* T['n] — fixed array sized by a const generic parameter; positivity
+         * is checked per instantiation once the value is known. */
+        if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
+            peek_at(p, 1)->kind == TOK_TYPE_VAR && peek_at(p, 2)->kind == TOK_RBRACKET) {
+            advance_p(p); /* consume [ */
+            Token *var_tok = current(p);
+            advance_p(p); /* consume TYPE_VAR */
+            expect(p, TOK_RBRACKET);
+            Type *size_ref = type_type_var(p->arena, tok_intern(p, var_tok));
+            base = type_fixed_array_sym(p->arena, base, size_ref);
+            continue;
+        }
+        /* T['n / 32], T[('n * 2)], T[4 * 2] — fixed array sized by a const
+         * expression (over const generic params, or fully concrete — folded
+         * and positivity-checked in pass2/at instantiation). */
+        if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
+            (peek_at(p, 1)->kind == TOK_TYPE_VAR || peek_at(p, 1)->kind == TOK_LPAREN ||
+             peek_at(p, 1)->kind == TOK_MINUS || peek_at(p, 1)->kind == TOK_INT_LIT)) {
+            advance_p(p); /* consume [ */
+            Expr *size_expr = parse_const_arith(p, 1);
+            expect(p, TOK_RBRACKET);
+            base = type_fixed_array_sym(p->arena, base, type_const_expr(p->arena, size_expr));
             continue;
         }
         if (check(p, TOK_QUESTION)) {
@@ -560,8 +610,9 @@ static Type *parse_type(Parser *p) {
                 if (tt->kind == TOK_IDENT || tt->kind == TOK_TYPE_VAR ||
                     tt->kind == TOK_LPAREN || tt->kind == TOK_VOID ||
                     tt->kind == TOK_ERROR_KW ||
-                    tt->kind == TOK_CONST || tt->kind == TOK_LBRACE) {
-                    Type *ty = parse_type(p);
+                    tt->kind == TOK_CONST || tt->kind == TOK_LBRACE ||
+                    tt->kind == TOK_INT_LIT || tt->kind == TOK_MINUS) {
+                    Type *ty = parse_type_arg(p);
                     DA_APPEND(targs, ta_count, ta_cap, ty);
                 } else {
                     valid = false;
@@ -759,6 +810,181 @@ static Type *parse_int_type(const char *start, int length) {
     if (num_end >= length) return type_int32();
     Type *t = type_from_int_suffix(start + num_end, length - num_end);
     return t ? t : type_int32();
+}
+
+/* ---- Const generic arguments ----
+ *
+ * A generic argument is either a type or a const (value) expression. Bare
+ * const expressions admit integer literals, const params ('n), named consts,
+ * and + - * / % with unary minus; shifts and comparisons require parentheses
+ * (`wide<('n >> 2)>`), inside which the full expression grammar applies. */
+
+/* One atom of a bare const expression inside <...> or a size slot. */
+static Expr *parse_const_atom(Parser *p) {
+    Token *t = current(p);
+    SrcLoc loc = loc_from_token(t);
+    switch (t->kind) {
+    case TOK_INT_LIT: {
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_INT_LIT, loc);
+        bool oor = false;
+        e->int_lit.value = parse_int_value(t->start, t->length, &oor);
+        e->int_lit.lit_type = parse_int_type(t->start, t->length);
+        e->int_lit.out_of_range = oor;
+        return e;
+    }
+    case TOK_TYPE_VAR: {
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_TYPE_VAR_REF, loc);
+        e->type_var_ref.name = tok_intern(p, t);
+        return e;
+    }
+    case TOK_IDENT: {
+        /* named constant, possibly dotted (m.x) or a type property (i32.bits) */
+        advance_p(p);
+        Expr *e = alloc_expr(p, EXPR_IDENT, loc);
+        e->ident.name = tok_intern(p, t);
+        while (check(p, TOK_DOT)) {
+            advance_p(p);
+            Token *m = expect(p, TOK_IDENT);
+            if (!m) break;
+            Expr *fld = alloc_expr(p, EXPR_FIELD, loc);
+            fld->field.object = e;
+            fld->field.name = tok_intern(p, m);
+            fld->field.name_loc = loc_from_token(m);
+            fld->field.name_loc.filename = p->filename;
+            e = fld;
+        }
+        return e;
+    }
+    case TOK_MINUS: {
+        advance_p(p);
+        Expr *operand = parse_const_atom(p);
+        Expr *e = alloc_expr(p, EXPR_UNARY_PREFIX, loc);
+        e->unary_prefix.op = TOK_MINUS;
+        e->unary_prefix.operand = operand;
+        return e;
+    }
+    case TOK_LPAREN: {
+        advance_p(p);
+        Expr *e = parse_bracketed_expr(p, PREC_NONE + 1);
+        expect(p, TOK_RPAREN);
+        return e;
+    }
+    default:
+        diag_error(loc, "expected a const generic expression, got %s",
+                   token_kind_name(t->kind));
+        if (!is_hard_stop(t->kind)) advance_p(p);
+        return alloc_expr_error(p, loc);
+    }
+}
+
+/* min_prec: 1 = additive level, 2 = multiplicative level. */
+static Expr *parse_const_arith(Parser *p, int min_prec) {
+    Expr *left = parse_const_atom(p);
+    while (1) {
+        TokenKind k = current(p)->kind;
+        int prec;
+        if (k == TOK_STAR || k == TOK_SLASH || k == TOK_PERCENT) prec = 2;
+        else if (k == TOK_PLUS || k == TOK_MINUS) prec = 1;
+        else break;
+        if (prec < min_prec) break;
+        Token *op_tok = current(p);
+        advance_p(p);
+        Expr *right = parse_const_arith(p, prec + 1);
+        Expr *e = alloc_expr(p, EXPR_BINARY, loc_from_token(op_tok));
+        e->binary.op = k;
+        e->binary.left = left;
+        e->binary.right = right;
+        left = e;
+    }
+    return left;
+}
+
+/* Does the token at `idx` begin a const atom (for the `t*` vs `a * b`
+ * disambiguation: after `*`, a const atom can never continue a pointer type)? */
+static bool starts_const_atom(TokenKind k) {
+    return k == TOK_INT_LIT || k == TOK_TYPE_VAR || k == TOK_IDENT ||
+           k == TOK_LPAREN || k == TOK_MINUS;
+}
+
+/* Lookahead over a dotted name (IDENT ('.' IDENT)*) starting at offset 0;
+ * returns the offset of the first token past it. */
+static int scan_dotted_ident(Parser *p, int off) {
+    off++;  /* the IDENT itself */
+    while (peek_at(p, off)->kind == TOK_DOT &&
+           peek_at(p, off + 1)->kind == TOK_IDENT)
+        off += 2;
+    return off;
+}
+
+/* Would the tokens ahead read as a bare const expression rather than a type?
+ * Decides for the IDENT/TYPE_VAR-headed case: a following + - / % makes it
+ * arithmetic; a following * is arithmetic iff the token after it can begin a
+ * const atom (no type continues past `T*` with an expression atom). */
+static bool ident_arg_is_const_expr(Parser *p) {
+    int off = current(p)->kind == TOK_TYPE_VAR ? 1 : scan_dotted_ident(p, 0);
+    TokenKind k = peek_at(p, off)->kind;
+    if (k == TOK_PLUS || k == TOK_SLASH || k == TOK_PERCENT) return true;
+    if (k == TOK_MINUS)
+        /* `t - x` is never a type; but a '-' here could also start the next
+         * clause only in error cases — treat as arithmetic. */
+        return true;
+    if (k == TOK_STAR) {
+        /* consume any run of '*' (pointer levels); arithmetic iff a const
+         * atom follows the first '*' */
+        return starts_const_atom(peek_at(p, off + 1)->kind);
+    }
+    return false;
+}
+
+/* Parse one generic argument inside <...>: a const (value) expression or a
+ * type. Concrete const expressions fold in pass2; expressions over const
+ * params stay symbolic (TYPE_CONST_EXPR) until instantiation. */
+static Type *parse_type_arg(Parser *p) {
+    Token *t = current(p);
+    SrcLoc loc = loc_from_token(t);
+
+    bool is_const_expr = false;
+    switch (t->kind) {
+    case TOK_INT_LIT:
+    case TOK_MINUS:
+        is_const_expr = true;
+        break;
+    case TOK_TYPE_VAR:
+    case TOK_IDENT:
+        is_const_expr = ident_arg_is_const_expr(p);
+        break;
+    case TOK_LPAREN: {
+        /* `(...)` followed by `->` is a function type; otherwise a
+         * parenthesized const expression (possibly continued by arithmetic). */
+        int depth = 0, off = 0;
+        while (peek_at(p, off)->kind != TOK_EOF) {
+            TokenKind k = peek_at(p, off)->kind;
+            if (k == TOK_LPAREN) depth++;
+            else if (k == TOK_RPAREN && --depth == 0) break;
+            off++;
+        }
+        is_const_expr = peek_at(p, off + 1)->kind != TOK_ARROW;
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (!is_const_expr)
+        return parse_type(p);
+
+    Expr *expr = parse_const_arith(p, 1);
+    if (expr->kind == EXPR_INT_LIT) {
+        if (expr->int_lit.out_of_range) {
+            diag_error(loc, "const generic argument out of range");
+            return type_error();
+        }
+        /* Suffixed literals are allowed; the value is taken as-is (i64 domain). */
+        return type_const_int(p->arena, (int64_t)expr->int_lit.value);
+    }
+    return type_const_expr(p->arena, expr);
 }
 
 /* Parse the byte value from a char literal token (e.g., 'a', '\n', '\x41').
@@ -2502,7 +2728,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                 Type **type_args = NULL;
                 int ta_count = 0, ta_cap = 0;
                 do {
-                    Type *ty = parse_type(p);
+                    Type *ty = parse_type_arg(p);
                     DA_APPEND(type_args, ta_count, ta_cap, ty);
                     if (!check(p, TOK_COMMA)) break;
                     advance_p(p);
@@ -2598,7 +2824,7 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
                 Type **type_args = NULL;
                 int ta_count = 0, ta_cap = 0;
                 do {
-                    Type *ty = parse_type(p);
+                    Type *ty = parse_type_arg(p);
                     DA_APPEND(type_args, ta_count, ta_cap, ty);
                     if (!check(p, TOK_COMMA)) break;
                     advance_p(p);

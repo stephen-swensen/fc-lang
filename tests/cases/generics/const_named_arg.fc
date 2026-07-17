@@ -1,0 +1,17 @@
+// Named module constants as const arguments, bare and in arithmetic.
+module cfg =
+    let block_bits = 128
+
+struct wide =
+    limbs: u32['n / 32]
+
+let main = (args: str[]) ->
+    let a = default(wide<cfg.block_bits>)
+    assert(a.limbs.len == 4)
+    let b = default(wide<cfg.block_bits * 2>)
+    assert(b.limbs.len == 8)
+    let c = default(wide<(cfg.block_bits >> 1)>)
+    assert(c.limbs.len == 2)
+    let d = default(wide<(1 << 8)>)
+    assert(d.limbs.len == 8)
+    0

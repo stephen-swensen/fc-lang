@@ -1,0 +1,18 @@
+// A const param in expression position behaves like an i32 literal of the
+// bound value: loop bounds, arithmetic, widening.
+let sum_to = <'n>() ->
+    let mut s = 0
+    for i in 0..'n do
+        s = s + i
+    s
+
+let widened = <'n>() ->
+    let big = 'n + 0i64
+    big
+
+let main = (args: str[]) ->
+    assert(sum_to<5>() == 10)
+    assert(sum_to<10>() == 45)
+    assert(sum_to<1>() == 0)
+    assert(widened<7>() == 7i64)
+    0
