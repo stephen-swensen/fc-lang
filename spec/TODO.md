@@ -29,13 +29,15 @@ divide-by-zero width-contract hack in wideint's size expressions with a readable
 comptime fence is spec'd as a law: *compile-time evaluation may decide whether an
 instantiation exists, never what it contains*; no calls in constant expressions, message
 must be a string literal. Checked per instance at the mono_register choke point (all
-instantiation paths), immediately for concrete conditions. Placement: anywhere among a
-type body's members (adjacency-as-documentation); in function bodies the rule follows
-what the assert is about — const-param asserts are the instantiation contract and must
-lead the body (prologue, fused to the signature; their condition can reference nothing
-the body computes), while concrete asserts may sit at any straight-line position
-(co-located with what they protect, the struct-adjacency convention). Both rejected
-inside if/match/loop/for/defer/lambda (unconditional, no branch pruning). Spec §Const Parameters → Static assertions; tests
+instantiation paths), immediately for concrete conditions. Placement (final,
+after three iterations): anywhere among a type body's members and any straight-line
+statement position in a function body — position is documentation (co-locate with what
+the assert protects; contract-first is a stated convention, not an error — FC has no
+style diagnostics). A prologue *requirement* for const-param asserts was implemented and
+then dropped: it contradicted the co-location utility and promoted style to a compile
+error against FC's own philosophy. The one enforced restriction is semantic: no nesting
+inside if/match/loop/for/defer/lambda (the assertion is unconditional — no branch
+pruning — so nesting would promise conditionality that cannot exist). Spec §Const Parameters → Static assertions; tests
 `generics/static_assert_*`.
 
 Open (not blocking):

@@ -1,9 +1,8 @@
-// static_assert placement. Type bodies: anywhere among the members (position
-// is documentation — adjacency to the field it justifies). Function bodies:
-// an assert over const params is the instantiation contract and must lead
-// the body (the prologue, fused to the signature); a concrete assert is a
-// standalone fact and may sit at any straight-line position, co-located with
-// what it protects.
+// static_assert placement: anywhere among a type body's members, and any
+// straight-line statement position in a function body — co-locate an assert
+// with what it protects (the convention for an instantiation contract is the
+// top of the body, but that is style, not law). Never nested inside control
+// flow or a lambda (see the _in_*_err tests).
 module cfg =
     let frame_bytes = 64
 
@@ -16,8 +15,11 @@ struct ring =
 
 let f = <'n>() ->
     static_assert('n >= 64, "f requires at least 64")
-    static_assert('n % 32 == 0, "width must be limb-aligned")
     let words = 'n / 32
+    // const-param assert co-located with the buffer it justifies
+    static_assert('n <= 4096, "scratch below caps at 4096 bits")
+    let scratch = u8['n / 8] { }
+    assert(scratch.len == ('n / 8))
     words
 
 let main = (args: str[]) ->

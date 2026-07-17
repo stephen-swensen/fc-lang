@@ -1403,22 +1403,6 @@ static void register_concrete_tuple(CheckCtx *ctx, Type *tup) {
     }
 }
 
-/* Syntactic: does this expression mention a generic parameter ('x)? Used
- * before type-checking (stamped flags not yet available) by the prologue
- * placement rule; covers the const-expression shapes — anything outside them
- * fails the shape/normalize checks on its own. */
-static bool expr_mentions_gen_param(Expr *e) {
-    if (!e) return false;
-    switch (e->kind) {
-    case EXPR_TYPE_VAR_REF: return true;
-    case EXPR_UNARY_PREFIX: return expr_mentions_gen_param(e->unary_prefix.operand);
-    case EXPR_BINARY: return expr_mentions_gen_param(e->binary.left) ||
-                             expr_mentions_gen_param(e->binary.right);
-    case EXPR_CAST: return expr_mentions_gen_param(e->cast.operand);
-    default: return false;
-    }
-}
-
 /* Does this (already-checked) expression reference a const generic param? */
 static bool expr_refs_const_param(Expr *e) {
     if (!e) return false;
@@ -4956,26 +4940,6 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             ctx->active_fn_sym = ctx->pending_fn_sym;
             ctx->pending_fn_sym = NULL;
 
-            /* Prologue rule: a static_assert over const parameters is the
-               function's instantiation contract — a constraint on the type
-               variables — so it must be among the body's leading statements,
-               fused to the signature. A concrete static_assert is a
-               standalone fact and may instead sit at any straight-line
-               position, co-located with what it protects. (Unchecked nodes
-               only: a re-check of an already-typed body must not re-report.) */
-            bool past_prologue = false;
-            for (int i = 0; i < e->func.body_count; i++) {
-                if (e->func.body[i]->kind != EXPR_STATIC_ASSERT) {
-                    past_prologue = true;
-                    continue;
-                }
-                if (past_prologue && !e->func.body[i]->type &&
-                    expr_mentions_gen_param(e->func.body[i]->static_assert_expr.condition))
-                    diag_error(e->func.body[i]->loc,
-                        "a static_assert over const parameters states the function's "
-                        "instantiation contract and must precede all other statements "
-                        "in the body");
-            }
         }
 
         /* Type-check body in inner scope. recursive_ret/self_name are scoped to
