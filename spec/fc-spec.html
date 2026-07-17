@@ -3932,14 +3932,26 @@ let halve = <'n>() ->
 
 A condition over const parameters is checked once per instantiation, on every path an instance can be reached by (a direct annotation, a call, an instance produced by const arithmetic inside another generic); a failing instance is rejected with the message: `static assertion failed in instantiation of 'uwide<100>': uwide width must be a multiple of 32, at least 64`. A fully concrete condition is judged immediately where it stands. In every case `static_assert` emits no code and evaluates nothing at runtime — it is the compile-time twin of `assert`: the same role (state a precondition, fail loudly on violation), moved to the instantiation boundary.
 
-**Placement.** In a struct or union body, `static_assert` lines may appear anywhere among the members — position carries no semantic weight, so the convention is adjacency: put each assertion next to the field it justifies (or the whole contract at the top). In a function body, `static_assert` may stand at any straight-line statement position — but **not** inside `if`/`match` arms, loop bodies, `defer`, or a lambda body. The assertion is unconditional (FC evaluates no branches at compile time), so a placement that visually promises conditionality is rejected outright rather than silently firing for every instance:
+**Placement.** In a struct or union body, `static_assert` lines may appear anywhere among the members — position carries no semantic weight there, so the convention is adjacency: put each assertion next to the field it justifies (or the whole contract at the top). In a function body the rule follows what the assertion *is about*. An assert over **const parameters** is the function's instantiation contract — a constraint on its type variables — and must be among the body's leading statements, the **prologue**, sitting directly under the `->` fused to the signature (its condition can reference nothing the body computes, so a later placement could never say more). A **concrete** assert is a standalone fact about named constants and may sit at any straight-line statement position — co-locate it with what it protects, the same adjacency convention as struct fields. Neither form may nest inside `if`/`match` arms, loop bodies, `defer`, or a lambda body: the assertion is unconditional — FC evaluates no branches at compile time — so nesting would visually promise conditionality that cannot exist.
 
 ```fc
-let f = <'n>() ->
-    if 'n > 100 then
-        static_assert('n % 64 == 0, "…")   // error: static_assert is unconditional
-    else void()
+let halve = <'n>() ->
+    static_assert('n % 64 == 0, "halve needs a width divisible by 64")   // the contract
+    'n / 2
+
+let read_frame = (src: u8[]) ->
     ...
+    static_assert(cfg.frame_bytes % 16 == 0, "frame must be 16-byte aligned")
+    let frame = u8[cfg.frame_bytes] { }      // co-located with what it protects
+    ...
+
+let f = <'n>() ->
+    let words = 'n / 32
+    static_assert('n % 32 == 0, "…")   // error: the contract must precede the body
+    if 'n > 100 then
+        static_assert('n >= 128, "…")  // error: static_assert is unconditional
+    else void()
+    words
 ```
 
 `static_assert` is deliberately **judgmental, never generative**. The governing rule for all compile-time evaluation in FC: *compile-time evaluation may decide whether an instantiation exists, never what it contains.* Values flow into layout (`u32['n / 32]`), predicates gate admission (`static_assert`), and nothing computes code. Two restrictions keep it on that side of the line: the condition is limited to the constant-expression grammar — const parameters, integer and bool literals, arithmetic/bitwise/comparison/logical operators, and fixed-width integer casts; **function calls are never allowed in a constant expression** (write `('n & ('n - 1)) == 0`, not `is_power_of_two('n)`) — and the message must be a string literal. In a function body the condition may also fold through named constants; in a type body it may reference only the type's own const parameters and literals.

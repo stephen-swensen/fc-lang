@@ -30,10 +30,12 @@ comptime fence is spec'd as a law: *compile-time evaluation may decide whether a
 instantiation exists, never what it contains*; no calls in constant expressions, message
 must be a string literal. Checked per instance at the mono_register choke point (all
 instantiation paths), immediately for concrete conditions. Placement: anywhere among a
-type body's members (adjacency-as-documentation); straight-line statement positions only
-in function bodies — rejected inside if/match/loop/for/defer/lambda, since the assertion
-is unconditional (no branch pruning) and a nested placement would visually promise
-conditionality that cannot exist. Spec §Const Parameters → Static assertions; tests
+type body's members (adjacency-as-documentation); in function bodies the rule follows
+what the assert is about — const-param asserts are the instantiation contract and must
+lead the body (prologue, fused to the signature; their condition can reference nothing
+the body computes), while concrete asserts may sit at any straight-line position
+(co-located with what they protect, the struct-adjacency convention). Both rejected
+inside if/match/loop/for/defer/lambda (unconditional, no branch pruning). Spec §Const Parameters → Static assertions; tests
 `generics/static_assert_*`.
 
 Open (not blocking):

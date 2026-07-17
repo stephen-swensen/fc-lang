@@ -1,0 +1,8 @@
+let f = <'n>() ->
+    let words = 'n / 32
+    static_assert('n % 32 == 0, "too late — the contract must lead the body")
+    words
+
+let main = (args: str[]) ->
+    assert(f<128>() == 4)
+    0
