@@ -1,0 +1,8 @@
+let main = (args: str[]) ->
+    let x = 1
+    match x with
+    | 1 ->
+        static_assert(1 == 1, "inside a match arm")
+        void()
+    | _ -> void()
+    0

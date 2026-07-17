@@ -1,0 +1,22 @@
+// static_assert placement: anywhere among a type body's members (position is
+// documentation — adjacency to the field it justifies), and any straight-line
+// statement position in a function body.
+struct ring =
+    static_assert('cap > 0, "capacity must be positive")
+    buf: 'a['cap]
+    static_assert('cap % 2 == 0, "capacity must be even")
+    head: i32
+    static_assert('cap <= 4096, "capacity too large")
+
+let f = <'n>() ->
+    static_assert('n >= 64, "f requires at least 64")
+    let words = 'n / 32
+    static_assert('n % 32 == 0, "width must be limb-aligned")
+    words
+
+let main = (args: str[]) ->
+    let r = default(ring<u8, 64>)
+    assert(r.buf.len == 64)
+    assert(f<128>() == 4)
+    static_assert(2 * 2 == 4, "concrete, mid-main")
+    0

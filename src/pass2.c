@@ -589,6 +589,11 @@ typedef struct {
        to that decl's own EXPR_FUNC (mirrors pending_recursive_ret). */
     struct Symbol *active_fn_sym;
     struct Symbol *pending_fn_sym;
+    /* True while checking any subtree under a conditional or deferred-execution
+       construct (if/match/loop/for/defer, or a lambda body). static_assert is
+       unconditional — FC evaluates no branches at compile time — so a placement
+       that visually promises conditionality is rejected. */
+    bool in_conditional;
     MonoTable *mono_table;       /* global instantiation registry */
     InternTable *intern;         /* for name mangling */
     ImportScope *import_scope;   /* lexically scoped import chain */
@@ -3927,7 +3932,24 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     bool in_value_position = !(ctx->in_callee_position || ctx->in_reflection_position);
     ctx->in_callee_position = false;
     ctx->in_reflection_position = false;
+    /* Conditional-context tracking for static_assert placement (see the
+     * CheckCtx field). One dispatch point covers every descendant. */
+    bool saved_cond_ctx = ctx->in_conditional;
+    switch (e->kind) {
+    case EXPR_IF: case EXPR_MATCH: case EXPR_LOOP: case EXPR_FOR:
+    case EXPR_DEFER:
+        ctx->in_conditional = true;
+        break;
+    case EXPR_FUNC:
+        /* A lambda body (not the decl's own top-level init) is deferred
+         * execution — its statements do not run where they stand. */
+        if (!ctx->is_top_level_init) ctx->in_conditional = true;
+        break;
+    default:
+        break;
+    }
     Type *t = check_expr_inner(ctx, e);
+    ctx->in_conditional = saved_cond_ctx;
     /* Reject a *generic function declaration* used as a value. The signal is the
      * resolved symbol's is_generic flag (set only on generic top-level/module
      * function and type declarations) plus a function type — NOT merely a type
@@ -7467,6 +7489,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Guard against re-checks (on-demand + in-order): the type stamp
          * doubles as the "already collected" marker. */
         if (e->type) return e->type;
+        if (ctx->in_conditional) {
+            diag_error(e->loc,
+                "static_assert is unconditional — FC evaluates no branches at "
+                "compile time — so it may not appear inside if/match/loop/for/"
+                "defer or a lambda body; move it to the enclosing function body");
+            e->type = type_void();
+            return e->type;
+        }
         Expr *cond = e->static_assert_expr.condition;
         Type *ct = check_expr(ctx, cond);
         if (!type_is_error(ct) && ct->kind != TYPE_BOOL) {

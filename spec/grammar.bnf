@@ -868,7 +868,10 @@ assert_expr      = "assert" , "(" , expr , [ "," , expr ] , ")" ;
 
 (* static_assert is also valid in statement position (see static_assert   *)
 (* under unions): immediate for concrete conditions, per instantiation     *)
-(* when the condition uses const generic params.                           *)
+(* when the condition uses const generic params. Straight-line statement   *)
+(* positions only — not inside if/match arms, loop bodies, defer, or a     *)
+(* lambda body (the assertion is unconditional; a placement that promises  *)
+(* conditionality is rejected).                                            *)
 
 (* Atomic builtins: pointer to integer/bool pointee; acquire/release ordering *)
 atomic_load_expr  = "atomic_load_acquire" , "(" , expr , ")" ;

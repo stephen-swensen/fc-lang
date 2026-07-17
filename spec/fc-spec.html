@@ -3932,6 +3932,16 @@ let halve = <'n>() ->
 
 A condition over const parameters is checked once per instantiation, on every path an instance can be reached by (a direct annotation, a call, an instance produced by const arithmetic inside another generic); a failing instance is rejected with the message: `static assertion failed in instantiation of 'uwide<100>': uwide width must be a multiple of 32, at least 64`. A fully concrete condition is judged immediately where it stands. In every case `static_assert` emits no code and evaluates nothing at runtime — it is the compile-time twin of `assert`: the same role (state a precondition, fail loudly on violation), moved to the instantiation boundary.
 
+**Placement.** In a struct or union body, `static_assert` lines may appear anywhere among the members — position carries no semantic weight, so the convention is adjacency: put each assertion next to the field it justifies (or the whole contract at the top). In a function body, `static_assert` may stand at any straight-line statement position — but **not** inside `if`/`match` arms, loop bodies, `defer`, or a lambda body. The assertion is unconditional (FC evaluates no branches at compile time), so a placement that visually promises conditionality is rejected outright rather than silently firing for every instance:
+
+```fc
+let f = <'n>() ->
+    if 'n > 100 then
+        static_assert('n % 64 == 0, "…")   // error: static_assert is unconditional
+    else void()
+    ...
+```
+
 `static_assert` is deliberately **judgmental, never generative**. The governing rule for all compile-time evaluation in FC: *compile-time evaluation may decide whether an instantiation exists, never what it contains.* Values flow into layout (`u32['n / 32]`), predicates gate admission (`static_assert`), and nothing computes code. Two restrictions keep it on that side of the line: the condition is limited to the constant-expression grammar — const parameters, integer and bool literals, arithmetic/bitwise/comparison/logical operators, and fixed-width integer casts; **function calls are never allowed in a constant expression** (write `('n & ('n - 1)) == 0`, not `is_power_of_two('n)`) — and the message must be a string literal. In a function body the condition may also fold through named constants; in a type body it may reference only the type's own const parameters and literals.
 
 **No value recursion.** A generic may not instantiate itself — directly or through a cycle — with a *changed* const argument (`f<'n + 1>` inside `f`). Every such chain denotes an infinite family of instances: FC evaluates no branches at compile time, so a "bounded" recursion (`if 'n > 100 then 0 else f<'n + 1>()`) still names infinitely many instances and is rejected. Recursion at the *same* instantiation (`f<'n>`, or plain `f(...)`) is ordinary recursion and fine. Compile-time iteration is not what const parameters are for; they parameterize **layout** — the loop belongs at runtime, over the laid-out data.

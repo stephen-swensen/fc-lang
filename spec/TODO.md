@@ -29,8 +29,12 @@ divide-by-zero width-contract hack in wideint's size expressions with a readable
 comptime fence is spec'd as a law: *compile-time evaluation may decide whether an
 instantiation exists, never what it contains*; no calls in constant expressions, message
 must be a string literal. Checked per instance at the mono_register choke point (all
-instantiation paths), immediately for concrete conditions. Spec §Const Parameters → Static
-assertions; tests `generics/static_assert_*`.
+instantiation paths), immediately for concrete conditions. Placement: anywhere among a
+type body's members (adjacency-as-documentation); straight-line statement positions only
+in function bodies — rejected inside if/match/loop/for/defer/lambda, since the assertion
+is unconditional (no branch pruning) and a nested placement would visually promise
+conditionality that cannot exist. Spec §Const Parameters → Static assertions; tests
+`generics/static_assert_*`.
 
 Open (not blocking):
 - Struct literals for const-param structs: `wide { limbs = ... }` cannot infer `'n` from a

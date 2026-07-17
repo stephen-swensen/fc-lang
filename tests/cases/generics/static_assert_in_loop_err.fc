@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    for i in 0..3 do
+        static_assert(1 == 1, "inside a loop body")
+    0

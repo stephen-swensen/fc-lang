@@ -1,0 +1,6 @@
+let main = (args: str[]) ->
+    let lam = () ->
+        static_assert(1 == 1, "inside a lambda")
+        3
+    assert(lam() == 3)
+    0
