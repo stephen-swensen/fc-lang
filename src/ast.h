@@ -62,6 +62,7 @@ typedef enum {
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
     EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
     EXPR_ASSERT,
+    EXPR_STATIC_ASSERT,  /* compile-time predicate; statement position, emits nothing */
     EXPR_DEFER,
     EXPR_IGNORE,       /* ignore expr — evaluate for effect, yield void */
     EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
@@ -102,6 +103,16 @@ typedef struct InterpSegment {
     char conversion;        /* for format segments: 'd', 'x', 'f', 's', etc. */
     Expr *expr;             /* for format segments: the expression (NULL for literals) */
 } InterpSegment;
+
+/* One static_assert line in a struct/union body: an instantiation
+ * predicate over the type's const generic params. */
+typedef struct StaticAssert {
+    Expr *cond;
+    const char *msg;        /* NUL-terminated literal content */
+    SrcLoc loc;
+    const char *owner;      /* source-level owner name for diagnostics
+                               ("uwide", "from_u64") — decl names get mangled */
+} StaticAssert;
 
 typedef struct FieldPattern {
     const char *name;       /* struct field name */
@@ -410,6 +421,14 @@ struct Expr {
             int expr_text_len;
         } assert_expr;
 
+        /* EXPR_STATIC_ASSERT — static_assert(const_expr, "msg"): checked at
+         * compile time (immediately when concrete; per instantiation when the
+         * condition uses const generic params), emits no code. */
+        struct {
+            Expr *condition;        /* restricted const-expr grammar */
+            const char *msg;        /* string literal (guardrail: no computation) */
+        } static_assert_expr;
+
         /* EXPR_DEFER */
         struct { Expr *value; } defer_expr;
 
@@ -539,6 +558,11 @@ struct Decl {
              * the const-expr gate in pass2; zero-init (UNVISITED) is correct. */
             int const_fold_state;       /* 0=unvisited, 1=visiting, 2=done, 3=failed */
             Expr *const_fold_value;     /* folded literal tree (may be == init) */
+            /* static_assert statements over const params in this (generic)
+             * function's body, collected by pass2 for the per-instantiation
+             * check in mono_register. */
+            StaticAssert *static_asserts;   /* arena-backed */
+            int static_assert_count;
         } let;
 
         /* DECL_STRUCT */
@@ -553,6 +577,8 @@ struct Decl {
             int type_param_count;
             uint8_t *param_kinds;       /* GenParamKind per param; NULL = all GP_TYPE */
             bool is_generic;
+            StaticAssert *static_asserts;   /* instantiation predicates; checked in mono_register */
+            int static_assert_count;
         } struc;
 
         /* DECL_UNION */
@@ -564,6 +590,8 @@ struct Decl {
             int type_param_count;
             uint8_t *param_kinds;       /* GenParamKind per param; NULL = all GP_TYPE */
             bool is_generic;
+            StaticAssert *static_asserts;   /* instantiation predicates; checked in mono_register */
+            int static_assert_count;
         } unio;
 
         /* DECL_ENUM — closed set of named integer constants over a declared repr.

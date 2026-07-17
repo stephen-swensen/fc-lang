@@ -56,6 +56,7 @@ static const char *token_names[TOK_COUNT] = {
     [TOK_ENUM_OF]      = "'enum_of'",
     [TOK_DEFAULT]      = "'default'",
     [TOK_ASSERT]       = "'assert'",
+    [TOK_STATIC_ASSERT] = "'static_assert'",
     [TOK_ERROR_NAME]   = "'error_name'",
     [TOK_ATOMIC_LOAD]  = "'atomic_load_acquire'",
     [TOK_ATOMIC_STORE] = "'atomic_store_release'",

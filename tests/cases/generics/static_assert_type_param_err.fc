@@ -1,0 +1,7 @@
+struct box =
+    static_assert('a == 4, "a type param is not a value")
+    value: 'a
+
+let main = (args: str[]) ->
+    let b = default(box<i32>)
+    0

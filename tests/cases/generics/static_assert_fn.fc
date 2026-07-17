@@ -1,0 +1,21 @@
+// static_assert as a statement: immediate for concrete conditions, per
+// instantiation when the condition uses const params (both explicit and
+// inferred instantiation paths).
+struct wide =
+    limbs: u32['n / 32]
+
+let halve = <'n>() ->
+    static_assert('n % 64 == 0, "halve needs a width divisible by 64")
+    'n / 2
+
+let first = (a: wide<'n>) ->
+    static_assert('n >= 64, "first requires at least 64 bits")
+    a.limbs[0]
+
+let main = (args: str[]) ->
+    static_assert(1 + 1 == 2, "arithmetic works")
+    static_assert(true, "bool literal works")
+    assert(halve<128>() == 64)
+    let w = default(wide<256>)
+    assert(first(w) == 0u32)
+    0

@@ -3915,6 +3915,25 @@ let mul_wide = (a: wide<'n>, b: wide<'n>) ->
 
 **Instances are distinct types.** `wide<128>` and `wide<256>` are unrelated types: assignment, comparison, and calls do not convert between them. Each concrete instantiation is monomorphized once, program-wide, no matter how many sites name it.
 
+### Static assertions
+
+A declaration can state a **compile-time predicate** its const parameters must satisfy — `static_assert(condition, "message")` — as a line in a struct or union body, or as a statement in a function body:
+
+```fc
+struct uwide =
+    static_assert('n % 32 == 0 && 'n >= 64,
+        "uwide width must be a multiple of 32, at least 64")
+    limbs: u32['n / 32]
+
+let halve = <'n>() ->
+    static_assert('n % 64 == 0, "halve needs a width divisible by 64")
+    'n / 2
+```
+
+A condition over const parameters is checked once per instantiation, on every path an instance can be reached by (a direct annotation, a call, an instance produced by const arithmetic inside another generic); a failing instance is rejected with the message: `static assertion failed in instantiation of 'uwide<100>': uwide width must be a multiple of 32, at least 64`. A fully concrete condition is judged immediately where it stands. In every case `static_assert` emits no code and evaluates nothing at runtime — it is the compile-time twin of `assert`: the same role (state a precondition, fail loudly on violation), moved to the instantiation boundary.
+
+`static_assert` is deliberately **judgmental, never generative**. The governing rule for all compile-time evaluation in FC: *compile-time evaluation may decide whether an instantiation exists, never what it contains.* Values flow into layout (`u32['n / 32]`), predicates gate admission (`static_assert`), and nothing computes code. Two restrictions keep it on that side of the line: the condition is limited to the constant-expression grammar — const parameters, integer and bool literals, arithmetic/bitwise/comparison/logical operators, and fixed-width integer casts; **function calls are never allowed in a constant expression** (write `('n & ('n - 1)) == 0`, not `is_power_of_two('n)`) — and the message must be a string literal. In a function body the condition may also fold through named constants; in a type body it may reference only the type's own const parameters and literals.
+
 **No value recursion.** A generic may not instantiate itself — directly or through a cycle — with a *changed* const argument (`f<'n + 1>` inside `f`). Every such chain denotes an infinite family of instances: FC evaluates no branches at compile time, so a "bounded" recursion (`if 'n > 100 then 0 else f<'n + 1>()`) still names infinitely many instances and is rejected. Recursion at the *same* instantiation (`f<'n>`, or plain `f(...)`) is ordinary recursion and fine. Compile-time iteration is not what const parameters are for; they parameterize **layout** — the loop belongs at runtime, over the laid-out data.
 
 ---
@@ -5709,7 +5728,7 @@ Common mathematical functions wrapping C11 `math.h`, all operating on `f64` (on 
 
 ## std::wideint
 
-Fixed-width integers wider than the built-in types: unsigned `uwide<'n>` and signed (two's complement) `iwide<'n>`, parameterized by their bit width as a const generic. The width may be **any multiple of 32 from 64 up** — `uwide<128>`, `uwide<256>`, `iwide<1024>`, `uwide<192>`, ... — and each width is its own type, monomorphized from the one definition; a width violating the contract fails to instantiate. A value is a by-value struct holding a little-endian array of `u32` limbs, and each type is paired with a companion module of the same name that carries its operations — `import wideint from std::`, then `wideint.uwide.add(a, b)`. Operations whose arguments carry the width infer it; constructors and constants name it explicitly: `wideint.uwide<128>.from_u64(x)`, `wideint.uwide<256>.max()`, `wideint.iwide<512>.parse(s)`. Values behave like any other struct: copy with `=`, compare with `==`/`!=`, and zero-initialize with `default(uwide<256>)` (which *is* the value 0). Storage is inline, so a value lives wherever its binding does, with no heap allocation. Unlike the other modules this one is pure FC — it wraps no C library. The signed type shares the unsigned storage, interpreted as two's complement.
+Fixed-width integers wider than the built-in types: unsigned `uwide<'n>` and signed (two's complement) `iwide<'n>`, parameterized by their bit width as a const generic. The width may be **any multiple of 32 from 64 up** — `uwide<128>`, `uwide<256>`, `iwide<1024>`, `uwide<192>`, ... — and each width is its own type, monomorphized from the one definition; a width violating the contract fails to instantiate (a `static_assert` in the struct body — see §Const Parameters). A value is a by-value struct holding a little-endian array of `u32` limbs, and each type is paired with a companion module of the same name that carries its operations — `import wideint from std::`, then `wideint.uwide.add(a, b)`. Operations whose arguments carry the width infer it; constructors and constants name it explicitly: `wideint.uwide<128>.from_u64(x)`, `wideint.uwide<256>.max()`, `wideint.iwide<512>.parse(s)`. Values behave like any other struct: copy with `=`, compare with `==`/`!=`, and zero-initialize with `default(uwide<256>)` (which *is* the value 0). Storage is inline, so a value lives wherever its binding does, with no heap allocation. Unlike the other modules this one is pure FC — it wraps no C library. The signed type shares the unsigned storage, interpreted as two's complement.
 
 Because FC has no operator overloading, every operation is a named function, not a symbol: `wideint.uwide.mul(a, b)`, never `a * b`. That is deliberate rather than a limitation — a wide-integer multiply is several machine operations, and spelling it as a call keeps that cost visible instead of hiding it behind an atomic-looking `*`.
 

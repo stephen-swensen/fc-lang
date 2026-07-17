@@ -335,6 +335,7 @@ static bool const_expr_eq(Expr *a, Expr *b) {
     if (!a || !b || a->kind != b->kind) return false;
     switch (a->kind) {
     case EXPR_INT_LIT:      return a->int_lit.value == b->int_lit.value;
+    case EXPR_BOOL_LIT:     return a->bool_lit.value == b->bool_lit.value;
     case EXPR_TYPE_VAR_REF: return a->type_var_ref.name == b->type_var_ref.name;
     case EXPR_UNARY_PREFIX: return a->unary_prefix.op == b->unary_prefix.op &&
                                    const_expr_eq(a->unary_prefix.operand, b->unary_prefix.operand);
@@ -491,8 +492,13 @@ static void const_expr_print(char *buf, int *pos, int cap, Expr *e) {
     case EXPR_TYPE_VAR_REF:
         tn_appendf(buf, pos, cap, "%s", e->type_var_ref.name);
         return;
+    case EXPR_BOOL_LIT:
+        tn_appendf(buf, pos, cap, "%s", e->bool_lit.value ? "true" : "false");
+        return;
     case EXPR_UNARY_PREFIX:
-        tn_appendf(buf, pos, cap, "%s", e->unary_prefix.op == TOK_TILDE ? "~" : "-");
+        tn_appendf(buf, pos, cap, "%s",
+                   e->unary_prefix.op == TOK_TILDE ? "~"
+                 : e->unary_prefix.op == TOK_BANG ? "!" : "-");
         const_expr_print(buf, pos, cap, e->unary_prefix.operand);
         return;
     case EXPR_BINARY: {
@@ -504,6 +510,10 @@ static void const_expr_print(char *buf, int *pos, int cap, Expr *e) {
         case TOK_AMP: op = "&"; break;    case TOK_PIPE: op = "|"; break;
         case TOK_CARET: op = "^"; break;
         case TOK_LTLT: op = "<<"; break;  case TOK_GTGT: op = ">>"; break;
+        case TOK_EQEQ: op = "=="; break;  case TOK_BANGEQ: op = "!="; break;
+        case TOK_LT: op = "<"; break;     case TOK_GT: op = ">"; break;
+        case TOK_LTEQ: op = "<="; break;  case TOK_GTEQ: op = ">="; break;
+        case TOK_AMPAMP: op = "&&"; break; case TOK_PIPEPIPE: op = "||"; break;
         default: break;
         }
         tn_appendf(buf, pos, cap, "(");
@@ -925,6 +935,9 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
     case EXPR_INT_LIT:
         *out = (int64_t)e->int_lit.value;
         return true;
+    case EXPR_BOOL_LIT:
+        *out = e->bool_lit.value ? 1 : 0;
+        return true;
     case EXPR_TYPE_VAR_REF: {
         for (int i = 0; i < count; i++) {
             if (var_names[i] == e->type_var_ref.name) {
@@ -950,6 +963,7 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
         switch (e->unary_prefix.op) {
         case TOK_MINUS: *out = (int64_t)(0 - (uint64_t)v); return true;
         case TOK_TILDE: *out = (int64_t)(~(uint64_t)v);    return true;
+        case TOK_BANG:  *out = (v == 0) ? 1 : 0;           return true;
         default:
             const_eval_fail(e, "operator not allowed in a const-generic expression");
             return false;
@@ -969,6 +983,14 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
         case TOK_CARET:   *out = (int64_t)(ul ^ ur); return true;
         case TOK_LTLT:    *out = (int64_t)(ul << (ur & 63)); return true;
         case TOK_GTGT:    *out = l >> (ur & 63); return true;  /* arithmetic (i64 domain) */
+        case TOK_EQEQ:    *out = (l == r) ? 1 : 0; return true;
+        case TOK_BANGEQ:  *out = (l != r) ? 1 : 0; return true;
+        case TOK_LT:      *out = (l <  r) ? 1 : 0; return true;
+        case TOK_GT:      *out = (l >  r) ? 1 : 0; return true;
+        case TOK_LTEQ:    *out = (l <= r) ? 1 : 0; return true;
+        case TOK_GTEQ:    *out = (l >= r) ? 1 : 0; return true;
+        case TOK_AMPAMP:  *out = (l != 0 && r != 0) ? 1 : 0; return true;
+        case TOK_PIPEPIPE: *out = (l != 0 || r != 0) ? 1 : 0; return true;
         case TOK_SLASH:
         case TOK_PERCENT:
             if (r == 0) {

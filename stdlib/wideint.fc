@@ -26,18 +26,21 @@ module wideint =
 
     // An 'n-bit unsigned integer: 'n/32 inline little-endian u32 limbs, no
     // heap. 'n must be a multiple of 32, at least 64 — any other width fails
-    // to instantiate (the size expression below divides by zero for it).
-    // Plain by-value data — copy with `=`, compare with `==`, zero with
-    // `default(uwide<'n>)` (which is the value 0).
+    // to instantiate. Plain by-value data — copy with `=`, compare with
+    // `==`, zero with `default(uwide<'n>)` (which is the value 0).
     struct uwide =
-        limbs: u32['n / 32 + 0 / (1 - ('n % 32 + 31) / 32) + 0 / ('n / 64)]      // little-endian: limbs[0] is least significant
+        static_assert('n % 32 == 0 && 'n >= 64,
+            "uwide width must be a multiple of 32, at least 64")
+        limbs: u32['n / 32]      // little-endian: limbs[0] is least significant
 
     // An 'n-bit signed integer: 'n/32 inline little-endian u32 limbs
     // interpreted as two's complement. 'n must be a multiple of 32, at least
     // 64 — any other width fails to instantiate. Plain by-value data — copy
     // with `=`, compare with `==`, zero with `default(iwide<'n>)`.
     struct iwide =
-        limbs: u32['n / 32 + 0 / (1 - ('n % 32 + 31) / 32) + 0 / ('n / 64)]      // little-endian two's complement; limbs[0] is least significant
+        static_assert('n % 32 == 0 && 'n >= 64,
+            "iwide width must be a multiple of 32, at least 64")
+        limbs: u32['n / 32]      // little-endian two's complement; limbs[0] is least significant
 
     // ===================================================================
     // Shared limb core (private). Every routine works on u32[] slices of

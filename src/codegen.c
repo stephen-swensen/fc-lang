@@ -2654,6 +2654,11 @@ static void emit_none_of_type(Type *opt, FILE *out) {
 
 static void emit_expr(Expr *e, FILE *out) {
     switch (e->kind) {
+    case EXPR_STATIC_ASSERT:
+        /* Proven at compile time (pass2 for concrete conditions, mono_register
+         * per instantiation) — a no-op in the emitted C. */
+        fprintf(out, "((void)0)");
+        break;
     case EXPR_TYPE_VAR_REF: {
         /* A const generic param in expression position: emit the bound value
          * as a plain int literal (typed i32 in pass2; range-checked per
@@ -6835,6 +6840,8 @@ static void detect_features_expr(Expr *e) {
     switch (e->kind) {
     case EXPR_ERROR:   /* unreachable: error nodes never reach codegen */
         return;
+    case EXPR_STATIC_ASSERT:
+        return;   /* proven at compile time — emits nothing, needs nothing */
     case EXPR_INTERP_STRING:
         g_needs_stdio = true;
         for (int i = 0; i < e->interp_string.segment_count; i++) {

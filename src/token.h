@@ -64,6 +64,7 @@ typedef enum {
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,
+    TOK_STATIC_ASSERT,  /* static_assert — compile-time instantiation predicate */
     TOK_ERROR_NAME,     /* error_name — declared-error name lookup */
     TOK_ATOMIC_LOAD,    /* atomic_load_acquire */
     TOK_ATOMIC_STORE,   /* atomic_store_release */

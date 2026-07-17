@@ -1,0 +1,3 @@
+let main = (args: str[]) ->
+    static_assert(1 == 2, "this fails at compile time")
+    0

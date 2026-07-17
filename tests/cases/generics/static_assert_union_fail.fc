@@ -1,0 +1,11 @@
+struct payload =
+    limbs: u32['n / 32]
+
+union holder =
+    static_assert('n >= 64, "holder requires at least 64 bits")
+    | got(payload<'n>)
+    | nothing
+
+let main = (args: str[]) ->
+    let bad = holder<32>.nothing
+    0

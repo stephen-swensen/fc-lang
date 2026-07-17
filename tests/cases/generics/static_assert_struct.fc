@@ -1,0 +1,25 @@
+// static_assert in type bodies: an instantiation predicate over const
+// params, checked once per instance on every instantiation path.
+struct wide =
+    static_assert('n % 32 == 0 && 'n >= 64, "width must be a multiple of 32, at least 64")
+    limbs: u32['n / 32]
+
+union holder =
+    static_assert('n >= 64, "holder requires at least 64 bits")
+    | got(wide<'n>)
+    | nothing
+
+// transitive path: the instance is produced by const arithmetic in a body
+let quarter = <'n>() ->
+    let w = default(wide<('n >> 2)>)
+    w.limbs.len
+
+let main = (args: str[]) ->
+    let a = default(wide<128>)
+    assert(a.limbs.len == 4)
+    let h = holder<256>.got(default(wide<256>))
+    match h with
+    | got(w) -> assert(w.limbs.len == 8)
+    | nothing -> assert(false)
+    assert(quarter<512>() == 4)
+    0

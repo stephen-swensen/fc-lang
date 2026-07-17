@@ -1,0 +1,11 @@
+struct wide =
+    static_assert('n % 32 == 0, "width must be a multiple of 32")
+    limbs: u32['n / 32]
+
+let shrink = <'n>() ->
+    let w = default(wide<'n - 12>)
+    w.limbs.len
+
+let main = (args: str[]) ->
+    let x = shrink<50>()
+    0

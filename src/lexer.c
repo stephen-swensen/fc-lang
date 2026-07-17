@@ -141,6 +141,7 @@ static TokenKind check_keyword(const char *start, int len) {
         {"default",   7,  TOK_DEFAULT},
         {"const",     5,  TOK_CONST},
         {"assert",    6,  TOK_ASSERT},
+        {"static_assert", 13, TOK_STATIC_ASSERT},
         {"error_name", 10, TOK_ERROR_NAME},
         {"atomic_load_acquire",  19, TOK_ATOMIC_LOAD},
         {"atomic_store_release", 20, TOK_ATOMIC_STORE},

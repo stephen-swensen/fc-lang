@@ -1,0 +1,1 @@
+static assertion failed in instantiation of 'wide<100>': width must be a multiple of 32

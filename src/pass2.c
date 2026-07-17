@@ -1461,7 +1461,8 @@ static Expr *normalize_const_expr(CheckCtx *ctx, Expr *e) {
     if (!e) return NULL;
     if (!expr_refs_const_param(e)) {
         Expr *folded = const_fold_expr(ctx, e);
-        if (folded && folded->kind == EXPR_INT_LIT) return folded;
+        if (folded && (folded->kind == EXPR_INT_LIT || folded->kind == EXPR_BOOL_LIT))
+            return folded;
         diag_error(e->loc, "const generic argument must be a compile-time constant");
         return NULL;
     }
@@ -1469,7 +1470,8 @@ static Expr *normalize_const_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_TYPE_VAR_REF:
         return e;
     case EXPR_UNARY_PREFIX: {
-        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_TILDE) break;
+        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_TILDE &&
+            e->unary_prefix.op != TOK_BANG) break;
         Expr *op = normalize_const_expr(ctx, e->unary_prefix.operand);
         if (!op) return NULL;
         if (op == e->unary_prefix.operand) return e;
@@ -1483,6 +1485,8 @@ static Expr *normalize_const_expr(CheckCtx *ctx, Expr *e) {
         case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
         case TOK_PERCENT: case TOK_AMP: case TOK_PIPE: case TOK_CARET:
         case TOK_LTLT: case TOK_GTGT:
+        case TOK_EQEQ: case TOK_BANGEQ: case TOK_LT: case TOK_GT:
+        case TOK_LTEQ: case TOK_GTEQ: case TOK_AMPAMP: case TOK_PIPEPIPE:
             break;
         default: goto bad;
         }
@@ -1564,6 +1568,102 @@ static Type *resolve_generic_arg(CheckCtx *ctx, Type *raw, uint8_t want, SrcLoc 
         if (c) return c;
     }
     return resolve_type(ctx, raw);
+}
+
+/* ---- static_assert in type bodies ----
+ *
+ * A struct/union static_assert is an instantiation predicate over the type's
+ * const generic params, evaluated context-free in mono_register (which sees
+ * every instance exactly once). The condition is therefore restricted to the
+ * const evaluator's node set: const params, integer/bool literals,
+ * arithmetic/bitwise/comparison/logical operators, and fixed-width integer
+ * casts — no calls and no named references (the guardrail that keeps this
+ * judgmental, never generative). This walk validates the shape once, up
+ * front, and stamps is_const_param on the param references. */
+static bool sa_shape_check(Expr *e, const char *owner_name,
+                           const char **params, uint8_t *kinds, int ntp) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_INT_LIT:
+    case EXPR_BOOL_LIT:
+        return true;
+    case EXPR_TYPE_VAR_REF: {
+        for (int i = 0; i < ntp; i++) {
+            if (params[i] != e->type_var_ref.name) continue;
+            if (kinds && kinds[i] == GP_CONST) {
+                e->type_var_ref.is_const_param = true;
+                return true;
+            }
+            diag_error(e->loc,
+                "static_assert may only reference const parameters; %s is a type parameter of '%s'",
+                e->type_var_ref.name, owner_name);
+            return false;
+        }
+        diag_error(e->loc, "%s is not a generic parameter of '%s'",
+                   e->type_var_ref.name, owner_name);
+        return false;
+    }
+    case EXPR_UNARY_PREFIX:
+        switch (e->unary_prefix.op) {
+        case TOK_MINUS: case TOK_TILDE: case TOK_BANG:
+            return sa_shape_check(e->unary_prefix.operand, owner_name, params, kinds, ntp);
+        default: break;
+        }
+        break;
+    case EXPR_BINARY:
+        switch (e->binary.op) {
+        case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
+        case TOK_PERCENT: case TOK_AMP: case TOK_PIPE: case TOK_CARET:
+        case TOK_LTLT: case TOK_GTGT:
+        case TOK_EQEQ: case TOK_BANGEQ: case TOK_LT: case TOK_GT:
+        case TOK_LTEQ: case TOK_GTEQ: case TOK_AMPAMP: case TOK_PIPEPIPE:
+            return sa_shape_check(e->binary.left, owner_name, params, kinds, ntp) &&
+                   sa_shape_check(e->binary.right, owner_name, params, kinds, ntp);
+        default: break;
+        }
+        break;
+    case EXPR_CAST:
+        if (e->cast.target && e->cast.target->kind >= TYPE_INT8 &&
+            e->cast.target->kind <= TYPE_UINT64)
+            return sa_shape_check(e->cast.operand, owner_name, params, kinds, ntp);
+        break;
+    default: break;
+    }
+    diag_error(e->loc,
+        "static_assert in a type body may only use const parameters, integer/bool "
+        "literals, operators, and fixed-width integer casts (no calls or named references)");
+    return false;
+}
+
+/* Validate every struct/union static_assert in a decl tree (recursing into
+ * modules). Run once at pass2 entry, before any instantiation can reach
+ * mono_register. */
+static void sa_validate_decls(Decl **decls, int count) {
+    for (int i = 0; i < count; i++) {
+        Decl *d = decls[i];
+        if (d->kind == DECL_MODULE) {
+            sa_validate_decls(d->module.decls, d->module.decl_count);
+            continue;
+        }
+        StaticAssert *sas = NULL;
+        int n = 0;
+        const char *owner = NULL;
+        const char **params = NULL;
+        uint8_t *kinds = NULL;
+        int ntp = 0;
+        if (d->kind == DECL_STRUCT) {
+            sas = d->struc.static_asserts; n = d->struc.static_assert_count;
+            owner = d->struc.name; params = (const char **)d->struc.type_params;
+            kinds = d->struc.param_kinds; ntp = d->struc.type_param_count;
+        } else if (d->kind == DECL_UNION) {
+            sas = d->unio.static_asserts; n = d->unio.static_assert_count;
+            owner = d->unio.name; params = (const char **)d->unio.type_params;
+            kinds = d->unio.param_kinds; ntp = d->unio.type_param_count;
+        }
+        for (int j = 0; j < n; j++)
+            sa_shape_check(sas[j].cond, sas[j].owner ? sas[j].owner : owner,
+                           params, kinds, ntp);
+    }
 }
 
 /* Validate the sizes in a fully-substituted (concrete) instance type: every
@@ -7363,6 +7463,63 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    case EXPR_STATIC_ASSERT: {
+        /* Guard against re-checks (on-demand + in-order): the type stamp
+         * doubles as the "already collected" marker. */
+        if (e->type) return e->type;
+        Expr *cond = e->static_assert_expr.condition;
+        Type *ct = check_expr(ctx, cond);
+        if (!type_is_error(ct) && ct->kind != TYPE_BOOL) {
+            diag_error(cond->loc, "static_assert condition must be bool, got %s",
+                       type_name(ct));
+        } else if (!type_is_error(ct)) {
+            if (expr_refs_const_param(cond)) {
+                /* Over const generic params: normalize to the context-free
+                 * node set and register on the enclosing function's decl —
+                 * mono_register checks it per instantiation. */
+                Expr *norm = normalize_const_expr(ctx, cond);
+                if (norm) {
+                    e->static_assert_expr.condition = norm;
+                    Symbol *fs = ctx->active_fn_sym;
+                    if (fs && fs->decl && fs->decl->kind == DECL_LET) {
+                        /* Arena-backed append (lists are tiny; the arena is
+                         * freed with the AST, keeping the server leak-free). */
+                        Decl *fd = fs->decl;
+                        int n = fd->let.static_assert_count;
+                        StaticAssert *na = arena_alloc(ctx->arena,
+                            sizeof(StaticAssert) * (size_t)(n + 1));
+                        if (n > 0)
+                            memcpy(na, fd->let.static_asserts,
+                                   sizeof(StaticAssert) * (size_t)n);
+                        na[n].cond = norm;
+                        na[n].msg = e->static_assert_expr.msg;
+                        na[n].loc = e->loc;
+                        na[n].owner = fd->let.name;
+                        fd->let.static_asserts = na;
+                        fd->let.static_assert_count = n + 1;
+                    }
+                }
+            } else {
+                /* Fully concrete: fold and judge now. */
+                Expr *folded = const_fold_expr(ctx, cond);
+                bool is_lit = folded && (folded->kind == EXPR_BOOL_LIT ||
+                                         folded->kind == EXPR_INT_LIT);
+                if (!is_lit) {
+                    diag_error(cond->loc,
+                        "static_assert condition must be a compile-time constant expression");
+                } else {
+                    bool val = folded->kind == EXPR_BOOL_LIT
+                        ? folded->bool_lit.value : folded->int_lit.value != 0;
+                    if (!val)
+                        diag_error(e->loc, "static assertion failed: %s",
+                                   e->static_assert_expr.msg);
+                }
+            }
+        }
+        e->type = type_void();
+        return e->type;
+    }
+
     case EXPR_ASSERT: {
         Type *ct = check_expr(ctx, e->assert_expr.condition);
         if (reject_unresolved_recursive_value(e->assert_expr.condition)) { e->type = type_void(); return e->type; }
@@ -10202,6 +10359,11 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         .on_demand_visited = NULL,
         .file_scopes = file_scopes,
     };
+
+    /* Validate struct/union static_assert shapes up front — mono_register
+     * evaluates them context-free, so ill-formed conditions must be rejected
+     * before any instantiation. */
+    sa_validate_decls(prog->decls, prog->decl_count);
 
     /* First pass: type-check all module member decls (including nested submodules) */
     const char *ns_tracker = NULL;

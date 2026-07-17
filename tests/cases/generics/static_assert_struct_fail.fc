@@ -1,0 +1,7 @@
+struct wide =
+    static_assert('n % 32 == 0 && 'n >= 64, "width must be a multiple of 32, at least 64")
+    limbs: u32['n / 32]
+
+let main = (args: str[]) ->
+    let a = default(wide<100>)
+    0

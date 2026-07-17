@@ -42,6 +42,14 @@ union result =
     | good('a)
     | bad('b)
 
+// Const generics — a generic parameter can be a compile-time integer.
+// Same 'x sigil; the position decides the kind ('n in a size slot = const
+// param). static_assert states what widths are admitted: checked once per
+// instantiation, emits no code.
+struct nbits =
+    static_assert('n % 8 == 0, "nbits width must be a multiple of 8")
+    bytes: u8['n / 8]
+
 // Error groups — named i32 error codes for the result type T!. A group is a
 // pseudo-module of constants (not a type): the compiler assigns each declared
 // error a unique code (sorted fully-qualified names, numbered from 65536;
@@ -934,6 +942,16 @@ let main = (args: str[]) ->
     let dp = make_pair<i32, bool>()
     assert(dp.first == 0)
     assert(dp.second == false)
+
+    // Const generics — nbits<32> and nbits<64> are distinct types from one
+    // definition; const args admit arithmetic (parens for shifts)
+    let mut n32 = default(nbits<32>)
+    n32.bytes[3] = 0xffu8
+    assert(n32.bytes.len == 4)
+    let n64 = default(nbits<(32 << 1)>)
+    assert(n64.bytes.len == 8)
+    // 'n in expression position acts as an i32 literal of the bound value;
+    // a width failing the struct's static_assert would not compile at all
 
     // --------------------------------------------------------
     // Const — deep immutability for pointers and slices

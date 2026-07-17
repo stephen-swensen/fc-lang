@@ -164,6 +164,60 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         return mangled;
     }
 
+    /* static_assert enforcement — the one choke point every instance passes
+     * through exactly once (explicit annotation, call site, transitive
+     * discovery, nested field type). Conditions were shape-validated and
+     * normalized in pass2, so the context-free evaluator suffices here. */
+    {
+        StaticAssert *sas = NULL;
+        int san = 0;
+        if (tmpl) {
+            if (tmpl->kind == DECL_STRUCT) {
+                sas = tmpl->struc.static_asserts; san = tmpl->struc.static_assert_count;
+            } else if (tmpl->kind == DECL_UNION) {
+                sas = tmpl->unio.static_asserts; san = tmpl->unio.static_assert_count;
+            } else if (tmpl->kind == DECL_LET) {
+                sas = tmpl->let.static_asserts; san = tmpl->let.static_assert_count;
+            }
+        }
+        if (san > 0) {
+            /* Human-readable instance descriptor: "uwide<100>" (the owner
+             * name captured at parse time — decl names get mangled). */
+            const char *disp = sas[0].owner ? sas[0].owner : name;
+            char inst_buf[256];
+            int pos = snprintf(inst_buf, sizeof(inst_buf), "%s<", disp);
+            for (int i = 0; i < count && pos > 0 && pos < (int)sizeof(inst_buf); i++)
+                pos += snprintf(inst_buf + pos, sizeof(inst_buf) - (size_t)pos,
+                                "%s%s", i ? ", " : "", type_name(type_args[i]));
+            if (pos > 0 && pos < (int)sizeof(inst_buf))
+                snprintf(inst_buf + pos, sizeof(inst_buf) - (size_t)pos, ">");
+
+            int nbind = tp_count < count ? tp_count : count;
+            for (int i = 0; i < san; i++) {
+                Type wrapper = {0};
+                wrapper.kind = TYPE_CONST_EXPR;
+                wrapper.const_expr.expr = sas[i].cond;
+                int64_t v;
+                if (const_type_eval(&wrapper, type_params, type_args, nbind, &v)) {
+                    if (v == 0) {
+                        diag_error(sas[i].loc,
+                            "static assertion failed in instantiation of '%s': %s",
+                            inst_buf, sas[i].msg);
+                        return mangled;   /* rejected — never registered */
+                    }
+                } else {
+                    SrcLoc eloc = {0};
+                    const char *emsg = const_eval_take_error(&eloc);
+                    diag_error((emsg && eloc.filename) ? eloc : sas[i].loc,
+                        "%s (in static_assert of '%s')",
+                        emsg ? emsg : "could not evaluate static_assert condition",
+                        inst_buf);
+                    return mangled;
+                }
+            }
+        }
+    }
+
     /* Copy type_args into arena */
     Type **args_copy = arena_alloc(a, sizeof(Type*) * (size_t)count);
     memcpy(args_copy, type_args, sizeof(Type*) * (size_t)count);

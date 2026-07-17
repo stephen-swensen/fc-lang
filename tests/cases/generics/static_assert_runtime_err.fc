@@ -1,0 +1,7 @@
+let f = (x: i32) ->
+    static_assert(x > 0, "a runtime value cannot be statically asserted")
+    x
+
+let main = (args: str[]) ->
+    let y = f(3)
+    0

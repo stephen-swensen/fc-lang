@@ -22,6 +22,16 @@ add/mul_wide at 128/256 from one definition).
 (see §std::wideint above), 2826 → 739 lines with the same API surface and richer abort
 messages (width interpolated per instance).
 
+2026-07-17 (same day): **`static_assert(cond, "msg")` added** — compile-time instantiation
+predicates in struct/union bodies and statement position, replacing the initial
+divide-by-zero width-contract hack in wideint's size expressions with a readable one-liner
+(`static_assert('n % 32 == 0 && 'n >= 64, "...")`). Judgmental, never generative — the
+comptime fence is spec'd as a law: *compile-time evaluation may decide whether an
+instantiation exists, never what it contains*; no calls in constant expressions, message
+must be a string literal. Checked per instance at the mono_register choke point (all
+instantiation paths), immediately for concrete conditions. Spec §Const Parameters → Static
+assertions; tests `generics/static_assert_*`.
+
 Open (not blocking):
 - Struct literals for const-param structs: `wide { limbs = ... }` cannot infer `'n` from a
   slice-typed field value; construction is via `default(wide<N>)` + mutation or companion
@@ -45,8 +55,8 @@ ops, `min()`/`max()`, strict `parse`/`parse_hex` (→ `uwide<'n>!`/`iwide<'n>!`)
 2826 lines) to two const-generic definitions (`uwide<'n>`, `iwide<'n>`, 739 lines)** — the
 motivating case for the const-generics feature, closing its evaluation gate. Any width
 that is a multiple of 32 and ≥ 64 now instantiates (uwide<192> works; the width contract
-is enforced at instantiation via the limbs field's size expression, which divides by zero
-for an invalid width). The `mul_wide` ladder is now unbounded (`uwide<4096>.mul_wide` →
+is enforced at instantiation by a `static_assert` in the struct body). The `mul_wide`
+ladder is now unbounded (`uwide<4096>.mul_wide` →
 `uwide<8192>`). Abort messages carry the concrete width via string interpolation in the
 assert message (`uwide.checked_mul: overflow past 256 bits` — evaluated only on the abort
 path). Width-inferring ops (`uwide.add(a, b)`) vs explicitly-named constructors

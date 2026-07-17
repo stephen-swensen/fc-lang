@@ -286,6 +286,7 @@ static Expr **arena_copy_exprs(Parser *p, Expr **arr, int count) {
 
 static Type *parse_type(Parser *p);
 static Type *parse_type_arg(Parser *p);
+static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **out_msg, SrcLoc *out_loc);
 static Expr *parse_const_arith(Parser *p, int min_prec);
 
 /* Check if a token kind is valid inside a type argument list <...> */
@@ -1413,7 +1414,7 @@ static bool token_starts_prefix_expr(TokenKind k) {
     case TOK_ALLOC: case TOK_ALLOCA: case TOK_FREE:
     case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_ENUM_OF:
     case TOK_DEFAULT:
-    case TOK_ASSERT: case TOK_ERROR_NAME:
+    case TOK_ASSERT: case TOK_STATIC_ASSERT: case TOK_ERROR_NAME:
     case TOK_ATOMIC_LOAD: case TOK_ATOMIC_STORE:
     case TOK_GUARDED: case TOK_UNGUARDED: case TOK_CHECKED: case TOK_UNCHECKED:
     case TOK_IF: case TOK_MATCH: case TOK_LOOP: case TOK_FOR: case TOK_LET:
@@ -2313,6 +2314,17 @@ static Expr *parse_prefix(Parser *p) {
         e->atomic_store.ptr = ptr;
         e->atomic_store.value = value;
         return e;
+    }
+
+    case TOK_STATIC_ASSERT: {
+        Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
+        if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
+            Expr *e = alloc_expr(p, EXPR_STATIC_ASSERT, sa_loc);
+            e->static_assert_expr.condition = sa_cond;
+            e->static_assert_expr.msg = sa_msg;
+            return e;
+        }
+        return alloc_expr_error(p, loc);
     }
 
     case TOK_ASSERT: {
@@ -3374,6 +3386,39 @@ static Decl *parse_let_decl(Parser *p) {
     return d;
 }
 
+/* Parse `static_assert(cond, "message")` — the message must be a string
+ * literal (no computation on the failure path). Returns false if the leading
+ * keyword is absent. Used in struct/union bodies (collected as instantiation
+ * predicates) and via parse_prefix in statement position. */
+static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **out_msg, SrcLoc *out_loc) {
+    if (!check(p, TOK_STATIC_ASSERT)) return false;
+    SrcLoc loc = loc_from_token(current(p));
+    loc.filename = p->filename;
+    advance_p(p);
+    expect(p, TOK_LPAREN);
+    Expr *cond = parse_bracketed_expr(p, PREC_NONE + 1);
+    expect(p, TOK_COMMA);
+    const char *msg = NULL;
+    if (check(p, TOK_STRING_LIT)) {
+        Expr *m = parse_expr(p, PREC_NONE + 1);
+        if (m && m->kind == EXPR_STRING_LIT)
+            msg = arena_strdup(p->arena, m->string_lit.value, m->string_lit.length);
+    }
+    if (!msg) {
+        diag_error(loc_from_token(current(p)),
+            "static_assert message must be a string literal");
+        /* consume up to ')' so the line recovers */
+        while (!check(p, TOK_RPAREN) && !check(p, TOK_NEWLINE) && !at_end_p(p))
+            advance_p(p);
+        msg = "";
+    }
+    expect(p, TOK_RPAREN);
+    *out_cond = cond;
+    *out_msg = msg;
+    *out_loc = loc;
+    return true;
+}
+
 static Decl *parse_struct_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
@@ -3386,12 +3431,24 @@ static Decl *parse_struct_decl(Parser *p) {
 
     StructField *fields = NULL;
     int field_count = 0, field_cap = 0;
+    StaticAssert *sasserts = NULL;
+    int sassert_count = 0, sassert_cap = 0;
 
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
 
         int guard = p->pos;
+        {
+            Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
+            if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
+                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name };
+                DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
+                recover_progress(p, guard);
+                skip_newlines(p);
+                continue;
+            }
+        }
         Token *ftok = expect(p, TOK_IDENT);
         const char *fname = tok_intern(p, ftok);
         SrcLoc floc = loc_from_token(ftok);
@@ -3418,6 +3475,12 @@ static Decl *parse_struct_decl(Parser *p) {
         memcpy(d->struc.fields, fields, sizeof(StructField) * (size_t)field_count);
         free(fields);
     }
+    d->struc.static_assert_count = sassert_count;
+    if (sassert_count > 0) {
+        d->struc.static_asserts = arena_alloc(p->arena, sizeof(StaticAssert) * (size_t)sassert_count);
+        memcpy(d->struc.static_asserts, sasserts, sizeof(StaticAssert) * (size_t)sassert_count);
+        free(sasserts);
+    }
     return d;
 }
 
@@ -3433,12 +3496,24 @@ static Decl *parse_union_decl(Parser *p) {
 
     UnionVariant *variants = NULL;
     int variant_count = 0, variant_cap = 0;
+    StaticAssert *sasserts = NULL;
+    int sassert_count = 0, sassert_cap = 0;
 
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
 
         int guard = p->pos;
+        {
+            Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
+            if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
+                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name };
+                DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
+                recover_progress(p, guard);
+                skip_newlines(p);
+                continue;
+            }
+        }
         expect(p, TOK_PIPE);
         Token *vtok = expect(p, TOK_IDENT);
         const char *vname = tok_intern(p, vtok);
@@ -3467,6 +3542,12 @@ static Decl *parse_union_decl(Parser *p) {
         d->unio.variants = arena_alloc(p->arena, sizeof(UnionVariant) * (size_t)variant_count);
         memcpy(d->unio.variants, variants, sizeof(UnionVariant) * (size_t)variant_count);
         free(variants);
+    }
+    d->unio.static_assert_count = sassert_count;
+    if (sassert_count > 0) {
+        d->unio.static_asserts = arena_alloc(p->arena, sizeof(StaticAssert) * (size_t)sassert_count);
+        memcpy(d->unio.static_asserts, sasserts, sizeof(StaticAssert) * (size_t)sassert_count);
+        free(sasserts);
     }
     return d;
 }

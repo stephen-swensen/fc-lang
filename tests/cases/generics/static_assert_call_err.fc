@@ -1,0 +1,9 @@
+let helper = () -> 32
+
+struct wide =
+    static_assert('n % helper() == 0, "no calls in type-body predicates")
+    limbs: u32['n / 32]
+
+let main = (args: str[]) ->
+    let a = default(wide<64>)
+    0
