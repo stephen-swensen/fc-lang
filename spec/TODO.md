@@ -360,4 +360,18 @@ open-item backlog. None of these block release.
 - **Install targets are Linux-only** — `make install` / `install-vscode` assume
   a Linux layout; Windows/macOS packaging is unwritten.
 
+## Backtrace tests fail at -O2 on some toolchains
+
+`backtraces/{oob_slice,unwrap_chain,lambda_frame}` fail under `make test-gcc-O2`
+(and two of the three under clang -O2) on at least one dev machine (gcc 13.3 /
+Ubuntu, 2026-07-17): the expected function-name substrings are missing from the
+dumped backtrace, consistent with the optimizer inlining the frames that
+`fc_dump_backtrace`'s `execinfo` walk would otherwise report. Verified identical
+on unmodified `develop`, so this is a toolchain/optimization interaction, not a
+compiler regression — the `-O0` suite (the default) passes everywhere. Possible
+directions: emit `__attribute__((noinline))` on the frames the tests rely on
+when `--backtraces` is active, loosen the tests' `expected_stderr_contains` to
+tokens that survive inlining, or gate those three tests out of the -O2 runs the
+way `skip_windows` gates platforms.
+
 ---
