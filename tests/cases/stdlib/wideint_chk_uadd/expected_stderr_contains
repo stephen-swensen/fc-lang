@@ -1,1 +1,1 @@
-u256.checked_add: overflow past 256 bits
+uwide.checked_add: overflow past 256 bits

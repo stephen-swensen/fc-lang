@@ -2,5 +2,5 @@ import wideint from std::
 
 let main = (args: str[]) ->
     // unsigned add carry
-    let _r = wideint.u256.checked_add(wideint.u256.max(), wideint.u256.from_u64(1u64))
+    let _r = wideint.uwide.checked_add(wideint.uwide<256>.max(), wideint.uwide<256>.from_u64(1u64))
     0

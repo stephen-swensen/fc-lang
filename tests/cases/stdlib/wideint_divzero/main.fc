@@ -3,7 +3,7 @@ import wideint from std::
 // Division by zero aborts, exactly like the built-in `/`. The test expects the
 // abort exit code (134 = 128 + SIGABRT).
 let main = (args: str[]) ->
-    let a = wideint.u256.from_u64(100u64)
-    let q = wideint.u256.div(a, default(wideint.u256))
-    assert(!wideint.u256.is_zero(q))    // unreachable — div aborted above
+    let a = wideint.uwide<256>.from_u64(100u64)
+    let q = wideint.uwide.div(a, default(wideint.uwide<256>))
+    assert(!wideint.uwide.is_zero(q))    // unreachable — div aborted above
     0

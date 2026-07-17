@@ -2,5 +2,5 @@ import wideint from std::
 
 let main = (args: str[]) ->
     // abs(min) has no representable result
-    let _r = wideint.i256.checked_abs(wideint.i256.min())
+    let _r = wideint.iwide.checked_abs(wideint.iwide<256>.min())
     0

@@ -1,0 +1,36 @@
+// Widths the enumerated stdlib never had, straight from the one generic
+// definition: an in-between width (192) and one beyond the old top
+// (mul_wide at 4096 -> uwide<8192>).
+import wideint from std::
+
+let main = (args: str[]) ->
+    // uwide<192>: 6 limbs
+    let a = wideint.uwide<192>.max()
+    assert(a.limbs.len == 6)
+    let one = wideint.uwide<192>.from_u64(1u64)
+    let z = wideint.uwide.add(a, one)                     // wraps to 0
+    assert(wideint.uwide.is_zero(z))
+    let { s, c } = wideint.uwide.add_carry(a, one)
+    assert(c)
+    // (2^192 - 1)^2 = 2^384 - 2^193 + 1 -> uwide<384>
+    let p = wideint.uwide.mul_wide(a, a)
+    assert(p.limbs.len == 12)
+    assert(p.limbs[0] == 1u32)
+    // iwide<192> min/max round-trip via to_str/parse
+    let mn = wideint.iwide<192>.min()
+    let txt = wideint.iwide.to_str(mn)
+    match wideint.iwide<192>.parse(txt) with
+    | ok(v) -> assert(v == mn)
+    | err(e) -> assert(false)
+    free(txt)
+
+    // uwide<8192> via mul_wide of two uwide<4096> values
+    let big = wideint.uwide<4096>.max()
+    let sq = wideint.uwide.mul_wide(big, big)
+    assert(sq.limbs.len == 256)
+    assert(sq.limbs[0] == 1u32)                            // (2^4096-1)^2 ends in ...0001
+    assert(sq.limbs[127] == 0u32)
+    assert(sq.limbs[128] == 0xFFFFFFFEu32)
+    assert(sq.limbs[129] == 0xFFFFFFFFu32)
+    assert(sq.limbs[255] == 0xFFFFFFFFu32)
+    0

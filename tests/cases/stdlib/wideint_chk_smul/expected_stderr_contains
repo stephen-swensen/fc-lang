@@ -1,1 +1,1 @@
-i256.checked_mul: signed overflow
+iwide.checked_mul: signed overflow at 256 bits

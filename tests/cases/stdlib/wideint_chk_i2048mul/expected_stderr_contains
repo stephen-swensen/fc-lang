@@ -1,1 +1,1 @@
-i2048.checked_mul: signed overflow
+iwide.checked_mul: signed overflow at 2048 bits

@@ -1,42 +1,42 @@
 import wideint from std::
 
-let h = (s: const str) -> wideint.u256.parse_hex(s)!
+let h = (s: const str) -> wideint.uwide<256>.parse_hex(s)!
 
 let main = (args: str[]) ->
     let a = h("123456789abcdef0fedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0")
     let b = h("fedcba9876543210")
 
     // exact quotient/remainder against a known oracle
-    assert(wideint.u256.div(a, b) == h("1249249249249238ec687d6343eb1a20a2ded90d791fbca5"))
-    assert(wideint.u256.rem(a, b) == h("97502fdf0adadda0"))
-    let { q, r } = wideint.u256.divmod(a, b)
-    assert(q == wideint.u256.div(a, b))
-    assert(r == wideint.u256.rem(a, b))
+    assert(wideint.uwide.div(a, b) == h("1249249249249238ec687d6343eb1a20a2ded90d791fbca5"))
+    assert(wideint.uwide.rem(a, b) == h("97502fdf0adadda0"))
+    let { q, r } = wideint.uwide.divmod(a, b)
+    assert(q == wideint.uwide.div(a, b))
+    assert(r == wideint.uwide.rem(a, b))
 
     // division identity: q*b + r == a, and r < b
-    assert(wideint.u256.add(wideint.u256.mul(q, b), r) == a)
-    assert(wideint.u256.cmp(r, b) == -1)
+    assert(wideint.uwide.add(wideint.uwide.mul(q, b), r) == a)
+    assert(wideint.uwide.cmp(r, b) == -1)
 
     // edge cases
-    assert(wideint.u256.is_zero(wideint.u256.div(b, a)))          // divide by larger -> 0
-    assert(wideint.u256.rem(b, a) == b)                          // ... remainder is the dividend
-    assert(wideint.u256.div(a, wideint.u256.from_u64(1u64)) == a) // divide by one
-    assert(wideint.u256.div(a, a) == wideint.u256.from_u64(1u64)) // divide by self
-    assert(wideint.u256.is_zero(wideint.u256.rem(a, a)))
+    assert(wideint.uwide.is_zero(wideint.uwide.div(b, a)))          // divide by larger -> 0
+    assert(wideint.uwide.rem(b, a) == b)                          // ... remainder is the dividend
+    assert(wideint.uwide.div(a, wideint.uwide<256>.from_u64(1u64)) == a) // divide by one
+    assert(wideint.uwide.div(a, a) == wideint.uwide<256>.from_u64(1u64)) // divide by self
+    assert(wideint.uwide.is_zero(wideint.uwide.rem(a, a)))
 
     // u128 width: identity holds
-    let c = wideint.u128.parse_hex("deadbeefcafebabe0123456789abcdef")!
-    let d = wideint.u128.from_u64(0x1000000007u64)
-    let { cq, cr } = wideint.u128.divmod(c, d)
-    assert(wideint.u128.add(wideint.u128.mul(cq, d), cr) == c)
-    assert(wideint.u128.cmp(cr, d) == -1)
+    let c = wideint.uwide<128>.parse_hex("deadbeefcafebabe0123456789abcdef")!
+    let d = wideint.uwide<128>.from_u64(0x1000000007u64)
+    let { cq, cr } = wideint.uwide.divmod(c, d)
+    assert(wideint.uwide.add(wideint.uwide.mul(cq, d), cr) == c)
+    assert(wideint.uwide.cmp(cr, d) == -1)
 
     // u512 width: (x*y + z) / y == x with remainder z (z < y)
-    let y = wideint.u512.parse("123456789012345678901234567890")!
-    let x = wideint.u512.parse("99999999999999999999999999999999999999999999")!
-    let z = wideint.u512.from_u64(42u64)
-    let n = wideint.u512.add(wideint.u512.mul(x, y), z)
-    let { xq, xr } = wideint.u512.divmod(n, y)
+    let y = wideint.uwide<512>.parse("123456789012345678901234567890")!
+    let x = wideint.uwide<512>.parse("99999999999999999999999999999999999999999999")!
+    let z = wideint.uwide<512>.from_u64(42u64)
+    let n = wideint.uwide.add(wideint.uwide.mul(x, y), z)
+    let { xq, xr } = wideint.uwide.divmod(n, y)
     assert(xq == x)
     assert(xr == z)
     0

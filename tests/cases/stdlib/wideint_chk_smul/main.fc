@@ -2,6 +2,6 @@ import wideint from std::
 
 let main = (args: str[]) ->
     // signed multiply overflow (2^200 * 2^200)
-    let p = wideint.i256.shl(wideint.i256.from_i64(1i64), 200u32)
-    let _r = wideint.i256.checked_mul(p, p)
+    let p = wideint.iwide.shl(wideint.iwide<256>.from_i64(1i64), 200u32)
+    let _r = wideint.iwide.checked_mul(p, p)
     0

@@ -1,1 +1,1 @@
-i256.checked_div: i256.min / -1 overflows
+iwide.checked_div: iwide<256>.min / -1 overflows

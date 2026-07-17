@@ -1,1 +1,1 @@
-i4096.checked_neg: a is i4096.min
+iwide.checked_neg: a is iwide<4096>.min

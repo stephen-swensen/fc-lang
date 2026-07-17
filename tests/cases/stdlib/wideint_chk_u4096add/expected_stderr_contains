@@ -1,1 +1,1 @@
-u4096.checked_add: overflow past 4096 bits
+uwide.checked_add: overflow past 4096 bits

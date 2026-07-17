@@ -18,9 +18,11 @@ family (no compile-time branch pruning). Spec §Const Parameters; grammar `const
 tests `tests/cases/generics/const_*` + `wideint_proto` (acceptance: generic wide with
 add/mul_wide at 128/256 from one definition).
 
-Open before merge:
-- **Decision**: keep the feature (and optionally rewrite std::wideint over `wide<'n>`) or
-  abandon the branch — evaluate the prototype's ergonomics vs the enumerated stdlib.
+2026-07-17: **decision resolved — kept**; std::wideint rewritten over `uwide<'n>`/`iwide<'n>`
+(see §std::wideint above), 2826 → 739 lines with the same API surface and richer abort
+messages (width interpolated per instance).
+
+Open (not blocking):
 - Struct literals for const-param structs: `wide { limbs = ... }` cannot infer `'n` from a
   slice-typed field value; construction is via `default(wide<N>)` + mutation or companion
   constructors. Consider size inference from array-literal field values later.
@@ -31,26 +33,35 @@ Open before merge:
 
 ---
 
-## std::wideint (né fixint) wide integers — IMPLEMENTED 2026-07-14; follow-ups open
+## std::wideint (né fixint) wide integers — IMPLEMENTED 2026-07-14; REWRITTEN over const generics 2026-07-17
 
-Wide fixed-width integers (`u128`–`u4096`, `i128`–`i4096`) as by-value limb structs with
-companion-module operations over a shared private `u32[]` core: wrapping arithmetic,
-carry/borrow and `mul_wide` reporting forms, `checked_*` abort forms, div/rem/divmod,
-bitwise/shifts, signed two's-complement ops, `min()`/`max()`, strict `parse`/`parse_hex`
-(→ `uN!`/`iN!`), `to_str`/`to_hex`. Spec §std::wideint; tests in `tests/cases/stdlib/wideint_*`.
-2026-07-16: added the 1024-bit widths (giving `u512.mul_wide` a home), gave every abort
-site a message naming the operation (`u128.checked_mul: overflow past 128 bits`), and
-put doc comments on both companion halves (struct + module) of every width for LSP hover.
-Same day: added the 2048- and 4096-bit families (RSA-2048/4096 and Rust `ruint`
-`Uint<4096>` precedent — by-value stays right at these sizes since copies scale O(n) vs
-mul's O(n²)), completing the `mul_wide` chain u128→…→u4096 (`u4096` is the top, no
-`u8192`). By-value/heap line: fixed width = value struct; a future arbitrary-precision
-`std::bignum` is the heap tool, not wider structs.
+Wide fixed-width integers as by-value limb structs with companion-module operations over a
+shared private `u32[]` core: wrapping arithmetic, carry/borrow and `mul_wide` reporting
+forms, `checked_*` abort forms, div/rem/divmod, bitwise/shifts, signed two's-complement
+ops, `min()`/`max()`, strict `parse`/`parse_hex` (→ `uwide<'n>!`/`iwide<'n>!`),
+`to_str`/`to_hex`. Spec §std::wideint; tests in `tests/cases/stdlib/wideint_*`.
+
+2026-07-17: **rewritten from 12 hand-enumerated width families (u128–u4096, i128–i4096,
+2826 lines) to two const-generic definitions (`uwide<'n>`, `iwide<'n>`, 739 lines)** — the
+motivating case for the const-generics feature, closing its evaluation gate. Any width
+that is a multiple of 32 and ≥ 64 now instantiates (uwide<192> works; the width contract
+is enforced at instantiation via the limbs field's size expression, which divides by zero
+for an invalid width). The `mul_wide` ladder is now unbounded (`uwide<4096>.mul_wide` →
+`uwide<8192>`). Abort messages carry the concrete width via string interpolation in the
+assert message (`uwide.checked_mul: overflow past 256 bits` — evaluated only on the abort
+path). Width-inferring ops (`uwide.add(a, b)`) vs explicitly-named constructors
+(`uwide<128>.from_u64(x)`, `uwide<256>.max()`). History: 2026-07-14 enumerated impl;
+2026-07-16 1024/2048/4096 families + abort messages + companion docs (all superseded by
+the generic rewrite, which preserved the same API surface, docs, and abort-message
+content). By-value/heap line unchanged: fixed width = value struct; a future
+arbitrary-precision `std::bignum` is the heap tool.
 
 Follow-ups (deliberately additive, not blocking):
-- **Cross-width conversions**: widening (`u128`→`u256`), truncating (`u256`→`u128`), and
+- **Cross-width conversions**: widening (`uwide<128>`→`uwide<256>`), truncating, and
   signed↔unsigned reinterpretation at the same width. Today the only cross-width paths are
-  `mul_wide` or a heap round-trip through `to_hex`/`parse_hex`.
+  `mul_wide` or a heap round-trip through `to_hex`/`parse_hex`. (With const generics these
+  can now be written ONCE: `widen(a: uwide<'m>) -> uwide<'n>` needs 'n inferred from the
+  call context or named explicitly — `uwide<256>.widen_from(a)`.)
 - **Division core**: `limbs_divmod` is binary long division (O(bits) iterations — correct,
   simple); a Knuth-D core could replace it without touching any caller if wide division
   ever becomes hot.

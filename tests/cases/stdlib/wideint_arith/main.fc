@@ -1,7 +1,7 @@
 import wideint from std::
 
-let h256 = (s: const str) -> wideint.u256.parse_hex(s)!
-let h512 = (s: const str) -> wideint.u512.parse_hex(s)!
+let h256 = (s: const str) -> wideint.uwide<256>.parse_hex(s)!
+let h512 = (s: const str) -> wideint.uwide<512>.parse_hex(s)!
 
 let main = (args: str[]) ->
     let a = h256("123456789abcdef0fedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0")
@@ -9,33 +9,33 @@ let main = (args: str[]) ->
 
     // add (wrap) + carry flag
     let sum_ab = h256("11111111111111011111111111111100b0d0f11131507090b0d0f11131517180")
-    assert(wideint.u256.add(a, b) == sum_ab)
-    let { s1, c1 } = wideint.u256.add_carry(a, b)
+    assert(wideint.uwide.add(a, b) == sum_ab)
+    let { s1, c1 } = wideint.uwide.add_carry(a, b)
     assert(s1 == sum_ab)
     assert(c1)                       // overflow past 256 bits
-    let three = wideint.u256.from_u64(3u64)
-    let { s2, c2 } = wideint.u256.add_carry(wideint.u256.from_u64(1u64), wideint.u256.from_u64(2u64))
+    let three = wideint.uwide<256>.from_u64(3u64)
+    let { s2, c2 } = wideint.uwide.add_carry(wideint.uwide<256>.from_u64(1u64), wideint.uwide<256>.from_u64(2u64))
     assert(s2 == three)
     assert(!c2)
 
     // sub (wrap) + borrow flag
     let diff_ab = h256("13579be02468ace0eca8641fdb97531f6d6b6967656462605e5c5a5856545260")
-    assert(wideint.u256.sub(a, b) == diff_ab)
-    let { d1, bor1 } = wideint.u256.sub_borrow(a, b)
+    assert(wideint.uwide.sub(a, b) == diff_ab)
+    let { d1, bor1 } = wideint.uwide.sub_borrow(a, b)
     assert(bor1)                     // a < b, wraps
     assert(d1 == diff_ab)
-    let { d2, bor2 } = wideint.u256.sub_borrow(b, a)
+    let { d2, bor2 } = wideint.uwide.sub_borrow(b, a)
     assert(!bor2)
     assert(d2 == h256("eca8641fdb97531f13579be02468ace0929496989a9b9d9fa1a3a5a7a9abada0"))
 
     // mul (wrap to 256) and mul_wide (full 512)
-    assert(wideint.u256.mul(a, b) == h256("e23566304f7f5b9a297ad274a5a9c54aa98efaed6666ed08ba00dd4f56f42700"))
-    assert(wideint.u256.mul_wide(a, b) == h512("121fa00ad77d74232273b07252ebd6a9b17aaffc09830228fcc1bc3062a746b0e23566304f7f5b9a297ad274a5a9c54aa98efaed6666ed08ba00dd4f56f42700"))
+    assert(wideint.uwide.mul(a, b) == h256("e23566304f7f5b9a297ad274a5a9c54aa98efaed6666ed08ba00dd4f56f42700"))
+    assert(wideint.uwide.mul_wide(a, b) == h512("121fa00ad77d74232273b07252ebd6a9b17aaffc09830228fcc1bc3062a746b0e23566304f7f5b9a297ad274a5a9c54aa98efaed6666ed08ba00dd4f56f42700"))
 
     // identities
-    let zero = default(wideint.u256)
-    assert(wideint.u256.add(a, zero) == a)
-    assert(wideint.u256.sub(a, a) == zero)
-    assert(wideint.u256.mul(a, zero) == zero)
-    assert(wideint.u256.mul(a, wideint.u256.from_u64(1u64)) == a)
+    let zero = default(wideint.uwide<256>)
+    assert(wideint.uwide.add(a, zero) == a)
+    assert(wideint.uwide.sub(a, a) == zero)
+    assert(wideint.uwide.mul(a, zero) == zero)
+    assert(wideint.uwide.mul(a, wideint.uwide<256>.from_u64(1u64)) == a)
     0

@@ -2,6 +2,6 @@ import wideint from std::
 
 let main = (args: str[]) ->
     // unsigned multiply overflow (2^512 * 2^512 = 2^1024)
-    let p = wideint.u1024.shl(wideint.u1024.from_u64(1u64), 512u32)
-    let _r = wideint.u1024.checked_mul(p, p)
+    let p = wideint.uwide.shl(wideint.uwide<1024>.from_u64(1u64), 512u32)
+    let _r = wideint.uwide.checked_mul(p, p)
     0

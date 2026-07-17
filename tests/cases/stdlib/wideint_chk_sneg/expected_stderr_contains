@@ -1,1 +1,1 @@
-i256.checked_neg: a is i256.min
+iwide.checked_neg: a is iwide<256>.min

@@ -2,5 +2,5 @@ import wideint from std::
 
 let main = (args: str[]) ->
     // signed multiply overflow: min * -1 has no positive counterpart
-    let _r = wideint.i2048.checked_mul(wideint.i2048.min(), wideint.i2048.from_i64(-1i64))
+    let _r = wideint.iwide.checked_mul(wideint.iwide<2048>.min(), wideint.iwide<2048>.from_i64(-1i64))
     0

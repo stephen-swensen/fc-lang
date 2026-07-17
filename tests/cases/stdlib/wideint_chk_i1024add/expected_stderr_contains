@@ -1,1 +1,1 @@
-i1024.checked_add: signed overflow
+iwide.checked_add: signed overflow at 1024 bits

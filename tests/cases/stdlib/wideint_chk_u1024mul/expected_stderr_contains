@@ -1,1 +1,1 @@
-u1024.checked_mul: overflow past 1024 bits
+uwide.checked_mul: overflow past 1024 bits
