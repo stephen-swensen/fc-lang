@@ -1,0 +1,26 @@
+// default() of a struct holding an option of an aggregate: the emitted zero
+// initializer must brace through the option's value-first payload (gcc
+// -Wmissing-braces is an error under -Werror).
+struct point =
+    x: i32
+    y: i32
+
+struct holder =
+    p: point?
+    tag: i32
+
+struct deep =
+    h: holder?
+    n: i32
+
+let main = (args: str[]) ->
+    let h = default(holder)
+    let d = default(deep)
+    let ok1 = match h.p with
+              | some(pt) -> 1
+              | none -> 0
+    let ok2 = match d.h with
+              | some(x) -> 1
+              | none -> 0
+    assert(ok1 == 0 && ok2 == 0)
+    h.tag + d.n

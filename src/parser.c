@@ -23,6 +23,109 @@ void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable 
     p->expr_start_errs = 0;
     p->half_gt = false;
     p->half_gt_pos = -1;
+    p->generic_names = NULL;
+    p->generic_name_count = 0;
+    p->generic_gate = false;
+}
+
+/* ---- Generic-name pre-pass (see parser.h) ---- */
+
+static void gn_add(const char ***names, int *n, int *cap, const char *name) {
+    for (int i = 0; i < *n; i++)
+        if ((*names)[i] == name) return;
+    DA_APPEND(*names, *n, *cap, name);
+}
+
+/* Does the token range [i, end) contain a type variable ('a)? */
+static bool gn_range_has_type_var(Token *toks, int i, int end) {
+    for (; i < end; i++)
+        if (toks[i].kind == TOK_TYPE_VAR) return true;
+    return false;
+}
+
+void parser_collect_generic_names(Token *toks, int count, InternTable *it,
+                                  const char ***names, int *n, int *cap) {
+    for (int i = 0; i < count; i++) {
+        switch (toks[i].kind) {
+        case TOK_STRUCT: case TOK_UNION: {
+            /* struct NAME = INDENT body DEDENT — generic iff the body mentions
+             * a type variable (the evidence pass1's detection reads). */
+            if (i + 2 >= count || toks[i + 1].kind != TOK_IDENT ||
+                toks[i + 2].kind != TOK_EQ)
+                break;
+            int j = i + 3;
+            while (j < count && toks[j].kind == TOK_NEWLINE) j++;
+            if (j >= count || toks[j].kind != TOK_INDENT) break;
+            int depth = 1, start = ++j;
+            while (j < count && depth > 0) {
+                if (toks[j].kind == TOK_INDENT) depth++;
+                else if (toks[j].kind == TOK_DEDENT) depth--;
+                j++;
+            }
+            if (gn_range_has_type_var(toks, start, j))
+                gn_add(names, n, cap, intern(it, toks[i + 1].start, toks[i + 1].length));
+            break;
+        }
+        case TOK_LET: {
+            /* let NAME = <'a,...>(...) or let NAME = (... 'a ...) -> — generic
+             * iff the lambda header (explicit prefix or parameter list)
+             * mentions a type variable. */
+            int j = i + 1;
+            if (j < count && toks[j].kind == TOK_MUT) j++;
+            if (j + 1 >= count || toks[j].kind != TOK_IDENT ||
+                toks[j + 1].kind != TOK_EQ)
+                break;
+            Token *name_tok = &toks[j];
+            j += 2;
+            while (j < count && (toks[j].kind == TOK_NEWLINE || toks[j].kind == TOK_INDENT)) j++;
+            if (j >= count) break;
+            if (toks[j].kind == TOK_LT) {
+                /* explicit type/const-param prefix */
+                gn_add(names, n, cap, intern(it, name_tok->start, name_tok->length));
+                break;
+            }
+            if (toks[j].kind != TOK_LPAREN) break;
+            int depth = 1, start = ++j;
+            while (j < count && depth > 0) {
+                if (toks[j].kind == TOK_LPAREN) depth++;
+                else if (toks[j].kind == TOK_RPAREN) depth--;
+                else if (toks[j].kind == TOK_NEWLINE || toks[j].kind == TOK_EOF) break;
+                j++;
+            }
+            if (gn_range_has_type_var(toks, start, j))
+                gn_add(names, n, cap, intern(it, name_tok->start, name_tok->length));
+            break;
+        }
+        case TOK_IMPORT: {
+            /* Conservatively admit every `as` alias on the import line: the
+             * aliased target's genericness is not resolvable at token level,
+             * and over-claiming only restores the historical scan behavior
+             * for that one name. */
+            int j = i + 1;
+            while (j < count && toks[j].kind != TOK_NEWLINE && toks[j].kind != TOK_EOF) {
+                if (toks[j].kind == TOK_AS && j + 1 < count &&
+                    toks[j + 1].kind == TOK_IDENT)
+                    gn_add(names, n, cap, intern(it, toks[j + 1].start, toks[j + 1].length));
+                j++;
+            }
+            break;
+        }
+        default: break;
+        }
+    }
+}
+
+/* Gate for the expression-position `<` scans: claim a generic reading only
+ * when the callee name is a known generic declaration (or the gate is off). */
+static bool gate_generic_name(Parser *p, Expr *left) {
+    if (!p->generic_gate) return true;
+    const char *name = NULL;
+    if (left->kind == EXPR_IDENT) name = left->ident.name;
+    else if (left->kind == EXPR_FIELD) name = left->field.name;
+    if (!name) return false;
+    for (int i = 0; i < p->generic_name_count; i++)
+        if (p->generic_names[i] == name) return true;
+    return false;
 }
 
 /* ---- Token access ---- */
@@ -465,12 +568,14 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             base = type_fixed_array_sym(p->arena, base, size_ref);
             continue;
         }
-        /* T['n / 32], T[('n * 2)], T[4 * 2] — fixed array sized by a const
-         * expression (over const generic params, or fully concrete — folded
-         * and positivity-checked in pass2/at instantiation). */
+        /* T['n / 32], T[('n * 2)], T[4 * 2], T[cfg.word] — fixed array sized
+         * by a const expression (over const generic params, named constants,
+         * or fully concrete — folded and positivity-checked in pass2/at
+         * instantiation). */
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
             (peek_at(p, 1)->kind == TOK_TYPE_VAR || peek_at(p, 1)->kind == TOK_LPAREN ||
-             peek_at(p, 1)->kind == TOK_MINUS || peek_at(p, 1)->kind == TOK_INT_LIT)) {
+             peek_at(p, 1)->kind == TOK_MINUS || peek_at(p, 1)->kind == TOK_INT_LIT ||
+             peek_at(p, 1)->kind == TOK_IDENT)) {
             advance_p(p); /* consume [ */
             Expr *size_expr = parse_const_arith(p, 1);
             expect(p, TOK_RBRACKET);
@@ -2733,8 +2838,12 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         /* Check if this is a generic call: left<Type, ...>(args)
          * The '<' token has already been consumed by the Pratt loop.
          * Scan forward to see if tokens between here and '>' are all
-         * type-compatible, and '>' is followed by '('. */
-        if (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) {
+         * type-compatible, and '>' is followed by '(' — and the callee names
+         * a known generic declaration (gate_generic_name), so an ordinary
+         * comparison whose operand happens to scan as a type-arg list keeps
+         * its comparison reading. */
+        if ((left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) &&
+            gate_generic_name(p, left)) {
             if (generic_call_scan(p, p->pos)) {
                 /* Parse type args */
                 Type **type_args = NULL;
@@ -2897,6 +3006,7 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
          * reached with the bare name as `left`. */
         if (t->kind == TOK_LT &&
             (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) &&
+            gate_generic_name(p, left) &&
             generic_call_scan(p, p->pos + 1))
             prec = PREC_POSTFIX;
         if (prec == PREC_NONE || prec < min_prec) break;
@@ -3442,7 +3552,7 @@ static Decl *parse_struct_decl(Parser *p) {
         {
             Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
             if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name };
+                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name, false };
                 DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
                 recover_progress(p, guard);
                 skip_newlines(p);
@@ -3507,7 +3617,7 @@ static Decl *parse_union_decl(Parser *p) {
         {
             Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
             if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name };
+                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name, false };
                 DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
                 recover_progress(p, guard);
                 skip_newlines(p);

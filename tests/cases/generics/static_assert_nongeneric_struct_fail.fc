@@ -1,0 +1,10 @@
+// A static_assert in a NON-generic struct body is judged once, up front —
+// the type is never monomorphized, so the per-instance choke point alone
+// would never see it.
+struct plain =
+    static_assert(1 == 2, "always false")
+    x: i32
+
+let main = (args: str[]) ->
+    let p = plain { x = 1 }
+    p.x - 1

@@ -1,0 +1,7 @@
+// A fully concrete (const-param-free) condition in a GENERIC type body is
+// judged immediately too — even though the type is never instantiated.
+struct g =
+    static_assert(3 < 2, "concrete and false")
+    limbs: u32['n / 32]
+
+let main = (args: str[]) -> 0

@@ -1,0 +1,10 @@
+// Same immediate judgment for a non-generic union body.
+union u =
+    static_assert(2 + 2 == 5, "arithmetic disagrees")
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    match u.a(1) with
+    | a(v) -> v - 1
+    | b -> 1

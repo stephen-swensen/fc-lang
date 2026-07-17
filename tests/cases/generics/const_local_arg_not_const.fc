@@ -1,0 +1,7 @@
+// A block-local used as a const argument is a runtime value; same category
+// diagnostic.
+let f = <'n>(x: i32) -> x + 'n
+
+let main = (args: str[]) ->
+    let width = 8
+    f<width>(2)

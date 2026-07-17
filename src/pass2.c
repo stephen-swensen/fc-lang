@@ -623,6 +623,14 @@ typedef struct {
        Independent of guards_suppressed — the two axes are orthogonal. Mirrors
        codegen's g_overflow_checked; used to reject non-flipping markers. */
     bool overflow_checked;
+    /* Generic parameters of the struct/union decl whose field types are being
+       canonicalized (canonicalize_decl_field_stubs). normalize_size_expr reads
+       these to classify a 'x reference in a field's array-size expression when
+       there is no active_fn_sym (type bodies have no function symbol). NULL
+       outside the canonicalize walk. */
+    const char **td_params;
+    uint8_t *td_kinds;
+    int td_ntp;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -1287,6 +1295,8 @@ static Symbol *resolve_dotted_name(CheckCtx *ctx, const char *dotted_name) {
  * structs like `node { next: node*? }`. */
 static void register_concrete_tuple(CheckCtx *ctx, Type *tup);
 
+static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc);
+
 static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     if (!t) return;
     switch (t->kind) {
@@ -1294,7 +1304,14 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     case TYPE_OPTION:  canonicalize_field_stubs(ctx, t->option.inner); return;
     case TYPE_RESULT:  canonicalize_field_stubs(ctx, t->result.inner); return;
     case TYPE_SLICE:   canonicalize_field_stubs(ctx, t->slice.elem); return;
-    case TYPE_FIXED_ARRAY: canonicalize_field_stubs(ctx, t->fixed_array.elem); return;
+    case TYPE_FIXED_ARRAY:
+        canonicalize_field_stubs(ctx, t->fixed_array.elem);
+        /* Fold the field's size expression: named consts resolve here (the
+         * decl's own scope), concrete sizes fold to a positive `size`, and
+         * const-param sizes keep a normalized symbolic form for per-instance
+         * folding. */
+        resolve_size_ref_inplace(ctx, t, ctx->type_loc);
+        return;
     case TYPE_STRUCT:
         /* A tuple field type: canonicalize element stub names, then name+register
          * this tuple *in place* so the struct decl's own field-type object carries
@@ -1366,17 +1383,29 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
  * ctx->type_loc is set to each field/variant's source loc first so an unknown
  * field type is reported at that field rather than a stale location. */
 static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
+    const char **saved_params = ctx->td_params;
+    uint8_t *saved_kinds = ctx->td_kinds;
+    int saved_ntp = ctx->td_ntp;
     if (d->kind == DECL_STRUCT) {
+        ctx->td_params = d->struc.type_params;
+        ctx->td_kinds = d->struc.param_kinds;
+        ctx->td_ntp = d->struc.type_param_count;
         for (int i = 0; i < d->struc.field_count; i++) {
             ctx->type_loc = d->struc.fields[i].loc;
             canonicalize_field_stubs(ctx, d->struc.fields[i].type);
         }
     } else if (d->kind == DECL_UNION) {
+        ctx->td_params = d->unio.type_params;
+        ctx->td_kinds = d->unio.param_kinds;
+        ctx->td_ntp = d->unio.type_param_count;
         for (int i = 0; i < d->unio.variant_count; i++) {
             ctx->type_loc = d->unio.variants[i].loc;
             canonicalize_field_stubs(ctx, d->unio.variants[i].payload);
         }
     }
+    ctx->td_params = saved_params;
+    ctx->td_kinds = saved_kinds;
+    ctx->td_ntp = saved_ntp;
 }
 
 /* Resolve a TYPE_STUB to the actual type from symtab */
@@ -1416,46 +1445,158 @@ static bool expr_refs_const_param(Expr *e) {
     }
 }
 
-/* A size expression deferred to per-instance folding must stay inside the
- * node set the context-free evaluator supports (const_expr_eval in types.c):
- * integer literals, const params, + - * / % & | ^ << >>, unary -/~, and
- * fixed-width integer casts. Reports and returns false otherwise. */
-static bool check_const_size_shape(Expr *e) {
+static Type *resolve_type(CheckCtx *ctx, Type *t);
+
+/* Does this (possibly unchecked) expression tree mention a 'x variable? */
+static bool expr_mentions_type_var(Expr *e) {
     if (!e) return false;
     switch (e->kind) {
-    case EXPR_INT_LIT: return true;
-    case EXPR_TYPE_VAR_REF:
-        if (e->type_var_ref.is_const_param) return true;
-        break;
-    case EXPR_UNARY_PREFIX:
-        if (e->unary_prefix.op == TOK_MINUS || e->unary_prefix.op == TOK_TILDE)
-            return check_const_size_shape(e->unary_prefix.operand);
-        break;
-    case EXPR_BINARY:
+    case EXPR_TYPE_VAR_REF: return true;
+    case EXPR_UNARY_PREFIX: return expr_mentions_type_var(e->unary_prefix.operand);
+    case EXPR_BINARY: return expr_mentions_type_var(e->binary.left) ||
+                             expr_mentions_type_var(e->binary.right);
+    case EXPR_CAST: return expr_mentions_type_var(e->cast.operand);
+    default: return false;
+    }
+}
+
+/* Normalize a fixed-array size expression (`u8[cfg.word]`, `u32['n / 32]`,
+ * `u8[('n + 31) / 8]`): fold every 'x-free subtree to an integer literal via
+ * check_expr + const_fold (named module consts, i32.bits, enum counts,
+ * concrete arithmetic), classify each 'x reference against the owning
+ * declaration's parameter kinds — active_fn_sym inside a generic function
+ * body, td_params during a type decl's canonicalize walk — and verify the
+ * symbolic residue stays inside the context-free evaluator's node set.
+ * Returns a fully-symbolic-or-literal tree, or NULL after reporting.
+ * A 'x-free result is always a single EXPR_INT_LIT. */
+static Expr *normalize_size_expr(CheckCtx *ctx, Expr *e) {
+    if (!e) return NULL;
+    if (!expr_mentions_type_var(e)) {
+        Type *t = e->type ? e->type : check_expr(ctx, e);
+        if (type_is_error(t)) return NULL;
+        if (!type_is_integer(t)) {
+            diag_error(e->loc, "fixed array size must be an integer expression, got %s",
+                       type_name(t));
+            return NULL;
+        }
+        if (e->kind == EXPR_INT_LIT) return e;
+        Expr *folded = const_fold_expr(ctx, e);
+        if (folded && folded->kind == EXPR_INT_LIT) return folded;
+        diag_error(e->loc, "fixed array size must be a compile-time constant");
+        return NULL;
+    }
+    switch (e->kind) {
+    case EXPR_TYPE_VAR_REF: {
+        const char **params = NULL;
+        uint8_t *kinds = NULL;
+        int ntp = 0;
+        Symbol *fs = ctx->active_fn_sym;
+        if (fs) { params = fs->type_params; kinds = fs->param_kinds; ntp = fs->type_param_count; }
+        else { params = ctx->td_params; kinds = ctx->td_kinds; ntp = ctx->td_ntp; }
+        for (int i = 0; i < ntp; i++) {
+            if (params[i] != e->type_var_ref.name) continue;
+            uint8_t k = kinds ? kinds[i] : GP_TYPE;
+            if (k == GP_UNKNOWN && fs && fs->param_kinds) {
+                /* size position is const evidence — pin a prefix var lazily */
+                fs->param_kinds[i] = GP_CONST;
+                k = GP_CONST;
+            }
+            if (k == GP_CONST) {
+                e->type_var_ref.is_const_param = true;
+                return e;
+            }
+            diag_error(e->loc,
+                "%s is a type parameter and cannot size a fixed array",
+                e->type_var_ref.name);
+            return NULL;
+        }
+        diag_error(e->loc, "%s is not a generic parameter of the enclosing declaration",
+                   e->type_var_ref.name);
+        return NULL;
+    }
+    case EXPR_UNARY_PREFIX: {
+        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_TILDE) break;
+        Expr *op = normalize_size_expr(ctx, e->unary_prefix.operand);
+        if (!op) return NULL;
+        if (op == e->unary_prefix.operand) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->unary_prefix.operand = op;
+        return n;
+    }
+    case EXPR_BINARY: {
         switch (e->binary.op) {
         case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
         case TOK_PERCENT: case TOK_AMP: case TOK_PIPE: case TOK_CARET:
         case TOK_LTLT: case TOK_GTGT:
-            return check_const_size_shape(e->binary.left) &&
-                   check_const_size_shape(e->binary.right);
-        default: break;
+            break;
+        default: goto bad;
         }
-        break;
-    case EXPR_CAST:
-        if (e->cast.target && e->cast.target->kind >= TYPE_INT8 &&
-            e->cast.target->kind <= TYPE_UINT64)
-            return check_const_size_shape(e->cast.operand);
-        break;
+        Expr *l = normalize_size_expr(ctx, e->binary.left);
+        Expr *r = normalize_size_expr(ctx, e->binary.right);
+        if (!l || !r) return NULL;
+        if (l == e->binary.left && r == e->binary.right) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->binary.left = l;
+        n->binary.right = r;
+        return n;
+    }
+    case EXPR_CAST: {
+        if (!e->cast.target || e->cast.target->kind < TYPE_INT8 ||
+            e->cast.target->kind > TYPE_UINT64) break;
+        Expr *op = normalize_size_expr(ctx, e->cast.operand);
+        if (!op) return NULL;
+        if (op == e->cast.operand) return e;
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        *n = *e;
+        n->cast.operand = op;
+        return n;
+    }
     default: break;
     }
+bad:
     diag_error(e->loc,
         "a size expression using const generic parameters may only combine "
-        "integer literals, const parameters, arithmetic/bitwise operators, "
-        "and fixed-width integer casts");
-    return false;
+        "integer literals, const parameters, named constants, arithmetic/bitwise "
+        "operators, and fixed-width integer casts");
+    return NULL;
 }
 
-static Type *resolve_type(CheckCtx *ctx, Type *t);
+/* Resolve a TYPE_FIXED_ARRAY's symbolic size in place: normalize the size
+ * expression, fold it to a concrete positive `size` when no const params
+ * remain, and keep the normalized symbolic form otherwise. In-place because
+ * decl field types are shared (pass1's Symbol.type aliases the decl's field
+ * Type objects); every alias must see the fold. Returns false after reporting
+ * on failure. */
+static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc) {
+    Type *sr = t->fixed_array.size_ref;
+    if (!sr) return true;
+    if (sr->kind == TYPE_TYPE_VAR) return true;   /* bare 'n — kind-checked by inference */
+    if (sr->kind == TYPE_CONST_INT) {
+        t->fixed_array.size = sr->const_int.value;
+        t->fixed_array.size_ref = NULL;
+    } else if (sr->kind == TYPE_CONST_EXPR) {
+        SrcLoc saved = ctx->type_loc;
+        if (sr->const_expr.expr) ctx->type_loc = sr->const_expr.expr->loc;
+        Expr *norm = normalize_size_expr(ctx, sr->const_expr.expr);
+        ctx->type_loc = saved;
+        if (!norm) return false;
+        if (norm->kind == EXPR_INT_LIT) {
+            t->fixed_array.size = (int64_t)norm->int_lit.value;
+            t->fixed_array.size_ref = NULL;
+        } else {
+            sr->const_expr.expr = norm;
+            return true;
+        }
+    }
+    if (t->fixed_array.size <= 0) {
+        diag_error(loc, "fixed array size must be positive, got %lld",
+                   (long long)t->fixed_array.size);
+        return false;
+    }
+    return true;
+}
 
 /* Normalize a const-generic expression tree: type-check it, fold every
  * const-param-free subtree to an integer literal (named consts, i32.bits,
@@ -1546,9 +1687,24 @@ static Type *check_const_type_expr(CheckCtx *ctx, Expr *e) {
 
 /* Try to interpret a bare name used where a const argument is expected
  * (wide<block_bits>) as a foldable named constant. Returns NULL silently when
- * the name doesn't resolve to one (caller falls back to type resolution and
- * the kind gate reports). */
+ * the name doesn't resolve to a value at all (caller falls back to type
+ * resolution and the kind gate reports). A name that DOES resolve to a value
+ * but doesn't fold is reported here — the writer meant a constant, so the
+ * kind gate's "a type argument was given" would blame the wrong category. */
 static Type *try_named_const_arg(CheckCtx *ctx, const char *name, SrcLoc loc) {
+    /* A block-local (param, let, loop var) is a runtime value — resolving it
+     * as a type below would misreport the category entirely. */
+    if (!strchr(name, '.')) {
+        bool is_global = false;
+        if (scope_lookup_capture(ctx->scope, name, NULL, NULL, NULL,
+                                 &is_global, NULL, NULL) && !is_global) {
+            diag_error(loc,
+                "'%s' is not a compile-time constant; a const generic argument "
+                "must be an integer literal, a const parameter, or a "
+                "module-level immutable let with a constant initializer", name);
+            return type_error();
+        }
+    }
     Symbol *s = strchr(name, '.') ? resolve_dotted_name(ctx, name)
                                   : resolve_symbol(ctx, name);
     if (!s || s->kind != DECL_LET || !s->decl) return NULL;
@@ -1557,8 +1713,16 @@ static Type *try_named_const_arg(CheckCtx *ctx, const char *name, SrcLoc loc) {
     ref->loc = loc;
     ref->ident.name = name;
     ref->ident.resolved_sym = s;
+    int errs_before = diag_error_count();
     Expr *folded = const_fold_expr(ctx, ref);
-    if (!folded || folded->kind != EXPR_INT_LIT) return NULL;
+    if (!folded || folded->kind != EXPR_INT_LIT) {
+        if (diag_error_count() == errs_before)
+            diag_error(loc,
+                "'%s' is not a compile-time constant; a const generic argument "
+                "must be an integer literal, a const parameter, or a "
+                "module-level immutable let with a constant initializer", name);
+        return type_error();
+    }
     return type_const_int(ctx->arena, (int64_t)folded->int_lit.value);
 }
 
@@ -1665,9 +1829,33 @@ static void sa_validate_decls(Decl **decls, int count) {
             owner = d->unio.name; params = (const char **)d->unio.type_params;
             kinds = d->unio.param_kinds; ntp = d->unio.type_param_count;
         }
-        for (int j = 0; j < n; j++)
-            sa_shape_check(sas[j].cond, sas[j].owner ? sas[j].owner : owner,
-                           params, kinds, ntp);
+        for (int j = 0; j < n; j++) {
+            if (!sa_shape_check(sas[j].cond, sas[j].owner ? sas[j].owner : owner,
+                                params, kinds, ntp))
+                continue;
+            /* A fully concrete condition (no const params — always the case
+             * in a non-generic type, which is never monomorphized and would
+             * otherwise never be judged) is judged once, right here. */
+            if (expr_mentions_type_var(sas[j].cond)) continue;
+            Type wrapper = {0};
+            wrapper.kind = TYPE_CONST_EXPR;
+            wrapper.const_expr.expr = sas[j].cond;
+            int64_t v;
+            if (const_type_eval(&wrapper, NULL, NULL, 0, &v)) {
+                sas[j].judged = true;
+                if (v == 0)
+                    diag_error(sas[j].loc, "static assertion failed in '%s': %s",
+                               sas[j].owner ? sas[j].owner : owner, sas[j].msg);
+            } else {
+                SrcLoc eloc = {0};
+                const char *emsg = const_eval_take_error(&eloc);
+                sas[j].judged = true;
+                diag_error((emsg && eloc.filename) ? eloc : sas[j].loc,
+                    "%s (in static_assert of '%s')",
+                    emsg ? emsg : "could not evaluate static_assert condition",
+                    sas[j].owner ? sas[j].owner : owner);
+            }
+        }
     }
 }
 
@@ -1675,37 +1863,51 @@ static void sa_validate_decls(Decl **decls, int count) {
  * fixed array must have folded to a positive size. Recurses through value
  * constructors and the instance's own fields/payloads, but not into
  * referenced types (stubs) — those are validated at their own instantiation.
- * Reports and returns false on the first violation. */
-static bool check_inst_sizes(Type *t, SrcLoc loc) {
+ * Reports and returns false on the first violation. With a non-NULL frame the
+ * violation reports through the instantiation chain (gen_inst_diag); with
+ * NULL it reports at `loc` directly. One walk serves both paths so they can
+ * never drift. */
+typedef struct InstFrame InstFrame;
+static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fmt, ...);
+
+static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) {
     if (!t) return true;
     switch (t->kind) {
     case TYPE_FIXED_ARRAY: {
         int64_t sz;
         if (type_fixed_array_size(t, &sz) && sz <= 0) {
-            diag_error(loc, "fixed array size must be positive, got %lld (in '%s')",
-                       (long long)sz, type_name(t));
+            if (frame)
+                gen_inst_diag(frame, loc, "fixed array size must be positive, got %lld (in '%s')",
+                              (long long)sz, type_name(t));
+            else
+                diag_error(loc, "fixed array size must be positive, got %lld (in '%s')",
+                           (long long)sz, type_name(t));
             return false;
         }
-        return check_inst_sizes(t->fixed_array.elem, loc);
+        return check_inst_sizes_frame(t->fixed_array.elem, frame, loc);
     }
-    case TYPE_POINTER: return check_inst_sizes(t->pointer.pointee, loc);
-    case TYPE_SLICE:   return check_inst_sizes(t->slice.elem, loc);
-    case TYPE_OPTION:  return check_inst_sizes(t->option.inner, loc);
-    case TYPE_RESULT:  return check_inst_sizes(t->result.inner, loc);
+    case TYPE_POINTER: return check_inst_sizes_frame(t->pointer.pointee, frame, loc);
+    case TYPE_SLICE:   return check_inst_sizes_frame(t->slice.elem, frame, loc);
+    case TYPE_OPTION:  return check_inst_sizes_frame(t->option.inner, frame, loc);
+    case TYPE_RESULT:  return check_inst_sizes_frame(t->result.inner, frame, loc);
     case TYPE_STRUCT:
         for (int i = 0; i < t->struc.field_count; i++)
-            if (!check_inst_sizes(t->struc.fields[i].type, loc)) return false;
+            if (!check_inst_sizes_frame(t->struc.fields[i].type, frame, loc)) return false;
         return true;
     case TYPE_UNION:
         for (int i = 0; i < t->unio.variant_count; i++)
-            if (!check_inst_sizes(t->unio.variants[i].payload, loc)) return false;
+            if (!check_inst_sizes_frame(t->unio.variants[i].payload, frame, loc)) return false;
         return true;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
-            if (!check_inst_sizes(t->func.param_types[i], loc)) return false;
-        return check_inst_sizes(t->func.return_type, loc);
+            if (!check_inst_sizes_frame(t->func.param_types[i], frame, loc)) return false;
+        return check_inst_sizes_frame(t->func.return_type, frame, loc);
     default: return true;
     }
+}
+
+static bool check_inst_sizes(Type *t, SrcLoc loc) {
+    return check_inst_sizes_frame(t, NULL, loc);
 }
 
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
@@ -1767,10 +1969,18 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (t->kind == TYPE_FIXED_ARRAY) {
         Type *inner = resolve_type(ctx, t->fixed_array.elem);
         if (t->fixed_array.size_ref) {
-            /* Symbolic size — stays symbolic here; instantiation folds it. */
-            if (inner != t->fixed_array.elem)
-                return type_fixed_array_sym(ctx->arena, inner, t->fixed_array.size_ref);
-            return t;
+            /* Normalize + fold the size: a concrete expression (u8[4 * 2],
+             * u8[cfg.word]) must fold to a positive size here — a non-generic
+             * context is never instantiated, so nothing later would fold it.
+             * A size over const params keeps its normalized symbolic form;
+             * instantiation folds it. */
+            if (!resolve_size_ref_inplace(ctx, t, ctx->type_loc))
+                return type_error();
+            if (t->fixed_array.size_ref) {   /* still symbolic */
+                if (inner != t->fixed_array.elem)
+                    return type_fixed_array_sym(ctx->arena, inner, t->fixed_array.size_ref);
+                return t;
+            }
         }
         if (inner != t->fixed_array.elem)
             return type_fixed_array(ctx->arena, inner, t->fixed_array.size);
@@ -2179,14 +2389,13 @@ static bool unify(Arena *arena, Type *param_type, Type *arg_type,
                     return false;
             } else {
                 /* TYPE_CONST_EXPR: evaluate under current bindings and compare */
-                int64_t pv, av;
+                int64_t pv;
                 if (!const_type_eval(pref, var_names, bindings, var_count, &pv)) {
                     SrcLoc d; (void)const_eval_take_error(&d);
                     return false;   /* unresolvable here — conservative fail */
                 }
                 if (asize->kind != TYPE_CONST_INT || asize->const_int.value != pv)
                     return false;
-                (void)av;
             }
         } else if (aref || param_type->fixed_array.size != arg_type->fixed_array.size) {
             return false;
@@ -2983,36 +3192,6 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
     }
     #undef GID_APPEND
     diag_error(primary, "%s", buf);
-}
-
-/* Frame-aware twin of check_inst_sizes: reports through the instantiation
- * chain. Same walk contract (no descent into referenced stubs). */
-static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) {
-    if (!t) return true;
-    switch (t->kind) {
-    case TYPE_FIXED_ARRAY: {
-        int64_t sz;
-        if (type_fixed_array_size(t, &sz) && sz <= 0) {
-            gen_inst_diag(frame, loc, "fixed array size must be positive, got %lld (in '%s')",
-                          (long long)sz, type_name(t));
-            return false;
-        }
-        return check_inst_sizes_frame(t->fixed_array.elem, frame, loc);
-    }
-    case TYPE_POINTER: return check_inst_sizes_frame(t->pointer.pointee, frame, loc);
-    case TYPE_SLICE:   return check_inst_sizes_frame(t->slice.elem, frame, loc);
-    case TYPE_OPTION:  return check_inst_sizes_frame(t->option.inner, frame, loc);
-    case TYPE_RESULT:  return check_inst_sizes_frame(t->result.inner, frame, loc);
-    case TYPE_STRUCT:
-        for (int i = 0; i < t->struc.field_count; i++)
-            if (!check_inst_sizes_frame(t->struc.fields[i].type, frame, loc)) return false;
-        return true;
-    case TYPE_UNION:
-        for (int i = 0; i < t->unio.variant_count; i++)
-            if (!check_inst_sizes_frame(t->unio.variants[i].payload, frame, loc)) return false;
-        return true;
-    default: return true;
-    }
 }
 
 /* Per-instance validation of a type operand (default/alloc/sizeof/alignof
@@ -5380,6 +5559,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         ? callee_sym->param_kinds[i] : GP_TYPE;
                     bindings[i] = resolve_generic_arg(ctx, e->call.type_args[i],
                                                       want_k, e->loc);
+                    /* Already reported (unknown type, non-constant name, bad
+                     * const expr) — poison the call instead of cascading into
+                     * the kind gate / per-instance validation. */
+                    if (bindings[i] && type_is_error(bindings[i])) {
+                        e->type = type_error();
+                        return e->type;
+                    }
                 }
                 /* Kind gate: an explicit argument must match its parameter's
                  * kind (type vs const). GP_UNKNOWN (a prefix var with no
@@ -7072,13 +7258,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
             /* A size over const generic params can't fold at template time —
-             * defer the value checks to per-instance validation. */
+             * normalize it (folding any named-const subtrees) and defer the
+             * value checks to per-instance validation. */
             if (expr_refs_const_param(e->array_lit.size_expr)) {
-                if (!check_const_size_shape(e->array_lit.size_expr)) {
+                Expr *norm = normalize_size_expr(ctx, e->array_lit.size_expr);
+                if (!norm) {
                     e->type = type_error();
                     return e->type;
                 }
-                size_deferred = true;
+                e->array_lit.size_expr = norm;
+                size_deferred = norm->kind != EXPR_INT_LIT;
             } else {
                 diag_error(e->array_lit.size_expr->loc,
                     "slice literal length must be a compile-time constant");
@@ -10206,6 +10395,114 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     scope_add(ctx->scope, d->let.name, cg_name, t, d->let.is_mut, d->loc);
 }
 
+/* Size-only twin of canonicalize_field_stubs: walk a field type and fold its
+ * fixed-array size expressions, leaving stub names untouched (they are
+ * canonicalized later, interleaved with body checking, where scope-based
+ * resolution of the source spelling still works). */
+static void normalize_type_sizes(CheckCtx *ctx, Type *t) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_POINTER: normalize_type_sizes(ctx, t->pointer.pointee); return;
+    case TYPE_OPTION:  normalize_type_sizes(ctx, t->option.inner); return;
+    case TYPE_RESULT:  normalize_type_sizes(ctx, t->result.inner); return;
+    case TYPE_SLICE:   normalize_type_sizes(ctx, t->slice.elem); return;
+    case TYPE_FIXED_ARRAY:
+        normalize_type_sizes(ctx, t->fixed_array.elem);
+        resolve_size_ref_inplace(ctx, t, ctx->type_loc);
+        return;
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++)
+            normalize_type_sizes(ctx, t->struc.fields[i].type);
+        return;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++)
+            normalize_type_sizes(ctx, t->unio.variants[i].payload);
+        return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            normalize_type_sizes(ctx, t->func.param_types[i]);
+        normalize_type_sizes(ctx, t->func.return_type);
+        return;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            normalize_type_sizes(ctx, t->stub.type_args[i]);
+        return;
+    default: return;
+    }
+}
+
+/* Fold the fixed-array size expressions of one type decl's fields, under the
+ * decl's own generic-parameter kinds. */
+static void normalize_decl_field_sizes(CheckCtx *ctx, Decl *d) {
+    const char **saved_params = ctx->td_params;
+    uint8_t *saved_kinds = ctx->td_kinds;
+    int saved_ntp = ctx->td_ntp;
+    if (d->kind == DECL_STRUCT) {
+        ctx->td_params = d->struc.type_params;
+        ctx->td_kinds = d->struc.param_kinds;
+        ctx->td_ntp = d->struc.type_param_count;
+        for (int i = 0; i < d->struc.field_count; i++) {
+            ctx->type_loc = d->struc.fields[i].loc;
+            normalize_type_sizes(ctx, d->struc.fields[i].type);
+        }
+    } else if (d->kind == DECL_UNION) {
+        ctx->td_params = d->unio.type_params;
+        ctx->td_kinds = d->unio.param_kinds;
+        ctx->td_ntp = d->unio.type_param_count;
+        for (int i = 0; i < d->unio.variant_count; i++) {
+            ctx->type_loc = d->unio.variants[i].loc;
+            normalize_type_sizes(ctx, d->unio.variants[i].payload);
+        }
+    } else if (d->kind == DECL_EXTERN && d->ext.type &&
+               d->ext.type->kind == TYPE_STRUCT) {
+        /* Extern struct fields also admit T[N]; they are never generic, so a
+         * size expression must fold concrete here. */
+        ctx->td_params = NULL;
+        ctx->td_kinds = NULL;
+        ctx->td_ntp = 0;
+        ctx->type_loc = d->loc;
+        normalize_type_sizes(ctx, d->ext.type);
+    }
+    ctx->td_params = saved_params;
+    ctx->td_kinds = saved_kinds;
+    ctx->td_ntp = saved_ntp;
+}
+
+/* Fold every type decl's fixed-array size expressions in a module, recursing
+ * into submodules with the same scope discipline as check_module_members. Runs
+ * as a dedicated pass BEFORE any body checking: instantiation (resolve_type /
+ * type_substitute) reads a template's field types, so their size expressions
+ * must already be normalized (named consts folded) when the first body names
+ * the template — which may live in a module checked earlier than the
+ * template's own. Stub names are NOT touched here. */
+static void canonicalize_module_types(CheckCtx *ctx, Decl *mod_decl,
+                                      SymbolTable *parent_members) {
+    for (int i = 0; i < mod_decl->module.decl_count; i++) {
+        Decl *child = mod_decl->module.decls[i];
+        if (child->kind == DECL_STRUCT || child->kind == DECL_UNION ||
+            child->kind == DECL_EXTERN) {
+            normalize_decl_field_sizes(ctx, child);
+        } else if (child->kind == DECL_MODULE) {
+            Symbol *sub_sym = symtab_lookup_kind(parent_members,
+                child->module.name, DECL_MODULE);
+            if (sub_sym && sub_sym->members) {
+                SymbolTable *saved_symtab = ctx->module_symtab;
+                ModuleScopeChain *saved_parents = ctx->parent_modules;
+                ImportScope *saved_imports = ctx->import_scope;
+                ImportScope sub_import_scope = { .table = sub_sym->imports, .parent = ctx->import_scope };
+                if (sub_sym->imports) ctx->import_scope = &sub_import_scope;
+                ModuleScopeChain parent_link = { .members = ctx->module_symtab, .import_scope = saved_imports, .parent = ctx->parent_modules };
+                if (ctx->module_symtab) ctx->parent_modules = &parent_link;
+                ctx->module_symtab = sub_sym->members;
+                canonicalize_module_types(ctx, child, sub_sym->members);
+                ctx->module_symtab = saved_symtab;
+                ctx->parent_modules = saved_parents;
+                ctx->import_scope = saved_imports;
+            }
+        }
+    }
+}
+
 /* Recursively type-check module members, including arbitrarily nested submodules.
  * parent_members is the symbol table to look up submodule symbols in. */
 static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
@@ -10395,6 +10692,55 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
      * evaluates them context-free, so ill-formed conditions must be rejected
      * before any instantiation. */
     sa_validate_decls(prog->decls, prog->decl_count);
+
+    /* Pass 0: fold every type decl's fixed-array size expressions (named
+     * consts, concrete arithmetic) before any body checking. A body checked
+     * early may instantiate a template declared in a module processed later,
+     * so template sizes must be normalized program-wide first. (Stub-name
+     * canonicalization stays interleaved with body checking below — it
+     * rewrites source spellings to mangled names, which must not happen
+     * before the bodies that resolve those spellings are checked.) */
+    {
+        const char *ns0 = NULL;
+        for (int i = 0; i < prog->decl_count; i++) {
+            Decl *d = prog->decls[i];
+            if (d->kind == DECL_NAMESPACE) { ns0 = d->ns.name; continue; }
+
+            /* File-level import scope for this decl's file */
+            ImportTable *file_tbl = NULL;
+            if (file_scopes) {
+                const char *fn = d->loc.filename;
+                for (int fi = 0; fi < file_scopes->count; fi++) {
+                    if (file_scopes->scopes[fi].filename == fn) {
+                        file_tbl = &file_scopes->scopes[fi].imports;
+                        break;
+                    }
+                }
+            }
+            ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
+
+            if (d->kind == DECL_MODULE) {
+                Symbol *mod_sym = symtab_lookup_module(symtab, d->module.name,
+                    d->module.ns_prefix ? d->module.ns_prefix : ns0);
+                if (!mod_sym || !mod_sym->members) continue;
+                ctx.current_ns = mod_sym->ns_prefix;
+                ImportScope mod_import_scope = { .table = mod_sym->imports, .parent = &file_import_scope };
+                ctx.import_scope = mod_sym->imports ? &mod_import_scope
+                                 : (file_tbl ? &file_import_scope : NULL);
+                ctx.module_symtab = mod_sym->members;
+                canonicalize_module_types(&ctx, d, mod_sym->members);
+                ctx.module_symtab = NULL;
+                ctx.import_scope = NULL;
+            } else if (d->kind == DECL_STRUCT || d->kind == DECL_UNION ||
+                       d->kind == DECL_EXTERN) {
+                ctx.current_ns = ns0;
+                ctx.import_scope = file_tbl ? &file_import_scope : NULL;
+                normalize_decl_field_sizes(&ctx, d);
+                ctx.import_scope = NULL;
+            }
+        }
+        ctx.current_ns = NULL;
+    }
 
     /* First pass: type-check all module member decls (including nested submodules) */
     const char *ns_tracker = NULL;

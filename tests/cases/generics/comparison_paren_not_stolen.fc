@@ -1,0 +1,19 @@
+// Comparison arguments whose RHS is parenthesized must keep their comparison
+// reading: the callee of the would-be generic call names no generic
+// declaration, so `<` stays a comparison even though the token shape brushes
+// against a type-argument list (f(a < 2, b > (c)) ~ f(a<2, b>(c))).
+let both = (a: bool, b: bool) ->
+    if a && b then 1 else 0
+
+let pick = (a: bool, b: bool) ->
+    if a then 10 else if b then 20 else 30
+
+let main = (args: str[]) ->
+    let x = 1
+    let c = 5
+    assert(both(x < 2, x > (c)) == 0)
+    assert(both(x < 2, x < (c)) == 1)
+    assert(pick(x < (c + 1), x > (2)) == 10)
+    let lit = 4
+    assert(both(lit < 2 + 3, lit > (2)) == 1)
+    0

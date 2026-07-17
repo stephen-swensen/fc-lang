@@ -1,10 +1,10 @@
-// `a<b>(c)` on a numeric value parses as a generic call (the <...> reads as
-// type arguments) and fails because `a` is not a function. There is no valid
-// comparison reading to suggest: `(a < b) > c` would order a bool, which is
-// itself a type error, so the diagnostic stays the plain non-callable message.
+// `a<b>(c)` on numeric locals: `a` is not a generic declaration, so the
+// expression keeps its comparison reading `(a < b) > (c)` — which orders a
+// bool against an i32 and is rejected with a comparison diagnostic (not a
+// misleading "cannot call" error from a stolen generic-call parse).
 let main = (args: str[]) ->
     let a = 3
     let b = 4
     let c = 5
     let r = a<b>(c)
-    r
+    if r then 1 else 0

@@ -623,7 +623,10 @@ static int zero_agg_depth(Type *t) {
     case TYPE_SLICE:   return 1;  /* struct { ptr; len } */
     case TYPE_RESULT:  return 1;  /* struct { err; value } */
     case TYPE_FUNC:    return 1;  /* struct { fn_ptr; ctx } */
-    case TYPE_OPTION:  return is_null_sentinel(t) ? 0 : 1;
+    case TYPE_OPTION:
+        /* C repr is value-FIRST: struct { T value; bool has_value; } — the
+         * first-member chain continues through the payload. */
+        return is_null_sentinel(t) ? 0 : 1 + zero_agg_depth(t->option.inner);
     default: return 0;            /* scalars, pointers, enums, any* */
     }
 }
@@ -640,6 +643,9 @@ static int zero_brace_extra(Type *t) {
         return t->struc.field_count > 0
             ? zero_agg_depth(t->struc.fields[0].type) : 0;
     case TYPE_FIXED_ARRAY: return zero_agg_depth(t->fixed_array.elem);
+    case TYPE_OPTION:
+        /* value-first repr: the payload is the first member */
+        return is_null_sentinel(t) ? 0 : zero_agg_depth(t->option.inner);
     default: return 0;  /* union (tag first), slice/result/fn (scalar first), ... */
     }
 }

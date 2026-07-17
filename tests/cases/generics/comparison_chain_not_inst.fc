@@ -1,0 +1,10 @@
+// A chained comparison over parenthesized operands is not a generic
+// instantiation: `a` names no generic declaration, so the expression parses
+// as (a < (b + 1)) > (c) and fails with a comparison type error — not a
+// misleading "cannot call non-function".
+let main = (args: str[]) ->
+    let a = 1
+    let b = 2
+    let c = 3
+    let r = a < (b + 1) > (c)
+    if r then 0 else 1

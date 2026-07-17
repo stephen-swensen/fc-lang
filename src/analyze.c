@@ -17,10 +17,10 @@ static void collect_sink(SrcLoc loc, const char *msg, void *ud) {
     DA_APPEND(r->diags, r->diag_count, r->diag_cap, d);
 }
 
-/* ---- one source: lex + parse into an arena-owned Program ---- */
+/* ---- one source: lex into an r-owned token array ---- */
 
-static Program *lex_parse_one(AnalysisResult *r, const char *text,
-                              const char *filename, const Flag *flags, int flag_count) {
+static Token *lex_one(AnalysisResult *r, const char *text, const char *filename,
+                      const Flag *flags, int flag_count, int *out_count) {
     diag_set_filename(filename);
 
     /* Expose the lexer's in-progress arrays so an abort during lexing frees
@@ -33,8 +33,7 @@ static Program *lex_parse_one(AnalysisResult *r, const char *text,
     lexer.abort_slot_raw = &r->lex_raw;
     lexer.abort_slot_layout = &r->lex_layout;
 
-    int token_count;
-    Token *tokens = lexer_tokenize(&lexer, &token_count);
+    Token *tokens = lexer_tokenize(&lexer, out_count);
 
     /* Tokenize succeeded: the pre-filter array was freed internally and the
      * returned array is `tokens`. Clear the in-progress slots and track the
@@ -42,10 +41,21 @@ static Program *lex_parse_one(AnalysisResult *r, const char *text,
     r->lex_raw = NULL;
     r->lex_layout = NULL;
     DA_APPEND(r->token_arrays, r->token_array_count, r->token_array_cap, tokens);
+    return tokens;
+}
 
+/* ---- one source: parse pre-lexed tokens into an arena-owned Program ---- */
+
+static Program *parse_one(AnalysisResult *r, Token *tokens, int token_count,
+                          const char *filename,
+                          const char **generic_names, int generic_name_count) {
+    diag_set_filename(filename);
     Parser parser = {0};
     parser_init(&parser, tokens, token_count, &r->arena, &r->intern);
     parser.filename = filename;
+    parser.generic_names = generic_names;
+    parser.generic_name_count = generic_name_count;
+    parser.generic_gate = true;
     Program *prog = parse_program(&parser);
     /* pending_decls is malloc'd scratch the parser never frees (one-shot CLI
      * relies on process exit); the AST itself lives in the arena. */
@@ -89,12 +99,12 @@ static LexCacheEntry *lexcache_slot(LexCache *c, const char *path) {
 }
 
 /* Feed source via the lex cache: reuse cached tokens on a content+flags match,
- * else lex and (re)populate the slot. Re-parses into r->arena like lex_parse_one,
- * but the tokens are owned by the cache (NOT appended to r->token_arrays, so
- * analysis_free never frees them). */
-static Program *parse_feed_cached(AnalysisResult *r, LexCache *cache,
-                                  const AnalysisSource *src, const char *fn,
-                                  const Flag *flags, int flag_count, uint64_t flags_sig) {
+ * else lex and (re)populate the slot. The tokens are owned by the cache (NOT
+ * appended to r->token_arrays, so analysis_free never frees them). */
+static Token *lex_feed_cached(AnalysisResult *r, LexCache *cache,
+                              const AnalysisSource *src, const char *fn,
+                              const Flag *flags, int flag_count,
+                              uint64_t flags_sig, int *out_count) {
     LexCacheEntry *e = lexcache_slot(cache, src->filename);
 
     /* A slot hits only when a same-length candidate's CONTENT matches (hash as a
@@ -114,7 +124,7 @@ static Program *parse_feed_cached(AnalysisResult *r, LexCache *cache,
         tokens = e->tokens;
         tc = e->token_count;
     } else {
-        /* MISS: lex with the same abort slots as lex_parse_one so a feed layout
+        /* MISS: lex with the same abort slots as lex_one so a feed layout
          * error still longjmps cleanly (the dup below runs only after success, so
          * the abort path has nothing extra to clean up). */
         diag_set_filename(fn);
@@ -167,12 +177,8 @@ static Program *parse_feed_cached(AnalysisResult *r, LexCache *cache,
         e->token_count = tc;
     }
 
-    Parser parser = {0};
-    parser_init(&parser, tokens, tc, &r->arena, &r->intern);
-    parser.filename = fn;
-    Program *prog = parse_program(&parser);
-    free(parser.pending_decls);
-    return prog;
+    *out_count = tc;
+    return tokens;
 }
 
 void lexcache_free(LexCache *c) {
@@ -221,18 +227,38 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
     if (setjmp(env) == 0) {
         int nsrc = 1 + extra_count;
         Program **programs = arena_alloc(&r->arena, sizeof(Program *) * (size_t)nsrc);
+        Token **toks = arena_alloc(&r->arena, sizeof(Token *) * (size_t)nsrc);
+        int *tcs = arena_alloc(&r->arena, sizeof(int) * (size_t)nsrc);
+        const char **fns = arena_alloc(&r->arena, sizeof(const char *) * (size_t)nsrc);
 
-        /* The primary edited buffer is always lexed fresh (it changes every
-         * keystroke); only the feed sources are cached. */
-        programs[0] = lex_parse_one(r, r->source, r->filename, flags, flag_count);
+        /* Lex every source before parsing any: the expression-position `<`
+         * scans need the whole-unit set of generic declaration names (see
+         * parser_collect_generic_names). The primary edited buffer is always
+         * lexed fresh (it changes every keystroke); only the feed sources are
+         * cached. */
+        fns[0] = r->filename;
+        toks[0] = lex_one(r, r->source, r->filename, flags, flag_count, &tcs[0]);
         uint64_t flags_sig = cache ? flags_signature(flags, flag_count) : 0;
         for (int i = 0; i < extra_count; i++) {
             const char *fn = arena_strdup(&r->arena, extra[i].filename,
                                           (int)strlen(extra[i].filename));
-            programs[1 + i] = cache
-                ? parse_feed_cached(r, cache, &extra[i], fn, flags, flag_count, flags_sig)
-                : lex_parse_one(r, extra[i].text, fn, flags, flag_count);
+            fns[1 + i] = fn;
+            toks[1 + i] = cache
+                ? lex_feed_cached(r, cache, &extra[i], fn, flags, flag_count,
+                                  flags_sig, &tcs[1 + i])
+                : lex_one(r, extra[i].text, fn, flags, flag_count, &tcs[1 + i]);
         }
+
+        const char **generic_names = NULL;
+        int gn_count = 0, gn_cap = 0;
+        for (int i = 0; i < nsrc; i++)
+            parser_collect_generic_names(toks[i], tcs[i], &r->intern,
+                                         &generic_names, &gn_count, &gn_cap);
+
+        for (int i = 0; i < nsrc; i++)
+            programs[i] = parse_one(r, toks[i], tcs[i], fns[i],
+                                    generic_names, gn_count);
+        free(generic_names);
 
         /* Merge programs, mirroring main.c: inject a global-namespace reset
          * sentinel before any file that does not begin with a namespace decl. */

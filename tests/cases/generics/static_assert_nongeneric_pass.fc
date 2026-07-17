@@ -1,0 +1,16 @@
+// A concrete-true static_assert in non-generic type bodies compiles clean and
+// emits nothing.
+struct plain =
+    static_assert(8 % 4 == 0, "ok")
+    x: i32
+
+union u =
+    static_assert(1 <= 2 && !(1 == 2), "ok")
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    let p = plain { x = 3 }
+    match u.a(p.x) with
+    | a(v) -> v - 3
+    | b -> 1

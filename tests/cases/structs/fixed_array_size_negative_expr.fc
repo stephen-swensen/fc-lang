@@ -1,0 +1,5 @@
+// A concrete const-expression size must fold positive (negative rejected).
+struct bad =
+    data: u8[(0 - 4)]
+
+let main = (args: str[]) -> 0

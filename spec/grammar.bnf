@@ -694,6 +694,9 @@ index_or_slice   = [ expr ] , ".." , [ expr ]          (* sub-slice forms  *)
 (* Call arguments — may include generic type arguments.                *)
 (* name<Type, ...>(args)  is a generic call.                           *)
 (* name(args)             is a plain call.                             *)
+(* The <...> reading applies only when `name` is a generic             *)
+(* declaration (semantic disambiguation, as in C++); otherwise `<`     *)
+(* keeps its comparison reading — see the spec's Parsing note.         *)
 call_args        = [ "<" , type_arg_list , ">" ] , "(" , [ arg_list ] , ")" ;
 
 arg_list         = expr , { "," , expr } ;

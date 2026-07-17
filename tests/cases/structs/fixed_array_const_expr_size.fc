@@ -1,0 +1,17 @@
+// Fully concrete const-expression sizes in a non-generic struct fold at
+// compile time (they are never instantiated, so nothing later would fold
+// them): arithmetic, parenthesized, and cast forms.
+struct buf =
+    data: u8[4 * 2]
+    tail: u8[(3)]
+    tag: i32
+
+let main = (args: str[]) ->
+    let mut b = default(buf)
+    b.data[7] = 42u8
+    b.tail[2] = 7u8
+    assert(b.data.len == 8)
+    assert(b.tail.len == 3)
+    assert((i32) b.data[7] == 42)
+    assert((i32) sizeof(u8[4 * 2]) == 8)
+    b.tag

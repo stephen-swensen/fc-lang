@@ -35,6 +35,8 @@
  * diagnostic is fast and names the template. */
 #define MONO_MAX_PER_TEMPLATE        2048
 
+static void mono_drain_const_eval_error(void);
+
 /* Structural nesting depth of a type's *type arguments*: the axis along which a
  * divergent instantiation grows. Recurses through wrapper constructors and into
  * generic type arguments, but NOT into struct/union fields (those are bounded by
@@ -194,6 +196,7 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
 
             int nbind = tp_count < count ? tp_count : count;
             for (int i = 0; i < san; i++) {
+                if (sas[i].judged) continue;   /* concrete — judged once in pass2 */
                 Type wrapper = {0};
                 wrapper.kind = TYPE_CONST_EXPR;
                 wrapper.const_expr.expr = sas[i].cond;
@@ -934,6 +937,8 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
         }
     } while (t->count > prev_count);  /* Repeat until fixpoint */
 
+    mono_drain_const_eval_error();
+
     /* Resolve all type names in concrete_types. This is the single centralized
      * pass that converts canonical struct names (e.g., "m__entry") to mangled
      * C identifiers (e.g., "m__entry_i32_i32"). Done AFTER discovery so
@@ -991,6 +996,20 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     free(order);
 }
 
+/* Backstop for hard const-generic evaluation failures stashed by this phase's
+ * type_substitute calls (e.g. division by zero in the size expression of a
+ * transitively-discovered instance). Deliberate diagnostic sites drain the
+ * slot themselves; anything still stashed here would otherwise vanish — and a
+ * vanished failure means fcc exits 0 while the emitted C names an unresolved
+ * instance and fails the C compile. Report it so the build fails with the
+ * real cause at the real location. */
+static void mono_drain_const_eval_error(void) {
+    SrcLoc eloc = {0};
+    const char *emsg = const_eval_take_error(&eloc);
+    if (emsg)
+        diag_error(eloc, "%s (in a const-generic instantiation)", emsg);
+}
+
 void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     int discovered = 0;
     while (discovered < t->count) {
@@ -1014,4 +1033,5 @@ void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, Symbo
         }
         discovered = batch_end;
     }
+    mono_drain_const_eval_error();
 }

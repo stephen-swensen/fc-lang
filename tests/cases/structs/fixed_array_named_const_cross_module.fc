@@ -1,0 +1,16 @@
+// A body in a module declared (and checked) before the template's own module
+// still instantiates it correctly: template sizes are normalized program-wide
+// before any body checking.
+module user =
+    let mk = () -> default(lib.wide<128>)
+
+module lib =
+    module cfg =
+        let word = 4
+    struct wide =
+        limbs: u32['n / cfg.word]
+
+let main = (args: str[]) ->
+    let w = user.mk()
+    assert(w.limbs.len == 32)
+    0

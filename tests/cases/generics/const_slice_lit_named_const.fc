@@ -1,0 +1,13 @@
+// A slice-literal length over const params may also fold named constants:
+// 'n * cfg.words defers 'n per instance while cfg.words folds up front.
+module cfg =
+    let words = 2
+
+let mk = <'n>() ->
+    let s = u32['n * cfg.words] { }
+    s.len
+
+let main = (args: str[]) ->
+    assert(mk<3>() == 6)
+    assert(mk<5>() == 10)
+    0

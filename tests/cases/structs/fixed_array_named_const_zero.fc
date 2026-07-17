@@ -1,0 +1,9 @@
+// A named-constant size that folds to zero is rejected like any other
+// non-positive size.
+module cfg =
+    let word = 0
+
+struct bad =
+    data: u8[cfg.word]
+
+let main = (args: str[]) -> 0

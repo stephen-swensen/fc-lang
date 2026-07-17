@@ -1,0 +1,23 @@
+// Named module constants (bare-module dotted) serve as fixed-array sizes, in
+// both concrete and const-generic size expressions — mirroring the forms
+// already accepted in <...> argument position.
+module cfg =
+    let word = 4
+    let pair = word * 2
+
+struct nb =
+    data: u8[cfg.word]
+    wide: u8[cfg.pair]
+
+struct gen =
+    limbs: u32['n / cfg.word]
+
+let main = (args: str[]) ->
+    let n = default(nb)
+    assert(n.data.len == 4)
+    assert(n.wide.len == 8)
+    let g = default(gen<256>)
+    assert(g.limbs.len == 64)
+    let h = default(gen<64>)
+    assert(h.limbs.len == 16)
+    0

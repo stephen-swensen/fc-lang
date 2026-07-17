@@ -1,0 +1,9 @@
+// A named value used as a const argument that cannot fold (a top-level let is
+// not a module constant) reports the constant-category diagnostic — not a
+// bogus "a type argument was given".
+let width = 8
+
+let f = <'n>(x: i32) -> x + 'n
+
+let main = (args: str[]) ->
+    f<width>(2)

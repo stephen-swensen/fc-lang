@@ -112,6 +112,11 @@ typedef struct StaticAssert {
     SrcLoc loc;
     const char *owner;      /* source-level owner name for diagnostics
                                ("uwide", "from_u64") — decl names get mangled */
+    bool judged;            /* condition was fully concrete (no const params)
+                               and pass2 judged it once, up front — a type
+                               that is never monomorphized still gets its
+                               verdict, and mono_register skips a re-judgment
+                               per instance */
 } StaticAssert;
 
 typedef struct FieldPattern {
