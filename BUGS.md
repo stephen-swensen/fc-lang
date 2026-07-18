@@ -126,22 +126,42 @@ fixed an unreported latent bug: `any*[N]{}` built `any**` on the old path.
 `slices/slice_lit_head_negative_space` (comparisons and indexing keep their
 readings). Spec: §Continuation, §Escape Sequences, §Slice literals updated.
 
-**Incidental findings (not fixed, no tests):**
-- `(t) x` where `t` is a *user-defined* type name (enum/struct) is not read as a
-  cast — the parser's cast heuristic only fires for built-in type names or a
-  `* < ! ? .` suffix — so it now reports the separator error instead of pass2's
-  "'t' is a type, not a value". A `parser_collect_generic_names`-style pre-pass
-  over declared type names would give the semantic answer (cf. the `<`
-  disambiguation gate); deliberately out of scope here.
-- A slice literal's elements do **not** accept nonconst→const narrowing:
-  `const i32*[2] { &a, &b }` errors "expected const i32*, got i32*". Same
-  phenomenon as §7.4 (tuples), one container over.
-- Malformed numeric literals (`1e`, `1e9i32`) are diagnosed only indirectly, as
-  juxtaposition. A lexer rule rejecting an identifier character adjacent to a
-  numeric literal would name the actual problem.
-- A juxtaposition inside a *match arm* body (`| 3 -> n = 1 n = 2`) still yields
-  the old 3-error "expected '|'" cascade rather than the separator message
-  (arm bodies go through `parse_inline_seq`). §8 diagnostics-polish territory.
+**Incidental findings, triaged.** All four were verified against 812180c (the
+pre-fix build) to separate "newly introduced" from "newly visible":
+
+- **Symptom changed by 1.1, cause pre-existing** — `(t) x` where `t` is a
+  *user-defined* type name is not read as a cast (the parser's cast heuristic
+  fires only for built-in type names or a `* < ! ? .` suffix), so it now reports
+  the separator error instead of pass2's "'t' is a type, not a value". Only
+  reaches programs that are illegal either way — a bare cast to a struct/enum
+  type is never legal, and `(mytype*) p` / `(mod.t*) p` already parse as casts.
+  Diagnostics-only. → tracked in §8.
+- **Symptom changed by 1.1, cause pre-existing** — malformed numeric literals
+  (`1e`, `1e9i32`) lex as two tokens and so are diagnosed as juxtaposition. The
+  messages they used to get ("undefined name 'e'", "'i32' is a type, not a
+  value") were equally incidental. A lexer rule rejecting an identifier
+  character adjacent to a numeric literal ("invalid suffix on numeric literal")
+  would name the actual problem — same family as 1.2, ~10 lines. → **proposed
+  as 1.5, awaiting go-ahead.**
+- **Pre-existing, made visible by 1.3** — slice-literal elements are checked
+  with bare `type_eq`: no widening of any kind. `const i32*[2] { &a, &b }`
+  errors "expected const i32*, got i32*", and so does `i64[2] { 1, 2 }`
+  ("expected i64, got i32") — both identically before 1.3, which only made the
+  const spelling reachable. The sibling aggregate positions *do* widen
+  (`peek(&a)` into a `const i32*` param, `holder { p = &a }` into a
+  `const i32*` field). Extending widening to this position is a language
+  decision, not a repair. → tracked as §7.9.
+- **Pre-existing and unchanged** — a juxtaposition inside a *match arm* body
+  (`| 3 -> n = 1 n = 2`) yields a 3-error "expected '|'" cascade instead of the
+  separator message (arm bodies go through `parse_inline_seq`, untouched by
+  1.1). It was already an error before, just a noisy one. → tracked in §8.
+
+**Also found while fixing (pre-existing, minor):** a slice literal whose element
+type is *itself* a slice can't be spelled directly — `i32[][2] { a, a }` fails
+("unexpected token ']'"), because the head scan stops at the first `[` and
+requires the `{` to follow its match. Parenthesizing works —
+`(i32[])[2] { a, a }` compiles — and the aliased form (`str[2] { … }`) was never
+affected, so this is an ergonomics nit, not an expressiveness gap. → §8.
 
 ## 2. Missing type-checker (pass2) judgments — most emit broken C or run wrong
 
@@ -403,6 +423,17 @@ are separate alloc-path checks.
    `module i32`) are accepted but unreachable (primitive/property lookup wins,
    diagnostics like "expected i32, got i32"). Spec disclaims support;
    rejecting the declaration would be kinder.
+9. **Slice-literal elements admit no widening at all** (found while fixing
+   §1.3): the element check is a bare `type_eq`, so `i64[2] { 1, 2 }` errors
+   "expected i64, got i32" and `const i32*[2] { &a, &b }` errors "expected
+   const i32*, got i32*" — while the sibling aggregate positions accept both
+   (a `const i32*` *parameter* takes `&a`; a `const i32*` struct *field* takes
+   `&a`). The spec's widening list (binary expressions, comparisons, call
+   arguments, slice indices, for-range endpoints) does not name this position,
+   so today's behavior is defensible-by-omission — but the asymmetry with
+   struct-literal fields, which are the same "aggregate literal element"
+   position, looks unintended. Deciding it also settles the direction for §7.4
+   (tuples). Extending widening here is a language change and needs a call.
 
 ## 8. Diagnostics-polish observations (no tests; fix opportunistically)
 
@@ -422,7 +453,20 @@ are separate alloc-path checks.
   rather than a purposeful message.
 - `f<g>(x)` where `f` isn't generic, `identity<i32> == identity<i32>`, and
   `(identity<i32>)(5)` all get incidental diagnostics (comparison/cast
-  misreadings) rather than curated ones.
+  misreadings) rather than curated ones. Same family: `(t) x` for a
+  *user-defined* type name `t` isn't read as a cast at all (the heuristic wants
+  a built-in name or a `* < ! ? .` suffix), so it lands on the juxtaposition
+  error. A pre-pass collecting declared type names — the shape
+  `parser_collect_generic_names` already uses for the `<` gate — would let all
+  of these get semantic answers instead of token-shape guesses.
+- A juxtaposition inside a match-arm body (`| 3 -> n = 1 n = 2`) produces a
+  3-error "expected '|'" cascade; block bodies report one clean "expected a
+  newline or ';' between statements". The arm loop could apply the same check
+  after `parse_body`.
+- A slice literal whose element type is itself a slice needs parens:
+  `i32[][2] { a, a }` fails, `(i32[])[2] { a, a }` works. The head scan takes
+  the first `[` as the literal's, so an unparenthesized `[]` element suffix is
+  never seen.
 
 ## Areas swept clean (for the record)
 
