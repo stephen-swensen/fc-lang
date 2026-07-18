@@ -321,14 +321,11 @@ module wideint =
     // uwide<'n> — 'n-bit unsigned ('n/32 x u32 limbs)
     // ===================================================================
 
-    // Operations on uwide<'n>: wrapping add/sub/mul (mod 2^'n),
-    // carry-reporting add_carry/sub_borrow, widening mul_wide
-    // (-> uwide<'n * 2>), aborting checked_* forms, div/rem/divmod, bitwise
-    // ops and shifts, cmp, min()/max(), from_u64/try_to_u64, strict
-    // parse/parse_hex -> uwide<'n>!, and to_str/to_hex (heap strings, caller
-    // frees). The width is inferred from arguments where one is passed
-    // (uwide.add(a, b)) and named explicitly otherwise
-    // (uwide<128>.from_u64(x), uwide<256>.parse(s)).
+    // Operations for the unsigned uwide<'n> type: construction and constants,
+    // wrapping and checked arithmetic, bitwise logic, comparison, and
+    // decimal/hex string conversion. Width is inferred from an argument that
+    // carries it (uwide.add(a, b)) and named explicitly where none does
+    // (uwide<128>.from_u64(x), uwide<256>.max()).
     module uwide =
         // A uwide<'n> holding x (zero-extended).
         let from_u64 = <'n>(x: u64) ->
@@ -504,15 +501,12 @@ module wideint =
     // iwide<'n> — 'n-bit signed (two's complement, 'n/32 x u32 limbs)
     // ===================================================================
 
-    // Operations on iwide<'n> (two's complement): wrapping add/sub/mul (mod
-    // 2^'n) and neg/abs, truncating div/rem/divmod (remainder takes the
-    // dividend's sign), aborting checked_* forms (incl. neg/abs/div for the
-    // min cases), bitwise ops, shl and arithmetic shr, signed cmp,
-    // from_i64/try_to_i64, min()/max(), strict signed parse -> iwide<'n>!,
-    // raw two's-complement parse_hex, and to_str/to_hex (heap strings,
-    // caller frees). The width is inferred from arguments where one is
-    // passed (iwide.add(a, b)) and named explicitly otherwise
-    // (iwide<128>.from_i64(x), iwide<256>.parse(s)).
+    // Operations for the signed, two's-complement iwide<'n> type: the same
+    // repertoire as uwide plus sign-aware neg/abs, truncating division whose
+    // remainder takes the dividend's sign, and arithmetic (sign-extending)
+    // shift. Width is inferred from an argument that carries it
+    // (iwide.add(a, b)) and named explicitly where none does
+    // (iwide<128>.from_i64(x), iwide<256>.min()).
     module iwide =
         // An iwide<'n> holding x (sign-extended).
         let from_i64 = <'n>(x: i64) ->
