@@ -67,6 +67,17 @@ The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → 
 - **`common.c/h`** — Shared utilities. Arena allocator, dynamic array macro (`DA_APPEND`).
 - **`analyze.c/h`**, **`json.c/h`**, **`lsp.c/h`** — The in-process language server (`fcc --lsp`), independent of the normal compile path. `analyze()` runs lexer→parser→pass1→pass2 over an in-memory source (merging the installed stdlib so `std::` resolves), collecting diagnostics and keeping the typed AST alive for queries; `json.c` is a minimal JSON-RPC value model; `lsp.c` is the stdio message loop + handlers (diagnostics, hover, definition, completion, and each `let`'s inferred type offered as **both** a type-above CodeLens and an inline inlay hint — the client's `fc.typeDisplay` setting picks which renders). See **Editor integration** below. **Note:** `pass2_check` now takes the AST `Arena*` (the type nodes it synthesizes are AST-referenced and freed with that arena) — this fixed a latent leak and is what lets a long-running server reclaim each analysis.
 
+### Feature-addition discipline
+
+Lessons distilled from post-feature multi-agent reviews (most recently const generics, whose 10 confirmed findings all trace to these patterns). When adding a feature — especially a major one — extend the existing architecture; don't slip the feature in between the cracks with parallel machinery:
+
+- **Extend existing channels; never add a twin.** New data should ride existing structures (const args ride the `Type**` type-arg arrays) and new checks should extend existing walkers, tables, and resolution paths. If you're copying a recursive walker to add one parameter, merge them instead — twins drift (a duplicated instantiation-size walker silently lost the `TYPE_FUNC` descent its sibling had).
+- **A choke point only covers what flows through it.** Before relying on a single enforcement site (`mono_register`, `resolve_symbol`), enumerate what never reaches it and cover those cases explicitly (static_asserts in *non-generic* type bodies never reach mono — they needed up-front judgment in pass2).
+- **The concrete/degenerate case is part of the feature.** Machinery built for the generic path must also serve the fully-concrete case (`u8[4 * 2]`, `u8[cfg.word]` in a non-generic struct) — Completeness-over-partiality applies to implementation paths, not just language rules.
+- **Deferred errors need a guaranteed drain.** Any stash-now/report-later error channel must have a pipeline-end backstop that converts unclaimed errors into diagnostics. The worst compiler failure mode is exit 0 with broken output (mono once swallowed const-eval errors exactly this way).
+- **Semantic questions get semantic answers.** Don't approximate a name-dependent parse decision with token-lookahead heuristics — FC compiles whole-program, so global knowledge is cheap (the `<` disambiguation pre-pass). A heuristic that's right "in practice" is a review finding waiting to happen.
+- **New Type/Expr kind or changed repr ⇒ audit every consumer.** Sweep every existing switch/case-analysis over that domain before calling the feature done (codegen's zero-initializer brace-depth logic missed the option repr and regressed a previously-passing program).
+
 ## Key Language Design Decisions
 
 ### Type System
@@ -209,6 +220,12 @@ The test runner discovers all `.fc` files in the subdirectory and compiles them 
 ### Test coverage philosophy
 
 Every new feature, bug fix, or spec change must include tests covering the happy path, edge cases, error cases, and feature interactions. Aim for thorough coverage — not just one type or one syntax form, but all meaningful combinations. Exit codes are mod 256 — keep expected values under 256.
+
+Corner-case classes that reviews have caught untested (write these alongside the happy paths, not after):
+- **The negative space of a new claim.** When new grammar or resolution takes territory that previously meant something else (`name<...>` vs comparison), test that the old readings still work in programs adjacent to the feature.
+- **Error conditions through indirect paths.** Trigger each new error transitively (e.g. a const-eval failure reached through mono's transitive discovery), not only at the direct declaration/call site — indirect paths are where errors get swallowed.
+- **Interactions with every existing type shape.** Exercise new type/codegen machinery against options, unions, nested structs, and fixed arrays, not just the shape the feature was built for.
+- **The non-generic twin of a generic feature**, and vice versa — whichever path you developed on, the other one is the untested one.
 
 ## Workflow
 
