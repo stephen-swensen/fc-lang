@@ -18,6 +18,12 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) EXTRA_LIBS="-lws2_32"; IS_WINDOWS=1 ;;
 esac
 
+# Optimized-C run detection. The -O2 test targets (test-*-O2) set CC_OPT=-O2;
+# the default runs leave it empty (the transpiled C is built unoptimized). This
+# drives the skip_o2 / only_o2 markers below.
+IS_O2=""
+case "${CC_OPT:-}" in *-O2*) IS_O2=1 ;; esac
+
 # UCRT's abort() exits with status 3 (it calls _exit(3) after raising SIGABRT),
 # whereas POSIX reports 128+SIGABRT=134. Existing .expected_exit files hardcode
 # the POSIX value; treat 3 as equivalent on Windows rather than duplicating
@@ -202,6 +208,20 @@ for milestone_dir in "$TESTDIR"/*/; do
             if [ -z "$FILTER" ] || printf '%s' "$milestone/$test_name" | grep -q "$FILTER"; then
                 skipped=$((skipped + 1))
                 skip_names="${skip_names}  SKIP  $milestone/$test_name (windows)\n"
+            fi
+            continue
+        fi
+
+        # Optimization-level skips (see IS_O2 above). skip_o2 opts a test out of
+        # the -O2 runs (e.g. --backtraces tests asserting full frames that TCO
+        # legitimately elides at -O2); only_o2 opts a test out of the default
+        # unoptimized runs (e.g. the -O2 backtrace variants asserting the
+        # degraded frame set / cold-split handling, which only holds at -O2).
+        if { [ -n "$IS_O2" ] && [ -f "${test_subdir}skip_o2" ]; } || \
+           { [ -z "$IS_O2" ] && [ -f "${test_subdir}only_o2" ]; }; then
+            if [ -z "$FILTER" ] || printf '%s' "$milestone/$test_name" | grep -q "$FILTER"; then
+                skipped=$((skipped + 1))
+                skip_names="${skip_names}  SKIP  $milestone/$test_name (opt)\n"
             fi
             continue
         fi

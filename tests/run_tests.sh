@@ -18,6 +18,12 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) EXTRA_LIBS="-lws2_32"; IS_WINDOWS=1 ;;
 esac
 
+# Optimized-C run detection. The -O2 test targets (test-*-O2) set CC_OPT=-O2;
+# this runner (make test) leaves it empty (the transpiled C is unoptimized).
+# Drives the skip_o2 / only_o2 markers below.
+IS_O2=""
+case "${CC_OPT:-}" in *-O2*) IS_O2=1 ;; esac
+
 # UCRT's abort() exits with status 3 (it calls _exit(3) after raising SIGABRT),
 # whereas POSIX reports 128+SIGABRT=134. Existing .expected_exit files hardcode
 # the POSIX value; treat 3 as equivalent on Windows rather than duplicating
@@ -213,6 +219,15 @@ for milestone_dir in "$TESTDIR"/*/; do
         # (glibc/macOS only; a no-op stub under MSYS2/UCRT).
         if [ -n "$IS_WINDOWS" ] && [ -f "${test_subdir}skip_windows" ]; then
             echo "  SKIP  $test_display (windows)"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        # Optimization-level skips (see IS_O2 above). skip_o2 opts a test out of
+        # the -O2 runs; only_o2 opts a test out of the default unoptimized runs.
+        if { [ -n "$IS_O2" ] && [ -f "${test_subdir}skip_o2" ]; } || \
+           { [ -z "$IS_O2" ] && [ -f "${test_subdir}only_o2" ]; }; then
+            echo "  SKIP  $test_display (opt)"
             skipped=$((skipped + 1))
             continue
         fi

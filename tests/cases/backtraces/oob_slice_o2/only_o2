@@ -1,0 +1,7 @@
+# Runs ONLY in the -O2 test runs (test-*-O2); skipped in the default
+# unoptimized runs, where backtraces/oob_slice already covers the full frames.
+# Asserts the -O2 graceful-degradation contract: the top failure line is exact
+# (it's passed as data, never read off the stack) and the backtrace still
+# renders with `main`. It deliberately does NOT assert `get`: at -O2 the C
+# compiler may elide it via TCO (toolchain-dependent), and that is acceptable
+# degradation, not a bug.

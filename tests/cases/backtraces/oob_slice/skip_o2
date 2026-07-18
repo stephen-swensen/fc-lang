@@ -1,0 +1,6 @@
+# Skipped in the -O2 test runs (test-*-O2). This test asserts the FULL frame
+# set (get + main); at -O2 the C compiler's tail/sibling-call optimization and
+# hot/cold block splitting can legitimately elide or relocate the callee frame.
+# Full frames are an -O0/low-opt fidelity property, not an every-`-O` guarantee.
+# The -O2 behavior is covered by backtraces/oob_slice_o2 (top line exact, main
+# present) and backtraces/cold_frame (cold-path frame kept via no-reorder).

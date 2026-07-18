@@ -1,0 +1,8 @@
+# The top failure line is always exact.
+slice index out of range
+backtrace:
+# `probe`'s cold-block return address stays correctly attributed only because
+# --backtraces suppresses hot/cold splitting. Without the pragma, gcc -O2 drops
+# this frame and the test fails.
+probe
+main

@@ -1,0 +1,5 @@
+# Runs ONLY in the -O2 test runs (test-*-O2); skipped in the default
+# unoptimized runs, where backtraces/unwrap_chain covers the full frames.
+# Asserts the surviving (non-tail) frames at -O2: `inner` (where the unwrap
+# aborts) and `main`. `outer` is deliberately not asserted — it tail-calls
+# `inner`, so the C compiler's TCO elides its frame (acceptable degradation).

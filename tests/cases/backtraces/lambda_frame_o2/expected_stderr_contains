@@ -1,0 +1,6 @@
+# The top failure line is always exact.
+assertion failed
+backtrace:
+# `<lambda>` (crash site) and `main` survive; `apply` is TCO-elided at -O2.
+<lambda>
+main

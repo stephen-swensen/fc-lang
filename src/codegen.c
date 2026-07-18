@@ -112,13 +112,19 @@ static DeferScope *g_defer_scope = NULL;
 
 /* Storage-class prefix for emitted FC functions, monomorphs, lambdas, and
  * trampolines.  Normally `static` so the C compiler can DCE/inline freely.
- * With --backtraces we switch to the FC_BT_FN_ATTR macro (defined in the
- * preamble): `noinline` so every call is a distinct frame, plus — under Clang —
- * `disable_tail_calls`, since at -O2 a tail/sibling call still elides the
- * caller's frame despite noinline (GCC gets the equivalent from a preamble
- * pragma that also disables hot/cold splitting).  Functions stay `static`:
- * address resolution happens via an FC-emitted symbol table keyed by `&fn`
- * addresses, not the dynamic symbol table, so `-rdynamic` is not required.
+ * With --backtraces we add `noinline` so a call that isn't tail-eliminated
+ * appears as its own frame in the execinfo walk (without it, an inlined call
+ * would silently vanish).  We deliberately do NOT suppress tail/sibling-call
+ * optimization: TCO is behavior-changing and, in FC's ML/F# lineage, semantic
+ * — tail-recursive loops rely on it to stay stack-safe, so suppressing it would
+ * turn stack-safe programs into stack overflows.  A frame legitimately elided by
+ * TCO is acceptable graceful degradation; the top failure line is always exact
+ * because it's passed as data to the abort helper, not read off the stack.  GCC
+ * additionally gets a preamble pragma disabling hot/cold block splitting, which
+ * only relocates code (non-behavior-changing) and would otherwise mis-attribute
+ * a return address in .text.unlikely to the wrong function.  Functions stay
+ * `static`: address resolution happens via an FC-emitted symbol table keyed by
+ * `&fn` addresses, not the dynamic symbol table, so `-rdynamic` is not required.
  * Set in codegen_emit(). */
 static const char *g_fn_attr = "static __attribute__((unused)) ";
 
@@ -7247,11 +7253,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     g_intern = intern_tbl;
     g_symtab = symtab;
     g_backtraces = opts && opts->backtraces;
-    /* Under --backtraces every FC function must leave a real, in-place frame so
-     * the execinfo walk can name it (see FC_BT_FN_ATTR + the GCC pragma emitted
-     * in the preamble). `noinline` alone is not enough — tail/sibling calls and
-     * hot/cold splitting still elide or relocate frames at -O2. */
-    g_fn_attr = g_backtraces ? "static FC_BT_FN_ATTR "
+    /* Under --backtraces every non-tail-eliminated FC call must leave a real,
+     * in-place frame so the execinfo walk can name it: `noinline` prevents frame
+     * merging, and the GCC preamble pragma prevents cold-split mis-attribution.
+     * TCO is deliberately left on (see g_fn_attr's doc comment) — frames it
+     * elides degrade gracefully. */
+    g_fn_attr = g_backtraces ? "static __attribute__((unused, noinline)) "
                              : "static __attribute__((unused)) ";
     symmap_reset();
 
@@ -7334,27 +7341,22 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     }
     fprintf(out, "\n");
 
-    /* --backtraces: keep every FC frame visible to the execinfo stack walk.
+    /* --backtraces: keep FC frames visible to the execinfo stack walk.
      * fc_dump_backtrace maps a return address to the FC function whose &fn is the
-     * largest one <= it, which holds only if (1) no frame is elided by a tail /
-     * sibling call and (2) each function's code stays contiguous from &fn (no
-     * hot/cold split into .text.unlikely, which would land a return address
-     * outside every function's [&fn, &next) range and mis-attribute the frame).
-     * `noinline` (in FC_BT_FN_ATTR) covers neither at -O2, so:
-     *   - Clang honors a per-function `disable_tail_calls` — folded into the attr.
-     *   - GCC needs both optimizer knobs off TU-wide; there is no attribute for
-     *     the cold-split one, so a pragma disables both for functions defined
-     *     below. GCC also *defines* __GNUC__, so the pragma is fenced off from
-     *     Clang, which would reject the unknown pragma under -Werror. */
+     * largest one <= it, which mis-fires if a function's code is hot/cold-split
+     * into .text.unlikely: a return address in the cold shard lands outside every
+     * function's [&fn, &next) range and gets attributed to the wrong function.
+     * On GCC (which enables -freorder-blocks-and-partition at -O2) a pragma
+     * disables that split TU-wide for functions defined below; it is a pure
+     * code-layout change, so nothing behavioral shifts.  Clang doesn't do this
+     * split by default, so it needs no pragma.  The pragma is fenced to GCC
+     * (Clang would reject the unknown pragma under -Werror; Clang also defines
+     * __GNUC__, hence the !defined(__clang__)).  We do NOT disable sibling-call /
+     * tail-call optimization here — TCO is semantic in FC (see g_fn_attr). */
     if (g_backtraces) {
         fprintf(out,
-            "#if defined(__clang__)\n"
-            "#  define FC_BT_FN_ATTR __attribute__((unused, noinline, disable_tail_calls))\n"
-            "#else\n"
-            "#  define FC_BT_FN_ATTR __attribute__((unused, noinline))\n"
-            "#endif\n"
             "#if defined(__GNUC__) && !defined(__clang__)\n"
-            "#  pragma GCC optimize(\"no-optimize-sibling-calls\", \"no-reorder-blocks-and-partition\")\n"
+            "#  pragma GCC optimize(\"no-reorder-blocks-and-partition\")\n"
             "#endif\n\n");
     }
 

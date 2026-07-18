@@ -1,0 +1,15 @@
+// `probe`'s slice access emits a bounds check whose failure block is cold
+// (post-dominated by abort). At -O2 with hot/cold splitting on
+// (-freorder-blocks-and-partition, gcc default), that block is relocated to
+// .text.unlikely — and the non-tail call into the backtrace helper lives in it,
+// so probe's return address lands outside [&probe, &next) and is mis-attributed
+// unless the split is suppressed. --backtraces emits a GCC pragma disabling the
+// split, so probe's frame stays correctly named. This test guards that pragma:
+// remove it and gcc -O2 drops `probe` from the trace (shows only `main`).
+let probe = (xs: i32[], i: i32) ->
+    xs[i] + 1
+
+let main = (args: str[]) ->
+    let xs = i32[2] { 10, 20 }
+    let _r = probe(xs, 5)
+    0

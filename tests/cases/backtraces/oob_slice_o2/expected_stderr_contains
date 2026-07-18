@@ -1,0 +1,7 @@
+# The top failure line is always exact (passed as data to the abort helper).
+slice index out of range
+# The backtrace still renders...
+backtrace:
+# ...with main present. `get` is intentionally not asserted (TCO may elide it
+# at -O2 on some toolchains — acceptable degradation).
+main

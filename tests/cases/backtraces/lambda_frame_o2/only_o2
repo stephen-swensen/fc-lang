@@ -1,0 +1,5 @@
+# Runs ONLY in the -O2 test runs (test-*-O2); skipped in the default
+# unoptimized runs, where backtraces/lambda_frame covers the full frames.
+# Asserts the surviving (non-tail) frames at -O2: `<lambda>` (where the assert
+# aborts) and `main`. `apply` is deliberately not asserted — it tail-calls the
+# lambda (`f(x)`), so the C compiler's TCO elides its frame.

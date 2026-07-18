@@ -1,0 +1,8 @@
+# Runs ONLY in the -O2 test runs (test-*-O2). This test exists to justify the
+# `#pragma GCC optimize("no-reorder-blocks-and-partition")` that --backtraces
+# emits: it only bites at -O2, where gcc hot/cold-splits functions. `probe`'s
+# bounds-check failure block is cold and holds the non-tail call into the
+# backtrace helper; with the split suppressed, probe's frame is correctly named.
+# Remove the pragma and gcc -O2 drops `probe` (shows only `main`) — this test
+# then fails. At -O0 there is no split, so running it there proves nothing.
+# clang doesn't do this split by default and keeps `probe` regardless.

@@ -1,0 +1,4 @@
+# Skipped in the -O2 test runs (test-*-O2). This test asserts the FULL frame
+# set (<lambda> + apply + main); at -O2 `apply`, which tail-calls the lambda
+# (`f(x)`), is elided by the C compiler's TCO. Full frames are an -O0/low-opt
+# fidelity property. The -O2 behavior is covered by backtraces/lambda_frame_o2.

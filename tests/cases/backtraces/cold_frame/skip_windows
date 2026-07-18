@@ -1,0 +1,1 @@
+execinfo backtrace() is glibc/macOS only; fc_dump_backtrace is a no-op stub under MSYS2/UCRT.
