@@ -1,0 +1,6 @@
+// `const` still only modifies pointer/slice types: a const-headed slice
+// literal over a scalar element type is rejected like any other `const i32`.
+let main = (args: str[]) ->
+    let xs = const i32[2] { 1, 2 }
+    assert(xs.len == 2)
+    0

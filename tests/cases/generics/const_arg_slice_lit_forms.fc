@@ -1,0 +1,32 @@
+// A slice literal's element type may be any instantiation form: a const arg,
+// const-arg arithmetic, a named module const, a mixed type+const arg list, and
+// (inside a generic) the enclosing const param.
+module cfg =
+    let bits = 64
+
+struct wide =
+    limbs: u32['n / 32]
+
+struct pair =
+    key: 'a
+    slots: u8['n]
+
+let mk = <'n>() ->
+    let s = wide<'n>[2] {}
+    s.len
+
+let main = (args: str[]) ->
+    let a = wide<32 * 2>[2] {}
+    assert(a.len == 2)
+    assert(a[0].limbs.len == 2)
+
+    let b = wide<cfg.bits>[3] {}
+    assert(b.len == 3)
+    assert(b[0].limbs.len == 2)
+
+    let c = pair<i32, 4>[2] {}
+    assert(c.len == 2)
+    assert(c[1].slots.len == 4)
+
+    assert(mk<128>() == 2)
+    0

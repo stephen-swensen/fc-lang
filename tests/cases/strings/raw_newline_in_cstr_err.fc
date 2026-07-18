@@ -1,0 +1,6 @@
+// Same one-line rule for c"..." literals.
+let main = (args: str[]) ->
+    let s = c"abc
+def"
+    assert(s != c"")
+    0

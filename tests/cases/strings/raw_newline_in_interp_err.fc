@@ -1,0 +1,8 @@
+// A raw newline may not appear inside an interpolated string either:
+// the string scanner stops at the line end in every string form.
+let main = (args: str[]) ->
+    let n = 5
+    let s = "n=%d{n} and
+more"
+    assert(s.len > 0)
+    0

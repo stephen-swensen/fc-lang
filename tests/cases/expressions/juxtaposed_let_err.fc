@@ -1,0 +1,5 @@
+// Two `let`s on one line are two block items with no separator between them.
+let main = (args: str[]) ->
+    let x = 5 let y = 6
+    assert(x + y == 11)
+    0

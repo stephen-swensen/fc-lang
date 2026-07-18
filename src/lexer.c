@@ -330,7 +330,12 @@ static int check_interp_spec(const char *p) {
 static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
     const char *text_start = l->current;  /* start of literal text content */
 
-    while (!at_end(l) && peek(l) != '"') {
+    /* A string literal never spans a line: an unescaped newline ends the scan
+     * and is reported as an unterminated string, so a missing closing quote is
+     * caught on its own line instead of swallowing the rest of the file (and
+     * never reaches codegen, which would emit a C literal spanning two lines).
+     * Use \n for a newline byte. */
+    while (!at_end(l) && peek(l) != '"' && peek(l) != '\n') {
         if (peek(l) == '\\') {
             advance(l); /* skip backslash */
             if (at_end(l)) break;
@@ -397,8 +402,8 @@ static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
         advance(l);
     }
 
-    /* Reached closing " (or end of input) */
-    if (at_end(l)) return error_token(l, "unterminated string");
+    /* Reached closing " (or end of input / end of line) */
+    if (at_end(l) || peek(l) == '\n') return error_token(l, "unterminated string");
 
     if (tok_kind == TOK_INTERP_MID) {
         /* End of an interpolated string (after at least one interp segment) */
@@ -448,6 +453,9 @@ static Token scan_char_lit(Lexer *l) {
             return error_token(l, "unrecognized escape sequence");
         }
     } else {
+        /* Same one-line rule as strings: a raw newline ends the literal rather
+         * than being taken as its byte (use '\n'). */
+        if (at_end(l) || peek(l) == '\n') return error_token(l, "unterminated char literal");
         advance(l);
     }
     if (peek(l) != '\'') return error_token(l, "unterminated char literal");

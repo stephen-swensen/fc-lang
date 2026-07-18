@@ -1,0 +1,6 @@
+// A raw newline is not a char literal's byte — spell it '\n'.
+let main = (args: str[]) ->
+    let c = '
+'
+    assert(c == 10u8)
+    0

@@ -1,0 +1,10 @@
+// An over-indented line that does not follow a block-former is a *continuation*
+// (the layout pass suppresses the newline), so a complete statement followed by
+// an over-indented one is a juxtaposition with no separator between them — the
+// cross-line spelling of `let x = 5 6`, and the shape a stray indent produces.
+let main = (args: str[]) ->
+    let mut n = 0
+    let x = 5
+        n = x
+    assert(n == 5)
+    0

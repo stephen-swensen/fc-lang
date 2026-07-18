@@ -1,0 +1,20 @@
+// A const-qualified element type works in every slice-literal form: the sized
+// form, the raw-parts form, and an option element.
+let main = (args: str[]) ->
+    let words = const str[3] { "a", "bc", "def" }
+    assert(words.len == 3)
+    assert(words[2].len == 3)
+
+    let raw = const str[] { ptr = words.ptr, len = 2 }
+    assert(raw.len == 2)
+    assert(raw[1].len == 2)
+
+    let opts = const str?[2] { some("hi"), none(const str) }
+    match opts[0] with
+    | some(w) -> assert(w.len == 2)
+    | none -> assert(false)
+    match opts[1] with
+    | some(_) -> assert(false)
+    | none -> assert(true)
+
+    0

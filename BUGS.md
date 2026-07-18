@@ -7,6 +7,9 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
+**Status: 4 / 45 fixed.** §1 (parser / lexer) complete — see the section header
+for what landed. §2–§8 untouched; current suite: 2079 passed, 41 failed (gcc).
+
 Conventions:
 
 - Run one bug's test: `make test-gcc FILTER=<test_name>`.
@@ -26,9 +29,14 @@ Conventions:
 
 ---
 
-## 1. Parser / lexer gaps
+## 1. Parser / lexer gaps — ✅ ALL FIXED (2026-07-18)
 
-### 1.1 `expressions/juxtaposed_stmts_err` — statement separator never enforced
+All four fixed on branch `bugsearch`; suite 2079 passed / 41 failed (the
+remaining failures are §2–§6), gcc + clang, -O0 and -O2, LSP wire tests green.
+11 tests added beyond the four repros (below). Two shared root causes turned out
+to be twins-in-the-parser, closed by one helper each.
+
+### 1.1 `expressions/juxtaposed_stmts_err` — statement separator never enforced ✅ FIXED
 `parse_block` loops `parse_block_item` with only `skip_separators` *between*
 items — it never requires a NEWLINE/`;` after an item. So `assert(a) assert(b)`,
 `let x = 5 6` (the `6` silently discarded), `let x = 5 let y = 6`, and
@@ -36,7 +44,31 @@ items — it never requires a NEWLINE/`;` after an item. So `assert(a) assert(b)
 grammar.bnf's `block` rule requires the separator. Fix in `parse_block`
 (src/parser.c ~1130): demand NEWLINE/`;`/DEDENT before starting the next item.
 
-### 1.2 `strings/raw_newline_in_str_err` — raw newline in string literal
+**Fixed:** `parse_block` now reports "expected a newline or ';' between
+statements" when an item stops short of `at_stmt_terminator` (the existing
+predicate — NEWLINE/`;`/DEDENT/`else`/EOF). Cascade guard: the check is skipped
+for a line that already produced an error, so recovery debris never earns a
+second diagnosis (`line_errs`, reset whenever separators are consumed).
+`parse_inline_seq` is deliberately *not* changed — its `let … in` form ends at
+`)`/`,` — but leftovers from an inline body are caught by the enclosing block
+anyway (`if c then continue 5` is flagged).
+
+Also catches the **cross-line spelling**: an over-indented line after a complete
+statement is a *continuation* (the layout pass suppresses the NEWLINE), so it
+juxtaposes too. New test `expressions/juxtaposed_continuation_err`. This found
+one real instance in the user's sibling project — **`wolf-fc/src/input.fc:67`**,
+where `loop` is over-indented 4 spaces under `let mut event = …` (harmless in
+effect, but now a compile error; the fix is dedenting that `loop` and its body).
+euler-fc, all demos, `spec/examples.fc`, and the stdlib are clean.
+
+Collateral: three pre-existing tests pinned *incidental* pass2 diagnostics that
+were only reachable through juxtaposition — `(e) 1` (a cast-shaped
+juxtaposition), `1e9i32`, and `1e`. The syntax error now precedes them.
+`enums/err_type_as_value` was re-pointed at the direct spelling (`let x = e`) so
+it still pins "'e' is a type, not a value"; the two malformed-float tests now
+expect the separator error.
+
+### 1.2 `strings/raw_newline_in_str_err` — raw newline in string literal ✅ FIXED
 The lexer's string scanner doesn't stop at `\n`; the literal is accepted and
 codegen copies the newline byte verbatim into the C string literal, which then
 spans two lines → gcc "missing terminating \" character". **Fix-direction:**
@@ -44,7 +76,15 @@ reject in the lexer (consistent with unterminated-string fatals; the test
 expects this) — or, if multi-line strings are ever wanted, escape control bytes
 in the emitter. Escaping control bytes is needed anyway (see 4.10–4.11).
 
-### 1.3 `slices/const_str_slice_lit` — `const str[2] { ... }` unparseable
+**Fixed** in the lexer (the fix-direction the test expected): `scan_string_body`
+stops at an unescaped `\n` and reports "unterminated string", so a missing
+closing quote is a one-line error instead of swallowing the file. The same
+one-line rule was missing in `scan_char_lit` (a raw newline was silently taken
+as the byte) and is now applied there too. Covers plain, `c"…"`, and
+interpolated literals (they share the scanner). Spec §Escape Sequences states
+the rule. Escaping control bytes in the emitter is still wanted for 4.10–4.11.
+
+### 1.3 `slices/const_str_slice_lit` — `const str[2] { ... }` unparseable ✅ FIXED
 `parse_prefix` recognizes slice literals only from a bare type token; a
 `const`-prefixed head falls to the error default ("unexpected token unknown").
 Per grammar.bnf the head is a `type_expr` (which admits leading `const`), and
@@ -52,12 +92,56 @@ Per grammar.bnf the head is a `type_expr` (which admits leading `const`), and
 type `str` correctly rejects `const str` values) — so slices of string
 literals are currently inexpressible. Legal program, wrongly rejected.
 
-### 1.4 `generics/const_arg_slice_lit_elem` — `wide<64>[2]{}` parse error
+**Fixed** together with 1.4 — see below.
+
+### 1.4 `generics/const_arg_slice_lit_elem` — `wide<64>[2]{}` parse error ✅ FIXED
 Twin drift in parser.c: the array-literal lookahead scan uses
 `is_type_arg_token` (admits int literals), but the element-type parse of
 `<...>` calls `parse_type` instead of `parse_type_arg` — so a *const-arg*
 instantiation can't be a slice-literal element type while the type-arg twin
 `box<i32>[2]{}` and the in-generic `wide<'n>[2]{}` both work.
+
+**Fixed (1.3 + 1.4 together).** Rather than patching the twin, the two
+hand-rolled element-type parsers (the `TOK_IDENT` and `TOK_TYPE_VAR` arms of
+`parse_prefix`) were replaced by one shape test plus `parse_type`:
+`scan_type_head` / `at_slice_literal` decide *whether* a `type_expr [ … ] {`
+starts here, and `parse_type` — which already owns `const`, dotted names, type
+*and* const arguments (`parse_type_arg`), and the `? * !` suffixes — parses the
+element type. A `TOK_CONST` arm was added to `parse_prefix` for 1.3. The split
+is safe because `[` is never part of a type in expression position (`T[]` before
+`{` is declined by `parse_type_suffix`; fixed-array `T[N]` is struct-field-only),
+so the first `[` past the head always opens the literal. Dropping the twin also
+fixed an unreported latent bug: `any*[N]{}` built `any**` on the old path.
+
+**Tests added** (11): `expressions/juxtaposed_let_err`,
+`expressions/juxtaposed_continuation_err`,
+`control_flow/juxtaposed_after_continue_err`, `expressions/stmt_separators`
+(positive: every legal separator form incl. `;`, inline bodies, `(a; b)`,
+`let … in`), `strings/raw_newline_in_interp_err`,
+`strings/raw_newline_in_cstr_err`, `expressions/char_raw_newline_err`,
+`strings/escaped_newline_ok` (positive), `slices/const_slice_lit_forms`
+(sized / raw-parts / option element), `slices/const_slice_lit_nonptr_err`
+(`const i32[2]` still rejected), `generics/const_arg_slice_lit_forms`
+(const arithmetic, module const, mixed type+const args, in-generic `'n`),
+`slices/slice_lit_head_negative_space` (comparisons and indexing keep their
+readings). Spec: §Continuation, §Escape Sequences, §Slice literals updated.
+
+**Incidental findings (not fixed, no tests):**
+- `(t) x` where `t` is a *user-defined* type name (enum/struct) is not read as a
+  cast — the parser's cast heuristic only fires for built-in type names or a
+  `* < ! ? .` suffix — so it now reports the separator error instead of pass2's
+  "'t' is a type, not a value". A `parser_collect_generic_names`-style pre-pass
+  over declared type names would give the semantic answer (cf. the `<`
+  disambiguation gate); deliberately out of scope here.
+- A slice literal's elements do **not** accept nonconst→const narrowing:
+  `const i32*[2] { &a, &b }` errors "expected const i32*, got i32*". Same
+  phenomenon as §7.4 (tuples), one container over.
+- Malformed numeric literals (`1e`, `1e9i32`) are diagnosed only indirectly, as
+  juxtaposition. A lexer rule rejecting an identifier character adjacent to a
+  numeric literal would name the actual problem.
+- A juxtaposition inside a *match arm* body (`| 3 -> n = 1 n = 2`) still yields
+  the old 3-error "expected '|'" cascade rather than the separator message
+  (arm bodies go through `parse_inline_seq`). §8 diagnostics-polish territory.
 
 ## 2. Missing type-checker (pass2) judgments — most emit broken C or run wrong
 

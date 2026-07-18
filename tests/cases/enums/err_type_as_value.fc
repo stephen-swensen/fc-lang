@@ -1,6 +1,10 @@
+// An enum type name is not a value. (Was spelled `(e) 1` — a cast-shaped
+// juxtaposition that reached pass2 only because the parser did not require a
+// statement separator between block items; that spelling is a syntax error now,
+// so the judgment is pinned on the direct form.)
 enum e =
     | a
 
 let main = (args: str[]) ->
-    let x = (e) 1
+    let x = e
     0

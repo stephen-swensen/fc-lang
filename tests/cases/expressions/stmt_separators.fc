@@ -1,0 +1,17 @@
+// The legal ways to separate statements all still parse: newlines, `;` between
+// items on one line, a trailing `;`, inline `then`/`do` bodies, an inline
+// `;`-sequence body (greedy — `n = n + 1` below belongs to the loop), a
+// `(a; b)` sequence expression, and `let ... in`.
+let main = (args: str[]) ->
+    let mut n = 0
+    n = 1; n = 2;
+    let s = "ab"; assert(s.len == 2)
+    if n == 2 then n = 3 else n = 4
+    for i in 0..2 do n = n + i
+    for i in 0..2 do n = n + i; n = n + 1
+    let r = (n = n + 1; n * 2)
+    let t = let q = 2 in q + n
+    assert(n == 8)
+    assert(r == 16)
+    assert(t == 10)
+    0

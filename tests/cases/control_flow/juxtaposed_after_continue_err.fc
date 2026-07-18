@@ -1,0 +1,9 @@
+// `continue` takes no value: the trailing expression is a second block item
+// with no separator before it (it used to be silently discarded).
+let main = (args: str[]) ->
+    let mut n = 0
+    for i in 0..3 do
+        if i == 1 then continue 5
+        n = n + i
+    assert(n == 2)
+    0

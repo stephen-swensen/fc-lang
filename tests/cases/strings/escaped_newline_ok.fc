@@ -1,0 +1,15 @@
+// Escaped newlines/tabs still work in every string form (the one-line rule
+// rejects only *raw* newlines).
+let main = (args: str[]) ->
+    let n = 2
+    let s = "a\nb"
+    let i = "x=%d{n}\ty"
+    let c = c"p\nq"
+    let ch = '\n'
+    assert(s.len == 3)
+    assert(s[1] == 10u8)
+    assert(i.len == 5)
+    assert(i[3] == 9u8)
+    assert(ch == 10u8)
+    assert(c[1] == 10u8)
+    0

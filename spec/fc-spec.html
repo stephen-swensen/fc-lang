@@ -591,6 +591,14 @@ let total = first_value
 
 The distinction between a new block and a continuation is unambiguous from context: a new block only opens after a block-forming construct. In any other case, a more-indented line is a continuation of the previous expression.
 
+Because a continuation carries the *same* expression, it cannot begin a new one. Peers in a block are separated by a newline at the block column (or by `;` on one line), and an item that stops short of a separator — a second statement juxtaposed on the same line, or an over-indented statement after a complete one — is a syntax error rather than a silently discarded value:
+
+```fc
+let x = 5 6         // error: two items, no separator
+let y = 5
+    print(y)        // error: over-indented — a continuation cannot start a statement
+```
+
 ### Layout Suppression Inside Brackets
 
 Inside matched bracket pairs — `()`, `[]`, and `{}` — the offside rule is suspended. `INDENT`, `DEDENT`, and `NEWLINE` tokens are not emitted, so expressions can span multiple lines freely without alignment requirements. This applies to function call arguments, slice literals, and struct literals:
@@ -799,6 +807,8 @@ The following escape sequences are valid in `str`, `cstr`, and `char` literals:
 | `\xNN` | arbitrary byte value, exactly two hex digits |
 
 All three literal forms share the same escape set. An unrecognized escape sequence is a compile error.
+
+A literal never spans lines: a raw newline inside a `str`, `cstr`, or `char` literal ends it as unterminated. Write `\n` for a newline byte. This keeps a missing closing quote a one-line error rather than one that swallows the rest of the file.
 
 ### String Interpolation
 
@@ -3294,7 +3304,7 @@ Two initialization forms for stack slices:
 
 There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
 
-The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
+The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
 
 The backing storage for a stack slice literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
 

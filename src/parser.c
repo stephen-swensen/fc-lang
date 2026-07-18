@@ -1125,6 +1125,8 @@ static uint8_t parse_char_value(const char *start, int length) {
     }
 }
 
+static bool at_stmt_terminator(Parser *p);
+
 /* Parse a block: INDENT item (NEWLINE item)* DEDENT.
    Returns array of Expr*, sets *count. */
 static Expr **parse_block(Parser *p, int *count) {
@@ -1132,17 +1134,32 @@ static Expr **parse_block(Parser *p, int *count) {
     int len = 0, cap = 0;
 
     expect(p, TOK_INDENT);
+    /* Error count as of the start of the current line — see the separator check. */
+    int line_errs = diag_error_count();
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
+        int at = p->pos;
         skip_separators(p);
+        if (p->pos != at) line_errs = diag_error_count(); /* fresh line, fresh slate */
         if (check(p, TOK_DEDENT)) break;
         int guard = p->pos;
         Expr *e = parse_block_item(p);
         DA_APPEND(stmts, len, cap, e);
+        /* The grammar's `block` rule separates items: an item that stops short of
+           a separator means the rest of the line was never claimed by anything.
+           Without this check, juxtaposed items (`let x = 5 6`, `assert(a) assert(b)`,
+           `continue 5`) parse as separate statements and silently discard values.
+           Reported only for a line that has been error-free so far — once a line
+           has failed, its leftover tokens are that error's debris and every
+           further item on it is a recovery artifact, not a second diagnosis. */
+        if (p->pos > guard && diag_error_count() == line_errs && !at_stmt_terminator(p)) {
+            diag_error(loc_from_token(current(p)),
+                "expected a newline or ';' between statements, got %s",
+                token_kind_name(current(p)->kind));
+        }
         /* Watchdog: a leaf error that stalled on a hard-stop token (e.g. a stray
            ')' or '}') won't have consumed it; force one token of progress. The
-           leaf-bump rule handles ordinary garbage; skip_separators eats the NEWLINE. */
+           leaf-bump rule handles ordinary garbage; the loop top eats the NEWLINE. */
         recover_progress(p, guard);
-        skip_separators(p);
     }
     expect(p, TOK_DEDENT);
 
@@ -1445,6 +1462,76 @@ static Expr *parse_block_item(Parser *p) {
 
 /* ---- Prefix parsing ---- */
 
+/* Scan a type-expression head at the current token, returning the offset of
+ * the token just past it, or -1 if no type expression starts there. Covers the
+ * heads that can front a slice literal in expression position:
+ *   const* (IDENT (.IDENT)* <args>? | 'a) (? | * | !)*
+ * (`void!` and `error` keep their own targeted paths in parse_prefix — a bare
+ * `void`/`error` head is a diagnostic, not a type expression.) An unbalanced or
+ * non-type-argument-shaped `<...>` leaves `off` at the '<', which no caller can
+ * use — the comparison reading survives, as it must. */
+static int scan_type_head(Parser *p) {
+    int off = 0;
+    while (peek_at(p, off)->kind == TOK_CONST) off++;
+    TokenKind k = peek_at(p, off)->kind;
+    if (k == TOK_TYPE_VAR) {
+        off++;
+    } else if (k == TOK_IDENT) {
+        off++;
+        while (peek_at(p, off)->kind == TOK_DOT && peek_at(p, off + 1)->kind == TOK_IDENT)
+            off += 2;
+        /* Generic arguments <T, 4, 'n * 2, ...>: depth-counted so nested lists
+           are skipped ('>>' closes two levels), claimed only when every token
+           inside is legal in a type-argument position. */
+        if (peek_at(p, off)->kind == TOK_LT) {
+            int scan = off + 1, depth = 1;
+            bool ok = true;
+            while (depth > 0) {
+                TokenKind a = peek_at(p, scan)->kind;
+                if (a == TOK_EOF) { ok = false; break; }
+                if (a == TOK_LT) depth++;
+                else if (a == TOK_GT) depth--;
+                else if (a == TOK_GTGT) { depth -= 2; if (depth < 0) { ok = false; break; } }
+                else if (!is_type_arg_token(a)) { ok = false; break; }
+                scan++;
+            }
+            if (ok) off = scan; /* scan sits just past the closing > / >> */
+        }
+    } else {
+        return -1;
+    }
+    while (peek_at(p, off)->kind == TOK_QUESTION || peek_at(p, off)->kind == TOK_STAR ||
+           peek_at(p, off)->kind == TOK_BANG)
+        off++;
+    return off;
+}
+
+/* Is a slice literal — `type_expr [ size ] { ... }` or `type_expr [] { ... }` —
+ * starting at the current token? The trailing '{' after the matching ']' is what
+ * separates a literal from indexing (`xs[i]`) or a comparison chain, neither of
+ * which is ever followed by a brace here.
+ *
+ * Detection and element-type parsing are deliberately split: this decides the
+ * shape, parse_type owns the type grammar (const, dotted names, type *and*
+ * const arguments, and the ? * ! suffixes). They stay in sync because '[' is never
+ * part of a type in expression position — `T[]` before '{' belongs to the
+ * literal (parse_type_suffix declines it) and fixed-array `T[N]` is
+ * struct-field-only (allow_fixed_array is off here) — so the first '[' past the
+ * head always opens the literal. */
+static bool at_slice_literal(Parser *p) {
+    int off = scan_type_head(p);
+    if (off < 0 || peek_at(p, off)->kind != TOK_LBRACKET) return false;
+    int depth = 0;
+    do {
+        TokenKind k = peek_at(p, off)->kind;
+        if (k == TOK_EOF) return false;
+        if (k == TOK_LBRACKET) depth++;
+        else if (k == TOK_RBRACKET) depth--;
+        off++;
+    } while (depth > 0);
+    return peek_at(p, off)->kind == TOK_LBRACE;
+}
+
 /* Parse the body of an array or slice literal given an already-parsed element
  * type. The parser must be positioned just before the '[':
  *   T[]  { ptr = expr, len = expr }   → EXPR_SLICE_LIT
@@ -1706,114 +1793,13 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_IDENT: {
         const char *name = tok_intern(p, t);
 
-        /* Check for slice literal: type_name[size] { ... }
-         * Supports built-in types, user-defined structs, and module-qualified types.
-         * Disambiguate from indexing: scan past [expr] and check for { */
-        {
-        int arr_start = 1; /* offset past first IDENT to find [ */
-        /* Scan past optional dot-qualified path: name.sub.type */
-        while (peek_at(p, arr_start)->kind == TOK_DOT &&
-               peek_at(p, arr_start + 1)->kind == TOK_IDENT)
-            arr_start += 2;
-        /* Scan past optional generic type args: <T, T, ...> (depth-counted so
-           nested args like box<box<int32>> are skipped; '>>' closes two levels).
-           Only matches when every token inside <...> is valid in a type position. */
-        if (peek_at(p, arr_start)->kind == TOK_LT) {
-            int scan = arr_start + 1;
-            int depth = 1;
-            bool ok = true;
-            while (depth > 0) {
-                TokenKind k = peek_at(p, scan)->kind;
-                if (k == TOK_EOF) { ok = false; break; }
-                if (k == TOK_LT) depth++;
-                else if (k == TOK_GT) depth--;
-                else if (k == TOK_GTGT) { depth -= 2; if (depth < 0) { ok = false; break; } }
-                else if (!is_type_arg_token(k)) { ok = false; break; }
-                scan++;
-            }
-            if (ok) arr_start = scan; /* scan sits just past the closing > / >> */
+        /* Slice literal: type_name[size] { ... } — built-in, user-defined,
+         * module-qualified, or generic element types alike (parse_type owns the
+         * element grammar; at_slice_literal owns the shape decision). */
+        if (at_slice_literal(p)) {
+            Type *elem_type = parse_type(p);
+            return parse_array_lit_body(p, elem_type, loc);
         }
-        /* Scan past ? / * / ! type suffixes on the element type: name?*![N]{...} */
-        while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
-               peek_at(p, arr_start)->kind == TOK_STAR ||
-               peek_at(p, arr_start)->kind == TOK_BANG)
-            arr_start += 1;
-        if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
-            /* Look ahead: type[expr] { — the { after ] means slice literal */
-            int save = p->pos;
-            /* Advance past IDENT (.IDENT)* [ */
-            for (int skip = 0; skip < arr_start + 1; skip++) advance_p(p);
-            /* Skip tokens until we find matching ] */
-            int depth = 1;
-            while (depth > 0 && !at_end_p(p)) {
-                if (check(p, TOK_LBRACKET)) depth++;
-                if (check(p, TOK_RBRACKET)) depth--;
-                advance_p(p);
-            }
-            bool is_array_lit = check(p, TOK_LBRACE);
-            /* Restore position */
-            restore_pos(p, save);
-
-            if (is_array_lit) {
-                /* Build the type name (possibly dotted) */
-                char buf[512];
-                int pos = snprintf(buf, sizeof(buf), "%s", name);
-                advance_p(p);  /* consume first ident */
-                while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
-                    advance_p(p); /* consume . */
-                    Token *seg = current(p);
-                    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ".%.*s",
-                                    seg->length, seg->start);
-                    advance_p(p); /* consume ident */
-                }
-                const char *type_name_str = intern(p->intern, buf, (int)strlen(buf));
-                Type *elem_type = type_from_name(t->start, t->length);
-                if (!elem_type) {
-                    /* User-defined type — create stub */
-                    elem_type = arena_alloc(p->arena, sizeof(Type));
-                    elem_type->kind = TYPE_STUB;
-                    elem_type->stub.name = type_name_str;
-                    elem_type->stub.qualified_name = NULL;
-                    elem_type->stub.type_args = NULL;
-                    elem_type->stub.type_arg_count = 0;
-                }
-                /* Parse optional generic type args: <T, T, ...>. Only attaches to
-                   stub (user-defined) element types; built-in types can't have args. */
-                if (check(p, TOK_LT) && elem_type->kind == TYPE_STUB) {
-                    advance_p(p); /* consume < */
-                    Type **targs = NULL;
-                    int ta_count = 0, ta_cap = 0;
-                    do {
-                        Type *ty = parse_type(p);
-                        DA_APPEND(targs, ta_count, ta_cap, ty);
-                        if (!check(p, TOK_COMMA)) break;
-                        advance_p(p);
-                    } while (1);
-                    expect_typearg_gt(p);
-                    elem_type->stub.type_args = arena_alloc(p->arena,
-                        sizeof(Type*) * (size_t)ta_count);
-                    memcpy(elem_type->stub.type_args, targs,
-                           sizeof(Type*) * (size_t)ta_count);
-                    elem_type->stub.type_arg_count = ta_count;
-                    free(targs);
-                }
-                /* Apply ? (option), * (pointer), ! (result) suffixes to the element type */
-                while (check(p, TOK_QUESTION) || check(p, TOK_STAR) || check(p, TOK_BANG)) {
-                    if (check(p, TOK_QUESTION)) {
-                        advance_p(p);
-                        elem_type = type_option(p->arena, elem_type);
-                    } else if (check(p, TOK_BANG)) {
-                        advance_p(p);
-                        elem_type = type_result(p->arena, elem_type);
-                    } else {
-                        advance_p(p);
-                        elem_type = type_pointer(p->arena, elem_type);
-                    }
-                }
-                return parse_array_lit_body(p, elem_type, loc);
-            }
-        }
-        } /* end slice literal check */
 
         /* Check for struct literal: name { field = expr, ... }
          * Disambiguate from block: peek past { for IDENT = or } */
@@ -2653,46 +2639,12 @@ static Expr *parse_prefix(Parser *p) {
         /* Slice literal with a type-variable element type: 'a[N] { e0, ... }
          * (or 'a[] { ptr =, len = }, and 'a?/'a* element-type suffixes). The
          * element type is the abstract type var inside a generic body; it is
-         * substituted per-monomorphization. Mirrors the IDENT slice-literal
-         * lookahead: a bare 'a[expr] with no following '{' is not a value and
-         * falls through to the type-var-ref path, which pass2 rejects. */
-        {
-            int arr_start = 1; /* offset past the type-var token */
-            while (peek_at(p, arr_start)->kind == TOK_QUESTION ||
-                   peek_at(p, arr_start)->kind == TOK_STAR ||
-                   peek_at(p, arr_start)->kind == TOK_BANG)
-                arr_start += 1;
-            if (peek_at(p, arr_start)->kind == TOK_LBRACKET) {
-                int save = p->pos;
-                for (int skip = 0; skip < arr_start + 1; skip++) advance_p(p);
-                int depth = 1;
-                while (depth > 0 && !at_end_p(p)) {
-                    if (check(p, TOK_LBRACKET)) depth++;
-                    if (check(p, TOK_RBRACKET)) depth--;
-                    advance_p(p);
-                }
-                bool is_array_lit = check(p, TOK_LBRACE);
-                restore_pos(p, save);
-                if (is_array_lit) {
-                    advance_p(p); /* consume the type-var token */
-                    Type *elem_type = arena_alloc(p->arena, sizeof(Type));
-                    elem_type->kind = TYPE_TYPE_VAR;
-                    elem_type->type_var.name = tok_intern(p, t);
-                    while (check(p, TOK_QUESTION) || check(p, TOK_STAR) || check(p, TOK_BANG)) {
-                        if (check(p, TOK_QUESTION)) {
-                            advance_p(p);
-                            elem_type = type_option(p->arena, elem_type);
-                        } else if (check(p, TOK_BANG)) {
-                            advance_p(p);
-                            elem_type = type_result(p->arena, elem_type);
-                        } else {
-                            advance_p(p);
-                            elem_type = type_pointer(p->arena, elem_type);
-                        }
-                    }
-                    return parse_array_lit_body(p, elem_type, loc);
-                }
-            }
+         * substituted per-monomorphization. A bare 'a[expr] with no following
+         * '{' is not a value and falls through to the type-var-ref path, which
+         * pass2 rejects. */
+        if (at_slice_literal(p)) {
+            Type *elem_type = parse_type(p);
+            return parse_array_lit_body(p, elem_type, loc);
         }
         /* Allow 'a in expression position for type-variable property access ('a.min etc.) */
         advance_p(p);
@@ -2701,7 +2653,21 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
+    case TOK_CONST:
+        /* `const T[N] { ... }` — a slice literal over a const element type. It
+         * is the only spelling that can hold string literals (a string literal
+         * is a `const str`, which does not narrow to `str`), so without it
+         * slices of string literals would be inexpressible. A `const` anywhere
+         * else in expression position is not a value — fall through to the
+         * default diagnostic. */
+        if (at_slice_literal(p)) {
+            Type *elem_type = parse_type(p);
+            return parse_array_lit_body(p, elem_type, loc);
+        }
+        goto unexpected;
+
     default:
+    unexpected:
         diag_error(loc, "unexpected token %s in expression",
             token_kind_name(t->kind));
         /* Leaf-bump: consume the offending token (unless it's a hard stop the
