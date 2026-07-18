@@ -1,0 +1,19 @@
+// BUG (bugsearch 2026-07-18): alloc(slice)'s deep copy promotes only the
+// top level — copied pointer VALUES still target the dead frame, i.e. stack
+// pointers end up stored in heap memory (ASan: stack-use-after-return).
+// Returning ptrs directly is correctly rejected; alloc(ptrs)! launders it.
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    alloc(ptrs)!
+
+let clobber = (n: i32) ->
+    let mut q = n * 3
+    q + 1
+
+let main = (args: str[]) ->
+    let hs = bad()
+    let _c = clobber(9)
+    let p = hs[0]
+    assert(*p == 42)
+    0

@@ -1,0 +1,10 @@
+// BUG (bugsearch 2026-07-18): a raw newline inside a string literal is
+// accepted by the lexer and emitted verbatim into the C string literal,
+// which then spans two source lines — gcc/clang: missing terminating "
+// character. Should be a lexer error (unterminated string), consistent with
+// the offside rule.
+let main = (args: str[]) ->
+    let s = "abc
+def"
+    assert(s.len == 7)
+    0

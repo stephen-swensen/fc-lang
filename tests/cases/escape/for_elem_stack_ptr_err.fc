@@ -1,0 +1,22 @@
+// BUG (bugsearch 2026-07-18): the for-loop element binding launders stack
+// provenance — `for p in ptrs do return p` escapes the frame (ASan:
+// stack-use-after-return) while the indexed twin `return ptrs[0]` IS caught
+// (escape/return_indexed_stack_ptr_err). The element var is registered with
+// plain scope_add → PROV_UNKNOWN.
+let bad = () ->
+    let mut a = 41
+    a = a + 1
+    let ptrs = i32*[1] { &a }
+    for p in ptrs do
+        return p
+    default(i32*)
+
+let clobber = (n: i32) ->
+    let mut q = n * 3
+    q + 1
+
+let main = (args: str[]) ->
+    let r = bad()
+    let _c = clobber(9)
+    assert(*r == 42)
+    0

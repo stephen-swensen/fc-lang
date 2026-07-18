@@ -1,0 +1,20 @@
+// BUG (bugsearch 2026-07-18): name capture in transitive const-generic
+// instantiation. mk2<64> calls mk<'n * 2>; the fn-type typedef collection
+// substitutes the CALLER's 'n (64) into the callee's signature instead of
+// the callee's inferred binding (128), emitting a typedef over the phantom
+// type fc__wide__5___k64 which is never defined — invalid C. Renaming the
+// callee's param to 'm avoids it. This is the wideint mul_wide shape; it
+// works there only because every width instance happens to exist.
+struct wide =
+    limbs: u32['n / 32]
+
+let mk = <'n>() ->
+    default(wide<'n>)
+
+let mk2 = <'n>() ->
+    mk<'n * 2>()
+
+let main = (args: str[]) ->
+    let w = mk2<64>()
+    assert(w.limbs.len == 4)
+    0

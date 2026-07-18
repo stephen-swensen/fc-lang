@@ -1,0 +1,19 @@
+// BUG (bugsearch 2026-07-18): the tag-enum typedef for union U is named
+// fc__<U>_tag — a single underscore inside the user-reachable fc__<name>
+// space — so a user struct literally named shape_tag collides: "conflicting
+// types for 'fc__shape_tag'". Derived names must live in a reserved space.
+union shape =
+    | circle(i32)
+    | square
+
+struct shape_tag =
+    kind: i32
+
+let main = (args: str[]) ->
+    let s = shape.circle(3)
+    let t = shape_tag { kind = 1 }
+    let v = match s with
+            | circle(r) -> r
+            | square -> 0
+    assert(v + t.kind == 4)
+    0

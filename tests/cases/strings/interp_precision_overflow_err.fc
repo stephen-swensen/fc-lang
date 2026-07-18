@@ -1,0 +1,10 @@
+// BUG (bugsearch 2026-07-18): interpolation precision wraps through 32 bits
+// — %.4294967297s wraps to precision 1, so a 5-char string renders as "h":
+// silent data loss. Spec: the compiler computes a sufficient buffer; a
+// precision that can't be honored should be a compile error, and a legal
+// precision must never clip below its stated value.
+let main = (args: str[]) ->
+    let s = "hello"
+    let t = "%.4294967297s{s}"
+    assert(t.len == 5)
+    0

@@ -1,0 +1,11 @@
+// BUG (bugsearch 2026-07-18): comparing a variable with itself emits
+// `_l_x_0 == _l_x_0` and trips gcc/clang -Werror=tautological-compare. The
+// spec's no-op rule covers only self-ASSIGNMENT; self-comparison is legal FC
+// (and floats already pass — compilers exempt the NaN idiom). Integer/bool
+// self-compares must produce warning-clean C.
+let main = (args: str[]) ->
+    let x = 5
+    assert(x == x)
+    assert(x <= x)
+    assert(!(x != x))
+    0

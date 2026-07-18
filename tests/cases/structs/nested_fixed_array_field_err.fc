@@ -1,0 +1,11 @@
+// BUG (bugsearch 2026-07-18): a nested fixed-array field type u8[2][3] is
+// accepted and codegen emits `uint8_t[2] m[3];` — not a C type-specifier;
+// ~10 gcc errors. Must never be exit-0-with-broken-output: either reject
+// (this test's expectation) or emit the proper inside-out C declarator.
+struct grid =
+    m: u8[2][3]
+
+let main = (args: str[]) ->
+    let g = default(grid)
+    assert(g.m.len == 2)
+    0

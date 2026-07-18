@@ -1,0 +1,14 @@
+// BUG (bugsearch 2026-07-18): a bare generic type name (no type args) in a
+// field type slips through pass1/pass2 to codegen — fcc exits 0 and emits
+// `struct fc__outer { fc__box inner; };` with fc__box never defined (invalid
+// C). Same via default(box) and alloc(box)!. Should be a compile error like
+// the existing "generic union 'maybe' requires explicit type arguments".
+struct box =
+    value: 'a
+
+struct outer =
+    inner: box
+
+let main = (args: str[]) ->
+    let o = default(outer)
+    0

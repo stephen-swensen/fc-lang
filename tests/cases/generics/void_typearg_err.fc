@@ -1,0 +1,11 @@
+// BUG (bugsearch 2026-07-18): void instantiates a type variable — a void
+// call passed to a generic fn monomorphizes idv<void> and emits
+// `static void fc__idv__4_void(void x, void* _ctx)` — invalid C. Spec: void
+// "cannot be passed as an argument". Should be a pass2 error.
+let idv = (x: 'a) -> x
+
+let v = () -> return
+
+let main = (args: str[]) ->
+    idv(v())
+    0

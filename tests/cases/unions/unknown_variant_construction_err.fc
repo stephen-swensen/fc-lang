@@ -1,0 +1,11 @@
+// BUG (bugsearch 2026-07-18): constructing a nonexistent NO-PAYLOAD union
+// variant is silently accepted — fcc exits 0 emitting undeclared
+// fc__u_tag_zzz. The payload form u.zzz(5) correctly errors "union 'u' has
+// no variant 'zzz'" — the no-payload (non-call) path skips the check.
+union u =
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    let x = u.zzz
+    0

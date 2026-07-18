@@ -1,0 +1,15 @@
+// BUG (bugsearch 2026-07-18): match-pattern bindings are the one binding
+// form not run through c_safe_ident — a payload binding named `int` emits
+// `int32_t int = _subj0.circle;`. Params, for-vars, fields, and variant
+// spellings all escape C keywords already (see the rest of c_hygiene/).
+union u =
+    | circle(i32)
+    | blank
+
+let main = (args: str[]) ->
+    let s = u.circle(21)
+    let v = match s with
+            | circle(int) -> int * 2
+            | blank -> 0
+    assert(v == 42)
+    0

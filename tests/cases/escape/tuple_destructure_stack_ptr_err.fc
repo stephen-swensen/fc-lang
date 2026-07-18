@@ -1,0 +1,19 @@
+// BUG (bugsearch 2026-07-18): tuple destructure bindings launder stack
+// provenance — p escapes bad()'s frame (ASan: stack-use-after-return).
+// Same hole family as match bindings and for-loop elements.
+let bad = () ->
+    let mut x = 41
+    x = x + 1
+    let pair = {&x, 1}
+    let {p, n} = pair
+    p
+
+let clobber = (m: i32) ->
+    let mut q = m * 3
+    q + 1
+
+let main = (args: str[]) ->
+    let r = bad()
+    let _c = clobber(9)
+    assert(*r == 42)
+    0

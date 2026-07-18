@@ -1,0 +1,11 @@
+// BUG (bugsearch 2026-07-18): an escaped double-quote in the static text of
+// an INTERPOLATED string breaks the emitted snprintf format — the `"` byte
+// is emitted as `\\"` (escaped backslash + raw quote), terminating the C
+// literal early. Static-only strings with \" work (string_escapes.fc).
+let main = (args: str[]) ->
+    let x = 7
+    let s = "say \"hi\" %d{x}"
+    assert(s.len == 10)
+    assert(s[4] == 34)
+    assert(s[9] == 55)
+    0

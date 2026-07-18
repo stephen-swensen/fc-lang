@@ -1,0 +1,23 @@
+// BUG (bugsearch 2026-07-18): parameters emitted raw can shadow libc and
+// FC-runtime file-scope names the generated body relies on: a param named
+// `abort` breaks the assert expansion ("called object 'abort' is not a
+// function"), `fc_str` breaks subsequent str declarations, `snprintf`
+// breaks interpolation. is_c_reserved covers only C keywords, not libc or
+// the fc_* runtime namespace.
+let f = (abort: i32) ->
+    assert(abort == 1)
+    abort + 1
+
+let g = (fc_str: i32) ->
+    let s = "abc"
+    fc_str + (i32) s.len
+
+let h = (snprintf: i32) ->
+    let t = "n=%d{snprintf}"
+    (i32) t.len
+
+let main = (args: str[]) ->
+    assert(f(1) == 2)
+    assert(g(4) == 7)
+    assert(h(12) == 4)
+    0

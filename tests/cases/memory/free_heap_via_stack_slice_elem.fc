@@ -1,0 +1,14 @@
+// BUG (bugsearch 2026-07-18): a value loaded from a stack-backed slice
+// element inherits the slice's "stack" provenance, so a heap slice stored in
+// a stack slice can never be freed — free(ss[0]) is rejected ("cannot free
+// stack-allocated memory"), and so is a local copy of the element. Freeing
+// heap allocations through a stack container is the basic collection
+// pattern; the spec says free works "through any copy". Siblings that work:
+// free through a stack struct field, free of a fn parameter.
+let main = (args: str[]) ->
+    let e = i32[1] { 0 }
+    let ss = (i32[])[2] { e, e }
+    ss[0] = alloc(i32[2] { 4, 5 })!
+    assert(ss[0][1] == 5)
+    free(ss[0])
+    0

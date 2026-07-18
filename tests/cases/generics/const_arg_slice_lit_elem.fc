@@ -1,0 +1,14 @@
+// BUG (bugsearch 2026-07-18): a const-arg instantiation can't be a
+// slice-literal element type: `wide<64>[2]{}` is a parse error ("expected
+// type, got int literal") while the type-arg twin box<i32>[2]{} works
+// (generics/qualified_type_arg_array_lit) and wide<'n>[2]{} /
+// wide<cfg.n>[2]{} work. Twin drift: the array-lit lookahead admits int
+// literals but the element-type parse uses parse_type, not parse_type_arg.
+struct wide =
+    limbs: u32['n / 32]
+
+let main = (args: str[]) ->
+    let s = wide<64>[2]{}
+    assert(s.len == 2)
+    assert(s[0].limbs.len == 2)
+    0

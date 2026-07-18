@@ -1,0 +1,22 @@
+// BUG (bugsearch 2026-07-18): match pattern bindings launder stack
+// provenance — `| some(p) -> p` returns a pointer into the dead frame
+// (ASan: stack-use-after-return), while the unwrap twin some(&x)! IS
+// caught. Pattern bindings are registered with PROV_UNKNOWN instead of
+// inheriting the scrutinee's provenance.
+let bad = () ->
+    let mut x = 42
+    let o = some(&x)
+    match o with
+    | some(p) -> p
+    | none -> default(i32*)
+
+let clobber = (n: i32) ->
+    let mut a = n * 3
+    let mut b = a + n
+    a + b
+
+let main = (args: str[]) ->
+    let p = bad()
+    let _c = clobber(9)
+    assert(*p == 42)
+    0

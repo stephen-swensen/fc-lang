@@ -1,0 +1,20 @@
+// BUG (bugsearch 2026-07-18): a loop's break value loses stack provenance —
+// `break &x` then returning the loop value escapes the frame (ASan:
+// stack-use-after-return). if/match value joins propagate provenance; loop
+// is the third value-producing control expression and doesn't.
+let bad = () ->
+    let p = loop
+        let mut x = 41
+        x = x + 1
+        break &x
+    p
+
+let clobber = (n: i32) ->
+    let mut q = n * 3
+    q + 1
+
+let main = (args: str[]) ->
+    let r = bad()
+    let _c = clobber(9)
+    assert(*r == 42)
+    0

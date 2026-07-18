@@ -1,0 +1,12 @@
+// BUG (bugsearch 2026-07-18): `const str[2] { ... }` is grammatical
+// (grammar.bnf: slice_literal head is a type_expr, whose type_primary admits
+// a leading const) and is the ONLY spelling that can hold string literals
+// (str[2] { "a" } is correctly rejected: const str doesn't narrow) — but the
+// expression parser never handles a const-prefixed slice-literal head:
+// "unexpected token unknown in expression". Slices of string literals are
+// inexpressible.
+let main = (args: str[]) ->
+    let names = const str[2] { "a", "bc" }
+    assert(names.len == 2)
+    assert(names[1].len == 2)
+    0

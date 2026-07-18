@@ -1,0 +1,20 @@
+// BUG (bugsearch 2026-07-18): an enum-variant pattern nested inside a union
+// payload emits tagged-union codegen for the enum — `.tag ==
+// fc__color_tag_red` on an int typedef: invalid C. fcc accepts the pattern
+// (exhaustiveness even demands the missing variant). Enum patterns nested
+// under a bare option or result work; only the union-payload path is broken.
+enum color =
+    | red
+    | green
+
+union pick =
+    | chosen(color)
+    | nothing
+
+let main = (args: str[]) ->
+    let p = pick.chosen(color.green)
+    let r = match p with
+            | chosen(red) -> 1
+            | chosen(green) -> 2
+            | nothing -> 3
+    r - 2

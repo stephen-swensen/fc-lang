@@ -1,0 +1,7 @@
+// BUG (bugsearch 2026-07-18): zero-size slice literal is accepted on the
+// concrete path but rejected on the generic path — the generic twin
+// (generics/const_slice_size_zero_err, zeros<0>()) mandates "slice literal
+// length must be positive". The concrete twin must match.
+let main = (args: str[]) ->
+    let a = u8[0]{}
+    (i32) a.len

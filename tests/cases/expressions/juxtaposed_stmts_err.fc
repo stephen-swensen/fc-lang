@@ -1,0 +1,9 @@
+// BUG (bugsearch 2026-07-18): the parser never requires a NEWLINE or `;`
+// between block items (grammar.bnf `block` rule), so juxtaposed expressions
+// on one line are silently accepted as separate statements. `let x = 5 6`
+// and `continue 5` (parsed as `continue; 5`) silently discard the trailing
+// expression. Should be a syntax error.
+let main = (args: str[]) ->
+    let x = 5 6
+    assert(x == 5)
+    0

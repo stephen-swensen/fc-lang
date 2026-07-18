@@ -1,0 +1,21 @@
+// BUG (bugsearch 2026-07-18): the module-qualified 3-part spelling
+// gfx.mode.count is not accepted as a compile-time constant in size slots
+// ("fixed array size must be a compile-time constant"), while every
+// neighboring form works: bare mode.count, via import, in module-level let
+// init, and deep module const paths. Spec: E.count is "an i32 constant
+// expression (usable in slice-literal lengths...)".
+module gfx =
+    enum mode of u16 =
+        | text
+        | vga
+        | vesa
+
+struct tables =
+    counts: u8[gfx.mode.count]
+
+let main = (args: str[]) ->
+    let names = i32[gfx.mode.count]{ 10, 20, 30 }
+    let t = tables { }
+    assert(names[1] == 20)
+    assert(t.counts.len == 3)
+    0

@@ -1,0 +1,11 @@
+// BUG (bugsearch 2026-07-18): interpolation width digits wrap through 32
+// bits with no range validation. %99999999999d wraps to ~1.2GB and emits
+// `uint8_t _fc_back_0[1215752192];` — instant stack-overflow SIGSEGV (exit
+// 139). Related shapes: %2147483648d fails -Werror=format-truncation;
+// %4294967297d silently ignores the width. An unrepresentable width should
+// be a compile error.
+let main = (args: str[]) ->
+    let x = 5
+    let s = "%99999999999d{x}"
+    assert(s.len > 0)
+    0

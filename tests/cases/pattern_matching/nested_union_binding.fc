@@ -1,0 +1,23 @@
+// BUG (bugsearch 2026-07-18): a binding at depth 2 of a nested union
+// pattern is type-checked but never declared by codegen — the arm body uses
+// `c` and gcc fails with "'c' undeclared". Pattern-binding emission only
+// materializes bindings at payload depth 1.
+enum color =
+    | red
+    | green
+
+union pick =
+    | chosen(color)
+    | nothing
+
+union outer =
+    | wrap(pick)
+    | empty
+
+let main = (args: str[]) ->
+    let o = outer.wrap(pick.chosen(color.red))
+    let r = match o with
+            | wrap(chosen(c)) -> if c == color.red then 1 else 2
+            | wrap(nothing) -> 3
+            | empty -> 4
+    r - 1

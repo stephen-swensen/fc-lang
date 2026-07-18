@@ -1,0 +1,16 @@
+// BUG (bugsearch 2026-07-18): alloc(lambda) promotes the closure context to
+// heap without checking captured values' provenance. Here the heap closure
+// captures a stack-backed slice; calling it after make() returns is a
+// stack-use-after-return (ASan-confirmed). The explicit-store twins ARE
+// rejected ("cannot store stack-allocated ... in heap-allocated struct
+// field") — this path must be too.
+let make = () ->
+    let buf = i32[2] { 7, 8 }
+    alloc(() -> buf[0])!
+
+let main = (args: str[]) ->
+    let f = make()
+    let v = f()
+    free(f)
+    assert(v == 7)
+    0

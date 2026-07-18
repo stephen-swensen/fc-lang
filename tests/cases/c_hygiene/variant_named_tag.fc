@@ -1,0 +1,15 @@
+// BUG (bugsearch 2026-07-18): a union variant named `tag` with a payload
+// collides with the codegen-injected discriminant member: emitted struct is
+// `{ fc__thing_tag tag; union { int32_t tag; }; }` — C: duplicate member
+// 'tag' (anonymous-union members share the enclosing namespace).
+union thing =
+    | tag(i32)
+    | other
+
+let main = (args: str[]) ->
+    let t = thing.tag(5)
+    let v = match t with
+            | tag(n) -> n
+            | other -> 0
+    assert(v == 5)
+    0

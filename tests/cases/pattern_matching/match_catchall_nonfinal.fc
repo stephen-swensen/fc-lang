@@ -1,0 +1,12 @@
+// BUG (bugsearch 2026-07-18): an unguarded catch-all arm (`_` or a binding)
+// in non-final position makes codegen emit a bare block for that arm, so the
+// next arm's `else` has no `if` — invalid C (gcc/clang: "'else' without a
+// previous 'if'"). FC deliberately allows redundant arms (first-match-wins,
+// see exhaustiveness/exhaust_union_dup_variant), so this must compile and
+// the catch-all must win.
+let main = (args: str[]) ->
+    let v = match 5 with
+        | _ -> 1
+        | 5 -> 2
+    assert(v == 1)
+    0

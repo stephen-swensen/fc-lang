@@ -1,0 +1,15 @@
+// BUG (bugsearch 2026-07-18): a module (or namespace) named `fc` collides
+// with the compiler's fc__ top-level mangling prefix. Members of module fc
+// emit as fc__<name> — the same spelling as top-level decls — so the two
+// counters here silently merge into one C global (compiles clean, runs
+// wrong; struct twins produce invalid C via redefinition). The two mangling
+// schemes must be disjoint.
+module fc =
+    let counter = 111
+
+let counter = 222
+
+let main = (args: str[]) ->
+    assert(fc.counter == 111)
+    assert(counter == 222)
+    0

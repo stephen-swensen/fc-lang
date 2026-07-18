@@ -1,0 +1,10 @@
+// BUG (bugsearch 2026-07-18): FC's \x escape takes exactly two hex digits
+// (see hex_escape_one_digit_err), so "\x411" is {0x41, '1'} — but codegen
+// passes the escape text through verbatim and C's \x is greedy: gcc/clang
+// "hex escape sequence out of range". The decoded bytes must be re-encoded.
+let main = (args: str[]) ->
+    let s = "\x411"
+    assert(s.len == 2)
+    assert(s[0] == 65)
+    assert(s[1] == 49)
+    0

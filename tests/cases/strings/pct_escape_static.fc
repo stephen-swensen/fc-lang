@@ -1,0 +1,12 @@
+// BUG (bugsearch 2026-07-18): in a static (segment-free) string literal, %%
+// is NOT collapsed in the emitted bytes but .len IS computed as if it were:
+// "50%% off" emits ((fc_str){"50%% off", 7}) — 8 bytes of content, len 7 —
+// yielding "50%% of". Spec escape rules: "100%%" → "100%". Only strings with
+// an interpolation segment go through the snprintf path that collapses %%.
+let main = (args: str[]) ->
+    let s = "50%% off"
+    assert(s.len == 7)
+    assert(s[2] == 37)
+    assert(s[3] == 32)
+    assert(s[6] == 102)
+    0

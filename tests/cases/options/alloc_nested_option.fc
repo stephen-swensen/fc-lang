@@ -1,0 +1,10 @@
+// BUG (bugsearch 2026-07-18): when a nested option type's sole occurrence is
+// the type argument of alloc(T), its typedef is never emitted — the C
+// references undeclared fc_option_fc_option_int32_t. Codegen's option-typedef
+// discovery walk doesn't visit alloc's type operand.
+let main = (args: str[]) ->
+    let ho = alloc(i32??)
+    match ho with
+    | some(p) -> free(p)
+    | none -> void()
+    0

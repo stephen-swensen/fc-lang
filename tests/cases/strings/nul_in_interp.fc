@@ -1,0 +1,12 @@
+// BUG (bugsearch 2026-07-18): a \0 escape in the static text of an
+// interpolated string lands as a real NUL inside the snprintf format string
+// — gcc: -Werror=format-contains-nul, and at runtime the format would stop
+// at the NUL, dropping all later segments. str is length-delimited, so
+// "a\0b%d{x}" must be the 4 bytes {a, 0, b, '7'}.
+let main = (args: str[]) ->
+    let x = 7
+    let s = "a\0b%d{x}"
+    assert(s.len == 4)
+    assert(s[1] == 0)
+    assert(s[3] == 55)
+    0

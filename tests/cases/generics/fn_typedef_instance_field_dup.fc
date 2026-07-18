@@ -1,0 +1,20 @@
+// BUG (bugsearch 2026-07-18): when a struct field's function type covers a
+// monomorphized generic instance, the fn-type typedef is emitted twice
+// (once for the field type, once for the function signature) — C11 forbids
+// redefining a typedef to a distinct anonymous struct, so gcc/clang reject
+// with "conflicting types for 'fc_fn_fc__wide__5___k64__int32_t'". The
+// plain-struct twin ((pt) -> i32 field) compiles fine. Also repros with a
+// type-arg instance (box<i32>) — generic-instance/fn-typedef dedup failure.
+struct wide =
+    limbs: u32['n / 32]
+
+struct ops =
+    measure: (wide<64>) -> i32
+
+let mlen = (w: wide<64>) -> (i32) w.limbs.len
+
+let main = (args: str[]) ->
+    let o = ops { measure = mlen }
+    let w = default(wide<64>)
+    assert(o.measure(w) == 2)
+    0
