@@ -805,6 +805,15 @@ is spelled from its arguments. Patching producers one at a time was whack-a-mole
 construction) settle it there. Registration stays at discovery; *naming* is
 settled at emission.
 
+**This is the third or fourth recurrence of this family** (§4.4 and §4.5 were
+the same shape), and the §4.14 fix reduces the blast radius without removing the
+hazard: the C name of an instance is still *stored state on the type node*, so
+sites can still disagree about it. Scoping afterwards found the actual root
+cause — `mangle_type_name`'s `TYPE_STUB` arm already computes a name from
+structure, and its comment describes this exact bug, but the `TYPE_STRUCT` and
+`TYPE_UNION` arms read the stored name instead. The durable fix is much smaller
+than a rewrite: see **`MANGLING-PLAN.md`** at repo root.
+
 **Test** `generics/nested_instance_arg_in_generic` covers the family, not the
 repro: the original two-level shape, three levels, the instance reaching the
 argument through a wrapper constructor (`bx(some(bx(v)))`), a generic *union*
