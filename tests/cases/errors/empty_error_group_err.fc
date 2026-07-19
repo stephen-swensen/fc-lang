@@ -1,0 +1,4 @@
+// §8.9: an empty error group — one clean diagnostic, no cascade.
+error g =
+let main = (args: str[]) ->
+    0

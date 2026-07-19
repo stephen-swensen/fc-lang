@@ -1,0 +1,6 @@
+// §8.10: a huge usize index that fails the bounds check reports its true
+// magnitude, not a bogus signed -1 (int64_t rendering). Exit 134 (abort).
+let main = (args: str[]) ->
+    let s = i32[3] { 1, 2, 3 }
+    let i = 0usize - 1usize
+    s[i]

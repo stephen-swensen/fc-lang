@@ -2054,6 +2054,33 @@ static bool check_inst_sizes(Type *t, SrcLoc loc) {
     return check_inst_sizes_frame(t, NULL, loc);
 }
 
+/* Readable form of a generic struct/union instantiation for diagnostics:
+   the type's source name (any C mangling stripped to its last "__"-separated
+   component, undoing fc__/module prefixes — a user name can never contain "__")
+   followed by its concrete arguments, e.g. "inner<8>". Mirrors the richer form
+   the static_assert path prints, so a const-eval failure names the instance the
+   user wrote rather than a mangled C symbol. */
+static const char *fmt_type_inst(Arena *arena, const char *mangled_name,
+                                 Type **args, int nargs) {
+    const char *base = mangled_name ? mangled_name : "?";
+    for (const char *p = base; (p = strstr(p, "__")); p += 2) base = p + 2;
+    char buf[256];
+    int pos = snprintf(buf, sizeof(buf), "%s", base);
+    if (pos < 0) pos = 0;
+    if (nargs > 0 && pos < (int)sizeof(buf)) {
+        int n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, "<");
+        if (n > 0) pos += n;
+        for (int i = 0; i < nargs && pos < (int)sizeof(buf); i++) {
+            n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s%s",
+                         i ? ", " : "", args && args[i] ? type_name(args[i]) : "?");
+            if (n > 0) pos += n;
+        }
+        if (pos < (int)sizeof(buf))
+            snprintf(buf + pos, sizeof(buf) - (size_t)pos, ">");
+    }
+    return arena_strdup(arena, buf, (int)strlen(buf));
+}
+
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
 
@@ -2247,7 +2274,8 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                     const char *emsg = const_eval_take_error(&eloc);
                     if (emsg) {
                         diag_error(eloc.filename ? eloc : ctx->type_loc,
-                            "%s (in instantiation of '%s')", emsg, t->stub.name);
+                            "%s (in instantiation of '%s')", emsg,
+                            fmt_type_inst(ctx->arena, t->stub.name, resolved_args, nta));
                         return type_error();
                     }
                 }
@@ -3759,7 +3787,8 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                     if (v < INT32_MIN || v > INT32_MAX) {
                         gen_inst_diag(frame, e->loc,
                             "const parameter %s = %lld does not fit i32 in expression position "
-                            "(cast the use site if a wider value is required)",
+                            "(a const parameter is an i32 where it is read as a value; a value "
+                            "this large is usable only in a type or size position)",
                             e->type_var_ref.name, (long long)v);
                         ok = false;
                     }
@@ -6366,7 +6395,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         if (t->kind == TYPE_NEVER) {
             diag_error(e->loc, "cannot bind '%s': every path through this expression "
-                "returns, so it has no value", e->let_expr.let_name);
+                "diverges (returns, breaks, or continues), so it has no value",
+                e->let_expr.let_name);
             e->let_expr.let_type = type_error();
             scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
                       e->let_expr.let_name_loc);
@@ -6421,7 +6451,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         if (t->kind == TYPE_NEVER) {
             diag_error(e->loc, "cannot destructure: every path through this "
-                "expression returns, so it has no value");
+                "expression diverges (returns, breaks, or continues), so it has no value");
             e->type = type_void();
             return e->type;
         }
@@ -6836,6 +6866,22 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Generic struct instantiation: unify field types with provided values */
         if (sym->is_generic) {
             int ntp = sym->type_param_count;
+            /* A field value inferred as void would bind a type variable to void
+               and reach codegen as `void x;`. The non-generic path rejects this
+               via the field's concrete type (an earlier "expected T, got void"),
+               but a type-var field has no concrete type to compare against, so a
+               void value slips through to here. Catch it at the literal rather
+               than deferring to mono_register's backstop, which reports at the
+               template declaration with a mangled name. */
+            for (int i = 0; i < e->struct_lit.field_count; i++) {
+                FieldInit *fi = &e->struct_lit.fields[i];
+                if (fi->value->type && fi->value->type->kind == TYPE_VOID) {
+                    diag_error(fi->value->loc,
+                        "field '%s': void cannot be a generic type argument", fi->name);
+                    e->type = type_error();
+                    return e->type;
+                }
+            }
             Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
             memset(bindings, 0, sizeof(Type*) * (size_t)ntp);
             bool unify_err = false;
@@ -7185,8 +7231,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     }
                     Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
                     for (int k = 0; k < ntp; k++) {
+                        uint8_t want_k = member->param_kinds ? member->param_kinds[k] : GP_TYPE;
                         bindings[k] = resolve_generic_arg(ctx, e->field.type_args[k],
-                                                          GP_TYPE, e->loc);
+                                                          want_k, e->loc);
                         if (type_is_error(bindings[k])) {
                             e->type = type_error();
                             return e->type;
@@ -7345,8 +7392,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     }
                     Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
                     for (int k = 0; k < ntp; k++) {
+                        uint8_t want_k = sym->param_kinds ? sym->param_kinds[k] : GP_TYPE;
                         bindings[k] = resolve_generic_arg(ctx, e->field.type_args[k],
-                                                          GP_TYPE, e->loc);
+                                                          want_k, e->loc);
                         if (type_is_error(bindings[k])) {
                             e->type = type_error();
                             return e->type;
@@ -7410,8 +7458,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     }
                     Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
                     for (int k = 0; k < ntp; k++) {
+                        uint8_t want_k = usym->param_kinds ? usym->param_kinds[k] : GP_TYPE;
                         bindings[k] = resolve_generic_arg(ctx, e->field.type_args[k],
-                                                          GP_TYPE, e->loc);
+                                                          want_k, e->loc);
                         if (type_is_error(bindings[k])) {
                             e->type = type_error();
                             return e->type;

@@ -1,0 +1,4 @@
+// §8.9: an empty enum body — one clean diagnostic, no cascade.
+enum e =
+let main = (args: str[]) ->
+    0

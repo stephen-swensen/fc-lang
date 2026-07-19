@@ -1,0 +1,8 @@
+// §8.8: the divergence here is by `continue`, not `return`, so the message must
+// not claim "every path returns". It now reads "diverges (returns, breaks, or
+// continues)".
+let main = (args: str[]) ->
+    for i in 0..3 do
+        let x = if i == 0 then continue else break
+        assert(x == x)
+    0

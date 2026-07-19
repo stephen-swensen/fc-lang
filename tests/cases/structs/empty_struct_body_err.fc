@@ -1,0 +1,5 @@
+// §8.9: a struct header with no indented body must give one clean diagnostic,
+// not a 9+-error cascade from the field loop chewing the next declaration.
+struct s =
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,7 @@
+// §8.6: a const-eval failure during instantiation names `inner<8>` (source name
+// + concrete args), not a bare or mangled C symbol.
+struct inner =
+    data: u8['n / 0]
+let main = (args: str[]) ->
+    let _ = default(inner<8>)
+    0

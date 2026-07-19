@@ -7,7 +7,7 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 42 / 45 fixed** (+13 found and fixed along the way: §1.5 during §1's
+**Status: all 45 fixed** (+ many found and fixed along the way: §1.5 during §1's
 triage, two variant-construction holes during §2.5, three more — two uncovered
 spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an adversarial
 review of the §2 diff, three during §4 (a wrong-length string *pattern* compare,
@@ -15,12 +15,14 @@ an option typedef missing behind any pointer, and §6.1 which the §4.8–4.11
 root-cause fix closed outright), and three during §5: §5.7, a module member
 named `main` (two `fc_main` definitions; a compiler segfault on the zero-param
 form), and a `let` destructure in a match arm emitting a placeholder comment).
-§1 (parser / lexer), §2 (pass2
-judgments), §3 (escape analysis), §4 (codegen emits invalid C) and §5
-(C-identifier hygiene) complete — see those sections for what landed. §6
-(string interpolation semantics) is the only section with open tests; §7–§8 are
-decide-first / opportunistic lists with no tests. Current suite: 2202 passed,
-3 failed (gcc + clang, -O0 and -O2; LSP wire tests green).
+§1 (parser / lexer), §2 (pass2 judgments), §3 (escape analysis), §4 (codegen
+emits invalid C), §5 (C-identifier hygiene) and §6 (string interpolation
+semantics) all complete — see those sections for what landed. §8
+(diagnostics-polish) is now cleared of every item fixable without a design
+decision (three left open with a note on why). §7 is the decide-first list of
+genuine design questions (§7.10 fixed; the rest await a language call). Current
+suite: **2238 passed, 0 failed** (gcc + clang, -O0 and -O2; LSP wire tests
+green).
 
 Several **new bugs** were found while doing the work and fixed in the same
 sessions — see §4.14, §5.7, and §5's diff-review section.
@@ -1196,30 +1198,48 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
     silently — banning the whole `fc_` prefix would block a real library that
     happens to use it, so that sliver stays until it earns a rule.
 
-## 8. Diagnostics-polish observations (no tests; fix opportunistically)
+## 8. Diagnostics-polish observations (fix opportunistically)
 
-- Diagnostics leak internal type spellings: "return type mismatch: expected
-  str, got **const str**" where `const str` isn't user-annotatable in that
-  position; "string pattern on non-str type const cstr".
-- *(added while fixing §2.4)* A void inferred into a generic **struct
-  literal** — `box { value = v() }` — is caught only by `mono_register`'s
-  backstop, which reports at the *template declaration* with the mangled name
-  ("cannot instantiate 'fc__box' with void") rather than at the literal. Same
-  family as the mangled-name item below. The struct-literal inference path
-  needs a use-site check of its own; correctness is not at risk (no such
-  instance reaches codegen).
-- *(added while fixing §2.4)* The three union-variant construction sites pass
-  `GP_TYPE` to `resolve_generic_arg` rather than the parameter's declared
-  kind, so a **const** generic argument is still refused there:
-  `maybe_wide<cfg.n>.nothing` fails while `wide<cfg.n>` in a type position
-  works. Pre-existing (the previous `resolve_type` call had the same effect);
-  the fix is `usym->param_kinds[k]`, and it is adjacent to §7.7's asymmetry.
+**Status: the fixable-without-a-design-decision items are done (2026-07-19,
+branch `bugsearch`).** 12 tests added; suite 2238 passed / 0 failed (gcc +
+clang, -O0 and -O2; LSP wire tests green). `spec/examples.fc`, the stdlib, all
+five demos, and both sibling projects (wolf-fc, euler-fc) still compile clean;
+the new codegen path is ASan/UBSan-clean. Three items are left open with a note
+on why — each needs a language/design call or a substantial new pass, not a
+localized fix.
+
+- **Diagnostics leak internal type spellings** — *left open, design-entangled.*
+  "return type mismatch: expected str, got **const str**"; "string pattern on
+  non-str type const cstr". The wording can't be fixed in isolation: the first
+  message is only nonsense *because* `str` and `const str` don't unify in that
+  position, and whether they should is the const-acceptance question of §7.4 /
+  §7.9. Hiding `const` where the two genuinely differ would turn it into
+  "expected str, got str". Decide the unification direction first.
+- ✅ **FIXED** — *(added while fixing §2.4)* A void inferred into a generic
+  **struct literal** — `box { value = v() }` — was caught only by
+  `mono_register`'s backstop, reported at the *template declaration* with a
+  mangled name. The generic struct-literal path now carries its own use-site
+  check (pass2, right before unification): a field value typed void is rejected
+  at the **field**, "field 'value': void cannot be a generic type argument". The
+  non-generic path already rejected it via the field's concrete type; only the
+  type-var field slipped through. Test `generics/void_struct_literal_err`.
+- ✅ **FIXED** — *(added while fixing §2.4)* The three union/struct-member
+  construction sites passed `GP_TYPE` to `resolve_generic_arg` rather than the
+  declared parameter kind, so a **named** const argument was refused at variant
+  construction (`maybe_wide<cfg.n>.nothing`) while `wide<cfg.n>` in a type slot
+  worked. All three now read `sym->param_kinds[k]`. Test
+  `generics/const_union_named_arg` (no-payload variant, bare and arithmetic
+  named-const args, with the type-position control). *Residual, left open:* the
+  **payload-call** spelling `maybe_wide<cfg.n>.got(x)` resolves the union's type
+  args through a separate call-based path that still refuses a named const arg —
+  a distinct, deeper site (adjacent to §7.7's kind-inference gap), not one of
+  the three field-access sites this fix covers.
 - *(added while fixing §2.7)* The concrete negative-slice-length check reads
   the folded literal as signed, so a length that wraps at an **unsigned**
   width slips through: `i32[0u32 - 1u32] { }` still emits
-  `int32_t _fc_back_0[4294967295]`. Arguably correct under FC's wrapping
-  semantics (the value genuinely is 4294967295), but it is the one spelling
-  of "negative length" the rule does not catch.
+  `int32_t _fc_back_0[4294967295]`. *Left open* — arguably correct under FC's
+  wrapping semantics (the value genuinely is 4294967295); catching it (or not)
+  is a semantic call, not a repair.
 
 *(Also found while settling §2.8, and **fixed** — a zero-size heap request
 reported allocation failure.* `alloc(T, 0)`, `alloc(T[0] { })`, `alloc("")`,
@@ -1234,33 +1254,64 @@ everywhere while the FC-level length stays 0. It folds away for a constant
 count. Reachable at runtime too, since the spec allows `alloc(T[N])` with a
 runtime `N`. Test `memory/alloc_zero_size` (all five forms, literal and
 runtime zero, ASan-clean); spec §Heap Allocation states the rule.)
-- Transitive const-eval diagnostics can print mangled names
-  ("in instantiation of 'fc__inner'") where the static_assert path prints
-  `inner<8>`.
-- The oversized-`'n`-in-expression diagnostic suggests "cast the use site",
-  but `(i64) 'n` triggers the same error — unfulfillable advice.
-- "every path through this expression returns" fires for paths that
-  `continue`.
-- Empty `error g =` and zero-field `struct` produce 9–25-error parse cascades.
-- Bounds-abort prints a huge usize index as `index=-1` (signed rendering).
-- `defer break` / `defer return` rejected with generic "unexpected token"
-  rather than a purposeful message.
+- ✅ **FIXED** — Transitive const-eval diagnostics could print a mangled name
+  ("in instantiation of 'fc__inner'") and dropped the arguments entirely.
+  `fmt_type_inst` (pass2) now renders the source name (mangling stripped to its
+  last `__`-separated component — a user name can never contain `__`) plus the
+  concrete arguments, so the message reads `inner<8>`, matching the richer form
+  the static_assert path already used. Test `generics/const_eval_inst_name_err`.
+- ✅ **FIXED** — The oversized-`'n`-in-expression diagnostic suggested "cast the
+  use site", but `(i64) 'n` triggers the same error (the check is on the *read*
+  of `'n`, before any cast) — unfulfillable advice. The message now states the
+  actual rule: "a const parameter is an i32 where it is read as a value; a value
+  this large is usable only in a type or size position." Test
+  `generics/const_expr_cast_no_help_err`.
+- ✅ **FIXED** — "every path through this expression returns" fired even when the
+  divergence was a `continue` (or `break`). Both the `let`- and destructure-bind
+  messages now read "diverges (returns, breaks, or continues)". Test
+  `control_flow/never_bind_continue_err` (the divergence is by `continue`/`break`).
+- ✅ **FIXED** — Empty `error g =` / zero-field `struct` / empty `union` / empty
+  `enum` produced 9–25-error cascades. All four decl parsers now detect the
+  missing indented body (`decl_body_present`), report one clean "must declare at
+  least one field/variant/member" (suppressed if the header already failed), and
+  bail with a `DECL_ERROR` instead of running the member loop against the next
+  declaration. Tests `structs/empty_struct_body_err`,
+  `unions/empty_union_body_err`, `enums/empty_enum_body_err`,
+  `errors/empty_error_group_err`.
+- ✅ **FIXED** — Bounds-abort printed a huge usize index as `index=-1` (the
+  index was rendered through a signed `int64_t`). Codegen now chooses the
+  reported format from the index operand's own signedness — a new `fc_oob_u`
+  (`%llu`) for an unsigned index, the existing `fc_oob` (`%lld`) for a signed one
+  — and always prints `len` unsigned. A huge usize prints its true magnitude; a
+  genuine signed `-1` still prints `-1`. Tests `slices/oob_index_unsigned`,
+  `slices/oob_index_signed` (multi-file, `expected_stderr_contains`).
+- ✅ **FIXED** — `defer break` / `defer continue` / `defer return` were rejected
+  with a bare "unexpected token 'break' in expression". `parse_block_item`'s
+  defer arm now reports "cannot defer a control-flow expression (break,
+  continue, or return)" and parses the transfer as an ordinary statement so no
+  cascade follows. Tests `defer/{break,continue,return}_in_defer_err` (existing
+  `.error` substrings tightened to the purposeful message).
 - `f<g>(x)` where `f` isn't generic, `identity<i32> == identity<i32>`, and
   `(identity<i32>)(5)` all get incidental diagnostics (comparison/cast
   misreadings) rather than curated ones. Same family: `(t) x` for a
   *user-defined* type name `t` isn't read as a cast at all (the heuristic wants
   a built-in name or a `* < ! ? .` suffix), so it lands on the juxtaposition
-  error. A pre-pass collecting declared type names — the shape
-  `parser_collect_generic_names` already uses for the `<` gate — would let all
-  of these get semantic answers instead of token-shape guesses.
-- A juxtaposition inside a match-arm body (`| 3 -> n = 1 n = 2`) produces a
-  3-error "expected '|'" cascade; block bodies report one clean "expected a
-  newline or ';' between statements". The arm loop could apply the same check
-  after `parse_body`.
+  error. *Left open* — the fix is a pre-pass collecting declared type names (the
+  shape `parser_collect_generic_names` already uses for the `<` gate); that is a
+  new resolution pass and a disambiguation-strategy decision, not a localized
+  polish edit.
+- ✅ **FIXED** — A juxtaposition inside an inline match-arm body
+  (`| 3 -> n = 1 n = 2`) produced a 3-error "expected '|'" cascade. The arm loop
+  now applies the same separator check `parse_block` uses (skipped if the body
+  already failed), reporting one clean "expected a newline or ';' between
+  statements" and resyncing to the next arm. Test
+  `pattern_matching/match_arm_juxtaposition_err`.
 - A slice literal whose element type is itself a slice needs parens:
   `i32[][2] { a, a }` fails, `(i32[])[2] { a, a }` works. The head scan takes
   the first `[` as the literal's, so an unparenthesized `[]` element suffix is
-  never seen.
+  never seen. *Left open* — an ergonomics nit (parens express it), and the head
+  scan is load-bearing for the §1.3/§1.4 slice-literal grammar; reshaping it is
+  not a localized fix.
 
 ## Areas swept clean (for the record)
 

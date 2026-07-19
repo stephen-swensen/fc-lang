@@ -1,0 +1,9 @@
+// §8.7: a const param over i32 range is read as a value in expression position;
+// casting the use site does not lift it (the check is on the read of 'n), so the
+// message no longer suggests that unfulfillable remedy.
+let f = <'n>() ->
+    let x = (i64) 'n
+    x
+let main = (args: str[]) ->
+    let _ = f<5000000000>()
+    0

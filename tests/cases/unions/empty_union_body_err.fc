@@ -1,0 +1,4 @@
+// §8.9: an empty union body — one clean diagnostic, no cascade.
+union u =
+let main = (args: str[]) ->
+    0

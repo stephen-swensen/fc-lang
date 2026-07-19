@@ -1,0 +1,2 @@
+# A signed index prints signed; the len is always unsigned.
+index=-1 len=3

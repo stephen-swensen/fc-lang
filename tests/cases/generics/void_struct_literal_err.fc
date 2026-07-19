@@ -1,0 +1,8 @@
+// §8.2: a void field value binds the type variable to void. Reported at the
+// field in the literal, not deferred to mono_register's mangled-name backstop.
+struct box =
+    value: 'a
+let v = () -> return
+let main = (args: str[]) ->
+    let b = box { value = v() }
+    0

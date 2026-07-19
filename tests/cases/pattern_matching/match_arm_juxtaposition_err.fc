@@ -1,0 +1,9 @@
+// §8.13: two statements juxtaposed in an inline arm body used to yield a
+// 3-error "expected '|'" cascade; now it is the same clean separator error a
+// block reports. (`| 3 -> n = 1; n = 2` with a `;` is the legal spelling.)
+let main = (args: str[]) ->
+    let mut n = 0
+    match 3 with
+    | 3 -> n = 1 n = 2
+    | _ -> n = 3
+    n

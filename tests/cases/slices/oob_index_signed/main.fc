@@ -1,0 +1,6 @@
+// §8.10 companion: a genuinely-negative *signed* index keeps its readable -1
+// rendering (the fix chooses the format from the operand's own signedness).
+let main = (args: str[]) ->
+    let s = i32[3] { 1, 2, 3 }
+    let i = 0 - 1
+    s[i]

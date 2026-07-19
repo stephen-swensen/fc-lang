@@ -1,0 +1,32 @@
+// §8.3: a no-payload union variant constructed with a *named* const argument
+// (a module const, bare or in arithmetic) resolves like the same argument in a
+// type position. Before the fix the variant-construction sites hardcoded
+// GP_TYPE, so `maybe_wide<cfg.n>.nothing` failed ("used as a constant is bound
+// to a type") while `wide<cfg.n>` in a type slot worked.
+module cfg =
+    let n = 4
+
+struct wide =
+    limbs: u32['n]
+
+union maybe_wide =
+    | got(wide<'n>)
+    | nothing
+
+// A type-position use of the same named argument (the control that always worked).
+let width = <'n>() ->
+    let w = default(wide<'n>)
+    w.limbs.len
+
+let main = (args: str[]) ->
+    let e = maybe_wide<cfg.n>.nothing
+    match e with
+    | got(w) -> assert(false)
+    | nothing -> void()
+    // bare arithmetic over a named const in the variant argument slot
+    let e2 = maybe_wide<cfg.n + 4>.nothing
+    match e2 with
+    | got(w) -> assert(false)
+    | nothing -> void()
+    assert(width<cfg.n>() == 4)
+    0

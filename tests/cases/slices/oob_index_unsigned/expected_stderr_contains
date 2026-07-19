@@ -1,0 +1,2 @@
+# The reported index is the true usize magnitude, not a signed -1.
+index=18446744073709551615

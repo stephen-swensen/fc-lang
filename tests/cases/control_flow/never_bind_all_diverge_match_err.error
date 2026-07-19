@@ -1,1 +1,1 @@
-cannot bind 'x': every path through this expression returns, so it has no value
+cannot bind 'x': every path through this expression diverges

@@ -1478,6 +1478,17 @@ static Expr *parse_block_item(Parser *p) {
     if (check(p, TOK_DEFER)) {
         SrcLoc loc = loc_from_token(current(p));
         advance_p(p);
+        /* `defer` schedules a *value* expression to run at scope exit; a
+           control-flow transfer (break/continue/return) has no meaning there.
+           These tokens are only parsed as statements, so parse_expr below would
+           reject them with a bare "unexpected token" — give the purposeful
+           reason instead, then parse the transfer as an ordinary statement so
+           the defer is simply dropped and no cascade follows. */
+        if (check(p, TOK_BREAK) || check(p, TOK_CONTINUE) || check(p, TOK_RETURN)) {
+            diag_error(loc_from_token(current(p)),
+                "cannot defer a control-flow expression (break, continue, or return)");
+            return parse_block_item(p);
+        }
         Expr *value = parse_expr(p, PREC_NONE + 1);
         Expr *e = alloc_expr(p, EXPR_DEFER, loc);
         e->defer_expr.value = value;
@@ -3396,7 +3407,22 @@ static Expr *parse_match_expr(Parser *p) {
         /* Parse arm body. (An empty body after `->` was briefly supported as
            a no-op arm and rolled back 2026-07-08: `void()` is the one no-op
            spelling — see result-type-design.md §Post-migration review.) */
+        int body_errs = diag_error_count();
         arm.body = parse_body(p, &arm.body_count);
+
+        /* An inline arm body goes through parse_inline_seq, which — unlike
+           parse_block — does not enforce a separator between juxtaposed
+           statements. Without this check, `| 3 -> n = 1 n = 2` leaves `n = 2`
+           unclaimed and the arm loop reports it as a 3-error "expected '|'"
+           cascade. Report the same clean separator error a block would, then
+           resync to the next arm. Skipped if the body itself failed (its
+           leftovers are that error's debris, not a second diagnosis). */
+        if (diag_error_count() == body_errs && !at_stmt_terminator(p)) {
+            diag_error(loc_from_token(current(p)),
+                "expected a newline or ';' between statements, got %s",
+                token_kind_name(current(p)->kind));
+            recover_to(p, arm_sync, 1);
+        }
 
         DA_APPEND(arms, arm_count, arm_cap, arm);
         recover_progress(p, guard);
@@ -3531,7 +3557,31 @@ static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **ou
     return true;
 }
 
+/* A struct/union/error body must open with its own indented block. When the
+   header is followed straight by a newline (an empty body), the member loop
+   would otherwise chew through the *next* declaration and emit a 9–25-error
+   cascade. Report one clean diagnostic (suppressed if the header already
+   failed) and signal the caller to bail with a DECL_ERROR. Returns true when a
+   body is present. */
+static bool decl_body_present(Parser *p, const char *kind, const char *name,
+                              const char *item, SrcLoc loc, int errs0) {
+    if (check(p, TOK_INDENT)) return true;
+    if (diag_error_count() == errs0)
+        diag_error(loc, "%s '%s' must declare at least one %s", kind, name, item);
+    return false;
+}
+
+/* Placeholder for a malformed type declaration — skipped by pass1/pass2, never
+   reaches codegen (it only exists while diag_error_count() > 0). */
+static Decl *decl_error_node(Parser *p, SrcLoc loc) {
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_ERROR;
+    d->loc = loc;
+    return d;
+}
+
 static Decl *parse_struct_decl(Parser *p) {
+    int errs0 = diag_error_count();
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
     expect(p, TOK_STRUCT);
@@ -3539,6 +3589,8 @@ static Decl *parse_struct_decl(Parser *p) {
     expect(p, TOK_EQ);
 
     /* Expect INDENT then field: type lines */
+    if (!decl_body_present(p, "struct", name, "field", loc, errs0))
+        return decl_error_node(p, loc);
     expect(p, TOK_INDENT);
 
     StructField *fields = NULL;
@@ -3597,6 +3649,7 @@ static Decl *parse_struct_decl(Parser *p) {
 }
 
 static Decl *parse_union_decl(Parser *p) {
+    int errs0 = diag_error_count();
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
     expect(p, TOK_UNION);
@@ -3604,6 +3657,8 @@ static Decl *parse_union_decl(Parser *p) {
     expect(p, TOK_EQ);
 
     /* Expect INDENT then | variant(type) lines */
+    if (!decl_body_present(p, "union", name, "variant", loc, errs0))
+        return decl_error_node(p, loc);
     expect(p, TOK_INDENT);
 
     UnionVariant *variants = NULL;
@@ -3674,6 +3729,7 @@ static Decl *parse_union_decl(Parser *p) {
  * values continue C-style from the previous one. pass1 resolves/validates the
  * values (repr fit, duplicates, mandatory zero variant). */
 static Decl *parse_enum_decl(Parser *p) {
+    int errs0 = diag_error_count();
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
     expect(p, TOK_ENUM);
@@ -3701,6 +3757,8 @@ static Decl *parse_enum_decl(Parser *p) {
     }
 
     expect(p, TOK_EQ);
+    if (!decl_body_present(p, "enum", name, "variant", loc, errs0))
+        return decl_error_node(p, loc);
     expect(p, TOK_INDENT);
 
     EnumVariant *variants = NULL;
@@ -3780,6 +3838,7 @@ static Decl *parse_enum_decl(Parser *p) {
  * pass1 assigns deterministically (sorted fully-qualified names, numbered
  * from 65536) once the whole program has been collected. */
 static Decl *parse_error_decl(Parser *p) {
+    int errs0 = diag_error_count();
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
     expect(p, TOK_ERROR_KW);
@@ -3787,6 +3846,8 @@ static Decl *parse_error_decl(Parser *p) {
     expect(p, TOK_EQ);
 
     /* Expect INDENT then | member lines (union-style layout, no payloads) */
+    if (!decl_body_present(p, "error group", name, "member", loc, errs0))
+        return decl_error_node(p, loc);
     expect(p, TOK_INDENT);
 
     Decl **members = NULL;

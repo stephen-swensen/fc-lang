@@ -4108,12 +4108,19 @@ static void emit_expr(Expr *e, FILE *out) {
                 /* unguarded: bare access, no bounds check (UB out of range). */
                 fprintf(out, "; _s%d.ptr + _i%d; }))", tid, tid);
             } else {
+                /* Render the reported index with the source operand's own
+                   signedness: a genuinely-negative signed index prints as -1,
+                   while a huge usize (which int64_t would render as a bogus
+                   negative) prints its true magnitude. The bounds compare is
+                   unsigned either way. */
+                bool idx_unsigned = type_is_unsigned(e->index.index->type);
                 fprintf(out, "; if (__builtin_expect((uint64_t)_i%d >= (uint64_t)_s%d.len, 0)) "
-                             "fc_oob(\"", tid, tid);
+                             "%s(\"", tid, tid, idx_unsigned ? "fc_oob_u" : "fc_oob");
                 emit_c_escaped(fn, fn_len, out);
-                fprintf(out, "\", %d, (long long)_i%d, (long long)_s%d.len); "
+                fprintf(out, "\", %d, (%s)_i%d, (unsigned long long)_s%d.len); "
                              "_s%d.ptr + _i%d; }))",
-                        line, tid, tid, tid, tid);
+                        line, idx_unsigned ? "unsigned long long" : "long long",
+                        tid, tid, tid, tid);
             }
         } else {
             /* Pointer indexing — no bounds check */
@@ -7880,8 +7887,14 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     if (g_needs_stdio) {
         fprintf(out,
             "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_oob(const char *file, int line, long long idx, long long len) {\n"
-            "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%lld len=%%lld\\n\",\n"
+            "static void fc_oob(const char *file, int line, long long idx, unsigned long long len) {\n"
+            "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%lld len=%%llu\\n\",\n"
+            "            file, line, idx, len);\n"
+            "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_oob_u(const char *file, int line, unsigned long long idx, unsigned long long len) {\n"
+            "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%llu len=%%llu\\n\",\n"
             "            file, line, idx, len);\n"
             "    FC_ABORT();\n"
             "}\n"
@@ -7923,6 +7936,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         /* Register the helpers as skip-entries so their frames don't pollute
          * the user-visible backtrace when a bounds check fires. */
         symmap_add("fc_oob", NULL, "<runtime>", 0);
+        symmap_add("fc_oob_u", NULL, "<runtime>", 0);
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
         symmap_add("fc_neg_len", NULL, "<runtime>", 0);
         symmap_add("fc_null_some", NULL, "<runtime>", 0);
