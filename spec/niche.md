@@ -128,3 +128,131 @@ Sequenced so each step is cheap and informative:
 Everything the DOS port forces — int-width agnosticism, runtime-free codegen, stdlib
 layering, target profiles — is exactly the discipline the (deferred) embedded wedge
 needs later. Investing in retro doesn't foreclose embedded; it quietly builds it.
+
+---
+
+## Addendum: what the emitted C actually requires (audit, 2026-07-18)
+
+An audit of `src/codegen.c` against the framing above. It refines the "Technical
+reach" section in two ways: the emitted dialect is stricter than "C11", and several
+blockers are structural (independent of dialect). The audit is what makes a
+*non-compromising retro subset* definable at all: you can only draw the line once you
+know exactly what sits on each side of it.
+
+### Correction: the emitted dialect is "GCC's C11", not ISO C11
+
+The generated C compiles with `gcc`/`clang -std=c11 -Wall -Werror`, but it leans on
+GNU extensions that ISO C11 does not have. Enumerated by tier:
+
+**C99 baseline (relative to C89):**
+- `<stdint.h>` / `<stdbool.h>` / `<stddef.h>` fixed-width types and `bool`
+- `long long` — required for `int64_t`/`uint64_t` (see the structural section: this
+  is not an edge case; it is load-bearing in every slice)
+- `static inline` helper functions (`fc_to_size`, `fc_to_int`, `fc_alloc_n`, …)
+- Compound literals and designated initializers (`(fc_str){ .ptr = …, .len = … }`)
+- Declarations interleaved with statements
+
+**C11 proper:**
+- Anonymous union member in the tagged-union representation:
+  `struct shape { shape_tag tag; union { … }; }`
+- The defined type-pun for bitcasts: a union *compound literal* read through the
+  other member (`(((union { T from; U to; }){ .from = x }).to)`)
+- `_Static_assert` — emitted only inside the atomics lock-free guard (below), so it
+  falls away with atomics
+
+**GNU extensions (the real dialect ceiling):**
+- **Statement expressions `({ … })` — ~49 emission sites**, and they are not
+  peripheral: option unwrap, bounds-checked indexing, result propagation, string
+  interpolation, and cstr conversion all lower through them. This is the single
+  hardest dialect dependency to remove.
+- `__builtin_alloca` (the `alloca` operator, interpolation buffers, cstr casts)
+- `__builtin_expect` on every guard branch (bounds, null-some, zero-error)
+- `__builtin_add/sub/mul_overflow` — the entire `checked` arithmetic feature
+- `__atomic_load_n` / `__atomic_store_n` / `__atomic_always_lock_free` — the
+  `atomic_*` intrinsics (GNU builtins, not even C11 `<stdatomic.h>`)
+- `__attribute__((unused))` on every emitted helper and function (`g_fn_attr`);
+  `__attribute__((constructor))` on the Windows-only abort-dialog suppressor
+
+**Consequence.** Any GCC-based cross toolchain — djgpp, gcc-ia16, m68k-gcc,
+devkitARM — accepts all of this (these extensions are ancient; most predate C99).
+Non-GNU compilers do not: cc65 rejects nearly every line, Watcom/Borland-era
+compilers reject the C99 tier, and **SDCC's GNU-extension coverage is partial —
+statement-expression support in particular must be verified before SDCC is claimed
+as reachable** (this downgrades the Z80 line in "Technical reach" from *reachable*
+to *verify first*). A "true retro" emission mode is therefore not just "C89" — it is
+**de-GNU + C89**: eliminate statement expressions (temporaries + real statements),
+replace builtins (plain branches for `expect`, manual overflow checks, a
+platform `alloca` or banning it), drop attributes, and shim `<stdint.h>`.
+
+### Structural blockers (dialect-independent)
+
+These bite even on a GCC toolchain, because they are about the target's runtime and
+word size, not the compiler's parser:
+
+1. **64-bit integers are load-bearing everywhere.** `fc_str` is
+   `{ uint8_t *ptr; int64_t len; }`; every slice length, bounds comparison
+   (`(uint64_t)i >= (uint64_t)s.len`), string-interpolation length computation, and
+   `INT64_C` literal rides 64-bit math. On a 16-bit CPU every bounds check becomes a
+   multi-word software comparison and every slice fattens by 6 bytes. GCC targets
+   *compile* it (soft 64-bit via libgcc), but it taxes exactly the machines the
+   niche is about. This is the deepest single item: a retro profile wants the
+   slice-length type **parameterized** (e.g. `isize`-based lengths — `int32_t` or
+   even `int16_t` per target) with identical checked semantics.
+2. **Hosted-libc assumptions.** Always: `malloc`/`free` (alloc), `memcpy`/`strlen`,
+   `abort` + `assert` (every safety guard). Feature-gated but common: `snprintf`
+   (string interpolation is a hard stdio dependency — `EXPR_INTERP_STRING` sets
+   `g_needs_stdio` unconditionally), `<math.h>`/`<float.h>` (float properties),
+   `<errno.h>`. A freestanding retro target has none of these by default; each needs
+   a platform mapping (guards → a `fc_trap` hook, alloc → a platform allocator) or a
+   profile-level compile error.
+3. **Floating point.** `f32`/`f64` soft-float works on GCC targets but is enormous
+   on 8/16-bit machines; period platforms mostly had none. Per-target opt-out.
+4. **Atomics.** GNU `__atomic` builtins plus a lock-free static assert — meaningless
+   on single-core retro hardware and unavailable in period toolchains.
+5. **Backtraces.** `<execinfo.h>`, glibc/macOS-only — already stubbed on Windows,
+   so the gating precedent exists.
+
+### Defining the non-compromising retro subset ("FC/retro profile")
+
+The governing rule is the project's completeness-over-partiality principle applied to
+targets: **every construct in the profile keeps its full FC semantics, and every
+construct outside it is a compile error on that target.** No silent degradation, no
+"works but means less here." (The one sanctioned exception is the existing Windows
+backtraces precedent: a *diagnostic-only* feature may degrade to a no-op stub,
+because it never changes program meaning. Semantics-bearing features never get that
+option.)
+
+**Untouchable — the identity travels intact.** Bounds checks, option-unwrap checks,
+defined signed overflow, masked shifts, exhaustive match, defer, escape analysis.
+These are what make FC worth carrying to a 386; they cost a compare-and-branch, which
+even 6502-class machines afford. A retro profile that relaxed them would be a
+different language wearing FC's syntax.
+
+**In the subset unconditionally** (already codegen-clean given a GCC toolchain):
+all control flow, structs/unions/enums/options/results, pattern matching, generics
+and const generics, closures, slices, pointers, `checked`/`unchecked`, modules.
+
+**Profile-gated — compile error where the target can't honor full semantics:**
+- `atomic_*` (single-core targets)
+- `f32`/`f64` (float-less targets)
+- `i64`/`u64` as user types (targets where the profile deems soft-64 unacceptable)
+- String interpolation, until a freestanding formatter replaces `snprintf`
+- `alloc`/`free`, unless the target profile supplies an allocator
+- `--backtraces` (no-op stub per the diagnostic-only exception, or error)
+
+**Profile-parameterized — same semantics, target-sized machinery:**
+- Slice/string length type (`int64_t` today → `int32_t`/`int16_t` per profile), with
+  every guard emitted against the profile's width
+- Guard failure: `abort()` → a per-target `fc_trap` (freestanding targets)
+- Stdlib layering: a core layer with zero libc dependence, `std::io` et al. becoming
+  per-platform modules
+
+**Two lanes, restated precisely after the audit:**
+- **Lane 1 — GCC retro (DOS, Amiga, Genesis, GBA):** no dialect work at all; the
+  cost is the structural list — stdlib layering, `fc_trap`, the length-type
+  parameter, float/atomic gates. This is tractable incrementally and is where the
+  falsifiable experiment already points.
+- **Lane 2 — true 8/16-bit (NES, C64, SNES, period PC compilers):** everything in
+  Lane 1 *plus* the de-GNU + C89 emission mode. The addendum's enumeration is the
+  scope of that project — finite, but dominated by one item: retiring ~49 statement-
+  expression forms into statement-level lowering. Still the earned second act.
