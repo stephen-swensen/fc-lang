@@ -927,14 +927,15 @@ variant, nested-variant, option, result, struct, tuple and for-header patterns).
 5.4: the payload union is now *named* (`… union { … } u;`), so the outer struct
 declares exactly `tag` and `u` — nothing derived from source — and no variant
 name reaches that namespace at all. 5.5: the tag enum is `fc_tag_<U>` and its
-enumerators `fc_tv_<U>__<V>`, both outside `fc__`.
+enumerators `fc_tv_<V>__<U>` (variant first), both outside `fc__`.
 
 The two kinds take **different prefixes**, and the variant is joined with `__`
 rather than `_`, because a single `_`-joined space is ambiguous both ways: union
 `a` variant `b_c` would spell like union `a_b` variant `c`, and union `shape`
-variant `circle` like union `shape_circle`'s typedef. A variant name cannot
-contain `__`, so splitting at the last one recovers exactly one (union, variant)
-pair. Tests `union_derived_name_forms` (variants named `tag` *and* `u`, user
+variant `circle` like union `shape_circle`'s typedef. The enumerator puts the
+variant *first* because only that order is injective — the union-first join
+aliases across a `_` boundary; see the diff-review section below for the case
+that forced the order. Tests `union_derived_name_forms` (variants named `tag` *and* `u`, user
 types named `thing_tag` / `thing_tag_blank` / union `thing_tag_more`, through
 equality, options and slices) and `union_derived_name_generic_forms` (the
 monomorphized and module-scoped twins, which emit through separate code paths).
@@ -1107,6 +1108,17 @@ Widened: `param_keywords` (generic, higher-order/trampoline and defer paths).
    struct-literal fields, which are the same "aggregate literal element"
    position, looks unintended. Deciding it also settles the direction for §7.4
    (tuples). Extending widening here is a language change and needs a call.
+10. **An extern C name can spell a monomorphized instance name** (found in
+    review of §5): `check_c_name_collisions` runs at the end of pass1, but
+    instance names (`fc__pair__4__i32`, `fc__wide__6___k256`) only exist after
+    mono. User *paths* can never reach them (a path component cannot start
+    with a digit), but an extern C name is verbatim, so
+    `extern fc__pair__4__i32 as p` silently merges with the instance — the
+    §5.1 failure mode through the one remaining door. Contrived (it requires
+    deliberately spelling a mangled instance name), but closing it needs a
+    decision: re-run the claim check post-mono against instance names, or
+    reject extern C names under the `fc__` root outright (costing the
+    legitimate-if-odd ability to alias an FC-emitted symbol from FC).
 
 ## 8. Diagnostics-polish observations (no tests; fix opportunistically)
 
