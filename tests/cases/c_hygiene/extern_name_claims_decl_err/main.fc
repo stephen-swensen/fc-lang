@@ -1,9 +1,8 @@
-// `extern` is the one FC construct that may spell a C name containing `__`
-// (that is where the implementation-reserved namespace lives, so the name is
-// emitted verbatim with a mandatory `as` alias). It can therefore land inside
-// the reserved fc__ space that every declaration is rooted at — here it names
-// the same C object as module member `m.counter`, and the two silently
-// referred to one global.
+// An extern C name is emitted verbatim, so before the reserved-root ban this
+// extern and module member `m.counter` silently referred to one C object (the
+// original §5 silent-merge, through the extern door). Now the parser rejects
+// any extern C name under `fc__` outright — nothing a header can legitimately
+// export lives there.
 module libc from "stdlib.h" =
     extern fc__m__counter as ext_counter: i32
 

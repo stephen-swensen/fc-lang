@@ -1703,8 +1703,9 @@ static void collect_c_names(CNameClaims *cl, Decl **decls, int count) {
             break;
         case DECL_STRUCT:
             /* An extern type is emitted under the C tag its header declares,
-             * which is verbatim — the one FC spelling that can land inside the
-             * reserved `fc__` space. */
+             * verbatim. The parser already bans a tag under the reserved
+             * `fc__` root (extern_c_name_in_reserved_root), so claiming it
+             * here is defense in depth. */
             claim_c_name(cl, d->struc.is_extern ? d->struc.c_name : d->struc.name,
                          d->loc, d->struc.is_extern);
             break;
@@ -1715,10 +1716,12 @@ static void collect_c_names(CNameClaims *cl, Decl **decls, int count) {
             claim_c_name(cl, d->enu.name, d->loc, false);
             break;
         case DECL_EXTERN:
-            /* Same hole as an extern type: `extern fc__m__counter as c` names a
-             * C symbol verbatim, and `__` is legal there (it is exactly where
-             * the implementation-reserved namespace lives). Without this the
-             * extern and a module member silently referred to one object. */
+            /* An extern names a C symbol verbatim, and `__` is legal there (it
+             * is exactly where the implementation-reserved namespace lives).
+             * The parser's `fc__` root ban is the primary defense — before it,
+             * `extern fc__m__counter as c` and module member `m.counter`
+             * silently referred to one object — so this claim, like the extern
+             * type's, is defense in depth. */
             claim_c_name(cl, d->ext.name, d->loc, true);
             break;
         case DECL_MODULE:

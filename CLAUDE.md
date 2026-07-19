@@ -117,7 +117,12 @@ one of them deliberately:
   named `fc` from colliding with the top-level prefix. The path scheme is still
   not injective — namespaces and module nesting flatten onto one separator — so
   `check_c_name_collisions` (end of pass1) reports a second claimant of any
-  emitted name rather than letting two globals silently merge.
+  emitted name rather than letting two globals silently merge. Extern C names
+  are the one user-written spelling emitted verbatim, so the parser rejects any
+  beginning with `fc__` (`extern_c_name_in_reserved_root`) — that seals the
+  space against spellings the claim check cannot see, like post-mono instance
+  names (`fc__pair__3_i32`); names merely *containing* `fc__`, or with the
+  single-underscore `fc_` prefix, stay legal externs.
 - **`fc_<kind>_…` — compiler-derived names.** `fc_str`, `fc_main`, `fc_eq_*`,
   `fc_fn_*`, `fc_tag_*` (a union's tag enum), `fc_tv_*` (its enumerators).
   Unreachable from source because no user name starts with `fc__`. A derived

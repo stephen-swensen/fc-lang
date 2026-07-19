@@ -1,0 +1,18 @@
+// Every form of extern C name is rejected under the reserved `fc__` emission
+// root, alias or not: an extern here could only alias a compiler-emitted
+// symbol. The third one is the case the pass1 claim backstop cannot see — a
+// monomorphized instance name (`fc__id__3_i32` is exactly what generic `id`
+// instantiated at i32 emits as) exists only after mono, so before this ban the
+// extern bound to the instance silently.
+module fake from "stdlib.h" =
+    extern fc__anything as ext_fn: (i32) -> i32
+    extern fc__some_const as ext_const: i32
+    extern fc__id__3_i32 as ext_id: (i32, any*) -> i32
+    extern struct fc__layout as ext_layout =
+        x: i32
+
+let id = (x: 'a) -> x
+
+let main = (args: str[]) ->
+    assert(id(41) == 41)
+    0

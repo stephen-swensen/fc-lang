@@ -1,8 +1,16 @@
 // The negative space of the extern C-name claim: two FC aliases for one C
 // symbol is the feature, not a collision, and must keep compiling.
+// Also the negative space of the `fc__` root ban: only the exact reserved
+// root is banned. A `__` name that merely starts elsewhere, a name that
+// *contains* `fc__` past the start, and the single-underscore `fc_` prefix
+// (a plausible real library prefix) all stay legal. These three are never
+// called, so no header needs to declare them.
 module libc from "stdio.h" =
     extern puts as write_line: (const cstr) -> i32
     extern puts as emit_line: (const cstr) -> i32
+    extern __fictional_probe as fic: (i32) -> i32
+    extern xfc__thing as xfc: (i32) -> i32
+    extern fc_library_init as fclib: (i32) -> i32
 
 let main = (args: str[]) ->
     let a = libc.write_line(c"")

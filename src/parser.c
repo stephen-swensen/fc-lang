@@ -4199,6 +4199,23 @@ static ExternProtocol parse_extern_protocol(Parser *p) {
     return bare;
 }
 
+/* Reject an extern C name under `fc__`, the reserved root every FC
+ * declaration's emitted name lives under (mangle_root, pass1.c). Nothing a
+ * header can legitimately export starts with `fc__`, so such an extern could
+ * only alias a compiler-emitted symbol — and for names that exist only after
+ * monomorphization (`fc__pair__3_i32`), it would do so *silently*, past the
+ * end-of-pass1 collision backstop. The ban closes that door outright; the
+ * backstop still covers extern-vs-declaration as defense in depth. Returns
+ * true when it reported. */
+static bool extern_c_name_in_reserved_root(SrcLoc loc, const char *c_name) {
+    if (strncmp(c_name, "fc__", 4) != 0) return false;
+    diag_error(loc, "extern C name '%s' starts with 'fc__', the reserved root "
+        "every FC declaration is emitted under — it could only alias a "
+        "compiler-emitted symbol; refer to the FC declaration directly instead",
+        c_name);
+    return true;
+}
+
 static Decl *parse_extern_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
@@ -4214,8 +4231,12 @@ static Decl *parse_extern_decl(Parser *p) {
             advance_p(p);
             fc_name = tok_intern(p, expect(p, TOK_IDENT));
         }
-        /* Same rule as extern functions: a '__' C tag needs a clean FC alias. */
-        if (fc_name == c_name && strstr(c_name, "__") != NULL) {
+        /* Same rules as extern functions: nothing under the reserved `fc__`
+         * emission root (see extern_c_name_in_reserved_root), and a '__' C tag
+         * needs a clean FC alias. */
+        if (extern_c_name_in_reserved_root(loc, c_name)) {
+            /* reported; keep parsing the body */
+        } else if (fc_name == c_name && strstr(c_name, "__") != NULL) {
             diag_fatal(loc, "extern C name '%s' contains '__', which is reserved in "
                 "FC names; give it an alias: `extern %s %s as <name> = ...`",
                 c_name, is_c_union ? "union" : "struct", c_name);
@@ -4272,6 +4293,8 @@ static Decl *parse_extern_decl(Parser *p) {
         advance_p(p);
         alias = tok_intern(p, expect(p, TOK_IDENT));
     }
+    /* Nothing under the reserved emission root, alias or not. */
+    bool in_reserved_root = extern_c_name_in_reserved_root(loc, name);
     /* A reserved-identifier C name (free, default, sizeof, ...) is accepted only
      * with an alias: the bare name is a keyword in FC and would be unreferenceable.
      * Require `extern <name> as <ident>: ...` in that case. */
@@ -4282,7 +4305,7 @@ static Decl *parse_extern_decl(Parser *p) {
     /* A C name containing '__' (implementation-reserved namespace, e.g.
      * __errno_location) is emitted verbatim, but the FC-visible name must stay
      * clean of the mangling separator — require an alias. */
-    if (!alias && strstr(name, "__") != NULL) {
+    if (!in_reserved_root && !alias && strstr(name, "__") != NULL) {
         diag_fatal(loc, "extern C name '%s' contains '__', which is reserved in FC "
             "names; give it an alias: `extern %s as <name>: ...`", name, name);
     }

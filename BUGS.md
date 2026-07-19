@@ -1113,12 +1113,30 @@ Widened: `param_keywords` (generic, higher-order/trampoline and defer paths).
     instance names (`fc__pair__4__i32`, `fc__wide__6___k256`) only exist after
     mono. User *paths* can never reach them (a path component cannot start
     with a digit), but an extern C name is verbatim, so
-    `extern fc__pair__4__i32 as p` silently merges with the instance — the
-    §5.1 failure mode through the one remaining door. Contrived (it requires
-    deliberately spelling a mangled instance name), but closing it needs a
-    decision: re-run the claim check post-mono against instance names, or
-    reject extern C names under the `fc__` root outright (costing the
-    legitimate-if-odd ability to alias an FC-emitted symbol from FC).
+    `extern fc__pair__3_i32 as p` silently merges with the instance — the
+    §5.1 failure mode through the one remaining door. The mandatory `as` alias
+    does not help: it fixes the FC-side spelling (no FC identifier can contain
+    `__`), while the collision is on the C-side name, emitted verbatim.
+    Verified: `extern fc__id__3_i32 as ext_id` next to generic `id` compiles
+    clean (fcc exit 0, gcc -Wall -Werror clean) and the extern call binds to
+    the static instance in the same TU.
+    **✅ FIXED** (2026-07-19, decided: reject the root outright). Any extern C
+    name beginning with `fc__` is rejected at the declaration
+    (`extern_c_name_in_reserved_root`, parser.c) — functions/constants and
+    struct tags alike, alias or not: no header can legitimately export a
+    symbol there, so such an extern could only alias a compiler-emitted one.
+    The pass1 extern claims stay as defense in depth. Spec §C Interop states
+    the rule (and its §Unions transpilation sketch was updated to the named
+    payload union while there). Tests `extern_fc_root_err` (every extern
+    form, incl. the instance-name spelling), `extern_name_claims_decl_err`
+    (repurposed — the module-member spelling is now rejected at the extern
+    itself), and `extern_alias_negative_space` extended with the ban's
+    negative space: `__` names not under the root, names *containing* `fc__`
+    elsewhere, and the single-underscore `fc_` prefix all stay legal.
+    Residual, deliberately open: the few derived names containing no `__` at
+    all (`fc_main`, `fc_str`, `fc_trunc`) can still be extern-aliased
+    silently — banning the whole `fc_` prefix would block a real library that
+    happens to use it, so that sliver stays until it earns a rule.
 
 ## 8. Diagnostics-polish observations (no tests; fix opportunistically)
 

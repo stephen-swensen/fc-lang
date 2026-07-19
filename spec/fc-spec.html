@@ -2615,15 +2615,15 @@ let r = parse_outcome.success(42)
 ```
 
 > **Transpilation**
-> Union types transpile to a C tagged struct using a C11 anonymous union for the payload. For example:
+> Union types transpile to a C tagged struct with a named inner union for the payload. For example:
 > ```c
 > typedef enum { SHAPE_CIRCLE = 0, SHAPE_RECTANGLE, SHAPE_POINT } shape_tag;
 > typedef struct {
 >     shape_tag tag;
->     union { double circle; rect_dims rectangle; };
+>     union { double circle; rect_dims rectangle; } u;
 > } shape;
 > ```
-> The anonymous union means payload fields are accessed directly on the struct (`s.circle`) rather than through a named payload field (`s.payload.circle`), producing cleaner generated code. Variant tags are assigned integer values in declaration order starting from 0. This means zero-initialized memory is always a valid union value — the tag field 0 corresponds to the first declared variant, and the payload bytes are zero.
+> Naming the inner union keeps the outer struct's member namespace to exactly `tag` and `u` — neither derived from source — so a variant may itself be named `tag` (or `u`) without colliding with the discriminant. Variant tags are assigned integer values in declaration order starting from 0. This means zero-initialized memory is always a valid union value — the tag field 0 corresponds to the first declared variant, and the payload bytes are zero.
 
 ---
 
@@ -5312,7 +5312,7 @@ module sdl from "SDL2/SDL.h" =
         h: i32
 ```
 
-The `as` clause follows the same convention as `extern ... as` for functions: `SDL_Rect` is the C name (emitted in generated code as `struct SDL_Rect`), `sdl_rect` is the FC name (used in FC source code). Without `as`, the C name and FC name are the same.
+The `as` clause follows the same convention as `extern ... as` for functions: `SDL_Rect` is the C name (emitted in generated code as `struct SDL_Rect`), `sdl_rect` is the FC name (used in FC source code). Without `as`, the C name and FC name are the same. The C-name rules for extern functions apply to tags too: a tag containing `__` requires an alias, and a tag beginning with `fc__` — the reserved root FC's own declarations are emitted under — is rejected.
 
 **Usage** — extern structs support all FC struct features:
 
@@ -5488,6 +5488,8 @@ The C-name position is also the one place an identifier may contain `__` (double
 module er from "errno.h" =
     extern __errno_location as errno_loc: () -> i32*   // errno accessor behind the macro
 ```
+
+One spelling is excluded outright: an extern C name may not **begin with `fc__`**, the reserved root every FC declaration's emitted name lives under (a file-scope `counter` is emitted as `fc__counter`, module member `m.counter` as `fc__m__counter`). No header can legitimately export such a symbol, so an extern there could only alias a compiler-emitted one — referring to the FC declaration directly is always the intent — and it is rejected at the declaration, alias or not. Only the exact double-underscore root is reserved: C names that merely contain `fc__` elsewhere, or use a single-underscore `fc_` prefix (a plausible real library prefix), remain legal.
 
 In practice, `extern free as c_free` is essentially never needed. FC's built-in `free` operator emits C's `free()` in the generated output and works on any heap pointer regardless of whether it was allocated via FC's `alloc` or `libc.malloc` — at the C level it is the same allocator. If a C API requires `free` as a function pointer value, a wrapper lambda suffices:
 
