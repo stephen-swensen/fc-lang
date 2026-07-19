@@ -1,0 +1,9 @@
+// The union-variant construction path resolves its explicit type arguments
+// separately from the call path — it needs the same judgment.
+union may =
+    | got('a)
+    | nope
+
+let main = (args: str[]) ->
+    let m = may<void>.nope
+    0

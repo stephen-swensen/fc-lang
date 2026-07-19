@@ -609,6 +609,13 @@ typedef struct {
        never emits it as a runtime value, so a generic function is permitted here
        even though it is rejected in ordinary value position. */
     bool in_reflection_position;
+    /* The node currently being checked sits in a value position — i.e. neither
+       of the two one-shot flags above was set for it. Derived by check_expr
+       from those flags and saved/restored around the dispatch, so the per-kind
+       checker can see what the wrapper consumed. EXPR_FIELD uses it to tell
+       `u.a` (a payload variant named as a value — always wrong) from the
+       callee of `u.a(5)`. */
+    bool in_value_position;
     /* Best-effort source location for type-resolution diagnostics (resolve_type
        has no loc of its own). Set broadly at each expression and precisely at
        function-parameter resolution; used to attribute "unknown type name". */
@@ -1297,6 +1304,40 @@ static void register_concrete_tuple(CheckCtx *ctx, Type *tup);
 
 static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc);
 
+/* A generic type name written without its type arguments is not a type: its
+ * type variables are unbound, so it has no layout and `fc__box` would be
+ * referenced but never defined. Every `<...>` spelling flows through
+ * mono_register, which owns the arity and kind judgments — the bare name never
+ * reaches it, so every place that turns a written name into a type judges it
+ * here. Returns true when it reported (the caller poisons).
+ *
+ * Takes the pieces rather than a node because the same name arrives in two
+ * representations: an unresolved TYPE_STUB (the usual case) and — for a
+ * *module-scoped* declaration, whose field types pass1 already resolved and
+ * mangled — a TYPE_STRUCT/TYPE_UNION with `type_arg_count == 0`. */
+static bool reject_bare_generic_type(Symbol *sym, const char *disp,
+                                     int type_arg_count, SrcLoc loc) {
+    if (!sym || !sym->is_generic || sym->type_param_count <= 0) return false;
+    if (type_arg_count != 0) return false;
+    if (sym->kind != DECL_STRUCT && sym->kind != DECL_UNION) return false;
+    if (!disp) return false;
+    diag_error(loc, "generic %s '%s' requires explicit type arguments: %s<...>",
+               sym->kind == DECL_UNION ? "union" : "struct", disp, disp);
+    return true;
+}
+
+/* void has no value representation, so an instance binding a type parameter to
+ * it emits `void x;`. Shared by the type-resolution path (resolve_generic_arg)
+ * and the field-type path (canonicalize_field_stubs) — struct/union member
+ * types never go through resolve_type, so they need the judgment of their own.
+ * Returns true when it reported (the caller poisons). */
+static bool reject_void_type_arg(Type *arg, SrcLoc loc) {
+    if (!arg || arg->kind != TYPE_VOID) return false;
+    diag_error(loc, "void cannot be a generic type argument; "
+        "it is not a value type");
+    return true;
+}
+
 static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     if (!t) return;
     switch (t->kind) {
@@ -1316,14 +1357,26 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
         /* A tuple field type: canonicalize element stub names, then name+register
          * this tuple *in place* so the struct decl's own field-type object carries
          * the mangled name. Codegen's by-value dependency sort reads that name to
-         * order the tuple's typedef before this struct. (Named struct field types
-         * are kept as stubs, so a real TYPE_STRUCT here is always a tuple.) */
+         * order the tuple's typedef before this struct. */
         if (t->struc.is_tuple) {
             for (int i = 0; i < t->struc.field_count; i++)
                 canonicalize_field_stubs(ctx, t->struc.fields[i].type);
             if (!type_contains_type_var(t))
                 register_concrete_tuple(ctx, t);
+            return;
         }
+        /* A named struct field type is normally kept as a stub — except inside
+         * a *module*, where pass1 already resolved and mangled it. A bare
+         * generic therefore arrives here rather than at the TYPE_STUB arm, and
+         * needs the same judgment. */
+        reject_bare_generic_type(t->struc.resolved_sym,
+            t->struc.qualified_name ? t->struc.qualified_name : t->struc.name,
+            t->struc.type_arg_count, ctx->type_loc);
+        return;
+    case TYPE_UNION:
+        reject_bare_generic_type(t->unio.resolved_sym,
+            t->unio.qualified_name ? t->unio.qualified_name : t->unio.name,
+            t->unio.type_arg_count, ctx->type_loc);
         return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
@@ -1331,8 +1384,14 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
         canonicalize_field_stubs(ctx, t->func.return_type);
         return;
     case TYPE_STUB:
-        for (int i = 0; i < t->stub.type_arg_count; i++)
+        for (int i = 0; i < t->stub.type_arg_count; i++) {
+            /* A field type never reaches resolve_generic_arg, so the void
+             * judgment has to happen here too — `inner: box<void>` otherwise
+             * emits a reference to an instance that is never generated. */
+            if (reject_void_type_arg(t->stub.type_args[i], ctx->type_loc))
+                return;
             canonicalize_field_stubs(ctx, t->stub.type_args[i]);
+        }
         if (t->stub.name) {
             Symbol *sym = NULL;
             if (strchr(t->stub.name, '.'))
@@ -1344,6 +1403,11 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
             if (!sym)
                 sym = resolve_symbol_kind(ctx, t->stub.name, DECL_ENUM);
             if (sym && sym->type) {
+                if (reject_bare_generic_type(sym,
+                        t->stub.qualified_name ? t->stub.qualified_name
+                                               : t->stub.name,
+                        t->stub.type_arg_count, ctx->type_loc))
+                    return;
                 const char *canon = NULL, *qname = NULL;
                 if (sym->type->kind == TYPE_STRUCT) {
                     canon = sym->type->struc.name;
@@ -1736,7 +1800,13 @@ static Type *resolve_generic_arg(CheckCtx *ctx, Type *raw, uint8_t want, SrcLoc 
         Type *c = try_named_const_arg(ctx, raw->stub.name, loc);
         if (c) return c;
     }
-    return resolve_type(ctx, raw);
+    Type *r = resolve_type(ctx, raw);
+    /* Both written spellings come through here — an explicit call type
+     * argument `f<void>(…)` and a type-position one `box<void>`. The struct/
+     * union *field* spelling does not (field types never reach resolve_type);
+     * canonicalize_field_stubs carries the same judgment. */
+    if (reject_void_type_arg(r, loc)) return type_error();
+    return r;
 }
 
 /* ---- static_assert in type bodies ----
@@ -2153,6 +2223,11 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 }
                 return concrete;
             }
+            if (reject_bare_generic_type(sym,
+                    t->stub.qualified_name ? t->stub.qualified_name
+                                           : t->stub.name,
+                    t->stub.type_arg_count, ctx->type_loc))
+                return type_error();
             return sym->type;
         }
         /* Stub matched no struct, union, or other symbol — genuinely unknown.
@@ -2806,6 +2881,31 @@ static void for_pattern_bind_error(CheckCtx *ctx, Pattern *pat) {
         break;
     default:
         break;
+    }
+}
+
+/* Report any name a single binding construct introduces twice, looking at the
+ * locals it just added to `s` (everything from index `first` on). `what` names
+ * the construct for the diagnostic ("pattern", "for-loop header").
+ *
+ * Reading the scope rather than re-walking the pattern keeps one source of
+ * truth — no second walker to drift from the checker — and it runs after
+ * PAT_BINDING→PAT_VARIANT conversion, so a no-payload variant name repeated
+ * in two field positions is correctly not a binding at all. It also reaches
+ * collisions no pattern walk would see, like a `for` element and index var
+ * sharing a name. Two bindings of one name would emit two declarations of the
+ * same C name in one scope; the ML family (and Rust) reject rather than pick a
+ * winner, and every FC binding construct takes the same judgment. */
+static void check_dup_bindings(Scope *s, int first, const char *what) {
+    for (int i = first; i < s->local_count; i++) {
+        for (int j = first; j < i; j++) {
+            if (!s->locals[i].name || !s->locals[j].name) continue;
+            if (strcmp(s->locals[i].name, s->locals[j].name) != 0) continue;
+            diag_error(s->locals[i].def_loc,
+                "duplicate binding '%s' in this %s; a name may be bound only once",
+                s->locals[i].name, what);
+            break;
+        }
     }
 }
 
@@ -3600,9 +3700,9 @@ static bool validate_generic_body(Expr *e, Arena *arena,
             wrapper.const_expr.expr = e->array_lit.size_expr;
             int64_t sz;
             if (const_type_eval(&wrapper, type_params, bindings, ntp, &sz)) {
-                if (sz <= 0) {
+                if (sz < 0) {
                     gen_inst_diag(frame, e->array_lit.size_expr->loc,
-                        "slice literal length must be positive, got %lld", (long long)sz);
+                        "slice literal length cannot be negative, got %lld", (long long)sz);
                     ok = false;
                 } else if (e->array_lit.elem_count > 0 &&
                            (int64_t)e->array_lit.elem_count != sz) {
@@ -4127,7 +4227,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     default:
         break;
     }
+    bool saved_vp = ctx->in_value_position;
+    ctx->in_value_position = in_value_position;
     Type *t = check_expr_inner(ctx, e);
+    ctx->in_value_position = saved_vp;
     ctx->in_conditional = saved_cond_ctx;
     /* Reject a *generic function declaration* used as a value. The signal is the
      * resolved symbol's is_generic flag (set only on generic top-level/module
@@ -4162,6 +4265,37 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
     return t;
+}
+
+/* Judge `u.<name>` as no-payload variant construction: the variant must exist,
+ * and it must actually be payload-less. Both are the non-call twins of checks
+ * the `u.<name>(payload)` path already made — without them `u.zzz` typed as
+ * `u` and emitted an undeclared `fc__u_tag_zzz`, and `u.a` (a *payload*
+ * variant named without its payload) silently built the variant with a
+ * zero-filled payload. Variant names are interned, so pointer equality is the
+ * comparison. Returns true when it reported (the caller poisons). */
+static bool reject_bad_no_payload_variant(CheckCtx *ctx, Type *ut, Expr *e) {
+    const UnionVariant *found = NULL;
+    for (int v = 0; v < ut->unio.variant_count; v++) {
+        if (ut->unio.variants[v].name == e->field.name) {
+            found = &ut->unio.variants[v];
+            break;
+        }
+    }
+    if (!found) {
+        diag_error(e->loc, "union '%s' has no variant '%s'",
+                   type_name(ut), e->field.name);
+        return true;
+    }
+    /* In callee position this node is `u.a` of `u.a(5)` — the call path checks
+     * the payload against the declared type, so say nothing here. */
+    if (found->payload && ctx->in_value_position) {
+        diag_error(e->loc,
+            "variant '%s' requires a payload: write %s.%s(value)",
+            e->field.name, type_name(ut), e->field.name);
+        return true;
+    }
+    return false;
 }
 
 static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
@@ -5607,6 +5741,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             for (int i = 0; i < e->call.arg_count; i++) {
                 Type *at = check_expr(ctx, e->call.args[i]);
                 if (type_is_error(at)) { arg_err = true; continue; }
+                /* A concrete parameter would reject void by type mismatch; a
+                 * type variable would happily bind to it and monomorphize a
+                 * copy taking `void x`. Spec: void cannot be passed as an
+                 * argument. */
+                if (at->kind == TYPE_VOID) {
+                    diag_error(e->call.args[i]->loc,
+                        "argument %d is a void expression; void cannot be "
+                        "passed as an argument", i + 1);
+                    arg_err = true;
+                    continue;
+                }
                 if (!unify(ctx->arena, ft->func.param_types[i], at,
                            callee_sym->type_params, bindings, ntp)) {
                     /* Unify failed — try implicit widening for concrete params */
@@ -6067,10 +6212,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         snprintf(tmp_name, (size_t)ds_len, "_ds_%d", tmp_id);
         e->let_destruct.tmp_name = tmp_name;
 
+        int first_local = ctx->scope->local_count;
         if (e->let_destruct.pattern->kind == PAT_TUPLE)
             check_tuple_destruct(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
         else
             check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
+        check_dup_bindings(ctx->scope, first_local, "pattern");
 
         e->type = type_void();
         return e->type;
@@ -6788,8 +6935,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         return e->type;
                     }
                     Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
-                    for (int k = 0; k < ntp; k++)
-                        bindings[k] = resolve_type(ctx, e->field.type_args[k]);
+                    for (int k = 0; k < ntp; k++) {
+                        bindings[k] = resolve_generic_arg(ctx, e->field.type_args[k],
+                                                          GP_TYPE, e->loc);
+                        if (type_is_error(bindings[k])) {
+                            e->type = type_error();
+                            return e->type;
+                        }
+                    }
 
                     Type *concrete = type_substitute(ctx->arena, member->type,
                         member->type_params, bindings, ntp);
@@ -6919,6 +7072,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (e->field.object->kind == EXPR_IDENT && obj_type->kind == TYPE_UNION) {
             Symbol *sym = e->field.object->ident.resolved_sym;
             if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
+                if (reject_bad_no_payload_variant(ctx, sym->type, e)) {
+                    e->type = type_error();
+                    return e->type;
+                }
                 e->field.is_variant_constructor = true;
                 if (sym->is_generic) {
                     /* Generic union no-payload variant: require explicit type args */
@@ -6938,8 +7095,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         return e->type;
                     }
                     Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
-                    for (int k = 0; k < ntp; k++)
-                        bindings[k] = resolve_type(ctx, e->field.type_args[k]);
+                    for (int k = 0; k < ntp; k++) {
+                        bindings[k] = resolve_generic_arg(ctx, e->field.type_args[k],
+                                                          GP_TYPE, e->loc);
+                        if (type_is_error(bindings[k])) {
+                            e->type = type_error();
+                            return e->type;
+                        }
+                    }
 
                     Type *concrete = type_substitute(ctx->arena, sym->type,
                         sym->type_params, bindings, ntp);
@@ -6970,8 +7133,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
         }
 
-        /* If the object resolved to a union type (e.g., module.UnionType.Variant) */
-        if (obj_type->kind == TYPE_UNION) {
+        /* If the object resolved to a union type (e.g., module.UnionType.Variant).
+         * The object must name the TYPE: without that guard a union *value*'s
+         * field access was also read as variant construction, so `x.b` on a
+         * `u` value silently built a fresh `u.b` and discarded `x`. A value
+         * falls through to the member-access error below. */
+        if (obj_type->kind == TYPE_UNION && expr_is_type_ref(e->field.object)) {
+            if (reject_bad_no_payload_variant(ctx, obj_type, e)) {
+                e->type = type_error();
+                return e->type;
+            }
             e->field.is_variant_constructor = true;
             /* For module-qualified generic variants (m.union_name<Types>.variant),
              * the parser puts type args on the outer FIELD node.  Instantiate
@@ -6989,8 +7160,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         return e->type;
                     }
                     Type **bindings = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)ntp);
-                    for (int k = 0; k < ntp; k++)
-                        bindings[k] = resolve_type(ctx, e->field.type_args[k]);
+                    for (int k = 0; k < ntp; k++) {
+                        bindings[k] = resolve_generic_arg(ctx, e->field.type_args[k],
+                                                          GP_TYPE, e->loc);
+                        if (type_is_error(bindings[k])) {
+                            e->type = type_error();
+                            return e->type;
+                        }
+                    }
                     Type *concrete = type_substitute(ctx->arena, usym->type,
                         usym->type_params, bindings, ntp);
                     if (concrete == usym->type)
@@ -7083,7 +7260,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         /* Normal struct field access */
         if (obj_type->kind != TYPE_STRUCT) {
-            diag_error(e->loc, "field access on non-struct type %s", type_name(obj_type));
+            if (obj_type->kind == TYPE_UNION)
+                diag_error(e->loc, "a union value has no fields — match '%s' to "
+                    "reach a variant's payload (the '%s.%s' spelling constructs "
+                    "a variant, and needs the union's type name)",
+                    type_name(obj_type), type_name(obj_type), e->field.name);
+            else
+                diag_error(e->loc, "field access on non-struct type %s", type_name(obj_type));
             e->type = type_error();
             return e->type;
         }
@@ -7271,6 +7454,28 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             } else {
                 diag_error(e->array_lit.size_expr->loc,
                     "slice literal length must be a compile-time constant");
+                e->type = type_error();
+                return e->type;
+            }
+        }
+        /* A statically-negative length is a compile error (spec §Slice
+         * construction): the backing array would be dimensioned with the
+         * wrapped u64 value, and a negative `len` defeats every later bounds
+         * check. Zero is legal — `i32[0] { }` is the empty-slice literal.
+         * This is the concrete twin of the per-instance check in
+         * validate_generic_body. */
+        if (!size_deferred) {
+            uint64_t raw = e->array_lit.size_expr->int_lit.value;
+            Type *slt = e->array_lit.size_expr->int_lit.lit_type;
+            bool unrepresentable = raw > (uint64_t) INT64_MAX && slt && !type_is_signed(slt);
+            if (unrepresentable || (int64_t) raw < 0) {
+                if (unrepresentable)
+                    diag_error(e->array_lit.size_expr->loc,
+                        "slice literal length %" PRIu64 " is too large", raw);
+                else
+                    diag_error(e->array_lit.size_expr->loc,
+                        "slice literal length cannot be negative, got %lld",
+                        (long long) (int64_t) raw);
                 e->type = type_error();
                 return e->type;
             }
@@ -7570,6 +7775,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                           e->for_expr.var_loc);
             }
         }
+        /* The loop scope is fresh and holds nothing but the header's bindings,
+         * so a repeated name in it is a collision — between two names inside a
+         * destructuring pattern, or between the element and index vars
+         * (`for a, a in s`), which no pattern walk would see. */
+        check_dup_bindings(ctx->scope, 0, "for-loop header");
 
         /* Save/set loop context for break checking */
         Type **saved_break = ctx->loop_break_type;
@@ -7595,20 +7805,31 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->type = type_void();
             return e->type;
         }
-        if (e->break_expr.value) {
-            if (ctx->in_for) {
-                diag_error(e->loc, "break with value is not allowed in for loops");
-                e->type = type_void();
-                return e->type;
-            }
-            Type *vt = check_expr(ctx, e->break_expr.value);
-            if (!type_is_error(vt)) {
-                if (*ctx->loop_break_type == NULL) {
-                    *ctx->loop_break_type = vt;
-                } else if (!type_eq(*ctx->loop_break_type, vt)) {
+        if (e->break_expr.value && ctx->in_for) {
+            diag_error(e->loc, "break with value is not allowed in for loops");
+            e->type = type_void();
+            return e->type;
+        }
+        /* A valueless `break` anchors the loop to void rather than
+         * abstaining: left non-contributing it let `break` and `break 5`
+         * coexist, and the emitted `_loop_result` was then never assigned on
+         * the bare path (clang rejects the C; gcc reads garbage). */
+        Type *vt = e->break_expr.value ? check_expr(ctx, e->break_expr.value)
+                                       : type_void();
+        if (!type_is_error(vt)) {
+            if (*ctx->loop_break_type == NULL) {
+                *ctx->loop_break_type = vt;
+            } else if (!type_eq(*ctx->loop_break_type, vt)) {
+                Type *other = *ctx->loop_break_type;
+                if (vt->kind == TYPE_VOID || other->kind == TYPE_VOID)
+                    diag_error(e->loc, "break type mismatch: this loop mixes "
+                        "`break` with `break <value>` — a loop that produces a "
+                        "value needs one on every break (the other break "
+                        "produces %s)",
+                        type_name(vt->kind == TYPE_VOID ? other : vt));
+                else
                     diag_error(e->loc, "break type mismatch: expected %s, got %s",
-                        type_name(*ctx->loop_break_type), type_name(vt));
-                }
+                        type_name(other), type_name(vt));
             }
         }
         e->type = type_never();
@@ -9312,6 +9533,17 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     /* Update the subject's type to the resolved type so codegen can access it */
     e->match_expr.subject->type = subj_type;
 
+    /* The subject is a value position — codegen binds it to a temporary, and
+     * `void _subj0 = …;` is not C. Void is rejected in the other value
+     * positions (let bindings, call arguments) but used to slip through here;
+     * `match (n = 5) with` reaches this the same way (assignment is void). */
+    if (subj_type->kind == TYPE_VOID) {
+        diag_error(e->match_expr.subject->loc,
+            "cannot match on a void expression");
+        e->type = type_error();
+        return e->type;
+    }
+
     if (e->match_expr.arm_count == 0) {
         diag_error(e->loc, "match expression has no arms");
         e->type = type_error();
@@ -9350,8 +9582,11 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         Scope *saved = ctx->scope;
         ctx->scope = arm_scope;
 
-        /* Check pattern and introduce bindings */
+        /* Check pattern and introduce bindings. The arm scope is fresh and
+         * holds nothing but this pattern's bindings, so a repeated name in it
+         * is a duplicate binding. */
         check_match_pattern(ctx, pat, subj_type, /*reject_bindings=*/false);
+        check_dup_bindings(arm_scope, 0, "pattern");
 
         /* Type-check the optional `when` guard in the arm scope, so
            destructured pattern bindings are visible. Guard must be bool. */
@@ -9659,18 +9894,18 @@ static Expr *const_make_bool(CheckCtx *ctx, Type *t, bool v, SrcLoc loc) {
  * target-defined isize/usize width.  Those still satisfy the const-expr gate and
  * emit their C macro unchanged. */
 static Expr *const_fold_type_property(CheckCtx *ctx, Expr *e) {
-    if (!e->field.is_type_property || e->field.object->kind != EXPR_IDENT)
-        return NULL;
-    /* Enum count: the variant count is a compile-time i32. */
-    {
-        Symbol *osym = e->field.object->ident.resolved_sym;
-        if (osym && osym->kind == DECL_ENUM && osym->type &&
-            osym->type->kind == TYPE_ENUM &&
-            strcmp(e->field.name, "count") == 0) {
-            return const_make_int(ctx, type_int32(),
-                (uint64_t)osym->type->enu.variant_count, e->loc);
-        }
+    if (!e->field.is_type_property) return NULL;
+    /* Enum count: the variant count is a compile-time i32. The enum may be
+     * named by a bare ident (`mode.count`) or reached through a module
+     * component (`gfx.mode.count`), in which case the object is itself an
+     * EXPR_FIELD — read the type pass2 gave the object rather than the node
+     * shape, so every spelling folds. */
+    if (strcmp(e->field.name, "count") == 0 && e->field.object->type &&
+        e->field.object->type->kind == TYPE_ENUM) {
+        return const_make_int(ctx, type_int32(),
+            (uint64_t)e->field.object->type->enu.variant_count, e->loc);
     }
+    if (e->field.object->kind != EXPR_IDENT) return NULL;
     Type *t = type_from_name(e->field.object->ident.name,
                              (int)strlen(e->field.object->ident.name));
     if (!t) return NULL;

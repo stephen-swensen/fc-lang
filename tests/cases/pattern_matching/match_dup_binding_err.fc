@@ -1,9 +1,6 @@
-// BUG (bugsearch 2026-07-18): duplicate binding names in a single match
-// pattern generate invalid C — `| { a, a } ->` emits two `int32_t a = ...`
-// declarations in one scope (redefinition). Expected: a "duplicate binding"
-// diagnostic. Note the let-destructure twin `let { a, a } = { 1, 2 }`
-// currently compiles (last wins via unique names) — whichever way this is
-// fixed should pin both paths the same way.
+// A name bound twice in one pattern emitted two `int32_t a = ...;`
+// declarations in one C scope. Rejected, as in the ML family and Rust — the
+// alternative (last wins) silently picks a winner.
 let main = (args: str[]) ->
     let t = { 1, 2 }
     let v = match t with

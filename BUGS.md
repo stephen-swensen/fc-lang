@@ -7,9 +7,13 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 4 / 45 fixed** (+1 found and fixed during triage, §1.5). §1 (parser /
-lexer) complete — see that section for what landed. §2–§8 untouched; current
-suite: 2083 passed, 41 failed (gcc).
+**Status: 14 / 45 fixed** (+6 found and fixed along the way: §1.5 during §1's
+triage, two variant-construction holes during §2.5, and three more — two
+uncovered spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an
+adversarial review of the §2 diff, see those entries). §1 (parser / lexer)
+and §2 (pass2 judgments) complete — see those sections for what landed.
+§3–§8 untouched; current suite: 2122 passed, 31 failed (gcc + clang, -O0 and
+-O2; LSP wire tests green).
 
 Conventions:
 
@@ -182,9 +186,21 @@ requires the `{` to follow its match. Parenthesizing works —
 `(i32[])[2] { a, a }` compiles — and the aliased form (`str[2] { … }`) was never
 affected, so this is an ergonomics nit, not an expressiveness gap. → §8.
 
-## 2. Missing type-checker (pass2) judgments — most emit broken C or run wrong
+## 2. Missing type-checker (pass2) judgments — ✅ ALL FIXED (2026-07-18)
 
-### 2.1 `control_flow/loop_mixed_break_err` — bare `break` + `break v` in one loop
+All ten fixed on branch `bugsearch`, plus two more found while fixing 2.5
+(both silent wrong-runtime — see there); suite 2122 passed / 31 failed (the
+remaining failures are §3–§6), gcc + clang, -O0 and -O2, LSP wire tests green.
+30 tests added beyond the ten repros. `spec/examples.fc`, the stdlib, all five
+demos, and both sibling projects (wolf-fc, euler-fc) still compile clean under
+the new judgments.
+
+Two entries were decided against what the repro test originally assumed; both
+are called out below (2.8 reversed, 2.6 confirmed). Spec updated: §Data Types
+(void), §loop, §Match Expressions, §Allocation (slice-literal length),
+§Generic structs and unions, §Const Parameters.
+
+### 2.1 `control_flow/loop_mixed_break_err` — bare `break` + `break v` in one loop ✅ FIXED
 A value loop mixing `break` and `break 5` passes pass2; the emitted
 `_loop_result` is unassigned on the bare-break path → clang
 `-Wsometimes-uninitialized` rejects the C; gcc binaries read garbage (observed
@@ -193,12 +209,30 @@ non-contributing instead of anchoring the loop type to void and reporting the
 mismatch (the arm-disagreement diagnostic "break type mismatch" already
 exists — extend it here).
 
-### 2.2 `pattern_matching/match_void_subject_err` — void match subject
+**Fixed** exactly that way: EXPR_BREAK now computes `vt = value ? check(value)
+: void` and runs the *same* unification for both, so a valueless break anchors
+the loop to void instead of abstaining. A loop is therefore uniform — every
+break carries a value of one type, or none does. The void-vs-value pairing
+gets its own wording ("this loop mixes `break` with `break <value>`") since
+"expected void" would name a type the programmer never wrote; the
+value-vs-value case keeps the existing message verbatim. `for` is unaffected
+(`break value` was already rejected there, so all its breaks are void and
+agree). Tests: `loop_mixed_break_reverse_err` (value break seen first),
+`loop_mixed_break_nested_err` (per-loop tracking — an inner void loop must not
+license a mixed outer one), `loop_break_forms` (positive: all-bare, all-valued
+with several breaks, nested, and `for` with a bare break).
+
+### 2.2 `pattern_matching/match_void_subject_err` — void match subject ✅ FIXED
 `match f() with` where `f` returns void emits `void _subj0 = fc__f(NULL);`.
 pass2 rejects void in let bindings and call args but never checks the match
 subject. Also reachable via `match (n = 5) with` (assignment is void).
 
-### 2.3 `generics/bare_generic_type_err` — bare generic name as a type
+**Fixed** in `check_match`, right after the subject's type resolves: the
+subject is a value position (codegen binds it to a temporary), so void is
+rejected there like anywhere else. Tests cover all three spellings — a void
+call, `match (n = 5)` (assignment), and the literal `match void()`.
+
+### 2.3 `generics/bare_generic_type_err` — bare generic name as a type ✅ FIXED
 A generic struct name with no type args in a field type, `default(box)`, or
 `alloc(box)!` sails through to codegen → `fc__box` referenced, never defined
 (fcc exit 0, invalid C). The name never reaches `mono_register`'s choke point,
@@ -208,49 +242,225 @@ case in pass1/pass2 type resolution. (Related papercuts: bare generic *param*
 type `(b: box)` is accepted silently if never called; slice-literal element
 form errors with the odd "expected box, got box<i32>".)
 
-### 2.4 `generics/void_typearg_err` — `void` instantiates `'a`
+**Fixed** at every place that turns a written type name into a type —
+`resolve_type` (expression and annotation positions) and
+`canonicalize_field_stubs` (struct and union member types, which never go
+through `resolve_type` at all, which is why the field spelling was the one
+that reached codegen). One shared helper, `reject_bare_generic_type`, so they
+can't drift. Both related papercuts are fixed by the same helper and are now
+tested (`bare_generic_param_err`, `bare_generic_slice_elem_err`), along with
+`default`, `alloc`, and the generic *union* twin.
+
+**One spelling was still leaking after the first fix** (caught by an
+adversarial review of the diff, not by the suite): inside a **module**, pass1
+has already resolved and mangled a field's type by the time pass2 walks it, so
+an unqualified sibling reference (`inner: box` within `module m`) arrives as a
+resolved `TYPE_STRUCT` with `type_arg_count == 0` — not a `TYPE_STUB` — and
+sailed straight past a check written for stubs. Same hole through `box*`,
+`box[]`, `box?`, and for a generic union. The helper now takes the pieces
+(symbol, display name, arg count) instead of a stub node, and
+`canonicalize_field_stubs` judges the resolved `TYPE_STRUCT`/`TYPE_UNION` arms
+too. Tests `bare_generic_module_sibling_err` (all four field shapes) and
+`bare_generic_module_union_err`. The lesson is the standing one: a judgment
+added to one representation of a name has to cover every representation the
+pipeline produces.
+
+### 2.4 `generics/void_typearg_err` — `void` instantiates `'a` ✅ FIXED
 `idv(v())` with `v` void-returning monomorphizes `idv<void>` and emits
 `void x` as a parameter → invalid C. Generic argument unification lacks the
 void-as-value guard the non-generic call path has.
 
-### 2.5 `unions/unknown_variant_construction_err` — unknown no-payload variant
+**Fixed** at three levels, because the written and inferred spellings reach
+instantiation by different routes. `resolve_generic_arg` — the shared entry
+point for explicit call type arguments *and* stub type arguments — rejects a
+void argument, which covers `idv<void>(…)`, `box<void>`, and (after routing
+the three union-variant sites through it instead of bare `resolve_type`)
+`may<void>.nope`. The generic call-argument loop rejects a void *argument
+expression* at the argument's own location, which covers the inferred case. A
+backstop in `mono_register` catches anything that reaches instantiation
+without passing either, so no void instance can ever reach codegen; it reports
+at the template's declaration with the mangled name, which is deliberately the
+worse message — it should never be the one a user sees. (It *is* the one a
+void inferred into a generic **struct literal** — `box { value = v() }` — gets
+today, since that inference path has no use-site check of its own. Correctness
+holds; the location is poor. → §8.) The spec already said void "cannot be
+passed as an argument" and "remains invalid as a generic type argument"; only
+enforcement was missing.
+
+**A fourth route was still open after the first fix** (found by the same
+adversarial diff review): `inner: box<void>` as a **struct field type** passes
+neither use-site check — field types never reach `resolve_type` — and never
+reaches `mono_register` either, because no instance is ever registered for a
+field type that names one. So the emitted C referenced `fc__box`, undefined.
+`canonicalize_field_stubs` — the field-type counterpart to `resolve_type` —
+now carries the void judgment too, sharing `reject_void_type_arg` with
+`resolve_generic_arg`. Test `generics/void_typearg_field_err`.
+
+### 2.5 `unions/unknown_variant_construction_err` — unknown no-payload variant ✅ FIXED
 `u.zzz` on a union with no variant `zzz` is silently accepted (types as `u`)
 and emits undeclared `fc__u_tag_zzz`. The call path `u.zzz(5)` checks
 ("union 'u' has no variant 'zzz'"); the no-payload field-access path doesn't.
 Also makes `u.count` on a union "work". Non-call twin of a call-shaped check.
 
-### 2.6 `pattern_matching/match_dup_binding_err` — duplicate binding in one pattern
+**Fixed** by giving both union-variant-construction branches of the field
+checker the existence check the call path already had, via a
+`reject_bad_no_payload_variant` helper, and reusing the call path's message
+verbatim. `u.zzz(5)` does not double-report: the field check runs first (the
+call reads its callee's type) and poisons, so the call path returns early on
+TYPE_ERROR. Tests cover the no-payload spelling, the property-shaped
+`u.count`, the module-qualified `shapes.u.zzz`, and the generic `may<i32>.zzz`.
+
+**Two more holes in the same family, found while fixing this and closed with
+it** — both were silent wrong-runtime, not invalid C, so nothing downstream
+would ever have caught them:
+
+- **A *payload* variant named without its payload.** `let y = u.a` where
+  `a(i32)` emitted `(fc__u){ .tag = fc__u_tag_a }` — the variant with a
+  zero-filled payload, exit 0. The call path had the mirror check ("variant
+  '%s' takes no payload") but the non-call path judged neither direction. Now
+  rejected with "variant 'a' requires a payload: write u.a(value)", suppressed
+  in callee position (where the node *is* `u.a` of `u.a(5)`) via a new
+  `CheckCtx.in_value_position` — derived by `check_expr` from the one-shot
+  callee/reflection flags it already consumes, so the per-kind checker can see
+  what the wrapper decided. Test `unions/payload_variant_no_call_err`.
+- **Field access on a union *value*.** The second variant-construction branch
+  fired on any object of union type, value or not, so `x.b` on a `u` value
+  built a fresh `u.b` and discarded `x`. The branch now requires the object to
+  name the type (`expr_is_type_ref`, already used two checks below), and a
+  union value falls through to a tailored member-access message instead of the
+  generic "field access on non-struct type". Test
+  `unions/union_value_field_access_err`.
+
+`unions/variant_construction_forms` pins the negative space for all three:
+payload and no-payload variants, bare and module-qualified, and a generic
+union's explicit-type-arg spelling of both. `unions/imported_companion_variant/`
+adds the cross-namespace import of a name that is both a union and its
+companion module — a distinct resolution path through the same branch.
+
+### 2.6 `pattern_matching/match_dup_binding_err` — duplicate binding in one pattern ✅ FIXED
 `| { a, a } ->` emits two `int32_t a = ...;` in one C scope → redefinition
 error. **Fix-direction:** the test expects a "duplicate binding" diagnostic
 (Rust/OCaml precedent); the alternative is unique codegen names with
 last-wins. Note the let-destructure twin `let { a, a } = { 1, 2 }` currently
 *compiles* (last wins) — whichever direction is chosen must pin both paths.
 
-### 2.7 `const_eval/slice_lit_negative_size_err` — negative concrete slice-literal size
+**Fix-direction decided: the diagnostic**, and applied to every binding form —
+match arm, `let` destructure, and `for` destructure. Rust, OCaml, F#, and
+Swift all reject rather than pick a winner, and last-wins in a destructure is
+a silent footgun with no upside. Implemented as `check_dup_pattern_bindings`,
+which reads the locals the pattern just added to its scope rather than
+re-walking the pattern (`check_dup_bindings`): that keeps one source of truth
+(no second walker to drift from the checker) and it necessarily runs *after*
+the PAT_BINDING→PAT_VARIANT rewrite, so a no-payload variant name repeated in
+two field positions is correctly not a binding at all. That negative space is
+pinned by `dup_binding_negative_space` (repeated variant names in one pattern,
+the same name bound by different arms, a pattern binding shadowing an outer
+one, binding-plus-wildcard).
+
+Reading the scope also turned out to reach a collision **no** pattern walk
+would have seen, which the same review surfaced: `for a, a in s` binds the
+element and the index var separately, and emitted two declarations of `a` in
+one C scope (a pre-existing bug, not a regression — the `for` header just was
+not anywhere in scope of the old rule). The check now runs once over the whole
+freshly-created loop scope after the header finishes binding, so it covers the
+pattern-internal case and the element-vs-index case together. Test
+`control_flow/for_index_var_dup_err`.
+
+### 2.7 `const_eval/slice_lit_negative_size_err` — negative concrete slice-literal size ✅ FIXED
 `u8[-4]{}` (also `u8[1 - 5]{}`, negative named const) accepted; emits
 `uint8_t _fc_back_0[18446744073709551612]`. Spec: "A statically-negative
 length is therefore a compile error." Only the deferred per-instance generic
 path checks `sz <= 0`; the concrete EXPR_ARRAY_LIT path (src/pass2.c ~7284)
 reads the folded u64 and never checks. The concrete twin of a generic check.
 
-### 2.8 `const_eval/slice_lit_zero_size_err` — zero concrete slice-literal size
+**Fixed:** the concrete EXPR_ARRAY_LIT path reads the folded length as a
+signed 64-bit value and rejects it when negative, before the element-count
+check (so the negative case is diagnosed at the length, not as a bogus
+element-count mismatch). An unsigned literal above `INT64_MAX` gets its own
+"too large" message rather than being rendered as a negative.
+
+### 2.8 `const_eval/slice_lit_zero_size_err` — zero concrete slice-literal size ⚠️ FIXED, DIRECTION REVERSED
 Same hole as 2.7: `u8[0]{}` compiles and runs while the generic twin
 `zeros<0>()` is mandated to fail (existing test
 `generics/const_slice_size_zero_err`: "slice literal length must be positive").
 
-### 2.9 `const_eval/i64_literal_const_arith` — i64 literals rejected in const-arg arithmetic
+**The concrete path was right and the generic one was wrong** — the opposite
+of what this entry assumed. Evidence: `i32[0] { }` is an established
+empty-slice idiom already used by five pre-existing tests including two stdlib
+ones (`stdlib/data_slice`, `memory/module_array_lit`, `generic_nested_depth2`,
+`results/prop_generic`); the spec forbids only a statically-**negative**
+length (§Slice construction from raw pointer) and says nothing against zero;
+and codegen handles it cleanly (`alloca(0)` — no zero-length C array is ever
+declared). Rejecting zero would have broken working code to satisfy a rule
+nobody wrote.
+
+So the *generic* per-instance check was relaxed from `sz <= 0` to `sz < 0`,
+and `generics/const_slice_size_zero_err` became the positive test
+`generics/const_slice_size_zero` (a `<0>` instance yields an empty slice; a
+`<3>` instance still yields three). The negative half it used to carry is now
+its own test, `generics/const_slice_size_negative_err`, and the concrete zero
+case is pinned by `const_eval/slice_lit_zero_size`. Spec §Allocation now
+states the rule explicitly in both directions.
+
+### 2.9 `const_eval/i64_literal_const_arith` — i64 literals rejected in const-arg arithmetic ✅ FIXED
 Const args are spec'd to evaluate in the i64 domain, and a *lone* literal
 `f<4000000000>` is accepted — but the same literal inside const-arg
 arithmetic (`wide<4000000000 / 10 + 0>`) goes through the normal i32-literal
 check and errors, then evaluates as 0 producing a bogus "fixed array size must
 be positive, got 0" cascade (missing poison suppression — fix that too).
 
-### 2.10 `enums/module_enum_count_size` — `gfx.mode.count` not const in size slots
+**Fixed at the source rather than by suppressing the cascade:** the i64 domain
+now fixes the *type* of an unsuffixed integer literal written inside a const
+expression, so the range check never fires and there is no bogus 0 to
+propagate. A new `Parser.in_const_expr` flag marks the const-expression slots
+— a generic `<...>` argument and a fixed-array size, which share one grammar —
+and `parse_int_type_in` gives an unsuffixed literal `i64` there instead of the
+`i32` expression default. A written suffix still wins. The flag is set for the
+whole extent of `parse_const_arith`, so it also covers the parenthesized
+escape hatch (`wide<(5000000000 - 1000000000) / 10>`), which re-enters the
+general expression grammar and would otherwise have kept the asymmetry one
+level down. Spec §Const Parameters states the rule.
+
+Not covered (and correctly so): an ordinary module-level `let big =
+4000000000 / 1000000000` is not a const-expression slot — it is a normal
+binding whose inferred type is `i32`, and the literal is out of range there.
+
+### 2.10 `enums/module_enum_count_size` — `gfx.mode.count` not const in size slots ✅ FIXED
 The 3-part module-qualified spelling is rejected ("must be a compile-time
 constant", duplicated diagnostic) while bare `mode.count`, imported forms, and
 deep module-const paths all fold. The const-size dotted-path folder doesn't
 descend into an enum reached through a module component. Spec: `E.count` is an
 i32 constant expression usable in slice-literal lengths.
+
+**Fixed** in `const_fold_type_property`, which required the property's object
+to be an `EXPR_IDENT` — true for `mode.count`, false for `gfx.mode.count`
+(whose object is itself an EXPR_FIELD). pass2 already typed the object
+correctly in both cases, so the fold now reads the object's **type** rather
+than its node shape, and every spelling folds regardless of nesting depth.
+The test was widened to cover a two-level module path (`gfx.deep.chan.count`),
+arithmetic over two such counts, both size positions (struct field and
+slice-literal length), and the ordinary expression positions.
+
+### Tests added (30)
+
+`generics/`: `const_slice_size_negative_err`, `void_typearg_explicit_err`,
+`void_typearg_struct_err`, `void_typearg_union_err`, `bare_generic_default_err`,
+`bare_generic_alloc_err`, `bare_generic_param_err`, `bare_generic_union_err`,
+`bare_generic_slice_elem_err`, `bare_generic_module_sibling_err`,
+`bare_generic_module_union_err`, `void_typearg_field_err`
+(+ `const_slice_size_zero` repurposed positive).
+`const_eval/`: `slice_lit_zero_size` (positive).
+`pattern_matching/`: `match_void_subject_assign_err`, `match_void_lit_subject_err`,
+`match_dup_binding_nested_err`, `dup_binding_negative_space` (positive).
+`bindings/`: `let_destructure_dup_binding_err`.
+`control_flow/`: `for_destructure_dup_binding_err`, `loop_mixed_break_reverse_err`,
+`loop_mixed_break_nested_err`, `loop_break_forms` (positive),
+`for_index_var_dup_err`.
+`unions/`: `unknown_variant_property_err`, `unknown_variant_module_qualified_err`,
+`unknown_variant_generic_err`, `payload_variant_no_call_err`,
+`union_value_field_access_err`, `variant_construction_forms` (positive),
+`imported_companion_variant/` (positive, multi-file).
+Widened: `enums/module_enum_count_size`, `const_eval/i64_literal_const_arith`.
 
 ## 3. Escape-analysis holes (all ASan-verified stack-use-after-return) + one wrong-reject
 
@@ -459,6 +669,25 @@ are separate alloc-path checks.
 - Diagnostics leak internal type spellings: "return type mismatch: expected
   str, got **const str**" where `const str` isn't user-annotatable in that
   position; "string pattern on non-str type const cstr".
+- *(added while fixing §2.4)* A void inferred into a generic **struct
+  literal** — `box { value = v() }` — is caught only by `mono_register`'s
+  backstop, which reports at the *template declaration* with the mangled name
+  ("cannot instantiate 'fc__box' with void") rather than at the literal. Same
+  family as the mangled-name item below. The struct-literal inference path
+  needs a use-site check of its own; correctness is not at risk (no such
+  instance reaches codegen).
+- *(added while fixing §2.4)* The three union-variant construction sites pass
+  `GP_TYPE` to `resolve_generic_arg` rather than the parameter's declared
+  kind, so a **const** generic argument is still refused there:
+  `maybe_wide<cfg.n>.nothing` fails while `wide<cfg.n>` in a type position
+  works. Pre-existing (the previous `resolve_type` call had the same effect);
+  the fix is `usym->param_kinds[k]`, and it is adjacent to §7.7's asymmetry.
+- *(added while fixing §2.7)* The concrete negative-slice-length check reads
+  the folded literal as signed, so a length that wraps at an **unsigned**
+  width slips through: `i32[0u32 - 1u32] { }` still emits
+  `int32_t _fc_back_0[4294967295]`. Arguably correct under FC's wrapping
+  semantics (the value genuinely is 4294967295), but it is the one spelling
+  of "negative length" the rule does not catch.
 - Transitive const-eval diagnostics can print mangled names
   ("in instantiation of 'fc__inner'") where the static_assert path prints
   `inner<8>`.

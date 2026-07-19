@@ -1,0 +1,58 @@
+// The shapes the duplicate-binding rule must NOT claim: a no-payload variant
+// name is not a binding (so it may appear in two field positions), the same
+// name may be bound by different arms, and a pattern binding may still shadow
+// an outer binding of the same name.
+enum color =
+    | red
+    | green
+
+union tag =
+    | on(i32)
+    | off
+
+struct twin =
+    a: color
+    b: color
+
+struct utwin =
+    a: tag
+    b: tag
+
+let main = (args: str[]) ->
+    // the same variant name in two field positions — both are PAT_VARIANT
+    let t = twin { a = color.red, b = color.red }
+    let m = match t with
+            | { a = red, b = red } -> 1
+            | _ -> 0
+    assert(m == 1)
+
+    let u = utwin { a = tag.off, b = tag.off }
+    let n = match u with
+            | { a = off, b = off } -> 2
+            | _ -> 0
+    assert(n == 2)
+
+    // the same name bound by different arms of one match
+    let w = tag.on(7)
+    let v = match w with
+            | on(x) -> x
+            | off -> 0
+    let v2 = match w with
+             | on(x) -> x * 2
+             | off -> 0
+    assert(v == 7)
+    assert(v2 == 14)
+
+    // a pattern binding shadowing an outer binding of the same name
+    let x = 100
+    let s = match w with
+            | on(x) -> x
+            | off -> 0
+    assert(x == 100)
+    assert(s == 7)
+
+    // one binding plus one wildcard in the same pattern is fine
+    let p = { 1, 2 }
+    let { a, _ } = p
+    assert(a == 1)
+    0

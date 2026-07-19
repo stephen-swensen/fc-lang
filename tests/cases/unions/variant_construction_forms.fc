@@ -1,0 +1,52 @@
+// The legal variant-construction shapes the checks above must not claim.
+module shapes =
+    union u =
+        | a(i32)
+        | b
+
+union may =
+    | got('a)
+    | nope
+
+union plain =
+    | one(i32)
+    | two
+    | three
+
+let main = (args: str[]) ->
+    // payload and no-payload, bare and module-qualified
+    let p = plain.one(7)
+    let q = plain.two
+    let r = shapes.u.a(3)
+    let s = shapes.u.b
+    // generic union, explicit type args, both variant shapes
+    let g = may<i32>.got(9)
+    let h = may<i32>.nope
+
+    let pv = match p with
+             | one(n) -> n
+             | two -> -1
+             | three -> -2
+    assert(pv == 7)
+    let qv = match q with
+             | one(_) -> 0
+             | two -> 1
+             | three -> 2
+    assert(qv == 1)
+    let rv = match r with
+             | a(n) -> n
+             | b -> 0
+    assert(rv == 3)
+    let sv = match s with
+             | a(_) -> 0
+             | b -> 1
+    assert(sv == 1)
+    let gv = match g with
+             | got(n) -> n
+             | nope -> 0
+    assert(gv == 9)
+    let hv = match h with
+             | got(_) -> 0
+             | nope -> 1
+    assert(hv == 1)
+    0

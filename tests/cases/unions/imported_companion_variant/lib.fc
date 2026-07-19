@@ -1,0 +1,8 @@
+namespace shapes
+
+union u =
+    | a(i32)
+    | b
+
+module u =
+    let make = (n: i32) -> u.a(n)

@@ -1,14 +1,33 @@
-// BUG (bugsearch 2026-07-18): const arguments are evaluated in the i64
-// domain (spec: "evaluated in the 64-bit signed integer domain"), and a bare
-// literal f<4000000000> is accepted — but the same literal inside const-arg
-// arithmetic is type-checked through the normal i32-literal path and
-// rejected ("integer literal 4000000000 out of range for i32"), then
-// evaluates as 0 producing a bogus "fixed array size must be positive"
-// cascade. Should compile and run.
+// Const expressions evaluate in the i64 domain, so an unsuffixed literal in a
+// const-argument or size slot is i64 — not the i32 expression default. A lone
+// literal `f<4000000000>` was always taken as-is; the same literal inside
+// const arithmetic used to be judged against i32's range and then evaluate as
+// 0, cascading into a bogus "fixed array size must be positive, got 0".
 struct wide =
     limbs: u32['n / 100000000]
+
+struct sized =
+    // a fixed-array size slot is the same const-expression grammar
+    a: u8[4000000000 / 1000000000]
+    b: u8[3000000000 / 1000000000 + 1]
 
 let main = (args: str[]) ->
     let a = default(wide<4000000000 / 10 + 0>)
     assert(a.limbs.len == 4)
+
+    // a lone out-of-i32-range literal, and one reached through arithmetic
+    let b = default(wide<4000000000>)
+    assert(b.limbs.len == 40)
+
+    // parenthesized (full expression grammar) and negative-then-positive
+    let c = default(wide<(5000000000 - 1000000000) / 10>)
+    assert(c.limbs.len == 4)
+
+    let s = default(sized)
+    assert(s.a.len == 4)
+    assert(s.b.len == 4)
+
+    // written suffixes still win
+    let d = default(wide<400i64 * 1000000>)
+    assert(d.limbs.len == 4)
     0

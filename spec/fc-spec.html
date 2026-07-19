@@ -712,7 +712,7 @@ The following are **built-in type names**. Unlike reserved identifiers, they are
 | f64 | 64-bit IEEE 754 float (default float) | double |
 | bool | Boolean — true or false | bool (stdbool.h) |
 | char | Alias for `u8`. Represents a single ASCII/UTF-8 byte. Supports character literal syntax. | u8_t |
-| void | Non-instantiable type. Used by the compiler for type inference and control flow analysis. May appear in function type signatures (`() -> void`) but never as a value in expression positions — `void` cannot be assigned to a let binding or passed as an argument. | void |
+| void | Non-instantiable type. Used by the compiler for type inference and control flow analysis. May appear in function type signatures (`() -> void`) but never as a value in expression positions — `void` cannot be assigned to a let binding, passed as an argument, used as a `match` subject, or bound to a generic type parameter. | void |
 | any* | Opaque pointer — a raw address with no associated type. Cannot be dereferenced. Used for C interop — wrapping opaque C handles (file handles, database connections, etc.) and pointer casts. See §any* — opaque pointers. | void* |
 | str | Alias for `u8[]`. An FC string — fat pointer with length. | — |
 | cstr | Alias for `u8*`. A null-terminated C string pointer. Use for C interop only. | char* |
@@ -1943,6 +1943,8 @@ match some_node with
 | `{}` | matches any struct, binds nothing |
 | `pattern \| pattern \| ...` | or-pattern — matches if any alternative matches; alternatives must be binding-free |
 
+A name may be bound only once per pattern. `{ a, a }` and `both({ x = n, y = n })` are compile errors, not a last-wins rebinding — the same rule holds for a `let` or `for` destructuring pattern. Distinct arms may of course reuse a name, and a pattern binding may shadow an outer binding of the same name; only two bindings *within one pattern* collide. (A repeated no-payload variant name is not a binding at all, so `{ a = red, b = red }` is unaffected.)
+
 When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants. Inside an or-pattern alternative this rule is further constrained: because alternatives must be binding-free, a lone identifier must resolve to a no-payload variant (or be `_`); an unresolved bare name is a compile error rather than a binding.
 
 Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
@@ -1996,6 +1998,14 @@ let result = loop
 A loop produces a value only via `break value`. Everything else in the loop body — including expressions with non-void return values — is evaluated for side effects, and any value is discarded. Fall-through at the bottom of the loop body simply begins the next iteration; it never produces a value.
 
 `break value` is void-typed within the loop body (see §Control Flow Expressions) — the carried value determines the type of the `loop` expression at the call site, not the type of the `break` expression itself. All `break value` paths in a loop must agree on a type, and that type becomes the type of the loop expression.
+
+A valueless `break` is not an abstention: it makes the loop void, exactly as `break value` makes it the value's type. A loop must therefore be uniform — either every break carries a value of one type, or none does. Mixing the two is a break type mismatch:
+
+```fc
+let v = loop
+    if i > 3 then break        // error: break type mismatch — this loop mixes
+    break 5                    //        `break` with `break <value>`
+```
 
 ### for
 
@@ -3306,6 +3316,8 @@ Two initialization forms for stack slices:
 
 There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
 
+The declared length must be a compile-time constant, and it must not be negative — `u8[-4] { }` and `u8[1 - 5] { }` are compile errors, whether the length is written concretely or reached through a const parameter (`u32['n - 4] { }` is judged per instantiation). Zero is legal: `i32[0] { }` is the empty-slice literal, matching `default(i32[])`.
+
 The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
 
 The backing storage for a stack slice literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
@@ -3856,6 +3868,16 @@ let map_fst = (p: pair<'a, 'b>, f: ('a) -> 'c) ->
     pair { first = f(p.first), second = p.second }
 ```
 
+**A generic type name is never a type on its own.** Wherever a type is written — a struct field, a parameter annotation, a slice-literal element type, the operand of `default`/`sizeof`/`alloc` — a generic name must carry its type arguments. The bare name has unbound type variables and therefore no layout:
+
+```fc
+struct outer =
+    inner: box            // error: generic struct 'box' requires explicit type arguments: box<...>
+
+let take = (b: box) -> 0  // same error
+let d = default(box)      // same error
+```
+
 ### Type-associated modules on generic types
 
 A module sharing a generic type's name works the same as for concrete types. Type variables in scope within the type definition are available within the associated module:
@@ -3902,7 +3924,7 @@ let r = default(ring<u8, 64>)
 
 Using one variable in both kinds of position within a declaration is an error. When a variable is passed along to another generic's parameter (`inner: wide<'k>`), it inherits that parameter's kind.
 
-**Const arguments.** Where a const parameter expects an argument, the following forms are accepted directly: an integer literal (`wide<256>`), a const parameter (`wide<'n>`), a named constant — a module-level immutable `let` whose initializer is a compile-time constant, bare or dotted (`wide<cfg.block_bits>`) — and bare arithmetic over these with `+ - * / %` and unary minus (`wide<'n * 2>`, `wide<cfg.block_bits + 32>`). Shift, comparison, and bitwise operators require parentheses — `wide<('n >> 2)>` — inside which the full constant-expression grammar applies. Const arguments are evaluated in the 64-bit signed integer domain with two's-complement wraparound and masked shifts; division or modulo by zero in a const expression is a compile-time error. Only integer const parameters exist; there are no type-level floats, bools, or strings.
+**Const arguments.** Where a const parameter expects an argument, the following forms are accepted directly: an integer literal (`wide<256>`), a const parameter (`wide<'n>`), a named constant — a module-level immutable `let` whose initializer is a compile-time constant, bare or dotted (`wide<cfg.block_bits>`) — and bare arithmetic over these with `+ - * / %` and unary minus (`wide<'n * 2>`, `wide<cfg.block_bits + 32>`). Shift, comparison, and bitwise operators require parentheses — `wide<('n >> 2)>` — inside which the full constant-expression grammar applies. Const arguments are evaluated in the 64-bit signed integer domain with two's-complement wraparound and masked shifts; division or modulo by zero in a const expression is a compile-time error. That domain also fixes the type of an unsuffixed integer literal written inside a const expression — it is `i64` there, not the `i32` default of ordinary expressions, so `wide<4000000000 / 10>` is accepted just as the lone literal `wide<4000000000>` is. A written suffix still wins. The same holds in a fixed-array size slot, which uses the same constant-expression grammar. Only integer const parameters exist; there are no type-level floats, bools, or strings.
 
 The same expression forms serve as fixed-array sizes — `u32['n]`, `u32['n / 32]`, `u32[('n + 31) / 32]` inside a generic definition, and equally in non-generic ones, where a constant expression folds up front: `u8[4 * 2]`, `u8[cfg.word]` (a named module constant), `u8[(1 << 4)]`. A size that folds to zero or negative is a compile error.
 

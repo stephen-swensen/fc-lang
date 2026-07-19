@@ -1,0 +1,12 @@
+// A zero-length slice literal is legal — it is the empty-slice spelling.
+// Only a statically-negative length is a compile error (spec §Slice
+// construction from raw pointer). Pinned here as the concrete twin of
+// generics/const_slice_size_zero.
+let main = (args: str[]) ->
+    let a = u8[0]{}
+    assert(a.len == 0)
+    let b = i32[1 - 1] {}
+    assert(b.len == 0)
+    let c = u8[4 - 4]{}
+    assert(c.len == 0)
+    0

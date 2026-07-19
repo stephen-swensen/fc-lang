@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): constructing a nonexistent NO-PAYLOAD union
-// variant is silently accepted — fcc exits 0 emitting undeclared
-// fc__u_tag_zzz. The payload form u.zzz(5) correctly errors "union 'u' has
-// no variant 'zzz'" — the no-payload (non-call) path skips the check.
+// Constructing a nonexistent NO-PAYLOAD variant used to be silently accepted
+// (it typed as the union and emitted an undeclared fc__u_tag_zzz). The
+// payload form u.zzz(5) always checked; the non-call path needs the same
+// judgment.
 union u =
     | a(i32)
     | b

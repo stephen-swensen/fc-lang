@@ -1,0 +1,12 @@
+// A struct field's type never goes through resolve_type, so `box<void>` there
+// reached neither the type-resolution check nor mono_register's backstop
+// (mono is never invoked for a field type that names no valid instance).
+struct box =
+    value: 'a
+
+struct outer =
+    inner: box<void>
+
+let main = (args: str[]) ->
+    let o = default(outer)
+    0

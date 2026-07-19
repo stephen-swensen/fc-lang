@@ -1,21 +1,42 @@
-// BUG (bugsearch 2026-07-18): the module-qualified 3-part spelling
-// gfx.mode.count is not accepted as a compile-time constant in size slots
-// ("fixed array size must be a compile-time constant"), while every
-// neighboring form works: bare mode.count, via import, in module-level let
-// init, and deep module const paths. Spec: E.count is "an i32 constant
-// expression (usable in slice-literal lengths...)".
+// `E.count` is an i32 constant expression usable in any size slot, however
+// the enum is spelled — bare, module-qualified, or reached through nested
+// modules. The module-qualified spellings used to be rejected ("fixed array
+// size must be a compile-time constant") because the const folder only
+// recognized an enum named by a bare identifier.
 module gfx =
     enum mode of u16 =
         | text
         | vga
         | vesa
 
+    module deep =
+        enum chan =
+            | r
+            | g
+            | b
+            | a
+
+enum bare =
+    | on
+    | off
+
 struct tables =
     counts: u8[gfx.mode.count]
+    chans: u8[gfx.deep.chan.count]
+    flags: u8[bare.count]
+    sum: u8[gfx.mode.count + gfx.deep.chan.count]
 
 let main = (args: str[]) ->
     let names = i32[gfx.mode.count]{ 10, 20, 30 }
+    let deep = i32[gfx.deep.chan.count]{ 1, 2, 3, 4 }
     let t = tables { }
     assert(names[1] == 20)
+    assert(deep[3] == 4)
     assert(t.counts.len == 3)
+    assert(t.chans.len == 4)
+    assert(t.flags.len == 2)
+    assert(t.sum.len == 7)
+    // still an i32 constant expression in ordinary expression positions
+    assert(gfx.mode.count == 3)
+    assert(gfx.deep.chan.count * 2 == 8)
     0

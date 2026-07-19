@@ -391,6 +391,7 @@ static Type *parse_type(Parser *p);
 static Type *parse_type_arg(Parser *p);
 static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **out_msg, SrcLoc *out_loc);
 static Expr *parse_const_arith(Parser *p, int min_prec);
+static Expr *parse_const_arith_inner(Parser *p, int min_prec);
 
 /* Check if a token kind is valid inside a type argument list <...> */
 static bool is_type_arg_token(TokenKind k) {
@@ -918,6 +919,20 @@ static Type *parse_int_type(const char *start, int length) {
     return t ? t : type_int32();
 }
 
+/* The literal's type in the current slot. A const expression evaluates in the
+ * i64 domain, so an unsuffixed literal inside one is i64 rather than the i32
+ * expression default — otherwise a lone `f<4000000000>` (taken as-is by
+ * parse_type_arg) would be accepted while the same literal reached through
+ * const arithmetic got judged against i32's range. A written suffix always
+ * wins. */
+static Type *parse_int_type_in(Parser *p, const char *start, int length) {
+    int num_end = int_num_end(start, length);
+    if (num_end >= length)
+        return p->in_const_expr ? type_int64() : type_int32();
+    Type *t = type_from_int_suffix(start + num_end, length - num_end);
+    return t ? t : type_int32();
+}
+
 /* ---- Const generic arguments ----
  *
  * A generic argument is either a type or a const (value) expression. Bare
@@ -935,7 +950,7 @@ static Expr *parse_const_atom(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_INT_LIT, loc);
         bool oor = false;
         e->int_lit.value = parse_int_value(t->start, t->length, &oor);
-        e->int_lit.lit_type = parse_int_type(t->start, t->length);
+        e->int_lit.lit_type = parse_int_type_in(p, t->start, t->length);
         e->int_lit.out_of_range = oor;
         return e;
     }
@@ -987,6 +1002,14 @@ static Expr *parse_const_atom(Parser *p) {
 
 /* min_prec: 1 = additive level, 2 = multiplicative level. */
 static Expr *parse_const_arith(Parser *p, int min_prec) {
+    bool saved_const = p->in_const_expr;
+    p->in_const_expr = true;
+    Expr *r = parse_const_arith_inner(p, min_prec);
+    p->in_const_expr = saved_const;
+    return r;
+}
+
+static Expr *parse_const_arith_inner(Parser *p, int min_prec) {
     Expr *left = parse_const_atom(p);
     while (1) {
         TokenKind k = current(p)->kind;
@@ -997,7 +1020,7 @@ static Expr *parse_const_arith(Parser *p, int min_prec) {
         if (prec < min_prec) break;
         Token *op_tok = current(p);
         advance_p(p);
-        Expr *right = parse_const_arith(p, prec + 1);
+        Expr *right = parse_const_arith_inner(p, prec + 1);
         Expr *e = alloc_expr(p, EXPR_BINARY, loc_from_token(op_tok));
         e->binary.op = k;
         e->binary.left = left;
@@ -1628,7 +1651,7 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_INT_LIT, loc);
         bool int_oor = false;
         e->int_lit.value = parse_int_value(t->start, t->length, &int_oor);
-        e->int_lit.lit_type = parse_int_type(t->start, t->length);
+        e->int_lit.lit_type = parse_int_type_in(p, t->start, t->length);
         e->int_lit.out_of_range = int_oor;
         return e;
     }

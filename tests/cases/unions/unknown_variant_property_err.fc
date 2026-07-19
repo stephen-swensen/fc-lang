@@ -1,0 +1,9 @@
+// The same hole made a type-property-looking access "work": `u.count` on a
+// union typed as the union itself.
+union u =
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    let n = u.count
+    0

@@ -1,0 +1,16 @@
+// The duplicate may be at different depths of one pattern.
+struct pair =
+    x: i32
+    y: i32
+
+union wrap =
+    | both(pair)
+    | none_of_it
+
+let main = (args: str[]) ->
+    let w = wrap.both(pair { x = 1, y = 2 })
+    let v = match w with
+            | both({ x = n, y = n }) -> n
+            | none_of_it -> 0
+    assert(v == 2)
+    0

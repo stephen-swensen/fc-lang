@@ -1,0 +1,13 @@
+// Found alongside unknown_variant_construction_err: naming a *payload* variant
+// without its payload used to silently build the variant with a zero-filled
+// payload (`(fc__u){ .tag = fc__u_tag_a }` — exit 0, wrong at runtime). The
+// call path already checked the mirror case ("variant 'x' takes no payload").
+union u =
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    let y = u.a
+    match y with
+    | a(n) -> n
+    | b -> 0

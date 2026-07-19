@@ -1,0 +1,10 @@
+// The module-qualified spelling resolves the union through a separate branch
+// of the field checker — it needs the check too.
+module shapes =
+    union u =
+        | a(i32)
+        | b
+
+let main = (args: str[]) ->
+    let x = shapes.u.zzz
+    0

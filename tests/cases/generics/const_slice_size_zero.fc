@@ -1,0 +1,12 @@
+// A zero-length slice literal is the empty-slice spelling, and that holds for
+// a const-generic length too: `u32['n] { }` with 'n = 0 yields an empty slice,
+// exactly as the concrete `u32[0] { }` does. Only a *negative* length is a
+// compile error (see const_slice_size_negative_err).
+let zeros = <'n>() ->
+    let b = u32['n] { }
+    b.len
+
+let main = (args: str[]) ->
+    assert(zeros<0>() == 0)
+    assert(zeros<3>() == 3)
+    0

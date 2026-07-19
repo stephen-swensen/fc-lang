@@ -1,0 +1,12 @@
+// The generic-union twin of bare_generic_module_sibling_err.
+module m =
+    union maybe =
+        | got('a)
+        | nope
+
+    struct outer =
+        u: maybe
+
+let main = (args: str[]) ->
+    let o = default(m.outer)
+    0

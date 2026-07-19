@@ -1,0 +1,9 @@
+// A bare generic name as a parameter type was accepted silently whenever the
+// function was never called (the papercut twin of the field-type case).
+struct box =
+    value: 'a
+
+let take = (b: box) -> 0
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,12 @@
+// Break tracking is per-loop: the inner loop's valueless break must not
+// license a mixed outer loop (and vice versa).
+let main = (args: str[]) ->
+    let mut i = 0
+    let v = loop
+        let inner = loop
+            i = i + 1
+            if i > 2 then break 7
+        if inner > 5 then break
+        break inner
+    assert(v == 7)
+    0

@@ -1,0 +1,8 @@
+// The other order: the value break is seen first, then the bare one.
+let main = (args: str[]) ->
+    let mut i = 10
+    let v = loop
+        if i > 3 then break 5
+        break
+    assert(v == 5)
+    0

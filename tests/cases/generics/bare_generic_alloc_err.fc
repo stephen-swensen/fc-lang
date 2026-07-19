@@ -1,0 +1,7 @@
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let p = alloc(box)!
+    free(p)
+    0

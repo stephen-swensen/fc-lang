@@ -1,7 +1,0 @@
-let zeros = <'n>() ->
-    let b = u32['n] { }
-    b.len
-
-let main = (args: str[]) ->
-    assert(zeros<0>() == 0)
-    0

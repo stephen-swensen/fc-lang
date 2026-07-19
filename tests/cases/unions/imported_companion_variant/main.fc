@@ -1,0 +1,22 @@
+// Variant construction through an imported name that is BOTH a union and its
+// companion module — a distinct resolution path from the bare and
+// module-qualified spellings, and one the union-value guard must not claim.
+import u from shapes::
+
+let main = (args: str[]) ->
+    let x = u.a(5)
+    let y = u.b
+    let z = u.make(3)
+    let v = match z with
+            | a(n) -> n
+            | b -> 0
+    assert(v == 3)
+    let w = match y with
+            | a(_) -> 0
+            | b -> 1
+    assert(w == 1)
+    let q = match x with
+            | a(n) -> n
+            | b -> 0
+    assert(q == 5)
+    0

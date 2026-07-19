@@ -1,7 +1,6 @@
-// BUG (bugsearch 2026-07-18): a void-typed match subject is accepted and
-// codegen emits `void _subj0 = f(...);` — invalid C. The subject of a match
-// is a value position; pass2 should reject void there (it already rejects
-// void in let bindings and call args).
+// A match subject is a value position: codegen binds it to a temporary, so a
+// void subject would emit `void _subj0 = f(...);`. Rejected in pass2, like
+// void in a let binding or a call argument.
 let f = () -> void()
 
 let main = (args: str[]) ->

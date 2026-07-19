@@ -1,0 +1,5 @@
+// The literal void value is rejected in subject position too.
+let main = (args: str[]) ->
+    match void() with
+    | _ -> void()
+    0

@@ -1,0 +1,9 @@
+// The element var and the index var of a `for i, x in s` share one scope, so
+// giving them the same name emitted two declarations of it in the emitted C.
+// No pattern walk would see this collision — it is between two separate
+// header bindings.
+let main = (args: str[]) ->
+    let s = i32[2] { 1, 2 }
+    for a, a in s do
+        assert(a >= 0)
+    0

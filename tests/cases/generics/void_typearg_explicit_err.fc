@@ -1,0 +1,6 @@
+// The written spelling on a call: an explicit `void` type argument.
+let idv = <'a>(x: 'a) -> x
+
+let main = (args: str[]) ->
+    idv<void>(5)
+    0

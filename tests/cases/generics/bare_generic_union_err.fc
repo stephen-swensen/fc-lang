@@ -1,0 +1,11 @@
+// Generic unions take the same judgment as generic structs.
+union maybe =
+    | got('a)
+    | nope
+
+struct holder =
+    m: maybe
+
+let main = (args: str[]) ->
+    let h = default(holder)
+    0

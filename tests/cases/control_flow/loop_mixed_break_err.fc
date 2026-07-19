@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): a value loop mixing a bare `break` with
-// `break <value>` is accepted; the bare-break path leaves the loop result
-// uninitialized in the emitted C (clang -Werror rejects it; gcc binaries
-// read garbage). Should be a break type mismatch error (void vs i32).
+// A valueless `break` makes the loop void, so mixing it with `break <value>`
+// is a break type mismatch. Left unjudged, the emitted `_loop_result` was
+// never assigned on the bare-break path (clang rejects the C, gcc reads
+// garbage).
 let main = (args: str[]) ->
     let mut i = 10
     let v = loop

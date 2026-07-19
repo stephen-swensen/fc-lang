@@ -1,0 +1,8 @@
+// A generic union's explicit-type-arg spelling takes the same path.
+union may =
+    | got('a)
+    | nope
+
+let main = (args: str[]) ->
+    let x = may<i32>.zzz
+    0

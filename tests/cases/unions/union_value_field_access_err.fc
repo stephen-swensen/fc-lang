@@ -1,0 +1,13 @@
+// The same family: a union *value*'s field access was read as variant
+// construction, so `x.b` silently built a fresh `u.b` and discarded `x`.
+// Variant construction needs the union's TYPE name, not a value.
+union u =
+    | a(i32)
+    | b
+
+let main = (args: str[]) ->
+    let x = u.a(5)
+    let y = x.b
+    match y with
+    | a(n) -> n
+    | b -> 0

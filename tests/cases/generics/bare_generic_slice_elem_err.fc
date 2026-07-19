@@ -1,0 +1,8 @@
+// A bare generic name as a slice-literal element type used to produce the odd
+// "expected box, got box<i32>" instead of naming the real problem.
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let a = box[2] { }
+    0

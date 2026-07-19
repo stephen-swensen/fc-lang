@@ -1,0 +1,9 @@
+// A const-generic slice-literal length that evaluates negative is rejected
+// per instance — the generic twin of const_eval/slice_lit_negative_size_err.
+let zeros = <'n>() ->
+    let b = u32['n - 4] { }
+    b.len
+
+let main = (args: str[]) ->
+    assert(zeros<1>() == 0)
+    0

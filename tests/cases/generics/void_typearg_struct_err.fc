@@ -1,0 +1,9 @@
+// The written spelling in a type position: a generic struct instantiated with
+// void, reached through default(). alloc(box<void>) and a field/param
+// annotation take the same path.
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let b = default(box<void>)
+    0

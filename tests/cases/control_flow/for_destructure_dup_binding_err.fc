@@ -1,0 +1,6 @@
+// The `for` destructure twin — it shares the let-destructure checkers.
+let main = (args: str[]) ->
+    let ps = { i32, i32 }[2] { { 1, 2 }, { 3, 4 } }
+    for { a, a } in ps do
+        assert(a > 0)
+    0

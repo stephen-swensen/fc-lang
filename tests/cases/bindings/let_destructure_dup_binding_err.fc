@@ -1,0 +1,6 @@
+// The `let` destructure twin of pattern_matching/match_dup_binding_err: this
+// used to compile with last-wins. Both binding forms take the same judgment.
+let main = (args: str[]) ->
+    let { a, a } = { 1, 2 }
+    assert(a == 2)
+    0

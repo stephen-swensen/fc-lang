@@ -1,0 +1,8 @@
+// The expression-position spellings of the same hole: default(box) and
+// alloc(box) both resolve the bare name as a type.
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let b = default(box)
+    0

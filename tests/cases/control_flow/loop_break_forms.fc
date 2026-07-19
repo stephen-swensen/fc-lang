@@ -1,0 +1,35 @@
+// The legal break shapes around loop_mixed_break_err: a loop whose breaks are
+// all valueless is a void loop; a loop whose breaks all carry the same type
+// produces that value; a nested pair keeps its own break type; and `for`
+// (always void) still takes plain `break`.
+let main = (args: str[]) ->
+    let mut i = 0
+    // all-bare: statement-position void loop
+    loop
+        i = i + 1
+        if i > 2 then break
+        if i == 1 then continue
+    assert(i == 3)
+
+    // all-valued, several breaks of the same type
+    let mut j = 0
+    let v = loop
+        j = j + 1
+        if j == 1 then break 10
+        break 20
+    assert(v == 10)
+
+    // nested: inner void loop inside a value loop
+    let w = loop
+        loop
+            break
+        break 3
+    assert(w == 3)
+
+    // for is always void and takes a bare break
+    let mut n = 0
+    for k in 0..10 do
+        n = n + 1
+        if k == 4 then break
+    assert(n == 5)
+    0

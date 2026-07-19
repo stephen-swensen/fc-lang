@@ -111,6 +111,20 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
             return mangled;
     }
 
+    /* Backstop: void has no value representation, so an instance binding a
+     * type parameter to it emits `void x;`. pass2 rejects the written and
+     * inferred spellings at their use sites (with a source location); this
+     * catches any path that reached instantiation without passing one of
+     * them, so no such instance can ever reach codegen. */
+    for (int i = 0; i < count; i++) {
+        if (type_args[i] && type_args[i]->kind == TYPE_VOID) {
+            diag_error(tmpl ? tmpl->loc : (SrcLoc){0},
+                "cannot instantiate '%s' with void: void is not a value type",
+                name);
+            return mangled;
+        }
+    }
+
     /* Termination guard: a new instance whose type arguments nest deeper than any
      * finite program would means a generic is instantiating itself with a growing
      * type argument (infinite monomorphization). Report once and stop. */

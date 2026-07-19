@@ -1,0 +1,18 @@
+// Inside a module, pass1 has already resolved and mangled a field's type by
+// the time pass2 walks it, so a bare generic named by an unqualified sibling
+// reference arrives as a resolved node rather than a stub — and used to skip
+// the check entirely (fcc exit 0, `m__box` referenced and never defined).
+// Every field shape takes the same route.
+module m =
+    struct box =
+        value: 'a
+
+    struct outer =
+        inner: box
+        p: box*
+        s: box[]
+        o: box?
+
+let main = (args: str[]) ->
+    let o = default(m.outer)
+    0

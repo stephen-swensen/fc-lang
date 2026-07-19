@@ -1,7 +1,6 @@
-// BUG (bugsearch 2026-07-18): void instantiates a type variable — a void
-// call passed to a generic fn monomorphizes idv<void> and emits
-// `static void fc__idv__4_void(void x, void* _ctx)` — invalid C. Spec: void
-// "cannot be passed as an argument". Should be a pass2 error.
+// void has no value representation, so binding a type parameter to it would
+// monomorphize a copy taking `void x`. The inferred spelling — passing a
+// void-returning call to a generic function — is rejected at the argument.
 let idv = (x: 'a) -> x
 
 let v = () -> return
