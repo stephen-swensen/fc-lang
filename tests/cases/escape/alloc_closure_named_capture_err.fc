@@ -1,0 +1,14 @@
+// The `alloc(f)` spelling promotes the same context as `alloc(<lambda>)`, so
+// it takes the same judgment — the check reads the captures recorded on the
+// lambda literal the binding was initialized with.
+let make = () ->
+    let buf = i32[2] { 7, 8 }
+    let f = () -> buf[0]
+    alloc(f)!
+
+let main = (args: str[]) ->
+    let g = make()
+    let v = g()
+    free(g)
+    assert(v == 7)
+    0

@@ -1,0 +1,12 @@
+// A subslice views the same storage, so it holds the same values — element
+// provenance rides through `s[lo..hi]` alongside the backing's own.
+let bad = () ->
+    let mut x = 41
+    x = x + 1
+    let ptrs = i32*[2] { &x, &x }
+    let tail = ptrs[1..2]
+    tail[0]
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

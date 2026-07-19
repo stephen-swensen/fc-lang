@@ -1,14 +1,17 @@
-// BUG (bugsearch 2026-07-18): a value loaded from a stack-backed slice
-// element inherits the slice's "stack" provenance, so a heap slice stored in
-// a stack slice can never be freed — free(ss[0]) is rejected ("cannot free
-// stack-allocated memory"), and so is a local copy of the element. Freeing
-// heap allocations through a stack container is the basic collection
-// pattern; the spec says free works "through any copy". Siblings that work:
-// free through a stack struct field, free of a fn parameter.
+// A value loaded out of a slice is the *stored value*, not the backing store,
+// so it carries the container's element provenance rather than the container's
+// own. Without that split a slice literal — always stack-backed — made every
+// heap allocation parked in it unfreeable, which is the basic collection
+// pattern. escape/free_stack_slice_elem_err pins the other side: a container
+// that has actually held a stack slice stays tainted.
 let main = (args: str[]) ->
-    let e = i32[1] { 0 }
-    let ss = (i32[])[2] { e, e }
+    let ss = (i32[])[2] { }
     ss[0] = alloc(i32[2] { 4, 5 })!
+    ss[1] = alloc(i32[3] { 6, 7, 8 })!
     assert(ss[0][1] == 5)
+    assert(ss[1][2] == 8)
     free(ss[0])
+    // …and through a local copy of the element, too
+    let last = ss[1]
+    free(last)
     0

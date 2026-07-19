@@ -1,0 +1,14 @@
+// A capturing closure's own context is stack-allocated, so capturing one is
+// capturing stack data: promoting the outer closure to the heap would leave it
+// pointing at the inner context's dead frame.
+let make = () ->
+    let buf = i32[2] { 7, 8 }
+    let g = () -> buf[0]
+    alloc(() -> g())!
+
+let main = (args: str[]) ->
+    let f = make()
+    let v = f()
+    free(f)
+    assert(v == 7)
+    0

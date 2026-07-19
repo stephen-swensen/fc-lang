@@ -1,0 +1,13 @@
+// The two halves compose: an element load carries the container's element
+// provenance, and a match binding then inherits it from the subject.
+let bad = () ->
+    let mut x = 41
+    x = x + 1
+    let opts = (i32*?)[1] { some(&x) }
+    match opts[0] with
+    | some(p) -> p
+    | none -> default(i32*)
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

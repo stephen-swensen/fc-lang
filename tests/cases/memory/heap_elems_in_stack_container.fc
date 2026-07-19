@@ -1,0 +1,40 @@
+// The collection pattern across every element shape and every read form: a
+// stack-backed container holding heap values stays freeable however the value
+// is read back out (index, subslice, for-element, struct field).
+struct arena =
+    blocks: (i32[])[]
+
+let main = (args: str[]) ->
+    // read back by index and by iteration
+    let ptrs = (i32*)[3] { }
+    for i in 0..3 do
+        ptrs[i] = alloc(i32)!
+        *ptrs[i] = i
+    for p in ptrs do
+        free(p)
+
+    // a subslice keeps the element provenance of its source
+    let bufs = (i32[])[2] { }
+    bufs[0] = alloc(i32[1] { 1 })!
+    bufs[1] = alloc(i32[1] { 2 })!
+    let tail = bufs[1..2]
+    free(tail[0])
+    free(bufs[0])
+
+    // through a struct field holding the container
+    let more = (i32[])[1] { }
+    more[0] = alloc(i32[1] { 3 })!
+    let a = arena { blocks = more }
+    assert(a.blocks[0][0] == 3)
+    free(a.blocks[0])
+
+    // heap closures parked in a stack container
+    let fs = ((i32) -> i32)[1] { }
+    let mut k = 4
+    let base = alloc(i32)!
+    *base = 10
+    fs[0] = alloc((x: i32) -> x + *base)!
+    assert(fs[0](k) == 14)
+    free(fs[0])
+    free(base)
+    0

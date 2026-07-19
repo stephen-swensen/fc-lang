@@ -1,0 +1,11 @@
+// A match binding of a stack pointer inherits the subject's provenance, so
+// freeing through it is rejected exactly like free(&x). The unwrap twin
+// `some(&x)!` was always caught; the pattern spelling used to launder it (and
+// gcc then rejected the emitted C with -Werror=free-nonheap-object).
+let main = (args: str[]) ->
+    let mut x = 42
+    let o = some(&x)
+    match o with
+    | some(p) -> free(p)
+    | none -> void()
+    0

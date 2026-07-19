@@ -1,0 +1,15 @@
+// Element provenance rides through a struct: a struct holding a container of
+// stack pointers keeps those elements tainted when they are read back out.
+struct holder =
+    data: i32*[]
+
+let bad = () ->
+    let mut x = 41
+    x = x + 1
+    let ptrs = i32*[1] { &x }
+    let h = holder { data = ptrs }
+    h.data[0]
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

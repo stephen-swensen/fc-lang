@@ -1,0 +1,12 @@
+// A captured stack *pointer* is the same hazard as a captured stack slice.
+let make = () ->
+    let mut x = 42
+    let p = &x
+    alloc(() -> *p)!
+
+let main = (args: str[]) ->
+    let f = make()
+    let v = f()
+    free(f)
+    assert(v == 42)
+    0

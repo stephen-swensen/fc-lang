@@ -1,0 +1,17 @@
+// The named-field destructure twin of tuple_destructure_stack_ptr_err: a
+// binding taken out of a struct inherits that struct's provenance.
+struct holder =
+    p: i32*
+    n: i32
+
+let bad = () ->
+    let mut x = 41
+    x = x + 1
+    let h = holder { p = &x, n = 1 }
+    let { p = ptr, n = cnt } = h
+    let _n = cnt
+    ptr
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

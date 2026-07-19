@@ -1,0 +1,14 @@
+// A destructuring for-loop header reaches the same binding path as a `let`
+// destructure, so the element's provenance flows into every name it binds.
+let bad = () ->
+    let mut a = 41
+    a = a + 1
+    let pairs = { i32*, i32 }[1] { { &a, 7 } }
+    for { p, n } in pairs do
+        let _n = n
+        return p
+    default(i32*)
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

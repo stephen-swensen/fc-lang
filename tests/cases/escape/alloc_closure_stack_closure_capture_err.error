@@ -1,0 +1,1 @@
+cannot heap-allocate a closure capturing stack-allocated () -> i32 'g'

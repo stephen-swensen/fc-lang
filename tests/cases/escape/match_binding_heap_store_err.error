@@ -1,0 +1,1 @@
+cannot store stack-allocated i32* in heap-allocated struct field

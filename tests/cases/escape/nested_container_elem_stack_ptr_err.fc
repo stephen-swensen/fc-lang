@@ -1,0 +1,14 @@
+// Contents are tracked one level deep, so a container loaded out of another
+// inherits its holder's element tag as the bound on its own — without that,
+// the two-step load `outer[0][0]` launders what the one-step `outer[0]`
+// correctly reports as stack memory.
+let bad = () ->
+    let mut x = 41
+    x = x + 1
+    let inner = i32*[1] { &x }
+    let outer = ((i32*)[])[1] { inner }
+    outer[0][0]
+
+let main = (args: str[]) ->
+    let _p = bad()
+    0

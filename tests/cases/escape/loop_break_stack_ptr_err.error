@@ -1,1 +1,1 @@
-stack
+cannot return stack-allocated i32* from function

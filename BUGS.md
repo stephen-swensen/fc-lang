@@ -7,13 +7,13 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 14 / 45 fixed** (+6 found and fixed along the way: §1.5 during §1's
+**Status: 22 / 45 fixed** (+6 found and fixed along the way: §1.5 during §1's
 triage, two variant-construction holes during §2.5, and three more — two
 uncovered spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an
-adversarial review of the §2 diff, see those entries). §1 (parser / lexer)
-and §2 (pass2 judgments) complete — see those sections for what landed.
-§3–§8 untouched; current suite: 2123 passed, 31 failed (gcc + clang, -O0 and
--O2; LSP wire tests green).
+adversarial review of the §2 diff, see those entries). §1 (parser / lexer),
+§2 (pass2 judgments) and §3 (escape analysis) complete — see those sections
+for what landed. §4–§8 untouched; current suite: 2151 passed, 23 failed
+(gcc + clang, -O0 and -O2; LSP wire tests green).
 
 Conventions:
 
@@ -462,46 +462,142 @@ slice-literal length), and the ordinary expression positions.
 `imported_companion_variant/` (positive, multi-file).
 Widened: `enums/module_enum_count_size`, `const_eval/i64_literal_const_arith`.
 
-## 3. Escape-analysis holes (all ASan-verified stack-use-after-return) + one wrong-reject
+## 3. Escape-analysis holes + one wrong-reject — ✅ ALL FIXED (2026-07-18)
 
-The spec claims provenance propagates through bindings, branches, and option
-wrapping, and that returning/heap-storing stack pointers are compile errors.
-Direct forms are caught; these paths launder the tag. Root pattern: bindings
-introduced by anything other than a plain `let` are registered via `scope_add`
-(hardcoded `PROV_UNKNOWN`) instead of `scope_add_prov`, and two `alloc` forms
-skip the provenance walk. One fix sweep should close 3.1–3.4 together; 3.5–3.7
-are separate alloc-path checks.
+All eight fixed on branch `bugsearch`; suite 2151 passed / 23 failed (the
+remaining failures are §4–§6), gcc + clang, -O0 and -O2, LSP wire tests green.
+20 tests added beyond the eight repros. `spec/examples.fc`, the stdlib, all
+five demos, and both sibling projects (wolf-fc, euler-fc) still compile clean.
+Spec updated: §Escape analysis (binding-form propagation, the new
+§§Containers and their contents), §Heap closures.
 
-- **3.1 `escape/match_binding_stack_ptr_err`** — `| some(p) -> p` returns a
-  dead-frame pointer (the unwrap twin `some(&x)!` IS caught). Also launders
-  `free` (gcc even rejects the emitted C with `-Werror=free-nonheap-object`)
-  and heap stores. src/pass2.c ~2725/2774/2797.
+The eight split into two root causes, and 3.8 turned out to be the *same* root
+cause as 3.3/3.7 rather than a rule in tension with them — see below.
+
+### Root cause A: binding forms laundered provenance (3.1–3.4) ✅ FIXED
+
+Every binding introduced by something other than a plain `let` went through
+`scope_add` (hardcoded `PROV_UNKNOWN`) instead of `scope_add_prov`, and the
+loop was the one value-producing control expression that never joined its
+result's provenance.
+
+- **3.1 `escape/match_binding_stack_ptr_err`** — `| some(p) -> p` returned a
+  dead-frame pointer (the unwrap twin `some(&x)!` was caught). Also laundered
+  `free` and heap stores.
 - **3.2 `escape/tuple_destructure_stack_ptr_err`** — `let {p, n} = {&x, 1}`
   then return `p`.
-- **3.3 `escape/for_elem_stack_ptr_err`** — `for p in ptrs do return p`
-  (indexed twin `ptrs[0]` IS caught: `escape/return_indexed_stack_ptr_err`).
-  src/pass2.c ~2828/7551.
-- **3.4 `escape/loop_break_stack_ptr_err`** — `break &x` → loop value has
-  `PROV_UNKNOWN`; if/match joins merge provenance, loop doesn't
-  (src/pass2.c ~7475).
-- **3.5 `escape/alloc_closure_stack_capture_err`** — `alloc(lambda)` promotes
-  the ctx without walking captured values' provenance; heap closure capturing
-  a stack slice/pointer/stack-closure escapes. Explicit-store twins are
-  rejected (spec cites both).
+- **3.3 `escape/for_elem_stack_ptr_err`** — `for p in ptrs do return p`.
+- **3.4 `escape/loop_break_stack_ptr_err`** — `break &x` produced a
+  `PROV_UNKNOWN` loop value.
+
+**Fixed** by one channel rather than four patches. `CheckCtx.bind_prov` carries
+"the provenance the value being taken apart has" across the pattern checkers,
+which the three callers set and restore around their call (match subject, `let`
+destructure init, `for` element); `bound_prov` applies it at each of the four
+`scope_add` sites, gated on `type_has_provenance` so a scalar destructured out
+of a stack tuple stays untagged. `EXPR_LOOP` grew `loop_break_prov` alongside
+the existing `loop_break_type` — the parallel channel, so a break contributes
+its provenance exactly where it already contributes its type. Nesting,
+depth-2 destructures, the index-var form (`for i, p in ptrs`), and the
+destructuring-`for` header all follow for free.
+
+### Root cause B: `alloc`'s one-level copy skipped its contents (3.5–3.7) ✅ FIXED
+
+A heap promotion copies one level and whatever it copies keeps pointing where
+it always did. The struct-literal field check knew this; the three sibling
+shapes did not.
+
+- **3.5 `escape/alloc_closure_stack_capture_err`** — `alloc(lambda)` promoted
+  the context without looking at the captures.
 - **3.6 `escape/alloc_union_stack_payload_err`** — `alloc(u.held(&x))!`; the
-  struct-literal twin `alloc(node { data = &x })` IS rejected. The union
-  constructor sets `PROV_STACK` but the alloc path doesn't consult it.
-- **3.7 `escape/alloc_slice_stack_ptr_elems_err`** — `alloc(ptrs)!` deep-copies
-  the top level only; copied *pointer values* still target the dead frame.
-  Needs a `type_has_provenance`-style element check on the alloc-promotion path.
+  union constructor already set `PROV_STACK`, the alloc path never read it.
+- **3.7 `escape/alloc_slice_stack_ptr_elems_err`** — `alloc(ptrs)!` copied the
+  elements verbatim; the copied *pointer values* still targeted the dead frame.
+
+**Fixed** with a check per shape at the one site that performs the store.
+3.6 reads the constructor's own `prov` (it was already correct — only the
+consumer was missing). 3.5 records each capture's provenance on the `Capture`
+node at capture time, which is the one place the outer binding is in scope;
+`reject_stack_captures` then judges both `alloc(<lambda>)` and `alloc(f)`, and
+it catches a captured *capturing closure* too, since such a closure's own
+context is stack memory. 3.7 needed root cause C.
+
+### Root cause C: container provenance conflated backing with contents (3.7, 3.8) ✅ FIXED
+
 - **3.8 `memory/free_heap_via_stack_slice_elem`** (wrong-reject) — a value
-  *loaded* from a stack slice element inherits the slice's stack provenance,
-  so a heap slice/closure stored in a stack slice can never be freed — not
-  even via a local copy ("cannot free stack-allocated memory", and for
-  closures a factually wrong "its context was not heap-allocated"). Freeing
-  through a stack *struct field* or a fn param works. The element-load should
-  yield the value's own (unknown) provenance; only `&fs[0]` should inherit the
-  backing's.
+  loaded from a stack slice element inherited the slice's stack provenance, so
+  a heap slice or closure parked in a stack container could never be freed,
+  not even via a local copy.
+
+3.8 reads as the opposite of 3.3/3.7 — one wants element loads *not* to
+inherit, the other two want them to. Taking 3.8's suggested fix literally
+(element load → `PROV_UNKNOWN`, only `&fs[0]` inherits) would have reopened
+`escape/return_indexed_stack_ptr_err`, a deliberate existing test. They are
+instead the same bug: **`prov` on a container was doing two jobs.** For a
+struct it means "holds stack data"; for a slice it means "the backing store is
+stack" — and a slice literal's backing is *always* stack (an alloca) however
+static or heap its contents are. So the tag was simultaneously too strong for
+element loads and too weak for `alloc`'s deep copy.
+
+**Fixed** by splitting the second job onto its own axis: `Expr.elem_prov` /
+`LocalBinding.elem_prov`, "the provenance of the values this thing holds",
+defaulting to `PROV_UNKNOWN` (not tracked). Slice literals compute it by
+merging their elements'; it rides through subslices, struct and tuple
+literals and their field loads, option/result unwrap, casts and widens,
+if/match/block joins, `alloc`'s copy, and `c[i] = v` (which taints the
+container, in the loop pre-taint sweep too, since `c` may be re-read a later
+iteration). A slice element load then reads `elem_prov` where it used to read
+`prov`, and `alloc(slice)` judges `elem_prov` for 3.7. `&c[i]` still reads the
+backing and is still rejected.
+
+This makes the collection pattern work — `let bufs = (i32[])[2] { }`, fill with
+`alloc`, `free(bufs[i])` — including through a `for` element, a subslice, a
+struct field, and for heap closures. The rewritten
+`memory/free_heap_via_stack_slice_elem` pins it, and
+`memory/heap_elems_in_stack_container` pins every read form.
+
+**What stays rejected, and deliberately:** provenance merges monotonically
+toward stack, so a container seeded with a stack value keeps that tag for every
+later read even after an element is overwritten with a heap one — which is
+exactly the shape the original 3.8 repro used (`(i32[])[2] { e, e }` where `e`
+is a stack slice, then `ss[0] = alloc(…)`). Under flow-insensitive analysis
+that rejection is correct, not a residual bug: `ss[0]` may still be `e`. It is
+pinned as `escape/free_stack_slice_elem_err`, and the idiomatic seed (`{ }`)
+carries no taint.
+
+### Tests added (20)
+
+`escape/`: `match_binding_free_err`, `match_binding_heap_store_err`,
+`struct_destructure_stack_ptr_err`, `nested_destructure_stack_ptr_err`,
+`for_index_elem_stack_ptr_err`, `for_destructure_stack_ptr_err`,
+`loop_break_nested_stack_ptr_err`, `alloc_closure_named_capture_err`,
+`alloc_closure_stack_ptr_capture_err`,
+`alloc_closure_stack_closure_capture_err`,
+`alloc_union_stack_slice_payload_err`, `alloc_slice_stack_slice_elems_err`,
+`struct_field_elem_stack_ptr_err`, `subslice_elem_stack_ptr_err`,
+`match_slice_elem_stack_ptr_err`, `nested_container_elem_stack_ptr_err`,
+`free_stack_slice_elem_err`,
+`binding_prov_forms` (positive: heap and static values through every binding
+form), `alloc_container_elem_forms` (positive: scalar / static / heap /
+closure elements all survive promotion).
+`memory/`: `heap_elems_in_stack_container` (positive), and
+`free_heap_via_stack_slice_elem` rewritten to the collection pattern.
+Every `.error` substring was tightened to the real diagnostic.
+
+**Known limit, deliberate:** contents are tracked one level deep. A container
+loaded out of another inherits its holder's element tag as the bound on its
+own (`nested_container_elem_stack_ptr_err`), which keeps the nested case
+conservative rather than precise — a heap container parked two levels inside a
+stack-tainted one is rejected. The alternative is per-level element tracking,
+which the intraprocedural analysis has no way to make sound anyway.
+
+**Adversarial diff review** (the same pass that caught the leftover spellings
+in §2.3/§2.4) found no further holes: `&arr[0]`, storing into a heap slice's
+element, capturing a stack closure, a container held in a struct field, a
+match on an element load, a subslice of one, and the loop-order case are all
+rejected; eight legal-code shapes (passing a stack slice to a function,
+iterating static strings, freeing through a parameter, destructuring a call
+result, a closure capturing a parameter) are all accepted and ASan-clean.
 
 ## 4. Codegen emits invalid C for legal programs
 

@@ -1,0 +1,14 @@
+// Provenance is tracked per loop: an inner loop's stack break value taints the
+// inner loop's result, which the outer loop then breaks with in turn.
+let bad = () ->
+    let p = loop
+        let q = loop
+            let mut x = 41
+            x = x + 1
+            break &x
+        break q
+    p
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

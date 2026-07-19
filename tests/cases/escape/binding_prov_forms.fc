@@ -1,0 +1,53 @@
+// Positive negative-space for the provenance-through-bindings sweep: every
+// binding form that now inherits its source's provenance must still pass heap
+// and static values through untouched. One over-strict tag here would make the
+// ordinary "allocate, hand around, free" shape uncompilable.
+struct pair =
+    p: i32*
+    n: i32
+
+let via_match = (h: i32*) ->
+    let o = some(h)
+    match o with
+    | some(q) -> q
+    | none -> default(i32*)
+
+let via_destructure = (h: i32*) ->
+    let t = { h, 3 }
+    let { q, n } = t
+    let _n = n
+    q
+
+let via_struct_destructure = (h: i32*) ->
+    let s = pair { p = h, n = 3 }
+    let { p = q, n = cnt } = s
+    let _c = cnt
+    q
+
+let via_loop = (h: i32*) ->
+    loop
+        break h
+
+let via_for = (hs: i32*[]) ->
+    for q in hs do
+        return q
+    default(i32*)
+
+let static_via_match = () ->
+    let o = some("hello")
+    match o with
+    | some(s) -> s
+    | none -> ""
+
+let main = (args: str[]) ->
+    let h = alloc(i32)!
+    *h = 7
+    assert(*via_match(h) == 7)
+    assert(*via_destructure(h) == 7)
+    assert(*via_struct_destructure(h) == 7)
+    assert(*via_loop(h) == 7)
+    let hs = i32*[1] { h }
+    assert(*via_for(hs) == 7)
+    assert(static_via_match().len == 5)
+    free(h)
+    0

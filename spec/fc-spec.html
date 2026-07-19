@@ -2471,6 +2471,8 @@ Here `px` is a `let` binding holding an `i32*`, so it is capturable by copy. The
 
 `alloc` of a capturing lambda copies its context to the heap, exactly as `alloc` of a stack string copies its bytes. The result is `F?` where `F` is the lambda's function type — an option like every other heap allocation, `none` on failure. The promoted closure has heap provenance, so every escape restriction lifts: it can be returned, stored in heap structs, and captured by other lambdas. The caller owns the context and releases it with `free(f)`:
 
+The copy is one level deep, so what it captures must itself outlive the frame: promoting a closure that captures stack data — a stack slice, the address of a local, or another capturing closure — is a compile error, the same judgment `alloc(struct { f = ... })` already takes. Capture heap or static values (or a pointer to heap-allocated state) instead.
+
 ```fc
 let make_adder = (n: i32) ->
     alloc((x: i32) -> x + n)!    // context copied to the heap; returnable
@@ -4906,7 +4908,47 @@ h.data = &x                        // compile error: cannot store stack-allocate
 
 The destination is judged by its **root** storage: a local stack binding is exempt (it shares the frame), while a heap or static root is rejected. A write *through* a pointer of unknown provenance (a function parameter, an extern result) is not rejected — see the intraprocedural limitation below.
 
-Provenance propagates through let bindings, if/match branches, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, `.ptr` on slices, and implicit widening conversions. The last point matters: adding `const` (`cstr` → `const cstr`, `i32[]` → `const i32[]`) or any other lossless widen inserted at an assignment, call argument, struct-literal field, option payload, or branch join carries the operand's provenance through to the widened value — so widening a stack value never launders away its stack taint, and the sinks above still fire on the result. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
+The same judgment covers every way `alloc` performs that store implicitly, since a heap promotion copies exactly one level and whatever it copies keeps pointing where it always did: a union payload (`alloc(carrier.held(&x))`), the elements of a container (`alloc(i32*[1] { &x })`), and a promoted closure's captured values (`alloc(() -> buf[0])` where `buf` is a stack slice — including a captured closure, whose own context is stack memory).
+
+##### Containers and their contents
+
+A container's provenance describes its **backing store**; the provenance of the values it *holds* is tracked separately. A slice literal always lives on the stack, but what it holds may be static, heap, or stack data — and it is that second tag an element load carries:
+
+```fc
+let bufs = (i32[])[2] { }           // the container is stack-backed…
+bufs[0] = alloc(i32[4] { })!        // …but this element is heap
+free(bufs[0])                       // OK — the load carries the element's provenance
+
+let mut x = 42
+let ptrs = i32*[1] { &x }
+ptrs[0]                             // compile error: this element is stack memory
+&bufs[0]                            // stack — taking an element's address reads the backing
+```
+
+Element provenance rides through subslices, struct and tuple fields, `alloc`'s deep copy, and the element binding of a `for` loop. It is merged monotonically like every other tag, so a container that has held a stack value at any point holds one for every read of it — seeding a container with stack data and later overwriting it with heap data leaves the container tainted.
+
+Provenance propagates through let bindings, if/match/loop results, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, `.ptr` on slices, and implicit widening conversions. It also propagates into every name a **binding construct** introduces from the value that construct takes apart — a match-arm binding from its subject, a `let` destructure from the value destructured, a `for`-loop element from the collection iterated. A binding form never launders a stack tag:
+
+```fc
+let bad = () ->
+    let mut x = 42
+    match some(&x) with
+    | some(p) -> p              // compile error: cannot return stack-allocated i32*
+    | none -> default(i32*)
+
+let also_bad = () ->
+    let mut x = 42
+    let { p, n } = { &x, 1 }
+    let _n = n
+    p                           // compile error: same, through a destructure
+
+let and_bad = () ->
+    let mut x = 42
+    loop
+        break &x                // compile error: same, through a loop's break value
+```
+
+The last propagation point matters: adding `const` (`cstr` → `const cstr`, `i32[]` → `const i32[]`) or any other lossless widen inserted at an assignment, call argument, struct-literal field, option payload, or branch join carries the operand's provenance through to the widened value — so widening a stack value never launders away its stack taint, and the sinks above still fire on the result. If any branch of an if/match is stack-derived, the result is treated as stack-derived (conservative).
 
 Reassigning a `let mut` binding merges the assigned value's provenance into the binding: once a binding has held a stack value on any path, it is treated as stack-derived for every later read, so the sinks above fire even when the binding originally came from a parameter or a heap pointer. The merge is conservative and monotone — it never clears a stack taint, so a binding reassigned back to a heap value is still rejected at a later sink, and a stack assignment in one `if` arm taints the binding for code after the join. Loop bodies are analyzed so a read that precedes the tainting assignment textually but follows it across an iteration is also caught:
 

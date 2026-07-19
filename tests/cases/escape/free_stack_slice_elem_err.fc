@@ -1,0 +1,11 @@
+// The conservative half of the element-provenance rule (memory/heap_elems_in_
+// stack_container pins the permissive half): escape analysis is flow-
+// insensitive, so a container that has *ever* held a stack value holds one for
+// every read of it. Seeding `ss` with a stack slice therefore taints every
+// later `ss[i]`, even the one a heap allocation was just written to.
+let main = (args: str[]) ->
+    let e = i32[1] { 0 }
+    let ss = (i32[])[2] { e, e }
+    ss[0] = alloc(i32[2] { 4, 5 })!
+    free(ss[0])
+    0

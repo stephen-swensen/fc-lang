@@ -1,0 +1,14 @@
+// The index-var form of the for-loop binds the element the same way, so it
+// carries the same provenance (the index var itself is a plain i64).
+let bad = () ->
+    let mut a = 41
+    a = a + 1
+    let ptrs = i32*[1] { &a }
+    for i, p in ptrs do
+        let _i = i
+        return p
+    default(i32*)
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

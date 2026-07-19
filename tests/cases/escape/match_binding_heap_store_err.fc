@@ -1,0 +1,14 @@
+// A match binding of a stack pointer cannot be stored in heap memory either —
+// the same sink the direct spelling `h.p = &x` hits.
+struct holder =
+    p: i32*
+
+let main = (args: str[]) ->
+    let mut x = 42
+    let o = some(&x)
+    let h = alloc(holder { p = default(i32*) })!
+    match o with
+    | some(p) -> h.p = p
+    | none -> void()
+    free(h)
+    0

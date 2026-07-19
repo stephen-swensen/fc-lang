@@ -14,6 +14,7 @@ typedef struct {
     bool is_mut;
     bool is_capturing;          /* true if bound to a capturing lambda */
     Provenance prov;            /* provenance of the bound value */
+    Provenance elem_prov;       /* provenance of the values it *holds* (see Expr.elem_prov) */
     SrcLoc def_loc;             /* source loc where this name is introduced (editor
                                    go-to-def on a block-local); {0} if synthesized */
     bool is_param;              /* this binding is a function parameter — the LSP renders
@@ -80,9 +81,11 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
     return buf;
 }
 
-static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
-                           Type *type, bool is_mut, Provenance prov, SrcLoc def_loc) {
-    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, def_loc, false, NULL };
+static void scope_add_prov2(Scope *s, const char *name, const char *codegen_name,
+                            Type *type, bool is_mut, Provenance prov,
+                            Provenance elem_prov, SrcLoc def_loc) {
+    LocalBinding b = { name, codegen_name, type, is_mut, false, prov, elem_prov,
+                       def_loc, false, NULL };
     /* Grow arena-side so the locals array is reclaimed with the AST arena
      * (a long-running server frees it; the CLI frees it at the end). */
     if (s->local_count >= s->local_cap) {
@@ -96,9 +99,15 @@ static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
     s->locals[s->local_count++] = b;
 }
 
+static void scope_add_prov(Scope *s, const char *name, const char *codegen_name,
+                           Type *type, bool is_mut, Provenance prov, SrcLoc def_loc) {
+    scope_add_prov2(s, name, codegen_name, type, is_mut, prov, PROV_UNKNOWN, def_loc);
+}
+
 static void scope_add(Scope *s, const char *name, const char *codegen_name,
                       Type *type, bool is_mut, SrcLoc def_loc) {
-    scope_add_prov(s, name, codegen_name, type, is_mut, PROV_UNKNOWN, def_loc);
+    scope_add_prov2(s, name, codegen_name, type, is_mut, PROV_UNKNOWN, PROV_UNKNOWN,
+                    def_loc);
 }
 
 /* Scope lookup with lambda boundary crossing and mutability tracking.
@@ -177,6 +186,17 @@ static Provenance scope_lookup_prov(Scope *s, const char *name) {
     return PROV_UNKNOWN;
 }
 
+/* Look up the provenance of the values a binding *holds* (see Expr.elem_prov) */
+static Provenance scope_lookup_elem_prov(Scope *s, const char *name) {
+    for (Scope *sc = s; sc; sc = sc->parent) {
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].name == name)
+                return sc->locals[i].elem_prov;
+        }
+    }
+    return PROV_UNKNOWN;
+}
+
 /* Conservative merge: if any branch is STACK, result is STACK */
 static Provenance merge_prov(Provenance a, Provenance b) {
     if (a == b) return a;
@@ -198,6 +218,22 @@ static void scope_taint_prov(Scope *s, const char *codegen_name, Provenance prov
             if (sc->locals[i].codegen_name &&
                 strcmp(sc->locals[i].codegen_name, codegen_name) == 0) {
                 sc->locals[i].prov = merge_prov(sc->locals[i].prov, prov);
+                return;
+            }
+        }
+    }
+}
+
+/* Merge a stored value's provenance into a container binding's element
+ * provenance (`arr[i] = v`, or a whole-container reassignment). Found by
+ * source name, since the write target is an lvalue expression rather than a
+ * fresh binding. Same monotone-toward-STACK conservatism as scope_taint_prov. */
+static void scope_taint_elem_prov(Scope *s, const char *name, Provenance prov) {
+    if (!name) return;
+    for (Scope *sc = s; sc; sc = sc->parent) {
+        for (int i = sc->local_count - 1; i >= 0; i--) {
+            if (sc->locals[i].name == name) {
+                sc->locals[i].elem_prov = merge_prov(sc->locals[i].elem_prov, prov);
                 return;
             }
         }
@@ -368,6 +404,20 @@ static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
             LocalBinding *b = scope_find_binding(scope, e->assign.target->ident.name);
             if (b && b->is_mut && b->prov != PROV_STACK && type_has_provenance(b->type)) {
                 b->prov = PROV_STACK;
+                *changed = true;
+            }
+        }
+        /* The same textual-order problem for `c[i] = &x`: a later iteration
+         * reads back what an earlier one stored, so the element taint has to
+         * be in place before the body is checked. Unlike the binding taint
+         * this needs no mutability — `let` containers are content-mutable. */
+        if (e->assign.target->kind == EXPR_INDEX &&
+            e->assign.target->index.object->kind == EXPR_IDENT &&
+            expr_may_yield_stack(scope, e->assign.value)) {
+            LocalBinding *b = scope_find_binding(scope,
+                e->assign.target->index.object->ident.name);
+            if (b && b->elem_prov != PROV_STACK) {
+                b->elem_prov = PROV_STACK;
                 *changed = true;
             }
         }
@@ -551,7 +601,15 @@ typedef struct {
     Scope *scope;
     Arena *arena;
     Type **loop_break_type;  /* non-NULL when inside a loop; points to break value type */
+    Provenance *loop_break_prov;  /* parallel to loop_break_type: merged provenance of the
+                                     break values, so a loop is a provenance join like
+                                     if/match rather than laundering `break &x` */
     bool in_for;             /* true when inside a for loop (break value forbidden) */
+    /* Provenance a binding introduced by a pattern / for-loop header inherits
+     * from the value it is destructured out of. Set (and restored) around the
+     * pattern checkers by their callers; PROV_UNKNOWN everywhere else. Without
+     * it every non-`let` binding form launders its source's tag. */
+    Provenance bind_prov;
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
     ModuleScopeChain *parent_modules;  /* chain of ancestor module symtabs (nearest first) */
     const char *current_ns;      /* current namespace for namespace isolation */
@@ -2337,6 +2395,7 @@ static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
     cast->cast.target = target;
     cast->cast.operand = e;
     cast->prov = e->prov;
+    cast->elem_prov = e->elem_prov;
     return cast;
 }
 
@@ -2751,6 +2810,15 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
 
 static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is_mut, SrcLoc loc);
 
+/* Provenance a binding introduced by a pattern or for-loop header inherits from
+ * the value it is taken out of (ctx->bind_prov, set by the caller). Only
+ * provenance-carrying types take the tag: a plain i32 destructured out of a
+ * stack tuple holds nothing that can dangle, and tagging it would only add
+ * noise to the sinks that don't gate on the type themselves. */
+static Provenance bound_prov(CheckCtx *ctx, Type *t) {
+    return type_has_provenance(t) ? ctx->bind_prov : PROV_UNKNOWN;
+}
+
 /* Recursively check a struct destructuring pattern, adding bindings to scope */
 static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_type, bool is_mut, SrcLoc loc) {
     if (type_is_error(struct_type)) return;
@@ -2797,7 +2865,8 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
             int id = local_id_counter++;
             const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
             inner->binding.name = cg;  /* overwrite with codegen name */
-            scope_add(ctx->scope, orig_name, cg, field_type, is_mut, inner->loc);
+            scope_add_prov(ctx->scope, orig_name, cg, field_type, is_mut,
+                           bound_prov(ctx, field_type), inner->loc);
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
@@ -2846,7 +2915,8 @@ static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is
             int id = local_id_counter++;
             const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
             inner->binding.name = cg;  /* overwrite with codegen name */
-            scope_add(ctx->scope, orig_name, cg, elem_type, is_mut, inner->loc);
+            scope_add_prov(ctx->scope, orig_name, cg, elem_type, is_mut,
+                           bound_prov(ctx, elem_type), inner->loc);
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this element */
         } else if (inner->kind == PAT_STRUCT) {
@@ -2925,9 +2995,9 @@ static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
         else
             check_destruct_pattern(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
     } else {
-        scope_add(ctx->scope, e->for_expr.var,
+        scope_add_prov(ctx->scope, e->for_expr.var,
             c_safe_ident(ctx->intern, e->for_expr.var), elem_type, false,
-            e->for_expr.var_loc);
+            bound_prov(ctx, elem_type), e->for_expr.var_loc);
     }
 }
 
@@ -4134,6 +4204,27 @@ static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
  * Const propagates from the pointer (`through_const`); provenance comes from the
  * pointed-to storage, so this is shared by the EXPR_FIELD auto-deref path and the
  * internally-produced EXPR_DEREF_FIELD nodes. */
+/* A heap-promoted closure's context is a verbatim copy of the captured values,
+ * so a capture that is (or holds) stack data still points into the frame the
+ * closure is meant to outlive. The explicit-store twins are already rejected
+ * ("cannot store stack-allocated ... in heap-allocated struct field"); this is
+ * the same judgment on the implicit store alloc(closure) performs. Reports at
+ * the alloc site, naming the capture — the lambda body's use of the name is
+ * where the reader will look. */
+static bool reject_stack_captures(Expr *alloc_e, Expr *lam) {
+    bool bad = false;
+    for (int i = 0; i < lam->func.capture_count; i++) {
+        Capture *c = &lam->func.captures[i];
+        if (c->prov != PROV_STACK || !type_has_provenance(c->type)) continue;
+        diag_error(alloc_e->loc,
+            "cannot heap-allocate a closure capturing stack-allocated %s '%s' — "
+            "the context outlives the frame that value lives in",
+            type_name(c->type), c->name);
+        bad = true;
+    }
+    return bad;
+}
+
 static Type *check_pointer_field(CheckCtx *ctx, Expr *e, Type *ptr_type) {
     bool through_const = ptr_type->is_const;
     Type *pointee = resolve_type(ctx, ptr_type->pointer.pointee);
@@ -4151,12 +4242,15 @@ static Type *check_pointer_field(CheckCtx *ctx, Expr *e, Type *ptr_type) {
                 e->type = type_slice(ctx->arena, ft->fixed_array.elem);
                 if (through_const) e->type = type_make_const(ctx->arena, e->type);
                 e->prov = e->field.object->prov;
+                e->elem_prov = e->field.object->elem_prov;
             } else {
                 e->type = ft;
                 if (through_const) e->type = type_make_const(ctx->arena, e->type);
                 /* Propagate provenance from the pointed-to struct. */
-                if (type_has_provenance(ft))
+                if (type_has_provenance(ft)) {
                     e->prov = e->field.object->prov;
+                    e->elem_prov = e->field.object->elem_prov;
+                }
             }
             return e->type;
         }
@@ -4366,9 +4460,19 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         }
                     }
                     if (!found) {
+                        /* Record what the captured value's provenance is here,
+                         * at the one place the outer binding is in scope, so
+                         * alloc(closure) can judge the context it promotes.
+                         * A container whose elements are stack-derived counts
+                         * as stack for that purpose. */
+                        Provenance cprov = scope_lookup_prov(ctx->scope, e->ident.name);
+                        if (cprov != PROV_STACK && type_has_provenance(t) &&
+                            scope_lookup_elem_prov(ctx->scope, e->ident.name) == PROV_STACK)
+                            cprov = PROV_STACK;
                         Capture cap = { .name = e->ident.name,
                                         .codegen_name = cg_name,
-                                        .type = t };
+                                        .type = t,
+                                        .prov = cprov };
                         DA_APPEND(lc->entries, lc->count, lc->cap, cap);
                     }
                     lc = lc->parent;
@@ -4411,6 +4515,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
             e->type = t;
             e->prov = scope_lookup_prov(ctx->scope, e->ident.name);
+            e->elem_prov = scope_lookup_elem_prov(ctx->scope, e->ident.name);
             return t;
         }
         /* 2. Check module symtab (for within-module sibling/forward references) */
@@ -5066,6 +5171,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (ot->kind == TYPE_RESULT) {
                 e->type = ot->result.inner;
                 e->prov = e->unary_postfix.operand->prov;
+                e->elem_prov = e->unary_postfix.operand->elem_prov;
                 return e->type;
             }
             if (ot->kind != TYPE_OPTION) {
@@ -5075,6 +5181,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
             e->type = ot->option.inner;
             e->prov = e->unary_postfix.operand->prov;
+            e->elem_prov = e->unary_postfix.operand->elem_prov;
             return e->type;
         }
         if (e->unary_postfix.op == TOK_QUESTION) {
@@ -5630,6 +5737,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     if (e->call.args[0]->prov == PROV_STACK &&
                         type_has_provenance(e->call.args[0]->type))
                         e->prov = PROV_STACK;
+                    e->elem_prov = e->call.args[0]->elem_prov;
                     return e->type;
                 }
             }
@@ -5981,12 +6089,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->type = unified;
             /* Provenance comes from the value-producing branch(es); a diverging
                (never) branch yields no value and contributes none. */
-            if (type_is_never(tt))
+            if (type_is_never(tt)) {
                 e->prov = e->if_expr.else_body->prov;
-            else if (type_is_never(et))
+                e->elem_prov = e->if_expr.else_body->elem_prov;
+            } else if (type_is_never(et)) {
                 e->prov = e->if_expr.then_body->prov;
-            else
+                e->elem_prov = e->if_expr.then_body->elem_prov;
+            } else {
                 e->prov = merge_prov(e->if_expr.then_body->prov, e->if_expr.else_body->prov);
+                e->elem_prov = merge_prov(e->if_expr.then_body->elem_prov,
+                                          e->if_expr.else_body->elem_prov);
+            }
         } else {
             /* No else → void; the then-branch's value (if any) is discarded,
                so a result there would be a silently dropped failure. */
@@ -6001,8 +6114,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         Scope *saved = ctx->scope;
         ctx->scope = inner;
         e->type = check_block(ctx, e->block.stmts, e->block.count, /*tail_used=*/true);
-        if (e->block.count > 0)
+        if (e->block.count > 0) {
             e->prov = e->block.stmts[e->block.count - 1]->prov;
+            e->elem_prov = e->block.stmts[e->block.count - 1]->elem_prov;
+        }
         ctx->scope = saved;
         return e->type;
     }
@@ -6023,6 +6138,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         *slot = saved;
         e->type = t;
         e->prov = e->guard.body->prov;
+        e->elem_prov = e->guard.body->elem_prov;
         /* Strict redundancy: an accepted marker must always change the emitted code.
            Reject one that doesn't flip its axis's context, or whose body has no
            governed operation for it to toggle. Suppress on an erroneous body. */
@@ -6167,8 +6283,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
 
         e->let_expr.let_type = t;
-        scope_add_prov(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
-                        e->let_expr.let_init->prov, e->let_expr.let_name_loc);
+        scope_add_prov2(ctx->scope, e->let_expr.let_name, cg, t, e->let_expr.let_is_mut,
+                        e->let_expr.let_init->prov, e->let_expr.let_init->elem_prov,
+                        e->let_expr.let_name_loc);
         /* Mark binding as capturing if init is a lambda with captures, and record
          * the lambda itself so alloc(f) can promote its context through the name. */
         if (e->let_expr.let_init->kind == EXPR_FUNC) {
@@ -6213,10 +6330,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         e->let_destruct.tmp_name = tmp_name;
 
         int first_local = ctx->scope->local_count;
+        /* Every name the pattern binds is a piece of the destructured value, so
+         * it inherits that value's provenance — otherwise `let {p, n} = {&x, 1}`
+         * launders the stack tag and `p` escapes the frame. */
+        Provenance saved_bind = ctx->bind_prov;
+        ctx->bind_prov = e->let_destruct.init->prov;
         if (e->let_destruct.pattern->kind == PAT_TUPLE)
             check_tuple_destruct(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
         else
             check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
+        ctx->bind_prov = saved_bind;
         check_dup_bindings(ctx->scope, first_local, "pattern");
 
         e->type = type_void();
@@ -6328,6 +6451,19 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             type_has_provenance(vt)) {
             scope_taint_prov(ctx->scope, e->assign.target->ident.codegen_name,
                 e->assign.value->prov);
+            /* A whole-container reassignment replaces what it holds too. */
+            scope_taint_elem_prov(ctx->scope, e->assign.target->ident.name,
+                e->assign.value->elem_prov);
+        }
+        /* `c[i] = v` stores v *into* c, so it is the element provenance that
+         * moves — the container's own backing is untouched. Without this,
+         * a stack pointer written into a slice would be invisible to the
+         * element loads that read it back. */
+        if (e->assign.target->kind == EXPR_INDEX &&
+            e->assign.target->index.object->kind == EXPR_IDENT &&
+            type_has_provenance(vt)) {
+            scope_taint_elem_prov(ctx->scope,
+                e->assign.target->index.object->ident.name, e->assign.value->prov);
         }
         e->type = type_void();
         return e->type;
@@ -6428,12 +6564,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             e->prov = PROV_STACK;
         else if (cstr_to_str) {
             e->prov = e->cast.operand->prov;  /* preserves source provenance */
+            e->elem_prov = e->cast.operand->elem_prov;
             if (from->is_const && is_str_type(to)) {
                 Type *ct = type_make_const(ctx->arena, to);
                 e->type = ct;
             }
-        } else if (type_has_provenance(to))
+        } else if (type_has_provenance(to)) {
             e->prov = e->cast.operand->prov;   /* pointer casts preserve provenance */
+            e->elem_prov = e->cast.operand->elem_prov;
+        }
         return e->type;
     }
 
@@ -6656,11 +6795,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         e->type = st;
         for (int i = 0; i < e->struct_lit.field_count; i++) {
             FieldInit *fi = &e->struct_lit.fields[i];
-            if (fi->value->prov == PROV_STACK &&
-                type_has_provenance(fi->value->type)) {
-                e->prov = PROV_STACK;
-                break;
-            }
+            if (!type_has_provenance(fi->value->type)) continue;
+            if (fi->value->prov == PROV_STACK) e->prov = PROV_STACK;
+            /* A struct's element provenance summarizes what its *container*
+             * fields hold, one level deeper than `prov`: a struct holding a
+             * stack slice of heap blocks is itself stack (the slice is) but
+             * the blocks stay freeable. */
+            e->elem_prov = merge_prov(e->elem_prov, fi->value->elem_prov);
         }
         return e->type;
     }
@@ -6692,11 +6833,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         /* Propagate stack provenance from any stack-pointer element, mirroring
          * struct literals, so a tuple holding a stack pointer can't escape. */
         for (int i = 0; i < n; i++) {
-            if (e->tuple_lit.elems[i]->prov == PROV_STACK &&
-                type_has_provenance(e->tuple_lit.elems[i]->type)) {
-                e->prov = PROV_STACK;
-                break;
-            }
+            if (!type_has_provenance(e->tuple_lit.elems[i]->type)) continue;
+            if (e->tuple_lit.elems[i]->prov == PROV_STACK) e->prov = PROV_STACK;
+            e->elem_prov = merge_prov(e->elem_prov, e->tuple_lit.elems[i]->elem_prov);
         }
         return e->type;
     }
@@ -7295,12 +7434,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     e->prov = e->field.object->prov;
                     if (e->prov == PROV_UNKNOWN)
                         e->prov = PROV_STACK;
+                    e->elem_prov = e->field.object->elem_prov;
                 } else {
                     e->type = ft;
                     /* Propagate provenance from the struct so reading a pointer
                        field out of a stack-provenance struct stays tainted. */
-                    if (type_has_provenance(ft))
+                    if (type_has_provenance(ft)) {
                         e->prov = e->field.object->prov;
+                        e->elem_prov = e->field.object->elem_prov;
+                    }
                 }
                 return e->type;
             }
@@ -7376,8 +7518,18 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         if (obj_type->kind == TYPE_SLICE) {
             e->type = obj_type->slice.elem;
-            if (type_has_provenance(e->type))
-                e->prov = e->index.object->prov;
+            /* A load yields the *stored value*, whose provenance is the
+             * container's element provenance — not the backing store's. A heap
+             * slice parked in a stack slice stays freeable; a stack pointer
+             * parked in one stays un-returnable. */
+            if (type_has_provenance(e->type)) {
+                e->prov = e->index.object->elem_prov;
+                /* Contents are only tracked one level, so a container loaded
+                 * out of another inherits its holder's element tag as the
+                 * bound on its own — otherwise `outer[0][0]` would launder
+                 * what `outer[0]` correctly reports. */
+                e->elem_prov = e->index.object->elem_prov;
+            }
             return e->type;
         }
         if (obj_type->kind == TYPE_POINTER) {
@@ -7417,6 +7569,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         e->type = obj_type;
         e->prov = e->slice.object->prov;
+        e->elem_prov = e->slice.object->elem_prov;
         return e->type;
     }
 
@@ -7515,7 +7668,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         if (elem_error) { e->type = type_error(); return e->type; }
         e->type = type_slice(ctx->arena, elem_type);
+        /* The backing array is an alloca — the slice itself is always stack.
+         * What it *holds* is a separate question: `str[2] { "a", "b" }` is a
+         * stack slice of static strings, and only the element provenance
+         * decides whether a load out of it can dangle. */
         e->prov = PROV_STACK;
+        if (type_has_provenance(elem_type)) {
+            for (int i = 0; i < e->array_lit.elem_count; i++)
+                e->elem_prov = i == 0 ? e->array_lit.elems[i]->prov
+                                      : merge_prov(e->elem_prov, e->array_lit.elems[i]->prov);
+        }
         return e->type;
     }
 
@@ -7595,6 +7757,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         e->type = type_option(ctx->arena, inner);
         e->prov = e->some_expr.value->prov;
+        e->elem_prov = e->some_expr.value->elem_prov;
         /* Null-sentinel options (T*?, any*?, cstr?) represent none as a null
          * pointer, so some(p) over a null p is indistinguishable from none.
          * Reject a provably-null payload outright; a not-provably-non-null
@@ -7626,6 +7789,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
         e->type = type_result(ctx->arena, inner);
         e->prov = e->ok_expr.value->prov;
+        e->elem_prov = e->ok_expr.value->elem_prov;
         return e->type;
     }
 
@@ -7684,9 +7848,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         /* Set up break type tracking */
         Type *break_type = NULL;
+        Provenance break_prov = PROV_UNKNOWN;
         Type **saved_break = ctx->loop_break_type;
+        Provenance *saved_break_prov = ctx->loop_break_prov;
         bool saved_in_for = ctx->in_for;
         ctx->loop_break_type = &break_type;
+        ctx->loop_break_prov = &break_prov;
         ctx->in_for = false;
 
         pretaint_loop_body(ctx->scope, e->loop_expr.body, e->loop_expr.body_count);
@@ -7694,10 +7861,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         ctx->scope = saved;
         ctx->loop_break_type = saved_break;
+        ctx->loop_break_prov = saved_break_prov;
         ctx->in_for = saved_in_for;
 
         /* Loop type comes from break values; void if no break-with-value */
         e->type = break_type ? break_type : type_void();
+        /* …and so does its provenance: `loop … break &x` is the third
+         * value-producing control expression, and must join provenance like
+         * if/match rather than dropping it. */
+        e->prov = break_prov;
         return e->type;
     }
 
@@ -7760,7 +7932,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         } else {
             /* Collection iteration: for x in slice */
             if (iter_type->kind == TYPE_SLICE) {
+                /* The element binding is a copy of a stored value, so it takes
+                 * the container's *element* provenance (not the backing's):
+                 * `for p in i32*[1] { &a }` yields a stack pointer, while
+                 * iterating a stack slice of heap slices does not. */
+                Provenance saved_bind = ctx->bind_prov;
+                ctx->bind_prov = e->for_expr.iter->elem_prov;
                 bind_for_element(ctx, e, iter_type->slice.elem);
+                ctx->bind_prov = saved_bind;
                 if (e->for_expr.index_var) {
                     scope_add(ctx->scope, e->for_expr.index_var,
                         c_safe_ident(ctx->intern, e->for_expr.index_var), type_int64(), false,
@@ -7783,9 +7962,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         /* Save/set loop context for break checking */
         Type **saved_break = ctx->loop_break_type;
+        Provenance *saved_break_prov = ctx->loop_break_prov;
         bool saved_in_for = ctx->in_for;
         Type *break_type = NULL;
+        Provenance break_prov = PROV_UNKNOWN;
         ctx->loop_break_type = &break_type;
+        ctx->loop_break_prov = &break_prov;
         ctx->in_for = true;
 
         pretaint_loop_body(ctx->scope, e->for_expr.body, e->for_expr.body_count);
@@ -7793,6 +7975,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         ctx->scope = saved;
         ctx->loop_break_type = saved_break;
+        ctx->loop_break_prov = saved_break_prov;
         ctx->in_for = saved_in_for;
 
         e->type = type_void();
@@ -7816,6 +7999,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * the bare path (clang rejects the C; gcc reads garbage). */
         Type *vt = e->break_expr.value ? check_expr(ctx, e->break_expr.value)
                                        : type_void();
+        if (e->break_expr.value && ctx->loop_break_prov)
+            *ctx->loop_break_prov = merge_prov(*ctx->loop_break_prov,
+                                               e->break_expr.value->prov);
         if (!type_is_error(vt)) {
             if (*ctx->loop_break_type == NULL) {
                 *ctx->loop_break_type = vt;
@@ -8177,6 +8363,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     e->type = type_error();
                     return e->type;
                 }
+                if (reject_stack_captures(e, ie)) { e->type = type_error(); return e->type; }
                 ie->func.heap_alloc = true;
                 e->type = type_option(ctx->arena, t);
                 e->prov = PROV_HEAP;
@@ -8199,6 +8386,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     return e->type;
                 }
                 if (lam) {
+                    if (reject_stack_captures(e, lam)) { e->type = type_error(); return e->type; }
                     e->alloc_expr.closure_src = lam;
                     e->type = type_option(ctx->arena, t);
                     e->prov = PROV_HEAP;
@@ -8264,6 +8452,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (t->kind == TYPE_SLICE) {
                 /* alloc(slice_expr) → T[]? (deep-copy to heap) */
                 /* Also handles alloc("str_lit"), alloc("interp %d{x}"), alloc(slice_var) */
+                /* The copy is one level deep: the *elements* are copied
+                 * verbatim, so stack-derived element values end up stored in
+                 * heap memory — the same store the struct-literal check above
+                 * rejects, just spelled through a container. */
+                if (ie->elem_prov == PROV_STACK &&
+                    type_has_provenance(t->slice.elem)) {
+                    diag_error(ie->loc,
+                        "cannot heap-copy a slice of stack-allocated %s — the copy "
+                        "duplicates the elements, not what they point to",
+                        type_name(t->slice.elem));
+                }
                 Type *rt = t;
                 if (rt->is_const) {
                     rt = arena_alloc(ctx->arena, sizeof(Type));
@@ -8275,7 +8474,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 /* alloc(struct_literal) → T*? */
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
             } else if (t->kind == TYPE_UNION) {
-                /* alloc(union_variant) → T*? */
+                /* alloc(union_variant) → T*? — the union constructor already
+                 * tags itself PROV_STACK when its payload is stack-derived
+                 * (the twin of the struct-literal field check above, which the
+                 * alloc path used not to consult). */
+                if (ie->prov == PROV_STACK) {
+                    Expr *payload = (ie->kind == EXPR_CALL && ie->call.arg_count > 0)
+                        ? ie->call.args[0] : ie;
+                    diag_error(payload->loc,
+                        "cannot store stack-allocated %s in heap-allocated union",
+                        type_name(payload->type));
+                }
                 e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
             } else {
                 diag_error(e->loc,
@@ -8286,6 +8495,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             e->prov = PROV_HEAP;
+            /* The promotion copies one level: whatever the source held is now
+             * held by heap storage, with the same provenance it always had. */
+            e->elem_prov = ie->elem_prov;
         }
         return e->type;
     }
@@ -8454,7 +8666,8 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
                 pat->binding.name);
             return;
         }
-        scope_add(ctx->scope, pat->binding.name, pat->binding.name, type, false, pat->loc);
+        scope_add_prov(ctx->scope, pat->binding.name, pat->binding.name, type, false,
+                       bound_prov(ctx, type), pat->loc);
         break;
     case PAT_INT_LIT:
         if (type->kind == TYPE_ENUM) {
@@ -9551,7 +9764,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
     }
 
     Type *result_type = NULL;
-    Provenance result_prov = PROV_UNKNOWN;
+    Provenance result_prov = PROV_UNKNOWN, result_elem_prov = PROV_UNKNOWN;
 
     /* While inferring a recursive function's return type, check base-case arms
        before arms that consume a self-recursive call's result, so the placeholder
@@ -9585,7 +9798,13 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         /* Check pattern and introduce bindings. The arm scope is fresh and
          * holds nothing but this pattern's bindings, so a repeated name in it
          * is a duplicate binding. */
+        /* A pattern binding names a piece of the subject, so it inherits the
+         * subject's provenance: `match some(&x) with | some(p) -> p` must be
+         * rejected exactly like the unwrap spelling `some(&x)!`. */
+        Provenance saved_bind = ctx->bind_prov;
+        ctx->bind_prov = e->match_expr.subject->prov;
         check_match_pattern(ctx, pat, subj_type, /*reject_bindings=*/false);
+        ctx->bind_prov = saved_bind;
         check_dup_bindings(arm_scope, 0, "pattern");
 
         /* Type-check the optional `when` guard in the arm scope, so
@@ -9601,9 +9820,11 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 
         /* Type-check arm body */
         Type *arm_type = check_block(ctx, arm->body, arm->body_count, /*tail_used=*/true);
-        Provenance arm_prov = PROV_UNKNOWN;
-        if (arm->body_count > 0)
+        Provenance arm_prov = PROV_UNKNOWN, arm_elem_prov = PROV_UNKNOWN;
+        if (arm->body_count > 0) {
             arm_prov = arm->body[arm->body_count - 1]->prov;
+            arm_elem_prov = arm->body[arm->body_count - 1]->elem_prov;
+        }
         ctx->scope = saved;
 
         if (type_is_error(arm_type)) continue;
@@ -9613,6 +9834,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
                it on a later iteration via unify_branch). */
             result_type = arm_type;
             result_prov = arm_prov;
+            result_elem_prov = arm_elem_prov;
         } else {
             Type *unified = unify_branch(result_type, arm_type);
             if (!unified) {
@@ -9622,10 +9844,13 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
                 /* A diverging (never) arm carries no value: when it overtakes a
                    prior never result, adopt its provenance; otherwise merge only
                    value-producing arms. */
-                if (type_is_never(result_type) && !type_is_never(arm_type))
+                if (type_is_never(result_type) && !type_is_never(arm_type)) {
                     result_prov = arm_prov;
-                else if (!type_is_never(arm_type))
+                    result_elem_prov = arm_elem_prov;
+                } else if (!type_is_never(arm_type)) {
                     result_prov = merge_prov(result_prov, arm_prov);
+                    result_elem_prov = merge_prov(result_elem_prov, arm_elem_prov);
+                }
                 result_type = unified;
             }
         }
@@ -9641,6 +9866,7 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
 
     e->type = result_type ? result_type : type_error();
     e->prov = result_prov;
+    e->elem_prov = result_elem_prov;
     return e->type;
 }
 

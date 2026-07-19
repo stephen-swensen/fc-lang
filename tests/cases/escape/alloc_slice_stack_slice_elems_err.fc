@@ -1,0 +1,11 @@
+// alloc's one-level deep copy launders stack *slices* held as elements just as
+// it launders stack pointers — the copied fat pointers still target the frame.
+let bad = () ->
+    let inner = i32[2] { 4, 5 }
+    let outer = (i32[])[1] { inner }
+    alloc(outer)!
+
+let main = (args: str[]) ->
+    let hs = bad()
+    free(hs)
+    0

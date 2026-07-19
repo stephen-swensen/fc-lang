@@ -1,1 +1,1 @@
-stack
+cannot heap-copy a slice of stack-allocated i32*

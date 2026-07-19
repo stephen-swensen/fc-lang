@@ -1,0 +1,14 @@
+// The union-payload check is on provenance, not on pointer-ness: a stack slice
+// payload is rejected exactly like a stack pointer one.
+union carrier =
+    | held(i32[])
+    | empty
+
+let bad = () ->
+    let buf = i32[2] { 4, 5 }
+    alloc(carrier.held(buf))!
+
+let main = (args: str[]) ->
+    let h = bad()
+    free(h)
+    0

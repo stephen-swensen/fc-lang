@@ -89,6 +89,9 @@ typedef struct Capture {
     const char *name;           /* FC source name */
     const char *codegen_name;   /* C codegen name from outer scope */
     Type *type;
+    Provenance prov;            /* provenance of the captured value, recorded at
+                                   capture time so alloc(closure) can reject
+                                   promoting a context that holds stack data */
 } Capture;
 
 struct FieldInit {
@@ -130,6 +133,12 @@ struct Expr {
     SrcLoc loc;
     Type *type;         /* filled in by pass2 */
     Provenance prov;    /* filled in by pass2: storage provenance for escape analysis */
+    /* Provenance of the values *stored in* this container, as distinct from
+     * `prov`, which describes its backing store. A slice literal always lives
+     * on the stack (`prov == PROV_STACK`) yet may hold heap or static values,
+     * so an element load must not inherit the backing's tag. PROV_UNKNOWN
+     * means "not tracked here" (function results, raw-parts slices, params). */
+    Provenance elem_prov;
     union {
         /* EXPR_INT_LIT */
         struct { uint64_t value; Type *lit_type; bool out_of_range; } int_lit;
