@@ -1,0 +1,7 @@
+// On an integer conversion a precision already sets the minimum digit count,
+// so C requires '0' to be ignored.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%0.5d{i}"
+    assert(s.len > 0)
+    0

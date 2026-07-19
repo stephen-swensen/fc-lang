@@ -1,0 +1,12 @@
+// The largest field width and precision a spec may carry (INTERP_MAX_FIELD =
+// 32767, C11's guaranteed `int` range) must still work — the limit rejects what
+// is past it, not the last legal value.
+let main = (args: str[]) ->
+    let i = 5
+    let h = "hi"
+    let s = "%32767d{i}"
+    assert(s.len == 32767)
+    assert(s[32766] == 53)          // '5' right-justified in the field
+    let t = "%.32767s{h}"
+    assert(t.len == 2)              // a precision is a cap, not a floor
+    0

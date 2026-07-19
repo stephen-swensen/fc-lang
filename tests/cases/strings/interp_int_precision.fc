@@ -1,0 +1,29 @@
+// A precision on an *integer* conversion is a minimum digit count, and can push
+// the output well past the type's own magnitude bound: %.20d of an i32 writes 20
+// digits where the type alone needs 11. The buffer must cover the precision, not
+// just the magnitude — pre-fix interp_numeric_bound ignored the precision here,
+// sized the buffer at 11, and snprintf silently clipped the result.
+let main = (args: str[]) ->
+    let i = 5
+    let n = -5
+    let u = 7u64
+    assert("%.20d{i}" == "00000000000000000005")
+    assert("%.20x{i}" == "00000000000000000005")
+    assert("%.20o{i}" == "00000000000000000005")
+    assert("%.20u{i}" == "00000000000000000005")
+    assert("%.20d{n}" == "-00000000000000000005")
+    assert("%.20d{u}" == "00000000000000000007")
+    // precision below the natural width changes nothing
+    assert("%.2d{i}" == "05")
+    assert("%.1d{i}" == "5")
+    // a width still floors the field on top of the precision
+    assert("%25.20d{i}" == "     00000000000000000005")
+    // '#' adds its prefix on top of the precision's digits — the "0x" case is an
+    // exact fit against the budget (16-digit magnitude, 20-digit precision, +2)
+    assert("%#.20x{i}" == "0x00000000000000000005")
+    assert("%#.20o{i}" == "00000000000000000005")
+    // a sign is budgeted on top of the precision only where one can be written
+    assert("%+.3d{i}" == "+005")
+    assert("% .3d{i}" == " 005")
+    assert("%.3u{7u8}" == "007")
+    0

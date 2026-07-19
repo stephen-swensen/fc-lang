@@ -1,0 +1,6 @@
+// '+' on a string conversion.
+let main = (args: str[]) ->
+    let h = "hi"
+    let s = "%+.4s{h}"
+    assert(s.len > 0)
+    0

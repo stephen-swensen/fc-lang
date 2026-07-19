@@ -1,0 +1,7 @@
+// '#' selects an alternate form, which only %x/%X/%o and the float formats
+// have. On %d/%u/%s/%c/%p it is undefined in C11.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%#d{i}"
+    assert(s.len > 0)
+    0

@@ -1,0 +1,1 @@
+format flag '0' pads a number, so it applies only to the integer and float formats, not %p

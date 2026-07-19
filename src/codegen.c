@@ -2335,10 +2335,20 @@ static int shift_mask_for(Type *t) {
 
 /* Parse width and precision from an InterpSegment format spec string.
  * Sets *width to the explicit width (0 if absent).
- * Sets *precision to the explicit precision (-1 if absent, 0 for ".0"). */
+ * Sets *precision to the explicit precision (-1 if absent, 0 for ".0").
+ *
+ * Both accumulate in int64 and *saturate* one past INTERP_MAX_FIELD: a digit run
+ * long enough to overflow the accumulator would be undefined behavior in this
+ * compiler and — before pass2 rejected it — wrapped to an arbitrary small or
+ * negative field (`%4294967297d` silently lost its width; `%.4294967297s` clipped
+ * a string to one byte). Saturating keeps every over-limit spelling comparable
+ * against the limit as "too large", which is all any caller needs to know.
+ * pass2 rejects those up front (via interp_seg_spec), so codegen only ever sees
+ * values in range. */
 static void parse_format_width_prec(const char *text,
-                                     int *width, int *precision) {
+                                     int64_t *width, int64_t *precision) {
     const char *fs = text;
+    const int64_t sat = (int64_t)INTERP_MAX_FIELD + 1;
     *width = 0;
     *precision = -1;
     /* Skip flags */
@@ -2346,7 +2356,8 @@ static void parse_format_width_prec(const char *text,
            *fs == '#' || *fs == ' ') fs++;
     /* Width */
     while (*fs >= '0' && *fs <= '9') {
-        *width = *width * 10 + (*fs - '0');
+        if (*width < sat) *width = *width * 10 + (*fs - '0');
+        if (*width > sat) *width = sat;
         fs++;
     }
     /* Precision */
@@ -2354,10 +2365,41 @@ static void parse_format_width_prec(const char *text,
         fs++;
         *precision = 0;
         while (*fs >= '0' && *fs <= '9') {
-            *precision = *precision * 10 + (*fs - '0');
+            if (*precision < sat) *precision = *precision * 10 + (*fs - '0');
+            if (*precision > sat) *precision = sat;
             fs++;
         }
     }
+}
+
+/* Exported (declared in ast.h): everything a format spec's modifier prefix says —
+ * flags, field width, precision. pass2 judges the spec from this; the emitters
+ * above size the buffer from it. Sharing the one reading is what keeps the
+ * judgment and the emission from disagreeing about what a spec says.
+ *
+ * A leading `0` is the zero flag, not a width digit — C fixes the flag prefix
+ * ahead of the width, so `%08d` is flag `0` + width 8 and `%00d` is the flag
+ * written twice. Both loops below split at that same point. */
+void interp_seg_spec(const InterpSegment *seg, InterpSpec *out) {
+    memset(out, 0, sizeof *out);
+    out->precision = -1;
+    if (seg->is_literal) return;
+    const char *fs = seg->text;
+    for (;; fs++) {
+        bool *slot;
+        switch (*fs) {
+        case '-': slot = &out->minus; break;
+        case '+': slot = &out->plus;  break;
+        case ' ': slot = &out->space; break;
+        case '#': slot = &out->hash;  break;
+        case '0': slot = &out->zero;  break;
+        default:  slot = NULL;        break;
+        }
+        if (!slot) break;
+        if (*slot && !out->repeated) out->repeated = *fs;
+        *slot = true;
+    }
+    parse_format_width_prec(seg->text, &out->width, &out->precision);
 }
 
 /* Explicit truncating precision of a format segment: the precision (>= 0) when
@@ -2368,9 +2410,24 @@ static void parse_format_width_prec(const char *text,
  * governed-op test and the emission gate can never disagree. */
 int interp_seg_trunc_prec(const InterpSegment *seg) {
     if (seg->is_literal || seg->conversion != 's') return -1;
-    int width = 0, precision = -1;
+    int64_t width = 0, precision = -1;
     parse_format_width_prec(seg->text, &width, &precision);
-    return precision;
+    return (int)precision;
+}
+
+/* True when an integer conversion renders its operand as unsigned. `%u %x %X %o`
+ * always do — they print the operand's bit pattern, negatives included. `%d`/`%i`
+ * print the operand's *value*, so they join when the operand's own type is
+ * unsigned: the spec's format table gives `%d` "all integer types", and forcing
+ * a u64 through `long long` printed `u64.max` as `-1` (an implementation-defined
+ * conversion at that). Both the format-string emitter and the argument emitter
+ * ask here so the conversion character and the argument's cast cannot disagree. */
+static bool interp_conv_is_unsigned(char conv, Type *t) {
+    switch (conv) {
+    case 'u': case 'x': case 'X': case 'o': return true;
+    case 'd': case 'i': return t && type_is_unsigned(t);
+    default: return false;
+    }
 }
 
 /* Bytes a literal segment contributes to the formatted output: each `%%` folds
@@ -2383,9 +2440,9 @@ static int interp_literal_len(InterpSegment *seg) {
  * A field width is a *minimum*, never a maximum, so it can only widen the bound;
  * flags may add a sign/space/`#`-prefix byte.  Shared by the buffer-size emitter
  * and the constant-size scan so the two can never disagree on the budget. */
-static int interp_numeric_bound(char conv, Type *t, const char *flags_text,
-                                int explicit_width, int explicit_prec) {
-    int bound;
+static int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
+                                    int64_t explicit_width, int64_t explicit_prec) {
+    int64_t bound;
     switch (conv) {
     case 'd': case 'i': case 'u':
         switch (t ? t->kind : 0) {
@@ -2424,20 +2481,41 @@ static int interp_numeric_bound(char conv, Type *t, const char *flags_text,
          * → 309 digits; FLT_MAX ≈ 3.4e38 → 39).  The budget must cover sign +
          * integer digits + '.' + fraction (default precision 6). */
         int int_digits = (t && t->kind == TYPE_FLOAT32) ? 39 : 309;
-        int prec = explicit_prec >= 0 ? explicit_prec : 6;
+        int64_t prec = explicit_prec >= 0 ? explicit_prec : 6;
         bound = 1 + int_digits + 1 + prec;
         break;
     }
     case 'e': case 'E': case 'g': case 'G': {
         /* Scientific/shortest forms are bounded by precision, not the exponent:
          * sign + leading digit + '.' + prec mantissa digits + 'e±ddd'. */
-        int prec = explicit_prec >= 0 ? explicit_prec : 6;
+        int64_t prec = explicit_prec >= 0 ? explicit_prec : 6;
         bound = 9 + prec;
         break;
     }
     case 'c': bound = 1; break;
     case 'p': bound = 18; break;
     default: bound = 24; break;
+    }
+    /* On an *integer* conversion a precision is a minimum digit count, so it can
+     * push the output past what the type's magnitude alone needs: `%.20d{5}`
+     * writes twenty digits from an i32 whose own bound is 11. (The float cases
+     * above already fold their precision in; %c/%p carry none — pass2 rejects a
+     * precision there.) Without this the buffer under-allocates and snprintf
+     * silently clips the result.
+     *
+     * The per-type bounds above are *whole field* widths that already include a
+     * minus sign where one can appear, so a precision that replaces them must
+     * budget that byte itself — `%.20d{-5}` writes 21. Only a conversion that
+     * renders signed needs it: `%.20x` of a negative prints the bit pattern with
+     * no sign at all. */
+    switch (conv) {
+    case 'd': case 'i': case 'u': case 'x': case 'X': case 'o':
+        if (explicit_prec > 0) {
+            int64_t need = explicit_prec + (interp_conv_is_unsigned(conv, t) ? 0 : 1);
+            if (need > bound) bound = need;
+        }
+        break;
+    default: break;
     }
     const char *flags = flags_text;
     while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
@@ -2469,14 +2547,14 @@ static bool interp_const_buffer_size(Expr *e, int64_t *out_size) {
             continue;
         }
         char conv = segs[i].conversion;
-        int explicit_width = 0, explicit_prec = -1;
+        int64_t explicit_width = 0, explicit_prec = -1;
         parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
         Type *t = segs[i].expr->type;
         bool is_str_arg = (conv == 's' && t && is_str_type(t));
         bool is_cstr_arg = (conv == 's' && t && is_cstr_type(t));
         if (is_str_arg || is_cstr_arg) {
             if (explicit_prec >= 0) {
-                int b = explicit_prec;
+                int64_t b = explicit_prec;
                 if (explicit_width > b) b = explicit_width;
                 total += b;
             } else {
@@ -2586,7 +2664,7 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
         }
 
         char conv = segs[i].conversion;
-        int explicit_width = 0, explicit_prec = -1;
+        int64_t explicit_width = 0, explicit_prec = -1;
         parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
         Type *t = segs[i].expr->type;
         bool is_str_arg = (conv == 's' && t && is_str_type(t));
@@ -2602,27 +2680,27 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
              * minimum field width (the str path was already correct; the cstr
              * path previously ignored the width and under-allocated). */
             if (explicit_prec >= 0) {
-                int b = explicit_prec;
+                int64_t b = explicit_prec;
                 if (explicit_width > b) b = explicit_width;
-                fprintf(out, "%d", b);
+                fprintf(out, "%" PRId64, b);
             } else if (is_str_arg) {
                 if (explicit_width > 0)
-                    fprintf(out, "(%d > _sg%d_%d.len ? %d : _sg%d_%d.len)",
+                    fprintf(out, "(%" PRId64 " > _sg%d_%d.len ? %" PRId64 " : _sg%d_%d.len)",
                         explicit_width, tid, k, explicit_width, tid, k);
                 else
                     fprintf(out, "_sg%d_%d.len", tid, k);
             } else {
                 if (explicit_width > 0)
-                    fprintf(out, "((int64_t)%d > (int64_t)strlen((const char*)_sg%d_%d)"
-                                 " ? (int64_t)%d : (int64_t)strlen((const char*)_sg%d_%d))",
+                    fprintf(out, "((int64_t)%" PRId64 " > (int64_t)strlen((const char*)_sg%d_%d)"
+                                 " ? (int64_t)%" PRId64 " : (int64_t)strlen((const char*)_sg%d_%d))",
                         explicit_width, tid, k, explicit_width, tid, k);
                 else
                     fprintf(out, "(int64_t)strlen((const char*)_sg%d_%d)", tid, k);
             }
         } else {
-            int bound = interp_numeric_bound(conv, t, segs[i].text,
-                                             explicit_width, explicit_prec);
-            fprintf(out, "%d", bound);
+            int64_t bound = interp_numeric_bound(conv, t, segs[i].text,
+                                                 explicit_width, explicit_prec);
+            fprintf(out, "%" PRId64, bound);
         }
         k++;
     }
@@ -2707,7 +2785,12 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
                 fprintf(out, "%%");
                 if (int_number) {
                     for (int j = 0; j < splen - 1; j++) fputc(sp[j], out);
-                    fprintf(out, "ll%c", sp[splen - 1]);
+                    /* `%d`/`%i` on an unsigned operand emits as `%llu` — see
+                     * interp_conv_is_unsigned; the argument is cast to match. */
+                    char cc = sp[splen - 1];
+                    if ((cc == 'd' || cc == 'i') && interp_conv_is_unsigned(cc, t))
+                        cc = 'u';
+                    fprintf(out, "ll%c", cc);
                 } else {
                     fwrite(sp, 1, (size_t)splen, out);
                 }
@@ -2736,13 +2819,14 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
         Type *t = segs[i].expr->type;
         bool is_str_arg2 = (conv == 's' && t && is_str_type(t));
         if (is_str_arg2) {
-            int prec_w = 0, prec_p = -1;
+            int64_t prec_w = 0, prec_p = -1;
             parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
             if (prec_p >= 0) {
                 /* Compare in int64 to avoid truncating before the min; the
                  * fc_to_int branch is only taken when len < prec_p, so the
                  * narrowing assert is trivially satisfied. */
-                fprintf(out, "(_sg%d_%d.len < (int64_t)%d ? fc_to_int(_sg%d_%d.len) : %d), _sg%d_%d.ptr",
+                fprintf(out, "(_sg%d_%d.len < (int64_t)%" PRId64 " ? fc_to_int(_sg%d_%d.len)"
+                             " : %" PRId64 "), _sg%d_%d.ptr",
                     tid, ak, prec_p, tid, ak, prec_p, tid, ak);
             } else {
                 fprintf(out, "fc_to_int(_sg%d_%d.len), _sg%d_%d.ptr",
@@ -2750,7 +2834,7 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
             }
         } else {
             if (t && type_is_integer(t)) {
-                if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
+                if (interp_conv_is_unsigned(conv, t)) {
                     /* Unsigned conversions print the operand's bit pattern.
                      * First reinterpret it at its *own* width via the unsigned
                      * counterpart — casting a signed narrow operand straight to

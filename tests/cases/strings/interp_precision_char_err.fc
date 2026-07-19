@@ -1,0 +1,6 @@
+// A precision has no meaning for %c (one character) or %p — undefined in C11.
+let main = (args: str[]) ->
+    let c = 65u8
+    let s = "%.3c{c}"
+    assert(s.len > 0)
+    0

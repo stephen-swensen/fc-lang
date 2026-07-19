@@ -1,0 +1,6 @@
+// '0' pads a number with leading zeros; %s has no numeric field to pad.
+let main = (args: str[]) ->
+    let h = "hi"
+    let s = "%08.4s{h}"
+    assert(s.len > 0)
+    0

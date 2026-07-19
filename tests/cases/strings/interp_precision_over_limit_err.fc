@@ -1,0 +1,6 @@
+// One past the field limit on the precision axis.
+let main = (args: str[]) ->
+    let h = "hi"
+    let s = "%.32768s{h}"
+    assert(s.len > 0)
+    0

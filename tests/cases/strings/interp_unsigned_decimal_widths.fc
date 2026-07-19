@@ -1,0 +1,24 @@
+// %d/%i print the operand's value in decimal for *every* integer type (spec
+// format table). An unsigned operand emits as %llu rather than being forced
+// through `long long`, which printed u64.max as -1. Signed operands are
+// unchanged, and %u still prints the bit pattern of a negative.
+let main = (args: str[]) ->
+    assert("%d{u8.max}" == "255")
+    assert("%d{u16.max}" == "65535")
+    assert("%d{u32.max}" == "4294967295")
+    assert("%d{u64.max}" == "18446744073709551615")
+    assert("%i{u64.max}" == "18446744073709551615")
+    assert("%d{18446744073709551615u64}" == "18446744073709551615")
+    // usize is unsigned too
+    let z = 42usize
+    assert("%d{z}" == "42")
+    // signed operands keep their sign
+    assert("%d{i64.min}" == "-9223372036854775808")
+    assert("%d{-5i32}" == "-5")
+    assert("%i{-5i8}" == "-5")
+    // width/flags compose with the unsigned remap
+    assert("%012d{u32.max}" == "004294967295")
+    assert("%-12d{u32.max}" == "4294967295  ")
+    // %u is unaffected: it prints the bit pattern of a negative
+    assert("%u{-1i16}" == "65535")
+    0

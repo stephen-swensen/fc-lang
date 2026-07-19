@@ -1,0 +1,6 @@
+// A flag written twice: the second is necessarily a no-op.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%--d{i}"
+    assert(s.len > 0)
+    0

@@ -1,0 +1,7 @@
+// '-' left-justifies the field, so there is no leading space for '0' to fill:
+// C requires the '0' to be ignored, making it a lie in the source.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%-08d{i}"
+    assert(s.len > 0)
+    0

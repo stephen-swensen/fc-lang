@@ -1,0 +1,41 @@
+// The positive space of the format-modifier rules: every flag/conversion pair
+// C11 defines must still compile and behave. Guards against the modifier
+// judgment (pass2 check_interp_spec_mods) over-rejecting.
+let main = (args: str[]) ->
+    let h = "hi"
+    let mut i = 5
+    let c = 65u8
+    let p = &i
+    let f = 1.5
+    let u = 7u32
+    // '-' is valid on every conversion
+    assert("%-8.5s{h}" == "hi      ")
+    assert("%-5d{i}" == "5    ")
+    assert("%-10.2f{f}" == "1.50      ")
+    // '0' pads the numeric formats
+    assert("%08d{i}" == "00000005")
+    assert("%04x{i}" == "0005")
+    assert("%08.2f{f}" == "00001.50")
+    // '+' / ' ' write the sign of a signed conversion
+    assert("%+f{f}" == "+1.500000")
+    assert("%+d{i}" == "+5")
+    assert("% d{i}" == " 5")
+    assert("%+.3e{f}" == "+1.500e+00")
+    // '#' prefixes the alternate forms
+    assert("%#x{i}" == "0x5")
+    assert("%#o{i}" == "05")
+    assert("%#.1f{f}" == "1.5")
+    // precision on integer, float and %s
+    assert("%.3d{i}" == "005")
+    assert("%.2f{f}" == "1.50")
+    assert("%.1s{h}" == "h")
+    // '0' with a float precision stays legal — only the *integer* formats let a
+    // precision nullify it
+    assert("%0.5f{f}" == "1.50000")
+    // '0' with no width is a no-op but not a lie: nothing overrides it
+    assert("%0d{i}" == "5")
+    // bare %T, %c, %p carry no modifiers
+    assert("%T{u}" == "u32")
+    assert("%c{c}" == "A")
+    assert("%p{p}".len > 0)
+    0

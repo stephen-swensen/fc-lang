@@ -1,0 +1,7 @@
+// The operand-dependent case: %d of an unsigned operand emits as %llu (so
+// u64.max prints in full), which leaves '+' nothing to write.
+let main = (args: str[]) ->
+    let u = 7u32
+    let s = "%+d{u}"
+    assert(s.len > 0)
+    0

@@ -1,0 +1,7 @@
+// %T is replaced by the compile-time type name and never reaches the
+// formatter, so every modifier on it was silently ignored.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%-10T{i}"
+    assert(s.len > 0)
+    0

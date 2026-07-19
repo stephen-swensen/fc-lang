@@ -1,0 +1,7 @@
+// A precision on %p.
+let main = (args: str[]) ->
+    let mut i = 5
+    let p = &i
+    let s = "%.3p{p}"
+    assert(s.len > 0)
+    0

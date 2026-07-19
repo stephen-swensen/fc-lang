@@ -1,0 +1,9 @@
+// The other 32-bit wrap shapes named in the bug report: 2147483648 (past INT_MAX,
+// which made the emitted C fail -Werror=format-truncation) and 4294967297 (which
+// wrapped to 1 and silently lost the width). Both are now rejected up front.
+let main = (args: str[]) ->
+    let i = 5
+    let a = "%2147483648d{i}"
+    let b = "%4294967297d{i}"
+    assert(a.len + b.len > 0)
+    0

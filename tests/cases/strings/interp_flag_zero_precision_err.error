@@ -1,0 +1,1 @@
+format flag '0' is ignored when %d carries a precision

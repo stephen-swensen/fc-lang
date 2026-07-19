@@ -4313,6 +4313,91 @@ static const char *value_ref_display(Expr *e, char *buf, size_t n) {
     return buf;
 }
 
+/* Judge a format spec's modifiers against its conversion and operand type.
+ *
+ * The governing rule is that **every modifier a spec carries must be honored**.
+ * A modifier fails that two ways, and both are silent lies about the output:
+ * C11 leaves the flag undefined for that conversion (`%+u`, `%#s`, `%.3c` — the
+ * formatter may do anything), or another modifier nullifies it (`%-08d`, `%+ d`,
+ * `%0.5d`, a flag written twice — the formatter is required to ignore it). FC
+ * has no warning channel, so a spec that cannot mean what it says is an error at
+ * the interpolation rather than a surprise in the emitted C, which copies the
+ * spec through verbatim and would fail `-Wall` on every case listed here.
+ *
+ * The one operand-dependent case is `%d`/`%i`: those emit as `%u` when the
+ * operand's own type is unsigned (see interp_conv_is_unsigned in codegen.c), so
+ * they carry no sign for `+`/space to write. */
+static void check_interp_spec_mods(InterpSegment *seg, Type *t) {
+    InterpSpec s;
+    interp_seg_spec(seg, &s);
+    SrcLoc loc = seg->expr->loc;
+    char conv = seg->conversion;
+
+    /* %T is replaced by the compile-time type name and never reaches the
+     * formatter, so no modifier on it can do anything at all. */
+    if (conv == 'T') {
+        if (s.minus || s.plus || s.space || s.hash || s.zero ||
+            s.width > 0 || s.precision >= 0)
+            diag_error(loc,
+                "%%T takes no flags, width or precision: it is replaced by the "
+                "compile-time type name, which never reaches the formatter");
+        return;
+    }
+
+    bool is_float = (conv == 'f' || conv == 'e' || conv == 'E' ||
+                     conv == 'g' || conv == 'G');
+    bool is_int   = (conv == 'd' || conv == 'i' || conv == 'u' ||
+                     conv == 'x' || conv == 'X' || conv == 'o');
+    /* Signed *conversion*, not signed operand: %u/%x/%X/%o print a bit pattern,
+     * and %d/%i of an unsigned operand emit as %u. */
+    bool signed_conv = is_float ||
+        ((conv == 'd' || conv == 'i') && !(t && type_is_unsigned(t)));
+
+    if (s.repeated)
+        diag_error(loc, "format flag '%c' is written twice in %%%.*s",
+            s.repeated, seg->text_length, seg->text);
+
+    if ((s.plus || s.space) && !signed_conv) {
+        char fl = s.plus ? '+' : ' ';
+        if (conv == 'd' || conv == 'i')
+            diag_error(loc,
+                "format flag '%c' writes the sign of a signed conversion, but "
+                "%%%c of an unsigned operand (%s) never writes one",
+                fl, conv, type_name(t));
+        else
+            diag_error(loc,
+                "format flag '%c' applies only to signed conversions "
+                "(%%d, %%i and the float formats), not %%%c", fl, conv);
+    }
+    if (s.plus && s.space)
+        diag_error(loc,
+            "format flags '+' and ' ' conflict: '+' already writes a sign where "
+            "' ' would leave a blank");
+
+    if (s.hash && !(is_float || conv == 'x' || conv == 'X' || conv == 'o'))
+        diag_error(loc,
+            "format flag '#' applies only to %%x, %%X, %%o and the float "
+            "formats, not %%%c", conv);
+
+    if (s.zero && !(is_int || is_float))
+        diag_error(loc,
+            "format flag '0' pads a number, so it applies only to the integer "
+            "and float formats, not %%%c", conv);
+    else if (s.zero && s.minus)
+        diag_error(loc,
+            "format flags '0' and '-' conflict: '-' left-justifies the field, "
+            "leaving nothing to pad with zeros");
+    else if (s.zero && is_int && s.precision >= 0)
+        diag_error(loc,
+            "format flag '0' is ignored when %%%c carries a precision — the "
+            "precision already sets the minimum digits", conv);
+
+    if (s.precision >= 0 && !(is_int || is_float || conv == 's'))
+        diag_error(loc,
+            "a precision applies only to the integer, float and %%s formats, "
+            "not %%%c", conv);
+}
+
 /* Wrapper around the per-kind type checker. Consumes the one-shot
  * `in_callee_position` / `in_reflection_position` flags and rejects a generic
  * function used as a value (anywhere other than directly in call position or a
@@ -8539,6 +8624,27 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             InterpSegment *seg = &e->interp_string.segments[i];
             if (seg->is_literal) continue;
 
+            /* A field width or precision must be representable as a C `int` on
+             * every target FC compiles to (INTERP_MAX_FIELD = 32767, C11's
+             * guaranteed `int` range). Unchecked, the digits wrapped:
+             * %99999999999d became a ~1.2 GB stack buffer, %4294967297d lost its
+             * width entirely, and %.4294967297s clipped a string to one byte —
+             * all silently. The cap is also what keeps a single segment from
+             * demanding an unreasonable hoisted buffer. */
+            InterpSpec spec;
+            interp_seg_spec(seg, &spec);
+            if (spec.width > INTERP_MAX_FIELD || spec.precision > INTERP_MAX_FIELD) {
+                diag_error(seg->expr->loc,
+                    "format %s in %%%.*s exceeds the maximum of %d: a field width "
+                    "and precision are passed to C as int, whose range is only "
+                    "guaranteed to 16 bits",
+                    spec.width > INTERP_MAX_FIELD ? "width" : "precision",
+                    seg->text_length, seg->text, INTERP_MAX_FIELD);
+                any_seg_err = true;
+                /* Fall through: the operand still gets type-checked, so its own
+                 * mismatch (and the LSP's overlays) don't hinge on the width. */
+            }
+
             /* `%T` reflects the expression's type at compile time and never emits
              * it as a value, so allow a generic function name here. */
             if (seg->conversion == 'T') ctx->in_reflection_position = true;
@@ -8588,6 +8694,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     "unknown format specifier %%%c", conv);
                 break;
             }
+            /* Only once the conversion suits the operand: the modifier rules are
+             * stated per conversion, and `%d{"s"}` is one mistake, not two. */
+            if (ok) check_interp_spec_mods(seg, et);
         }
         /* A runtime-sized interpolation (a %s/cstr segment with no precision) has a
          * buffer whose size isn't known until execution; evaluating it in a loop

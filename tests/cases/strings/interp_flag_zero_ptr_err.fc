@@ -1,0 +1,7 @@
+// '0' on %p — undefined in C11, rejected by both gcc and clang under -Wall.
+let main = (args: str[]) ->
+    let mut i = 5
+    let p = &i
+    let s = "%08p{p}"
+    assert(s.len > 0)
+    0

@@ -845,13 +845,26 @@ The compiler validates that each format specifier is compatible with the express
 
 The `%T` format emits the compile-time type name of the expression as a string literal. The expression is type-checked but **not evaluated** at runtime — only its static type is used. This is useful for debugging inferred types. For example, `"%T{x}"` where `x` is an `i32` produces `"i32"`. Since the type name is a compile-time constant, `%T` segments always contribute a fixed number of bytes to the buffer size.
 
-Width, precision, and flag modifiers are allowed: `%04d{x}`, `%8.2f{pi}`, `%20s{name}`.
+`%d` and `%i` cover every integer type, and print the operand's **value**: an unsigned operand renders as an unsigned decimal, so `%d{u64.max}` is `18446744073709551615`. `%u`, `%x`, `%X`, and `%o` instead print the operand's **bit pattern** at its own width, which is what makes `%u{-1i16}` render `65535`.
+
+#### Modifiers
+
+Width, precision, and flag modifiers are allowed: `%04d{x}`, `%8.2f{pi}`, `%20s{name}`. The flags are `-` (left-justify), `+` and space (write the sign of a positive value), `#` (alternate form), and `0` (zero-pad).
+
+**Every modifier a spec carries must be honored.** A modifier that could not take effect is a compile error rather than a silently ignored character, because a spec that cannot mean what it says is always a mistake. A modifier fails to take effect two ways:
+
+- It does not apply to the conversion. `+` and space write the sign of a *signed* conversion, so they belong only to `%d`/`%i` and the float formats — never to `%u`/`%x`/`%X`/`%o`, which print a bit pattern, nor to `%d`/`%i` of an *unsigned* operand, which prints no sign. `#` selects an alternate form, which only `%x`, `%X`, `%o`, and the float formats have. `0` pads a number, so it excludes `%s`, `%c`, and `%p`. A precision applies to the integer formats (where it sets a minimum digit count), the float formats, and `%s` (where it caps the output) — not to `%c` or `%p`.
+- Another modifier nullifies it. Writing a flag twice, `0` alongside `-` (which left-justifies, leaving nothing to pad), `0` alongside a precision on an integer conversion (the precision already sets the minimum digits), and space alongside `+` (which always writes a sign) are each rejected.
+
+`%T` accepts no modifiers at all: it is replaced by the compile-time type name and never reaches the formatter.
+
+A field width and a precision are each limited to **32767**. Both are passed to the platform's formatter as a C `int`, whose range is only guaranteed to 16 bits, so a larger number could not be represented on every target FC compiles to; the limit also bounds the buffer a single segment can demand.
 
 A bare `%f` is allowed and defaults like C `printf` (six fractional digits); width and precision are optional (`%f{x}`, `%.2f{x}`, `%8.2f{x}`). Any width given is a *minimum* field width, exactly as in C `printf` — it never caps the output. A `%f` value wider than its field is **not** truncated: the compiler sizes the buffer from the type's largest possible magnitude (and any explicit precision), so `%8.2f{1e9}` correctly renders all 13 characters of `1000000000.00`. (Earlier drafts required an explicit width on `%f`; that requirement was removed once the buffer was sized from the type rather than the width, leaving it with no purpose.)
 
 #### Allocation
 
-Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, pointer, and float formats are bounded at compile time by the type's maximum formatted width — for floats, the largest magnitude the type can hold. A field width is only ever a *floor* on a segment's contribution, never a cap, so widening a field can only enlarge the buffer. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size. The compiler's escape analysis tracks interpolated strings as stack-allocated — returning one from a function or freeing one is a compile error. Use `alloc(s)!` to deep-copy to the heap if the string must outlive the function.
+Interpolated strings are stack-allocated. The compiler computes a buffer size guaranteed to be sufficient. Integer, char, pointer, and float formats are bounded at compile time by the type's maximum formatted width — for floats, the largest magnitude the type can hold. A field width is only ever a *floor* on a segment's contribution, never a cap, so widening a field can only enlarge the buffer. A precision on an integer conversion is a minimum digit count and counts the same way — `%.20d{5}` writes twenty digits from an `i32` whose magnitude alone needs eleven, and the buffer covers it. The result `str`'s `.len` reflects the actual bytes written, which may be less than the buffer size. The compiler's escape analysis tracks interpolated strings as stack-allocated — returning one from a function or freeing one is a compile error. Use `alloc(s)!` to deep-copy to the heap if the string must outlive the function.
 
 FC has **no implicit unbounded stack allocation**: a string interpolation is only allowed as a bare expression when its buffer size is a compile-time constant — i.e., every segment is bounded (numeric/char/pointer/`%T`, or a `%s` carrying an explicit precision). Such a buffer is a fixed array hoisted to the top of the enclosing function: a single slot reused on every iteration, so building the string in a loop uses bounded stack and supports static stack analysis.
 

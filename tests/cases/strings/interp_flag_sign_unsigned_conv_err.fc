@@ -1,0 +1,8 @@
+// '+' and ' ' write the sign of a signed conversion. %u/%x/%X/%o print a bit
+// pattern and have no sign, so the flag could never be honored — C11 leaves it
+// undefined and the emitted C fails -Wall.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%+u{i}"
+    assert(s.len > 0)
+    0

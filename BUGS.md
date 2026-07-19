@@ -1039,7 +1039,7 @@ algorithmically identical to the new `mangled_tail`.
 `module_member_named_main`, `destructure_in_match_arm`.
 Widened: `param_keywords` (generic, higher-order/trampoline and defer paths).
 
-## 6. String interpolation semantics
+## 6. String interpolation semantics — ✅ ALL FIXED (2026-07-19)
 
 - **6.1 `strings/pct_escape_static`** — ✅ **FIXED 2026-07-19** as part of §4's
   root cause A (the decode/re-encode of string literals) — see there. In a
@@ -1047,18 +1047,76 @@ Widened: `param_keywords` (generic, higher-order/trampoline and defer paths).
   but `.len` was computed as if it were: `"50%% off"` → content `50%% of` with
   len 7. The cstr twin had the raw bytes too. Both now fold, from the single
   decoder that also computes the length. Test `strings/pct_escape_forms`.
-- **6.2 `strings/interp_width_overflow_err`** — width digits accumulate
-  through 32 bits unvalidated: `%99999999999d` wraps to ~1.2 GB backing array
-  → SIGSEGV at frame setup; `%2147483648d` emits C that fails
-  `-Werror=format-truncation`; `%4294967297d` silently ignores the width.
-  Also consider capping the hoisted buffer (a non-wrapping `%9999999d` = 10 MB
-  stack array). Expect a compile error for unrepresentable widths.
-- **6.3 `strings/interp_precision_overflow_err`** — precision wraps the same
-  way: `%.4294967297s` becomes precision 1 → silent data loss ("hello" → "h").
-- **6.4 `strings/interp_unsigned_decimal`** — `%d` maps unconditionally to
-  `"%lld"` + `(long long)` cast: `%d{u64.max}` prints `-1` (and the
-  conversion is implementation-defined). The `%u`/`%x` paths already switch on
-  signedness; `%d` should too. Spec: `%d` covers all integer types.
+- **6.2 `strings/interp_width_overflow_err`** — ✅ **FIXED 2026-07-19.** Width
+  digits accumulated through 32 bits unvalidated: `%99999999999d` wrapped to a
+  ~1.2 GB backing array → SIGSEGV at frame setup; `%2147483648d` emitted C that
+  failed `-Werror=format-truncation`; `%4294967297d` silently ignored the width.
+  Both axes now accumulate in `int64` and *saturate* (`parse_format_width_prec`,
+  codegen.c), and pass2 rejects anything over `INTERP_MAX_FIELD` = **32767**.
+  The limit is derived, not picked: a width and a precision are passed to the C
+  formatter as `int`, and C11 guarantees `int` only to 32767 — the same 16-bit
+  floor the emitted arithmetic already honors (§FC targets 16-bit-int
+  platforms). That also caps what one segment can demand of the hoisted buffer
+  (~32 KB), which closes the "consider capping the hoisted buffer" note.
+- **6.3 `strings/interp_precision_overflow_err`** — ✅ **FIXED 2026-07-19**, same
+  mechanism (`%.4294967297s` had wrapped to precision 1 → "hello" → "h").
+- **6.4 `strings/interp_unsigned_decimal`** — ✅ **FIXED 2026-07-19.** `%d`
+  mapped unconditionally to `"%lld"` + `(long long)`, so `%d{u64.max}` printed
+  `-1` through an implementation-defined conversion. `%d`/`%i` now emit `%llu` +
+  `(unsigned long long)` when the operand's own type is unsigned. One predicate
+  (`interp_conv_is_unsigned`, codegen.c) drives the conversion character, the
+  argument cast, and the sign-byte budget, so the three cannot drift.
+
+### Found while fixing 6.4: format modifiers were never judged ✅ FIXED (2026-07-19)
+
+Codegen copies a format spec into the emitted C format string **verbatim**, so
+FC accepted every flag/conversion pair C11 leaves undefined — and the C it
+emitted failed `-Wall` (which the project compiles with `-Werror`) on all of
+them, on both gcc and clang: `'+'` with `%u`/`%s`/`%c`, `'#'` with `%d`/`%s`/`%c`,
+`'0'` with `%s`/`%p`, precision with `%c`/`%p`, plus the *nullified* forms C
+requires the formatter to ignore (`%--d`, `%-08d`, `%0.5d`, `%+ d`). Every
+modifier on `%T` was silently dropped as well, since the type name is spliced at
+compile time and never reaches the formatter. Pre-existing, but 6.4 widened it:
+`%+d{u32.max}` now remaps to `%+llu`, which gcc rejects.
+
+Fixed with one rule — **every modifier a spec carries must be honored** —
+judged in pass2 (`check_interp_spec_mods`) off the shared spec reading
+(`interp_seg_spec` → `InterpSpec`, codegen.c). A modifier fails that either by
+not applying to the conversion (C11's flag table) or by being nullified by
+another modifier. Spec §Format specifiers → Modifiers states the rule. All 7
+flag-carrying specs in the existing tests/stdlib/demos/spec sources stay legal;
+no *working* program breaks, since every rejected form already emitted C that
+would not compile under the project's own flags.
+
+### Found while fixing the above: integer precision under-allocated the buffer ✅ FIXED (2026-07-19)
+
+`interp_numeric_bound` sized integer segments from the type's magnitude alone and
+ignored the precision, but a precision on an integer conversion is a *minimum
+digit count*: `%.20d{5}` writes twenty digits from an `i32` budgeted at eleven,
+so snprintf silently clipped the result to `00000000005` — a direct violation of
+the spec's "buffer size guaranteed to be sufficient". The bound now takes
+`max(magnitude, precision + sign)`, where the sign byte is budgeted only for a
+conversion that actually renders signed (`%.20x` of a negative prints a bit
+pattern with no sign). Test `strings/interp_int_precision`.
+
+### Tests added (17)
+
+Positive space — `interp_flags_valid` (every C11-defined flag/conversion pair,
+guarding the new judgment against over-rejecting), `interp_int_precision`
+(integer precision as a minimum digit count, incl. the exact-fit `%#.20x`
+budget), `interp_unsigned_decimal_widths` (`%d`/`%i` across every unsigned type
++ usize, signed operands unchanged, `%u` still a bit pattern),
+`interp_field_limit_boundary` (32767 still works on both axes).
+
+Negative space — `interp_width_over_limit_err`, `interp_precision_over_limit_err`
+(one past the limit), `interp_width_wrap_forms_err` (the other 32-bit wrap
+shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
+`interp_flag_sign_unsigned_operand_err`, `interp_flag_sign_str_err`,
+`interp_flag_hash_err`, `interp_flag_zero_str_err`, `interp_flag_zero_ptr_err`,
+`interp_flag_repeated_err`, `interp_flag_zero_minus_err`,
+`interp_flag_zero_precision_err`, `interp_flag_plus_space_err`,
+`interp_precision_char_err`, `interp_precision_ptr_err`,
+`interp_type_spec_mods_err`.
 
 ## 7. Design questions / spec contradictions (no tests — decide first)
 

@@ -685,6 +685,30 @@ bool interp_is_runtime_sized(const struct Expr *e);
  * -spec parser so pass2 and the emitter share one notion of "truncating". */
 int interp_seg_trunc_prec(const struct InterpSegment *seg);
 
+/* Largest field width or precision a format spec may carry. Both are passed to
+ * the C library as `int`, and C11 guarantees only that `int` reaches 32767 — the
+ * same 16-bit floor the emitted arithmetic already honors — so a larger number
+ * cannot be represented on every target FC compiles to. pass2 rejects specs over
+ * the limit outright rather than letting the digits wrap into an arbitrary field.
+ * The cap also bounds the hoisted buffer a single segment can demand. */
+#define INTERP_MAX_FIELD 32767
+
+/* The modifiers a format spec carries, as written. Codegen copies a spec into
+ * the emitted C format string verbatim, so this is also exactly what reaches the
+ * C formatter — which is why pass2 judges the spec from the same reading. */
+typedef struct InterpSpec {
+    bool minus, plus, space, hash, zero;  /* flags present */
+    char repeated;                        /* a flag written twice (that flag), else 0 */
+    int64_t width;                        /* explicit field width, 0 when absent */
+    int64_t precision;                    /* explicit precision, -1 when absent */
+} InterpSpec;
+
+/* Read a format segment's modifiers. Width and precision saturate one past
+ * INTERP_MAX_FIELD so an over-long digit run is reported as too large instead of
+ * overflowing the accumulator. Defined in codegen.c beside the format-spec
+ * parser, so pass2's judgment and the emitter read a spec identically. */
+void interp_seg_spec(const struct InterpSegment *seg, InterpSpec *out);
+
 /* Pointer-value null-status predicates for null-sentinel options (T*?, any*?,
  * cstr?), where none is represented by a null pointer. provably_nonnull is true
  * only when a value can never be null (codegen elides the some() null-guard);

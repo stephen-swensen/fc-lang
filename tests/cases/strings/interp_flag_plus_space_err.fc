@@ -1,0 +1,7 @@
+// '+' always writes a sign, so the ' ' that would blank a positive value can
+// never take effect.
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%+ d{i}"
+    assert(s.len > 0)
+    0

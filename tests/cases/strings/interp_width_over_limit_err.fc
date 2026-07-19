@@ -1,0 +1,8 @@
+// One past the field limit: 32768 is representable in this compiler but not in
+// a C `int` on every target FC compiles to, so it is rejected like any wider
+// spelling. (The wrapping shapes are covered by interp_width_overflow_err.)
+let main = (args: str[]) ->
+    let i = 5
+    let s = "%32768d{i}"
+    assert(s.len > 0)
+    0
