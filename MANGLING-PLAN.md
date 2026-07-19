@@ -1,7 +1,34 @@
 # Plan: make the C name of a type a function, not a field
 
-Status: **not started** — written 2026-07-19 after BUGS.md §4.14, which was the
-third or fourth recurrence of the same bug family. Do this in its own session.
+Status: **DONE 2026-07-19** — executed in its own session as planned. Outcome:
+
+- `mangle_type_name`'s `TYPE_STRUCT`/`TYPE_UNION` arms got the `TYPE_STUB`
+  recursion (base `"__"` lp(arg)*), with the base taken from
+  `resolved_sym->type` — option **(b)**, chosen after verifying coverage:
+  pass1 sets `resolved_sym` on every struct/union template type
+  (`set_type_resolved_syms` + the module-member loop), and `type_copy` /
+  `type_deep_copy` / `type_substitute` all propagate it, so every instance
+  node descends from a symbol-bearing template. Tuples spell from their
+  fields (mirroring `tuple_canonical_name`).
+- `mono_canonical_type_arg` deleted (all 5 call sites); `generic_instance_c_name`
+  reduced to a thin interned wrapper over `mangle_type_name` (no `mono_find`
+  repair, no arg pre-canonicalization).
+- Walk-order renames deleted: `discover_nested_types` no longer renames the
+  walked struct/union/stub node; `mono_resolve_type_names` lost the
+  args-first recursion and the sym/`mono_find` dance (its remaining in-place
+  writes — on mono-table-private deep copies — now just apply the pure
+  formula, kept because `find_by_value_dep`/`check_dangling_instance`/topo
+  compare stored names).
+- pass2's at-creation renames kept deliberately: they are the identity
+  record for codegen's raw name reads, applied exactly once at type-creation
+  with the same formula the pure function computes — not walk-order-dependent.
+- Verified: `make check` + O2 (gcc+clang, 2180/2181 + the 9 open BUGS.md
+  §5–§6 tests), `make test-lsp`, `spec/examples.fc`, all five demos,
+  euler-fc (compile + run), wolf-fc (fresh build, 208/208), and an
+  ASan/UBSan fcc over 547 test compilations — zero hits.
+  `generics/nested_instance_arg_in_generic` passes unchanged, no edits.
+
+Original plan follows.
 
 ## The recurring bug
 

@@ -1,5 +1,6 @@
 #include "types.h"
 #include "ast.h"    /* Expr — TYPE_CONST_EXPR carries a const-generic expression tree */
+#include "pass1.h"  /* Symbol — mangle_type_name reads resolved_sym for the canonical base name */
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -1630,8 +1631,52 @@ char *mangle_type_name(Type *t) {
     case TYPE_CHAR:    return str_dup("char");
     case TYPE_VOID:    return str_dup("void");
     case TYPE_NEVER:   return str_dup("never"); /* defensive: never monomorphized */
-    case TYPE_STRUCT:  return str_dup(t->struc.name);
-    case TYPE_UNION:   return str_dup(t->unio.name);
+    case TYPE_STRUCT:
+        /* A tuple's identity is its element list — spell the name from the
+         * fields (mirroring tuple_canonical_name) so it never depends on
+         * whether a stored name was canonicalized yet. */
+        if (t->struc.is_tuple) {
+            char hdr[24];
+            snprintf(hdr, sizeof(hdr), "fc_tuple%d", t->struc.field_count);
+            char *r = str_dup(hdr);
+            if (t->struc.field_count > 0) {
+                r = mangle_cat(r, "__");
+                for (int i = 0; i < t->struc.field_count; i++)
+                    r = mangle_append_piece(r, mangle_type_name(t->struc.fields[i].type));
+            }
+            return r;
+        }
+        /* A generic instance spells base "__" lp(arg)* from structure — the
+         * same recursion as the TYPE_STUB arm below — so the name is a pure
+         * function of the type, not of which walk renamed the node first.
+         * The base comes from the defining symbol (the canonical template
+         * name set by pass1) when available, which makes the spelling
+         * idempotent: re-mangling a node already renamed in place to its
+         * instance name cannot double-mangle. */
+        if (t->struc.type_arg_count > 0) {
+            const char *base = t->struc.name;
+            Symbol *sym = t->struc.resolved_sym;
+            if (sym && sym->type && sym->type->kind == TYPE_STRUCT && sym->type->struc.name)
+                base = sym->type->struc.name;
+            char *r = mangle_cat(str_dup(base), "__");
+            for (int i = 0; i < t->struc.type_arg_count; i++)
+                r = mangle_append_piece(r, mangle_type_name(t->struc.type_args[i]));
+            return r;
+        }
+        return str_dup(t->struc.name);
+    case TYPE_UNION:
+        /* Same structural spelling as the TYPE_STRUCT arm above. */
+        if (t->unio.type_arg_count > 0) {
+            const char *base = t->unio.name;
+            Symbol *sym = t->unio.resolved_sym;
+            if (sym && sym->type && sym->type->kind == TYPE_UNION && sym->type->unio.name)
+                base = sym->type->unio.name;
+            char *r = mangle_cat(str_dup(base), "__");
+            for (int i = 0; i < t->unio.type_arg_count; i++)
+                r = mangle_append_piece(r, mangle_type_name(t->unio.type_args[i]));
+            return r;
+        }
+        return str_dup(t->unio.name);
     case TYPE_ENUM:    return str_dup(t->enu.name);
     case TYPE_STUB:
         /* A generic-instance stub (box<i32>) must mangle identically to its
