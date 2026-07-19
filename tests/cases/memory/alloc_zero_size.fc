@@ -1,0 +1,40 @@
+// A zero-size heap request is not an allocation failure. C leaves
+// malloc(0)/calloc(0, n) implementation-defined — it may return NULL, which
+// FC's option reads as failure — so `alloc(i32, 0)!` used to abort on some
+// libcs and succeed on others. Every alloc form that can legitimately ask for
+// zero now requests one unit, so the pointer is unique and freeable
+// everywhere while the FC-level length stays 0.
+let main = (args: str[]) ->
+    // raw buffer, literal zero and runtime zero (T*? — null is the none sentinel)
+    let p = alloc(i32, 0)!
+    free(p)
+    let mut n = 4
+    n = n - 4
+    let q = alloc(i32, n)!
+    free(q)
+
+    // zero-length slice literal, literal and runtime length
+    let s = alloc(i32[0] { })!
+    assert(s.len == 0)
+    free(s)
+    let t = alloc(i32[n] { })!
+    assert(t.len == 0)
+    free(t)
+
+    // empty string literal
+    let e = alloc("")!
+    assert(e.len == 0)
+    free(e)
+
+    // heap copy of an empty slice
+    let src = i32[0] { }
+    let c = alloc(src)!
+    assert(c.len == 0)
+    free(c)
+
+    // the non-degenerate cases are unchanged
+    let big = alloc(i32[3] { 7, 8, 9 })!
+    assert(big.len == 3)
+    assert(big[2] == 9)
+    free(big)
+    0

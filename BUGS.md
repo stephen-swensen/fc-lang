@@ -12,7 +12,7 @@ triage, two variant-construction holes during §2.5, and three more — two
 uncovered spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an
 adversarial review of the §2 diff, see those entries). §1 (parser / lexer)
 and §2 (pass2 judgments) complete — see those sections for what landed.
-§3–§8 untouched; current suite: 2122 passed, 31 failed (gcc + clang, -O0 and
+§3–§8 untouched; current suite: 2123 passed, 31 failed (gcc + clang, -O0 and
 -O2; LSP wire tests green).
 
 Conventions:
@@ -688,6 +688,20 @@ are separate alloc-path checks.
   `int32_t _fc_back_0[4294967295]`. Arguably correct under FC's wrapping
   semantics (the value genuinely is 4294967295), but it is the one spelling
   of "negative length" the rule does not catch.
+
+*(Also found while settling §2.8, and **fixed** — a zero-size heap request
+reported allocation failure.* `alloc(T, 0)`, `alloc(T[0] { })`, `alloc("")`,
+and a heap copy of an empty slice all emitted `malloc(0)` / `calloc(0, n)`,
+which C11 7.22.3p1 leaves implementation-defined: the allocator may return
+null, which FC's option reads as exhaustion, so `alloc(i32, 0)!` aborted on
+some libcs and succeeded on others. glibc returns a unique pointer, so the
+suite never saw it. Codegen now routes every count that can legitimately be
+zero through a `fc_alloc_n` helper that requests one unit instead — the same
+idiom C programmers write by hand — so the pointer is unique and freeable
+everywhere while the FC-level length stays 0. It folds away for a constant
+count. Reachable at runtime too, since the spec allows `alloc(T[N])` with a
+runtime `N`. Test `memory/alloc_zero_size` (all five forms, literal and
+runtime zero, ASan-clean); spec §Heap Allocation states the rule.)
 - Transitive const-eval diagnostics can print mangled names
   ("in instantiation of 'fc__inner'") where the static_assert path prints
   `inner<8>`.

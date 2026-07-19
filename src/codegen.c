@@ -4877,7 +4877,7 @@ static void emit_expr(Expr *e, FILE *out) {
             /* alloc(T, N) → T*? (raw buffer, null sentinel) */
             fprintf(out, "(");
             emit_type(e->alloc_expr.alloc_type, out);
-            fprintf(out, "*)calloc(fc_to_size(");
+            fprintf(out, "*)calloc(fc_alloc_n(");
             emit_expr(e->alloc_expr.size_expr, out);
             fprintf(out, "), sizeof(");
             emit_type(e->alloc_expr.alloc_type, out);
@@ -4891,7 +4891,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "* _aptr%d = (", tid);
             emit_type(e->alloc_expr.alloc_type, out);
-            fprintf(out, "*)calloc(fc_to_size(_asz%d), sizeof(", tid);
+            fprintf(out, "*)calloc(fc_alloc_n(_asz%d), sizeof(", tid);
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, ")); _aptr%d ? (", tid);
             emit_type(e->type, out);
@@ -4924,7 +4924,8 @@ static void emit_expr(Expr *e, FILE *out) {
                 }
                 actual_len++;
             }
-            fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d); ", tid, actual_len);
+            fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d); ", tid,
+                actual_len > 0 ? actual_len : 1);
             fprintf(out, "_ap%d ? (memcpy(_ap%d, (uint8_t*)\"%.*s\", %d), (",
                 tid, tid, ie->string_lit.length, ie->string_lit.value, actual_len);
             emit_type(e->type, out);
@@ -4978,7 +4979,7 @@ static void emit_expr(Expr *e, FILE *out) {
             if (ec == 0) {
                 fprintf(out, " *_ap%d = (", tid);
                 emit_type(elem_type, out);
-                fprintf(out, "*)calloc(%d, sizeof(", (int)size);
+                fprintf(out, "*)calloc(%d, sizeof(", (int)(size > 0 ? size : 1));
             } else {
                 fprintf(out, " *_ap%d = (", tid);
                 emit_type(elem_type, out);
@@ -5087,7 +5088,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(elem_type, out);
             fprintf(out, " *_ap%d = (", tid);
             emit_type(elem_type, out);
-            fprintf(out, "*)malloc(fc_to_size(_as%d.len) * sizeof(", tid);
+            fprintf(out, "*)malloc(fc_alloc_n(_as%d.len) * sizeof(", tid);
             emit_type(elem_type, out);
             fprintf(out, ")); ");
             fprintf(out, "_ap%d ? (memcpy(_ap%d, _as%d.ptr, fc_to_size(_as%d.len) * sizeof(",
@@ -7392,6 +7393,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "static inline int fc_to_int(int64_t n) {\n"
         "    assert(n >= 0 && n <= INT_MAX);\n"
         "    return (int)n;\n"
+        "}\n"
+        /* Element/byte count for a heap request that may legitimately be zero
+         * (alloc(T, 0), an empty slice literal, a copy of an empty slice).
+         * C leaves a zero-size malloc/calloc implementation-defined: it may
+         * return NULL, which FC's option would read as an allocation failure —
+         * so the same program would abort on one libc and not another. Ask for
+         * one unit instead, giving a unique freeable pointer on every
+         * platform; the FC-level length stays 0, so nothing may be read
+         * through it. A constant count folds this away entirely. */
+        "__attribute__((unused))\n"
+        "static inline size_t fc_alloc_n(int64_t n) {\n"
+        "    assert(n >= 0 && (uint64_t)n <= SIZE_MAX);\n"
+        "    return n > 0 ? (size_t)n : 1;\n"
         "}\n");
 
     /* Saturating float->int conversion helpers (audit item 16). A raw C cast of
