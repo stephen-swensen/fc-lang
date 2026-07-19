@@ -7,13 +7,18 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 22 / 45 fixed** (+6 found and fixed along the way: §1.5 during §1's
-triage, two variant-construction holes during §2.5, and three more — two
-uncovered spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an
-adversarial review of the §2 diff, see those entries). §1 (parser / lexer),
-§2 (pass2 judgments) and §3 (escape analysis) complete — see those sections
-for what landed. §4–§8 untouched; current suite: 2151 passed, 23 failed
-(gcc + clang, -O0 and -O2; LSP wire tests green).
+**Status: 35 / 45 fixed** (+9 found and fixed along the way: §1.5 during §1's
+triage, two variant-construction holes during §2.5, three more — two uncovered
+spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an adversarial
+review of the §2 diff, and three during §4: a wrong-length string *pattern*
+compare, an option typedef missing behind any pointer, and §6.1 which the §4.8–
+4.11 root-cause fix closed outright). §1 (parser / lexer), §2 (pass2
+judgments), §3 (escape analysis) and §4 (codegen emits invalid C) complete —
+see those sections for what landed. §5–§8 untouched; current suite: 2180
+passed, 10 failed (gcc + clang, -O0 and -O2; LSP wire tests green).
+
+One **new bug** was found while writing §4's tests and is recorded as a failing
+test rather than fixed — see §4.14.
 
 Conventions:
 
@@ -599,61 +604,201 @@ rejected; eight legal-code shapes (passing a stack slice to a function,
 iterating static strings, freeing through a parameter, destructuring a call
 result, a closure capturing a parameter) are all accepted and ASan-clean.
 
-## 4. Codegen emits invalid C for legal programs
+## 4. Codegen emits invalid C for legal programs — ✅ ALL FIXED (2026-07-19)
 
-- **4.1 `pattern_matching/match_catchall_nonfinal`** — an unguarded catch-all
-  arm (`_` or binding) in non-final position emits a bare `{...}` block, so
-  the next arm's `else` has no `if` → "'else' without a previous 'if'". FC
-  deliberately allows redundant arms (first-match-wins; see
-  `exhaustiveness/exhaust_union_dup_variant`). Guarded catch-alls and
-  or-patterns containing `_` are unaffected (they still emit an `if`).
-- **4.2 `enums/nested_enum_pattern_union`** — enum-variant pattern nested in a
-  union payload emits tagged-union codegen for the enum:
-  `_subj0.chosen.tag == fc__color_tag_red` on an int typedef. Or-pattern and
-  union→option→enum forms too. Nested enum under bare option/result works —
-  only the union-payload path lacks the enum (scalar-compare) branch.
+All thirteen fixed on branch `bugsearch`, plus §6.1 and two more found while
+fixing (both restated below); suite 2180 passed / 10 failed (the remaining
+failures are §5, §6, and the new §4.14), gcc + clang, -O0 and -O2, LSP wire
+tests green. 15 tests added beyond the thirteen repros. `spec/examples.fc`, the
+stdlib, all five demos, and both sibling projects (wolf-fc, euler-fc) still
+compile clean; the new codegen paths are ASan/UBSan-clean.
+
+The thirteen collapsed into five root causes. Spec updated: §Fixed arrays
+(the outermost-type rule), §String Interpolation escape rules (`%%` folds in
+every literal form).
+
+### Root cause A: string literals were echoed, never decoded (4.8–4.11) ✅ FIXED
+
+A string literal reaches codegen as its *source* text — the bytes between the
+quotes, escapes unprocessed — and codegen printed that text into the emitted C
+literal. That is wrong in both directions: FC and C disagree on what an escape
+denotes (FC's `\x` takes exactly two hex digits, C's is greedy), and C reads
+sequences FC never writes (trigraphs). Every symptom below is the same bug seen
+from a different position.
+
+- **4.8 `strings/trigraph_literal`** — `??` runs emitted raw →
+  `-Werror=trigraphs`, and a conforming C11 translator would rewrite the bytes.
+- **4.9 `strings/hex_escape_adjacent_digit`** — `"\x411"` is `{0x41, '1'}` in
+  FC but one out-of-range escape in C.
+- **4.10 `strings/quote_in_interp`** — `\"` in an *interpolated* string's static
+  text emitted `\\"` (escaped backslash + raw quote), closing the C format
+  literal early.
+- **4.11 `strings/nul_in_interp`** — `\0` in interpolated static text landed as
+  a real NUL inside the snprintf format (`-Werror=format-contains-nul`, and at
+  runtime every later segment dropped).
+
+**Fixed** with one decode and one encode, shared by every position.
+`decode_str_lit` turns source text into the bytes it denotes (FC's escape set is
+closed and the lexer has already rejected the rest, so the decode is total) and
+doubles as the length function, so no consumer can compute a length that
+disagrees with the bytes. `emit_c_byte` re-encodes for C: **three-digit octal**
+rather than `\x` (self-delimiting, so 4.9's adjacent digit stays its own byte),
+`\?` unconditionally (4.8), and a `fmt` flag for the one position that is a
+printf format string. The seven emission sites — static `str`, `cstr`, string
+*pattern*, both `alloc` heap copies, the interpolation format string, and
+`emit_c_escaped`'s diagnostic text — all route through it. 4.11's NUL is the one
+byte a format string cannot carry, so it is written by the format as `%c` with
+argument `0`: snprintf copies it like any other byte and counts it in the
+return, no segment splitting needed.
+
+**Two more fixed by the same change:**
+
+- **§6.1 `strings/pct_escape_static`** (listed under §6) — `%%` was folded in the
+  computed `.len` but not in the emitted bytes, so `"50%% off"` yielded
+  `50%% of`. The decoder folds it, so length and bytes now come from one place.
+  The `cstr` twin, which had never folded `%%` at all, is fixed with it. New test
+  `strings/pct_escape_forms` pins all four spellings.
+- **A string *pattern* compared at the wrong length** (found while fixing, not
+  from the hunt) — `| "a\nb" ->` emitted
+  `fc_eq_fc_str(s, (fc_str){"a\nb", 4})`: the *source* length, 4, against a
+  3-byte C literal, so the comparison read one byte past the literal. Silent,
+  and no test would have caught it. Pinned in `strings/escape_encoding_forms`.
+
+### Root cause B: nested pattern types were never resolved (4.2, 4.3) ✅ FIXED
+
+- **4.2 `enums/nested_enum_pattern_union`** — an enum-variant pattern inside a
+  union payload emitted tagged-union codegen for the enum
+  (`_subj0.chosen.tag == fc__color_tag_red` on an int typedef).
 - **4.3 `pattern_matching/nested_union_binding`** — a binding at depth 2 of a
-  nested union pattern (`| wrap(chosen(c)) ->`) is type-checked but never
-  declared in the C ("'c' undeclared"). Binding emission stops at depth 1.
-- **4.4 `generics/const_arith_transitive_fn_typedef`** — name capture: when
-  `mk2<'n>` calls `mk<'n * 2>`, the fn-type typedef collection substitutes the
-  *caller's* `'n` into the callee's signature, emitting a typedef over the
-  phantom `wide<64>` which is never instantiated. Renaming the callee's param
-  to `'m` avoids it. **Latent hazard for std::wideint's `mul_wide` shape** —
-  works there only because every width instance happens to exist.
-- **4.5 `generics/fn_typedef_instance_field_dup`** — a struct field's function
-  type over a monomorphized instance (`measure: (wide<64>) -> i32`) plus a
-  function of the same signature emits the same typedef twice → C11
-  "conflicting types". Repros with type-arg instances (`box<i32>`) too;
-  fn-typedef dedup keys pre- vs post-mangling names inconsistently.
-- **4.6 `structs/nested_fixed_array_field_err`** — `m: u8[2][3]` accepted,
-  emits `uint8_t[2] m[3];` (not a C declarator). **Fix-direction:** the test
-  expects rejection ("fixed array"); supporting it means emitting the
-  inside-out C declarator `uint8_t m[3][2]` and auditing every consumer of
-  fixed-array reprs.
-- **4.7 `options/alloc_nested_option`** — a nested option type whose *only*
-  occurrence is `alloc(T)`'s type operand never gets its typedef emitted
-  (`fc_option_fc_option_int32_t` undeclared). The option-typedef discovery
-  walk skips alloc's type argument.
-- **4.8 `strings/trigraph_literal`** — `??` runs in string literals emitted raw
-  → gcc/clang `-Werror=trigraphs`; a strictly conforming C11 translator would
-  rewrite the bytes. Emit `?` escapes (`"?\?!"`). Also reachable via
-  diagnostic text embedded in unwrap/assert messages (source text `i32??`).
-- **4.9 `strings/hex_escape_adjacent_digit`** — FC's `\x` is exactly two
-  digits; C's is greedy. `"\x411"` is passed through verbatim → "hex escape
-  sequence out of range". Re-encode decoded bytes instead of echoing escapes.
-- **4.10 `strings/quote_in_interp`** — `\"` in the static text of an
-  *interpolated* string emits `\\"` (escaped backslash + raw quote),
-  terminating the C format literal early. The static-only path handles it.
-- **4.11 `strings/nul_in_interp`** — `\0` in interpolated static text lands as
-  a real NUL inside the snprintf format (`-Werror=format-contains-nul`; at
-  runtime everything after would be dropped). Static text with NULs can't ride
-  a format string — needs segment splitting/memcpy like the static path.
-- **4.12 `expressions/xor_literal_pow`** — `10 ^ 6` / `2 ^ 8` emitted verbatim
-  → gcc/clang `-Werror=xor-used-as-pow`. Fold or re-spell literal operands.
-- **4.13 `equality/self_compare`** — `x == x` emits `_l_x_0 == _l_x_0` →
-  `-Werror=tautological-compare` (integers/bools only; floats are exempted by
-  compilers for the NaN idiom). Spec's no-op rule covers only self-assignment.
+  nested union pattern (`| wrap(chosen(c)) ->`) was type-checked but never
+  declared ("'c' undeclared").
+
+Only the *outermost* type in a pattern comes from a checked expression; every
+type reached by descending is the name-only `TYPE_STUB` the declaration wrote.
+Both pattern emitters dispatched on `->kind` without resolving it, so an enum
+payload looked like a union (4.2) and a nested union's variant table was never
+found, leaving `payload_type` NULL and the binding silently unemitted (4.3).
+**Fixed** by resolving the stub once at the entry of `emit_pat_predicate` and
+`emit_pat_bindings` — a no-op for an already-resolved type, so every level below
+the first now sees the definition. Test `nested_pattern_depth_forms` covers the
+enum-in-union, or-pattern, depth-2 binding, depth-2 tag test, through-an-option
+and through-a-struct-field shapes.
+
+### Root cause C: the typedef-discovery walk (4.5, 4.7, and 4.4) ✅ FIXED
+
+- **4.7 `options/alloc_nested_option`** — the walk never descends into a
+  **pointer's pointee**, so a nested option whose only occurrence is behind one
+  gets no typedef. `alloc(T)`'s `T*?` result is that shape, and so is a plain
+  `i32??*` parameter or field — a more general hole than the entry assumed
+  ("skips alloc's type argument"). Fixed by descending into `TYPE_POINTER`; a
+  pointer's C declarator names its pointee, so the typedef must exist. Structs
+  are not collected here at all, so a self-referential `next: node*` still
+  terminates. Test `options/option_behind_pointer_forms` covers the alloc,
+  parameter, and field spellings over option, result, and slice pointees.
+- **4.5 `generics/fn_typedef_instance_field_dup`** — the emitted typedef *name*
+  resolves a stub to its mangled definition but `type_eq` does not, so
+  `(wide<64>) -> i32` written as a struct field's type and the identical
+  signature of a declared function hash apart and both emit
+  `fc_fn_fc__wide__5___k64__int32_t`. Fixed by canonicalizing stub param/return
+  types in the `TYPE_FUNC` arm — the same treatment the option and result arms
+  already applied to their inner types. Test `fn_typedef_instance_forms` adds
+  the type-arg (`box<i32>`) and generic-union twins.
+- **4.4 `generics/const_arith_transitive_fn_typedef`** — name capture: the walk
+  substituted the *caller's* `'n` into a callee's signature, so inside `mk2<'n>`
+  the call `mk<'n * 2>()` emitted a typedef over the phantom `wide<64>` that is
+  never instantiated. Fixed at the cause rather than the substitution: a
+  **direct** call emits its callee by name and needs no function-type typedef at
+  all, so the walk no longer collects one (an indirect call, whose callee really
+  is a function value, still does). This also removes the latent hazard in
+  std::wideint's `mul_wide` shape, which worked only because every width
+  instance happened to exist.
+
+### Root cause D: match arms after a catch-all (4.1) ✅ FIXED
+
+**4.1 `pattern_matching/match_catchall_nonfinal`** — an unguarded catch-all in
+non-final position tests nothing, so it emitted a bare `{...}` and the next
+arm's `else` had no `if`. **Fixed** by dropping the later arms: under
+first-match-wins they are unreachable, and FC permits such redundant arms
+(`exhaustiveness/exhaust_union_dup_variant`), so there is nothing to diagnose.
+Guarded catch-alls are unaffected — they route through the done-flag form, and a
+guard means the arm is *not* unconditional. `match_catchall_nonfinal_forms` pins
+the wildcard, binding and all-wildcard-struct spellings, mid-chain position, the
+void match, the guard-elsewhere form, and the guarded-catch-all negative case.
+
+### Root cause E: a fixed array nested in another type (4.6) ✅ FIXED
+
+**4.6 `structs/nested_fixed_array_field_err`** — **fix-direction decided:
+reject**, which is what the test expected. C spells a fixed array as an
+inside-out declarator (`uint8_t m[3][2]`), which no other type constructor here
+composes with, and supporting it would mean auditing every consumer of the
+fixed-array repr — the partial-fix shape FC's completeness rule exists to avoid.
+The check went in `parse_type_suffix`, where the nesting is formed, so it covers
+the whole family rather than the one reported spelling: `u8[2][3]`, `u8[2][]`,
+`u8[2]*`, `u8[2]?` and `u8[2]!` are all "a fixed array must be a field's
+outermost type". The negative space — a fixed array *of* a composite
+(`i32[][3]`, `i32*[2]`, `i32?[2]`) — is unaffected and pinned by
+`structs/fixed_array_outermost_ok`. Spec §Fixed arrays states the rule.
+
+### Warning-clean C (4.12, 4.13) ✅ FIXED
+
+- **4.12 `expressions/xor_literal_pow`** — `10 ^ 6` trips
+  `-Werror=xor-used-as-pow`, and a *hexadecimal* operand is the only thing that
+  silences gcc and clang (parentheses do not). FC's `^` is exclusive-or and has
+  no other reading, so a direct integer-literal operand of `^` is emitted in
+  hex. A negative value keeps its decimal spelling (hex digits would not denote
+  the same value, and the warning never fires there). `xor_literal_forms` pins
+  every literal type, both sides, negative operands, and the compound-operand
+  case that keeps decimal.
+- **4.13 `equality/self_compare`** — `x == x` trips
+  `-Werror=tautological-compare`. A no-op cast does *not* silence gcc (it strips
+  the conversion and re-equates), so the fix reuses the existing sequencing
+  machinery: `binary_is_self_compare` extends `seq_needed`'s condition, hoisting
+  the left operand into a `_sq` temp, which neither compiler equates. Detection
+  is `expr_structurally_equal`, deliberately answering true only for
+  side-effect-free shapes — the same set the C compilers flag, since they never
+  equate operands they cannot prove pure. Types that route through a generated
+  `fc_eq_*` helper are excluded (a call is never tautological).
+  `self_compare_forms` covers the local, field, pointer, deref, constant and
+  variable index, compound arithmetic, enum, bool and float shapes, and asserts
+  that a side-effecting operand is still evaluated once per occurrence.
+
+### 4.14 `generics/nested_instance_arg_in_generic` — ⏸️ NEW, NOT FIXED
+
+Found while writing 4.4's test; **pre-existing** (verified against d5cfe7b), and
+left as a failing test rather than fixed — it is a monomorphization-discovery
+bug, not a codegen one, and out of scope for this session's batch.
+
+A **generic** function whose body instantiates another generic function at a
+*generic-instance* argument type never gets the resulting struct instance
+registered: for `let bx2 = (v: 'a) -> bx(bx(v))`, the emitted C references an
+undefined `fc__box__14_fc__box__3_i32` (`box<box<i32>>`), and the callee's own
+instance is mangled `fc__bx__7_fc__box` — a bare `box` with no arguments, so the
+two names do not even agree. The identical nesting from a **non-generic** caller
+(`bx(bx(5))` in `main`) works, which localizes it to substituting the caller's
+`'a` into an already-generic argument type. The `let`-bound spelling
+(`let inner = bx(v)` then `bx(inner)`) fails the same way, so it is not about
+call nesting. Note `discover_in_expr`'s EXPR_CALL arm only registers a callee
+when `type_arg_count > 0` (explicit type args); an *inferred* generic call in a
+generic body reaches instantiation by another route, which is where to start.
+The test pins the working non-generic twin alongside the failing case.
+
+### Tests added (15)
+
+`strings/`: `escape_encoding_forms` (positive: every escape through static str,
+cstr, interpolated text, both alloc'd heap copies, and a string pattern),
+`pct_escape_forms` (positive: `%%` in all four literal forms),
+`trigraph_in_assert_msg` (a `??` run through the assert message *and* the
+asserted expression's embedded source text).
+`expressions/`: `xor_literal_forms` (positive).
+`equality/`: `self_compare_forms` (positive).
+`pattern_matching/`: `match_catchall_nonfinal_forms` (positive),
+`nested_pattern_depth_forms` (positive).
+`structs/`: `fixed_array_slice_elem_err`, `fixed_array_ptr_err`,
+`fixed_array_option_err`, `fixed_array_outermost_ok` (positive).
+`options/`: `option_behind_pointer_forms` (positive).
+`generics/`: `const_arith_transitive_chain` (positive: a deeper const chain plus
+the type-parameter twin), `fn_typedef_instance_forms` (positive),
+`nested_instance_arg_in_generic` (**failing** — see 4.14).
 
 ## 5. C-identifier hygiene / mangling collisions
 
@@ -692,12 +837,12 @@ result, a closure capturing a parameter) are all accepted and ASan-clean.
 
 ## 6. String interpolation semantics
 
-- **6.1 `strings/pct_escape_static`** — in a *static* (segment-free) literal,
-  `%%` is not collapsed in the emitted bytes but `.len` is computed as if it
-  were: `"50%% off"` → content `50%% of` with len 7. A trailing `%%` only
-  *looks* right because the len truncation chops the extra `%`. cstr twin has
-  the raw bytes too. Only interpolated strings hit the snprintf path that
-  collapses.
+- **6.1 `strings/pct_escape_static`** — ✅ **FIXED 2026-07-19** as part of §4's
+  root cause A (the decode/re-encode of string literals) — see there. In a
+  *static* (segment-free) literal, `%%` was not collapsed in the emitted bytes
+  but `.len` was computed as if it were: `"50%% off"` → content `50%% of` with
+  len 7. The cstr twin had the raw bytes too. Both now fold, from the single
+  decoder that also computes the length. Test `strings/pct_escape_forms`.
 - **6.2 `strings/interp_width_overflow_err`** — width digits accumulate
   through 32 bits unvalidated: `%99999999999d` wraps to ~1.2 GB backing array
   → SIGSEGV at frame setup; `%2147483648d` emits C that fails

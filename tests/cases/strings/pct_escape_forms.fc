@@ -1,0 +1,24 @@
+// `%%` folds to one `%` in every literal form — static str, cstr, and the
+// static text of an interpolated string — and .len counts the folded byte.
+let main = (args: str[]) ->
+    let s = "50%% off"
+    assert(s.len == 7)
+    assert(s[2] == 37)
+    assert(s[3] == 32)
+
+    let c = c"50%% off"
+    assert(c[2] == 37)
+    assert(c[3] == 32)
+
+    let n = 4
+    let i = "%d{n}0%% off"
+    assert(i.len == 7)
+    assert(i[0] == 52)
+    assert(i[2] == 37)
+    assert(i[3] == 32)
+
+    let h = alloc("50%% off")!
+    assert(h.len == 7)
+    assert(h[2] == 37)
+    free(h)
+    0

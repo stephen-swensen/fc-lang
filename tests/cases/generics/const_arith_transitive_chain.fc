@@ -1,0 +1,40 @@
+// Transitive const-generic instantiation must read each callee's signature in
+// the *callee's* own parameters.  A direct call emits its callee by name, so
+// its signature needs no function-type typedef at all — collecting one under
+// the caller's bindings invents a phantom instance (`wide<'n=64>` where the
+// real callee instance is `wide<128>`) whose typedef is never defined.
+struct wide =
+    limbs: u32['n / 32]
+
+let mk = <'n>() ->
+    default(wide<'n>)
+
+let mk2 = <'n>() ->
+    mk<'n * 2>()
+
+let mk3 = <'n>() ->
+    mk2<'n * 2>()
+
+// the same shape in the type-parameter domain: a generic function whose body
+// calls another generic function whose signature names the callee's own 'a
+struct box =
+    v: 'a
+
+let bx = (v: 'a) ->
+    box { v = v }
+
+let bx2 = (v: 'a) ->
+    bx(v)
+
+let main = (args: str[]) ->
+    let a = mk2<64>()
+    assert(a.limbs.len == 4)
+    let b = mk3<32>()
+    assert(b.limbs.len == 4)
+    let c = mk<96>()
+    assert(c.limbs.len == 3)
+    let d = bx2(5)
+    assert(d.v == 5)
+    let e = bx2(true)
+    assert(e.v)
+    0

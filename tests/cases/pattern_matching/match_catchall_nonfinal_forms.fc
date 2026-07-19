@@ -1,0 +1,56 @@
+// A non-final unguarded catch-all wins under first-match-wins and the arms
+// after it are unreachable — codegen must drop them, not emit an `else` with
+// no `if`.  Every catch-all spelling, in a value match, a void match, in the
+// middle of a longer chain, and with a guard present elsewhere.
+struct pt =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    // wildcard first
+    let a = match 5 with
+            | _ -> 1
+            | 5 -> 2
+    assert(a == 1)
+
+    // a binding is a catch-all too
+    let b = match 5 with
+            | n -> n + 1
+            | 5 -> 0
+    assert(b == 6)
+
+    // in the middle of three arms
+    let c = match 5 with
+            | 4 -> 1
+            | _ -> 2
+            | 5 -> 3
+    assert(c == 2)
+
+    // an all-wildcard struct pattern tests nothing either
+    let p = pt { x = 1, y = 2 }
+    let d = match p with
+            | { x = _, y = _ } -> 1
+            | { x = 1, y = 2 } -> 2
+    assert(d == 1)
+
+    // void match
+    let mut r = 0
+    match 5 with
+    | _ -> r = 1
+    | 5 -> r = 2
+    assert(r == 1)
+
+    // a guard elsewhere routes the whole match through the done-flag form
+    let e = match 5 with
+            | n when n > 9 -> 1
+            | _ -> 2
+            | 5 -> 3
+    assert(e == 2)
+
+    // a guarded catch-all is NOT unconditional — later arms stay reachable
+    let f = match 5 with
+            | _ when false -> 1
+            | 5 -> 2
+            | _ -> 3
+    assert(f == 2)
+    0

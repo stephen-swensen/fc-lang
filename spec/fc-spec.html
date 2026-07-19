@@ -872,7 +872,7 @@ let c = alloca("hello %s{name}")     // dynamic stack: dies at function return
 
 #### Escape rules
 
-`%%` produces a literal `%` character. Bare `{` and `}` are not special — interpolation is only triggered by the `%spec{` pattern.
+`%%` produces a literal `%` character, in every string literal — `str` or `cstr`, with interpolation segments or without. Bare `{` and `}` are not special — interpolation is only triggered by the `%spec{` pattern.
 
 ```fc
 "100%%"                    // "100%"
@@ -3523,6 +3523,7 @@ Omitted fields are zero-initialized (the entire inline array is zeroed).
 
 - `N` must be a compile-time integer literal (no expressions, no type variables for size).
 - `T[N]` is valid only in struct field declarations (including extern structs) and as a `sizeof`/`alignof` operand. It cannot appear as a function parameter type, return type, or binding type.
+- A fixed array must be the **outermost** type of the field it declares: `T[N]` cannot be the element, pointee, or payload of another type constructor. `u8[2][3]`, `u8[2][]`, `u8[2]*`, `u8[2]?` and `u8[2]!` are all compile errors. The element type is unrestricted, so a fixed array *of* a composite (`i32[][3]`, `i32*[2]`, `i32?[2]`) is fine — it is the fixed array that may not be nested, not the element that must be scalar. For a multi-dimensional buffer, declare the inner array as its own struct and make a fixed array of that.
 - `&s.data` is a compile error — use `s.data.ptr` for the raw pointer.
 
 ### sizeof

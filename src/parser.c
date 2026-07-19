@@ -524,6 +524,19 @@ static uint64_t parse_int_value(const char *start, int length, bool *out_of_rang
 static Type *parse_type_suffix(Parser *p, Type *base) {
     /* T*, T[], T[N], T? — left to right */
     for (;;) {
+        /* A fixed array is a *field's* storage, not a general type: C spells it
+         * as an inside-out declarator (`uint8_t m[3][2]`), which no other type
+         * constructor here composes with — `u8[2][3]`, `u8[2][]`, `u8[2]*` and
+         * `u8[2]?` all emit `uint8_t[2]` as a type-specifier, which is not C.
+         * So a fixed array must be the outermost type it appears in; a fixed
+         * array *of* something (`u8[][2]`) is unaffected. */
+        if (base->kind == TYPE_FIXED_ARRAY &&
+            (check(p, TOK_STAR) || check(p, TOK_LBRACKET) ||
+             check(p, TOK_QUESTION) || check(p, TOK_BANG))) {
+            diag_error(loc_from_token(current(p)),
+                       "a fixed array must be a field's outermost type");
+            break;
+        }
         if (check(p, TOK_STAR)) {
             advance_p(p);
             base = type_pointer(p->arena, base);

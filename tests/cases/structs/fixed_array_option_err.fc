@@ -1,0 +1,7 @@
+// Option-of-fixed-array would put `uint8_t[2] value` inside the option struct.
+struct grid =
+    m: u8[2]?
+
+let main = (args: str[]) ->
+    assert(sizeof(grid) > 0)
+    0

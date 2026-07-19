@@ -1,0 +1,10 @@
+// A `??` run also reaches C through the text codegen embeds in diagnostics:
+// the assert message expression and the source text of the asserted expression
+// itself.  Both go through the same byte encoder, so neither can be re-read as
+// a trigraph by a conforming C11 translator.
+let main = (args: str[]) ->
+    let q = "??!"
+    assert(q.len == 3, "huh??!")
+    let o = default(i32??)
+    assert(o.is_none)
+    0

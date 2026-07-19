@@ -1,0 +1,65 @@
+// A pattern that descends into a union payload sees the payload's *declared*
+// type — a name-only reference, not the definition — so codegen must resolve
+// it at every level: the enum's scalar compare, the nested union's tag and its
+// bindings, and the same shapes reached through an option, a result, and an
+// or-pattern.
+enum color =
+    | red
+    | green
+
+union pick =
+    | chosen(color)
+    | nothing
+
+union outer =
+    | wrap(pick)
+    | empty
+
+struct box =
+    p: pick
+
+let main = (args: str[]) ->
+    // enum nested one level inside a union payload
+    let p = pick.chosen(color.green)
+    let a = match p with
+            | chosen(red) -> 1
+            | chosen(green) -> 2
+            | nothing -> 3
+    assert(a == 2)
+
+    // ...and inside an or-pattern at that depth
+    let b = match p with
+            | chosen(red) | nothing -> 1
+            | chosen(green) -> 2
+    assert(b == 2)
+
+    // binding at depth 2
+    let o = outer.wrap(pick.chosen(color.red))
+    let c = match o with
+            | wrap(chosen(v)) -> if v == color.red then 1 else 2
+            | wrap(nothing) -> 3
+            | empty -> 4
+    assert(c == 1)
+
+    // nested union tag test at depth 2, no binding
+    let d = match o with
+            | wrap(nothing) -> 1
+            | wrap(chosen(red)) -> 2
+            | wrap(chosen(green)) -> 3
+            | empty -> 4
+    assert(d == 2)
+
+    // through an option
+    let e = match some(p) with
+            | some(chosen(c2)) -> if c2 == color.green then 1 else 2
+            | some(nothing) -> 3
+            | none -> 4
+    assert(e == 1)
+
+    // through a struct field
+    let bx = box { p = p }
+    let f = match bx with
+            | { p = chosen(green) } -> 1
+            | _ -> 2
+    assert(f == 1)
+    0

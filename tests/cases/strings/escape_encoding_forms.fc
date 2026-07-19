@@ -1,0 +1,66 @@
+// Positive: every escape survives the FC-source → bytes → C-literal round trip
+// in every literal position — static str, cstr, interpolated static text, the
+// alloc'd heap copies of both, and a string pattern.  Codegen decodes the
+// source text once and re-encodes for C, so no position can drift from another.
+let main = (args: str[]) ->
+    // static str: every escape plus a trigraph run and a greedy-hex neighbour
+    let s = "a\tb\rc\\d\"e\0f\x41g??!h\x411"
+    assert(s.len == 19)
+    assert(s[1] == 9)      // \t
+    assert(s[3] == 13)     // \r
+    assert(s[5] == 92)     // backslash
+    assert(s[7] == 34)     // quote
+    assert(s[9] == 0)      // NUL
+    assert(s[11] == 65)    // \x41 = 'A'
+    assert(s[13] == 63)    // '?'
+    assert(s[14] == 63)    // '?'
+    assert(s[15] == 33)    // '!'
+    assert(s[17] == 65)    // \x41 again, this time followed by a digit
+    assert(s[18] == 49)    // ...and the digit stays its own byte
+    let s2 = "\x411"
+    assert(s2.len == 2)
+    assert(s2[0] == 65)
+    assert(s2[1] == 49)    // the '1' is NOT swallowed by the hex escape
+
+    // cstr: same encoder, NUL-terminated (so no \0 inside)
+    let c = c"a\tb??!\x411"
+    assert(c[1] == 9)
+    assert(c[3] == 63)
+    assert(c[4] == 63)
+    assert(c[5] == 33)
+    assert(c[6] == 65)
+    assert(c[7] == 49)
+
+    // interpolated: the static text rides the snprintf format string
+    let n = 7
+    let i = "q\"r\0s??!t\x411u%d{n}"
+    assert(i.len == 13)
+    assert(i[1] == 34)     // quote does not close the C format literal
+    assert(i[3] == 0)      // NUL rides as %c, later segments survive
+    assert(i[5] == 63)
+    assert(i[6] == 63)
+    assert(i[7] == 33)
+    assert(i[9] == 65)
+    assert(i[10] == 49)
+    assert(i[12] == 55)    // '7' — the segment after the NUL
+
+    // heap copies go through the same encoder
+    let hs = alloc("a\0b??!\x411")!
+    assert(hs.len == 8)
+    assert(hs[1] == 0)
+    assert(hs[3] == 63)
+    assert(hs[6] == 65)
+    assert(hs[7] == 49)
+    free(hs)
+    let hc = alloc(c"x??!\x411")!
+    assert(hc[1] == 63)
+    assert(hc[4] == 65)
+    assert(hc[5] == 49)
+    free(hc)
+
+    // a string pattern compares decoded bytes, at the decoded length
+    let r = match "a\nb" with
+            | "a\nb" -> 1
+            | _ -> 2
+    assert(r == 1)
+    0

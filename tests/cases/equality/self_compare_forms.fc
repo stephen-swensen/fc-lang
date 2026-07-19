@@ -1,0 +1,58 @@
+// Self-comparison is legal FC and must produce warning-clean C in every shape
+// gcc or clang equates: a local, a struct field, a pointer, a deref, an index,
+// a compound arithmetic expression, an enum, and a pointer-to-pointer.  The
+// hoist that silences the warning must not change the value or the number of
+// evaluations.
+struct pt =
+    x: i32
+    y: i32
+
+enum dir =
+    | up
+    | down
+
+let mut calls = 0
+
+let bump = () ->
+    calls = calls + 1
+    3
+
+let main = (args: str[]) ->
+    let mut x = 5
+    assert(x == x)
+    assert(x <= x)
+    assert(x >= x)
+    assert(!(x != x))
+    assert(!(x < x))
+    assert(!(x > x))
+
+    let p = pt { x = 1, y = 2 }
+    assert(p.x == p.x)
+
+    let q = &x
+    assert(q == q)
+    assert(*q == *q)
+
+    let s = i32[3] { 1, 2, 3 }
+    assert(s[1] == s[1])
+    let i = 2
+    assert(s[i] == s[i])
+
+    assert(x + 1 == x + 1)
+    assert(-x == -x)
+    assert((x & 3) == (x & 3))
+
+    let d = dir.up
+    assert(d == d)
+
+    let b = true
+    assert(b == b)
+
+    // floats keep the NaN idiom working (compilers exempt them)
+    let f = 1.5
+    assert(f == f)
+
+    // a side-effecting operand is still evaluated once per occurrence
+    assert(bump() == bump())
+    assert(calls == 2)
+    0

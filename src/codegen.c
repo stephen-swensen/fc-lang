@@ -128,6 +128,10 @@ static DeferScope *g_defer_scope = NULL;
  * Set in codegen_emit(). */
 static const char *g_fn_attr = "static __attribute__((unused)) ";
 
+/* Set while emitting a direct integer-literal operand of `^`, which goes out in
+ * hexadecimal — see the TOK_CARET note in the binary emitter. */
+static bool g_int_lit_hex = false;
+
 static void emit_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
@@ -136,6 +140,100 @@ static void emit_enum_variant_literal(Type *et, const char *vname, FILE *out);
 static bool type_valueless(Type *t);
 static bool interp_const_buffer_size(Expr *e, int64_t *out_size);
 static void emit_c_escaped(const char *text, int len, FILE *out);
+
+/* ---- String literal decode / re-encode ----
+ *
+ * A string literal reaches codegen as its *source* text — the bytes between
+ * the quotes with escapes unprocessed.  Echoing that text into the emitted C
+ * literal is what FC used to do, and it is wrong in both directions: FC and C
+ * do not agree on what an escape denotes (FC's `\x` takes exactly two hex
+ * digits, C's is greedy), and C reads sequences FC does not write at all
+ * (trigraphs).  So the text is decoded to bytes once, and the bytes are
+ * re-encoded for C — the only way the emitted literal is guaranteed to hold
+ * the bytes the FC program wrote. */
+
+static int hex_digit_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return c - 'A' + 10;
+}
+
+/* Decode string-literal source text into the bytes it denotes.  FC's escape
+ * set is closed — `\n \t \r \\ \" \' \0 \xNN` plus the `%%` percent escape —
+ * and the lexer has already rejected everything else, so the decode is total.
+ * Writes to `out` when non-NULL and always returns the byte count, so one
+ * routine both sizes a buffer and fills it: every consumer's length and
+ * codegen's bytes come from the same place and cannot disagree. */
+static int decode_str_lit(const char *s, int slen, unsigned char *out) {
+    int n = 0;
+    for (int i = 0; i < slen; i++) {
+        unsigned char b;
+        if (s[i] == '%' && i + 1 < slen && s[i + 1] == '%') {
+            b = '%';
+            i++;
+        } else if (s[i] == '\\' && i + 1 < slen) {
+            i++;
+            switch (s[i]) {
+            case 'n': b = '\n'; break;
+            case 't': b = '\t'; break;
+            case 'r': b = '\r'; break;
+            case '0': b = '\0'; break;
+            case 'x':
+                if (i + 2 < slen) {
+                    b = (unsigned char)((hex_digit_val(s[i + 1]) << 4) |
+                                        hex_digit_val(s[i + 2]));
+                    i += 2;
+                } else {
+                    b = 'x';
+                }
+                break;
+            default: b = (unsigned char)s[i]; break;  /* \\ \" \' */
+            }
+        } else {
+            b = (unsigned char)s[i];
+        }
+        if (out) out[n] = b;
+        n++;
+    }
+    return n;
+}
+
+/* Decoded byte length of string-literal source text. */
+static int str_lit_len(const char *s, int slen) {
+    return decode_str_lit(s, slen, NULL);
+}
+
+/* Emit one raw byte as the body of a C string literal.  Non-printables take a
+ * *three-digit octal* escape rather than `\x`: C's hex escape is greedy, so
+ * `\x41` followed by the byte `1` would be re-read as one out-of-range escape,
+ * while `\101` is self-delimiting.  `?` is always escaped so no `??` run can be
+ * taken as a trigraph.  `fmt` marks a printf format string, where a literal `%`
+ * must be written `%%`. */
+static void emit_c_byte(unsigned char b, bool fmt, FILE *out) {
+    switch (b) {
+    case '\\': fputs("\\\\", out); return;
+    case '"':  fputs("\\\"", out); return;
+    case '\n': fputs("\\n", out);  return;
+    case '\r': fputs("\\r", out);  return;
+    case '\t': fputs("\\t", out);  return;
+    case '?':  fputs("\\?", out);  return;
+    case '%':  fputs(fmt ? "%%" : "%", out); return;
+    default:
+        if (b < 0x20 || b == 0x7f) fprintf(out, "\\%03o", b);
+        else fputc((char)b, out);
+        return;
+    }
+}
+
+/* Emit string-literal source text as a C string literal body, decoding FC's
+ * escapes and re-encoding for C. */
+static void emit_str_lit_body(const char *s, int slen, FILE *out) {
+    int n = decode_str_lit(s, slen, NULL);
+    unsigned char *buf = malloc(n > 0 ? (size_t)n : 1);
+    decode_str_lit(s, slen, buf);
+    for (int i = 0; i < n; i++) emit_c_byte(buf[i], false, out);
+    free(buf);
+}
 
 /* C name of a lifted lambda: pass2's lifted_name, plus the active
  * generic-instance suffix (see g_lambda_suffix). */
@@ -1272,6 +1370,62 @@ static bool seq_needed(Expr ***slots, int n) {
     return false;
 }
 
+/* Structural equality of two operands, used for exactly one purpose: spotting a
+ * *self*-comparison.  `x == x` is legal FC (the spec's no-op rule covers only
+ * self-assignment) but gcc and clang reject the emitted C as tautological, so
+ * the comparison is emitted with its left operand hoisted into a temporary,
+ * which the C compilers no longer equate.  Only side-effect-free shapes answer
+ * true — which is also the set the C compilers flag, since they never equate
+ * operands they cannot prove pure — so a false here costs nothing. */
+static bool expr_structurally_equal(Expr *a, Expr *b) {
+    if (a == b) return a != NULL;
+    if (!a || !b || a->kind != b->kind) return false;
+    switch (a->kind) {
+    case EXPR_INT_LIT:   return a->int_lit.value == b->int_lit.value;
+    case EXPR_FLOAT_LIT: return a->float_lit.value == b->float_lit.value;
+    case EXPR_BOOL_LIT:  return a->bool_lit.value == b->bool_lit.value;
+    case EXPR_CHAR_LIT:  return a->char_lit.value == b->char_lit.value;
+    case EXPR_IDENT: {
+        const char *an = a->ident.codegen_name ? a->ident.codegen_name : a->ident.name;
+        const char *bn = b->ident.codegen_name ? b->ident.codegen_name : b->ident.name;
+        return an && bn && strcmp(an, bn) == 0;
+    }
+    case EXPR_FIELD: case EXPR_DEREF_FIELD:
+        return a->field.name == b->field.name &&
+               expr_structurally_equal(a->field.object, b->field.object);
+    case EXPR_INDEX:
+        return expr_structurally_equal(a->index.object, b->index.object) &&
+               expr_structurally_equal(a->index.index, b->index.index);
+    case EXPR_UNARY_PREFIX:
+        return a->unary_prefix.op == b->unary_prefix.op &&
+               expr_structurally_equal(a->unary_prefix.operand,
+                                       b->unary_prefix.operand);
+    case EXPR_BINARY:
+        return a->binary.op == b->binary.op &&
+               expr_structurally_equal(a->binary.left, b->binary.left) &&
+               expr_structurally_equal(a->binary.right, b->binary.right);
+    case EXPR_CAST:
+        return type_eq(a->cast.target, b->cast.target) &&
+               expr_structurally_equal(a->cast.operand, b->cast.operand);
+    default:
+        /* calls, allocations, control flow, aggregates: never equated */
+        return false;
+    }
+}
+
+/* A comparison whose two operands emit identical C — see
+ * expr_structurally_equal.  Types that route through a generated `fc_eq_*`
+ * helper are excluded: those emit a call, which is never tautological. */
+static bool binary_is_self_compare(Expr *e) {
+    switch (e->binary.op) {
+    case TOK_EQEQ: case TOK_BANGEQ: case TOK_LT:
+    case TOK_GT:   case TOK_LTEQ:   case TOK_GTEQ: break;
+    default: return false;
+    }
+    if (type_needs_eq_func(e->binary.left->type)) return false;
+    return expr_structurally_equal(e->binary.left, e->binary.right);
+}
+
 /* Evaluate operands [0, n-1) into temporaries in source order (skipping
  * side-effect-free atoms and any operand lacking a type), rewriting their slots
  * to read the temporaries.  The final operand is left in place — it is
@@ -1309,7 +1463,8 @@ static bool emit_self_parens(Expr *e) {
     if (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) return false;
     Expr **slots[2] = { &e->binary.left, &e->binary.right };
     bool seq = e->binary.op != TOK_AMPAMP && e->binary.op != TOK_PIPEPIPE &&
-               !g_const_context && seq_needed(slots, 2);
+               !g_const_context &&
+               (seq_needed(slots, 2) || binary_is_self_compare(e));
     return !seq;
 }
 
@@ -1499,6 +1654,13 @@ static bool pattern_has_predicate(Pattern *pat) {
    `first` tracks whether any predicate has been emitted yet in the current
    conjunction chain — it flips to false on the first emission. */
 static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool *first, FILE *out) {
+    /* A payload/field type reached by descending into a pattern arrives as the
+     * name-only TYPE_STUB the declaration wrote, not the definition the subject
+     * expression carried — so the kind dispatch below (enum scalar compare vs.
+     * union tag compare, option/result shape) must resolve it first.  Only the
+     * *outermost* type came from a checked expression; every nested one needs
+     * this.  A no-op for an already-resolved type. */
+    if (type) type = resolve_struct_stub(type);
     switch (pat->kind) {
     case PAT_BINDING:
     case PAT_WILDCARD:
@@ -1609,8 +1771,10 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     case PAT_STRING_LIT:
         if (!*first) fprintf(out, " && ");
         *first = false;
-        fprintf(out, "fc_eq_fc_str(%s, (fc_str){(uint8_t*)\"%.*s\", %d})",
-            expr, pat->string_lit.length, pat->string_lit.value, pat->string_lit.length);
+        fprintf(out, "fc_eq_fc_str(%s, (fc_str){(uint8_t*)\"", expr);
+        emit_str_lit_body(pat->string_lit.value, pat->string_lit.length, out);
+        fprintf(out, "\", %d})",
+            str_lit_len(pat->string_lit.value, pat->string_lit.length));
         break;
     case PAT_OR: {
         if (!pattern_has_predicate(pat)) break;
@@ -1662,6 +1826,9 @@ static void emit_pat_conditions(Pattern *pat, const char *expr, Type *type, bool
    expr is the C expression for the value being matched.
    type is the FC type of the value. */
 static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *out) {
+    /* Same stub resolution as emit_pat_predicate: without it a nested union's
+     * variant table is never found and its bindings are silently not declared. */
+    if (type) type = resolve_struct_stub(type);
     switch (pat->kind) {
     case PAT_ERROR:      /* unreachable: error nodes never reach codegen */
     case PAT_CONST_PATH: /* unreachable: rewritten to PAT_INT_LIT in pass2 */
@@ -2101,18 +2268,7 @@ int interp_seg_trunc_prec(const InterpSegment *seg) {
 /* Bytes a literal segment contributes to the formatted output: each `%%` folds
  * to one `%`, and a backslash escape counts as the single byte it denotes. */
 static int interp_literal_len(InterpSegment *seg) {
-    int actual_len = 0;
-    const char *s = seg->text;
-    int slen = seg->text_length;
-    for (int j = 0; j < slen; j++) {
-        if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
-        else if (s[j] == '\\' && j + 1 < slen) {
-            if (s[j+1] == 'x' && j + 3 < slen) j += 3;
-            else j++;
-        }
-        actual_len++;
-    }
-    return actual_len;
+    return str_lit_len(seg->text, seg->text_length);
 }
 
 /* Upper bound on the bytes a non-string conversion can emit, for buffer sizing.
@@ -2389,18 +2545,20 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
     /* Emit format string */
     for (int i = 0; i < seg_count; i++) {
         if (segs[i].is_literal) {
-            const char *s = segs[i].text;
-            int slen = segs[i].text_length;
-            for (int j = 0; j < slen; j++) {
-                if (s[j] == '%') {
-                    fprintf(out, "%%%%");
-                    if (j + 1 < slen && s[j+1] == '%') j++;
-                } else if (s[j] == '"') {
-                    fprintf(out, "\\\"");
-                } else {
-                    fputc(s[j], out);
-                }
+            /* The segment's decoded bytes ride the format string itself — with
+             * one exception: a NUL byte would terminate the format, silently
+             * dropping every later segment (and tripping
+             * -Werror=format-contains-nul).  It is written by the format
+             * instead, as a `%c` whose argument is 0, which snprintf copies
+             * into the buffer like any other byte and counts in its return. */
+            int n = interp_literal_len(&segs[i]);
+            unsigned char *bytes = malloc(n > 0 ? (size_t)n : 1);
+            decode_str_lit(segs[i].text, segs[i].text_length, bytes);
+            for (int j = 0; j < n; j++) {
+                if (bytes[j] == 0) fputs("%c", out);
+                else emit_c_byte(bytes[j], true, out);
             }
+            free(bytes);
         } else if (segs[i].conversion == 'T') {
             const char *tname = type_name(segs[i].expr->type);
             fputs(tname, out);
@@ -2454,7 +2612,16 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
      * so each expression is evaluated exactly once and in source order. */
     int ak = 0;
     for (int i = 0; i < seg_count; i++) {
-        if (segs[i].is_literal) continue;
+        if (segs[i].is_literal) {
+            /* One `0` per NUL byte the format writes with `%c` (see above). */
+            int n = interp_literal_len(&segs[i]);
+            unsigned char *bytes = malloc(n > 0 ? (size_t)n : 1);
+            decode_str_lit(segs[i].text, segs[i].text_length, bytes);
+            for (int j = 0; j < n; j++)
+                if (bytes[j] == 0) fprintf(out, ", 0");
+            free(bytes);
+            continue;
+        }
         if (segs[i].conversion == 'T') continue;
         fprintf(out, ", ");
         char conv = segs[i].conversion;
@@ -2543,24 +2710,13 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
     }
 }
 
-/* Emit text as a C string literal body, escaping special chars */
+/* Emit already-raw bytes (a file name, the source text of an asserted
+ * expression) as a C string literal body.  These land in printf format strings,
+ * so `%` doubles; the rest of the encoding is emit_c_byte's — notably `\?`, so
+ * source text like `i32??` cannot be re-read as a trigraph. */
 static void emit_c_escaped(const char *text, int len, FILE *out) {
-    for (int i = 0; i < len; i++) {
-        switch (text[i]) {
-        case '\\': fprintf(out, "\\\\"); break;
-        case '"':  fprintf(out, "\\\""); break;
-        case '\n': fprintf(out, "\\n"); break;
-        case '\r': fprintf(out, "\\r"); break;
-        case '\t': fprintf(out, "\\t"); break;
-        case '%':  fprintf(out, "%%%%"); break;
-        default:
-            if ((unsigned char)text[i] < 0x20)
-                fprintf(out, "\\x%02x", (unsigned char)text[i]);
-            else
-                fputc(text[i], out);
-            break;
-        }
-    }
+    for (int i = 0; i < len; i++)
+        emit_c_byte((unsigned char)text[i], true, out);
 }
 
 /* Per-integer-type data for FC's saturating float->int conversion (audit item
@@ -2692,24 +2848,38 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "0 /* unresolved type var %s */", e->type_var_ref.name);
         break;
     }
-    case EXPR_INT_LIT:
+    case EXPR_INT_LIT: {
+        /* Digits, decimal — or hexadecimal inside `^` (see g_int_lit_hex).  A
+         * negative value keeps its decimal spelling: hex digits of a negative
+         * literal would not denote the same value. */
+        char num[32];
+        bool hex = g_int_lit_hex && (int64_t)e->int_lit.value >= 0;
+        if (hex)
+            snprintf(num, sizeof num, "0x%" PRIx64, e->int_lit.value);
+        else if (e->int_lit.lit_type->kind == TYPE_UINT64 ||
+                 e->int_lit.lit_type->kind == TYPE_USIZE)
+            snprintf(num, sizeof num, "%" PRIu64, e->int_lit.value);
+        else
+            snprintf(num, sizeof num, "%" PRId64, (int64_t)e->int_lit.value);
+
         if (e->int_lit.lit_type->kind == TYPE_INT64) {
             /* INT64_MIN cannot be written as a single literal (its magnitude
              * exceeds INT64_MAX); emit the portable (-MAX - 1) idiom. */
             if ((int64_t)e->int_lit.value == INT64_MIN)
                 fprintf(out, "(-9223372036854775807LL - 1)");
             else
-                fprintf(out, "INT64_C(%" PRId64 ")", (int64_t)e->int_lit.value);
+                fprintf(out, "INT64_C(%s)", num);
         }
         else if (e->int_lit.lit_type->kind == TYPE_UINT64)
-            fprintf(out, "UINT64_C(%" PRIu64 ")", e->int_lit.value);
+            fprintf(out, "UINT64_C(%s)", num);
         else if (e->int_lit.lit_type->kind == TYPE_ISIZE)
-            fprintf(out, "((ptrdiff_t)%" PRId64 "LL)", (int64_t)e->int_lit.value);
+            fprintf(out, "((ptrdiff_t)%sLL)", num);
         else if (e->int_lit.lit_type->kind == TYPE_USIZE)
-            fprintf(out, "((size_t)%" PRIu64 "ULL)", e->int_lit.value);
+            fprintf(out, "((size_t)%sULL)", num);
         else
-            fprintf(out, "%" PRId64, (int64_t)e->int_lit.value);
+            fprintf(out, "%s", num);
         break;
+    }
 
     case EXPR_FLOAT_LIT: {
         /* Use enough precision to round-trip IEEE 754 doubles (17 digits)
@@ -2741,26 +2911,17 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "'\\x%02x'", e->char_lit.value);
         break;
 
-    case EXPR_STRING_LIT: {
-        /* Compute actual byte length after C escape processing */
-        int actual_len = 0;
-        const char *s = e->string_lit.value;
-        int slen = e->string_lit.length;
-        for (int j = 0; j < slen; j++) {
-            if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
-            else if (s[j] == '\\' && j + 1 < slen) {
-                if (s[j+1] == 'x' && j + 3 < slen) j += 3;
-                else j++;
-            }
-            actual_len++;
-        }
-        fprintf(out, "((fc_str){(uint8_t*)\"%.*s\", %d})",
-            e->string_lit.length, e->string_lit.value, actual_len);
+    case EXPR_STRING_LIT:
+        fprintf(out, "((fc_str){(uint8_t*)\"");
+        emit_str_lit_body(e->string_lit.value, e->string_lit.length, out);
+        fprintf(out, "\", %d})",
+            str_lit_len(e->string_lit.value, e->string_lit.length));
         break;
-    }
 
     case EXPR_CSTRING_LIT:
-        fprintf(out, "(uint8_t*)\"%.*s\"", e->cstring_lit.length, e->cstring_lit.value);
+        fprintf(out, "(uint8_t*)\"");
+        emit_str_lit_body(e->cstring_lit.value, e->cstring_lit.length, out);
+        fprintf(out, "\"");
         break;
 
     case EXPR_IDENT:
@@ -2793,7 +2954,8 @@ static void emit_expr(Expr *e, FILE *out) {
         Expr _bscratch[2]; Expr *_bsaved[2];
         bool _bseq = e->binary.op != TOK_SLASH && e->binary.op != TOK_PERCENT &&
                      e->binary.op != TOK_AMPAMP && e->binary.op != TOK_PIPEPIPE &&
-                     !g_const_context && seq_needed(_bslots, 2);
+                     !g_const_context &&
+                     (seq_needed(_bslots, 2) || binary_is_self_compare(e));
         if (_bseq) { fprintf(out, "({ "); seq_hoist(_bslots, 2, _bscratch, _bsaved, out); }
         /* Structural equality on complex types */
         if ((e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) && e->binary.left->type) {
@@ -3042,9 +3204,16 @@ static void emit_expr(Expr *e, FILE *out) {
         default: op_str = "?"; break;
         }
         fprintf(out, "(");
+        /* gcc and clang read a decimal `10 ^ 6` as a mistyped 10⁶
+         * (-Wxor-used-as-pow), and a *hexadecimal* operand is the only thing
+         * that silences them — parentheses do not.  FC's `^` is exclusive-or
+         * and has no other reading, so its literal operands go out in hex. */
+        g_int_lit_hex = (op == TOK_CARET && e->binary.left->kind == EXPR_INT_LIT);
         emit_expr(e->binary.left, out);
         fprintf(out, " %s ", op_str);
+        g_int_lit_hex = (op == TOK_CARET && e->binary.right->kind == EXPR_INT_LIT);
         emit_expr(e->binary.right, out);
+        g_int_lit_hex = false;
         fprintf(out, ")");
     _binary_done:
         if (_bseq) { fprintf(out, "; })"); seq_restore(_bslots, 2, _bsaved); }
@@ -4424,6 +4593,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "int _matchdone%d = 0;\n", done_id);
         }
 
+        bool last_arm_unconditional = false;
         for (int i = 0; i < e->match_expr.arm_count; i++) {
             MatchArm *arm = &e->match_expr.arms[i];
             Pattern *pat = arm->pattern;
@@ -4475,6 +4645,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 else fprintf(out, "{\n");
                 indent_level++;
                 emit_pat_bindings(pat, subj_expr, e->match_expr.subject->type, out);
+                /* An unguarded catch-all (`_`, a binding, an all-wildcard
+                 * struct/tuple) tests nothing, so it emits a bare block and
+                 * every later arm is unreachable under first-match-wins — FC
+                 * permits such redundant arms (exhaust_union_dup_variant).
+                 * They must be dropped, not emitted: an `else` after a block
+                 * with no `if` is not C. */
+                last_arm_unconditional = !has_cond;
             }
 
             /* Emit arm body */
@@ -4559,6 +4736,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_indent(out);
                 fprintf(out, "}\n");
             }
+            if (last_arm_unconditional) break;
         }
 
         if (has_any_guard) {
@@ -4912,22 +5090,12 @@ static void emit_expr(Expr *e, FILE *out) {
             /* alloc("literal") → str? (direct to heap) */
             int tid = temp_counter++;
             Expr *ie = e->alloc_expr.init_expr;
-            /* Compute actual byte length after escape processing */
-            int actual_len = 0;
-            const char *s = ie->string_lit.value;
-            int slen = ie->string_lit.length;
-            for (int j = 0; j < slen; j++) {
-                if (s[j] == '%' && j + 1 < slen && s[j+1] == '%') j++;
-                else if (s[j] == '\\' && j + 1 < slen) {
-                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
-                    else j++;
-                }
-                actual_len++;
-            }
+            int actual_len = str_lit_len(ie->string_lit.value, ie->string_lit.length);
             fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d); ", tid,
                 actual_len > 0 ? actual_len : 1);
-            fprintf(out, "_ap%d ? (memcpy(_ap%d, (uint8_t*)\"%.*s\", %d), (",
-                tid, tid, ie->string_lit.length, ie->string_lit.value, actual_len);
+            fprintf(out, "_ap%d ? (memcpy(_ap%d, (uint8_t*)\"", tid, tid);
+            emit_str_lit_body(ie->string_lit.value, ie->string_lit.length, out);
+            fprintf(out, "\", %d), (", actual_len);
             emit_type(e->type, out);
             fprintf(out, "){ .value = (fc_str){ .ptr = _ap%d, .len = %d }, .has_value = true }) : (",
                 tid, actual_len);
@@ -4937,20 +5105,11 @@ static void emit_expr(Expr *e, FILE *out) {
             /* alloc(c"literal") → cstr? (direct to heap, null sentinel) */
             int tid = temp_counter++;
             Expr *ie = e->alloc_expr.init_expr;
-            /* Compute actual byte length after escape processing */
-            int actual_len = 0;
-            const char *s = ie->cstring_lit.value;
-            int slen = ie->cstring_lit.length;
-            for (int j = 0; j < slen; j++) {
-                if (s[j] == '\\' && j + 1 < slen) {
-                    if (s[j+1] == 'x' && j + 3 < slen) j += 3;
-                    else j++;
-                }
-                actual_len++;
-            }
+            int actual_len = str_lit_len(ie->cstring_lit.value, ie->cstring_lit.length);
             fprintf(out, "({ uint8_t *_ap%d = (uint8_t*)malloc(%d + 1); ", tid, actual_len);
-            fprintf(out, "if (_ap%d) memcpy(_ap%d, (uint8_t*)\"%.*s\", %d + 1); _ap%d; })",
-                tid, tid, ie->cstring_lit.length, ie->cstring_lit.value, actual_len, tid);
+            fprintf(out, "if (_ap%d) memcpy(_ap%d, (uint8_t*)\"", tid, tid);
+            emit_str_lit_body(ie->cstring_lit.value, ie->cstring_lit.length, out);
+            fprintf(out, "\", %d + 1); _ap%d; })", actual_len, tid);
         } else if (e->alloc_expr.init_expr->kind == EXPR_CAST &&
                    is_cstr_type(e->alloc_expr.init_expr->type)) {
             /* alloc((cstr) str) → cstr? — heap copy of str + NUL (null sentinel on
@@ -5498,7 +5657,15 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
     /* Resolve stubs before type classification */
     if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
-    if (t->kind == TYPE_FIXED_ARRAY) {
+    if (t->kind == TYPE_POINTER) {
+        /* A pointer's C declarator names its pointee, so the pointee's typedef
+         * must exist even where the pointee value itself never appears — e.g.
+         * the `T*?` that `alloc(T)` yields is the *only* occurrence of a nested
+         * option like `i32??`, and a `i32??*` parameter is another.  Structs are
+         * not collected here at all, so a self-referential `next: node*` still
+         * terminates. */
+        collect_types_in_type(t->pointer.pointee, slices, options, fns);
+    } else if (t->kind == TYPE_FIXED_ARRAY) {
         /* Fixed-array field: need slice typedef for the element type (field access returns slice) */
         collect_types_in_type(t->fixed_array.elem, slices, options, fns);
         Type *slice_t = type_slice(g_arena, t->fixed_array.elem);
@@ -5542,6 +5709,41 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
         collect_types_in_type(inner, slices, options, fns);
         if (g_results_set) typeset_add(g_results_set, t);
     } else if (t->kind == TYPE_FUNC) {
+        /* Same stub canonicalization the option/result arms do, for the same
+         * reason: the emitted typedef *name* resolves a stub to its mangled
+         * definition, but type_eq does not — so `(wide<64>) -> i32` written as a
+         * struct field's type (a name-only stub) and the identical signature of
+         * a declared function (resolved by pass2) hash apart and both emit
+         * `fc_fn_fc__wide__5___k64__int32_t`.  C11 forbids redefining a typedef
+         * to a distinct struct type, so the duplicate is an error, not noise. */
+        Type **params = t->func.param_types;
+        Type *ret = t->func.return_type;
+        bool changed = false;
+        for (int i = 0; i < t->func.param_count; i++) {
+            Type *pt = t->func.param_types[i];
+            if (!pt || pt->kind != TYPE_STUB) continue;
+            Type *r = resolve_struct_stub(pt);
+            if (r == pt) continue;
+            if (!changed) {
+                params = arena_alloc(g_arena,
+                    sizeof(Type*) * (size_t)t->func.param_count);
+                memcpy(params, t->func.param_types,
+                    sizeof(Type*) * (size_t)t->func.param_count);
+                changed = true;
+            }
+            params[i] = r;
+        }
+        if (ret && ret->kind == TYPE_STUB) {
+            Type *r = resolve_struct_stub(ret);
+            if (r != ret) { ret = r; changed = true; }
+        }
+        if (changed) {
+            Type *nf = arena_alloc(g_arena, sizeof(Type));
+            *nf = *t;
+            nf->func.param_types = params;
+            nf->func.return_type = ret;
+            t = nf;
+        }
         /* Recurse into param/return types FIRST so dependencies are emitted before this type */
         for (int i = 0; i < t->func.param_count; i++)
             collect_types_in_type(t->func.param_types[i], slices, options, fns);
@@ -5694,7 +5896,23 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
         collect_types_expr(e->unary_postfix.operand, slices, options, fns);
         break;
     case EXPR_CALL:
-        collect_types_expr(e->call.func, slices, options, fns);
+        /* A *direct* call emits its callee by name, so it needs no function-type
+         * typedef — and collecting one is actively wrong for a generic callee.
+         * The callee's signature is written in the callee's own type parameters,
+         * but this walk substitutes the *caller's* bindings into whatever it
+         * sees: inside `mk2<'n>`, the call `mk<'n * 2>()` would have mk's
+         * `() -> wide<'n>` read with the caller's 'n, emitting a typedef over
+         * the phantom `wide<64>` that is never instantiated.  Only an indirect
+         * call, whose callee really is a function value, needs the typedef. */
+        if (e->call.is_indirect) {
+            collect_types_expr(e->call.func, slices, options, fns);
+        } else if (e->call.func &&
+                   (e->call.func->kind == EXPR_FIELD ||
+                    e->call.func->kind == EXPR_DEREF_FIELD)) {
+            collect_types_expr(e->call.func->field.object, slices, options, fns);
+        } else if (e->call.func && e->call.func->kind != EXPR_IDENT) {
+            collect_types_expr(e->call.func, slices, options, fns);
+        }
         for (int i = 0; i < e->call.arg_count; i++)
             collect_types_expr(e->call.args[i], slices, options, fns);
         break;

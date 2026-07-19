@@ -1,0 +1,24 @@
+// Positive negative-space for the `^`-as-power re-spelling: a literal operand
+// of `^` is emitted in hex, which must not change its value in any spelling —
+// either side, every literal type, negative values, and inside compound
+// operands (where gcc never complains and the decimal spelling stays).
+let main = (args: str[]) ->
+    assert(10 ^ 6 == 12)
+    assert(2 ^ 8 == 10)
+    let x = 10
+    assert(x ^ 6 == 12)
+    assert(10 ^ x == 0)
+    assert((x + 0) ^ 6 == 12)
+    assert(10i64 ^ 6i64 == 12i64)
+    assert(10u32 ^ 6u32 == 12u32)
+    assert(10u8 ^ 6u8 == 12u8)
+    assert(10i8 ^ 6i8 == 12i8)
+    assert(10usize ^ 6usize == 12usize)
+    assert(10isize ^ 6isize == 12isize)
+    assert(10u64 ^ 6u64 == 12u64)
+    assert(-2 ^ 6 == -8)
+    assert(0xa ^ 0x6 == 0xc)
+    // the other bitwise operators are untouched
+    assert(10 & 6 == 2)
+    assert(10 | 6 == 14)
+    0

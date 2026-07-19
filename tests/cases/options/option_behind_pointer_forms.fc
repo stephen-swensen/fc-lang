@@ -1,0 +1,43 @@
+// A pointer's C declarator names its pointee, so the pointee's typedef must be
+// emitted even where the pointee value itself never appears in the program.
+// `alloc(T)` yields exactly that shape (`T*?`), and so does a bare `T*`
+// parameter or field whose T is an option, result, slice, or function type.
+struct sink =
+    o: i32??*
+    r: i32!*
+
+let take = (p: i32??*) ->
+    (*p).is_some
+
+let take_res = (p: i32!*) ->
+    match *p with
+    | ok(v) -> v
+    | err(_) -> -1
+
+let main = (args: str[]) ->
+    // the alloc spelling: the nested option occurs only as alloc's type operand
+    let ho = alloc(i32??)
+    match ho with
+    | some(p) -> free(p)
+    | none -> void()
+
+    let hr = alloc(i32!)
+    match hr with
+    | some(p) -> free(p)
+    | none -> void()
+
+    let hs = alloc(i32[]?)
+    match hs with
+    | some(p) -> free(p)
+    | none -> void()
+
+    // the parameter spelling
+    let mut v = some(some(5))
+    assert(take(&v))
+    let mut w = ok(7)
+    assert(take_res(&w) == 7)
+
+    // the field spelling
+    let mut s = sink { o = &v, r = &w }
+    assert((*s.o)!! == 5)
+    0

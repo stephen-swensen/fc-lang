@@ -1,0 +1,21 @@
+// The negative space of the "outermost type" rule: a fixed array *of* a
+// composite element is fine — it is the fixed array that must not be nested,
+// not the element that must be scalar.
+struct holder =
+    rows: i32[][3]
+    ptrs: i32*[2]
+    opts: i32?[2]
+    plain: u8[4]
+
+let main = (args: str[]) ->
+    let mut h = default(holder)
+    assert(h.rows.len == 3)
+    assert(h.ptrs.len == 2)
+    assert(h.opts.len == 2)
+    assert(h.plain.len == 4)
+    let mut v = 7
+    h.ptrs[0] = &v
+    assert(*h.ptrs[0] == 7)
+    h.opts[1] = some(9)
+    assert(h.opts[1]! == 9)
+    0

@@ -1,0 +1,8 @@
+// Pointer-to-fixed-array is the same shape as the nested/slice/option spellings
+// — `uint8_t[2]* m` is not a C declarator.
+struct grid =
+    m: u8[2]*
+
+let main = (args: str[]) ->
+    assert(sizeof(grid) > 0)
+    0

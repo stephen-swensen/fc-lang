@@ -1,0 +1,36 @@
+// A function type over a monomorphized instance is written two ways — as a
+// struct field's type (a name-only reference) and as a declared function's
+// signature — and both mangle to the same C typedef name.  They must dedupe:
+// C11 forbids redefining a typedef to a distinct struct type.  Covers a const
+// generic instance, a type-argument instance, and a generic union.
+struct wide =
+    limbs: u32['n / 32]
+
+struct box =
+    v: 'a
+
+union pick =
+    | held('a)
+    | nothing
+
+struct ops =
+    measure: (wide<64>) -> i32
+    unbox: (box<i32>) -> i32
+    peek: (pick<i32>) -> i32
+
+let mlen = (w: wide<64>) -> (i32) w.limbs.len
+
+let unbox = (b: box<i32>) -> b.v
+
+let peek = (p: pick<i32>) ->
+    match p with
+    | held(v) -> v
+    | nothing -> 0
+
+let main = (args: str[]) ->
+    let o = ops { measure = mlen, unbox = unbox, peek = peek }
+    let w = default(wide<64>)
+    assert(o.measure(w) == 2)
+    assert(o.unbox(box { v = 4 }) == 4)
+    assert(o.peek(pick<i32>.held(6)) == 6)
+    0
