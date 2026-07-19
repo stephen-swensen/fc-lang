@@ -1,24 +1,74 @@
-// BUG (bugsearch 2026-07-19, found while testing §4.4): a *generic* function
-// whose body instantiates another generic function at a generic-instance
-// argument type never gets the resulting struct instance registered — the C
-// references an undefined `fc__box__14_fc__box__3_i32` (box<box<i32>>), and
-// the callee's own instance is mangled `fc__bx__7_fc__box` (a bare `box`, no
-// arguments). The same nesting from a NON-generic caller (`bx(bx(5))` in main)
-// works, so it is the substitution of the caller's 'a into an already-generic
-// argument type that goes wrong. Pre-existing; verified against d5cfe7b.
+// A mangled C name is spelled from its type arguments' names, so an argument
+// that is itself a generic instance must already carry its own mangled name.
+// Inside a GENERIC function that is not true by construction: pass2 only ever
+// sees the abstract `box<'a>`, so the instance is discovered late and every
+// site that mangles from type arguments has to canonicalize them the same way
+// — pass2's return-type resolution, mono's transitive discovery, and codegen's
+// two emit-time manglers (type names and call names). When they disagree, the
+// name a caller emits and the name the definition carries drift apart and the C
+// references a struct or function that was never defined.
 struct box =
     v: 'a
+
+union hold =
+    | some_val('a)
+    | nothing
 
 let bx = (v: 'a) ->
     box { v = v }
 
+let hd = (v: 'a) ->
+    hold<'a>.some_val(v)
+
+// the shape that used to fail: a generic body nesting a generic result into a
+// generic argument
 let bx2 = (v: 'a) ->
     bx(bx(v))
 
+// three levels deep
+let bx3 = (v: 'a) ->
+    bx(bx(bx(v)))
+
+// the instance reaches the argument through a wrapper constructor
+let boxed_opt = (v: 'a) ->
+    bx(some(bx(v)))
+
+// generic union instance as the argument
+let held = (v: 'a) ->
+    bx(hd(v))
+
+// const-generic twin: the argument is a const-parameterized instance
+struct wide =
+    limbs: u32['n / 32]
+
+let mkw = <'n>() ->
+    default(wide<'n>)
+
+let boxw = <'n>() ->
+    bx(mkw<'n>())
+
 let main = (args: str[]) ->
-    // the working non-generic twin, so the test pins both
+    // the non-generic twin, which always worked — pinned so both stay honest
     let n = bx(bx(5))
     assert(n.v.v == 5)
-    let d = bx2(7)
-    assert(d.v.v == 7)
+
+    let a = bx2(7)
+    assert(a.v.v == 7)
+    let a2 = bx2(true)
+    assert(a2.v.v)
+
+    let b = bx3(9)
+    assert(b.v.v.v == 9)
+
+    let c = boxed_opt(4)
+    assert(c.v!.v == 4)
+
+    let d = held(6)
+    let dv = match d.v with
+             | some_val(x) -> x
+             | nothing -> 0
+    assert(dv == 6)
+
+    let e = boxw<64>()
+    assert(e.v.limbs.len == 2)
     0

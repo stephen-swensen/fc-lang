@@ -880,6 +880,28 @@ static void emit_indent(FILE *out) {
     for (int i = 0; i < indent_level; i++) fprintf(out, "    ");
 }
 
+/* The C name of a fully-concrete generic struct/union instance.
+ *
+ * A type node can reach codegen still carrying its *template's* base name: such
+ * nodes are produced by substitution in several places (pass2's return-type
+ * resolution, mono's discovery, the emit-time manglers) and canonicalizing at
+ * each producer has proven to be a game of whack-a-mole — one missed producer
+ * and the emitted C names a struct that was never defined. Emission is the one
+ * point every name must pass through, so the decision is settled here: a node
+ * that carries type arguments but whose name is not itself a registered instance
+ * is spelled from its arguments. Non-generic types (no type arguments) and
+ * already-canonical instances are returned untouched. */
+static const char *generic_instance_c_name(const char *base, Type **targs, int tac) {
+    if (!base || tac <= 0 || !targs || !g_mono) return base;
+    if (mono_find(g_mono, base)) return base;   /* already an instance name */
+    for (int i = 0; i < tac; i++)
+        if (!targs[i] || type_contains_type_var(targs[i])) return base;
+    Type **conc = arena_alloc(g_arena, sizeof(Type*) * (size_t)tac);
+    for (int i = 0; i < tac; i++)
+        conc[i] = mono_canonical_type_arg(g_mono, g_arena, g_intern, targs[i]);
+    return mangle_generic_name(g_arena, g_intern, base, conc, tac);
+}
+
 /* Compute mangled name for a generic struct/union type under g_subst */
 static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
     /* When the type carries explicit type args, substitute those — this folds
@@ -894,9 +916,11 @@ static const char *mangle_generic_with_subst(const char *base_name, Type *t) {
             : (t->kind == TYPE_STUB)   ? t->stub.type_arg_count : 0;
     if (targs && tac > 0) {
         Type **conc = arena_alloc(g_arena, sizeof(Type*) * (size_t)tac);
-        for (int i = 0; i < tac; i++)
+        for (int i = 0; i < tac; i++) {
             conc[i] = type_substitute(g_arena, targs[i], g_subst->var_names,
                                       g_subst->concrete, g_subst->count);
+            conc[i] = mono_canonical_type_arg(g_mono, g_arena, g_intern, conc[i]);
+        }
         return mangle_generic_name(g_arena, g_intern, base_name, conc, tac);
     }
     const char **vars = NULL;
@@ -1080,7 +1104,8 @@ static void emit_type(Type *t, FILE *out) {
             fprintf(out, "%s %s", t->struc.is_c_union ? "union" : "struct",
                 t->struc.c_name);
         } else {
-            fprintf(out, "%s", t->struc.name);
+            fprintf(out, "%s", generic_instance_c_name(t->struc.name,
+                t->struc.type_args, t->struc.type_arg_count));
         }
         break;
     case TYPE_UNION:
@@ -1088,7 +1113,8 @@ static void emit_type(Type *t, FILE *out) {
             fprintf(out, "%s", mangle_generic_with_subst(t->unio.name, t));
             return;
         }
-        fprintf(out, "%s", t->unio.name);
+        fprintf(out, "%s", generic_instance_c_name(t->unio.name,
+            t->unio.type_args, t->unio.type_arg_count));
         break;
     case TYPE_ENUM:
         fprintf(out, "%s", t->enu.name);
@@ -1163,13 +1189,15 @@ static void emit_type_ident(Type *t, FILE *out) {
         else if (t->struc.c_name)
             fprintf(out, "%s", t->struc.c_name);
         else
-            fprintf(out, "%s", t->struc.name);
+            fprintf(out, "%s", generic_instance_c_name(t->struc.name,
+                t->struc.type_args, t->struc.type_arg_count));
         break;
     case TYPE_UNION:
         if (g_subst && type_contains_type_var(t))
             fprintf(out, "%s", mangle_generic_with_subst(t->unio.name, t));
         else
-            fprintf(out, "%s", t->unio.name);
+            fprintf(out, "%s", generic_instance_c_name(t->unio.name,
+                t->unio.type_args, t->unio.type_arg_count));
         break;
     case TYPE_ENUM:
         fprintf(out, "%s", t->enu.name);
@@ -1739,10 +1767,14 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
             emit_enum_variant_literal(type, pat->variant.variant, out);
             break;
         }
+        /* Derived names (the tag enum) hang off the union's C name, so it must
+         * be the instance's, not the template's — see generic_instance_c_name. */
         const char *uname = type->unio.name;
-        if (g_subst && type_contains_type_var(type)) {
+        if (g_subst && type_contains_type_var(type))
             uname = mangle_generic_with_subst(uname, type);
-        }
+        else
+            uname = generic_instance_c_name(uname, type->unio.type_args,
+                                            type->unio.type_arg_count);
         fprintf(out, "%s.tag == %s_tag_%s", expr, uname, pat->variant.variant);
         if (pat->variant.payload) {
             char payload_expr[256];
@@ -3429,9 +3461,11 @@ static void emit_expr(Expr *e, FILE *out) {
             e->call.func->field.is_variant_constructor) {
             const char *union_name = e->type->unio.name;
             /* Under substitution, compute mangled name for generic unions */
-            if (g_subst && type_contains_type_var(e->type)) {
+            if (g_subst && type_contains_type_var(e->type))
                 union_name = mangle_generic_with_subst(union_name, e->type);
-            }
+            else
+                union_name = generic_instance_c_name(union_name,
+                    e->type->unio.type_args, e->type->unio.type_arg_count);
             const char *variant_name = e->call.func->field.name;
             fprintf(out, "(%s){ .tag = %s_tag_%s, .%s = ",
                 union_name, union_name, variant_name,
@@ -3492,6 +3526,8 @@ static void emit_expr(Expr *e, FILE *out) {
                 for (int i = 0; i < e->call.type_arg_count; i++) {
                     concrete_args[i] = type_substitute(g_arena, e->call.type_args[i],
                         g_subst->var_names, g_subst->concrete, g_subst->count);
+                    concrete_args[i] = mono_canonical_type_arg(g_mono, g_arena,
+                        g_intern, concrete_args[i]);
                 }
                 /* Use resolved_callee from pass2 — always set for all call patterns
                    (single-level and multi-level qualified calls) */
@@ -3768,9 +3804,11 @@ static void emit_expr(Expr *e, FILE *out) {
                 break;
             }
             const char *union_name = e->type->unio.name;
-            if (g_subst && type_contains_type_var(e->type)) {
+            if (g_subst && type_contains_type_var(e->type))
                 union_name = mangle_generic_with_subst(union_name, e->type);
-            }
+            else
+                union_name = generic_instance_c_name(union_name,
+                    e->type->unio.type_args, e->type->unio.type_arg_count);
             fprintf(out, "(%s){ .tag = %s_tag_%s }",
                 union_name, union_name, e->field.name);
             break;

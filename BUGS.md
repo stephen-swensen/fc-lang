@@ -7,7 +7,7 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 35 / 45 fixed** (+9 found and fixed along the way: §1.5 during §1's
+**Status: 36 / 45 fixed** (+9 found and fixed along the way: §1.5 during §1's
 triage, two variant-construction holes during §2.5, three more — two uncovered
 spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an adversarial
 review of the §2 diff, and three during §4: a wrong-length string *pattern*
@@ -15,10 +15,10 @@ compare, an option typedef missing behind any pointer, and §6.1 which the §4.8
 4.11 root-cause fix closed outright). §1 (parser / lexer), §2 (pass2
 judgments), §3 (escape analysis) and §4 (codegen emits invalid C) complete —
 see those sections for what landed. §5–§8 untouched; current suite: 2180
-passed, 10 failed (gcc + clang, -O0 and -O2; LSP wire tests green).
+passed, 9 failed (gcc + clang, -O0 and -O2; LSP wire tests green).
 
-One **new bug** was found while writing §4's tests and is recorded as a failing
-test rather than fixed — see §4.14.
+One **new bug** was found while writing §4's tests and fixed in the same
+session — see §4.14.
 
 Conventions:
 
@@ -608,7 +608,7 @@ result, a closure capturing a parameter) are all accepted and ASan-clean.
 
 All thirteen fixed on branch `bugsearch`, plus §6.1 and two more found while
 fixing (both restated below); suite 2180 passed / 10 failed (the remaining
-failures are §5, §6, and the new §4.14), gcc + clang, -O0 and -O2, LSP wire
+failures are §5 and §6), gcc + clang, -O0 and -O2, LSP wire
 tests green. 15 tests added beyond the thirteen repros. `spec/examples.fc`, the
 stdlib, all five demos, and both sibling projects (wolf-fc, euler-fc) still
 compile clean; the new codegen paths are ASan/UBSan-clean.
@@ -762,25 +762,54 @@ outermost type". The negative space — a fixed array *of* a composite
   variable index, compound arithmetic, enum, bool and float shapes, and asserts
   that a side-effecting operand is still evaluated once per occurrence.
 
-### 4.14 `generics/nested_instance_arg_in_generic` — ⏸️ NEW, NOT FIXED
+### 4.14 `generics/nested_instance_arg_in_generic` — ✅ FIXED (2026-07-19)
 
 Found while writing 4.4's test; **pre-existing** (verified against d5cfe7b), and
-left as a failing test rather than fixed — it is a monomorphization-discovery
-bug, not a codegen one, and out of scope for this session's batch.
+not one of the original 45. Filed as a failing test first, then fixed in the
+same session once scoping showed it was tractable.
 
-A **generic** function whose body instantiates another generic function at a
-*generic-instance* argument type never gets the resulting struct instance
-registered: for `let bx2 = (v: 'a) -> bx(bx(v))`, the emitted C references an
-undefined `fc__box__14_fc__box__3_i32` (`box<box<i32>>`), and the callee's own
-instance is mangled `fc__bx__7_fc__box` — a bare `box` with no arguments, so the
-two names do not even agree. The identical nesting from a **non-generic** caller
-(`bx(bx(5))` in `main`) works, which localizes it to substituting the caller's
-`'a` into an already-generic argument type. The `let`-bound spelling
-(`let inner = bx(v)` then `bx(inner)`) fails the same way, so it is not about
-call nesting. Note `discover_in_expr`'s EXPR_CALL arm only registers a callee
-when `type_arg_count > 0` (explicit type args); an *inferred* generic call in a
-generic body reaches instantiation by another route, which is where to start.
-The test pins the working non-generic twin alongside the failing case.
+**Symptom.** A *generic* function whose body instantiates another generic
+function at a *generic-instance* argument type emitted C naming things that were
+never defined: for `let bx2 = (v: 'a) -> bx(bx(v))`, an undefined
+`fc__box__14_fc__box__3_i32` (`box<box<i32>>`), and a callee mangled
+`fc__bx__7_fc__box` — a bare `box` with no arguments, so the name the caller
+emitted and the name the definition carried did not even agree. The identical
+nesting from a **non-generic** caller (`bx(bx(5))`) always worked.
+
+**One rule, missing at six sites.** A mangled C name is spelled from its type
+arguments' *names*, so an argument that is itself a generic instance must
+already carry its own mangled name — otherwise the outer name is built over a
+bare template name and matches no definition. Inside a generic body that is not
+true by construction: pass2 only ever sees the abstract `box<'a>`, so the
+instance is discovered late, and *every* site that mangles from type arguments
+has to canonicalize them the same way. Each site that missed it produced a
+differently-wrong name, which is why the symptom moved every time one was fixed.
+
+The rule is now a single exported helper, `mono_canonical_type_arg`
+(monomorph.h), applied at:
+
+- `resolve_generic_types_in_ret` (pass2) — the bindings it mangles from.
+- `discover_in_expr`'s EXPR_CALL arm (mono) — which also has to *register* the
+  argument's instance via `discover_nested_types`; nothing else reaches it.
+- `discover_nested_types` itself (mono) — it mangled from `type_args` while
+  descending only into *fields*, so the arguments were never visited at all.
+  This was the last one, and the only producer that survived all the others.
+- `mono_resolve_type_names` (mono) — same shape: recursed into fields, not args.
+- `mangle_generic_with_subst` and the deferred-call mangler (codegen).
+
+Plus a **choke point** at emission, `generic_instance_c_name` (codegen): a node
+that carries type arguments but whose name is not itself a registered instance
+is spelled from its arguments. Patching producers one at a time was whack-a-mole
+— emission is the one point every name must pass through, so `emit_type`,
+`emit_type_ident`, and the three union derived-name sites (tag enum, variant
+construction) settle it there. Registration stays at discovery; *naming* is
+settled at emission.
+
+**Test** `generics/nested_instance_arg_in_generic` covers the family, not the
+repro: the original two-level shape, three levels, the instance reaching the
+argument through a wrapper constructor (`bx(some(bx(v)))`), a generic *union*
+instance as the argument, the const-generic twin (`bx(mkw<'n>())`), and the
+non-generic twin that always worked — pinned so both stay honest.
 
 ### Tests added (15)
 
@@ -798,7 +827,7 @@ asserted expression's embedded source text).
 `options/`: `option_behind_pointer_forms` (positive).
 `generics/`: `const_arith_transitive_chain` (positive: a deeper const chain plus
 the type-parameter twin), `fn_typedef_instance_forms` (positive),
-`nested_instance_arg_in_generic` (**failing** — see 4.14).
+`nested_instance_arg_in_generic` (positive — see 4.14).
 
 ## 5. C-identifier hygiene / mangling collisions
 

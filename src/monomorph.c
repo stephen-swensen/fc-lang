@@ -300,6 +300,12 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
             return;
         }
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
+            /* Canonicalize the arguments FIRST: a type argument may itself be a
+             * generic instance (box<box<i32>>), and the mangled name below is
+             * built from the arguments' names — so an unresolved inner name
+             * yields an outer name that no definition carries. */
+            for (int i = 0; i < type->struc.type_arg_count; i++)
+                mono_resolve_type_names(t, a, intern, type->struc.type_args[i]);
             /* Canonicalize name via resolved_sym from pass1/pass2 */
             if (!mono_find(t, type->struc.name)) {
                 Symbol *sym = type->struc.resolved_sym;
@@ -317,6 +323,9 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         return;
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
+            /* Arguments first — see the struct arm. */
+            for (int i = 0; i < type->unio.type_arg_count; i++)
+                mono_resolve_type_names(t, a, intern, type->unio.type_args[i]);
             if (!mono_find(t, type->unio.name)) {
                 Symbol *sym = type->unio.resolved_sym;
                 if (sym && sym->type && sym->type->unio.name != type->unio.name) {
@@ -374,6 +383,15 @@ static void discover_in_type(Type *ty, MonoTable *t, Arena *a, InternTable *inte
     discover_nested_types(ct, t, a, intern, symtab);
 }
 
+/* See monomorph.h. Deep-copied because mono_resolve_type_names renames in place
+ * and the substituted argument may still share nodes with a template. */
+Type *mono_canonical_type_arg(MonoTable *t, Arena *a, InternTable *intern, Type *arg) {
+    if (!arg || type_contains_type_var(arg)) return arg;
+    Type *c = type_deep_copy(a, arg);
+    mono_resolve_type_names(t, a, intern, c);
+    return c;
+}
+
 /* Recursively walk an expression tree to discover transitive mono instances */
 static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *intern,
                               SymbolTable *symtab,
@@ -397,6 +415,18 @@ static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *inter
                 }
             }
             if (all_concrete) {
+                /* An argument type may itself name a generic instance: inside
+                 * `bx2<'a>`, the call `bx(bx(v))` binds the outer `bx` to
+                 * `box<'a>`, which substitutes to `box<i32>`.  Registering the
+                 * *callee* does not register that instance, and nothing else
+                 * reaches it — pass2 only ever saw the abstract `box<'a>` — so
+                 * the emitted C named a struct it never defined.  Register it,
+                 * then canonicalize so the callee's own mangled name is spelled
+                 * over the instance's real name. */
+                for (int i = 0; i < e->call.type_arg_count; i++) {
+                    discover_nested_types(concrete_args[i], t, a, intern, symtab);
+                    concrete_args[i] = mono_canonical_type_arg(t, a, intern, concrete_args[i]);
+                }
                 /* Use resolved_callee from pass2 — always set for all call patterns
                  * (single-level and multi-level qualified calls) */
                 Symbol *callee_sym = e->call.resolved_callee;
@@ -763,6 +793,14 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             Symbol *sym = type->struc.resolved_sym;
             if (!sym && symtab)
                 sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
+            /* Arguments first: an argument may itself be a generic instance
+             * (box<box<i32>>), and the mangled name below is spelled from the
+             * arguments' names — so each has to be registered and renamed before
+             * this one is named, or the outer name is built over a bare template
+             * name and matches nothing.  The arguments are reachable only here:
+             * the field walk below descends the *definition*, never the args. */
+            for (int i = 0; i < type->struc.type_arg_count; i++)
+                discover_nested_types(type->struc.type_args[i], t, a, intern, symtab);
             const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->struc.type_args, type->struc.type_arg_count);
@@ -799,6 +837,9 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             Symbol *sym = type->unio.resolved_sym;
             if (!sym && symtab)
                 sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
+            /* Arguments first — see the struct arm. */
+            for (int i = 0; i < type->unio.type_arg_count; i++)
+                discover_nested_types(type->unio.type_args[i], t, a, intern, symtab);
             const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
             const char *mangled = mangle_generic_name(a, intern,
                 canon, type->unio.type_args, type->unio.type_arg_count);

@@ -39,6 +39,15 @@ MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
  * to get canonical names without symtab re-lookup. */
 void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
 
+/* Canonicalize one type argument before it is used to build a mangled name.
+ * A mangled name is spelled from its arguments' *names*, so an argument that is
+ * itself a generic instance (`box<box<i32>>`) must already carry its own mangled
+ * name — otherwise the outer name is built over a bare template name and matches
+ * no definition. Every site that mangles from type arguments must route them
+ * through this, or the sites disagree on the name for the same instance.
+ * Returns a canonical copy; the input is never mutated. */
+Type *mono_canonical_type_arg(MonoTable *t, Arena *a, InternTable *intern, Type *arg);
+
 /* Finalize monomorphized types: ensure all concrete_types are built and
  * topologically sort entries so by-value struct dependencies are emitted first. */
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);

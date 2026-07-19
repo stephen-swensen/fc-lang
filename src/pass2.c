@@ -2771,6 +2771,19 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
             if (!type_bindings[i]) return t;
         }
 
+        /* A binding may itself name a generic instance — `box<box<i32>>` arises
+         * whenever a generic function's result feeds another's argument.  Resolve
+         * each one before mangling: unresolved, the inner instance is never
+         * registered (so its C struct is never defined) *and* it mangles under
+         * its bare template name, so the name the caller emits and the name the
+         * definition carries disagree.  Recursion strips one type constructor
+         * per level, and struct fields are not descended, so it terminates. */
+        for (int i = 0; i < tntp; i++) {
+            type_bindings[i] = resolve_generic_types_in_ret(ctx, type_bindings[i]);
+            type_bindings[i] = mono_canonical_type_arg(ctx->mono_table, ctx->arena,
+                ctx->intern, type_bindings[i]);
+        }
+
         const char *type_mangled = mono_register(ctx->mono_table, ctx->arena,
             ctx->intern, type_base_name, type_sym->ns_prefix,
             type_bindings, tntp, type_sym->decl,
