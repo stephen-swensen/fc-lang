@@ -1,0 +1,64 @@
+// Pattern bindings — the binding form that used to reach C with its source
+// spelling — named after C keywords, libc symbols and codegen temps, through
+// every pattern shape that binds: union variants, options, results, nested
+// variants, struct and tuple destructuring, and or-pattern siblings.
+union u =
+    | circle(i32)
+    | wrap(inner)
+    | blank
+
+union inner =
+    | chosen(i32)
+    | none_of
+
+struct pt =
+    x: i32
+    y: i32
+
+let ok_or = (r: i32!) ->
+    match r with
+    | ok(int) -> int
+    | err(short) -> short
+
+let main = (args: str[]) ->
+    // C keywords as variant payload bindings.
+    let s = u.circle(21)
+    let v = match s with
+            | circle(int) -> int * 2
+            | wrap(register) -> 0
+            | blank -> 0
+    assert(v == 42)
+
+    // Depth-2 binding inside a nested union pattern.
+    let w = u.wrap(inner.chosen(5))
+    let d = match w with
+            | wrap(chosen(volatile)) -> volatile * 3
+            | wrap(none_of) -> 0
+            | circle(static) -> static
+            | blank -> 0
+    assert(d == 15)
+
+    // Option and result payload bindings.
+    let o = some(7)
+    let a = match o with
+            | some(auto) -> auto
+            | none -> 0
+    assert(a == 7)
+    assert(ok_or(ok(4)) == 4)
+
+    // Struct pattern in a match arm, and a let destructure, both with
+    // keyword/libc/temp names.
+    let p = pt { x = 1, y = 2 }
+    let { x = signed, y = abort } = p
+    assert(signed + abort == 3)
+
+    let pts = pt[2] { pt { x = 3, y = 4 }, pt { x = 5, y = 6 } }
+    let mut sum = 0
+    for { x = snprintf, y = _subj0 } in pts do
+        sum = sum + snprintf * _subj0
+    assert(sum == 42)
+
+    // Tuple destructure.
+    let { double, memcmp } = { 8, 9 }
+    assert(double + memcmp == 17)
+    0

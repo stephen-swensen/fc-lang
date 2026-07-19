@@ -1,0 +1,10 @@
+import b from a::
+
+module a =
+    module b =
+        let counter = 222
+
+let main = (args: str[]) ->
+    assert(b.counter == 111)
+    assert(a.b.counter == 222)
+    0

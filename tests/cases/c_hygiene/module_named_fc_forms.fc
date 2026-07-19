@@ -1,0 +1,70 @@
+// Every declaration kind duplicated between a module literally named `fc` and
+// file scope. Members of module fc used to mangle to the same fc__<name> as a
+// file-scope decl: globals silently merged, type twins produced invalid C.
+// Rooting the whole declaration path at fc__ (fc__fc__point vs fc__point)
+// makes the two schemes disjoint, so `fc` is just another path component.
+module fc =
+    struct point =
+        x: i32
+    union shape =
+        | circle(i32)
+        | blank
+    enum dir of u8 =
+        | north
+        | south
+    struct box =
+        v: 'a
+    let counter = 111
+    let dbl = (n: i32) -> n * 2
+
+struct point =
+    x: i32
+
+union shape =
+    | circle(i32)
+    | blank
+
+enum dir of u8 =
+    | north
+    | south
+
+struct box =
+    v: 'a
+
+let counter = 222
+let dbl = (n: i32) -> n * 3
+
+let main = (args: str[]) ->
+    // Structs: distinct types, distinct layouts, distinct equality helpers.
+    let a = fc.point { x = 1 }
+    let b = point { x = 2 }
+    assert(a.x == 1 && b.x == 2)
+    assert(a == fc.point { x = 1 })
+    assert(b == point { x = 2 })
+
+    // Globals no longer merge into one C object.
+    assert(fc.counter == 111 && counter == 222)
+    assert(fc.dbl(5) == 10 && dbl(5) == 15)
+
+    // Unions: separate tag enums and separate enumerators.
+    let s = fc.shape.circle(7)
+    let t = shape.circle(9)
+    let v = match s with
+            | circle(n) -> n
+            | blank -> 0
+    let w = match t with
+            | circle(n) -> n
+            | blank -> 0
+    assert(v == 7 && w == 9)
+    assert(fc.shape.blank == fc.shape.blank)
+    assert(shape.circle(9) != shape.blank)
+
+    // Enums: separate typedefs.
+    assert(fc.dir.north != fc.dir.south)
+    assert(dir.north != dir.south)
+
+    // Generic instances of same-named templates in both scopes.
+    let bi = fc.box { v = 4 }
+    let bj = box { v = 5 }
+    assert(bi.v == 4 && bj.v == 5)
+    0

@@ -495,6 +495,25 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
     return result;
 }
 
+/* The mangling prefix for a declaration path rooted at namespace `ns` (NULL =
+ * the implicit global namespace).
+ *
+ * EVERY user-declared name that reaches C file scope is rooted at `fc__`: a
+ * file-scope decl is `fc__name`, a module member `fc__mod__name`, a namespaced
+ * one `fc__ns__mod__name`. Rooting the whole path — rather than only file-scope
+ * decls — is what keeps the two schemes disjoint, so a module or namespace
+ * named `fc` (whose members used to mangle to the same `fc__<name>` as a
+ * file-scope decl, silently merging two globals into one) is just another path
+ * component: `fc__fc__counter`.
+ *
+ * The reserved root also buys the converse: since `__` cannot appear in an FC
+ * identifier, no user name can start with `fc__`, so any compiler-derived
+ * spelling that does *not* (`fc_str`, `fc_eq_*`, `fc_tag_*`, `_l_x_3`) is
+ * unreachable from source by construction. */
+static const char *mangle_root(InternTable *intern, const char *ns) {
+    return ns ? make_mangled(intern, "fc", ns) : "fc";
+}
+
 /* Canonicalize generic stub names in a type tree.
  * Walks through compound type wrappers and, for TYPE_STUB nodes with
  * type_arg_count > 0, updates the stub's name to the canonical mangled form
@@ -666,8 +685,8 @@ static Type *register_struct_sym(SymbolTable *tab, InternTable *intern, Decl *d)
 /* Register a union type symbol and return the created type */
 static Type *register_union_sym(SymbolTable *tab, InternTable *intern, Decl *d) {
     /* See register_struct_sym: file-scope union types are mangled into the
-     * `fc__` namespace so their tag/typedef and `<name>_tag` enum cannot
-     * collide with C keywords or libc names at C file scope. */
+     * `fc__` namespace so their tag/typedef cannot collide with C keywords or
+     * libc names at C file scope. */
     const char *src_name = d->unio.name;
     const char *mangled = make_mangled(intern, "fc", src_name);
     d->unio.name = mangled;
@@ -1612,6 +1631,117 @@ static void infer_param_kinds(SymbolTable *global) {
     kind_finalize_table(global);
 }
 
+/* ---- C name collision backstop ----
+ *
+ * Rooting every declaration path at `fc__` (see mangle_root) separates the
+ * user namespace from the compiler's, but it does not by itself make the path
+ * scheme injective: FC has two hierarchies — namespaces and module nesting —
+ * and both flatten onto the same `__` separator, so `namespace a:: module b`
+ * and `module a = module b` spell one prefix, `fc__a__b`. Their members would
+ * then be emitted as one C object, which is the silent-wrong-code failure this
+ * whole family produces.
+ *
+ * Making the join unambiguous costs every generated name its readability
+ * (length-prefixed components, as the monomorphizer's type mangling uses), so
+ * the claim is checked instead: the first declaration to claim a C name keeps
+ * it, and a second claimant is an error naming both sites. Complete by
+ * construction — it judges the names actually emitted, not the shapes that
+ * were anticipated. */
+typedef struct { const char *cname; SrcLoc loc; bool is_extern; } CNameClaim;
+
+typedef struct {
+    CNameClaim *items;
+    int count, cap;
+} CNameClaims;
+
+/* The last path component of a mangled name — the declaration's source
+ * spelling. Split non-overlapping from the left, the way make_mangled built it:
+ * a component may start with `_`, so scanning for the *last* `__` would take
+ * `fc__a___x` (component `_x`) apart one character off. */
+static const char *mangled_tail(const char *cname) {
+    const char *tail = cname;
+    for (const char *p = cname; p[0] && p[1]; ) {
+        if (p[0] == '_' && p[1] == '_') { tail = p + 2; p += 2; }
+        else p++;
+    }
+    return tail;
+}
+
+static void claim_c_name(CNameClaims *cl, const char *cname, SrcLoc loc,
+                         bool is_extern) {
+    if (!cname) return;
+    for (int i = 0; i < cl->count; i++) {
+        /* Mangled names and token spellings share one intern table, so pointer
+         * equality is the comparison for both. */
+        if (cl->items[i].cname != cname) continue;
+        /* Two externs naming one C symbol is the feature, not a collision —
+         * that is how a header symbol gets a second FC alias. */
+        if (is_extern && cl->items[i].is_extern) return;
+        diag_error(loc,
+            "'%s' would be emitted as the C name '%s', which the declaration at "
+            "%s:%d already claims — rename one, or move it to a module path that "
+            "does not flatten onto the other's",
+            mangled_tail(cname), cname,
+            cl->items[i].loc.filename ? cl->items[i].loc.filename : "?",
+            cl->items[i].loc.line);
+        return;
+    }
+    CNameClaim c = { cname, loc, is_extern };
+    DA_APPEND(cl->items, cl->count, cl->cap, c);
+}
+
+static void collect_c_names(CNameClaims *cl, Decl **decls, int count) {
+    for (int i = 0; i < count; i++) {
+        Decl *d = decls[i];
+        switch (d->kind) {
+        case DECL_LET:
+            /* The entry point is emitted as fc_main, outside the user
+             * namespace, and has no codegen_name; a module member spelled
+             * `main` is an ordinary function and does have one. A let with no
+             * init never reaches C. */
+            claim_c_name(cl, d->let.init ? d->let.codegen_name : NULL, d->loc, false);
+            break;
+        case DECL_STRUCT:
+            /* An extern type is emitted under the C tag its header declares,
+             * which is verbatim — the one FC spelling that can land inside the
+             * reserved `fc__` space. */
+            claim_c_name(cl, d->struc.is_extern ? d->struc.c_name : d->struc.name,
+                         d->loc, d->struc.is_extern);
+            break;
+        case DECL_UNION:
+            claim_c_name(cl, d->unio.name, d->loc, false);
+            break;
+        case DECL_ENUM:
+            claim_c_name(cl, d->enu.name, d->loc, false);
+            break;
+        case DECL_EXTERN:
+            /* Same hole as an extern type: `extern fc__m__counter as c` names a
+             * C symbol verbatim, and `__` is legal there (it is exactly where
+             * the implementation-reserved namespace lives). Without this the
+             * extern and a module member silently referred to one object. */
+            claim_c_name(cl, d->ext.name, d->loc, true);
+            break;
+        case DECL_MODULE:
+            collect_c_names(cl, d->module.decls, d->module.decl_count);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+static void check_c_name_collisions(Program *prog) {
+    /* Only judge an otherwise-clean program. This is a backstop against
+     * *silent* wrong output, and a program that already has errors never
+     * reaches codegen — while a redefinition (the same file listed twice, a
+     * name declared twice in one scope) necessarily also collides, so running
+     * anyway would only add a second diagnosis of a reported mistake. */
+    if (diag_error_count() > 0) return;
+    CNameClaims cl = { NULL, 0, 0 };
+    collect_c_names(&cl, prog->decls, prog->decl_count);
+    free(cl.items);
+}
+
 void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                    FileImportScopes *file_scopes, bool require_main) {
     /* Phase 0: Validate that file-level imports come before other declarations.
@@ -1661,13 +1791,9 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
         const char *ns_prefix = d->module.ns_prefix ? d->module.ns_prefix : current_ns;
         d->module.ns_prefix = ns_prefix;
 
-        /* Build mangling prefix: [namespace_]module */
-        const char *mangle_prefix;
-        if (ns_prefix) {
-            mangle_prefix = make_mangled(intern, ns_prefix, mod_name);
-        } else {
-            mangle_prefix = mod_name;
-        }
+        /* Build mangling prefix: fc__[namespace__]module (see mangle_root) */
+        const char *mangle_prefix =
+            make_mangled(intern, mangle_root(intern, ns_prefix), mod_name);
 
         /* Build display prefix for qualified names: [namespace::]module */
         const char *display_prefix;
@@ -1834,7 +1960,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     break;
                 }
                 const char *src_name = d->struc.name;
-                const char *mangled = make_mangled(intern, current_ns, src_name);
+                const char *mangled = make_mangled(intern, mangle_root(intern, current_ns), src_name);
                 d->struc.name = mangled;
                 symtab_add(symtab, src_name, DECL_STRUCT, d);
                 Symbol *sym = &symtab->symbols[symtab->count - 1];
@@ -1899,7 +2025,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     break;
                 }
                 const char *src_name = d->unio.name;
-                const char *mangled = make_mangled(intern, current_ns, src_name);
+                const char *mangled = make_mangled(intern, mangle_root(intern, current_ns), src_name);
                 d->unio.name = mangled;
                 symtab_add(symtab, src_name, DECL_UNION, d);
                 Symbol *sym = &symtab->symbols[symtab->count - 1];
@@ -1959,7 +2085,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                     break;
                 }
                 const char *src_name = d->enu.name;
-                const char *mangled = make_mangled(intern, current_ns, src_name);
+                const char *mangled = make_mangled(intern, mangle_root(intern, current_ns), src_name);
                 d->enu.name = mangled;
                 symtab_add(symtab, src_name, DECL_ENUM, d);
                 Symbol *sym = &symtab->symbols[symtab->count - 1];
@@ -2280,4 +2406,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
     /* Assign deterministic codes to declared error constants (error groups).
      * Whole-program by construction: runs on the merged Program. */
     assign_error_codes(prog, intern);
+
+    /* Last: every declaration name is final, so the emitted C names can be
+     * checked pairwise-distinct (see check_c_name_collisions above). */
+    check_c_name_collisions(prog);
 }

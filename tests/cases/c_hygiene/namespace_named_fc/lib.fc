@@ -1,0 +1,12 @@
+// A namespace literally named `fc` — the other half of the fc__ prefix
+// collision. Its module's members mangle under fc__fc__core__…, disjoint from
+// the file-scope fc__… names in main.fc.
+namespace fc::
+
+module core =
+    struct point =
+        x: i32
+    union shape =
+        | circle(i32)
+        | blank
+    let counter = 111

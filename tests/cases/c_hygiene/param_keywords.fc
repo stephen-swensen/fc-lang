@@ -10,6 +10,21 @@ let scale = (double: i32) ->
     let f = (short: i32) -> short * double   // capture keyword-named param
     f(3)
 
+// A generic function's params: the body is checked once but emitted per
+// instance, so one codegen name has to serve every monomorphization.
+let gen = (static: 'a, int: i32) ->
+    let h = (auto: 'a) -> auto
+    h(static)
+
+// A function-typed param, whose call goes through the trampoline path.
+let apply = (f: (i32) -> i32, register: i32) -> f(register)
+
+let each = (s: i32[], f: (i32) -> i32) ->
+    let mut acc = 0
+    for restrict in s do
+        acc = acc + f(restrict)
+    acc
+
 let main = (args: str[]) ->
     assert(compute(6, 7, 5) == 47)
     assert(scale(4) == 12)
@@ -17,4 +32,21 @@ let main = (args: str[]) ->
     // Lambda with keyword params, invoked directly.
     let g = (static: i32, auto: i32) -> static - auto
     assert(g(10, 3) == 7)
+
+    // Two instances of the generic.
+    assert(gen(9, 0) == 9)
+    assert(gen(2.5, 0) == 2.5)
+
+    assert(apply((n: i32) -> n * 2, 5) == 10)
+    assert(each(i32[3] { 1, 2, 3 }, (n: i32) -> n * n) == 14)
+
+    // Keyword-named bindings read from a deferred expression, which runs in a
+    // separately emitted scope at block exit.
+    let mut sum = 0
+    let signed = 10
+    defer sum = sum + signed
+    for double in 0..3 do
+        defer sum = sum + double
+        sum = sum + 100
+    assert(sum == 303)
     0

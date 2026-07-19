@@ -1,0 +1,48 @@
+// The enumerator name joins a variant and a union, and FC identifiers may
+// *begin* with `_` — so `<union>__<variant>` aliases: union `a_` variant `b`
+// and union `a` variant `_b` both spell fc__a___b. Only variant-first is
+// injective (a variant contains no `__`, and a union's C name always starts
+// with `fc__`), and this pins that both directions still work.
+union a_ =
+    | b(i32)
+    | other
+
+union a =
+    | _b(i32)
+    | other2
+
+// The same boundary one level up: a module-scoped union whose name ends in `_`
+// beside a variant that starts with one.
+module m =
+    union u_ =
+        | v(i32)
+        | rest
+    union u =
+        | _v(i32)
+        | rest2
+
+let main = (args: str[]) ->
+    let x = a_.b(1)
+    let y = a._b(2)
+    let v = match x with
+            | b(n) -> n
+            | other -> 0
+    let w = match y with
+            | _b(n) -> n
+            | other2 -> 0
+    assert(v == 1 && w == 2)
+    assert(a_.b(1) == a_.b(1))
+    assert(a._b(2) != a.other2)
+
+    let p = m.u_.v(3)
+    let q = m.u._v(4)
+    let r = match p with
+            | v(n) -> n
+            | rest -> 0
+    let t = match q with
+            | _v(n) -> n
+            | rest2 -> 0
+    assert(r == 3 && t == 4)
+    assert(m.u_.v(3) == m.u_.v(3))
+    assert(m.u._v(4) != m.u.rest2)
+    0

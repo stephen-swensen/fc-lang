@@ -1,0 +1,43 @@
+// A `let` destructure as a non-final statement of a match arm. The arm loop
+// emits its statements itself rather than delegating to the block emitter, and
+// the twin only knew about plain `let` — a destructure fell through to
+// emit_expr's placeholder comment, so fcc exited 0 with invalid C.
+struct pt =
+    x: i32
+    y: i32
+
+union sh =
+    | rect(pt)
+    | pair(pair_t)
+    | other
+
+struct pair_t =
+    a: i32
+    b: i32
+
+let k = (s: sh) ->
+    match s with
+    | rect(p) ->
+        let { x = x, y = y } = p
+        x + y
+    | pair(q) ->
+        let { a = a, b = b } = q
+        let doubled = a * 2
+        doubled + b
+    | other -> 0
+
+let main = (args: str[]) ->
+    assert(k(sh.rect(pt { x = 1, y = 2 })) == 3)
+    assert(k(sh.pair(pair_t { a = 5, b = 4 })) == 14)
+    assert(k(sh.other) == 0)
+
+    // The tuple-destructure spelling, and one inside an if-arm block for good
+    // measure (blocks always went through the other emitter).
+    let z = match sh.rect(pt { x = 3, y = 4 }) with
+            | rect(p) ->
+                let { u, w } = { p.x, p.y }
+                u * w
+            | pair(_) -> 0
+            | other -> 0
+    assert(z == 12)
+    0

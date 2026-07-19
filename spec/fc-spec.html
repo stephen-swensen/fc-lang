@@ -485,7 +485,7 @@ The one nuance is mutually recursive top-level functions: since the first compil
 
 Targeting C is a deliberate design choice. Most platforms already have a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets — and by targeting C, FC inherits all of these backends, including niche embedded toolchains that have no LLVM backend. The generated C is human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
 
-FC targets **C11** specifically, plus a small set of GNU extensions supported by GCC and Clang. Key C11 features used by the compiler: anonymous unions (cleaner tagged union output), compound literals, and designated initializers. (`_Static_assert` is *not* emitted by the compiler; it appears only in programmer-authored extern C headers — see §C Interop.)
+FC targets **C11** specifically, plus a small set of GNU extensions supported by GCC and Clang. Key C features used by the compiler: `_Alignof`, `<stdint.h>` fixed-width types, compound literals, and designated initializers. (`_Static_assert` is *not* emitted by the compiler; it appears only in programmer-authored extern C headers — see §C Interop.)
 
 #### GNU extensions required
 
@@ -4522,7 +4522,7 @@ fcc src/*.fc vendor/acme/*.fc vendor/widget/*.fc
 The module system is entirely compile-time — no runtime representation in generated C:
 
 - **Namespaces** — erased. Exist only in the compiler's module map.
-- **Modules** — become C symbol prefixes using `__` as the hierarchy separator. `geometry.manhattan(p)` transpiles to `geometry__manhattan(p)`. Namespace segments are also joined with `__`: namespace `acme::graphics::` module `render` member `draw` becomes `acme__graphics__render__draw`. The `__` separator is unambiguous because double underscores are forbidden in user identifiers.
+- **Modules** — become C symbol prefixes using `__` as the hierarchy separator, under the reserved `fc__` root every declaration shares. `geometry.manhattan(p)` transpiles to `fc__geometry__manhattan(p)`. Namespace segments are joined the same way: namespace `acme::graphics::` module `render` member `draw` becomes `fc__acme__graphics__render__draw`. The root keeps declarations clear of the compiler's own generated names, and the separator is unspellable because double underscores are forbidden in user identifiers. Namespaces and module nesting flatten onto the same separator, so two distinct paths can spell one C name (`acme::` module `render` and module `acme` containing module `render`); that is a compile error naming both declarations, not a silent merge.
 - **Imports** — become nothing. The import scope chain is resolved at compile time.
 - **`private`** — enforced at compile time only.
 - **Type-associated modules** — pure naming convention. `vec2.zero` is a prefixed global; no vtable or indirection.

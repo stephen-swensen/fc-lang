@@ -1,0 +1,23 @@
+import core from fc::
+
+module core2 =
+    let counter = 333
+
+struct point =
+    x: i32
+
+let counter = 222
+
+let main = (args: str[]) ->
+    assert(core.counter == 111)
+    assert(core2.counter == 333)
+    assert(counter == 222)
+    let a = core.point { x = 1 }
+    let b = point { x = 2 }
+    assert(a.x == 1 && b.x == 2)
+    let s = core.shape.circle(4)
+    let v = match s with
+            | circle(n) -> n
+            | blank -> 0
+    assert(v == 4)
+    0

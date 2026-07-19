@@ -81,6 +81,7 @@ typedef struct FieldInit FieldInit;
 
 struct Param {
     const char *name;
+    const char *codegen_name;  /* unique C name minted by pass2 (see make_local_name) */
     Type *type;         /* parsed type annotation */
     SrcLoc loc;
 };
@@ -252,9 +253,11 @@ struct Expr {
         /* EXPR_FOR */
         struct {
             const char *var;        /* NULL when var_pattern is set */
+            const char *var_codegen_name;   /* unique C name minted by pass2 */
             struct Pattern *var_pattern; /* non-NULL: destructure the element (PAT_TUPLE/PAT_STRUCT) */
             const char *elem_tmp;   /* codegen temp holding the element when destructuring */
             const char *index_var;  /* NULL if not i,x form */
+            const char *index_codegen_name; /* unique C name minted by pass2 */
             SrcLoc var_loc;         /* source loc of `var` (editor go-to-def); {0} if pattern/absent */
             SrcLoc index_var_loc;   /* source loc of `index_var` (editor go-to-def); {0} if absent */
             Expr *iter;             /* collection expr, or range start */
@@ -486,7 +489,11 @@ struct Pattern {
     PatternKind kind;
     SrcLoc loc;
     union {
-        struct { const char *name; } binding;
+        /* PAT_BINDING. `name` stays the source spelling (diagnostics, LSP,
+         * variant/enum rewrite); `codegen_name` is the unique C name pass2
+         * mints so a binding can never collide with a codegen temporary, a
+         * libc symbol, or a C keyword. */
+        struct { const char *name; const char *codegen_name; } binding;
         struct { uint64_t value; Type *lit_type; bool out_of_range; bool negative; } int_lit;
         struct { uint8_t value; } char_lit;
         struct { bool value; } bool_lit;

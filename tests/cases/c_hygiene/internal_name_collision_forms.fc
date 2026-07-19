@@ -1,0 +1,80 @@
+// Every binding form, named after a codegen-internal temporary. pass2 mints a
+// unique `_l_<name>_<id>` for params, for-vars, match/destructure bindings and
+// `let`s alike, so a source name that happens to spell one of codegen's temps
+// (`_ctx`, `_sg0_0`, `_fe0`, `_subj0`, `_match0`, `_loop_result`, `_sq0`,
+// `_fc_back_0`, and `_l_x_0` itself) becomes `_l__ctx_7` and cannot reach the
+// temporary's namespace at all.
+union sh =
+    | circle(i32)
+    | square(i32)
+
+struct pt =
+    x: i32
+    y: i32
+
+// Params named after temporaries, referenced through interpolation (which
+// mints _sg temps), a match (which mints _subj/_match) and a loop.
+let f = (_ctx: i32, _sg0_0: i32, _subj0: i32) ->
+    let s = "v=%d{_ctx + _sg0_0 + _subj0}"
+    if s == "v=6" then 1 else 0
+
+let g = (_l_x_0: i32, _fc_back_0: i32, _loop_result: i32) ->
+    let x = _l_x_0 * 100        // a real local named x — its own _l_x_N
+    x + _fc_back_0 + _loop_result
+
+// The name a slice-literal backing array would take, as a param, next to a
+// slice literal that actually mints one.
+let h = (_fc_back_0: i32) ->
+    let arr = i32[2] { _fc_back_0, 2 }
+    arr[0] + arr[1]
+
+// Self-compare sequencing mints _sq temps.
+let sq = (_sq0: i32) -> if _sq0 == _sq0 then 1 else 0
+
+let main = (args: str[]) ->
+    assert(f(1, 2, 3) == 1)
+    assert(g(1, 2, 3) == 105)
+    assert(h(5) == 7)
+    assert(sq(9) == 1)
+
+    // for-loop range var, element var and index var named after temps.
+    let mut sum = 0
+    for _fe0 in 0..5 do
+        sum = sum + _fe0
+    assert(sum == 10)
+
+    let items = i32[3] { 10, 20, 30 }
+    let mut total = 0
+    for _fi0, _fs0 in items do
+        total = total + _fs0 + (i32) _fi0
+    assert(total == 63)
+
+    // match bindings named after the subject / result temps.
+    let s = sh.circle(9)
+    let a = match s with
+            | circle(_subj0) -> _subj0
+            | square(_match0) -> _match0 * 2
+    assert(a == 9)
+
+    // A loop whose break value binds through a name spelling its result temp.
+    let r = loop
+        let _loop_result = 7
+        break _loop_result
+    assert(r == 7)
+
+    // Destructure bindings, plain and through a for header.
+    let p = pt { x = 4, y = 5 }
+    let { x = _sl0, y = _sg0_1 } = p
+    assert(_sl0 + _sg0_1 == 9)
+
+    let pts = pt[2] { pt { x = 1, y = 2 }, pt { x = 3, y = 4 } }
+    let mut acc = 0
+    for { x = _subj0, y = _match0 } in pts do
+        acc = acc + _subj0 * _match0
+    assert(acc == 14)
+
+    // A capture of a temp-named binding, and a lambda param spelling one.
+    let _ctx = 6
+    let cap = (_sg0_0: i32) -> _sg0_0 * _ctx
+    assert(cap(7) == 42)
+    0

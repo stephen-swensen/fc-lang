@@ -1,0 +1,60 @@
+// The generic and module-scoped twins of union_derived_name_forms: a
+// monomorphized instance emits its own tag enum and payload union through a
+// separate code path from the plain declaration, so the derived-name rules
+// have to hold there too.
+struct pt =
+    x: i32
+
+union may =
+    | tag('a)
+    | u('a)
+    | blank
+
+module m =
+    union thing =
+        | tag(i32)
+        | u(i32)
+        | blank
+
+    // Same collision shapes as at file scope, one module down.
+    struct thing_tag =
+        kind: i32
+
+let get = (o: may<i32>) ->
+    match o with
+    | tag(v) -> v
+    | u(v) -> v * 10
+    | blank -> -1
+
+let get_pt = (o: may<pt>) ->
+    match o with
+    | tag(v) -> v.x
+    | u(v) -> v.x * 10
+    | blank -> -1
+
+let main = (args: str[]) ->
+    assert(get(may<i32>.tag(3)) == 3)
+    assert(get(may<i32>.u(4)) == 40)
+    assert(get(may<i32>.blank) == -1)
+    assert(may<i32>.tag(3) == may<i32>.tag(3))
+    assert(may<i32>.tag(3) != may<i32>.u(3))
+
+    // A second instance at a struct payload — distinct tag enum, distinct
+    // payload union.
+    assert(get_pt(may<pt>.tag(pt { x = 5 })) == 5)
+    assert(get_pt(may<pt>.u(pt { x = 5 })) == 50)
+    assert(may<pt>.u(pt { x = 5 }) == may<pt>.u(pt { x = 5 }))
+    assert(may<pt>.u(pt { x = 5 }) != may<pt>.blank)
+
+    // Module-scoped union with the same variant names, plus the colliding
+    // module-scoped struct.
+    let t = m.thing.tag(9)
+    let v = match t with
+            | tag(n) -> n
+            | u(n) -> n * 10
+            | blank -> -1
+    assert(v == 9)
+    assert(m.thing.u(2) == m.thing.u(2))
+    assert(m.thing.u(2) != m.thing.tag(2))
+    assert(m.thing_tag { kind = 1 }.kind == 1)
+    0

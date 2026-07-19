@@ -1,0 +1,10 @@
+// FC has two hierarchies — namespaces and module nesting — and both flatten
+// onto the same `__` separator in the emitted C name, so `a::b` and `a.b`
+// produce one prefix. Their members used to be emitted as a single C object
+// (both asserts here would have read the same global). pass1 now checks the
+// claim on each emitted name instead of lengthening every name to make the
+// join unambiguous.
+namespace a::
+
+module b =
+    let counter = 111

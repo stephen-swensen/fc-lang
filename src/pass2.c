@@ -81,6 +81,22 @@ static const char *make_local_name(Arena *a, const char *prefix, const char *nam
     return buf;
 }
 
+/* Mint the C name for a function-local binding of any form — `let`, parameter,
+ * for-loop variable, or pattern binding.
+ *
+ * Every such binding gets the same `_l_<name>_<id>` treatment, for three
+ * reasons that used to be three separate bugs: the id makes shadowing work; the
+ * `_l_` prefix keeps the name out of the file-scope namespaces the emitted body
+ * relies on (libc's `abort`/`snprintf`, the `fc_*` runtime, the `fc__*` user
+ * namespace), so no escape list of borrowed symbols has to be maintained; and
+ * because *every* binding is rewritten, a source name that happens to spell a
+ * codegen temporary (`_subj0`, `_sg0_0`, `_fe0`, `_match1`, `_l_x_0`) becomes
+ * `_l__subj0_7` and cannot collide with the temporary it names. The C-keyword
+ * escape (`c_safe_ident`) is subsumed too: `_l_int_3` is not a keyword. */
+static const char *local_c_name(Arena *a, const char *name) {
+    return make_local_name(a, "_l_", name, local_id_counter++);
+}
+
 static void scope_add_prov2(Scope *s, const char *name, const char *codegen_name,
                             Type *type, bool is_mut, Provenance prov,
                             Provenance elem_prov, SrcLoc def_loc) {
@@ -2869,12 +2885,10 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
         pat->struc.fields[i].resolved_type = field_type;
 
         if (inner->kind == PAT_BINDING) {
-            const char *orig_name = inner->binding.name;
-            int id = local_id_counter++;
-            const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
-            inner->binding.name = cg;  /* overwrite with codegen name */
-            scope_add_prov(ctx->scope, orig_name, cg, field_type, is_mut,
-                           bound_prov(ctx, field_type), inner->loc);
+            if (!inner->binding.codegen_name)
+                inner->binding.codegen_name = local_c_name(ctx->arena, inner->binding.name);
+            scope_add_prov(ctx->scope, inner->binding.name, inner->binding.codegen_name,
+                           field_type, is_mut, bound_prov(ctx, field_type), inner->loc);
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
@@ -2919,12 +2933,10 @@ static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is
         Pattern *inner = pat->tuple_pat.patterns[i];
 
         if (inner->kind == PAT_BINDING) {
-            const char *orig_name = inner->binding.name;
-            int id = local_id_counter++;
-            const char *cg = make_local_name(ctx->arena, "_l_", orig_name, id);
-            inner->binding.name = cg;  /* overwrite with codegen name */
-            scope_add_prov(ctx->scope, orig_name, cg, elem_type, is_mut,
-                           bound_prov(ctx, elem_type), inner->loc);
+            if (!inner->binding.codegen_name)
+                inner->binding.codegen_name = local_c_name(ctx->arena, inner->binding.name);
+            scope_add_prov(ctx->scope, inner->binding.name, inner->binding.codegen_name,
+                           elem_type, is_mut, bound_prov(ctx, elem_type), inner->loc);
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this element */
         } else if (inner->kind == PAT_STRUCT) {
@@ -3003,8 +3015,10 @@ static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
         else
             check_destruct_pattern(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
     } else {
+        if (!e->for_expr.var_codegen_name)
+            e->for_expr.var_codegen_name = local_c_name(ctx->arena, e->for_expr.var);
         scope_add_prov(ctx->scope, e->for_expr.var,
-            c_safe_ident(ctx->intern, e->for_expr.var), elem_type, false,
+            e->for_expr.var_codegen_name, elem_type, false,
             bound_prov(ctx, elem_type), e->for_expr.var_loc);
     }
 }
@@ -4372,7 +4386,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
 /* Judge `u.<name>` as no-payload variant construction: the variant must exist,
  * and it must actually be payload-less. Both are the non-call twins of checks
  * the `u.<name>(payload)` path already made — without them `u.zzz` typed as
- * `u` and emitted an undeclared `fc__u_tag_zzz`, and `u.a` (a *payload*
+ * `u` and emitted an undeclared tag enumerator, and `u.a` (a *payload*
  * variant named without its payload) silently built the variant with a
  * zero-filled payload. Variant names are interned, so pointer equality is the
  * comparison. Returns true when it reported (the caller poisons). */
@@ -5300,11 +5314,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 free(vars);
             }
             e->func.params[i].type = ptypes[i];
-            /* Codegen name escapes C reserved words (e.g. a parameter named
-             * `register`); the FC lookup name stays raw so source references
-             * still resolve. Decl emission applies the same escape. */
+            /* Unique codegen name (see local_c_name); the FC lookup name stays
+             * raw so source references still resolve. Decl emission reads the
+             * same field. */
+            if (!e->func.params[i].codegen_name)
+                e->func.params[i].codegen_name =
+                    local_c_name(ctx->arena, e->func.params[i].name);
             scope_add(inner, e->func.params[i].name,
-                c_safe_ident(ctx->intern, e->func.params[i].name), ptypes[i], false,
+                e->func.params[i].codegen_name, ptypes[i], false,
                 e->func.params[i].loc);
             /* Flag it a parameter so the LSP hovers it as name: type with no
              * doc-comment scan (a param has no doc of its own; the line above
@@ -7933,8 +7950,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     if (!type_eq(end_type, var_type))
                         e->for_expr.range_end = wrap_widen(ctx->arena, e->for_expr.range_end, var_type);
                 }
+                if (!e->for_expr.var_codegen_name)
+                    e->for_expr.var_codegen_name =
+                        local_c_name(ctx->arena, e->for_expr.var);
                 scope_add(ctx->scope, e->for_expr.var,
-                    c_safe_ident(ctx->intern, e->for_expr.var), var_type, false,
+                    e->for_expr.var_codegen_name, var_type, false,
                     e->for_expr.var_loc);
             }
         } else {
@@ -7949,8 +7969,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 bind_for_element(ctx, e, iter_type->slice.elem);
                 ctx->bind_prov = saved_bind;
                 if (e->for_expr.index_var) {
+                    if (!e->for_expr.index_codegen_name)
+                        e->for_expr.index_codegen_name =
+                            local_c_name(ctx->arena, e->for_expr.index_var);
                     scope_add(ctx->scope, e->for_expr.index_var,
-                        c_safe_ident(ctx->intern, e->for_expr.index_var), type_int64(), false,
+                        e->for_expr.index_codegen_name, type_int64(), false,
                         e->for_expr.index_var_loc);
                 }
             } else {
@@ -8674,8 +8697,10 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
                 pat->binding.name);
             return;
         }
-        scope_add_prov(ctx->scope, pat->binding.name, pat->binding.name, type, false,
-                       bound_prov(ctx, type), pat->loc);
+        if (!pat->binding.codegen_name)
+            pat->binding.codegen_name = local_c_name(ctx->arena, pat->binding.name);
+        scope_add_prov(ctx->scope, pat->binding.name, pat->binding.codegen_name,
+                       type, false, bound_prov(ctx, type), pat->loc);
         break;
     case PAT_INT_LIT:
         if (type->kind == TYPE_ENUM) {

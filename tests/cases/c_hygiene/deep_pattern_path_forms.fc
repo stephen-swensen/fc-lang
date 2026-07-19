@@ -1,0 +1,47 @@
+// The pattern emitters build member-access paths by descending into a value,
+// one suffix per level. They used to carry them in a fixed char[256], which
+// truncated silently — and a cut landing inside a member name can hit a
+// *shorter member of the same union* (`.u.abq` -> `.u.ab`), which compiles
+// clean under -Wall -Werror and reads the wrong bytes. Long names at depth.
+union leaf =
+    | ab(f32)
+    | abq(i32)          // `ab` is a prefix of `abq`: the silent-truncation shape
+
+union lvl0 =
+    | wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(leaf)
+    | zzz
+union lvl1 =
+    | wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(lvl0)
+    | zzz
+union lvl2 =
+    | wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(lvl1)
+    | zzz
+union lvl3 =
+    | wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(lvl2)
+    | zzz
+
+struct deep_field_name_that_is_quite_long_indeed =
+    another_rather_long_field_name_here: i32
+    a: i32              // prefix-of-nothing sibling, for the equality path
+
+struct outer_wrapper_with_a_long_name =
+    inner_field_with_a_long_name: deep_field_name_that_is_quite_long_indeed
+
+let main = (args: str[]) ->
+    let v = lvl3.wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(lvl2.wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(lvl1.wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(lvl0.wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(leaf.abq(7)))))
+    let r = match v with
+            | wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww(abq(n))))) -> n
+            | _ -> 0
+    assert(r == 7)
+
+    // The equality helper descends the same way, through long field paths.
+    let o = outer_wrapper_with_a_long_name {
+        inner_field_with_a_long_name = deep_field_name_that_is_quite_long_indeed {
+            another_rather_long_field_name_here = 5, a = 6 } }
+    assert(o == outer_wrapper_with_a_long_name {
+        inner_field_with_a_long_name = deep_field_name_that_is_quite_long_indeed {
+            another_rather_long_field_name_here = 5, a = 6 } })
+    assert(o != outer_wrapper_with_a_long_name {
+        inner_field_with_a_long_name = deep_field_name_that_is_quite_long_indeed {
+            another_rather_long_field_name_here = 5, a = 7 } })
+    0

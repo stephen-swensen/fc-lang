@@ -1,0 +1,59 @@
+// Bindings of every form named after file-scope symbols the emitted body calls:
+// libc functions the prelude pulls in, and the fc_* runtime namespace. The
+// unique `_l_<name>_<id>` codegen name keeps each one out of file scope, so no
+// list of borrowed libc symbols has to be maintained.
+struct pt =
+    x: i32
+    y: i32
+
+union sh =
+    | circle(i32)
+    | blank
+
+// Params shadowing libc names reachable from an assert / interpolation /
+// string comparison body.
+let a = (abort: i32, fprintf: i32, stderr: i32) ->
+    assert(abort + fprintf + stderr == 6)
+    abort
+
+let b = (memcmp: const str, snprintf: i32, malloc: i32) ->
+    let s = "n=%d{snprintf + malloc}"
+    if memcmp == "yes" && s == "n=3" then 1 else 0
+
+// Params shadowing the fc_* runtime namespace (typedefs, helpers, the emitted
+// entry point).
+// (the `__` in a generated helper's name is unspellable in FC — that half of
+// the namespace is unreachable by construction, so only the single-underscore
+// runtime names can be written here at all)
+let c = (fc_str: i32, fc_main: i32, fc_alloc_n: i32) ->
+    let s = "abc"
+    fc_str + fc_main + fc_alloc_n + (i32) s.len
+
+let main = (args: str[]) ->
+    assert(a(1, 2, 3) == 1)
+    assert(b("yes", 1, 2) == 1)
+    assert(c(1, 2, 3) == 9)
+
+    // let / for / match bindings of the same names.
+    let printf = 4
+    let mut fputs = 0
+    for calloc in 0..3 do
+        fputs = fputs + calloc + printf
+    assert(fputs == 15)
+
+    let items = i32[2] { 5, 6 }
+    let mut sum = 0
+    for memcpy, realloc in items do
+        sum = sum + realloc + (i32) memcpy
+    assert(sum == 12)
+
+    let s = sh.circle(8)
+    let v = match s with
+            | circle(strlen) -> strlen * 2
+            | blank -> 0
+    assert(v == 16)
+
+    let p = pt { x = 1, y = 2 }
+    let { x = fc_slice_index, y = fc_trunc } = p
+    assert(fc_slice_index + fc_trunc == 3)
+    0

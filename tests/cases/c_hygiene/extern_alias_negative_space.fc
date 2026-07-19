@@ -1,0 +1,11 @@
+// The negative space of the extern C-name claim: two FC aliases for one C
+// symbol is the feature, not a collision, and must keep compiling.
+module libc from "stdio.h" =
+    extern puts as write_line: (const cstr) -> i32
+    extern puts as emit_line: (const cstr) -> i32
+
+let main = (args: str[]) ->
+    let a = libc.write_line(c"")
+    let b = libc.emit_line(c"")
+    assert(a >= 0 && b >= 0)
+    0

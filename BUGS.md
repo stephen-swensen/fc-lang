@@ -7,18 +7,23 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 36 / 45 fixed** (+9 found and fixed along the way: §1.5 during §1's
+**Status: 42 / 45 fixed** (+13 found and fixed along the way: §1.5 during §1's
 triage, two variant-construction holes during §2.5, three more — two uncovered
 spellings of §2.3/§2.4 plus a `for a, a` collision — caught by an adversarial
-review of the §2 diff, and three during §4: a wrong-length string *pattern*
-compare, an option typedef missing behind any pointer, and §6.1 which the §4.8–
-4.11 root-cause fix closed outright). §1 (parser / lexer), §2 (pass2
-judgments), §3 (escape analysis) and §4 (codegen emits invalid C) complete —
-see those sections for what landed. §5–§8 untouched; current suite: 2180
-passed, 9 failed (gcc + clang, -O0 and -O2; LSP wire tests green).
+review of the §2 diff, three during §4 (a wrong-length string *pattern* compare,
+an option typedef missing behind any pointer, and §6.1 which the §4.8–4.11
+root-cause fix closed outright), and three during §5: §5.7, a module member
+named `main` (two `fc_main` definitions; a compiler segfault on the zero-param
+form), and a `let` destructure in a match arm emitting a placeholder comment).
+§1 (parser / lexer), §2 (pass2
+judgments), §3 (escape analysis), §4 (codegen emits invalid C) and §5
+(C-identifier hygiene) complete — see those sections for what landed. §6
+(string interpolation semantics) is the only section with open tests; §7–§8 are
+decide-first / opportunistic lists with no tests. Current suite: 2202 passed,
+3 failed (gcc + clang, -O0 and -O2; LSP wire tests green).
 
-One **new bug** was found while writing §4's tests and fixed in the same
-session — see §4.14.
+Several **new bugs** were found while doing the work and fixed in the same
+sessions — see §4.14, §5.7, and §5's diff-review section.
 
 Conventions:
 
@@ -838,40 +843,200 @@ asserted expression's embedded source text).
 the type-parameter twin), `fn_typedef_instance_forms` (positive),
 `nested_instance_arg_in_generic` (positive — see 4.14).
 
-## 5. C-identifier hygiene / mangling collisions
+## 5. C-identifier hygiene / mangling collisions — ✅ ALL FIXED (2026-07-19)
 
-- **5.1 `c_hygiene/module_named_fc`** — module/namespace named `fc`: member
-  mangling `fc__<name>` collides with the top-level user-decl prefix
-  `fc__<name>`. Globals silently MERGE (compiles clean, wrong values); struct
-  twins produce invalid C. Make the schemes disjoint (or reject `fc` as a
-  module/namespace name — test expects the mangling fix, i.e. both asserts
-  pass).
-- **5.2 `c_hygiene/internal_name_collisions`** — params, for-vars, and match
-  bindings keep their source spelling while codegen mints `_ctx`, `_sg*`,
-  `_fe*`, `_subj*`, `_match*`, `_fc_back_*`, `_l_name_N` in the same scopes.
-  Worst shapes are SILENT wrong-runtime: param `_sg0_0` in interpolation emits
-  self-initialization `int32_t _sg0_0 = _sg0_0;` (legal C11, garbage value);
-  binding `_match1` shadows the match result var (result uninitialized).
-  For-var `_fe0` self-compares the loop bound; binding `_subj0` collides with
-  the subject temp; param `_ctx`/`_l_x_0`/`_fc_back_0` are invalid C. Give
-  params/for-vars/pattern bindings the same unique-name treatment locals get.
+All six fixed on branch `bugsearch`, plus one more found while fixing (5.7,
+below) and two pre-existing ones surfaced by the diff review (see there);
+suite 2202 passed / 3 failed (the remaining failures are §6), gcc +
+clang, -O0 and -O2, LSP wire tests green. 16 tests added beyond the six repros.
+`spec/examples.fc`, the stdlib, all five demos, and both sibling projects
+(wolf-fc 208/208, euler-fc) still compile clean; an ASan/UBSan `fcc` over 1909
+test compilations plus `examples.fc` and wolf-fc reports zero hits.
+
+The six collapsed into **one design question with three answers** — *which
+namespace does this generated name live in?* FC identifiers cannot contain
+`__`, and that is the whole lever: it makes three name spaces separable, and
+every one of the six bugs is a name that landed in the wrong one. The rule is
+now stated as an invariant in CLAUDE.md → **C name namespaces**; the three
+spaces are `fc__…` (user declarations), `fc_<kind>_…` (compiler-derived), and
+`_l_<name>_<id>` / `_<temp><n>` (function-local).
+
+### Root cause A: the user namespace wasn't rooted deep enough (5.1) ✅ FIXED
+
+**5.1 `c_hygiene/module_named_fc`** — a module or namespace named `fc` mangled
+its members to `fc__<name>`, the same spelling file-scope declarations use.
+Two globals silently merged into one C object.
+
+**Fixed** by rooting the *whole* declaration path at `fc__` rather than only
+file-scope decls (`mangle_root`, pass1.c): a module member is `fc__mod__name`,
+a namespaced one `fc__ns__mod__name`, so `fc` is just another path component
+(`fc__fc__counter`). That also buys the converse the other fixes rely on —
+since no user name can start with `fc__`, any derived spelling that does *not*
+is unreachable from source by construction. Tests
+`module_named_fc_forms` (every declaration kind duplicated between module `fc`
+and file scope: struct, union, enum, generic struct, function, global) and
+`namespace_named_fc/` (multi-file, the namespace half).
+
+### Root cause B: bindings kept their source spelling (5.2, 5.3, 5.6) ✅ FIXED
+
+Three symptoms of one gap: `let` was the only binding form pass2 gave a unique
+codegen name. Params, for-loop variables (element and index) and pattern
+bindings reached C with their source spelling, escaped only for C keywords.
+
+- **5.2 `c_hygiene/internal_name_collisions`** — a source name spelling a
+  codegen temp. Worst shapes were silent: param `_sg0_0` in an interpolation
+  emitted `int32_t _sg0_0 = _sg0_0;` (legal C11, garbage); binding `_match1`
+  shadowed the match result var.
 - **5.3 `c_hygiene/param_shadows_runtime`** — params named `abort`, `fc_str`,
-  `snprintf` (etc.: `memcmp`, `fprintf`, any `fc_*` helper/typedef) shadow
-  file-scope names the generated body references. `is_c_reserved`
-  (src/common.c:138) covers only C keywords; it needs the libc names codegen
-  emits calls to plus the whole `fc_*` runtime namespace.
-- **5.4 `c_hygiene/variant_named_tag`** — payload variant named `tag`
-  duplicates the injected discriminant member inside the anonymous union
-  ("duplicate member 'tag'").
-- **5.5 `c_hygiene/union_tag_struct_collision`** — the tag-enum typedef
-  `fc__<union>_tag` lives inside the user-reachable `fc__<name>` space; a user
-  struct named `shape_tag` collides. Derived names need a reserved spelling
-  (double-underscore separator is unreachable since `__` is banned in FC
-  identifiers).
-- **5.6 `c_hygiene/pattern_binding_c_keyword`** — pattern bindings are the one
-  binding form not run through `c_safe_ident`: `| circle(int) ->` emits
-  `int32_t int = ...`. (Params, for-vars, fields, variants already escape.)
-  Overlaps with 5.2's fix if bindings get unique names.
+  `snprintf` shadowed file-scope names the emitted body calls.
+- **5.6 `c_hygiene/pattern_binding_c_keyword`** — `| circle(int) ->` emitted
+  `int32_t int = …`.
+
+**Fixed** with one channel rather than three escapes: `local_c_name` (pass2.c)
+mints `_l_<name>_<id>` for *every* binding form, and params, for-vars and
+pattern bindings now carry it on the AST (`Param.codegen_name`,
+`for_expr.var_codegen_name` / `index_codegen_name`,
+`Pattern.binding.codegen_name`) the way `let` already did. All three symptoms
+follow: the `_l_` prefix keeps every source name out of file scope, so no list
+of borrowed libc/runtime symbols has to be maintained (5.3); because *every*
+binding is rewritten, a name spelling a temp becomes `_l__subj0_7` and cannot
+reach it (5.2); and `_l_int_3` is not a keyword (5.6). `c_safe_ident` is now
+used only for *member* names, which live in per-type namespaces.
+
+The destructure paths, which used to overwrite `binding.name` with the codegen
+name, were switched to the new field — so the source spelling survives for
+diagnostics and the LSP, and re-checking a pattern is idempotent. Tests
+`internal_name_collision_forms` (every binding form named after a temp —
+`_ctx`, `_sg0_0`, `_subj0`, `_match0`, `_fe0`, `_fs0`, `_loop_result`, `_sq0`,
+`_fc_back_0`, `_l_x_0` — plus a capture of one), `binding_shadows_runtime_forms`
+(libc and `fc_*` names through params, `let`, for-vars, match and destructure
+bindings), `pattern_binding_name_forms` (keyword/libc/temp names through
+variant, nested-variant, option, result, struct, tuple and for-header patterns).
+
+### Root cause C: derived names built by suffixing a user name (5.4, 5.5) ✅ FIXED
+
+- **5.4 `c_hygiene/variant_named_tag`** — a payload variant named `tag`
+  duplicated the injected discriminant, because C gives an *anonymous* union's
+  members the enclosing struct's namespace.
+- **5.5 `c_hygiene/union_tag_struct_collision`** — the tag enum's typedef
+  `fc__<union>_tag` and its enumerators `fc__<union>_tag_<variant>` sat inside
+  the user-reachable `fc__<name>` space, so a user struct named `shape_tag`
+  collided.
+
+**Fixed** by moving each derived name out of the namespace it was borrowing.
+5.4: the payload union is now *named* (`… union { … } u;`), so the outer struct
+declares exactly `tag` and `u` — nothing derived from source — and no variant
+name reaches that namespace at all. 5.5: the tag enum is `fc_tag_<U>` and its
+enumerators `fc_tv_<U>__<V>`, both outside `fc__`.
+
+The two kinds take **different prefixes**, and the variant is joined with `__`
+rather than `_`, because a single `_`-joined space is ambiguous both ways: union
+`a` variant `b_c` would spell like union `a_b` variant `c`, and union `shape`
+variant `circle` like union `shape_circle`'s typedef. A variant name cannot
+contain `__`, so splitting at the last one recovers exactly one (union, variant)
+pair. Tests `union_derived_name_forms` (variants named `tag` *and* `u`, user
+types named `thing_tag` / `thing_tag_blank` / union `thing_tag_more`, through
+equality, options and slices) and `union_derived_name_generic_forms` (the
+monomorphized and module-scoped twins, which emit through separate code paths).
+
+### 5.7 declaration paths flatten ambiguously — ✅ FIXED (found while fixing 5.1)
+
+Not from the original hunt; **pre-existing** (the same collision spelled
+`a__b__counter` before 5.1's reroot). Rooting the path at `fc__` does not make
+the scheme injective, because FC has *two* hierarchies — namespaces and module
+nesting — and both flatten onto the same `__`. `namespace a:: module b` and
+`module a = module b` spell one prefix, and their members were emitted as a
+single C object: `assert(b.counter == 111)` and `assert(a.b.counter == 222)`
+read the same global. A component may also start or end with `_`, so module
+`a_` member `b` and module `a` member `_b` both spell `fc__a___b`.
+
+Making the join unambiguous costs every generated name its readability
+(length-prefixed components, as the monomorphizer's type mangling uses), so the
+**claim is checked instead**: `check_c_name_collisions` (end of pass1) walks
+every declaration that reaches C file scope and reports a second claimant of a
+name, quoting both sites. Complete by construction — it judges the names
+actually emitted, not the shapes that were anticipated — and it is the backstop
+the whole §5 family was missing: any future scheme change that reintroduces a
+collision fails loudly instead of silently merging two globals. Extern
+declarations are exempt (they are emitted under their C tag; two FC spellings of
+one C type are the point), and the check only judges an otherwise-clean program
+— a redefinition necessarily collides too, so running anyway would just diagnose
+a reported mistake twice. Tests `path_flatten_collision_err/` (multi-file,
+namespace-vs-nesting), `underscore_boundary_collision_err` (the `_` boundary
+case), and `c_name_claim_negative_space` (positive: names differing only by
+where an underscore falls, a type and its companion module, a module member
+whose tail matches a file-scope decl, two error groups sharing member names, and
+a generic template at several instances).
+
+### Adversarial diff review — 3 regressions caught and fixed, 2 pre-existing bugs found
+
+A review pass over the §5 diff (the same shape §2 and §3 used) found three
+defects the fix itself introduced. All three are the *same mistake*: a rule
+stated for one join was not applied to the next one along.
+
+- **The enumerator join was not injective.** `fc_tv_<U>__<V>` aliases, because
+  an FC identifier may *begin* with `_`: union `a_` variant `b` and union `a`
+  variant `_b` both spell `fc__a___b` — gcc "redeclaration of enumerator", fcc
+  exit 0. This is precisely the hazard `mangled_tail` (pass1.c) documents and
+  defends against, one join further along, and the baseline spelling did not
+  have it. **Fixed** by putting the variant *first*: `fc_tv_<V>__<U>` is
+  injective because `V` contains no `__` and `U` always starts with `fc__`, so
+  a shorter split would have to end its variant one `_` short and then read
+  `_f` where it needs `__`. Test `union_derived_name_underscore_forms`.
+- **The pattern emitters' fixed `char[256]` paths became silently wrong.**
+  Naming the payload union (5.4) costs `.u.` per level where a level used to
+  cost `.`, and `snprintf` truncation is invisible. A cut landing inside a
+  member name can hit a **shorter member of the same union** — a leaf
+  `| ab(f32) | abq(i32)` matched at `abq` emits `.u.ab`, which compiles clean
+  under `-Wall -Werror` and reads an `f32` as an `i32`. Verified: exit 0 on the
+  pre-§5 build, exit 134 after. **Fixed** at the cause — the six path buffers in
+  `emit_pat_predicate` / `emit_pat_bindings` and the two in `emit_value_eq` are
+  now arena-backed (`path_cat`), so no depth truncates. Test
+  `deep_pattern_path_forms` (the prefix-sibling union at depth 5 with 58-char
+  names, plus the equality helper's long field paths).
+- **`extern` can spell a name inside the `fc__` root.** The C-name position is
+  the one place `__` is legal (it is where the implementation-reserved namespace
+  lives), so `extern fc__m__counter as c` and module member `m.counter` were
+  emitted as one object — the §5.1 failure mode, through the door the reroot
+  opened. **Fixed** by claiming extern C names in the backstop; two externs
+  naming one symbol stay legal (that is how a header symbol gets a second
+  alias). Tests `extern_name_claims_decl_err/` and
+  `extern_alias_negative_space`.
+
+Two **pre-existing** bugs surfaced by the same pass, both fixed here since the
+backstop is what exposed them:
+
+- **A module member named `main`.** Codegen decided "this is the entry point"
+  from the source name alone, so `module m = let main = …` emitted a second
+  `fc_main` *and* a second `int main(int, char**)` wrapper (fcc exit 0, invalid
+  C) — and the zero-parameter form **segfaulted the compiler**, since the
+  entry-point path reads `params[0]` unconditionally. Only a *file-scope*
+  `let main` is the entry point (pass2's signature check does not apply to a
+  member either), so `is_entry_point` now says so and a member is an ordinary
+  function. Test `module_member_named_main`.
+- **A `let` destructure in a match arm** emitted `/* TODO: expr kind 44 */` —
+  fcc exit 0, invalid C. The arm loop emits its statements itself instead of
+  delegating to `emit_block_stmts`, and the twin knew only about plain `let`.
+  De-twinned into `emit_let_destruct_stmt`, called from both. Test
+  `destructure_in_match_arm`.
+
+The review also confirmed clean: every `param_count` loop in codegen routes
+through `param_c_name`; all six `.tag` sites and every payload access carry
+`.u`; the two remaining `binding.name` readers are correct; nested
+modules/namespaces root at `fc__` exactly once; and `unmangled_name` (lsp.c) is
+algorithmically identical to the new `mangled_tail`.
+
+### Tests added (16)
+
+`c_hygiene/`: `module_named_fc_forms`, `namespace_named_fc/` (multi-file),
+`internal_name_collision_forms`, `binding_shadows_runtime_forms`,
+`pattern_binding_name_forms`, `union_derived_name_forms`,
+`union_derived_name_generic_forms`, `union_derived_name_underscore_forms`,
+`deep_pattern_path_forms`, `path_flatten_collision_err/` (multi-file),
+`underscore_boundary_collision_err`, `c_name_claim_negative_space`,
+`extern_name_claims_decl_err/` (multi-file), `extern_alias_negative_space`,
+`module_member_named_main`, `destructure_in_match_arm`.
+Widened: `param_keywords` (generic, higher-order/trampoline and defer paths).
 
 ## 6. String interpolation semantics
 

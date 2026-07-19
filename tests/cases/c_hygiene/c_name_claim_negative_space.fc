@@ -1,0 +1,48 @@
+// Shapes adjacent to the C-name claim check that must keep working: names that
+// differ only by where an underscore falls, a type and its companion module, a
+// module member whose tail matches a file-scope decl, error-group members, and
+// generic templates instantiated at several types.
+module a =
+    let b = 1
+    struct pt =
+        x: i32
+
+// fc__a_b, not fc__a__b — a single underscore is an ordinary name character.
+module a_b =
+    let c = 2
+
+let b = 3           // fc__b: same tail as a.b, different path
+struct pt =         // fc__pt: same tail as a.pt
+    x: i32
+
+// A type and its companion module: the module itself has no emitted name, so
+// only its members claim one.
+struct cfg =
+    n: i32
+
+module cfg =
+    let default_n = 7
+
+error io =
+    | not_found
+    | denied
+
+error net =
+    | not_found    // same member name, different group
+    | denied
+
+struct box =
+    v: 'a
+
+let main = (args: str[]) ->
+    assert(a.b == 1 && a_b.c == 2 && b == 3)
+    assert(a.pt { x = 1 }.x == 1)
+    assert(pt { x = 2 }.x == 2)
+    assert(cfg { n = 5 }.n == 5)
+    assert(cfg.default_n == 7)
+    assert(io.not_found != net.not_found)
+    assert(io.denied != net.denied)
+    let bi = box { v = 1 }
+    let bf = box { v = 2.5 }
+    assert(bi.v == 1 && bf.v == 2.5)
+    0

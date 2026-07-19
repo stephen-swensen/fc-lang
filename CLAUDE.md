@@ -104,6 +104,50 @@ Lessons distilled from post-feature multi-agent reviews (most recently const gen
 - Option unwrap (`x!`) emits a tag check before value read
 - Struct/union equality emits generated comparison functions
 
+### C name namespaces (invariant)
+
+FC identifiers cannot contain `__`, which is what makes the emitted C name
+spaces separable. Three disjoint spaces, and new generated names must land in
+one of them deliberately:
+
+- **`fc__…` — user declarations.** Every declaration that reaches C file scope
+  is `fc__` + its FC path components joined by `__` (`fc__name`,
+  `fc__mod__name`, `fc__ns__mod__name`; `mangle_root` in pass1.c). Rooting the
+  *whole* path, not just file-scope decls, is what keeps a module or namespace
+  named `fc` from colliding with the top-level prefix. The path scheme is still
+  not injective — namespaces and module nesting flatten onto one separator — so
+  `check_c_name_collisions` (end of pass1) reports a second claimant of any
+  emitted name rather than letting two globals silently merge.
+- **`fc_<kind>_…` — compiler-derived names.** `fc_str`, `fc_main`, `fc_eq_*`,
+  `fc_fn_*`, `fc_tag_*` (a union's tag enum), `fc_tv_*` (its enumerators).
+  Unreachable from source because no user name starts with `fc__`. A derived
+  name must not be built by *suffixing* a user name (`<union>_tag` sat inside
+  `fc__<name>` space and collided with a user type named `shape_tag`), and two
+  kinds of derived name need two prefixes, not one shared prefix with different
+  tails. **Any join of two names must be shown injective**, not assumed: an FC
+  identifier may begin *or* end with `_`, so `<a>__<b>` aliases across the
+  boundary (`fc_tv_<U>__<V>` did, which is why enumerators are variant-first —
+  `V` has no `__` and `U` always starts with `fc__`, so the split is forced).
+  `mangled_tail` (pass1.c) splits non-overlapping from the left for the same
+  reason.
+- **`_l_<name>_<id>` / `_<temp><n>` — function-local names.** pass2 mints
+  `_l_<name>_<id>` for *every* binding form — `let`, parameter, for-loop
+  variable, pattern binding (`local_c_name` in pass2.c). That is what keeps
+  source names out of file scope (no list of borrowed libc symbols to
+  maintain), subsumes the C-keyword escape, and makes a source name that spells
+  a codegen temp (`_subj0`, `_sg0_0`, `_ctx`) harmless. Adding a new binding
+  form means routing it through `local_c_name` too.
+
+`c_safe_ident` now escapes only *member* names (struct fields, union variant
+payloads), which live in per-type namespaces.
+
+Related: the emitters that descend into a value (`emit_pat_predicate`,
+`emit_pat_bindings`, `emit_value_eq`) build their member-access paths with
+`path_cat`, which is arena-backed. Never give these a fixed buffer — FC
+identifiers are unbounded, `snprintf` truncation is silent, and a cut inside a
+member name can land on a *shorter member of the same type*, which compiles
+clean and reads the wrong bytes.
+
 ### Types and Literals
 - Default integer: `i32`; default float: `f64`
 - Suffixed literals: `42i8`, `42u64`, `3.14f32`

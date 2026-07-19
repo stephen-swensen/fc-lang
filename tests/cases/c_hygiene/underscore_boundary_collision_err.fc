@@ -1,0 +1,13 @@
+// The other way one declaration path flattens onto another: a component may
+// end (or start) with `_`, so module `a_` member `b` and module `a` member
+// `_b` both spell fc__a___b. Caught by the same claim check as the
+// namespace-vs-nesting case.
+module a_ =
+    let b = 1
+
+module a =
+    let _b = 2
+
+let main = (args: str[]) ->
+    assert(a_.b + a._b == 3)
+    0

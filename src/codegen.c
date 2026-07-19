@@ -30,6 +30,85 @@ static Arena *g_arena = NULL;
 static InternTable *g_intern = NULL;
 static SymbolTable *g_symtab = NULL;
 
+/* The C name of a function-local binding. pass2 mints a unique `_l_<name>_<id>`
+ * for every binding form (see local_c_name there), which keeps source names out
+ * of the file-scope namespaces this file emits into and subsumes the C-keyword
+ * escape. The fallbacks cover nodes pass2 never reached — only possible when a
+ * diagnostic already fired, which gates codegen. */
+static const char *param_c_name(const Param *p) {
+    return p->codegen_name ? p->codegen_name : c_safe_ident(g_intern, p->name);
+}
+
+static const char *pat_binding_c_name(const Pattern *p) {
+    return p->binding.codegen_name ? p->binding.codegen_name : p->binding.name;
+}
+
+/* Extend a C expression with a member/element access, for the recursive
+ * emitters that descend into a value (`emit_pat_predicate`, `emit_pat_bindings`,
+ * `emit_value_eq`).
+ *
+ * Arena-backed rather than the fixed `char buf[256]` these used to carry: FC
+ * identifiers are unbounded and each level of descent appends a suffix, so any
+ * fixed size eventually truncates — silently, since snprintf reports nothing
+ * and the emitters have no way to fail. A truncated path is not merely invalid
+ * C either: cut inside a member name it can land on a *shorter member of the
+ * same struct or union* (`.u.abq` → `.u.ab`), which compiles clean under
+ * -Wall -Werror and reads the wrong bytes. */
+static const char *path_cat(const char *base, const char *sep, const char *tail) {
+    size_t n = strlen(base) + strlen(sep) + strlen(tail) + 1;
+    char *buf = arena_alloc(g_arena, n);
+    snprintf(buf, n, "%s%s%s", base, sep, tail);
+    return buf;
+}
+
+/* The C member holding a union's variant payloads. Naming the inner union — C
+ * lets an anonymous one's members share the enclosing struct's namespace — is
+ * what keeps a variant literally named `tag` from duplicating the injected
+ * discriminant. The outer struct then declares exactly `tag` and `u`, neither
+ * derived from source, so no variant name can reach that namespace at all. */
+#define FC_PAYLOAD_MEMBER "u"
+
+static const char *intern_fmt2(const char *pre, const char *a, const char *sep,
+                               const char *b) {
+    int needed = snprintf(NULL, 0, "%s%s%s%s", pre, a, sep, b) + 1;
+    char *buf = malloc((size_t)needed);
+    snprintf(buf, (size_t)needed, "%s%s%s%s", pre, a, sep, b);
+    const char *result = intern_cstr(g_intern, buf);
+    free(buf);
+    return result;
+}
+
+/* Names derived from a union's C name: the tag enum's typedef, and its
+ * enumerators.
+ *
+ * Both live outside the `fc__` namespace that every user-declared name is
+ * rooted at (see mangle_root in pass1.c), so no FC declaration can spell them —
+ * which is the point: the old `<U>_tag` / `<U>_tag_<V>` spellings sat inside
+ * `fc__<name>` space, where a user type named `shape_tag` collided with union
+ * `shape`'s enum.
+ *
+ * The two kinds take *different* prefixes rather than sharing one, because a
+ * single `_`-joined space is ambiguous both ways: union `a` variant `b_c` would
+ * spell like union `a_b` variant `c`, and union `shape` variant `circle` like
+ * union `shape_circle`'s typedef.
+ *
+ * The enumerator puts the **variant first** — `fc_tv_<V>__<U>`, not
+ * `fc_tv_<U>__<V>` — because only that order is injective. An FC identifier may
+ * *begin* with `_`, so `<U>__<V>` aliases: union `a_` variant `b` and union `a`
+ * variant `_b` both spell `fc__a___b`. Variant-first cannot: `V` contains no
+ * `__` (the lexer forbids it) and `U` always starts with `fc__`, so if two
+ * splits of one string agreed the shorter variant would have to be the longer
+ * one minus a trailing `_`, and then its separator would read `_f` rather than
+ * `__`. (This is the same hazard `mangled_tail` in pass1.c defends against, one
+ * join further along.) */
+static const char *union_tag_type(const char *uname) {
+    return intern_fmt2("fc_tag_", uname, "", "");
+}
+
+static const char *union_tag_value(const char *uname, const char *variant) {
+    return intern_fmt2("fc_tv_", variant, "__", uname);
+}
+
 /* Forward declaration for TypeSet (defined later) */
 typedef struct TypeSet TypeSet;
 static TypeSet *g_eq_set = NULL;
@@ -564,7 +643,7 @@ static void collect_hoisted_pat(Pattern *pat, Type *type) {
     switch (pat->kind) {
     case PAT_BINDING:
         if (pat->binding.name) {
-            HoistedDecl d = { pat->binding.name, type };
+            HoistedDecl d = { pat_binding_c_name(pat), type };
             DA_APPEND(g_hoisted, g_hoisted_count, g_hoisted_cap, d);
         }
         break;
@@ -1719,9 +1798,7 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         if (is_ptr) fprintf(out, "%s != NULL", expr);
         else fprintf(out, "%s.has_value", expr);
         if (pat->some_pat.inner) {
-            char inner_expr[256];
-            if (is_ptr) snprintf(inner_expr, sizeof(inner_expr), "%s", expr);
-            else snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            const char *inner_expr = is_ptr ? expr : path_cat(expr, ".value", "");
             emit_pat_predicate(pat->some_pat.inner, inner_expr, type->option.inner, first, out);
         }
         break;
@@ -1739,8 +1816,7 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         *first = false;
         fprintf(out, "%s.err == 0", expr);
         if (pat->some_pat.inner) {
-            char inner_expr[256];
-            snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            const char *inner_expr = path_cat(expr, ".value", "");
             emit_pat_predicate(pat->some_pat.inner, inner_expr, type->result.inner, first, out);
         }
         break;
@@ -1750,8 +1826,7 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         *first = false;
         fprintf(out, "%s.err != 0", expr);
         if (pat->some_pat.inner) {
-            char inner_expr[256];
-            snprintf(inner_expr, sizeof(inner_expr), "%s.err", expr);
+            const char *inner_expr = path_cat(expr, ".err", "");
             emit_pat_predicate(pat->some_pat.inner, inner_expr, type_int32(), first, out);
         }
         break;
@@ -1771,10 +1846,10 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
             uname = mangle_generic_with_subst(uname, type);
         else
             uname = generic_instance_c_name(type);
-        fprintf(out, "%s.tag == %s_tag_%s", expr, uname, pat->variant.variant);
+        fprintf(out, "%s.tag == %s", expr,
+                union_tag_value(uname, pat->variant.variant));
         if (pat->variant.payload) {
-            char payload_expr[256];
-            snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr,
+            const char *payload_expr = path_cat(expr, "." FC_PAYLOAD_MEMBER ".",
                 c_safe_ident(g_intern, pat->variant.variant));
             Type *payload_type = NULL;
             for (int v = 0; v < type->unio.variant_count; v++) {
@@ -1790,8 +1865,7 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     }
     case PAT_STRUCT:
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
-            char path[256];
-            snprintf(path, sizeof(path), "%s.%s", expr,
+            const char *path = path_cat(expr, ".",
                 c_safe_ident(g_intern, pat->struc.fields[fi].name));
             emit_pat_predicate(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, first, out);
         }
@@ -1825,8 +1899,9 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
     }
     case PAT_TUPLE:
         for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
-            char path[256];
-            snprintf(path, sizeof(path), "%s.e%d", expr, i);
+            char elem[16];
+            snprintf(elem, sizeof(elem), "e%d", i);
+            const char *path = path_cat(expr, ".", elem);
             emit_pat_predicate(pat->tuple_pat.patterns[i], path,
                 pat->tuple_pat.resolved_types[i], first, out);
         }
@@ -1863,13 +1938,13 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
         break;
     case PAT_BINDING:
         emit_indent(out);
-        if (is_hoisted(pat->binding.name)) {
-            fprintf(out, "%s = %s;\n", pat->binding.name, expr);
+        if (is_hoisted(pat_binding_c_name(pat))) {
+            fprintf(out, "%s = %s;\n", pat_binding_c_name(pat), expr);
         } else {
             emit_type(type, out);
-            fprintf(out, " %s = %s;\n", pat->binding.name, expr);
+            fprintf(out, " %s = %s;\n", pat_binding_c_name(pat), expr);
             emit_indent(out);
-            fprintf(out, "(void)%s;\n", pat->binding.name);
+            fprintf(out, "(void)%s;\n", pat_binding_c_name(pat));
         }
         break;
     case PAT_WILDCARD:
@@ -1882,27 +1957,22 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     case PAT_SOME: {
         if (pat->some_pat.inner) {
             Type *inner_type = type->option.inner;
-            char inner_expr[256];
-            if (is_null_sentinel(type))
-                snprintf(inner_expr, sizeof(inner_expr), "%s", expr);
-            else
-                snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            const char *inner_expr = is_null_sentinel(type)
+                ? expr : path_cat(expr, ".value", "");
             emit_pat_bindings(pat->some_pat.inner, inner_expr, inner_type, out);
         }
         break;
     }
     case PAT_OK: {
         if (pat->some_pat.inner) {
-            char inner_expr[256];
-            snprintf(inner_expr, sizeof(inner_expr), "%s.value", expr);
+            const char *inner_expr = path_cat(expr, ".value", "");
             emit_pat_bindings(pat->some_pat.inner, inner_expr, type->result.inner, out);
         }
         break;
     }
     case PAT_ERR: {
         if (pat->some_pat.inner) {
-            char inner_expr[256];
-            snprintf(inner_expr, sizeof(inner_expr), "%s.err", expr);
+            const char *inner_expr = path_cat(expr, ".err", "");
             emit_pat_bindings(pat->some_pat.inner, inner_expr, type_int32(), out);
         }
         break;
@@ -1931,8 +2001,7 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
                     g_subst->var_names, g_subst->concrete, g_subst->count);
             }
             if (payload_type) {
-                char payload_expr[256];
-                snprintf(payload_expr, sizeof(payload_expr), "%s.%s", expr,
+                const char *payload_expr = path_cat(expr, "." FC_PAYLOAD_MEMBER ".",
                     c_safe_ident(g_intern, pat->variant.variant));
                 emit_pat_bindings(pat->variant.payload, payload_expr, payload_type, out);
             }
@@ -1941,16 +2010,16 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     }
     case PAT_STRUCT:
         for (int fi = 0; fi < pat->struc.field_count; fi++) {
-            char path[256];
-            snprintf(path, sizeof(path), "%s.%s", expr,
+            const char *path = path_cat(expr, ".",
                 c_safe_ident(g_intern, pat->struc.fields[fi].name));
             emit_pat_bindings(pat->struc.fields[fi].pattern, path, pat->struc.fields[fi].resolved_type, out);
         }
         break;
     case PAT_TUPLE:
         for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
-            char path[256];
-            snprintf(path, sizeof(path), "%s.e%d", expr, i);
+            char elem[16];
+            snprintf(elem, sizeof(elem), "e%d", i);
+            const char *path = path_cat(expr, ".", elem);
             emit_pat_bindings(pat->tuple_pat.patterns[i], path, pat->tuple_pat.resolved_types[i], out);
         }
         break;
@@ -1965,6 +2034,24 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
    expression should be wrapped in an implicit return. */
 static bool type_valueless(Type *t) {
     return !t || t->kind == TYPE_VOID || t->kind == TYPE_NEVER;
+}
+
+/* `let { a, b } = expr` in statement position: bind the RHS to a temp, then let
+ * the pattern emitter declare each name off it. Shared by every statement
+ * context — a block body and a match arm's body both call it, because the arm
+ * loop emits its statements itself rather than delegating to emit_block_stmts,
+ * and a twin that knew only about EXPR_LET fell through to emit_expr's
+ * "TODO: expr kind N" placeholder for a destructure in an arm — fcc exit 0,
+ * invalid C. The caller has already emitted the leading indent. */
+static void emit_let_destruct_stmt(Expr *s, FILE *out) {
+    emit_type(s->let_destruct.init_type, out);
+    fprintf(out, " %s = ", s->let_destruct.tmp_name);
+    emit_expr(s->let_destruct.init, out);
+    fprintf(out, ";\n");
+    emit_pat_bindings(s->let_destruct.pattern, s->let_destruct.tmp_name,
+                      s->let_destruct.init_type, out);
+    emit_indent(out);
+    fprintf(out, "(void)%s;\n", s->let_destruct.tmp_name);
 }
 
 static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return, bool discard_value) {
@@ -2000,14 +2087,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return,
             emit_indent(out);
             fprintf(out, "(void)%s;\n", vname);
         } else if (s->kind == EXPR_LET_DESTRUCT) {
-            /* Emit: struct_type _ds_N = rhs; then recursively emit field bindings */
-            emit_type(s->let_destruct.init_type, out);
-            fprintf(out, " %s = ", s->let_destruct.tmp_name);
-            emit_expr(s->let_destruct.init, out);
-            fprintf(out, ";\n");
-            emit_pat_bindings(s->let_destruct.pattern, s->let_destruct.tmp_name, s->let_destruct.init_type, out);
-            emit_indent(out);
-            fprintf(out, "(void)%s;\n", s->let_destruct.tmp_name);
+            emit_let_destruct_stmt(s, out);
         } else if (s->kind == EXPR_RETURN) {
             /* Emit defers before return */
             if (s->return_expr.value && has_pending_defers()) {
@@ -3462,11 +3542,11 @@ static void emit_expr(Expr *e, FILE *out) {
             else
                 union_name = generic_instance_c_name(e->type);
             const char *variant_name = e->call.func->field.name;
-            fprintf(out, "(%s){ .tag = %s_tag_%s, .%s = ",
-                union_name, union_name, variant_name,
+            fprintf(out, "(%s){ .tag = %s, ." FC_PAYLOAD_MEMBER " = { .%s = ",
+                union_name, union_tag_value(union_name, variant_name),
                 c_safe_ident(g_intern, variant_name));
             emit_expr(e->call.args[0], out);
-            fprintf(out, " }");
+            fprintf(out, " } }");
             break;
         }
 
@@ -3790,7 +3870,7 @@ static void emit_expr(Expr *e, FILE *out) {
             }
             break;
         }
-        /* No-payload variant constructor: color.green → (color){ .tag = color_tag_green } */
+        /* No-payload variant constructor: color.green → (color){ .tag = fc_tv_color__green } */
         if (e->field.is_variant_constructor) {
             if (e->type && e->type->kind == TYPE_ENUM) {
                 emit_enum_variant_literal(e->type, e->field.name, out);
@@ -3801,8 +3881,8 @@ static void emit_expr(Expr *e, FILE *out) {
                 union_name = mangle_generic_with_subst(union_name, e->type);
             else
                 union_name = generic_instance_c_name(e->type);
-            fprintf(out, "(%s){ .tag = %s_tag_%s }",
-                union_name, union_name, e->field.name);
+            fprintf(out, "(%s){ .tag = %s }",
+                union_name, union_tag_value(union_name, e->field.name));
             break;
         }
         /* Type variable property access: 'a.min → resolve via g_subst */
@@ -4512,7 +4592,8 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_indent(out);
             fprintf(out, "for (");
             emit_type(var_type, out);
-            const char *rvar = c_safe_ident(g_intern, e->for_expr.var);
+            const char *rvar = e->for_expr.var_codegen_name
+                ? e->for_expr.var_codegen_name : c_safe_ident(g_intern, e->for_expr.var);
             fprintf(out, " %s = ", rvar);
             emit_expr(e->for_expr.iter, out);
             fprintf(out, "; %s < _fe%d; %s++) {\n", rvar, tid, rvar);
@@ -4541,7 +4622,9 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_indent(out);
             Type *elem_type = iter_type->slice.elem;
             const char *elem_name = e->for_expr.var_pattern
-                ? e->for_expr.elem_tmp : c_safe_ident(g_intern, e->for_expr.var);
+                ? e->for_expr.elem_tmp
+                : (e->for_expr.var_codegen_name ? e->for_expr.var_codegen_name
+                                                : c_safe_ident(g_intern, e->for_expr.var));
             emit_type(elem_type, out);
             fprintf(out, " %s = _fs%d.ptr[_fi%d];\n", elem_name, tid, tid);
             emit_indent(out);
@@ -4552,7 +4635,9 @@ static void emit_expr(Expr *e, FILE *out) {
 
             /* Index binding if present (same %T{}-only-use guard) */
             if (e->for_expr.index_var) {
-                const char *iname = c_safe_ident(g_intern, e->for_expr.index_var);
+                const char *iname = e->for_expr.index_codegen_name
+                    ? e->for_expr.index_codegen_name
+                    : c_safe_ident(g_intern, e->for_expr.index_var);
                 emit_indent(out);
                 fprintf(out, "int64_t %s = _fi%d;\n", iname, tid);
                 emit_indent(out);
@@ -4729,6 +4814,8 @@ static void emit_expr(Expr *e, FILE *out) {
                             emit_expr(arm->body[s], out);
                             fprintf(out, ";\n");
                         }
+                    } else if (arm->body[s]->kind == EXPR_LET_DESTRUCT) {
+                        emit_let_destruct_stmt(arm->body[s], out);
                     } else {
                         emit_expr(arm->body[s], out);
                         fprintf(out, ";\n");
@@ -5470,18 +5557,29 @@ static bool is_generic_decl(Decl *d) {
     return false;
 }
 
+/* The program entry point: a *file-scope* `let main`. A module member spelled
+ * `main` is an ordinary function (pass2's entry-point signature check does not
+ * apply to it either), so it must not be emitted as `fc_main` with an
+ * `int main(int, char**)` wrapper — doing so gave two definitions of each for a
+ * legal program, and crashed the compiler outright on a zero-parameter one
+ * (the entry-point path reads params[0] unconditionally). */
+static bool is_entry_point(const Decl *d) {
+    return d->kind == DECL_LET && !d->let.is_module_member &&
+           strcmp(d->let.name, "main") == 0;
+}
+
 static void emit_func_decl(Decl *d, FILE *out) {
     Expr *fn = d->let.init;
     Type *ft = d->let.resolved_type;
     const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
-    bool is_main = strcmp(d->let.name, "main") == 0;
+    bool is_main = is_entry_point(d);
 
     if (is_main) {
         /* Emit the FC main body as fc_main(str[] args).  Static: only the
          * int main(int, char**) wrapper (emitted below) calls it. */
         fprintf(out, "%sint32_t fc_main(", g_fn_attr);
         emit_type(fn->func.params[0].type, out);
-        fprintf(out, " %s) {\n", c_safe_ident(g_intern, fn->func.params[0].name));
+        fprintf(out, " %s) {\n", param_c_name(&fn->func.params[0]));
     } else {
         /* Emit return type.  Static: FC emits a single translation unit, so
          * nothing outside this TU calls these functions; static allows GCC
@@ -5492,7 +5590,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
         for (int i = 0; i < fn->func.param_count; i++) {
             if (i > 0) fprintf(out, ", ");
             emit_type(fn->func.params[i].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[i].name));
+            fprintf(out, " %s", param_c_name(&fn->func.params[i]));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx) {\n");
@@ -5625,9 +5723,9 @@ static void emit_union_tag_enum(Decl *d, FILE *out) {
     fprintf(out, "typedef enum {");
     for (int i = 0; i < d->unio.variant_count; i++) {
         if (i > 0) fprintf(out, ",");
-        fprintf(out, " %s_tag_%s", name, d->unio.variants[i].name);
+        fprintf(out, " %s", union_tag_value(name, d->unio.variants[i].name));
     }
-    fprintf(out, " } %s_tag;\n", name);
+    fprintf(out, " } %s;\n", union_tag_type(name));
 }
 
 static void emit_union_def(Decl *d, FILE *out) {
@@ -5638,7 +5736,7 @@ static void emit_union_def(Decl *d, FILE *out) {
         if (d->unio.variants[i].payload) { has_any_payload = true; break; }
     }
     if (has_any_payload) {
-        fprintf(out, "struct %s { %s_tag tag; union {", name, name);
+        fprintf(out, "struct %s { %s tag; union {", name, union_tag_type(name));
         for (int i = 0; i < d->unio.variant_count; i++) {
             if (d->unio.variants[i].payload) {
                 fprintf(out, " ");
@@ -5646,10 +5744,10 @@ static void emit_union_def(Decl *d, FILE *out) {
                 fprintf(out, " %s;", c_safe_ident(g_intern, d->unio.variants[i].name));
             }
         }
-        fprintf(out, " }; };\n");
+        fprintf(out, " } " FC_PAYLOAD_MEMBER "; };\n");
     } else {
-        /* Tag-only union (enum-like) — no anonymous union needed */
-        fprintf(out, "struct %s { %s_tag tag; };\n", name, name);
+        /* Tag-only union (enum-like) — no payload union needed */
+        fprintf(out, "struct %s { %s tag; };\n", name, union_tag_type(name));
     }
 }
 
@@ -6700,10 +6798,8 @@ static void emit_eq_func(Type *t, FILE *out) {
                             fprintf(out, ") { _eq = false; break; } _eq; })");
                         }
                     } else {
-                        char a_buf[256], b_buf[256];
-                        snprintf(a_buf, sizeof(a_buf), "a.%s", fname);
-                        snprintf(b_buf, sizeof(b_buf), "b.%s", fname);
-                        emit_value_eq(ft, a_buf, b_buf, out);
+                        emit_value_eq(ft, path_cat("a.", fname, ""),
+                                      path_cat("b.", fname, ""), out);
                     }
                 }
                 fprintf(out, ";\n");
@@ -6725,14 +6821,14 @@ static void emit_eq_func(Type *t, FILE *out) {
             fprintf(out, "    switch (a.tag) {\n");
             const char *uname = t->unio.name;
             for (int i = 0; i < t->unio.variant_count; i++) {
-                fprintf(out, "    case %s_tag_%s: ", uname, t->unio.variants[i].name);
+                fprintf(out, "    case %s: ",
+                    union_tag_value(uname, t->unio.variants[i].name));
                 if (t->unio.variants[i].payload) {
-                    char a_buf[256], b_buf[256];
                     const char *vfield = c_safe_ident(g_intern, t->unio.variants[i].name);
-                    snprintf(a_buf, sizeof(a_buf), "a.%s", vfield);
-                    snprintf(b_buf, sizeof(b_buf), "b.%s", vfield);
                     fprintf(out, "return ");
-                    emit_value_eq(t->unio.variants[i].payload, a_buf, b_buf, out);
+                    emit_value_eq(t->unio.variants[i].payload,
+                        path_cat("a." FC_PAYLOAD_MEMBER ".", vfield, ""),
+                        path_cat("b." FC_PAYLOAD_MEMBER ".", vfield, ""), out);
                     fprintf(out, ";\n");
                 } else {
                     fprintf(out, "return true;\n");
@@ -7430,7 +7526,7 @@ static void emit_lambda_fwd_decls(LambdaSet *ls, FILE *out) {
         for (int j = 0; j < lam->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(lam->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
+            fprintf(out, " %s", param_c_name(&lam->func.params[j]));
         }
         if (lam->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
@@ -7448,7 +7544,7 @@ static void emit_lambda_defs(LambdaSet *ls, FILE *out) {
         for (int j = 0; j < lam->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(lam->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, lam->func.params[j].name));
+            fprintf(out, " %s", param_c_name(&lam->func.params[j]));
         }
         if (lam->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx) {\n");
@@ -7884,9 +7980,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "typedef enum {");
         for (int v = 0; v < ct->unio.variant_count; v++) {
             if (v > 0) fprintf(out, ",");
-            fprintf(out, " %s_tag_%s", inst->mangled_name, ct->unio.variants[v].name);
+            fprintf(out, " %s",
+                union_tag_value(inst->mangled_name, ct->unio.variants[v].name));
         }
-        fprintf(out, " } %s_tag;\n", inst->mangled_name);
+        fprintf(out, " } %s;\n", union_tag_type(inst->mangled_name));
     }
 
     /* Forward-declare all option typedefs (as named struct tags). This lets slice
@@ -8039,7 +8136,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
                 for (int v = 0; v < ct->unio.variant_count; v++)
                     if (ct->unio.variants[v].payload) { has_payload = true; break; }
                 if (has_payload) {
-                    fprintf(out, "struct %s { %s_tag tag; union {", inst->mangled_name, inst->mangled_name);
+                    fprintf(out, "struct %s { %s tag; union {", inst->mangled_name,
+                        union_tag_type(inst->mangled_name));
                     for (int v = 0; v < ct->unio.variant_count; v++) {
                         if (ct->unio.variants[v].payload) {
                             fprintf(out, " ");
@@ -8047,9 +8145,10 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
                             fprintf(out, " %s;", c_safe_ident(g_intern, ct->unio.variants[v].name));
                         }
                     }
-                    fprintf(out, " }; };\n");
+                    fprintf(out, " } " FC_PAYLOAD_MEMBER "; };\n");
                 } else {
-                    fprintf(out, "struct %s { %s_tag tag; };\n", inst->mangled_name, inst->mangled_name);
+                    fprintf(out, "struct %s { %s tag; };\n", inst->mangled_name,
+                        union_tag_type(inst->mangled_name));
                 }
             }
         }
@@ -8087,7 +8186,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     bool has_non_func = false;
     for (int i = 0; i < all_count; i++) {
         if (is_func_decl(all_decls[i])) {
-            if (strcmp(all_decls[i]->let.name, "main") == 0) has_main = true;
+            if (is_entry_point(all_decls[i])) has_main = true;
         } else if (all_decls[i]->kind == DECL_LET) {
             has_non_func = true;
         }
@@ -8117,15 +8216,15 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
      * main is emitted as fc_main with its str[] param (no _ctx). */
     for (int i = 0; i < all_count; i++) {
         Decl *d = all_decls[i];
-        if (is_func_decl(d) && strcmp(d->let.name, "main") == 0 && !is_generic_decl(d)) {
+        if (is_func_decl(d) && is_entry_point(d) && !is_generic_decl(d)) {
             Expr *fn = d->let.init;
             fprintf(out, "%sint32_t fc_main(", g_fn_attr);
             emit_type(fn->func.params[0].type, out);
-            fprintf(out, " %s);\n", c_safe_ident(g_intern, fn->func.params[0].name));
+            fprintf(out, " %s);\n", param_c_name(&fn->func.params[0]));
             symmap_add("fc_main", "main", d->loc.filename, d->loc.line);
             continue;
         }
-        if (is_func_decl(d) && strcmp(d->let.name, "main") != 0 && !is_generic_decl(d)) {
+        if (is_func_decl(d) && !is_entry_point(d) && !is_generic_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             Type *ft = d->let.resolved_type;
             fprintf(out, "%s", g_fn_attr);
@@ -8135,7 +8234,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             for (int j = 0; j < fn->func.param_count; j++) {
                 if (j > 0) fprintf(out, ", ");
                 emit_type(fn->func.params[j].type, out);
-                fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
+                fprintf(out, " %s", param_c_name(&fn->func.params[j]));
             }
             if (fn->func.param_count > 0) fprintf(out, ", ");
             fprintf(out, "void* _ctx);\n");
@@ -8158,7 +8257,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < fn->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(fn->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
+            fprintf(out, " %s", param_c_name(&fn->func.params[j]));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
@@ -8383,7 +8482,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < fn->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(fn->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
+            fprintf(out, " %s", param_c_name(&fn->func.params[j]));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx);\n");
@@ -8407,7 +8506,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         for (int j = 0; j < fn->func.param_count; j++) {
             if (j > 0) fprintf(out, ", ");
             emit_type(fn->func.params[j].type, out);
-            fprintf(out, " %s", c_safe_ident(g_intern, fn->func.params[j].name));
+            fprintf(out, " %s", param_c_name(&fn->func.params[j]));
         }
         if (fn->func.param_count > 0) fprintf(out, ", ");
         fprintf(out, "void* _ctx) {\n");

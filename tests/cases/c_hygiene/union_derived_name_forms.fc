@@ -1,0 +1,99 @@
+// The names codegen derives from a union — the discriminant member, the tag
+// enum's typedef, and its enumerators — must not be reachable from source.
+//
+// The discriminant lives in the outer struct and the payloads in a *named*
+// inner union, so the outer member namespace holds nothing derived from source
+// and a variant may be called `tag` (or `u`, the payload member's own name).
+// The tag enum's typedef and enumerators use the reserved fc_tag_/fc_tv_
+// prefixes rather than <union>_tag / <union>_tag_<variant>, which sat inside
+// the user-reachable fc__<name> space.
+union thing =
+    | tag(i32)          // duplicated the injected discriminant
+    | u(i32)            // duplicates the payload union's own member name
+    | blank
+
+// A user type spelled exactly like the old derived names.
+struct thing_tag =
+    kind: i32
+
+struct thing_tag_blank =
+    kind: i32
+
+// A union whose name is another union's name + "_" + a variant of it: with a
+// single `_` joining the two, `thing`'s `tag` enumerator and this union's
+// typedef would spell alike.
+union thing_tag_more =
+    | circle(i32)
+    | blank
+
+struct holder =
+    s: thing
+    n: i32
+
+let classify = (t: thing) ->
+    match t with
+    | tag(n) -> n
+    | u(n) -> n * 10
+    | blank -> -1
+
+let read = (h: holder) -> classify(h.s)
+
+let wrap = (b: bool) -> if b then ok(thing.tag(4)) else err(thing, 5)
+
+let main = (args: str[]) ->
+    assert(classify(thing.tag(3)) == 3)
+    assert(classify(thing.u(4)) == 40)
+    assert(classify(thing.blank) == -1)
+
+    // Equality reads both the discriminant and the payload member.
+    assert(thing.tag(3) == thing.tag(3))
+    assert(thing.tag(3) != thing.tag(4))
+    assert(thing.tag(3) != thing.u(3))
+    assert(thing.blank == thing.blank)
+
+    // The colliding user types are ordinary, distinct types.
+    let a = thing_tag { kind = 1 }
+    let b = thing_tag_blank { kind = 2 }
+    assert(a.kind + b.kind == 3)
+    assert(a == thing_tag { kind = 1 })
+
+    let m = thing_tag_more.circle(5)
+    let v = match m with
+            | circle(n) -> n
+            | blank -> 0
+    assert(v == 5)
+
+    // Payload variants through an option and a slice, so the payload member is
+    // read from a nested position too.
+    let o = some(thing.u(7))
+    let w = match o with
+            | some(t) -> classify(t)
+            | none -> 0
+    assert(w == 70)
+
+    let ts = thing[2] { thing.tag(1), thing.u(2) }
+    let mut sum = 0
+    for t in ts do
+        sum = sum + classify(t)
+    assert(sum == 21)
+
+    // Held in a struct field, carried by a result, promoted to the heap, and
+    // zero-defaulted — every position that reads the discriminant or a payload
+    // through a different emitter.
+    let h = holder { s = thing.u(2), n = 1 }
+    assert(read(h) == 20)
+    assert(h == holder { s = thing.u(2), n = 1 })
+    assert(h != holder { s = thing.tag(2), n = 1 })
+
+    let r = wrap(true)
+    let rv = match r with
+             | ok(t) -> classify(t)
+             | err(_) -> -9
+    assert(rv == 4)
+
+    let mut p = alloc(thing.tag(7))!
+    assert(classify(*p) == 7)
+    free(p)
+
+    assert(classify(default(thing)) == 0)
+    0
