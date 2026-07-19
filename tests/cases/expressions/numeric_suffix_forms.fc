@@ -1,0 +1,24 @@
+// Every valid literal spelling still lexes: each integer/float suffix, digit
+// separators, the base prefixes, scientific notation, and hex floats — the
+// adjacency rule fires only on what none of these consume.
+let main = (args: str[]) ->
+    assert(42i8 == 42i8)
+    assert(42i16 == 42i16)
+    assert(42i64 == 42i64)
+    assert(42u8 == 42u8)
+    assert(42u32 == 42u32)
+    assert(42isize == 42isize)
+    assert(42usize == 42usize)
+    assert(1_000_000 == 1000000)
+    assert(0xff == 255)
+    assert(0xffu64 == 255u64)
+    assert(0b1010i8 == 10i8)
+    assert(0o777 == 511)
+    assert(3.14f32 == 3.14f32)
+    assert(1e9 == 1000000000.0)
+    assert(1e9f32 == 1000000000.0f32)
+    assert(1.5e-3 > 0.0)
+    assert(0x1.8p3 == 12.0)
+    // `1e3 - 2` stays a subtraction: the exponent commits only on a digit.
+    assert(1e3 - 2.0 == 998.0)
+    0

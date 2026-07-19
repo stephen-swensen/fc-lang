@@ -7,8 +7,9 @@ one new failing test** in `tests/cases/`. Baseline before adding them: 2063
 passed, 0 failed (gcc). After: 2063 passed, **45 failed** — every failure below
 is intentional and should flip to PASS as its bug is fixed.
 
-**Status: 4 / 45 fixed.** §1 (parser / lexer) complete — see the section header
-for what landed. §2–§8 untouched; current suite: 2079 passed, 41 failed (gcc).
+**Status: 4 / 45 fixed** (+1 found and fixed during triage, §1.5). §1 (parser /
+lexer) complete — see that section for what landed. §2–§8 untouched; current
+suite: 2083 passed, 41 failed (gcc).
 
 Conventions:
 
@@ -31,10 +32,10 @@ Conventions:
 
 ## 1. Parser / lexer gaps — ✅ ALL FIXED (2026-07-18)
 
-All four fixed on branch `bugsearch`; suite 2079 passed / 41 failed (the
-remaining failures are §2–§6), gcc + clang, -O0 and -O2, LSP wire tests green.
-11 tests added beyond the four repros (below). Two shared root causes turned out
-to be twins-in-the-parser, closed by one helper each.
+All four fixed on branch `bugsearch`, plus 1.5 (found during triage); suite 2083
+passed / 41 failed (the remaining failures are §2–§6), gcc + clang, -O0 and -O2,
+LSP wire tests green. 15 tests added beyond the four repros. Two shared root
+causes turned out to be twins-in-the-parser, closed by one helper each.
 
 ### 1.1 `expressions/juxtaposed_stmts_err` — statement separator never enforced ✅ FIXED
 `parse_block` loops `parse_block_item` with only `skip_separators` *between*
@@ -65,8 +66,8 @@ Collateral: three pre-existing tests pinned *incidental* pass2 diagnostics that
 were only reachable through juxtaposition — `(e) 1` (a cast-shaped
 juxtaposition), `1e9i32`, and `1e`. The syntax error now precedes them.
 `enums/err_type_as_value` was re-pointed at the direct spelling (`let x = e`) so
-it still pins "'e' is a type, not a value"; the two malformed-float tests now
-expect the separator error.
+it still pins "'e' is a type, not a value"; the two malformed-float tests briefly
+expected the separator error and now pin 1.5's direct messages.
 
 ### 1.2 `strings/raw_newline_in_str_err` — raw newline in string literal ✅ FIXED
 The lexer's string scanner doesn't stop at `\n`; the literal is accepted and
@@ -113,7 +114,27 @@ is safe because `[` is never part of a type in expression position (`T[]` before
 so the first `[` past the head always opens the literal. Dropping the twin also
 fixed an unreported latent bug: `any*[N]{}` built `any**` on the old path.
 
-**Tests added** (11): `expressions/juxtaposed_let_err`,
+### 1.5 malformed numeric literals diagnosed only indirectly ✅ FIXED
+Not from the original hunt — surfaced by 1.1's triage (above) and fixed on the
+same go-ahead. A numeric literal owns its suffix: every valid one (`i8`…`usize`,
+`f32`/`f64`, hex-float `p`) is consumed by the scanner, so an identifier
+character still adjacent to the literal can only be a malformed suffix. It used
+to split into a number plus an identifier, and the mistake surfaced wherever
+that landed — as juxtaposition (`1e9i32`), or an undefined name.
+
+`scan_number` now wraps the scanner body and rejects a trailing identifier
+character ("invalid suffix on numeric literal": `1e9i32`, `42foo`, `0x1fz`,
+trailing `1_`), and an uncommitted `e`/`E` exponent gets its own message
+("float exponent requires at least one digit": `1e`, `1e+`). No legal program is
+affected — FC has no juxtaposition rule that gives `1x` a meaning, and the
+exponent commit rule (`1e3 - 2` stays a subtraction) is untouched. Spec
+§Literals states the rule. Tests: `expressions/numeric_suffix_adjacent_err`,
+`hex_suffix_adjacent_err`, `digit_separator_trailing_err`, and
+`numeric_suffix_forms` (positive: every valid spelling, incl. `1e3 - 2`); the
+two `float_scientific_*` tests now pin the direct messages instead of the
+incidental ones they inherited.
+
+**Tests added** (15; the four listed under 1.5 plus): `expressions/juxtaposed_let_err`,
 `expressions/juxtaposed_continuation_err`,
 `control_flow/juxtaposed_after_continue_err`, `expressions/stmt_separators`
 (positive: every legal separator form incl. `;`, inline bodies, `(a; b)`,
@@ -124,7 +145,8 @@ fixed an unreported latent bug: `any*[N]{}` built `any**` on the old path.
 (`const i32[2]` still rejected), `generics/const_arg_slice_lit_forms`
 (const arithmetic, module const, mixed type+const args, in-generic `'n`),
 `slices/slice_lit_head_negative_space` (comparisons and indexing keep their
-readings). Spec: §Continuation, §Escape Sequences, §Slice literals updated.
+readings). Spec: §Continuation, §Escape Sequences, §Literals, §Slice literals
+updated.
 
 **Incidental findings, triaged.** All four were verified against 812180c (the
 pre-fix build) to separate "newly introduced" from "newly visible":
@@ -139,10 +161,7 @@ pre-fix build) to separate "newly introduced" from "newly visible":
 - **Symptom changed by 1.1, cause pre-existing** — malformed numeric literals
   (`1e`, `1e9i32`) lex as two tokens and so are diagnosed as juxtaposition. The
   messages they used to get ("undefined name 'e'", "'i32' is a type, not a
-  value") were equally incidental. A lexer rule rejecting an identifier
-  character adjacent to a numeric literal ("invalid suffix on numeric literal")
-  would name the actual problem — same family as 1.2, ~10 lines. → **proposed
-  as 1.5, awaiting go-ahead.**
+  value") were equally incidental. → **fixed as 1.5 below.**
 - **Pre-existing, made visible by 1.3** — slice-literal elements are checked
   with bare `type_eq`: no widening of any kind. `const i32*[2] { &a, &b }`
   errors "expected const i32*, got i32*", and so does `i64[2] { 1, 2 }`

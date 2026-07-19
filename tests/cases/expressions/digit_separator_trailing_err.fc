@@ -1,0 +1,6 @@
+// A digit separator must sit between digits — a trailing `_` is a malformed
+// suffix, not an identifier abutting the literal.
+let main = (args: str[]) ->
+    let x = 1_
+    assert(x == 1)
+    0

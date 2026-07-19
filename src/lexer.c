@@ -180,7 +180,7 @@ static Token scan_identifier(Lexer *l) {
     return make_token(l, kw);
 }
 
-static Token scan_number(Lexer *l) {
+static Token scan_number_body(Lexer *l) {
     /* Check for 0x, 0b, 0o prefixes */
     if (l->current[-1] == '0') {
         if (peek(l) == 'x' || peek(l) == 'X') {
@@ -266,7 +266,9 @@ static Token scan_number(Lexer *l) {
     }
     /* Optional exponent: [eE][+-]?digit{['_']digit}. Commit only if a digit
      * (optionally preceded by sign) immediately follows e/E, with no whitespace.
-     * Rationale: keeps `1e3 - 2` parsing as subtraction, not `1.0e3-2`. */
+     * Rationale: keeps `1e3 - 2` parsing as subtraction, not `1.0e3-2`.
+     * An uncommitted e/E is not an identifier starting where a number ended —
+     * `1e` can only be a mistyped exponent, so it is named as one. */
     if (peek(l) == 'e' || peek(l) == 'E') {
         char c1 = peek_next(l);
         bool committed = false;
@@ -277,6 +279,8 @@ static Token scan_number(Lexer *l) {
             if (peek(l) == '+' || peek(l) == '-') advance(l);
             while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
             is_float = true;
+        } else {
+            return error_token(l, "float exponent requires at least one digit");
         }
     }
     if (is_float) {
@@ -292,6 +296,21 @@ static Token scan_number(Lexer *l) {
         while (isalnum((unsigned char)peek(l))) advance(l);
     }
     return make_token(l, TOK_INT_LIT);
+}
+
+/* A numeric literal owns its suffix: every valid one (i8…usize, f32/f64, and
+ * the hex-float forms) is consumed by scan_number_body, so an identifier
+ * character still adjacent to the literal is a malformed suffix — `1e9i32`,
+ * `42foo`, `0x1fz`, a trailing `1_`. Naming it here keeps the diagnosis on the
+ * literal; without this the token stream splits into a number and an
+ * identifier, and the mistake surfaces indirectly (as a juxtaposed statement,
+ * or an undefined name) at whatever position that lands. No legal program is
+ * affected: FC has no juxtaposition rule that gives `1x` a meaning. */
+static Token scan_number(Lexer *l) {
+    Token t = scan_number_body(l);
+    if (t.kind != TOK_ERROR && (isalnum((unsigned char)peek(l)) || peek(l) == '_'))
+        return error_token(l, "invalid suffix on numeric literal");
+    return t;
 }
 
 /* Check if position p (pointing past '%') looks like a format spec followed by '{'.

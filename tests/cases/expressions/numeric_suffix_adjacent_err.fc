@@ -1,0 +1,6 @@
+// A numeric literal owns its suffix: an identifier character still adjacent to
+// the literal is a malformed suffix, not the start of a new token.
+let main = (args: str[]) ->
+    let x = 42foo
+    assert(x == 42)
+    0

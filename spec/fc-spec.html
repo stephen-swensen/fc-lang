@@ -767,6 +767,8 @@ let pi_bits = 0x1.921fb54442d18p+1 // f64 representation of π
 let max_f32 = 0x1.fffffep+127f32   // largest finite f32
 ```
 
+A numeric literal owns its suffix, and there is no juxtaposition rule that would give an adjacent name a meaning — so an identifier character still touching the literal after its suffix (and any digit separator) has been read is a malformed suffix, not the start of a new token. `1e9i32`, `42foo`, `0x1fz`, and a trailing `1_` are all compile errors named at the literal.
+
 Suffixed integer literals are range-checked at compile time. A literal whose value does not fit in the specified type is a compile error:
 
 ```fc

@@ -1,0 +1,6 @@
+// Same rule on the hex/binary/octal paths: `z` is not a hex digit and not a
+// valid suffix, so it is a malformed suffix rather than an adjacent name.
+let main = (args: str[]) ->
+    let x = 0x1fz
+    assert(x == 31)
+    0
