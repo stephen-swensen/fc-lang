@@ -1,0 +1,6 @@
+// Integer-to-float is always an explicit cast — a slice literal's element
+// anchor does not make it implicit.
+let main = (args: str[]) ->
+    let xs = f64[2] { 1, 2 }
+    assert(xs.len == 2)
+    0

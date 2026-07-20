@@ -1,0 +1,6 @@
+// const is never stripped implicitly, in a slice-literal element or anywhere
+// else — a string literal is a const str and does not narrow to str.
+let main = (args: str[]) ->
+    let xs = str[2] { "a", "b" }
+    assert(xs.len == 2)
+    0

@@ -6006,8 +6006,33 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     if (!type_contains_type_var(pt) && type_can_widen(at, pt)) {
                         e->call.args[i] = wrap_widen(ctx->arena, e->call.args[i], pt);
                     } else {
+                        /* Show the parameter type with the bindings established
+                           by earlier arguments substituted in: once argument 1
+                           has bound 'a to i32, the useful message for argument
+                           2 is "expected i32, got bool", not "expected 'a".
+                           Vars still unbound stay spelled as themselves. */
+                        Type *shown = pt;
+                        if (ntp > 0) {
+                            const char **bn = arena_alloc(ctx->arena, sizeof(const char *) * (size_t)ntp);
+                            Type **bt = arena_alloc(ctx->arena, sizeof(Type *) * (size_t)ntp);
+                            int nb = 0;
+                            for (int k = 0; k < ntp; k++) {
+                                if (!bindings[k]) continue;
+                                bn[nb] = callee_sym->type_params[k];
+                                bt[nb] = bindings[k];
+                                nb++;
+                            }
+                            if (nb > 0) {
+                                Type *s = type_substitute(ctx->arena, pt, bn, bt, nb);
+                                /* Substituting for a message must not consume a
+                                   const-eval failure another site owns. */
+                                SrcLoc dummy; (void)const_eval_take_error(&dummy);
+                                if (s && !type_is_error(s)) shown = s;
+                            }
+                        }
                         diag_error(e->call.args[i]->loc,
-                            "argument %d: type mismatch", i + 1);
+                            "argument %d: expected %s, got %s", i + 1,
+                            type_name(shown), type_name(at));
                         arg_err = true;
                     }
                 }
@@ -7818,11 +7843,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         for (int i = 0; i < e->array_lit.elem_count; i++) {
             Type *et = check_expr(ctx, e->array_lit.elems[i]);
             if (type_is_error(et)) { elem_error = true; continue; }
+            /* The element type is written at the literal, so each element sits
+               in an anchored position and widens exactly as a struct-literal
+               field does. A type-variable element type anchors nothing to widen
+               toward — inside a generic body `'a` admits only `'a`, and that
+               exact-match check is the only one the body ever gets — so the
+               widen attempt is skipped there and the mismatch still reported. */
             if (!type_eq(et, elem_type)) {
-                diag_error(e->array_lit.elems[i]->loc,
-                    "slice literal element type mismatch: expected %s, got %s",
-                    type_name(elem_type), type_name(et));
-                elem_error = true;
+                if (!type_contains_type_var(elem_type) && type_can_widen(et, elem_type)) {
+                    e->array_lit.elems[i] = wrap_widen(ctx->arena, e->array_lit.elems[i], elem_type);
+                } else {
+                    diag_error(e->array_lit.elems[i]->loc,
+                        "slice literal element type mismatch: expected %s, got %s",
+                        type_name(elem_type), type_name(et));
+                    elem_error = true;
+                }
             }
         }
         if (elem_error) { e->type = type_error(); return e->type; }

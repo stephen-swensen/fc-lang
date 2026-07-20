@@ -1,0 +1,7 @@
+// Reached through a slice-literal element: the element anchor widens scalars
+// and representation-preserving forms, but does not descend into a composite
+// element to widen its parts.
+let main = (args: str[]) ->
+    let xs = {i64, i64}[2] { { 1, 2 }, { 3, 4 } }
+    assert(xs.len == 2)
+    0

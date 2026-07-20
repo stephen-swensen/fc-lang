@@ -1,0 +1,14 @@
+// Widening reinterprets, never rebuilds: it descends only into the option
+// niche, where it is free. A tuple element never widens, in either the
+// size-changing or the representation-preserving direction — the two tuple
+// types are distinct C structs and the conversion would have to rebuild the
+// value field by field.
+struct ht =
+    t: {i32, const str}
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let h = ht { t = { 1, buf } }
+    assert(h.t[0] == 1)
+    free(buf)
+    0

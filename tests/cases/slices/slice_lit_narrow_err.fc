@@ -1,0 +1,6 @@
+// Widening is one-directional: a slice literal's elements may widen to the
+// declared element type, never narrow to it.
+let main = (args: str[]) ->
+    let xs = i32[2] { 1i64, 2i64 }
+    assert(xs.len == 2)
+    0

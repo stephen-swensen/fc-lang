@@ -1,0 +1,8 @@
+// const T* does not widen to any* — that would silently drop the const
+// guarantee. (T* -> any* and const T* -> const any* both do widen.)
+let main = (args: str[]) ->
+    let mut x = 1i32
+    let cp = (const i32*) &x
+    let ps = any*[2] { cp, cp }
+    assert(ps.len == 2)
+    0

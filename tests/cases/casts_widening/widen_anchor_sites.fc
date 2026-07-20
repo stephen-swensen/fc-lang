@@ -1,0 +1,98 @@
+// Every anchored position in one program — the sites where a value is
+// conformed to a single type written elsewhere, and so may widen. This is the
+// canonical list the spec states; if a site is added or removed, this test is
+// the one that has to change.
+struct box =
+    n: i64
+    s: const str
+
+union holder =
+    | val(i64)
+    | s(const str)
+    | empty
+
+module c from "stdio.h" =
+    extern snprintf: (any*, usize, const cstr, ...) -> i32
+
+let takes_i64 = (v: i64) -> v
+let takes_cstr = (s: const str) -> s.len
+let takes_any = (p: any*) -> if p == default(any*) then 0i64 else 1i64
+let takes_opt = (o: const str?) -> if o.is_some then 1i64 else 0i64
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[4] { 65u8, 66u8, 67u8, 68u8 })!
+    let small = 2i32
+
+    // binary expressions and comparisons
+    assert(small + 3i64 == 5i64)
+    assert(small < 3i64)
+
+    // call arguments — numeric, const-add, T* -> any*
+    assert(takes_i64(small) == 2i64)
+    assert(takes_cstr(buf) == 4i64)
+    let mut cell = 7i32
+    assert(takes_any(&cell) == 1i64)
+
+    // option payload (representation-preserving only)
+    assert(takes_opt(some(buf)) == 1i64)
+
+    // struct-literal fields
+    let b = box { n = small, s = buf }
+    assert(b.n == 2i64)
+    assert(b.s.len == 4)
+
+    // union variant payloads
+    let h = holder.val(small)
+    let hv =
+        match h with
+        | val(n) -> n
+        | s(_) -> 0i64
+        | empty -> 0i64
+    assert(hv == 2i64)
+    let hs = holder.s(buf)
+    match hs with
+    | s(v) -> assert(v.len == 4)
+    | val(_) -> assert(false)
+    | empty -> assert(false)
+
+    // slice-literal elements
+    let xs = i64[3] { 1, 2, 3 }
+    assert(xs[1] == 2i64)
+
+    // assignment — variable, struct field, slice element, deref target
+    let mut acc = 0i64
+    acc = small
+    assert(acc == 2i64)
+    let mut mb = box { n = 0i64, s = "" }
+    mb.n = small
+    assert(mb.n == 2i64)
+    let mut ys = i64[2] { 0i64, 0i64 }
+    ys[0] = small
+    assert(ys[0] == 2i64)
+    let pacc = &acc
+    *pacc = small
+    assert(acc == 2i64)
+
+    // slice index and subslice bounds
+    let idx = 1i32
+    assert(xs[idx] == 2i64)
+    assert(xs[idx..3].len == 2)
+
+    // for-range endpoints (i32 start, i64 end -> i64 binding)
+    let mut count = 0i64
+    for i in 0..xs.len do
+        count = count + i
+    assert(count == 3i64)
+
+    // atomic_store_release value
+    let mut flag = 0i64
+    atomic_store_release(&flag, small)
+    assert(atomic_load_acquire(&flag) == 2i64)
+
+    // extern variadic argument
+    let mut out = alloc(u8[16] { })!
+    assert(c.snprintf(out.ptr, 16usize, c"%d", small) == 1)
+
+    free(buf)
+    free(out)
+    0

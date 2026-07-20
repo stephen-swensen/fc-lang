@@ -1193,10 +1193,30 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    clean). Tests: `tuples/const_str_element` (the corrected spelling, through
    parameter/return/destructure/slice-literal positions) and
    `tuples/const_str_strip_err` (the spec's old spelling, now pinned as an
-   error). Untouched and still open: tuples do no *elementwise* widening in the
-   **safe** direction either — `{i32, str}` is rejected by a
-   `{i32, const str}` parameter, just as `{i32, i32}` is by `{i64, i64}`
-   (`tuples/widen_mismatch_err`) — which is the same call as §7.9.
+   error).
+   **✅ The residual is now decided too — no elementwise widening** (2026-07-19).
+   Tuples do no elementwise widening in the **safe** direction either
+   (`{i32, str}` into a `{i32, const str}` parameter), and that stays. The
+   governing rule, now stated in spec §Implicit Widening → "How deep widening
+   reaches": **widening reinterprets a value, never rebuilds one; it descends
+   only into the option niche, where it is provably free.** Every widen either
+   leaves the bits alone (const-add, `T*` → `any*`) or rewrites one scalar in
+   place, so it reaches a value's own type and no further — a tuple's elements,
+   a struct's fields, and a result's payload never widen, because converting
+   them means constructing a second aggregate and copying the parts across.
+   Verified concretely: `{i32, str}` and `{i32, const str}` emit as two
+   distinct C typedefs with byte-identical bodies, so the conversion would need
+   a field-wise rebuild in a statement-expression — the very thing the spec
+   already cites as its reason for rejecting `i32?` → `i64?`. It would also
+   apply to tuples but never to the equivalent named structs (nominal), which
+   is a wart. The precedents agree: C allows `T*` → `const T*` at top level and
+   famously not `T**` → `const T**`; Rust's coercions do not propagate into
+   tuples; Zig coerces at top level and into optionals — which is exactly where
+   FC coerces today. This is not tension with §7.9: building and converting are
+   different acts, and a literal's elements are *placed into* slots whose type
+   is written right there. Tests `tuples/widen_no_descent_err` (struct field),
+   `_opt_err` (option payload), `_assign_err` (assignment), `_elem_err` (slice
+   -literal element) reach the rule through four indirect paths.
 5. **Spec §Tuples contradicts itself on `t[0] = v`**: line ~2742 says element
    rebinding "needs `let mut`", but §One-rule-three-knobs says contents are
    always assignable — and the compiler follows the latter. Fix the spec
@@ -1224,6 +1244,27 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    struct-literal fields, which are the same "aggregate literal element"
    position, looks unintended. Deciding it also settles the direction for §7.4
    (tuples). Extending widening here is a language change and needs a call.
+   **✅ FIXED — slice-literal elements now widen** (2026-07-19, decided). A
+   survey of every widening position (60-odd probe programs) found this to be
+   the only genuinely accidental hole: the element type is *written at the
+   literal*, so it is an anchor by FC's own definition, and the sibling
+   struct-literal-field check twenty lines away in `check_expr` is the same
+   shape plus the three lines that try widening. No test asserted the old
+   rejection and neither the stdlib nor the demos worked around it. All three
+   widening kinds now reach it — numeric (`i64[3] { 1, 2, 3 }`,
+   `f64[2] { 1.5f32, 2.5f32 }`), const-add (`const str[2] { buf, "lit" }`),
+   and `T*` → `any*` (`any*[2] { &a, &b }`) — on the `alloc` path too. The
+   one-directional half is unchanged and now pinned: narrowing, `const`
+   stripping, `const T*` → `any*`, and int→float stay errors. A **type-variable
+   element type still admits only itself** — the widen attempt is skipped
+   rather than the check relaxed, since the generic body's exact-match check is
+   the only one that instance ever gets (`generics/generic_slice_lit_elem_err`
+   guards the near-regression). Tests: `slices/slice_lit_widen`,
+   `slice_lit_widen_repr`, `slice_lit_narrow_err`, `slice_lit_const_strip_err`,
+   `slice_lit_anyptr_const_err`, `slice_lit_int_float_err`,
+   `memory/alloc_slice_lit_widen`, and `casts_widening/widen_anchor_sites`
+   (every anchored position in one program — the executable form of the spec's
+   canonical list).
 10. **An extern C name can spell a monomorphized instance name** (found in
     review of §5): `check_c_name_collisions` runs at the end of pass1, but
     instance names (`fc__pair__4__i32`, `fc__wide__6___k256`) only exist after
@@ -1264,13 +1305,14 @@ the new codegen path is ASan/UBSan-clean. Three items are left open with a note
 on why — each needs a language/design call or a substantial new pass, not a
 localized fix.
 
-- **Diagnostics leak internal type spellings** — *left open, design-entangled.*
-  "return type mismatch: expected str, got **const str**"; "string pattern on
-  non-str type const cstr". The wording can't be fixed in isolation: the first
-  message is only nonsense *because* `str` and `const str` don't unify in that
-  position, and whether they should is the const-acceptance question of §7.4 /
-  §7.9. Hiding `const` where the two genuinely differ would turn it into
-  "expected str, got str". Decide the unification direction first.
+- **Diagnostics leak internal type spellings** — ✅ **RESOLVED as no-change**
+  (2026-07-19), now that the blocking decision is made. "return type mismatch:
+  expected str, got **const str**" reads as noise only if `const str` is an
+  internal spelling that ought to unify with `str`. It isn't: §7.4/§7.9 settled
+  that `const` is never stripped implicitly, in any position, so the two types
+  named in that message genuinely differ and the difference *is* the error.
+  Hiding the qualifier would turn a precise diagnostic into "expected str, got
+  str". The message is load-bearing and stays.
 - ✅ **FIXED** — *(added while fixing §2.4)* A void inferred into a generic
   **struct literal** — `box { value = v() }` — was caught only by
   `mono_register`'s backstop, reported at the *template declaration* with a
@@ -1362,6 +1404,39 @@ runtime zero, ASan-clean); spec §Heap Allocation states the rule.)
   already failed), reporting one clean "expected a newline or ';' between
   statements" and resyncing to the next arm. Test
   `pattern_matching/match_arm_juxtaposition_err`.
+- ✅ **RESOLVED as no-change, rule now stated** — *(the third finding of the
+  §7.4/§7.9 widening survey)* A parameter whose type *contains* a type variable
+  gets no widening (`pass2.c` gates on `!type_contains_type_var(pt)`), which
+  looked like a generics gap. Sweeping every shape that can hold a type
+  variable against its concrete twin found **exactly one** real asymmetry, and
+  it is not composites: `unify` already handles const-add and `T*` → `any*`
+  itself, and a concrete parameter beside a generic one always widened; the
+  composite cases (`{'a, i64}`) reject in the generic *and* concrete forms
+  alike, for §7.4's reason. The survivor is the bare type variable —
+  `choose(a: 'a, b: 'a)` rejects `(1i64, 2i32)` where `(a: i64, b: i64)` takes
+  it. That one stays rejected: a type variable is bound by the first argument
+  mentioning it (verified — `choose(1i64, 2i32)` says "expected i64",
+  `choose(2i32, 1i64)` says "expected i32"), so widening would make a call's
+  meaning depend on argument **order**, and removing that order-dependence
+  means a common type across every site mentioning `'a` — whole-program
+  unification, which FC's directional inference rules out. It is therefore the
+  same symmetric position as an `if`/`match`/`return` join, and the existing
+  rule already governs it; it only *looked* arbitrary because the spec's list
+  of symmetric positions never mentioned type variables. §Implicit Widening now
+  carries that bullet plus the order-dependence rationale. Tests
+  `generics/typevar_symmetric` (positive, the cast bridge, the concrete twin's
+  order-freedom, and a concrete param beside a generic one) and
+  `typevar_symmetric_err`.
+- ✅ **FIXED** — *(found while surveying widening for §7.4/§7.9)* A **generic**
+  call's argument mismatch reported a bare `"argument 2: type mismatch"` with
+  no types at all, while the non-generic path printed `expected … got …`. It
+  now prints both, with the bindings established by earlier arguments
+  substituted in — so `choose(42, true)` says "expected **i32**, got bool"
+  rather than "expected `'a`", and `add(wide<4>, wide<8>)` says "expected
+  **wide<4>**, got wide<8>". The substitution is message-only and drains any
+  const-eval error it might trip (the `codegen.c:789` idiom) so it cannot
+  consume a failure another site owns. Tests `generics/type_mismatch` and
+  `generics/const_fn_arg_mismatch` updated to the informative text.
 - A slice literal whose element type is itself a slice needs parens:
   `i32[][2] { a, a }` fails, `(i32[])[2] { a, a }` works. The head scan takes
   the first `[` as the literal's, so an unparenthesized `[]` element suffix is

@@ -1,0 +1,30 @@
+// A slice literal's element type is written at the literal, so every element
+// sits in an anchored position and widens exactly as a struct-literal field
+// does. Numeric widening across the whole table.
+let main = (args: str[]) ->
+    let a = i64[3] { 1, 2, 3 }              // i32 literals -> i64
+    assert(a[0] == 1i64)
+    assert(a[2] == 3i64)
+
+    let b = i32[2] { 1i8, 2i16 }            // i8, i16 -> i32
+    assert(b[0] + b[1] == 3)
+
+    let c = u64[3] { 1u8, 2u16, 3u32 }      // unsigned chain -> u64
+    assert(c[0] + c[1] + c[2] == 6u64)
+
+    let d = i64[2] { 1u8, 2u32 }            // unsigned -> wider signed
+    assert(d[0] + d[1] == 3i64)
+
+    let e = f64[2] { 1.5f32, 2.5f32 }       // f32 -> f64
+    assert(e[0] + e[1] == 4.0)
+
+    // mixed widths in one literal, and an already-exact element alongside
+    let f = i64[3] { 1i8, 2i32, 3i64 }
+    assert(f[0] + f[1] + f[2] == 6i64)
+
+    // the widened element is a value like any other: iterate and index it
+    let mut sum = 0i64
+    for v in a do
+        sum = sum + v
+    assert(sum == 6i64)
+    0

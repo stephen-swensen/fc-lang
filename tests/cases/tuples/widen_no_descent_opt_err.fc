@@ -1,0 +1,10 @@
+// Reached through an option payload rather than a field: an option of tuples
+// does not widen elementwise either. The option niche carries a
+// representation-preserving inner widen, and a tuple rebuild is not one.
+let takes = (o: {i32, const str}?) -> if o.is_some then 1 else 0
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    assert(takes(some({ 1, buf })) == 1)
+    free(buf)
+    0

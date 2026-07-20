@@ -1,0 +1,12 @@
+// Reached through assignment: the anchor is a slot of tuple type, and the
+// value's elements still do not widen into it.
+let mk_const = () -> { 1, (const str) "x" }
+let mk_plain = (b: str) -> { 1, b }
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let mut t = mk_const()
+    t = mk_plain(buf)
+    assert(t[0] == 1)
+    free(buf)
+    0

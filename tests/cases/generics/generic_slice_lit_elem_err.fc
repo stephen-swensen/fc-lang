@@ -1,0 +1,11 @@
+// A type-variable element type anchors nothing to widen toward: inside a
+// generic body 'a admits only 'a, and that exact-match check is the only one
+// the body ever gets. Adding widening to concrete element types must not
+// weaken it.
+let make = (x: 'a) ->
+    let buf = 'a[2] { x, 1i32 }
+    buf.len
+
+let main = (args: str[]) ->
+    assert(make(5i64) == 2i64)
+    0

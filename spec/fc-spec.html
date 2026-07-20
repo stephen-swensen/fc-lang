@@ -1197,7 +1197,7 @@ match x with
 | none -> none(i64)
 ```
 
-As with all widening, this applies only in the asymmetric anchor positions (call arguments, assignment, struct-literal fields, option payloads); `if`/`match`/`loop`/`return` joins require an exact match either way.
+As with all widening, this applies only in the asymmetric anchor positions listed in §Implicit Widening; `if`/`match`/`loop`/`return` joins require an exact match either way.
 
 #### Explicit casts
 
@@ -1589,16 +1589,50 @@ let q = 3.14f64
 let r = p + q           // compile error — explicit cast required
 ```
 
-Widening applies only where there is a single anchor type that other values are conformed to: binary expressions and comparisons, function call arguments (the parameter type is the anchor), slice indices, and `for`-range endpoints. In positions where multiple value-producing sites symmetrically determine a result type, no widening occurs and all sites must have identical types:
+#### Where widening applies
+
+Widening applies only where there is a single **anchor** — a type written somewhere other than at the value itself, which the value is conformed to. The anchored positions are:
+
+- **binary expressions and comparisons** — both operands conform to the wider of the two
+- **function call arguments** — the parameter type is the anchor; this covers a union variant constructor's payload and an extern variadic argument alike
+- **assignment** — to a variable, a struct field, a slice or array element, or a pointer's target
+- **struct-literal fields and slice-literal elements** — the declared field or element type is the anchor
+- **option payloads** — the `x` in `some(x)`, against an option type
+- **slice indices and subslice bounds**
+- **`for`-range endpoints**
+- the value stored by **`atomic_store_release`**
+
+In positions where multiple value-producing sites symmetrically determine a result type, no widening occurs and all sites must have identical types:
 
 - `if`/`else` branches must have the same type
 - `match` arms must have the same type
 - `loop` `break value` expressions must all have the same type
 - `return value` expressions must match the function's inferred return type exactly (the function return type is itself inferred from the body's tail expression, so explicit `return`s are symmetric contributors, not values being passed to a declared slot)
+- arguments binding the **same type variable** must have the same type: `let choose = (a: 'a, b: 'a) -> a` accepts `choose(1i64, 2i64)` but not `choose(1i64, 2i32)`. A concrete `(a: i64, b: i64)` takes both, because there the anchor is *written* — `'a` is instead determined by the arguments themselves, which is what makes the position symmetric
 
-In these positions an explicit cast is required to bridge types: `if cond then (i64) x else y`, `return (i64) x`, etc.
+In these positions an explicit cast is required to bridge types: `if cond then (i64) x else y`, `return (i64) x`, `choose(1i64, (i64) 2i32)`, etc.
 
-Widening never reaches *through* a result: `i32!` and `i64!` are distinct types with distinct representations, so `let r: i64! = ok(5i32)` is an error — convert the payload explicitly (`ok((i64) 5)`). (Options behave the same except for the representation-preserving pointer cases; see §Option Types.)
+The type-variable case is worth stating plainly, since a generic function otherwise looks like it is refusing something its concrete twin allows. Widening there would make a call's meaning depend on argument *order* — a type variable is bound by the first argument that mentions it, so `choose(1i64, 42)` would compile while `choose(42, 1i64)` would not. Removing that order-dependence means computing a common type across every site that mentions `'a`, which is whole-program unification rather than the directional inference FC uses (§Type Inference). Exact match keeps the rule order-free.
+
+#### How deep widening reaches
+
+**Widening reinterprets a value; it never rebuilds one.** Every widen either leaves the bits exactly as they are (adding `const`, `T*` → `any*`) or rewrites a single scalar in place (the numeric table above). It therefore reaches a value's own type and no further — never the types *inside* it. The elements of a tuple, the fields of a struct, and the payload of a result do not widen:
+
+```fc
+let f = (t: {i32, const str}) -> t[0]
+let g = (t: {i64, i64}) -> t[0]
+let h = (r: i64!) -> 1
+
+f({ 1, buf })      // error — {i32, str} is not a {i32, const str}
+g({ 1, 2 })        // error — {i32, i32} is not a {i64, i64}
+h(ok(5i32))        // error — i32! is not an i64!
+```
+
+Converting any of those would mean *constructing a second aggregate* and copying the parts across, which is a different operation from reinterpreting the one at hand. Spell the annotation as the value is spelled, or write the conversion out part by part (`ok((i64) 5)`).
+
+This is consistent with element and field widening rather than in tension with it, because building and converting are different acts. A struct or slice literal *places* each value into a slot whose type is written right at the literal, so every element is an ordinary anchored position and widens there — `i64[2] { 1, 2 }` and `point { x = small }` are fine. An aggregate that already exists has no such slots left to fill.
+
+The one place a widen does reach inward is the **option niche**, where it costs nothing: an option widens when its inner type widens *representation-preservingly*, changing no bits at all. So `i32*?` widens to `const i32*?` and to `any*?`, and `i32[]?` to `const i32[]?`. A *numeric* option still does not widen — `i32?` to `i64?` would have to rebuild the option (see §Option Types).
 
 ### Overloaded Tokens
 
@@ -2734,7 +2768,7 @@ let p = { 1, 2, 3 }        // type {i32, i32, i32}
 
 A tuple has **at least two elements**. `{}` and `{ x }` are compile errors — a one-element tuple is pointless, and FC has no unit type.
 
-Element types are inferred exactly as they would be for a struct field, `const` included: a string literal is a `const str` and does not narrow to `str` (see §The const qualifier), so a tuple built from one has a `const str` element and an annotation naming that tuple's type must spell it that way — `{i32, const str}`, not `{i32, str}`.
+Element types are inferred exactly as they would be for a struct field, `const` included: a string literal is a `const str` and does not narrow to `str` (see §The const qualifier), so a tuple built from one has a `const str` element. An annotation naming that tuple's type must spell it the same way — `{i32, const str}`, not `{i32, str}`. Widening does not bridge the difference: it reinterprets a value and never rebuilds one, so it reaches a tuple's own type but not its elements (§Implicit Widening — How deep widening reaches).
 
 ### Tuple types
 
@@ -3335,7 +3369,11 @@ There is no partial-list initialization. If you want all elements to hold a spec
 
 The declared length must be a compile-time constant, and it must not be negative — `u8[-4] { }` and `u8[1 - 5] { }` are compile errors, whether the length is written concretely or reached through a const parameter (`u32['n - 4] { }` is judged per instantiation). Zero is legal: `i32[0] { }` is the empty-slice literal, matching `default(i32[])`.
 
-The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`. A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
+The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`.
+
+The declared element type is an **anchor**: each element is checked against it and widens to it under the usual rules (§Implicit Widening), exactly as a struct literal's fields widen to their declared field types. So `i64[3] { 1, 2, 3 }` takes `i32` literals, `f64[2] { 1.5f32, 2.5f32 }` takes `f32`s, `const str[2] { buf, "lit" }` mixes a `str` with a string literal, and `any*[2] { &a, &b }` takes typed pointers. Widening is one-directional as always — `i32[2] { 1i64, 2i64 }` and `str[2] { "a", "b" }` are errors, since narrowing and stripping `const` are not widens — and it does not descend into a composite element, so a slice of tuples needs its elements spelled exactly (`{i64, i64}[1] { { 1i64, 2i64 } }`). Inside a generic body a type-variable element type anchors nothing to widen toward: `'a` admits only `'a`.
+
+A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
 
 The backing storage for a stack slice literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
 

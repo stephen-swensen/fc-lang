@@ -1,0 +1,9 @@
+// Arguments binding the same type variable are a symmetric position: 'a is
+// determined by the arguments themselves, so no widening occurs and they must
+// have identical types. The concrete twin (a: i64, b: i64) takes both, because
+// there the anchor is written.
+let choose = (a: 'a, b: 'a) -> a
+
+let main = (args: str[]) ->
+    assert(choose(1i64, 2i32) == 1i64)
+    0

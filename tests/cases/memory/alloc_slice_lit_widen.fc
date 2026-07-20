@@ -1,0 +1,17 @@
+// The slice-literal element anchor widens on the alloc() path too — the heap
+// form goes through the same element check as the stack form.
+let main = (args: str[]) ->
+    let xs = alloc(i64[3] { 1, 2, 3 })!
+    assert(xs[0] + xs[1] + xs[2] == 6i64)
+
+    let ys = alloc(f64[2] { 1.5f32, 2.5f32 })!
+    assert(ys[0] + ys[1] == 4.0)
+
+    // const-add reaches the heap form too
+    let zs = alloc(const str[2] { "a", "bc" })!
+    assert(zs[1].len == 2)
+
+    free(xs)
+    free(ys)
+    free(zs)
+    0

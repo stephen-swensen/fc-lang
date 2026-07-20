@@ -1,0 +1,21 @@
+// The positive half of the same rule, and the property it exists to protect:
+// a type variable is bound by the first argument that mentions it, so widening
+// here would make a call's meaning depend on argument order. Exact match keeps
+// it order-free, and an explicit cast bridges.
+let choose = (a: 'a, b: 'a) -> a
+let concrete = (a: i64, b: i64) -> a
+
+// a concrete parameter sitting beside a generic one still widens normally
+let tagged = (x: 'a, n: i64) -> n
+
+let main = (args: str[]) ->
+    assert(choose(1i64, 2i64) == 1i64)
+    assert(choose(1i64, (i64) 2i32) == 1i64)   // cast bridges
+    assert(choose("a", "b").len == 1)
+
+    // the written anchor takes either order — this is what 'a cannot promise
+    assert(concrete(1i64, 2i32) == 1i64)
+    assert(concrete(2i32, 1i64) == 2i64)
+
+    assert(tagged("x", 1i32) == 1i64)
+    0
