@@ -1177,6 +1177,26 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    in. Either the spec examples change to `const str`, or tuples get
    elementwise nonconst→const acceptance (repr-preserving widening precedent
    exists: `i32*` → `const i32*`).
+   **✅ FIXED — spec examples corrected** (2026-07-19, decided). The premise of
+   the second option was wrong: the mismatch here runs `const str` value into a
+   `str` slot, so accepting it would *strip* const, not add it. That direction
+   is rejected everywhere in FC, tuples included — plain `g("hello")` against
+   `(s: str)` fails identically — and §Slice literals already states the rule
+   for the same "aggregate literal element" shape (`const str[3] { "a", … }`,
+   "a string literal is a `const str` and does not narrow to `str`"). So the
+   examples were simply wrong about the literal's type: §Tuples now says
+   `{ 4, "hello" }` is `{i32, const str}`, the parameter example is
+   `(x: {i32, const str})`, `t[1]` is documented `const str`, `flip`'s result
+   is `{const str, i32}`, and a sentence in §Tuple values states that elements
+   infer `const` exactly as struct fields do. Every code block in §Tuples was
+   compiled and run as one program to confirm (exit 0, gcc `-Wall -Werror`
+   clean). Tests: `tuples/const_str_element` (the corrected spelling, through
+   parameter/return/destructure/slice-literal positions) and
+   `tuples/const_str_strip_err` (the spec's old spelling, now pinned as an
+   error). Untouched and still open: tuples do no *elementwise* widening in the
+   **safe** direction either — `{i32, str}` is rejected by a
+   `{i32, const str}` parameter, just as `{i32, i32}` is by `{i64, i64}`
+   (`tuples/widen_mismatch_err`) — which is the same call as §7.9.
 5. **Spec §Tuples contradicts itself on `t[0] = v`**: line ~2742 says element
    rebinding "needs `let mut`", but §One-rule-three-knobs says contents are
    always assignable — and the compiler follows the latter. Fix the spec

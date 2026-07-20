@@ -1,0 +1,20 @@
+// A string literal is a const str, so a tuple holding one has a const str
+// element — that is how the tuple's type must be spelled in an annotation.
+let label = (t: {i32, const str}) -> t[1]
+
+let pair = () -> { 4, "hello" }
+
+let main = (args: str[]) ->
+    let t = { 4, "hello" }
+    assert(t[0] == 4)
+    assert(t[1].len == 5)
+    assert(label(t).len == 5)
+    assert(label(pair())[0] == 104u8)
+
+    let { n, s } = t
+    assert(n == 4)
+    assert(s.len == 5)
+
+    let xs = {i32, const str}[2] { { 1, "a" }, { 2, "bb" } }
+    assert(xs[1][1].len == 2)
+    0

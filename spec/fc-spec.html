@@ -2728,19 +2728,21 @@ A **tuple** is an anonymous, positional product type — a lightweight way to gr
 A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and slice literals always carry a type prefix (`point { … }`, `i32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
 
 ```fc
-let t = { 4, "hello" }     // type {i32, str}
+let t = { 4, "hello" }     // type {i32, const str}
 let p = { 1, 2, 3 }        // type {i32, i32, i32}
 ```
 
 A tuple has **at least two elements**. `{}` and `{ x }` are compile errors — a one-element tuple is pointless, and FC has no unit type.
+
+Element types are inferred exactly as they would be for a struct field, `const` included: a string literal is a `const str` and does not narrow to `str` (see §The const qualifier), so a tuple built from one has a `const str` element and an annotation naming that tuple's type must spell it that way — `{i32, const str}`, not `{i32, str}`.
 
 ### Tuple types
 
 A tuple type mirrors the value: `{T1, T2, …}`. It can appear anywhere a type can, and composes with the usual suffixes:
 
 ```fc
-let f = (x: {i32, str}) -> x[0]   // tuple parameter
-let g = () -> { 1, "a" }            // tuple return (inferred)
+let f = (x: {i32, const str}) -> x[0]   // tuple parameter
+let g = () -> { 1, "a" }                  // tuple return (inferred)
 
 {i32, str}[]      // slice of tuples
 {i32, str}?       // optional tuple
@@ -2756,11 +2758,11 @@ Tuple elements are read with a postfix index, **0-based**, where the index must 
 ```fc
 let t = { 4, "hello" }
 t[0]          // 4        (i32)
-t[1]          // "hello"  (str)
+t[1]          // "hello"  (const str)
 t[1].len      // 5
 ```
 
-The literal requirement is deliberate and complete, not a restriction awaiting relaxation. A tuple is heterogeneous — each position has its own type (`t[0]` is `i32`, `t[1]` is `str`) — so the index is not a computed offset into uniform storage the way an array index is, but a *static selection of one field*, resolved during type checking. An index that merely happens to be constant (`t[1 + 1]`, a `let`-bound value) would gain nothing: there is no single element type for a runtime index to land on, so there is nothing to compute and nothing const-folding could recover. Wanting a computed index is precisely the signal that you want an **array** (homogeneous, runtime `[expr]`, bounds-checked) rather than a tuple — the two readings of `[…]` are how FC draws that line. Because the position is fixed at compile time, the bound is checked then and no runtime bounds check is emitted.
+The literal requirement is deliberate and complete, not a restriction awaiting relaxation. A tuple is heterogeneous — each position has its own type (`t[0]` is `i32`, `t[1]` is `const str`) — so the index is not a computed offset into uniform storage the way an array index is, but a *static selection of one field*, resolved during type checking. An index that merely happens to be constant (`t[1 + 1]`, a `let`-bound value) would gain nothing: there is no single element type for a runtime index to land on, so there is nothing to compute and nothing const-folding could recover. Wanting a computed index is precisely the signal that you want an **array** (homogeneous, runtime `[expr]`, bounds-checked) rather than a tuple — the two readings of `[…]` are how FC draws that line. Because the position is fixed at compile time, the bound is checked then and no runtime bounds check is emitted.
 
 There is no `.field` access on a tuple — `t[0]`, not `t.e0`. Indexing is the only accessor.
 
@@ -2822,7 +2824,7 @@ A tuple element may be a type variable. Such a tuple is generic and is monomorph
 ```fc
 let flip = (p: {'a, 'b}) -> { p[1], p[0] }
 
-flip({ 7, "world" })   // {str, i32}
+flip({ 7, "world" })   // {const str, i32}
 flip({ true, 9 })      // {i32, bool}
 ```
 

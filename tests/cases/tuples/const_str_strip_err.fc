@@ -1,0 +1,6 @@
+// A {i32, const str} value does not narrow to {i32, str} — const is never
+// stripped implicitly, in a tuple element or anywhere else.
+let f = (x: {i32, str}) -> x[0]
+
+let main = (args: str[]) ->
+    f({ 4, "hello" })
