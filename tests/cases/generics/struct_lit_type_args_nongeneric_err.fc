@@ -1,0 +1,10 @@
+// The form is wrong whether or not the name is generic — a non-generic struct
+// gets the same diagnostic rather than the old tuple-literal misparse.
+struct point =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    let p = point<i32> { x = 1, y = 2 }
+    assert(p.x == 1)
+    0

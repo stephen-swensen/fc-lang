@@ -1,0 +1,1 @@
+explicit type arguments are not allowed on a struct literal; write 'pt { ... }'

@@ -414,10 +414,13 @@ static bool is_type_arg_token(TokenKind k) {
     }
 }
 
-/* Decide whether a '<' begins a generic-call type-argument list: scan from
- * `start` (the token just after the '<') for type-compatible tokens up to the
- * matching '>', which must be followed by '(' (call) or '.' (variant). */
-static bool generic_call_scan(Parser *p, int start) {
+/* Scan a balanced type-argument list: `start` is the token just after the '<',
+ * and every token up to the matching '>' must be type-compatible. Returns the
+ * index just past the closing '>' / '>>', or -1 when the run cannot be a
+ * type-argument list at all. Every expression-position reading of `name<...>`
+ * shares this one scan and differs only in what must *follow* it (see the three
+ * predicates below) — the readings must agree on the extent of the list. */
+static int typearg_scan(Parser *p, int start) {
     int scan = start;
     int depth = 1;
     int paren = 0;
@@ -427,9 +430,9 @@ static bool generic_call_scan(Parser *p, int start) {
          * expression carries the full grammar, incl. shifts and comparisons)
          * and angle tokens don't count toward the <...> depth. */
         if (k == TOK_LPAREN) { paren++; scan++; continue; }
-        if (k == TOK_RPAREN) { if (--paren < 0) return false; scan++; continue; }
+        if (k == TOK_RPAREN) { if (--paren < 0) return -1; scan++; continue; }
         if (paren > 0) {
-            if (k == TOK_NEWLINE || k == TOK_EOF) return false;
+            if (k == TOK_NEWLINE || k == TOK_EOF) return -1;
             scan++;
             continue;
         }
@@ -438,24 +441,27 @@ static bool generic_call_scan(Parser *p, int start) {
         if (k == TOK_GTGT) {
             /* '>>' closes two levels (split in type-argument context) */
             depth -= 2;
-            if (depth < 0) return false; /* unbalanced — read as comparison/shift */
+            if (depth < 0) return -1; /* unbalanced — read as comparison/shift */
             scan++;
             continue;
         }
-        if (!is_type_arg_token(k)) return false;
+        if (!is_type_arg_token(k)) return -1;
         scan++;
     }
-    if (paren != 0) return false;
-    /* depth reached 0; `scan` now sits just past the closing '>' / '>>', which
-     * must be followed by '(' (call) or '.' (variant). */
-    return depth == 0 && scan < p->token_count &&
-           (p->tokens[scan].kind == TOK_LPAREN ||
-            p->tokens[scan].kind == TOK_DOT);
+    if (paren != 0 || depth != 0 || scan >= p->token_count) return -1;
+    return scan;
 }
 
-/* Like generic_call_scan, but for a *bare* generic instantiation in value
- * position: a balanced <...> type-argument list NOT followed by '(' or '.', but
- * by a token that cannot begin the right operand of a comparison (an expression
+/* A generic call or generic variant construction: the list is followed by '('
+ * (call) or '.' (variant). */
+static bool generic_call_scan(Parser *p, int start) {
+    int end = typearg_scan(p, start);
+    return end >= 0 && (p->tokens[end].kind == TOK_LPAREN ||
+                        p->tokens[end].kind == TOK_DOT);
+}
+
+/* A *bare* generic instantiation in value position: the list is followed by a
+ * token that cannot begin the right operand of a comparison (an expression
  * terminator). `name<Type>` followed by such a token can only be a misuse of
  * explicit type arguments without a call — never a valid comparison chain
  * (`a < b > c` keeps the comparison reading because `c` starts an expression) —
@@ -466,32 +472,9 @@ static bool generic_call_scan(Parser *p, int start) {
  * expression, so no valid comparison is ever misread (a terminator we omit just
  * keeps the old, less-helpful error — never a regression). */
 static bool bare_inst_scan(Parser *p, int start) {
-    int scan = start;
-    int depth = 1;
-    int paren = 0;
-    while (scan < p->token_count && depth > 0) {
-        TokenKind k = p->tokens[scan].kind;
-        if (k == TOK_LPAREN) { paren++; scan++; continue; }
-        if (k == TOK_RPAREN) { if (--paren < 0) return false; scan++; continue; }
-        if (paren > 0) {
-            if (k == TOK_NEWLINE || k == TOK_EOF) return false;
-            scan++;
-            continue;
-        }
-        if (k == TOK_LT) { depth++; scan++; continue; }
-        if (k == TOK_GT) { depth--; scan++; continue; }
-        if (k == TOK_GTGT) {
-            depth -= 2;
-            if (depth < 0) return false;
-            scan++;
-            continue;
-        }
-        if (!is_type_arg_token(k)) return false;
-        scan++;
-    }
-    if (paren != 0) return false;
-    if (depth != 0 || scan >= p->token_count) return false;
-    switch (p->tokens[scan].kind) {
+    int end = typearg_scan(p, start);
+    if (end < 0) return false;
+    switch (p->tokens[end].kind) {
     case TOK_NEWLINE: case TOK_DEDENT: case TOK_EOF:
     case TOK_RPAREN: case TOK_RBRACKET: case TOK_RBRACE:
     case TOK_COMMA:
@@ -499,6 +482,54 @@ static bool bare_inst_scan(Parser *p, int start) {
     default:
         return false;
     }
+}
+
+/* Explicit type arguments on a struct literal — `name<Types> { field = ... }`,
+ * which FC does not have: a struct literal's type arguments are always inferred
+ * from its field values. The brace shape tested here is the same one
+ * parse_prefix uses to tell a struct literal from a block (`{}` or `{ ident =`),
+ * and it can never close a comparison chain — a tuple literal needs two
+ * elements, so neither shape is a legal right operand — which is why this
+ * reading is claimed without the generic-name gate: the form is wrong whether or
+ * not the name is generic, and only the diagnostic depends on knowing that. */
+static bool struct_lit_typearg_scan(Parser *p, int start) {
+    int end = typearg_scan(p, start);
+    if (end < 0 || p->tokens[end].kind != TOK_LBRACE ||
+        end + 1 >= p->token_count)
+        return false;
+    if (p->tokens[end + 1].kind == TOK_RBRACE) return true;   /* name<T> { } */
+    return p->tokens[end + 1].kind == TOK_IDENT &&            /* name<T> { f = */
+           end + 2 < p->token_count && p->tokens[end + 2].kind == TOK_EQ;
+}
+
+/* Flatten an `a.b.c` chain of EXPR_IDENT/EXPR_FIELD back into the dotted,
+ * interned spelling parse_struct_literal takes; NULL if the chain holds
+ * anything else. Sized from the components rather than written into a fixed
+ * buffer — FC identifiers are unbounded and snprintf truncation is silent. */
+static int dotted_name_len(Expr *e) {
+    if (e->kind == EXPR_IDENT) return (int)strlen(e->ident.name);
+    if (e->kind != EXPR_FIELD) return -1;
+    int n = dotted_name_len(e->field.object);
+    return n < 0 ? -1 : n + 1 + (int)strlen(e->field.name);
+}
+
+static char *dotted_name_fill(Expr *e, char *out) {
+    if (e->kind == EXPR_FIELD) {
+        out = dotted_name_fill(e->field.object, out);
+        *out++ = '.';
+    }
+    const char *s = (e->kind == EXPR_FIELD) ? e->field.name : e->ident.name;
+    size_t n = strlen(s);
+    memcpy(out, s, n);
+    return out + n;
+}
+
+static const char *dotted_name_of(Parser *p, Expr *e) {
+    int len = dotted_name_len(e);
+    if (len < 0) return NULL;
+    char *buf = arena_alloc(p->arena, (size_t)len + 1);
+    *dotted_name_fill(e, buf) = '\0';
+    return intern(p->intern, buf, len);
 }
 
 static bool is_type_name(const char *s, int len) {
@@ -2848,6 +2879,32 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_LT: {
+        /* `left<Types> { ... }` — a struct literal carrying explicit type
+         * arguments, which FC does not have (the field values determine them).
+         * Diagnose the form itself, then parse the literal as if the arguments
+         * were absent so the rest of the expression still type-checks: without
+         * this the `<` fell through to a comparison and the braces were read as
+         * a tuple literal, reporting "tuple literal requires at least 2
+         * elements" at the brace. Checked ahead of the generic readings below —
+         * the shape is unambiguous, so it needs no generic-name gate. */
+        if (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) {
+            const char *lit_name = struct_lit_typearg_scan(p, p->pos)
+                                 ? dotted_name_of(p, left) : NULL;
+            if (lit_name) {
+                diag_error(loc, "explicit type arguments are not allowed on a "
+                                "struct literal; write '%s { ... }' — the field "
+                                "values determine the type arguments", lit_name);
+                do {
+                    parse_type_arg(p);
+                    if (!check(p, TOK_COMMA)) break;
+                    advance_p(p);
+                } while (1);
+                expect_typearg_gt(p);
+                expect(p, TOK_LBRACE);
+                return parse_struct_literal(p, lit_name, left->loc);
+            }
+        }
+
         /* Check if this is a generic call: left<Type, ...>(args)
          * The '<' token has already been consumed by the Pratt loop.
          * Scan forward to see if tokens between here and '>' are all

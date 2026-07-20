@@ -1,0 +1,9 @@
+// A struct literal's type arguments are always inferred from its field
+// values, so writing them explicitly is an error — not a second spelling.
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let b = box<i32> { value = 42 }
+    assert(b.value == 42)
+    0

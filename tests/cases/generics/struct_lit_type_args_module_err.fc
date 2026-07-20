@@ -1,0 +1,9 @@
+// A module-qualified struct literal names the whole path in the message.
+module m =
+    struct bx =
+        value: 'a
+
+let main = (args: str[]) ->
+    let b = m.bx<i32> { value = 3 }
+    assert(b.value == 3)
+    0

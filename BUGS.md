@@ -1126,15 +1126,51 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    `some(fallible())` in statement position compiles — the discard check
    guards only top-level `TYPE_RESULT`. Letter-of-the-rule vs. its intent;
    probably worth guarding any discarded value *containing* a result.
+   **✅ DECIDED — no change** (2026-07-19). The rule guards the *result*, and a
+   result placed inside an aggregate has been consumed by that construction:
+   the value built from it is what statement position then discards, which is
+   the ordinary C-style "a plain value you may not need" case (§Results cannot
+   be silently ignored draws exactly that line). Deepening the check to any
+   discarded value *containing* a result would make the diagnostic depend on a
+   type's interior rather than on what the expression produces.
 2. **`return`/`break`/`continue` in grammar's `primary_expr`** but rejected in
    general expression positions (call args, match subject) — parser only
    allows them as block/inline-sequence items. Current semantics are
    defensible; then grammar.bnf should stop listing them under `primary_expr`.
+   **✅ FIXED — semantics kept, grammar corrected** (2026-07-19). They are
+   statement items now: `block_expr_item` gains `return_expr`, `break_expr`,
+   `"continue"` (and `ignore_stmt`, which the grammar had never carried) and
+   `primary_expr` loses them. Deleting them from `primary_expr` alone would
+   have made `if c then f() else return` underivable, because the body
+   positions were spelled `expr_or_block` while the parser reads all of them
+   (lambda, if/else, match arm, loop, for) as item sequences — so those now
+   share one `body_or_block = INDENT block DEDENT | inline_body`, and
+   `expr_or_block` is left to the positions that really do take a single value
+   (a `let` initializer, a guard operand). Also found while checking the
+   grammar against the lexer: the `keyword` production was missing `do`,
+   `ignore`, and `guarded`/`unguarded`/`checked`/`unchecked`.
 3. **Explicit type args on struct literals** (`box<i32> { ... }`,
    `pt<4> { ... }`): grammar.bnf line ~922 sanctions them, the parser never
    consumes them, and the fallback misparse yields nonsense diagnostics
    ("tuple literal requires at least 2 elements"). Accept per grammar, or fix
    grammar + add a targeted diagnostic.
+   **✅ FIXED — not allowed** (2026-07-19, decided). A struct literal's type
+   arguments are always determined by its field values, so an explicit list
+   adds nothing; `struct_literal` in grammar.bnf drops the `[ "<" …">" ]` (and
+   gains the module-qualified name it always accepted), and spec §Generic
+   Structs states the rule. The parser claims the form (`struct_lit_typearg_scan`
+   in parser.c) and reports it at the `<`, then consumes the arguments and
+   parses the literal as if they were absent so nothing cascades. The claim
+   needs no generic-name gate: `<…>` followed by struct-literal brace shape
+   (`{}` or `{ ident =`) can never close a comparison chain, since a tuple
+   literal needs two elements. The three expression-position readings of
+   `name<…>` (generic call, bare instantiation, this) now share one
+   `typearg_scan` and differ only in what must follow it — the two older scans
+   were byte-identical twins. Tests: `generics/struct_lit_type_args_err`,
+   `_nested_err`, `_module_err`, `_const_err` (const argument), `_nongeneric_err`
+   (the form is wrong whether or not the name is generic), and
+   `_negative_space` (a tuple of comparisons keeps its comparison reading; the
+   argument-free literal still infers).
 4. **Spec §Tuples' own examples are uncompilable**: `{i32, str}` can never
    receive `{ 1, "a" }` ("expected {i32, str}, got {i32, const str}") because
    tuple types are synthesized structurally and the literal's `const` leaks

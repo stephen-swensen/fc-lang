@@ -118,7 +118,9 @@ TYPE_VAR      = "'" , letter , { ident_cont } ;
 keyword = "let" | "mut" | "struct" | "union" | "enum" | "error" | "module"
         | "namespace" | "import" | "from" | "as" | "extern"
         | "private" | "const" | "match" | "with" | "when" | "if" | "then" | "else"
-        | "for" | "in" | "loop" | "break" | "continue" | "return" | "defer"
+        | "for" | "in" | "loop" | "do" | "break" | "continue" | "return"
+        | "defer" | "ignore"
+        | "guarded" | "unguarded" | "checked" | "unchecked"
         | "some" | "true" | "false" | "none" | "ok" | "err" | "void" ;
 (* Note: "any" is NOT a reserved word — it lexes as a plain identifier *)
 (* and is only meaningful in the "any*" type form (see type rules).    *)
@@ -548,8 +550,18 @@ type_param_list  = [ type_expr , { "," , type_expr } ] ;
 (* ================================================================== *)
 
 (* An expression or a new indented block that evaluates to a value.    *)
+(* Used where a single value is expected (a `let` initializer, a guard    *)
+(* operand) — not for the bodies of the block-forming expressions, which  *)
+(* take a body_or_block (item sequences, hence statement items).           *)
 expr_or_block    = expr
                  | INDENT , block , DEDENT
+                 ;
+
+(* The body of a block-forming expression: lambda, if/else, match arm,   *)
+(* loop, for. Either an offside block or a one-line item sequence — both  *)
+(* are item sequences, which is what admits the statement items below.     *)
+body_or_block    = INDENT , block , DEDENT
+                 | inline_body
                  ;
 
 (* A block is a sequence of peer items; the last one is the value.      *)
@@ -562,9 +574,19 @@ block            = block_expr_item , { ( NEWLINE | ";" ) , block_expr_item } ;
 (* body, and a `( ... )` grouping/sequence expression.                      *)
 inline_body      = block_expr_item , { ";" , block_expr_item } ;
 
+(* The statement items (return/break/continue/defer/ignore) are items, not *)
+(* primary expressions: they appear only as peers in a block or inline      *)
+(* sequence, never nested inside a larger expression (a call argument, a    *)
+(* match subject, an operand). They are still typed expressions — the       *)
+(* transfers are void-typed, which is what makes `if c then f() else return`*)
+(* well-formed: `return` is a peer item of the else body, not an operand.   *)
 block_expr_item  = let_binding
                  | cond_comp_block           (* #if inside a block       *)
                  | defer_stmt                (* deferred execution       *)
+                 | ignore_stmt               (* explicit result discard  *)
+                 | return_expr
+                 | break_expr
+                 | "continue"
                  | expr
                  ;
 
@@ -719,9 +741,6 @@ primary_expr     = INT_LIT
                  | loop_expr
                  | for_expr
                  | let_in_expr
-                 | return_expr
-                 | break_expr
-                 | "continue"
                  | alloc_expr
                  | free_expr
                  | sizeof_expr
@@ -758,7 +777,7 @@ tuple_literal    = "{" , expr , "," , expr , { "," , expr } , "}" ;
 (* functions where the type var does not appear in any parameter.      *)
 
 lambda_expr      = [ "<" , type_var_list , ">" ]
-                 , "(" , [ param_list ] , ")" , "->" , expr_or_block
+                 , "(" , [ param_list ] , ")" , "->" , body_or_block
                  ;
 
 type_var_list    = TYPE_VAR , { "," , TYPE_VAR } ;
@@ -772,12 +791,12 @@ param            = IDENT , ":" , type_expr ;
 (*  Control flow expressions                                           *)
 (* ------------------------------------------------------------------ *)
 
-if_expr          = "if" , expr , "then" , expr_or_block
+if_expr          = "if" , expr , "then" , body_or_block
                  , [ "else" , else_branch ]
                  ;
 
 else_branch      = if_expr                      (* else if ... *)
-                 | expr_or_block                (* else ...    *)
+                 | body_or_block                (* else ...    *)
                  ;
 
 match_expr       = "match" , expr , "with" , INDENT , match_arms , DEDENT ;
@@ -791,17 +810,17 @@ match_arms       = match_arm , { NEWLINE , match_arm } ;
    falls through to the body of the next arm that has "->". The final
    arm must have a body, and a `when` guard is only permitted on an arm
    that ends with "->". *)
-match_arm        = "|" , pattern , [ "when" , expr ] , "->" , expr_or_block
+match_arm        = "|" , pattern , [ "when" , expr ] , "->" , body_or_block
                  | "|" , pattern ;              (* body-less fall-through arm *)
 
 (* `loop` has no header expression to disambiguate, so its inline body    *)
 (* needs no keyword (like guarded/unguarded).                             *)
-loop_expr        = "loop" , ( ( INDENT , block , DEDENT ) | inline_body ) ;
+loop_expr        = "loop" , body_or_block ;
 
 (* `do` is required and marks the header/body boundary, uniform with         *)
 (* `then`/`with`. It introduces either an offside block or an inline body.    *)
 for_expr         = "for" , for_binding , "in" , for_iterable , "do" ,
-                   ( ( INDENT , block , DEDENT ) | inline_body )
+                   body_or_block
                  ;
 
 for_binding      = for_elem                     (* element iteration          *)
@@ -821,11 +840,19 @@ for_iterable     = expr , ".." , expr           (* range iteration: a..b      *)
                  | expr                         (* slice iteration            *)
                  ;
 
+(* Statement items — block/inline-sequence peers only (see                *)
+(* block_expr_item).  `return`/`break` carry an operand unless an inline    *)
+(* statement terminator (NEWLINE, DEDENT, ";", "else", EOF) follows.        *)
 return_expr      = "return" , [ expr ] ;
 
 break_expr       = "break" , [ expr ] ;
 
 defer_stmt       = "defer" , expr ;
+
+(* `ignore e` evaluates e for its side effects and yields void — the      *)
+(* explicit discard of a result (see §Results cannot be silently ignored). *)
+(* Its operand may not itself be void, nor a control-flow transfer.        *)
+ignore_stmt      = "ignore" , expr ;
 
 
 (* ------------------------------------------------------------------ *)
@@ -919,7 +946,13 @@ enum_of_expr     = "enum_of" , "(" , type_expr , "," , expr , ")" ;
 
 (* Struct literal: point { x = 1.0, y = 2.0 }                         *)
 (* Also used for slice construction from raw parts: str { ptr=p, len=n }*)
-struct_literal   = IDENT , [ "<" , type_arg_list , ">" ]
+(* A generic struct's type arguments are always inferred from the field   *)
+(* values, so the literal takes none: `box<i32> { value = 1 }` is an       *)
+(* error, not an alternative spelling of `box { value = 1 }`.  (Explicit   *)
+(* type arguments exist only where inference has nothing to read: a        *)
+(* generic call and a generic union's variant construction.)               *)
+(* The name may be module-qualified: gfx.point { x = 1.0, y = 2.0 }    *)
+struct_literal   = IDENT , { "." , IDENT }
                  , "{" , [ field_init_list ] , "}"
                  ;
 

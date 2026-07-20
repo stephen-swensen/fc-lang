@@ -1,0 +1,9 @@
+// A const generic argument on an (empty) struct literal is the same error:
+// the form is rejected, whichever kind of parameter it would bind.
+struct pt =
+    limbs: u8['n]
+
+let main = (args: str[]) ->
+    let p = pt<4> { }
+    assert(p.limbs[0] == 0)
+    0

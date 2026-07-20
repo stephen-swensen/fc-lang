@@ -1,0 +1,22 @@
+// The negative space of the struct-literal claim: `<...>` followed by a brace
+// is taken only when the brace has struct-literal shape (`{}` or `{ f = `).
+// A tuple of comparisons keeps its comparison reading, and the legal spelling
+// (no type arguments at all) still infers them from the field values.
+struct box =
+    value: 'a
+
+let f = (v: 'a) ->
+    box { value = v }
+
+let main = (args: str[]) ->
+    let a = 1
+    let b = 5
+    let c = 9
+    let t = { a < b, c > b }
+    assert(t[0])
+    assert(t[1])
+    let x = box { value = 42 }
+    assert(x.value == 42)
+    let y = f(7)
+    assert(y.value == 7)
+    0

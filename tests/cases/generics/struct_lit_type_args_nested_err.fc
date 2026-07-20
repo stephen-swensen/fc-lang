@@ -1,0 +1,9 @@
+// The type-argument list is consumed however deeply it nests, so the literal
+// after it still parses and only the one form error is reported.
+struct box =
+    value: 'a
+
+let main = (args: str[]) ->
+    let b = box<box<i32>> { value = box { value = 7 } }
+    assert(b.value.value == 7)
+    0
