@@ -1,0 +1,5 @@
+// The integer requirement holds on both sides of a shift, not just the amount.
+let main = (args: str[]) ->
+    let a = true << 1
+    assert(a == 2)
+    0

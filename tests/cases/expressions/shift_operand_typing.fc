@@ -1,0 +1,53 @@
+// A shift's operands are typed independently: the result takes the LEFT
+// operand's type, and the right operand may be any integer type. Neither
+// widens toward the other -- the amount is a bit count, not a value in the
+// left operand's domain. The observable consequence is that a shift stays
+// inside its left operand's width instead of promoting to int as C does.
+
+// Opaque to the constant folder, so the runtime path is exercised too.
+let opaque_i32 = (x: i32) -> x
+let opaque_i64 = (x: i64) -> x
+
+let main = (args: str[]) ->
+    let m = 1u8
+
+    // The amount may be any integer type; none of these convert `m`.
+    assert(m << 1 == 2u8)
+    assert(m << 1i8 == 2u8)
+    assert(m << 1i64 == 2u8)
+    assert(m << 1u64 == 2u8)
+    assert(m << 1isize == 2u8)
+    assert(m << 1usize == 2u8)
+
+    // ...and the left operand's type is likewise free of the right's.
+    assert(1i32 << m == 2)
+    assert(1i64 << m == 2i64)
+    assert(1u16 << m == 2u16)
+
+    // The result is the LEFT operand's type, so it wraps at that width.
+    // C would promote to int here and produce 256.
+    assert(0x80u8 << 1 == 0u8)
+    assert(0x40u8 << 2 == 0u8)
+    assert(0x8000u16 << 1 == 0u16)
+
+    // The same holds for a value the folder cannot see through.
+    let hi = if args.len >= 0 then 0x80u8 else 0u8
+    assert(hi << opaque_i32(1) == 0u8)
+
+    // Right shift follows the same rule.
+    assert(0x80u8 >> 1 == 0x40u8)
+    assert(0x80u8 >> 1i64 == 0x40u8)
+    assert(-2i32 >> 1 == -1)
+
+    // A negative amount is masked by its low bits: -1 selects width-1.
+    // The constant-folded and runtime paths must agree.
+    assert(m << -1 == 0x80u8)
+    assert(m << opaque_i32(-1) == 0x80u8)
+    assert(m << opaque_i64(-1i64) == 0x80u8)
+    assert(1i32 << -1 == i32.min)
+    assert(1u32 << opaque_i32(-1) == 0x80000000u32)
+
+    // An over-wide amount masks the same way, from either path.
+    assert(m << 300 == 0x10u8)
+    assert(m << opaque_i32(300) == 0x10u8)
+    0

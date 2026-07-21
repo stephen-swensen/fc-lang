@@ -1488,7 +1488,19 @@ The consequences of wrapping are predictable and consistent:
 
 ### Shift semantics
 
-When the shift amount equals or exceeds the bit width of the left operand, FC defines the result by masking the shift amount to the bit width — the shift amount is taken modulo the number of bits. This eliminates another class of C undefined behavior at zero runtime cost, since the masking matches what x86 and ARM hardware already do for variable shifts.
+**The operands of `<<` and `>>` are typed independently.** A shift's result type is the type of its **left** operand, and the right operand may be any integer type — the two need not match, and neither widens to the other. The right operand is a bit *count*, not a value in the left operand's domain, so there is nothing for it to be conformed to. This is what keeps a shift inside its left operand's width: `0x80u8 << 1` is a `u8` and wraps to `0`, where promoting both operands to a common type would instead yield `256` and demand a narrowing cast to get back. A `bool` is not an integer and an `enum` is not numeric; both are rejected on either side, and must be cast out first.
+
+```fc
+let m = 1u8
+let a = m << 1          // u8 — the amount is an i32 literal, which is fine
+let b = m << 1i64       // u8 — any integer type serves as the amount
+let c = 1i32 << m       // i32 — the result follows the left operand
+let d = 0x80u8 << 1     // 0u8 — the result stays in u8 and wraps
+```
+
+Because the amount carries no meaning beyond its value, writing it with a suffix that matches the left operand (`m << 1u8`) conveys nothing the plain `m << 1` does not.
+
+The shift amount is **masked to the bit width of the left operand** — taken modulo the number of bits — so every amount has a defined result, including one that equals or exceeds the width and one that is negative. This eliminates another class of C undefined behavior at zero runtime cost, since the masking matches what x86 and ARM hardware already do for variable shifts.
 
 | Left operand width | Mask | Effect |
 |---------------------|------|--------|
@@ -1501,7 +1513,10 @@ When the shift amount equals or exceeds the bit width of the left operand, FC de
 let a = 1i32 << 33     // equivalent to 1i32 << 1 — result is 2
 let b = 1i32 << 32     // equivalent to 1i32 << 0 — result is 1
 let c = 1i64 << 65     // equivalent to 1i64 << 1 — result is 2
+let d = 1u8 << -1      // equivalent to 1u8 << 7 — result is 0x80
 ```
+
+A negative amount is masked by the same rule, taking its low bits: since `-1` has every bit set, it selects the largest shift the width admits. A shift amount that can go negative is worth a second look at the expression producing it — the masking defines the result but does not make it meaningful.
 
 > **Transpilation**
 > The compiler emits an explicit mask on the shift amount: `a << (b & 31)` for 32-bit types, `a << (b & 63)` for 64-bit types, and so on. On targets where the hardware already masks, the C compiler's optimizer will typically eliminate the redundant mask.
@@ -1593,7 +1608,7 @@ let r = p + q           // compile error — explicit cast required
 
 Widening applies only where there is a single **anchor** — a type written somewhere other than at the value itself, which the value is conformed to. The anchored positions are:
 
-- **binary expressions and comparisons** — both operands conform to the wider of the two
+- **binary expressions and comparisons** — both operands conform to the wider of the two. The shift operators `<<` and `>>` are the exception: their operands are typed independently and neither widens (see §Shift semantics)
 - **function call arguments** — the parameter type is the anchor; this covers a union variant constructor's payload and an extern variadic argument alike
 - **assignment** — to a variable, a struct field, a slice or array element, or a pointer's target
 - **struct-literal fields and slice-literal elements** — the declared field or element type is the anchor

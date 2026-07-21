@@ -1,0 +1,7 @@
+// A bool is not an integer, so it cannot serve as a shift amount even though
+// the shift's operands are otherwise typed independently of each other.
+let main = (args: str[]) ->
+    let m = 1u8
+    let a = m << true
+    assert(a == 2u8)
+    0

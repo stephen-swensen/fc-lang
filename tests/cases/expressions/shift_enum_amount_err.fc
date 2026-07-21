@@ -1,0 +1,13 @@
+// An enum is not numeric, so it cannot serve as a shift amount: the closed set
+// would not survive the arithmetic. Cast out first. (The left-operand case is
+// covered by enums/err_shift; this guards the amount, which the independent
+// typing of a shift's operands might otherwise seem to exempt.)
+enum dir of u8 =
+    | north
+    | south
+
+let main = (args: str[]) ->
+    let m = 1u8
+    let a = m << dir.south
+    assert(a == 2u8)
+    0
