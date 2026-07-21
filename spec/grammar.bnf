@@ -528,17 +528,26 @@ type_arg_list    = type_arg , { "," , type_arg } ;
 (* A generic argument is a type or a const (value) expression; the parameter's *)
 (* kind — inferred from its occurrences in the declaration — selects the       *)
 (* reading. Bare const expressions admit + - * / % and unary minus over        *)
-(* literals, const parameters, and named constants; shifts, comparisons, and   *)
-(* bitwise operators require parentheses, inside which the full constant-      *)
-(* expression grammar applies.                                                 *)
+(* literals, const parameters, named constants, and static type properties;    *)
+(* shifts, comparisons, and bitwise operators require parentheses, inside      *)
+(* which the full constant-expression grammar applies.                         *)
 type_arg         = type_expr | const_expr ;
 
+(* The same grammar serves both slots that take a compile-time integer: a      *)
+(* const generic argument and a fixed-array size. A const_atom must fold to an *)
+(* integer constant; which names do is a semantic question, not a syntactic    *)
+(* one — a dotted name may be a module constant (cfg.bits), an enum's variant  *)
+(* count (dir.count, gfx.mode.count), or a built-in type's static property     *)
+(* (i32.bits, u8.max), and IDENT.IDENT covers the first two spellings while    *)
+(* builtin_type heads need type_property_access.                               *)
 const_expr       = const_term , { ( "+" | "-" ) , const_term } ;
 const_term       = const_factor , { ( "*" | "/" | "%" ) , const_factor } ;
 const_factor     = [ "-" ] , const_atom ;
 const_atom       = INT_LIT
                  | TYPE_VAR                              (* a const parameter: 'n *)
-                 | IDENT , { "." , IDENT }               (* named constant: block_bits, cfg.bits *)
+                 | IDENT , { "." , IDENT }               (* named constant / enum count:
+                                                            block_bits, cfg.bits, dir.count *)
+                 | type_property_access                  (* built-in property: i32.bits, u8.max *)
                  | "(" , expression , ")" ;              (* full const grammar, incl. shifts *)
 
 type_param_list  = [ type_expr , { "," , type_expr } ] ;

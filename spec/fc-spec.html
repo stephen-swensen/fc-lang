@@ -2823,11 +2823,11 @@ let t = { &p, 99 }        // type {point*, i32}
 
 t[0].x                   // read a field through a pointer element
 t[0].x = 10              // write through it  → mutates p (the pointee)
-&t[1]                     // address of an element (when t is `let mut`)
+&t[1]                     // address of an element (a content address, so `let` is fine)
 t[0].pair[1]             // chains left-to-right like any postfix run
 ```
 
-The element here is a pointer, so `.` auto-dereferences it one level — the very same `.` a struct value would use, which is what makes the accessor uniform; if it were an array the next `[…]` would be a runtime, bounds-checked index. In each case `t[N]` participates as a plain field access. Mutating through `t[N]` follows the same rule as a struct field: the immutability of the tuple *binding* governs only whole-tuple reassignment and rebinding an element (`t[0] = …`, which needs `let mut`) — it never blocks writing *through* a pointer element, since that mutates the pointee, not the tuple. A `let` tuple holding `&p` can still drive `t[0].x = 10`.
+The element here is a pointer, so `.` auto-dereferences it one level — the very same `.` a struct value would use, which is what makes the accessor uniform; if it were an array the next `[…]` would be a runtime, bounds-checked index. In each case `t[N]` participates as a plain field access. Mutating through `t[N]` follows the same rule as a struct field: `let` vs `let mut` governs only whole-tuple **reassignment** (`t = { … }`), never the contents — assigning an element (`t[0] = 7`) and taking its address (`&t[0]`) are both valid on a `let` tuple, exactly as `p.x = 7` and `&p.x` are on a `let` struct (§One rule, three knobs). Nor does it block writing *through* a pointer element, since that mutates the pointee: a `let` tuple holding `&p` can drive `t[0].x = 10`.
 
 ### Destructuring
 
@@ -2885,7 +2885,7 @@ Because a tuple is a struct, the following all work without anything tuple-speci
 { 1, 2 } == { 1, 2 }              // structural equality (recurses into nested tuples)
 default({i32, i32})           // zero-initialized: {0, 0}
 let a = { 1, 2 }; let mut b = a   // b is an independent copy
-b[0] = 99                         // element mutation on a let mut binding
+b[0] = 99                         // element mutation (contents — a `let` binding takes it too)
 ```
 
 Tuples also work where structs do: as struct fields and union variant payloads, as the element type of a slice literal, in `option`, and as module- or file-level constants — all subject to the same rules as named structs.
@@ -3269,7 +3269,7 @@ This is why `any*` is a valid and faithful representation of an opaque C handle:
 
 ### Address-of
 
-Only `let mut` bindings have addresses. You cannot take the address of a `let` binding: writing through the pointer (`*pp = v`) would reassign the binding through an alias — the very thing `let` forbids (§One rule, three knobs). Note this is a rule about the *binding*, not the value: fields of a `let` struct are assignable (`p.x = 10`) even though `&p` is not available.
+Only `let mut` bindings have addresses. You cannot take the address of a `let` binding: writing through the pointer (`*pp = v`) would reassign the binding through an alias — the very thing `let` forbids (§One rule, three knobs). Note this is a rule about the *binding*, not the value: the contents of a `let` value are both assignable and addressable — `p.x = 10` and `&p.x` are fine on a `let` struct (as are `b[0] = 10` and `&b[0]` on a `let` slice, and `t[0] = 10` and `&t[0]` on a `let` tuple) even though `&p` itself is not available.
 
 ```fc
 let mut x = 42
@@ -4004,9 +4004,9 @@ let r = default(ring<u8, 64>)
 
 Using one variable in both kinds of position within a declaration is an error. When a variable is passed along to another generic's parameter (`inner: wide<'k>`), it inherits that parameter's kind.
 
-**Const arguments.** Where a const parameter expects an argument, the following forms are accepted directly: an integer literal (`wide<256>`), a const parameter (`wide<'n>`), a named constant — a module-level immutable `let` whose initializer is a compile-time constant, bare or dotted (`wide<cfg.block_bits>`) — and bare arithmetic over these with `+ - * / %` and unary minus (`wide<'n * 2>`, `wide<cfg.block_bits + 32>`). Shift, comparison, and bitwise operators require parentheses — `wide<('n >> 2)>` — inside which the full constant-expression grammar applies. Const arguments are evaluated in the 64-bit signed integer domain with two's-complement wraparound and masked shifts; division or modulo by zero in a const expression is a compile-time error. That domain also fixes the type of an unsuffixed integer literal written inside a const expression — it is `i64` there, not the `i32` default of ordinary expressions, so `wide<4000000000 / 10>` is accepted just as the lone literal `wide<4000000000>` is. A written suffix still wins. The same holds in a fixed-array size slot, which uses the same constant-expression grammar. Only integer const parameters exist; there are no type-level floats, bools, or strings.
+**Const arguments.** Where a const parameter expects an argument, any expression that folds to a compile-time integer is accepted. Directly, that is: an integer literal (`wide<256>`), a const parameter (`wide<'n>`), a named constant — a module-level immutable `let` whose initializer is a compile-time constant, bare or dotted (`wide<cfg.block_bits>`) — a static type property, meaning an enum's variant count (`wide<dir.count>`, `wide<gfx.mode.count>`) or a fixed-width integer type's `bits`/`min`/`max` (`wide<i32.bits>`, `wide<u8.max>`) — and bare arithmetic over these with `+ - * / %` and unary minus (`wide<'n * 2>`, `wide<cfg.block_bits + 32>`, `wide<dir.count * 4>`). Shift, comparison, and bitwise operators require parentheses — `wide<('n >> 2)>` — inside which the full constant-expression grammar applies. Const arguments are evaluated in the 64-bit signed integer domain with two's-complement wraparound and masked shifts; division or modulo by zero in a const expression is a compile-time error. That domain also fixes the type of an unsuffixed integer literal written inside a const expression — it is `i64` there, not the `i32` default of ordinary expressions, so `wide<4000000000 / 10>` is accepted just as the lone literal `wide<4000000000>` is. A written suffix still wins. The same holds in a fixed-array size slot, which uses the same constant-expression grammar. Only integer const parameters exist; there are no type-level floats, bools, or strings.
 
-The same expression forms serve as fixed-array sizes — `u32['n]`, `u32['n / 32]`, `u32[('n + 31) / 32]` inside a generic definition, and equally in non-generic ones, where a constant expression folds up front: `u8[4 * 2]`, `u8[cfg.word]` (a named module constant), `u8[(1 << 4)]`. A size that folds to zero or negative is a compile error.
+The same expression forms serve as fixed-array sizes — `u32['n]`, `u32['n / 32]`, `u32[('n + 31) / 32]` inside a generic definition, and equally in non-generic ones, where a constant expression folds up front: `u8[4 * 2]`, `u8[cfg.word]` (a named module constant), `u8[dir.count]`, `u8[i32.bits]`, `u8[(1 << 4)]`. The two slots accept exactly the same expressions. A size that folds to zero or negative is a compile error.
 
 **Const parameters on functions.** A function acquires const parameters the same two ways it acquires type variables — through its parameter types, inferred at the call site by unification (`(a: wide<'n>, b: wide<'n>)` pins `'n` from the arguments), or through the explicit `<...>` prefix, supplied at the call site (`sum_to<10>()`):
 

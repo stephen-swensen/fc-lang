@@ -1,0 +1,62 @@
+// Type properties as const generic arguments: an enum's `count` (bare and
+// reached through a module) and a built-in type's `bits`/`min`/`max`. These
+// fold in a fixed-array size slot, and the const-argument slot shares that
+// constant-expression grammar, so every spelling is accepted in both.
+enum dir of u8 =
+    | north
+    | south
+    | east
+    | west
+
+module gfx =
+    enum mode of u8 =
+        | text
+        | vga
+        | ega
+
+module deep =
+    module inner =
+        enum chan of u8 =
+            | red
+            | green
+
+struct buf =
+    data: u8['n]
+
+let width = <'n>() -> 'n
+
+let main = (args: str[]) ->
+    // bare enum count, module-qualified count, nested module path
+    let a = default(buf<dir.count>)
+    let b = default(buf<gfx.mode.count>)
+    let c = default(buf<deep.inner.chan.count>)
+    assert(a.data.len == 4)
+    assert(b.data.len == 3)
+    assert(c.data.len == 2)
+
+    // built-in type properties
+    let d = default(buf<i32.bits>)
+    let e = default(buf<u8.max>)
+    assert(d.data.len == 32)
+    assert(e.data.len == 255)
+
+    // arithmetic over them, and mixed with a literal
+    let f = default(buf<dir.count * gfx.mode.count>)
+    let g = default(buf<i32.bits / 4>)
+    let h = default(buf<(u16.max >> 8)>)
+    assert(f.data.len == 12)
+    assert(g.data.len == 8)
+    assert(h.data.len == 255)
+
+    // the same expressions in a function's explicit const-argument prefix,
+    // and inferred back out of a struct argument
+    assert(width<dir.count>() == 4)
+    assert(width<i32.bits>() == 32)
+    assert(width<gfx.mode.count + 1>() == 4)
+
+    // and in the sibling size slots, which must agree
+    let s = u8[dir.count] {}
+    let t = u8[i32.bits] {}
+    assert(s.len == 4)
+    assert(t.len == 32)
+    0

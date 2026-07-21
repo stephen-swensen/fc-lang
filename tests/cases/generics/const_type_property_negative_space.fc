@@ -1,0 +1,26 @@
+// The negative space of the const-argument property reading: a dotted name in a
+// type-argument slot still reads as a module-qualified *type* when that is what
+// it names, and `<` after a non-generic name still reads as comparison even
+// when a type property follows it.
+enum dir of u8 =
+    | north
+    | south
+
+module m =
+    struct point =
+        x: i32
+        y: i32
+
+struct box =
+    v: 'a
+
+let main = (args: str[]) ->
+    let b = default(box<m.point>)
+    assert(b.v.x == 0)
+
+    let n = 5
+    let lt = n < i32.bits
+    let chain = (n < i32.bits) == (dir.count > 1)
+    assert(lt)
+    assert(chain)
+    0

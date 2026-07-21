@@ -1823,6 +1823,60 @@ static Type *check_const_type_expr(CheckCtx *ctx, Expr *e) {
     return type_const_expr(ctx->arena, norm);
 }
 
+/* Rebuild a flattened dotted name (`gfx.mode.count`) as the expression tree the
+ * parser would have produced for it — EXPR_IDENT with an EXPR_FIELD per
+ * component. The type-argument slot keeps such a name as a TYPE_STUB (it may
+ * still be a module-qualified type), so the value reading has to be recovered
+ * here when pass2 settles on it. */
+static Expr *dotted_name_expr(CheckCtx *ctx, const char *name, SrcLoc loc) {
+    Expr *e = NULL;
+    for (const char *seg = name;;) {
+        const char *dot = strchr(seg, '.');
+        int len = dot ? (int)(dot - seg) : (int)strlen(seg);
+        const char *part = intern(ctx->intern, seg, len);
+        Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
+        n->loc = loc;
+        if (!e) {
+            n->kind = EXPR_IDENT;
+            n->ident.name = part;
+        } else {
+            n->kind = EXPR_FIELD;
+            n->field.object = e;
+            n->field.name = part;
+            n->field.name_loc = loc;
+        }
+        e = n;
+        if (!dot) return e;
+        seg = dot + 1;
+    }
+}
+
+/* A dotted name in a const-argument slot may denote a *type property* rather
+ * than a named constant: an enum's variant count (`dir.count`,
+ * `gfx.mode.count`) or a built-in type's `bits`/`min`/`max` (`i32.bits`). Those
+ * are compile-time integers and fold through the very same const machinery a
+ * fixed-array size slot uses — `u8[dir.count]` has always worked — so the
+ * const-argument slot takes them too; the two slots share one constant-
+ * expression grammar. The parser had to leave a dotted name reading as a type
+ * (`m.point` is one), so the reading is settled here: commit only once the
+ * prefix is known to name a type, then hand the rebuilt expression to the
+ * ordinary const path, which owns every property and folding rule.
+ * Returns NULL when the prefix names no type (caller falls back to the type
+ * reading). */
+static Type *try_type_property_const_arg(CheckCtx *ctx, const char *name, SrcLoc loc) {
+    const char *last_dot = strrchr(name, '.');
+    if (!last_dot || last_dot == name) return NULL;
+    const char *prefix = intern(ctx->intern, name, (int)(last_dot - name));
+    bool prefix_is_type = type_from_name(prefix, (int)strlen(prefix)) != NULL;
+    if (!prefix_is_type) {
+        Symbol *s = strchr(prefix, '.') ? resolve_dotted_name(ctx, prefix)
+                                        : resolve_symbol(ctx, prefix);
+        prefix_is_type = s && s->kind == DECL_ENUM;
+    }
+    if (!prefix_is_type) return NULL;
+    return check_const_type_expr(ctx, dotted_name_expr(ctx, name, loc));
+}
+
 /* Try to interpret a bare name used where a const argument is expected
  * (wide<block_bits>) as a foldable named constant. Returns NULL silently when
  * the name doesn't resolve to a value at all (caller falls back to type
@@ -1845,7 +1899,8 @@ static Type *try_named_const_arg(CheckCtx *ctx, const char *name, SrcLoc loc) {
     }
     Symbol *s = strchr(name, '.') ? resolve_dotted_name(ctx, name)
                                   : resolve_symbol(ctx, name);
-    if (!s || s->kind != DECL_LET || !s->decl) return NULL;
+    if (!s || s->kind != DECL_LET || !s->decl)
+        return try_type_property_const_arg(ctx, name, loc);
     Expr *ref = arena_alloc(ctx->arena, sizeof(Expr));
     ref->kind = EXPR_IDENT;
     ref->loc = loc;

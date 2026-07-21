@@ -1,0 +1,9 @@
+// isize/usize widths are target-defined, so `isize.bits` does not fold — in a
+// const-argument slot exactly as in a size slot.
+struct buf =
+    data: u8['n]
+
+let main = (args: str[]) ->
+    let a = default(buf<isize.bits>)
+    assert(a.data.len == 1)
+    0

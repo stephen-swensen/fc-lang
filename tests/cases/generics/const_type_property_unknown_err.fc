@@ -1,0 +1,9 @@
+// A misspelled property on a built-in type is reported as the property error it
+// is, not as an unknown type name.
+struct buf =
+    data: u8['n]
+
+let main = (args: str[]) ->
+    let a = default(buf<i32.nope>)
+    assert(a.data.len == 1)
+    0

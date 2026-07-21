@@ -1094,9 +1094,21 @@ static int scan_dotted_ident(Parser *p, int off) {
 /* Would the tokens ahead read as a bare const expression rather than a type?
  * Decides for the IDENT/TYPE_VAR-headed case: a following + - / % makes it
  * arithmetic; a following * is arithmetic iff the token after it can begin a
- * const atom (no type continues past `T*` with an expression atom). */
+ * const atom (no type continues past `T*` with an expression atom).
+ *
+ * A dotted name is the one shape the parser cannot settle on its own — `m.point`
+ * is a module-qualified type and `dir.count` is a value — so it is left to read
+ * as a type here and pass2 takes the const reading when the name turns out to
+ * denote one (try_named_const_arg). The exception is a *built-in* type name with
+ * a member (`i32.bits`): no type continues past `i32`, so the value reading is
+ * forced and the parser must take it — parse_type would stop at the `.` and
+ * abandon the whole argument list. */
 static bool ident_arg_is_const_expr(Parser *p) {
-    int off = current(p)->kind == TOK_TYPE_VAR ? 1 : scan_dotted_ident(p, 0);
+    Token *head = current(p);
+    if (head->kind == TOK_IDENT && is_type_name(head->start, head->length) &&
+        peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT)
+        return true;
+    int off = head->kind == TOK_TYPE_VAR ? 1 : scan_dotted_ident(p, 0);
     TokenKind k = peek_at(p, off)->kind;
     if (k == TOK_PLUS || k == TOK_SLASH || k == TOK_PERCENT) return true;
     if (k == TOK_MINUS)

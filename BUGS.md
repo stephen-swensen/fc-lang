@@ -1221,14 +1221,95 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    rebinding "needs `let mut`", but §One-rule-three-knobs says contents are
    always assignable — and the compiler follows the latter. Fix the spec
    prose (or change the rule).
+   **✅ FIXED — spec prose corrected** (2026-07-21, decided). The rule stands as
+   §One rule, three knobs and §Address-of already state it; §Tuples was simply
+   wrong in two places, both the same mistake of reading an element access as
+   binding-level. `t[0] = 7` is a content mutation and needs no `let mut`
+   (verified), so that parenthetical is gone; the passage now says `let` vs
+   `let mut` governs only whole-tuple reassignment (`t = { … }`) and cites the
+   struct-field analogue. The second spot — `&t[1] // (when t is let mut)` —
+   was wrong for the same reason: `&t[0]` and `&p.x` and `&b[0]` are all
+   *content* addresses and all compile on a `let` binding; only `&t` itself
+   needs `let mut`. §Address-of gained that general statement (it previously
+   named only field *assignment* as the binding/value distinction), and the
+   §Inherited-behavior comment `b[0] = 99 // element mutation on a let mut
+   binding` no longer implies `mut` is what admits it. Test:
+   `tuples/let_content_mutation` (element assign, element address + write
+   through it, nested tuple and struct elements, a pointer element, and the
+   one form that does need `let mut`).
 6. **Closure captured-struct field mutation** mutates a per-call temporary
    (`f()` sees its own fresh copy each call, writes never persist) — identical
    for stack and heap closures. Consistent, but the spec's "capture by copy
    (at creation)" reads as one persistent copy. Needs a spec sentence.
+   **⏳ Investigated 2026-07-21 — decision pending.** The emitted C makes the
+   two copies explicit: closure *creation* stores one copy in the context
+   (`_fc_back_0._l_c_1 = _l_c_1`, or the malloc'd twin under `alloc`), and each
+   *call* opens with `fc__counter _l_c_1 = _c->_l_c_1;` — a fresh local copy of
+   that copy. So a write to a captured value's own storage is discarded at
+   return, always, and can never be observed: not by the enclosing binding, not
+   by a later call, not through another closure. What *does* persist is any
+   write that crosses a reference, since a copy is shallow: through a captured
+   pointer (`pc.n = pc.n + 1`) and into a captured slice's backing
+   (`buf[0] = buf[0] + 1`) both accumulate across calls — the ordinary FC rule,
+   nothing closure-specific. Tuple elements behave as struct fields do;
+   reassigning the captured binding itself is already "cannot assign to
+   immutable binding". Three ways to settle it:
+   (a) **document the no-op** — one spec sentence in §Closures & Capture;
+   (b) **reject the write** — assignment whose lvalue path bottoms out in the
+       captured copy (no pointer deref, no slice index along the way) becomes a
+       compile error, "capture a pointer instead"; a local copy
+       (`let mut p = base`) stays the way to get a mutable working value;
+   (c) make the capture copy persistent per closure — rejected on sight: that
+       is stateful closures, which §Capture rules ("captures are immutable
+       copies") and the ban on capturing `let mut` deliberately exclude.
+   Recommendation: **(b)**, with (a)'s sentence alongside it. FC rejects
+   capturing `let mut` precisely so a captured copy cannot silently go stale
+   (§One rule, three knobs), and rejects `x = x` because it is always a no-op —
+   a field write into a captured copy is both of those at once, and it is the
+   one remaining spelling that looks like it mutates and never does. The check
+   is local: the lvalue-root walk already exists next to the immutable-binding
+   and self-assignment checks in `EXPR_ASSIGN` (`assign_dest_prov`'s shape),
+   and a capture is identifiable from the enclosing `LambdaCtx`.
 7. **Const-generic argument slots reject `dir.count` / `i32.bits`**
    (`buf<dir.count>` errors) while the same expressions fold in *size* slots
    (`u8[dir.count]` works). The spec's const-arg grammar technically excludes
    them; the asymmetry looks unintended.
+   **✅ FIXED — a const argument only has to fold** (2026-07-21, decided). The
+   two slots share one constant-expression grammar, so what folds in a size
+   slot is a const argument. The hole was never in the folder — arithmetic
+   forms already worked (`buf<dir.count * 2>`, `buf<(i32.bits)>`), since
+   `normalize_const_expr` folds named consts, enum counts and type properties
+   alike. Only the *bare* dotted spelling missed, in two different ways:
+   - `buf<i32.bits>` never parsed. `parse_type` consumed `i32` as a built-in
+     and stopped at the `.`, so the whole argument list failed its claim and
+     backtracked ("expected ')', got '<'"). `ident_arg_is_const_expr` now takes
+     the value reading when a built-in type name is followed by a member — the
+     one dotted case the parser *can* settle, since no type continues past
+     `i32`. The ambiguous case stays deferred: `m.point` is a type and
+     `dir.count` is a value, and only pass2 knows which.
+   - `buf<dir.count>` parsed as a type stub and died as "unknown type name
+     'dir.count'". `try_named_const_arg` only accepted a stub naming a
+     `DECL_LET`; it now falls back to `try_type_property_const_arg`, which
+     commits to the value reading exactly when the name's prefix denotes a type
+     (a built-in, or an enum reached bare or through modules), rebuilds the
+     dotted expression, and hands it to `check_const_type_expr` — the same
+     const path the size slot uses, so no property or folding rule is
+     duplicated. Prefix isn't a type ⇒ NULL ⇒ the type reading and its kind
+     gate report as before.
+
+   `grammar.bnf`'s `const_atom` gains `type_property_access` (its
+   `IDENT , { "." , IDENT }` already covered `dir.count`, but not a
+   `builtin_type` head) with a note that *which* names fold is semantic, not
+   syntactic. Spec §Const arguments now leads with the general rule ("any
+   expression that folds to a compile-time integer") and names the property
+   forms in its list, and the size-slot paragraph says outright that the two
+   slots accept the same expressions. Tests: `generics/const_type_property_arg`
+   (enum count bare / module-qualified / two levels deep, `i32.bits`, `u8.max`,
+   arithmetic over them, explicit `<…>` prefix, and the same expressions in
+   size slots), `_float_err`, `_unknown_err`, `_variant_err`,
+   `_target_width_err` (`isize.bits` is target-defined and folds in neither
+   slot), and `_negative_space` (a module-qualified type argument still reads
+   as a type; `n < i32.bits` still reads as a comparison).
 8. **User types named after builtins** (`struct i32`, `enum str`,
    `module i32`) are accepted but unreachable (primitive/property lookup wins,
    diagnostics like "expected i32, got i32"). Spec disclaims support;
