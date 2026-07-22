@@ -2437,6 +2437,36 @@ The compiler performs **escape analysis** on pointer and slice expressions, trac
 
 Lambdas may capture immutable `let` bindings from the enclosing *local* scope by copy. `let mut` bindings cannot be captured.
 
+**What a capture copies.** The copy is taken **when the closure is created**, and each call works on a fresh copy of it. A captured name therefore behaves as if the body began with `let <name> = <the value copied at creation>` — an ordinary immutable binding, one per call, under the ordinary rules (§One rule, three knobs): its *contents* are assignable, the binding itself is not, and a mutation is visible for the rest of that call and through whatever the body returns, but it never reaches the enclosing binding and never carries into the next call. This is precisely how a by-value parameter behaves — a captured `point` and a `(p: point)` parameter differ in nothing but where the value came from:
+
+```fc
+let shift = (p: point) ->
+    p.x = p.x + 10       // mutates this call's copy
+    p                      // and returns it
+
+let base = point { x = 1, y = 2 }
+let shifted = () ->
+    base.x = base.x + 10   // the captured copy — same story
+    base
+
+let a = shifted()         // a.x == 11
+let b = shifted()         // b.x == 11 — a fresh copy each call, not 21
+// base.x is still 1
+```
+
+Taking the address of a captured value's field is the same as taking a parameter's: `&base.x` refers to that call's copy and does not outlive the call (returning it is rejected by escape analysis — §Stack Allocation).
+
+The copy is **one level deep**, so whatever the captured value *refers to* is shared rather than snapshotted. Writing through a captured pointer, or into the backing of a captured slice, mutates the storage everyone else sees — those writes persist across calls and are visible outside the closure. The distinction cuts both ways: a change made to the captured *value* after the closure was created is not seen by it (the snapshot was already taken), while a change made through a reference it holds is.
+
+```fc
+let buf = i32[2] { 1, 2 }
+let bump = () ->
+    buf[0] = buf[0] + 1    // the fat pointer is copied; the backing array is not
+bump()
+bump()
+// buf[0] is now 3
+```
+
 **Top-level bindings are not captures.** When a lambda references a top-level `let` or `let mut` binding, it accesses the global directly — no copy is made and no capture occurs. This means the function sees mutations to the global, and the function is *not* a closure for C interop purposes (it can be passed to `extern` function pointer parameters). Only references that cross a local lambda boundary produce captures.
 
 **A self-recursive call is not a capture.** When a `let`-bound lambda calls itself by name, that name is treated as a local of the function's own body, not a captured value, so self-recursion adds nothing to the closure's context. A self-recursive lambda that captures *other* local bindings is still a capturing closure subject to the usual lifetime rules (it cannot be returned or stored beyond its creator's frame unless promoted with `alloc` — see §Heap closures; recursive calls thread the promoted context). If a *nested* lambda refers to an enclosing self-recursive function, that reference is an ordinary capture of the enclosing function's value.
@@ -2558,7 +2588,7 @@ No other operand qualifies: a fat pointer carries no context size, so an arbitra
 
 Semantics of the promoted closure:
 
-- **Capture rules are unchanged.** Captures are still immutable copies, taken when the closure is created; `let mut` still cannot be captured. `alloc` changes *where the copied context lives*, not what capture means. For shared mutable state, the existing idiom composes: heap-allocate the state, capture the pointer — and now the closure holding that pointer can itself escape.
+- **Capture rules are unchanged.** Captures are still copies of immutable bindings, taken when the closure is created; `let mut` still cannot be captured. `alloc` changes *where the copied context lives*, not what capture means. For shared mutable state, the existing idiom composes: heap-allocate the state, capture the pointer — and now the closure holding that pointer can itself escape.
 - **Copies share the context.** The value is still the same two-word fat pointer; copying it copies `{ fn_ptr, ctx }`, so all copies alias one heap block. Free it exactly once, through any copy. Function equality (`==`) compares `fn_ptr` and `ctx`, so copies compare equal and separately-promoted closures do not.
 - **`free(f)` frees only the context.** Heap data the captures point at is a separate allocation with its own owner. Freeing a function value whose context is null (a non-capturing function) is a runtime no-op; freeing a *stack* closure is a compile error.
 - **The extern boundary is unchanged.** A heap closure still cannot cross to a C function pointer parameter — that limit is the C ABI's missing context channel, not lifetime.

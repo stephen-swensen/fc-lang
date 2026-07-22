@@ -1241,35 +1241,63 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    (`f()` sees its own fresh copy each call, writes never persist) — identical
    for stack and heap closures. Consistent, but the spec's "capture by copy
    (at creation)" reads as one persistent copy. Needs a spec sentence.
-   **⏳ Investigated 2026-07-21 — decision pending.** The emitted C makes the
+   **✅ FIXED — spec sentence, semantics kept** (2026-07-21, decided). The
+   framing in the item (and in the "reject the write" proposal below) was wrong
+   about what the write *is*. A capture is a by-value copy, and FC already has
+   by-value copies with exactly these semantics: **a by-value parameter**.
+   Verified side by side — `p.x = v` on a `(p: point)` parameter, `&p.x` into
+   it, a fixed-array field write, and mutate-and-return
+   (`(p: point) -> (p.x = p.x + 1; p)`) all compile, all discard at return, and
+   all leave the caller's value intact, matching the captured `point` case in
+   every shape. So the write is not a no-op at all: it is observable for the
+   rest of the call and through whatever the body returns — only the *enclosing
+   binding* is unaffected, which is what by-value means. Rejecting it would
+   have banned the capture spelling of a pattern FC allows for parameters, and
+   would have needed a special rule for captures alone. `let mut` governs the
+   root binding; `const` is the separate mechanism for read-only *through a
+   reference*; neither has anything to say here.
+   Spec §Closures & Capture gains **What a capture copies**: the copy is taken
+   at creation, each call works on a fresh copy of it, and a captured name
+   behaves as if the body began with `let <name> = <the value copied at
+   creation>` — so every rule that applies is one that already existed. It also
+   states the one genuinely surprising consequence, which falls out of the same
+   sentence: the copy is one level deep, so a post-creation write to the
+   captured value's own storage is *not* seen by the closure while a write
+   through a reference it holds *is* (both verified). §Heap closures' "captures
+   are still immutable copies" now reads "copies of immutable bindings" — the
+   binding is immutable, the copy's contents are not. Every code block added
+   was compiled and run as one program. Test:
+   `closures/capture_copy_semantics` (struct, tuple and fixed-array captures;
+   the parameter twin; `&base.x`; captured slice backing and captured pointer
+   pointee; and the creation-time snapshot vs. shared-reference split).
+
+   **Investigation notes 2026-07-21 (what the emitted C does).** It makes the
    two copies explicit: closure *creation* stores one copy in the context
    (`_fc_back_0._l_c_1 = _l_c_1`, or the malloc'd twin under `alloc`), and each
    *call* opens with `fc__counter _l_c_1 = _c->_l_c_1;` — a fresh local copy of
-   that copy. So a write to a captured value's own storage is discarded at
-   return, always, and can never be observed: not by the enclosing binding, not
-   by a later call, not through another closure. What *does* persist is any
-   write that crosses a reference, since a copy is shallow: through a captured
-   pointer (`pc.n = pc.n + 1`) and into a captured slice's backing
-   (`buf[0] = buf[0] + 1`) both accumulate across calls — the ordinary FC rule,
-   nothing closure-specific. Tuple elements behave as struct fields do;
-   reassigning the captured binding itself is already "cannot assign to
-   immutable binding". Three ways to settle it:
-   (a) **document the no-op** — one spec sentence in §Closures & Capture;
-   (b) **reject the write** — assignment whose lvalue path bottoms out in the
-       captured copy (no pointer deref, no slice index along the way) becomes a
-       compile error, "capture a pointer instead"; a local copy
-       (`let mut p = base`) stays the way to get a mutable working value;
-   (c) make the capture copy persistent per closure — rejected on sight: that
-       is stateful closures, which §Capture rules ("captures are immutable
-       copies") and the ban on capturing `let mut` deliberately exclude.
-   Recommendation: **(b)**, with (a)'s sentence alongside it. FC rejects
-   capturing `let mut` precisely so a captured copy cannot silently go stale
-   (§One rule, three knobs), and rejects `x = x` because it is always a no-op —
-   a field write into a captured copy is both of those at once, and it is the
-   one remaining spelling that looks like it mutates and never does. The check
-   is local: the lvalue-root walk already exists next to the immutable-binding
-   and self-assignment checks in `EXPR_ASSIGN` (`assign_dest_prov`'s shape),
-   and a capture is identifiable from the enclosing `LambdaCtx`.
+   that copy. That is the per-call value the body reads and writes; the write
+   reaches nothing outside the call. What *does* persist is any write that
+   crosses a reference, since the copy is shallow: through a captured pointer
+   (`pc.n = pc.n + 1`) and into a captured slice's backing
+   (`buf[0] = buf[0] + 1`) both accumulate across calls. Tuple elements behave
+   as struct fields do; reassigning the captured binding itself is already
+   "cannot assign to immutable binding".
+
+   **Rejecting the write was considered and declined.** A prototype (an
+   `is_capture` bit on `EXPR_IDENT` plus a capture-rooted-lvalue check beside
+   the immutable-binding and self-assignment checks in `EXPR_ASSIGN`) was
+   written and measured: zero sites in 2272 tests, `spec/examples.fc`, all five
+   demos, wolf-fc and euler-fc — nobody writes this. It was also *incomplete*:
+   `&c.f` and a fixed-array field (`h.arr[0] = v`, which decays to a slice and
+   slips a syntactic check) reach the same copy, so a complete rule would have
+   had to const-qualify or provenance-tag those too. Both facts were moot once
+   the parameter parallel surfaced — the sites are rare because mutating a
+   by-value copy is rare, not because the spelling is a trap. The precedent
+   survey that motivated the proposal (C++ `operator()` is const unless
+   `mutable`; ObjC `__block`; Swift immutable captures; F# FS0407) is about
+   languages whose captures are *closure state*; FC's per-call re-copy makes a
+   capture a per-call value, which is the parameter case, and every one of
+   those languages allows mutating a by-value parameter.
 7. **Const-generic argument slots reject `dir.count` / `i32.bits`**
    (`buf<dir.count>` errors) while the same expressions fold in *size* slots
    (`u8[dir.count]` works). The spec's const-arg grammar technically excludes

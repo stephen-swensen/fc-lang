@@ -1,0 +1,87 @@
+// A capture is a by-value copy taken at closure creation, and each call works
+// on a fresh copy of it — the same semantics a by-value parameter has. Contents
+// are assignable (the mutation is visible for the rest of the call and through
+// the return value), nothing carries to the next call or to the outer binding,
+// and the copy is one level deep so anything it *refers to* stays shared.
+struct point =
+    x: i32
+    y: i32
+
+struct holder =
+    arr: i32[4]
+
+// the parameter twin of the capture below — identical behavior
+let shift = (p: point) ->
+    p.x = p.x + 10
+    p
+
+let main = (args: str[]) ->
+    let base = point { x = 1, y = 2 }
+    let shifted = () ->
+        base.x = base.x + 10
+        base
+
+    let a = shifted()
+    let b = shifted()
+    assert(a.x == 11)
+    assert(b.x == 11)          // fresh copy per call, not 21
+    assert(base.x == 1)        // the enclosing binding is untouched
+    assert(shift(base).x == 11)
+    assert(base.x == 1)
+
+    // a tuple capture behaves the same
+    let t = { 1, 2 }
+    let tup = () ->
+        t[0] = t[0] + 5
+        t[0]
+    assert(tup() == 6)
+    assert(tup() == 6)
+    assert(t[0] == 1)
+
+    // so does a fixed-array field, which lives inline in the copy
+    let h = default(holder)
+    let arr = () ->
+        h.arr[0] = h.arr[0] + 1
+        h.arr[0]
+    assert(arr() == 1)
+    assert(arr() == 1)
+    assert(h.arr[0] == 0)
+
+    // the address of a captured field points into that call's copy
+    let addr = () ->
+        let q = &base.x
+        *q = 99
+        base.x
+    assert(addr() == 99)
+    assert(base.x == 1)
+
+    // one level deep: a captured slice copies the fat pointer, not the backing
+    let buf = i32[2] { 1, 2 }
+    let bump = () ->
+        buf[0] = buf[0] + 1
+    bump()
+    bump()
+    assert(buf[0] == 3)
+
+    // and a captured pointer writes through to the pointee
+    let mut c = point { x = 0, y = 0 }
+    let pc = &c
+    let via_ptr = () ->
+        pc.x = pc.x + 1
+    via_ptr()
+    via_ptr()
+    assert(c.x == 2)
+
+    // the snapshot is taken at creation: a later write to the captured value's
+    // own storage is not seen, while one through a shared reference is
+    let snap = point { x = 0, y = 0 }
+    let read_snap = () -> snap.x
+    snap.x = 5
+    assert(snap.x == 5)
+    assert(read_snap() == 0)
+
+    let shared = i32[1] { 7 }
+    let read_shared = () -> shared[0]
+    shared[0] = 42
+    assert(read_shared() == 42)
+    0
