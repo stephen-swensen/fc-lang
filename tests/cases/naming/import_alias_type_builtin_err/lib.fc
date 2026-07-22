@@ -1,0 +1,6 @@
+namespace geo
+
+module geometry =
+    struct point =
+        x: i32
+        y: i32

@@ -686,9 +686,13 @@ The following are **built-in globals** — predefined identifiers typed `any*` t
 
 `stdin`, `stdout`, `stderr`
 
-The following are **built-in type names**. Unlike reserved identifiers, they are not enforced keywords — the compiler permits shadowing them as binding or user-defined type names — but doing so is strongly discouraged and unsupported, since it obscures the built-in type and (for some names, such as `str` and `char`) interacts badly with code generation:
+The following are **built-in type names**:
 
 `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `isize`, `usize`, `f32`, `f64`, `bool`, `char`, `any`, `str`, `cstr`
+
+Unlike reserved identifiers, these are not enforced keywords, and the rule depends on which namespace the name enters. A **value** — a `let` binding, a function, a parameter, a loop variable, or an import alias that names a value — may carry one of these names: values occupy a namespace distinct from types, so the name never shadows the primitive (a `: i32` annotation still means the built-in `i32`). This is discouraged, since it obscures the built-in type for a reader, but permitted — the standard library relies on it, giving every container an `any` combinator.
+
+A **type or module** may **not** be named after a built-in type. A `struct`, `union`, `enum`, `module`, `namespace`, error group, or an import alias that renames a type or module is a compile error when its name is one of the built-in type names above. Every type position and every module-member access resolves the built-in first, so such a declaration would be permanently unreachable — each reference to it would bind to the primitive instead (`struct i32`'s own values would fail to type-check against the parameter `i32`; `module i32`'s members would be sought as properties of the primitive). Member names are unaffected: a struct field, union variant, or enum variant named `i32` lives in its type's own member namespace and never collides with the primitive.
 
 ---
 

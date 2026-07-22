@@ -1,0 +1,5 @@
+// §7.8: a whole-module import alias may not be a built-in type name either.
+import geometry as str from geo::
+
+let main = (args: str[]) ->
+    str.origin()

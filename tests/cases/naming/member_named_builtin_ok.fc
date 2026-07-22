@@ -1,0 +1,26 @@
+// §7.8 negative space: struct fields, union variants, and enum variants live in
+// per-type member namespaces, so naming one after a built-in type is legal —
+// only the type/module name itself collides with the primitive lookup.
+struct box =
+    i32: i32              // field named after a built-in
+    str: bool
+
+union tagged =
+    | u8(i32)             // variant named after a built-in
+    | any
+
+enum color of u8 =
+    | f32                 // enum variant named after a built-in (value 0)
+    | f64
+
+let main = (args: str[]) ->
+    let b = box { i32 = 7, str = true }
+    let t = tagged.u8(3)
+    let c = color.f32
+    let sum = match t with
+    | u8(v) -> v + b.i32
+    | any -> 0
+    assert(sum == 10, "member names resolve")
+    assert(c == color.f32, "enum variant name resolves")
+    assert(b.str, "field named str")
+    0

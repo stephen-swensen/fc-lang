@@ -1,0 +1,8 @@
+// §7.8: the alias ban reaches a whole-module import inside a module body too
+// (a distinct resolution path from the file-level import).
+module app =
+    import geometry as str from geo::
+    let run = () -> str.origin()
+
+let main = (args: str[]) ->
+    app.run()

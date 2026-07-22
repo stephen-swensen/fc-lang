@@ -1,0 +1,7 @@
+// §7.8: an `as` alias may not rename a type onto a built-in type name — the
+// alias would be as unreachable as a declaration with that name.
+import point as i32 from geo::geometry
+
+let main = (args: str[]) ->
+    let p = i32 { x = 1, y = 2 }
+    p.x

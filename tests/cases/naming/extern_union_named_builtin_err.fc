@@ -1,0 +1,9 @@
+// §7.8: an extern C union is represented as a struct declaration with the C
+// -union flag; its FC-visible name may not be a built-in type name either.
+module m from "stddef.h" =
+    extern union any =
+        x: i32
+        y: f32
+
+let main = (args: str[]) ->
+    0

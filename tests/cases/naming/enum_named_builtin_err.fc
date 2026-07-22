@@ -1,0 +1,8 @@
+// §7.8: an enum named after a built-in type name is rejected — its variant
+// access (`str.red`) would hit primitive type-property lookup instead.
+enum str of u8 =
+    | red
+    | green
+
+let main = (args: str[]) ->
+    0

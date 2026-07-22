@@ -224,6 +224,66 @@ static void check_recursion_in_decls(Decl **decls, int count) {
     }
 }
 
+/* True when `name` is one of the built-in type names (i32, str, any, char, …).
+ * The single source of truth is type_from_name, which is exactly the lookup
+ * every type position consults — so this predicate matches wins-before-any-user
+ * -declaration behavior by construction. */
+static bool is_builtin_type_name(const char *name) {
+    return name && type_from_name(name, (int)strlen(name)) != NULL;
+}
+
+/* §7.8: a built-in type name is resolved before any user declaration in every
+ * type and module position (a field's `: i32`, a cast target, `mod.member`
+ * property lookup), so a user *type or module* named after one is permanently
+ * unreachable — its uses bind to the built-in instead ("expected i32, got i32"
+ * on a `struct i32`; "type 'i32' has no property …" on a `module i32`). Reject
+ * such a declaration outright rather than let it sit shadowed and dead.
+ *
+ * Value bindings are deliberately exempt: a `let`, parameter, or loop variable
+ * named `i32`/`any`/`char` lives in a separate namespace from the type, never
+ * collides with it, and the standard library relies on the spelling (every
+ * container's `any` combinator, `array_list.any(pred)`). This walks the module
+ * tree so a nested `module m` containing `struct i32` is caught too, and runs
+ * before any name mangling, while declaration names are still their source
+ * spellings. Import aliases are checked at their resolution sites, where the
+ * imported symbol's kind (type/module vs value) is known. */
+static void check_builtin_type_name_decls(Decl **decls, int count) {
+    for (int i = 0; i < count; i++) {
+        Decl *d = decls[i];
+        const char *name = NULL;
+        const char *what = NULL;
+        switch (d->kind) {
+        case DECL_STRUCT:
+            name = d->struc.name;
+            what = d->struc.is_c_union ? "a union" : "a struct";
+            break;
+        case DECL_UNION:
+            name = d->unio.name;
+            what = "a union";
+            break;
+        case DECL_ENUM:
+            name = d->enu.name;
+            what = "an enum";
+            break;
+        case DECL_MODULE:
+            name = d->module.name;
+            what = d->module.is_error_group ? "an error group" : "a module";
+            check_builtin_type_name_decls(d->module.decls, d->module.decl_count);
+            break;
+        case DECL_NAMESPACE:
+            name = d->ns.name;
+            what = "a namespace";
+            break;
+        default:
+            break;
+        }
+        if (is_builtin_type_name(name))
+            diag_error(d->loc,
+                "'%s' is a built-in type name and cannot be used as %s name",
+                name, what);
+    }
+}
+
 static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
     if (!d->let.init || d->let.init->kind != EXPR_FUNC) return;
     Expr *fn = d->let.init;
@@ -455,6 +515,18 @@ static void process_member_import(Decl *d, ImportTable *target,
             return;
         }
         const char *import_name = d->import.alias ? d->import.alias : d->import.name;
+        /* §7.8: an `as` alias may not rename a type or module onto a built-in
+         * type name — that alias would be unreachable exactly as a declaration
+         * with the name would be. Value members (a `let`) are exempt, matching
+         * the rule for declarations. A non-aliased import can only carry a name
+         * its declaration already had, which was checked there. */
+        if (d->import.alias && is_builtin_type_name(import_name) &&
+            (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION ||
+             msym->kind == DECL_ENUM || msym->kind == DECL_MODULE)) {
+            diag_error(d->loc,
+                "import alias '%s' is a built-in type name and cannot name a type or module",
+                import_name);
+        }
         import_table_add(target, import_name, d->import.name, msym->kind,
                          mod_sym->members, msym);
         /* Type-associated module: if importing a type, also import its
@@ -1318,6 +1390,11 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
                 continue;
             }
             const char *import_name = d->import.alias ? d->import.alias : name;
+            if (d->import.alias && is_builtin_type_name(import_name)) {
+                diag_error(d->loc,
+                    "import alias '%s' is a built-in type name and cannot name a module",
+                    import_name);
+            }
             import_table_add_module(imports, import_name, src, global_symtab);
         } else {
             /* import MODULE [as ALIAS] — bare whole-module imports are not supported.
@@ -1774,6 +1851,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
      * Runs before any name mangling so self-references still carry source names. */
     check_recursion_in_decls(prog->decls, prog->decl_count);
 
+    /* Phase 0.6: Reject user types/modules named after a built-in type (§7.8).
+     * Also before mangling — the check reads source-spelling declaration names. */
+    check_builtin_type_name_decls(prog->decls, prog->decl_count);
+
     /* Phase 1: Register modules.
      * Track current namespace as we iterate — DECL_NAMESPACE resets it. */
     const char *current_ns = NULL;
@@ -2200,6 +2281,14 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
             if (!mod && !type_sym) {
                 diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, from_ns);
                 continue;
+            }
+            /* §7.8: a cross-namespace whole-symbol import brings in a module
+             * and/or a type — both type/module kinds, so an `as` alias onto a
+             * built-in type name is unreachable. */
+            if (d->import.alias && is_builtin_type_name(import_name)) {
+                diag_error(d->loc,
+                    "import alias '%s' is a built-in type name and cannot name a type or module",
+                    import_name);
             }
             if (mod) import_table_add_module(file_tbl, import_name, mod, symtab);
             if (type_sym) {

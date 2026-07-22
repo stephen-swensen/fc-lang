@@ -1,0 +1,13 @@
+// §7.8 negative space: value bindings live in a namespace separate from types,
+// so a `let`, parameter, or loop variable named after a built-in type is legal
+// (a type position never resolves to a value). This is not a hygiene error.
+let dbl = (i32: i32) -> i32 * 2       // parameter named after a built-in
+
+let main = (args: str[]) ->
+    let str = 10                      // local named `str`
+    let any = dbl(str)                // local named `any`
+    let mut u8 = 0                    // mutable local named `u8`
+    for f64 in 0..any do              // loop variable named `f64`
+        u8 = u8 + f64
+    assert(u8 == 190, "sum 0..20 exclusive")   // 0+1+...+19
+    0

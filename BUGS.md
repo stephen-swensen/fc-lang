@@ -19,9 +19,10 @@ form), and a `let` destructure in a match arm emitting a placeholder comment).
 emits invalid C), §5 (C-identifier hygiene) and §6 (string interpolation
 semantics) all complete — see those sections for what landed. §8
 (diagnostics-polish) is now cleared of every item fixable without a design
-decision (three left open with a note on why). §7 is the decide-first list of
-genuine design questions (§7.10 fixed; the rest await a language call). Current
-suite: **2238 passed, 0 failed** (gcc + clang, -O0 and -O2; LSP wire tests
+decision (three left open with a note on why). §7 was the decide-first list of
+genuine design questions — **all ten now resolved** (each with a recorded
+decision and, where the decision was to change behavior, tests). Current
+suite: **2290 passed, 0 failed** (gcc + clang, -O0 and -O2; LSP wire tests
 green).
 
 Several **new bugs** were found while doing the work and fixed in the same
@@ -1342,6 +1343,37 @@ shapes), and one per modifier rule: `interp_flag_sign_unsigned_conv_err`,
    `module i32`) are accepted but unreachable (primitive/property lookup wins,
    diagnostics like "expected i32, got i32"). Spec disclaims support;
    rejecting the declaration would be kinder.
+   **✅ FIXED — reject the type/module, keep the value binding** (2026-07-21,
+   decided). A built-in type name is resolved before any user declaration in
+   every type and module position, so a user *type or module* named after one
+   is permanently unreachable — the actual bug. Those declarations are now
+   rejected: `struct`, `union`, `enum` (incl. extern C structs/unions),
+   `module`, error groups, `namespace`, and a type/module `import` alias whose
+   name is a built-in type name are compile errors. The check is one recursive
+   pre-pass in pass1 (`check_builtin_type_name_decls`, before mangling so it
+   reads source-spelling names) over the whole declaration tree, plus a guard
+   at each import-resolution site where the imported symbol's kind is known;
+   the single predicate is `type_from_name` — exactly the lookup every type
+   position consults, so "is this a built-in name" can never drift from "does
+   this win the lookup".
+   **Value bindings are deliberately exempt.** A `let`, parameter, loop
+   variable, value import alias, or extern function/constant named `i32`/`any`/
+   `char` lives in the value namespace, never collides with the type (`: i32`
+   still means the primitive), and is reachable and correct — so rejecting it
+   would be a hygiene check, which FC does not do. It would also break real
+   code: the standard library gives every container an `any` combinator
+   (`array_list.any`, `linked_list.any`, …) and `spec/examples.fc` binds
+   `let i8`/`let u64`/`let f32`. The "basically reserved words" framing thus
+   holds only for the type/module namespace, not universally — which the spec's
+   own taxonomy already anticipated by separating "binding" from "user-defined
+   type" names. Member names (struct fields, union/enum variants) are likewise
+   untouched: they live in per-type namespaces and cannot shadow a primitive.
+   Spec §Identifiers rewrites the built-in-type-names paragraph to state the
+   split. Tests: `naming/` (new category) — `struct`/`union`/`enum`/`module`/
+   `error_group`/`namespace`/`nested_type`/`extern_struct`/`extern_union`
+   `_named_builtin_err`, `import_alias_type`/`_module`/`_module_scoped_builtin_err`
+   (all three import paths), and the negative space `value_binding`/
+   `toplevel_value`/`member_named`/`combinator_any`/`value_import_alias_builtin_ok`.
 9. **Slice-literal elements admit no widening at all** (found while fixing
    §1.3): the element check is a bare `type_eq`, so `i64[2] { 1, 2 }` errors
    "expected i64, got i32" and `const i32*[2] { &a, &b }` errors "expected

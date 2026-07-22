@@ -1,0 +1,7 @@
+// §7.8: a struct named after a built-in type name is unreachable — a `: i32`
+// annotation always resolves to the primitive — so the declaration is rejected.
+struct i32 =
+    x: i32
+
+let main = (args: str[]) ->
+    0

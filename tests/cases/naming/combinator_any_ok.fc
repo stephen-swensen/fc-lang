@@ -1,0 +1,14 @@
+// §7.8 negative space: a module member named after a built-in type — the
+// standard library's `any` combinator (`array_list.any`, `linked_list.any`, …)
+// — resolves as a member and must keep working. This is the concrete reason the
+// rule exempts value bindings.
+module list_ops =
+    let any = (s: const i32[], pred: (i32) -> bool) ->
+        for x in s do
+            if pred(x) then return true
+        false
+
+let main = (args: str[]) ->
+    let xs = i32[3] { 1, 2, 3 }
+    assert(list_ops.any(xs, (n: i32) -> n == 2), "any combinator resolves")
+    0

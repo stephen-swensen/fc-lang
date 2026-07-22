@@ -1,0 +1,8 @@
+// §7.8: the rule reaches types nested inside a module, not just top-level ones.
+// (Also exercises a built-in name other than i32: `char`.)
+module m =
+    struct char =
+        v: i32
+
+let main = (args: str[]) ->
+    0

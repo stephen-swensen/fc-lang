@@ -1,0 +1,7 @@
+// §7.8: a union named after a built-in type name is rejected.
+union bool =
+    | yes
+    | no
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,4 @@
+namespace mylib
+
+module helpers =
+    let compute = (x: i32) -> x * 2
