@@ -43,9 +43,25 @@ pruning — so nesting would promise conditionality that cannot exist). Spec §C
 Open (not blocking):
 - Struct literals for const-param structs: `wide { limbs = ... }` cannot infer `'n` from a
   slice-typed field value; construction is via `default(wide<N>)` + mutation or companion
-  constructors. Consider size inference from array-literal field values later.
-- Named consts inside *field* size slots (`limbs: u32[cfg.words]`) — const args in `< >`
-  fold named consts, field sizes accept only literals/const-param expressions today.
+  constructors. Consider size inference from array-literal field values later. (Explicit
+  type args on struct literals — `wide<128> { … }` — were rejected 2026-07-19,
+  `spec/hist/bugs-2026-07-21.md` §7.3.) 2026-07-22 adequacy/additivity check: the status
+  quo constructs everything — `default(T)` is total (zero-filled memory is the default of
+  every FC type, bare pointer fields included), so `default(wide<N>)` + mutation and `<'n>`
+  companion constructors cover every const-param struct (the std::wideint pattern), and
+  `'n` already infers from a *typed* field value (a `w: wide<'n>` field unifies against
+  the value's type) — only the shape where `'n` appears solely in size slots lacks a
+  literal spelling. Both future avenues stay additive: inferred and explicit args each
+  occupy today-error space ("could not infer type variable 'n" / the §7.3 rejection), so
+  admitting either later changes no compiling program's meaning — and the parser already
+  claims `name<…> { }` in order to reject it (`struct_lit_typearg_scan`), so re-admitting
+  the explicit form would flip a claimed parse, not introduce new grammar ambiguity.
+- ✅ RESOLVED — Named consts inside *field* size slots (`limbs: u32[cfg.words]`): landed
+  with the 2026-07-17 hardening (concrete size slots fold named consts; tests
+  `structs/fixed_array_named_const_*`); module-qualified enum counts in size slots fixed
+  2026-07-18 (`spec/hist/bugs-2026-07-21.md` §2.10); and the general rule — size slots and
+  const-arg slots accept the same constant expressions — settled 2026-07-21 (ibid. §7.7,
+  spec §Const arguments).
 - LSP: hover shows `wide<256>` via type_name; `'n` hovers as `i32`. No dedicated const-param
   hover docs yet.
 
@@ -271,9 +287,20 @@ unchanged.
 - **Observability, stated plainly in the spec:** `const T*` means no writes *through this
   pointer*, not "nobody writes" — a const view of `p` still observes `p.x = 10` performed
   through the binding. C's meaning of const, consistent with FC's existing const views.
-- **Field address-of:** does `&p.field` on a `let` struct also yield `const F*`? Symmetry says
-  yes (it's a smaller view of the same read-only aliasing); whatever the answer, the existing
-  carve-outs stay (`&s.fixed_array` error, packed/bit-field restrictions).
+- **Field address-of:** ✅ DECIDED 2026-07-22 — stays `F*`, unchanged. `let` vs `let mut`
+  governs exactly one thing: the *root variable* — its reassignability, and therefore
+  whole-value address-taking (`&p` yields a pointer whose `*pp = v` is reassignment through
+  an alias). One level deep, `let` and `let mut` are semantically identical — `p.field = v`
+  and `&p.field` → `F*` are both already legal on a `let` (spec §Address-of,
+  `spec/hist/bugs-2026-07-21.md` §7.5). F# school: mutability is a property of the variable,
+  never the value; shadowing and lexical scoping are the semantic tools for evolving values,
+  and a capture stays a plain value snapshot. The derived rule for this feature: each
+  address-of grants through the pointer exactly what its direct spelling allows — `p = v` is
+  illegal on `let`, so `&p` yields `const T*`; `p.field = v` is legal, so `&p.field` stays
+  `F*`. The whole-binding view being stricter than the field view is accepted (deep const is
+  the one tool that forecloses `*pp = v`; the precise remedy for wanting a writable field
+  pointer is to spell it: `&p.field`). Existing carve-outs stay (`&s.fixed_array` error,
+  packed/bit-field restrictions).
 - **Function bindings:** `&f` (C function pointer extraction) keeps its own rule — `let mut` +
   non-capturing (§Address-of). A `const`-qualified C function pointer isn't a meaningful
   interop artifact; decide explicitly that `&f` on a `let` lambda stays an error rather than
@@ -344,7 +371,8 @@ open-item backlog. None of these block release.
   declaration, not the specific variant. Deliberate today, but `UnionVariant.loc`
   is now recorded, so refining it is a small change plus a wire-test update.
 - **Residual parser `diag_fatal` sites** — error-recovery parsing (done — see
-  `spec/hist/archived-todos.md`) left ~14 `diag_fatal`s in `parser.c` for
+  `spec/hist/archived-todos.md`) left `diag_fatal`s in `parser.c` (17 as of
+  2026-07-21; the bugsearch mangling fixes added the extern-reserved-root checks) for
   validation *inside* matched delimiters (slice/tuple/`alloc`/`cstr[N]` literals,
   fixed-array size), string interpolation, the inline `let…in` form, and the
   extern-reserved-name check. These still abort the analysis (LSP falls back to
