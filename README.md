@@ -30,6 +30,7 @@ Smaller programs in [`demos/`](demos/) round out the surface:
 
 - **`fasteroids`** (~1300 lines) — vector-style Asteroids clone, SDL2.
 - **`face-invaders`** (~1500 lines) — Space Invaders clone, SDL2.
+- **`fuzzel-fobble`** (~1500 lines) — Puzzle Bobble clone, SDL2.
 - **`fibbles`** (~640 lines) — Snake/Nibbles clone, SDL2 graphics + audio.
 - **`fing`** (~160 lines) — `ping` clone, uses `std::net` (raw ICMP).
 - **`furl`** (~220 lines) — `curl`-style HTTP client, uses `std::net` (TCP).
