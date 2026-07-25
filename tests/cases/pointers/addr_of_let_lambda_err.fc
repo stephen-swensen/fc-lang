@@ -1,0 +1,6 @@
+// Function-binding carve-out: &f on an immutable let lambda stays an error
+// (C function-pointer extraction still requires a non-capturing let mut).
+let main = (args: str[]) ->
+    let f = (a: i32) -> a * 2
+    let g = &f
+    0

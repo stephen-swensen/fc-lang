@@ -215,8 +215,8 @@ let main = (args: str[]) ->
     // Bindings: let (immutable) and let mut (mutable)
     // --------------------------------------------------------
 
-    let x = 10                  // immutable — cannot reassign
-    let mut y = 20              // mutable — can reassign, addressable with &
+    let x = 10                  // immutable — cannot reassign; &x gives const T*
+    let mut y = 20              // mutable — can reassign; &y gives writable T*
     y = 30
     assert(y == 30)
 
@@ -807,12 +807,18 @@ let main = (args: str[]) ->
     // Pointers
     // --------------------------------------------------------
 
-    // &x requires let mut — gives T*
+    // & takes a binding's address. On a let mut it gives a writable T*;
+    // on an immutable let it gives a read-only const T*.
     let mut n = 42
-    let np = &n                // i32*
+    let np = &n                // i32* — writable
     assert(*np == 42)          // dereference with *
     *np = 100                  // mutate through pointer
     assert(n == 100)
+
+    let c = 7
+    let cptr = &c              // const i32* — read-only view of an immutable binding
+    assert(*cptr == 7)
+    // *cptr = 0                // would be a compile error — write through const
 
     // Pointer to struct — field access with ->
     let mut pt = point { x = 1, y = 2 }
@@ -957,8 +963,8 @@ let main = (args: str[]) ->
     // Const — deep immutability for pointers and slices
     // --------------------------------------------------------
 
-    let mut v = 42
-    let cp = (const i32*) &v    // freeze: i32* → const i32*
+    let v = 42
+    let cp = &v                  // &<let> is already const i32* — no cast needed
     assert(*cp == 42)             // reading through const is fine
     // *cp = 10                   // would be a compile error
 
@@ -983,11 +989,11 @@ let main = (args: str[]) ->
     //   free(&local_var)         → cannot free stack memory
     //   alloc(s { p = &local })  → cannot store stack ptr in heap
 
-    // Pointers to inner-scope let mut bindings are valid for
-    // the entire function call (hoisted to function scope).
+    // Pointers to inner-scope bindings are valid for the entire
+    // function call (hoisted to function scope).
     let inner_ptr =
-        let mut inner = 77
-        &inner
+        let inner = 77
+        &inner                 // const i32*
     assert(*inner_ptr == 77)
 
     // --------------------------------------------------------

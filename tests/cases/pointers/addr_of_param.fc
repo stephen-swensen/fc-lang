@@ -1,0 +1,7 @@
+// A function parameter is an immutable binding; its address is const T*.
+let peek = (v: i32) ->
+    let p = &v            // const i32*
+    *p
+let main = (args: str[]) ->
+    assert(peek(77) == 77)
+    0

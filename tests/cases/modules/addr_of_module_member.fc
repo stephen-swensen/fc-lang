@@ -1,0 +1,13 @@
+// &<immutable module member> yields const T* with static provenance —
+// so it may be returned across a call boundary.
+module cfg =
+    let scale = 7
+    let base = 100
+let base_ptr = () ->
+    &cfg.base                 // const i32*, PROV_STATIC — returnable
+let main = (args: str[]) ->
+    let p = &cfg.scale
+    assert(*p == 7)
+    let q = base_ptr()
+    assert(*q == 100)
+    0

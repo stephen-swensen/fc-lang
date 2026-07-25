@@ -1,0 +1,6 @@
+// Address-of an immutable let binding yields a read-only const T*.
+let main = (args: str[]) ->
+    let x = 42
+    let p = &x            // const i32*
+    assert(*p == 42)      // reading through the const view is fine
+    0

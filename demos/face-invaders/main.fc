@@ -172,14 +172,14 @@ struct world =
 
 let fill = (r: any*, x: i32, y: i32, w: i32, h: i32,
             cr: u8, cg: u8, cb: u8, ca: u8) ->
-    let mut rc = rect { x = x, y = y, w = w, h = h }
+    let rc = rect { x = x, y = y, w = w, h = h }
     sdl2.set_color(r, cr, cg, cb, ca)
     sdl2.fill_rect(r, &rc)
     return
 
 let outline = (r: any*, x: i32, y: i32, w: i32, h: i32,
                cr: u8, cg: u8, cb: u8, ca: u8) ->
-    let mut rc = rect { x = x, y = y, w = w, h = h }
+    let rc = rect { x = x, y = y, w = w, h = h }
     sdl2.set_color(r, cr, cg, cb, ca)
     sdl2.draw_rect(r, &rc)
     return
@@ -1296,7 +1296,7 @@ let main = (args: str[]) ->
     w.bunker_bitmaps = alloc(i32[40] { })!
 
     // Audio setup
-    let mut desired = default(audio_spec)
+    let desired = default(audio_spec)
     desired.freq = 44100
     desired.format = sdl2.audio_s16sys
     desired.channels = 1u8

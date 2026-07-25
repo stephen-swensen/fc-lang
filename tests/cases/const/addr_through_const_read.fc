@@ -1,0 +1,11 @@
+// Item 5: taking an address through a const path is a read-only address
+// (const F*), not an error. Reading through it is fine.
+struct point =
+    x: i32
+    y: i32
+let main = (args: str[]) ->
+    let p = point { x = 3, y = 4 }
+    let cp = &p               // const point*
+    let fp = &(cp.x)          // const i32* (through the const path)
+    assert(*fp == 3)
+    0

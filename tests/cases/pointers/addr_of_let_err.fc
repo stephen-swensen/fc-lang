@@ -1,4 +1,0 @@
-let main = (args: str[]) ->
-    let x = 42
-    let p = &x
-    *p

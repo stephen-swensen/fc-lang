@@ -1,0 +1,8 @@
+// The const T* produced by &<let> is an ordinary pointer value, capturable
+// by copy like any let-bound pointer.
+let main = (args: str[]) ->
+    let x = 9
+    let p = &x                // const i32*
+    let f = () -> *p          // captures p (a pointer) by copy
+    assert(f() == 9)
+    0

@@ -1,0 +1,9 @@
+// A pointer to an inner-scope immutable let stays valid for the whole call:
+// the binding is hoisted to function scope, exactly as a let mut is. Without
+// hoisting this &inner would dangle past the block.
+let main = (args: str[]) ->
+    let p =
+        let inner = 77
+        &inner                // const i32*
+    assert(*p == 77)
+    0

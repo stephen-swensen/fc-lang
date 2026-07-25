@@ -89,13 +89,13 @@ let draw_text = (r: any*, text: const str, ox: i32, oy: i32, cr: u8, cg: u8, cb:
         x = x + 4
 
 let draw_cell = (r: any*, gx: i32, gy: i32, red: u8, green: u8, blue: u8) ->
-    let mut rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
+    let rc = rect { x = gx * cell, y = gy * cell, w = cell, h = cell }
     sdl2.set_color(r, red, green, blue, 255u8)
     sdl2.fill_rect(r, &rc)
     return
 
 let draw_small_rect = (r: any*, x: i32, y: i32, w: i32, h: i32, red: u8, green: u8, blue: u8) ->
-    let mut rc = rect { x = x, y = y, w = w, h = h }
+    let rc = rect { x = x, y = y, w = w, h = h }
     sdl2.set_color(r, red, green, blue, 255u8)
     sdl2.fill_rect(r, &rc)
     return
@@ -217,7 +217,7 @@ let clear_screen = (r: any*) ->
     // snake dies on an invisible wall out in the "background".
     sdl2.set_color(r, 0u8, 0u8, 0u8, 255u8)
     sdl2.clear(r)
-    let mut bg = rect { x = 0, y = 0, w = grid_w * cell, h = grid_h * cell }
+    let bg = rect { x = 0, y = 0, w = grid_w * cell, h = grid_h * cell }
     sdl2.set_color(r, 20u8, 20u8, 40u8, 255u8)
     sdl2.fill_rect(r, &bg)
     return
@@ -359,7 +359,7 @@ let main = (args: str[]) ->
     let mut pcg_state = pcg_random.make((u64) sys.time())
 
     // Init audio (square wave sound effects)
-    let mut desired = default(audio_spec)
+    let desired = default(audio_spec)
     desired.freq = 44100
     desired.format = sdl2.audio_s16sys
     desired.channels = 1u8

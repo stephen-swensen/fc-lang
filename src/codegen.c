@@ -165,6 +165,31 @@ static HoistedDecl *g_hoisted = NULL;
 static int g_hoisted_count = 0;
 static int g_hoisted_cap = 0;
 
+/* One walk of a function body records every local `let` as a hoist candidate
+ * plus the codegen-names whose address is taken. begin_hoisted_scope then
+ * hoists a candidate iff it is `let mut` OR its address is taken — the latter
+ * so a pointer to an inner-scope immutable `let` stays valid for the whole
+ * call, exactly as `let mut` already does. Immutable, never-addressed lets stay
+ * inline (no change to their generated C). */
+typedef struct {
+    const char *codegen_name;
+    Type *type;
+    bool is_mut;
+} HoistCand;
+static HoistCand *g_hoist_cand = NULL;
+static int g_hoist_cand_count = 0;
+static int g_hoist_cand_cap = 0;
+
+static const char **g_addressed = NULL;
+static int g_addressed_count = 0;
+static int g_addressed_cap = 0;
+
+static bool name_addressed(const char *codegen_name) {
+    for (int i = 0; i < g_addressed_count; i++)
+        if (g_addressed[i] == codegen_name) return true;
+    return false;
+}
+
 /* Function-entry backing arrays for stack slice literals and constant-size
  * interpolation buffers.  Each entry is the slice-literal or interp-string node;
  * a fixed C array is emitted at function top and the node's use site references
@@ -408,24 +433,25 @@ static bool has_pending_defers(void) {
     return false;
 }
 
-static void collect_hoisted_pat(Pattern *pat, Type *type);
+static void collect_hoisted_pat(Pattern *pat, Type *type, bool is_mut);
 
-/* Recursively collect all let-mut bindings from a function body */
+/* Recursively collect hoist candidates (every local let) and addressed names */
 static void collect_hoisted_bindings(Expr *e) {
     if (!e) return;
     switch (e->kind) {
     case EXPR_LET:
         collect_hoisted_bindings(e->let_expr.let_init);
-        if (e->let_expr.let_is_mut && e->let_expr.codegen_name && e->let_expr.let_type) {
-            HoistedDecl d = { e->let_expr.codegen_name, e->let_expr.let_type };
-            DA_APPEND(g_hoisted, g_hoisted_count, g_hoisted_cap, d);
+        if (e->let_expr.codegen_name && e->let_expr.let_type) {
+            HoistCand c = { e->let_expr.codegen_name, e->let_expr.let_type,
+                            e->let_expr.let_is_mut };
+            DA_APPEND(g_hoist_cand, g_hoist_cand_count, g_hoist_cand_cap, c);
         }
         break;
     case EXPR_LET_DESTRUCT:
         collect_hoisted_bindings(e->let_destruct.init);
-        /* Destructured mut bindings: collect individual pattern bindings */
-        if (e->let_destruct.is_mut)
-            collect_hoisted_pat(e->let_destruct.pattern, e->let_destruct.init_type);
+        /* Destructured bindings become hoist candidates too */
+        collect_hoisted_pat(e->let_destruct.pattern, e->let_destruct.init_type,
+                            e->let_destruct.is_mut);
         break;
     case EXPR_BLOCK:
         for (int i = 0; i < e->block.count; i++)
@@ -457,6 +483,15 @@ static void collect_hoisted_bindings(Expr *e) {
         collect_hoisted_bindings(e->binary.right);
         break;
     case EXPR_UNARY_PREFIX:
+        /* &x on a local binding forces x to be hoisted to function scope so
+         * the resulting pointer outlives the block x was declared in. */
+        if (e->unary_prefix.op == TOK_AMP &&
+            e->unary_prefix.operand->kind == EXPR_IDENT &&
+            e->unary_prefix.operand->ident.is_local &&
+            e->unary_prefix.operand->ident.codegen_name) {
+            DA_APPEND(g_addressed, g_addressed_count, g_addressed_cap,
+                      e->unary_prefix.operand->ident.codegen_name);
+        }
         collect_hoisted_bindings(e->unary_prefix.operand);
         break;
     case EXPR_UNARY_POSTFIX:
@@ -638,40 +673,40 @@ static void collect_hoisted_bindings(Expr *e) {
 }
 
 /* Collect hoisted bindings from destructuring pattern */
-static void collect_hoisted_pat(Pattern *pat, Type *type) {
+static void collect_hoisted_pat(Pattern *pat, Type *type, bool is_mut) {
     if (!pat || !type) return;
     switch (pat->kind) {
     case PAT_BINDING:
         if (pat->binding.name) {
-            HoistedDecl d = { pat_binding_c_name(pat), type };
-            DA_APPEND(g_hoisted, g_hoisted_count, g_hoisted_cap, d);
+            HoistCand c = { pat_binding_c_name(pat), type, is_mut };
+            DA_APPEND(g_hoist_cand, g_hoist_cand_count, g_hoist_cand_cap, c);
         }
         break;
     case PAT_STRUCT:
         for (int i = 0; i < pat->struc.field_count; i++)
-            collect_hoisted_pat(pat->struc.fields[i].pattern, pat->struc.fields[i].resolved_type);
+            collect_hoisted_pat(pat->struc.fields[i].pattern, pat->struc.fields[i].resolved_type, is_mut);
         break;
     case PAT_TUPLE:
         for (int i = 0; i < pat->tuple_pat.pattern_count; i++)
-            collect_hoisted_pat(pat->tuple_pat.patterns[i], pat->tuple_pat.resolved_types[i]);
+            collect_hoisted_pat(pat->tuple_pat.patterns[i], pat->tuple_pat.resolved_types[i], is_mut);
         break;
     case PAT_SOME:
         if (pat->some_pat.inner && type->kind == TYPE_OPTION)
-            collect_hoisted_pat(pat->some_pat.inner, type->option.inner);
+            collect_hoisted_pat(pat->some_pat.inner, type->option.inner, is_mut);
         break;
     case PAT_OK:
         if (pat->some_pat.inner && type->kind == TYPE_RESULT)
-            collect_hoisted_pat(pat->some_pat.inner, type->result.inner);
+            collect_hoisted_pat(pat->some_pat.inner, type->result.inner, is_mut);
         break;
     case PAT_ERR:
         if (pat->some_pat.inner)
-            collect_hoisted_pat(pat->some_pat.inner, type_int32());
+            collect_hoisted_pat(pat->some_pat.inner, type_int32(), is_mut);
         break;
     case PAT_VARIANT:
         if (pat->variant.payload && type->kind == TYPE_UNION) {
             for (int v = 0; v < type->unio.variant_count; v++) {
                 if (type->unio.variants[v].name == pat->variant.variant) {
-                    collect_hoisted_pat(pat->variant.payload, type->unio.variants[v].payload);
+                    collect_hoisted_pat(pat->variant.payload, type->unio.variants[v].payload, is_mut);
                     break;
                 }
             }
@@ -727,15 +762,27 @@ static void emit_fn_backing_decls(FILE *out) {
 /* Set up hoisting for a function body, emit declarations, then tear down */
 static void begin_hoisted_scope(Expr **body, int body_count, FILE *out) {
     g_hoisted_count = 0;
+    g_hoist_cand_count = 0;
+    g_addressed_count = 0;
     g_fn_backing_count = 0;
     for (int i = 0; i < body_count; i++)
         collect_hoisted_bindings(body[i]);
+    /* Hoist a candidate iff it is `let mut` or its address is taken. */
+    for (int i = 0; i < g_hoist_cand_count; i++) {
+        HoistCand *c = &g_hoist_cand[i];
+        if (c->is_mut || name_addressed(c->codegen_name)) {
+            HoistedDecl d = { c->codegen_name, c->type };
+            DA_APPEND(g_hoisted, g_hoisted_count, g_hoisted_cap, d);
+        }
+    }
     emit_hoisted_decls(out);
     emit_fn_backing_decls(out);
 }
 
 static void end_hoisted_scope(void) {
     g_hoisted_count = 0;
+    g_hoist_cand_count = 0;
+    g_addressed_count = 0;
     g_fn_backing_count = 0;
 }
 

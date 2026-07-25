@@ -1,8 +1,14 @@
 # Read-only address-of: `&` on immutable bindings yields `const T*`
 
-> Status: **draft plan — not yet approved.** Additional design questions are still
-> open before implementation begins. Captured from the planning session so it can
-> be resumed later.
+> Status: **✅ IMPLEMENTED 2026-07-24.** Feature, optional item 5, and the
+> global/module soundness-bug fix all landed. Suite green: `make check` 2300×2
+> (gcc+clang, -O0), `make test-all-O2` 2301×2, `make test-lsp` all pass; demos +
+> wolf-fc migrated off false-`mut` and build clean. One interaction the plan below
+> did not anticipate — codegen hoists inner-scope `let mut` bindings so their
+> address outlives the block, and that hoisting had to be extended to immutable
+> `let`s whose address is taken (else `&<inner let>` dangles). Deliberately skipped:
+> the *optional* `nanosleep` extern retype (Part D). Plan retained below as the
+> implementation record.
 
 ## Context
 

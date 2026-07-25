@@ -5287,9 +5287,23 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
             e->type = ot;
         } else if (op == TOK_AMP) {
-            /* Address-of: only allowed on let mut bindings.
-             * Exception: &f on a top-level (non-capturing) function gives a
-             * raw C function pointer. */
+            /* Address-of.
+             *
+             * The produced pointer's const-ness tracks the *writability of the
+             * thing addressed*, and its provenance tracks the storage class:
+             *
+             *   - immutable binding (let local/param, immutable global or
+             *     module member)  -> const T*   (a read-only view: *pp = v would
+             *     be reassignment, which the binding forbids, so the const
+             *     pointer forecloses it)
+             *   - mutable binding (let mut, anywhere)                -> T*
+             *   - content address through a non-const path (p.field,
+             *     t[i])                                              -> F*
+             *   - content address through a const path (cp.field)   -> const F*
+             *   - function binding (&f): its own C-fn-pointer rule (below)
+             *
+             * Globals and module members live in static storage (PROV_STATIC);
+             * locals and content addresses are PROV_STACK. */
             Expr *operand = e->unary_prefix.operand;
             /* Cannot take address of inline array field — use .ptr instead */
             if ((operand->kind == EXPR_FIELD || operand->kind == EXPR_DEREF_FIELD) &&
@@ -5299,23 +5313,47 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
-            if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
-                bool op_is_mut = false;
-                scope_lookup_capture(ctx->scope, operand->ident.name,
-                    NULL, &op_is_mut, NULL, NULL, NULL, NULL);
-                if (!op_is_mut) {
-                    diag_error(e->loc, "address-of requires mutable binding");
-                    e->type = type_error();
-                    return e->type;
+            /* Does the operand name a whole binding (an ident or a module
+             * member), rather than a content sub-path? If so, capture its
+             * mutability and storage class. `is_mut`/`is_local` are already
+             * stamped on the ident by name resolution; a module member is an
+             * EXPR_FIELD whose resolved_member is a DECL_LET. */
+            bool is_binding = false, binding_mut = false, binding_static = false;
+            if (operand->kind == EXPR_IDENT) {
+                is_binding = true;
+                binding_mut = operand->ident.is_mut;
+                binding_static = !operand->ident.is_local;
+            } else if (operand->kind == EXPR_FIELD && operand->field.resolved_member &&
+                       operand->field.resolved_member->decl &&
+                       operand->field.resolved_member->decl->kind == DECL_LET) {
+                is_binding = true;
+                binding_mut = operand->field.resolved_member->decl->let.is_mut;
+                binding_static = true;   /* module members live in static storage */
+            }
+            bool make_const = false;
+            if (ot->kind == TYPE_FUNC) {
+                /* Function bindings keep their own rule: &f is C-function-pointer
+                 * extraction, valid only on a non-capturing let mut / top-level
+                 * function. A const-qualified C function pointer is not a
+                 * meaningful interop artifact, so &f on an immutable let lambda
+                 * stays an error rather than yielding a const pointer. */
+                if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
+                    if (!operand->ident.is_mut) {
+                        diag_error(e->loc, "address-of requires mutable binding");
+                        e->type = type_error();
+                        return e->type;
+                    }
+                    /* &f on a capturing lambda is an error — only non-capturing
+                     * function bindings can yield a raw C function pointer */
+                    if (scope_lookup_is_capturing(ctx->scope, operand->ident.name)) {
+                        diag_error(e->loc, "cannot take address of capturing closure");
+                        e->type = type_error();
+                        return e->type;
+                    }
                 }
-                /* &f on a capturing lambda is an error — only non-capturing
-                 * function bindings can yield a raw C function pointer */
-                if (ot->kind == TYPE_FUNC &&
-                    scope_lookup_is_capturing(ctx->scope, operand->ident.name)) {
-                    diag_error(e->loc, "cannot take address of capturing closure");
-                    e->type = type_error();
-                    return e->type;
-                }
+            } else if (is_binding && !binding_mut) {
+                /* Read-only address-of an immutable binding yields const T*. */
+                make_const = true;
             }
             /* &(inline lambda): reject if it captures */
             if (operand->kind == EXPR_FUNC && operand->func.capture_count > 0) {
@@ -5323,10 +5361,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
-            if (is_write_through_const(operand)) {
-                diag_error(e->loc, "cannot take mutable address through const pointer");
-                e->type = type_error();
-                return e->type;
+            /* An address reached through a const pointer/slice is a read-only
+             * address, not an error: &cp.field yields const F*. The write is
+             * still rejected — at the assignment (is_write_through_const). */
+            if (ot->kind != TYPE_FUNC && is_write_through_const(operand)) {
+                make_const = true;
             }
             /* &f on a function value yields a raw C function pointer — typed
              * as any* (opaque) because it is strictly a C-interop handle,
@@ -5335,8 +5374,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_any_ptr();
                 e->prov = PROV_STATIC;
             } else {
-                e->type = type_pointer(ctx->arena, ot);
-                e->prov = PROV_STACK;
+                Type *pt = type_pointer(ctx->arena, ot);
+                if (make_const) pt = type_make_const(ctx->arena, pt);
+                e->type = pt;
+                e->prov = (is_binding && binding_static) ? PROV_STATIC : PROV_STACK;
             }
         } else if (op == TOK_STAR) {
             /* Dereference: operand must be pointer */

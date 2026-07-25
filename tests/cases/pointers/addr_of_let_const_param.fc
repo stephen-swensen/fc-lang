@@ -1,0 +1,10 @@
+// &<let> flows into a const-pointer parameter with no `let mut` needed;
+// a plain T* (from &<let mut>) widens to const T* too.
+let reads = (p: const i32*) ->
+    *p
+let main = (args: str[]) ->
+    let x = 55
+    let mut y = 66
+    assert(reads(&x) == 55)   // const i32* -> const i32*
+    assert(reads(&y) == 66)   // i32* widens to const i32*
+    0

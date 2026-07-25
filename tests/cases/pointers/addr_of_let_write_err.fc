@@ -1,0 +1,6 @@
+// Writing through the const view of a let binding is rejected.
+let main = (args: str[]) ->
+    let x = 42
+    let p = &x
+    *p = 1
+    0

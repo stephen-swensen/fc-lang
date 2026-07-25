@@ -1071,8 +1071,8 @@ Overflow detection is **deterministic**, independent of optimization level — F
 
 | Keyword | Terminology | Reassignable | Addressable | Contents assignable | Capturable in closure |
 |---------|-------------|---------|-------------|---------------------|-----------------------|
-| let | let binding | no | no | yes | yes — captured by copy |
-| let mut | mutable let binding | yes | yes | yes | no |
+| let | let binding | no | read-only (`&x` → `const T*`) | yes | yes — captured by copy |
+| let mut | mutable let binding | yes | yes (`&x` → `T*`) | yes | no |
 
 All bindings must be initialized at declaration. Types are always inferred — there are no explicit type annotations on bindings.
 
@@ -1134,18 +1134,18 @@ This is consistent with the pointer rule — writing through a `let` binding poi
 
 A binding appears to have three separate mutability properties — reassignability, addressability, and content mutability (the table at §let and let mut). They are assigned by one rule: **the keyword governs the *binding*; the contents of the bound value are always assignable.** The two derived columns follow from reassignability:
 
-- **Addressability tracks reassignability.** A pointer to a binding is reassignment by another name — `*pp = v` writes the whole value, which is exactly what `let` forbids — so `&p` on a `let` would reopen the door the keyword closed. Only `let mut` is addressable (§Address-of).
+- **Addressability is universal; the pointer's const-ness tracks reassignability.** A pointer to a binding can reassign it by another name — `*pp = v` writes the whole value, which is exactly what `let` forbids. So `&p` on a `let` yields a read-only `const T*` that forecloses that write (not a compile error, and not a door reopened); `&p` on a `let mut` yields a writable `T*`. Either binding is addressable — only `let mut` gives a pointer you can write the binding through (§Address-of).
 - **Capturability is its complement.** Capture is by copy, and a copy of a binding that can still be reassigned would silently go stale. A `let` can never be reassigned, so its captured copy stays honest; a `let mut` cannot be captured — capture a pointer to it instead (§Closures & Capture).
 
-The pairing this produces surprises readers from both of FC's parent traditions, in opposite directions, so it is worth stating head-on: **you can write a field of `p` that you cannot point at.**
+The pairing this produces is worth stating head-on: **you can write a field of `p` freely, but a pointer to `p` itself is read-only.**
 
 ```fc
 let p = point { x = 1.0, y = 2.0 }
-p.x = 3.0     // ok — mutates the value
-// &p         // compile error — would permit *pp = v, i.e. reassigning p
+p.x = 3.0      // ok — mutates the value (a field write, not a reassignment)
+let pp = &p    // ok — const point*; a write *pp = v (reassigning p) won't compile
 ```
 
-This is not a contradiction: `p.x = v` operates on the *value*, while `&p` and `p = v` operate on the *binding*. The triple is precisely F#'s. There, `let` vs `let mutable` splits reassignment the same way; `&x` likewise requires a mutable local; mutable locals likewise cannot be captured by closures (F# directs you to a heap `ref` cell where FC directs you to capturing a pointer); and a record field declared `mutable` is assignable through an immutable binding — `let p = {...}` then `p.X <- 10` — exactly as every FC field is.
+This is not a contradiction: `p.x = v` operates on the *value* (always allowed), while `&p` and `p = v` operate on the *binding* — and `&p` grants only what the binding permits, which for a `let` is reading, not reassigning. The split mirrors F#'s: `let` vs `let mutable` divides reassignment the same way, and mutable locals likewise cannot be captured by closures (F# directs you to a heap `ref` cell where FC directs you to capturing a pointer); and a record field declared `mutable` is assignable through an immutable binding — `let p = {...}` then `p.X <- 10` — exactly as every FC field is.
 
 Where FC departs from the ML school is only the default: OCaml and F# freeze record fields unless a field opts in with `mutable`, while FC follows C — every field of every struct is assignable, with no per-field opt-out. The `const` qualifier (below) recovers content-immutability at the pointer/slice boundary: `const T*` / `const T[]` are read-only *views* through which no write compiles, deeply (§Deep const). But a view is a property of an access path, not of the data — FC has no way to declare a struct binding or field whose contents are frozen everywhere. That is a deliberate omission, not an oversight: systems code initializes, patches, and reuses structures in place, and where a read-only guarantee matters it is at a boundary — an API handing out access to data it owns — which is exactly where a `const` view sits.
 
@@ -1172,11 +1172,12 @@ const any*       // read-only opaque pointer (maps to const void* in C)
 
 #### Const sources
 
-Const enters the type system at three sites and propagates from there through inference:
+Const enters the type system at four sites and propagates from there through inference:
 
 - **String and cstring literals**: `"hello"` has type `const str`, `c"hello"` has type `const cstr`. The data lives in static read-only memory.
 - **Function parameter annotations**: `let f = (s: const str) -> ...` declares that `f` will not modify `s`.
 - **Struct field declarations**: `struct config = name: const str` declares a read-only field.
+- **Address-of an immutable binding**: `&p` where `p` is a `let` binding (including a parameter or an immutable global) has type `const T*`. Reassignment through the pointer is the write `let` forecloses, so the address is read-only (§Address-of).
 
 Since FC has no type annotations on `let` bindings, local variable types are always inferred from the right-hand side. A binding inherits whatever constness the expression produces.
 
@@ -1243,9 +1244,10 @@ let cp = (const i32*) &x
 *cp = 10                 // compile error: cannot assign through const pointer/slice
 cp.field = 10           // compile error (for struct pointers)
 const_slice[0] = 10      // compile error
-&(cp.field)             // compile error: cannot take mutable address through const pointer
 free(cp)                 // compile error: cannot free const pointer/slice
 ```
+
+Taking an *address* through a const pointer is not itself an error — it is a read-only address. `&(cp.field)` has type `const F*`, and writing through the result (`*(&(cp.field)) = 10`) is rejected just the same. This mirrors `&<a let binding>`: an address inherits the write permission of the path it names.
 
 These are `diag_error` (non-fatal) — the compiler reports all const violations in a single pass.
 
@@ -1573,7 +1575,7 @@ let p = alloc(shape.circle(3.14))!
 | Negation | `-x` | signed integer types, float types | same type |
 | Boolean not | `!x` | `bool` only | `bool` |
 | Bitwise not | `~x` | integer types | same type |
-| Address-of | `&x` | `let mut` bindings only | `T*` |
+| Address-of | `&x` | any binding | `T*` on `let mut`, `const T*` on `let` |
 | Dereference | `*x` | `T*` | `T` |
 | Cast | `(T)x` | numeric, `bool`→numeric, pointer, slice — see §Casting | `T` |
 | Unwrap | `x!` | `T?`, `T!` | `T` — crashes at runtime if `none`/`err` (a result's abort includes the error code) |
@@ -2355,7 +2357,7 @@ let hypotenuse = (a: f64, b: f64) ->
 
 ### Parameters are let bindings
 
-Function parameters are let bindings — immutable and non-addressable within the function body. If you need a mutable local copy of a parameter, shadow it with a mutable let binding:
+Function parameters are let bindings — immutable within the function body. Like any `let`, a parameter is addressable read-only: `&p` yields a `const T*` (useful for passing to a `const`-pointer C function without a spurious mutable copy). If you need a mutable local copy of a parameter, shadow it with a mutable let binding:
 
 ```fc
 let factorial = (n: i32) ->
@@ -2426,8 +2428,8 @@ All local bindings in a function body — regardless of their lexical nesting de
 ```fc
 let f = () ->
     let px =
-        let mut x = 42
-        &x          // &x is valid here — x lives in f's stack frame
+        let x = 42
+        &x          // const i32*, valid here — x lives in f's stack frame
     *px             // still valid — f has not returned yet
 ```
 
@@ -2493,7 +2495,7 @@ let add = (n: i32) ->                    // not a closure — total is a global,
     total
 ```
 
-Capturing a pointer value (a `let` binding that holds a pointer) is allowed. The programmer is responsible for ensuring the pointed-to memory remains live for the lifetime of the closure.
+Capturing a pointer value (a `let` binding that holds a pointer) is allowed. The programmer is responsible for ensuring the pointed-to memory remains live for the lifetime of the closure. A `const T*` obtained from `&<a let binding>` is an ordinary pointer value, so it composes the same way — a closure may capture it by copy, giving read-only access to the pointee (again, the programmer owns the lifetime).
 
 If you want to mutate a mutable let binding from another function, there are two approaches. The first passes a pointer as an explicit parameter — this is a plain function, not a closure:
 
@@ -3303,17 +3305,23 @@ This is why `any*` is a valid and faithful representation of an opaque C handle:
 
 ### Address-of
 
-Only `let mut` bindings have addresses. You cannot take the address of a `let` binding: writing through the pointer (`*pp = v`) would reassign the binding through an alias — the very thing `let` forbids (§One rule, three knobs). Note this is a rule about the *binding*, not the value: the contents of a `let` value are both assignable and addressable — `p.x = 10` and `&p.x` are fine on a `let` struct (as are `b[0] = 10` and `&b[0]` on a `let` slice, and `t[0] = 10` and `&t[0]` on a `let` tuple) even though `&p` itself is not available.
+`&x` takes the address of a binding. The pointer's const-ness tracks the binding's reassignability: a `let mut` yields a writable `T*`, and a `let` yields a read-only `const T*`. Writing the whole value through the pointer (`*pp = v`) is reassignment by another name — the very thing `let` forbids (§One rule, three knobs) — so `&` on a `let` produces a const pointer that forecloses exactly that write, while still permitting reads.
 
 ```fc
 let mut x = 42
-let px = &x    // ok — x is a mutable let binding, px inferred as i32*
+let px = &x    // x is a let mut binding — px inferred as i32* (writable)
+*px = 99       // ok
 
 let y = 42
-let py = &y    // compile error — y is a let binding
+let py = &y    // y is a let binding — py inferred as const i32* (read-only)
+// *py = 99    // compile error — cannot write through a const pointer
 ```
 
-**Taking the address of a function** — `&f` on a function binding is valid if and only if the lambda is non-capturing. All function values use a fat-pointer representation internally, but a non-capturing lambda has a null context pointer, so the compiler can safely extract the raw `fn_ptr` field and produce a plain C-compatible function pointer.
+This is a rule about the *binding*, not the value: the contents of a `let` value are independently assignable and addressable — `p.x = 10` and `&p.x` (a writable `i32*`) are fine on a `let` struct (as are `b[0] = 10` and `&b[0]` on a `let` slice, and `t[0] = 10` and `&t[0]` on a `let` tuple), because a field or element write is not a reassignment of the binding.
+
+`const T*` here means no writes *through this pointer* — not that the value never changes (§The const qualifier). An immutable **global or module-level** `let` is addressable the same way, yielding a `const T*` with static provenance (so it may be returned). Taking an address **through a const path** is likewise a read-only address, not an error: `&(cp.field)` where `cp` is a `const T*` yields a `const F*`.
+
+**Taking the address of a function** — `&f` is valid on a **top-level function** or a **non-capturing `let mut`** lambda; it is *not* valid on a `let`-bound local lambda. Like any `let`, that would be a read-only address, and a const-qualified C function pointer is not a meaningful interop artifact, so the compiler requires `let mut` (or a top-level function) instead. All function values use a fat-pointer representation internally, but a non-capturing lambda has a null context pointer, so the compiler can safely extract the raw `fn_ptr` field and produce a plain C-compatible function pointer.
 
 In practice, `&f` is rarely needed. When a function type appears in an `extern` parameter declaration, the compiler handles the C function pointer mapping automatically — the programmer passes a non-capturing lambda directly without `&`. See §C Interop.
 

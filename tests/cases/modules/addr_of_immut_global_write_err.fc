@@ -1,0 +1,8 @@
+// Regression: writing through &<immutable global/module member> used to
+// compile and silently mutate a constant. Now rejected.
+module cfg =
+    let scale = 7
+let main = (args: str[]) ->
+    let p = &cfg.scale
+    *p = 99
+    0

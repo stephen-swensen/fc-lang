@@ -1,0 +1,12 @@
+// A module-level `let mut` is mutable global state; its address stays a
+// writable T* (static provenance).
+module m =
+    let mut counter = 5
+let bump = () ->
+    let p = &m.counter        // i32* — writable
+    *p = *p + 1
+let main = (args: str[]) ->
+    bump()
+    bump()
+    assert(m.counter == 7)
+    0

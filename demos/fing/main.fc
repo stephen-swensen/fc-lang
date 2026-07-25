@@ -89,7 +89,7 @@ let main = (args: str[]) ->
     defer net.close(fd)
 
     // Set receive timeout: 2 seconds
-    let mut timeout = time_ext.timeval { tv_sec = 2, tv_usec = 0 }
+    let timeout = time_ext.timeval { tv_sec = 2, tv_usec = 0 }
     sock_ext.setsockopt(fd, sock_ext.sol_socket, sock_ext.so_rcvtimeo, (const any*) &timeout, 16u32)
 
     let addr = net.make_addr(net.net_to_host32(ip), 0u16)

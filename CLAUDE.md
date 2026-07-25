@@ -198,7 +198,7 @@ match s with
 - The `->` token introduces the function body (or separates param types in function type syntax like `(i32) -> i32`)
 
 ### Bindings
-- `let`: immutable binding, not addressable, capturable in closures (by copy)
+- `let`: immutable binding, addressable read-only (`&x` → `const T*`), capturable in closures (by copy)
 - `let mut`: mutable binding, addressable (`&x` → `T*`), not capturable in closures
 - Both `let` and `let mut` allow field/element mutation — `let` controls reassignability, not content mutation
 - Shadowing is allowed (any combination of `let`/`let mut`)
