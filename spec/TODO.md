@@ -310,6 +310,33 @@ unchanged.
   confirm the capture-a-pointer idiom composes (it should: same as capturing any `let` pointer,
   programmer owns the lifetime).
 
+## Deferred (future): a `const` binding for frozen constants at global scope
+
+Surfaced 2026-07-24 while stress-testing the const/`let`/`let mut` model against an F#
+value-vs-variable lens. **Conclusion: FC's chosen axis stands — the owner controls content.**
+`let` vs `let mut` governs only the *root* (reassignability, and derived from it whole-value
+address-taking); a value's contents are always mutable *by the binding that owns them*, and
+content-immutability is expressed only at a reference boundary (`const T*` / `const T[]`).
+This is deliberate (see §One rule, three knobs) and we affirmed it rather than reworking it.
+
+We explored filling the rest of the two-bit `{rebind?} × {patch contents?}` square that FC's
+rebind/field-write split makes expressible — a frozen `let const` (no rebind, no patch) and a
+rebind-but-no-patch `let mut const` (≈ F#'s `let mutable` of an immutable record). Both are
+*coherent*, but: local frozen bindings are mostly author self-discipline (which FC punts to
+the programmer — no style diagnostics), and rebind-no-patch hands consumers no guarantee a
+plain `let mut` + const view doesn't already give. So neither earns a language feature.
+
+The **one** extension left open, as a *possible future feature* (not scheduled): a `const`
+modifier at **global/module scope only**, declaring a genuinely frozen constant — no rebind,
+no content write from anywhere — which would (a) make such globals ROM-able (emit C `const`,
+land in `.rodata`; a real win for the 16-bit/retro target) and (b) close the one edge where
+today's model reads oddly: a module/file-level `let config = point{…}` currently permits
+`config.x = 3` from anywhere (verified 2026-07-24), i.e. `let` globals are "mutable constants"
+distinguishable from `let mut` only by rebindability. Likely spelling `const x` as a peer of
+`let`/`let mut` (Zig/Rust precedent), with **no** `const mut`. Local `const` bindings are
+explicitly out of scope. Note this is orthogonal to — and larger than — the read-only
+address-of feature above; ship that first.
+
 ## Discarded pure value as a no-op error — extend the self-assignment rule
 
 Surfaced 2026-07-12 by a hand-written `factorial` whose `loop` had no `break`: the arm

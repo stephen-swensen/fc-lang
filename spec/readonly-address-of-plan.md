@@ -250,7 +250,39 @@ compiling (Part F), not the test runner.
 - Keep spec headings verbatim so the name-based `§` cross-references (`§Address-of`,
   `§One rule, three knobs`, `§Deep const`, `§Write rejection`) stay valid.
 
-## Open — further design questions (raised before approval)
+## Design deliberation outcome (2026-07-24) — the plan stands
 
-_To be filled in with the additional questions the user wants to settle before
-implementation._
+Before approving, we stress-tested FC's whole `let` / `let mut` / `const` model
+against an F# value-vs-variable lens (the doubt: "why is `const` only on
+pointer/slice types, not values like C?"). **Outcome: the model is sound — more
+coherent than C's — and this feature is *forced* by it, not bolted on.** No
+rework.
+
+- **Unifying framing.** Mutability is a property of *paths* (a root + hops).
+  `let`/`let mut` sets the root's rebind permission; `const` sets the write
+  permission at each dereference (lending) hop. `&` stamps a path with exactly the
+  permission it already had — which *derives* both the new rule (`&<let>` →
+  `const T*`) and item 5 (`&cp.field` → `const F*`) with zero free choices. FC's
+  split (root axis = keyword, hop axis = qualifier) is strictly less ambiguous
+  than C cramming both into `const` placement.
+- **"Why no `const` on value types?"** Value-immutability is already spelled
+  `let` (for a scalar, `let` ≡ C's `const int`); `const` is not a second
+  immutability system, only the annotation for the one thing `let` can't express —
+  permission on a lend. The only thing neither knob expresses is a frozen-contents
+  *owned* value (C's `const struct` local), which FC omits by design: **the owner
+  controls content.**
+- **Explored and declined:** filling the rest of the `{rebind?} × {patch?}` square
+  FC's model makes expressible — `let const` (frozen) and `let mut const`
+  (rebind-no-patch ≈ F# `let mutable` of an immutable record). Both coherent, but
+  local content-freeze is author self-discipline (FC punts style to the
+  programmer) and rebind-no-patch gives consumers no guarantee `let mut` + a const
+  view doesn't. **The owner-controls-content axis is affirmed as-is.**
+- **Left open (future, unscheduled):** at most a `const` modifier at
+  **global/module scope** for genuinely frozen, ROM-able constants — closing the
+  edge that a module/file-level `let config = point{…}` today permits `config.x =
+  3` from anywhere. Tracked in `spec/TODO.md` ("Deferred (future): a `const`
+  binding for frozen constants at global scope"). Orthogonal to and larger than
+  this plan — **ship the read-only address-of feature first.**
+
+No changes to Parts A–F below result from this deliberation; it only confirms the
+approach and records why the `const`-on-values question is settled.
