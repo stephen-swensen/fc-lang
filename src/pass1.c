@@ -1723,9 +1723,15 @@ static void infer_param_kinds(SymbolTable *global) {
  * were anticipated. */
 typedef struct { const char *cname; SrcLoc loc; bool is_extern; } CNameClaim;
 
+/* Open-addressed set of claimed names, keyed by the claim itself. A linear scan
+ * per declaration made this quadratic in the emitted-name count — invisible on a
+ * small program, 26ms on ten thousand declarations, and paid again on every
+ * keystroke the server analyzes a clean file. Sized and probed like the intern
+ * table (power-of-two capacity, linear probing, grow at half load); a slot is
+ * empty iff its `cname` is NULL, and nothing is ever removed. */
 typedef struct {
-    CNameClaim *items;
-    int count, cap;
+    CNameClaim *slots;
+    int count, capacity;
 } CNameClaims;
 
 /* The last path component of a mangled name — the declaration's source
@@ -1741,27 +1747,71 @@ static const char *mangled_tail(const char *cname) {
     return tail;
 }
 
+/* Claims are interned, so the key is the pointer, not the bytes. Allocator
+ * alignment leaves the low bits constant, which linear probing would turn into
+ * one long run, so the value is passed through a mixing finalizer first. */
+static uint32_t cname_hash(const char *cname) {
+    uint64_t x = (uint64_t)(uintptr_t)cname;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ULL;
+    x ^= x >> 33;
+    return (uint32_t)x;
+}
+
+static void claims_grow(CNameClaims *cl) {
+    int newcap = cl->capacity ? cl->capacity * 2 : 64;
+    CNameClaim *slots = calloc((size_t)newcap, sizeof(CNameClaim));
+    if (!slots) {
+        fprintf(stderr, "fcc: out of memory\n");
+        exit(1);
+    }
+    for (int i = 0; i < cl->capacity; i++) {
+        if (!cl->slots[i].cname) continue;
+        uint32_t idx = cname_hash(cl->slots[i].cname) & (uint32_t)(newcap - 1);
+        while (slots[idx].cname) idx = (idx + 1) & (uint32_t)(newcap - 1);
+        slots[idx] = cl->slots[i];
+    }
+    free(cl->slots);
+    cl->slots = slots;
+    cl->capacity = newcap;
+}
+
 static void claim_c_name(CNameClaims *cl, const char *cname, SrcLoc loc,
                          bool is_extern) {
     if (!cname) return;
-    for (int i = 0; i < cl->count; i++) {
+    /* Grow before probing: rehashing moves every slot, so a position found
+     * first would be stale. Half load keeps probe runs short. */
+    if ((cl->count + 1) * 2 >= cl->capacity) claims_grow(cl);
+
+    uint32_t idx = cname_hash(cname) & (uint32_t)(cl->capacity - 1);
+    for (;;) {
+        CNameClaim *e = &cl->slots[idx];
+        if (!e->cname) {                        /* first claimant keeps the name */
+            e->cname = cname;
+            e->loc = loc;
+            e->is_extern = is_extern;
+            cl->count++;
+            return;
+        }
         /* Mangled names and token spellings share one intern table, so pointer
          * equality is the comparison for both. */
-        if (cl->items[i].cname != cname) continue;
-        /* Two externs naming one C symbol is the feature, not a collision —
-         * that is how a header symbol gets a second FC alias. */
-        if (is_extern && cl->items[i].is_extern) return;
-        diag_error(loc,
-            "'%s' would be emitted as the C name '%s', which the declaration at "
-            "%s:%d already claims — rename one, or move it to a module path that "
-            "does not flatten onto the other's",
-            mangled_tail(cname), cname,
-            cl->items[i].loc.filename ? cl->items[i].loc.filename : "?",
-            cl->items[i].loc.line);
-        return;
+        if (e->cname == cname) {
+            /* Two externs naming one C symbol is the feature, not a collision —
+             * that is how a header symbol gets a second FC alias. */
+            if (is_extern && e->is_extern) return;
+            diag_error(loc,
+                "'%s' would be emitted as the C name '%s', which the declaration at "
+                "%s:%d already claims — rename one, or move it to a module path that "
+                "does not flatten onto the other's",
+                mangled_tail(cname), cname,
+                e->loc.filename ? e->loc.filename : "?",
+                e->loc.line);
+            return;
+        }
+        idx = (idx + 1) & (uint32_t)(cl->capacity - 1);
     }
-    CNameClaim c = { cname, loc, is_extern };
-    DA_APPEND(cl->items, cl->count, cl->cap, c);
 }
 
 static void collect_c_names(CNameClaims *cl, Decl **decls, int count) {
@@ -1816,7 +1866,7 @@ static void check_c_name_collisions(Program *prog) {
     if (diag_error_count() > 0) return;
     CNameClaims cl = { NULL, 0, 0 };
     collect_c_names(&cl, prog->decls, prog->decl_count);
-    free(cl.items);
+    free(cl.slots);
 }
 
 void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
