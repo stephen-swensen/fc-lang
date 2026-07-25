@@ -1,4 +1,5 @@
 #include "diag.h"
+#include "common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -40,10 +41,14 @@ void diag_set_abort_jmp(jmp_buf *env) {
 static void emit(SrcLoc loc, const char *fmt, va_list ap) {
     const char *fn = loc.filename ? loc.filename : g_filename;
     if (g_sink) {
-        char buf[2048];
-        vsnprintf(buf, sizeof buf, fmt, ap);
+        /* Sized to the message. The stderr path below never truncates, so a
+         * fixed buffer here would make the editor show a shorter diagnostic
+         * than the CLI for the same error — and the longest messages (a deep
+         * generic instantiation chain) are the ones that most need their tail. */
+        char *buf = str_vsprintf(fmt, ap);
         SrcLoc resolved = { .filename = fn, .line = loc.line, .col = loc.col };
         g_sink(resolved, buf, g_sink_ud);
+        free(buf);
     } else {
         /* CLI path: stream straight to stderr, byte-for-byte as before. */
         fprintf(stderr, "%s:%d:%d: error: ", fn, loc.line, loc.col);
@@ -73,10 +78,9 @@ _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...) {
 }
 
 _Noreturn void diag_fatal_simple(const char *fmt, ...) {
-    char buf[1024];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
+    char *buf = str_vsprintf(fmt, ap);   /* messages embed unbounded paths */
     va_end(ap);
     if (g_sink) {
         /* No location for a simple fatal; report at the start of the file. */
@@ -85,6 +89,7 @@ _Noreturn void diag_fatal_simple(const char *fmt, ...) {
     } else {
         fprintf(stderr, "fcc: error: %s\n", buf);
     }
+    free(buf);          /* the sink copies; the longjmp path must not leak */
     g_error_count++;
     if (g_abort_env) longjmp(*g_abort_env, 1);
     exit(1);

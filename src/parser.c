@@ -738,9 +738,8 @@ static Type *parse_type(Parser *p) {
             advance_p(p); /* consume . */
             Token *member = current(p);
             advance_p(p); /* consume member name */
-            char buf[512];
-            snprintf(buf, sizeof(buf), "%s.%.*s", type_name, member->length, member->start);
-            type_name = intern(p->intern, buf, (int)strlen(buf));
+            type_name = intern_sprintf(p->intern, "%s.%.*s", type_name,
+                                       member->length, member->start);
         }
         Type *udt = arena_alloc(p->arena, sizeof(Type));
         udt->kind = TYPE_STUB;
@@ -900,7 +899,16 @@ static Expr *parse_bracketed_expr(Parser *p, Prec min_prec) {
 }
 
 static uint64_t parse_int_value(const char *start, int length, bool *out_of_range) {
-    char buf[72];  /* 64 binary digits + null + margin */
+    /* Sized from the token, not a guessed maximum. A fixed buffer clipped the
+     * digit string, and a clipped *number* is not detectably wrong: strtoull on
+     * the surviving prefix succeeds and sets no ERANGE, so `0x000…0042` written
+     * with enough leading zeros to overrun the buffer silently evaluated to 0.
+     * The digits can never outnumber the token's own characters. */
+    char *buf = malloc((size_t)length + 1);
+    if (!buf) {
+        fprintf(stderr, "fcc: out of memory\n");
+        exit(1);
+    }
     int num_len = 0;
     if (out_of_range) *out_of_range = false;
 
@@ -912,7 +920,7 @@ static uint64_t parse_int_value(const char *start, int length, bool *out_of_rang
         else if (start[1] == 'o' || start[1] == 'O') { base = 8;  prefix_len = 2; }
     }
 
-    for (int i = prefix_len; i < length && num_len < 71; i++) {
+    for (int i = prefix_len; i < length; i++) {
         char c = start[i];
         bool ok = false;
         switch (base) {
@@ -929,6 +937,7 @@ static uint64_t parse_int_value(const char *start, int length, bool *out_of_rang
     errno = 0;
     uint64_t v = strtoull(buf, NULL, base);
     if (errno == ERANGE && out_of_range) *out_of_range = true;
+    free(buf);
     return v;
 }
 
@@ -1734,12 +1743,20 @@ static Expr *parse_prefix(Parser *p) {
             suffix_len = 3;
         }
         int num_end = t->length - suffix_len;
-        char buf[128];
+        /* Sized from the token for the same reason as parse_int_value: a fixed
+         * buffer clipped long literals, and dropping the tail of a float is
+         * silently wrong rather than an error — cutting `0.0…01e300` before its
+         * exponent yields 0.0 with neither ERANGE nor an out-of-range flag. */
+        char *buf = malloc((size_t)num_end + 1);
+        if (!buf) {
+            fprintf(stderr, "fcc: out of memory\n");
+            exit(1);
+        }
         int num_len = 0;
         bool mantissa_nonzero = false;
         bool past_mantissa = false;
         bool is_hex = t->length >= 2 && t->start[0] == '0' && (t->start[1] == 'x' || t->start[1] == 'X');
-        for (int i = 0; i < num_end && num_len < (int)sizeof(buf) - 1; i++) {
+        for (int i = 0; i < num_end; i++) {
             char c = t->start[i];
             if (c == '_') continue;
             if (is_hex ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E')) past_mantissa = true;
@@ -1752,6 +1769,7 @@ static Expr *parse_prefix(Parser *p) {
         buf[num_len] = '\0';
         errno = 0;
         double v = strtod(buf, NULL);
+        free(buf);
         bool oor = false, underflow = false;
         /* strtod sets ERANGE on overflow (returns ±HUGE_VAL) and may also
          * set it on underflow even for subnormal results. Distinguish by
@@ -1952,18 +1970,16 @@ static Expr *parse_prefix(Parser *p) {
                     is_struct_lit = true;
                 if (is_struct_lit) {
                     /* Build dotted name by consuming IDENT (. IDENT)* */
-                    char buf[512];
-                    int pos = snprintf(buf, sizeof(buf), "%s", name);
+                    const char *dotted_name = name;
                     advance_p(p); /* consume first IDENT */
                     while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
                         advance_p(p); /* consume . */
                         Token *seg = current(p);
-                        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ".%.*s",
-                                        seg->length, seg->start);
+                        dotted_name = intern_sprintf(p->intern, "%s.%.*s", dotted_name,
+                                                     seg->length, seg->start);
                         advance_p(p); /* consume IDENT */
                     }
                     advance_p(p); /* consume { */
-                    const char *dotted_name = intern(p->intern, buf, (int)strlen(buf));
                     return parse_struct_literal(p, dotted_name, loc);
                 }
             }
@@ -4079,8 +4095,7 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
     }
 
     /* Build namespace path: ident::ident::... */
-    char buf[512];
-    snprintf(buf, sizeof(buf), "%s", first);
+    const char *ns = first;
 
     while (check(p, TOK_COLONCOLON)) {
         advance_p(p); /* consume :: */
@@ -4088,24 +4103,23 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
             const char *part = tok_intern(p, expect(p, TOK_IDENT));
             if (!check(p, TOK_COLONCOLON)) {
                 /* This IDENT is NOT followed by ::, so it's the module name */
-                *out_ns = intern_cstr(p->intern, buf);
+                *out_ns = ns;
                 *out_mod = part;
                 return;
             }
             /* More :: follows — this is still namespace.
              * Use __ to separate segments so foo::bar != foo_bar. */
-            size_t cur = strlen(buf);
-            snprintf(buf + cur, sizeof(buf) - cur, "__%s", part);
+            ns = intern_sprintf(p->intern, "%s__%s", ns, part);
         } else {
             /* Bare namespace ending: from acme:: or from acme::graphics:: */
-            *out_ns = intern_cstr(p->intern, buf);
+            *out_ns = ns;
             *out_mod = NULL;
             return;
         }
     }
 
     /* Shouldn't reach here, but just in case */
-    *out_ns = intern_cstr(p->intern, buf);
+    *out_ns = ns;
     *out_mod = NULL;
 }
 
@@ -4238,16 +4252,13 @@ static Decl *parse_namespace_decl(Parser *p) {
     expect(p, TOK_NAMESPACE);
 
     /* namespace IDENT :: [IDENT ::] ... */
-    const char *first = tok_intern(p, expect(p, TOK_IDENT));
-    char buf[512];
-    snprintf(buf, sizeof(buf), "%s", first);
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
 
     while (check(p, TOK_COLONCOLON)) {
         advance_p(p);
         if (check(p, TOK_IDENT)) {
             const char *part = tok_intern(p, expect(p, TOK_IDENT));
-            size_t cur = strlen(buf);
-            snprintf(buf + cur, sizeof(buf) - cur, "__%s", part);
+            name = intern_sprintf(p->intern, "%s__%s", name, part);
         }
     }
 
@@ -4255,7 +4266,7 @@ static Decl *parse_namespace_decl(Parser *p) {
     d->kind = DECL_NAMESPACE;
     d->loc = loc;
     d->is_private = false;
-    d->ns.name = intern_cstr(p->intern, buf);
+    d->ns.name = name;
     return d;
 }
 

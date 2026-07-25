@@ -61,6 +61,65 @@ void arena_free(Arena *a) {
     a->current = NULL;
 }
 
+/* ---- Exact-size string formatting ---- */
+
+/* Measure with a throwaway pass, then format for real. The va_list is consumed
+ * by the measuring pass, so the copy is mandatory. */
+static int format_len(const char *fmt, va_list ap) {
+    va_list probe;
+    va_copy(probe, ap);
+    int n = vsnprintf(NULL, 0, fmt, probe);
+    va_end(probe);
+    /* vsnprintf only fails on an encoding error, which none of fcc's format
+     * strings can produce; degrade to an empty string rather than a negative
+     * allocation size. */
+    return n < 0 ? 0 : n;
+}
+
+char *str_vsprintf(const char *fmt, va_list ap) {
+    int n = format_len(fmt, ap);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) {
+        fprintf(stderr, "fcc: out of memory\n");
+        exit(1);
+    }
+    vsnprintf(buf, (size_t)n + 1, fmt, ap);
+    return buf;
+}
+
+char *str_sprintf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char *buf = str_vsprintf(fmt, ap);
+    va_end(ap);
+    return buf;
+}
+
+char *arena_sprintf(Arena *a, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = format_len(fmt, ap);
+    char *buf = arena_alloc(a, (size_t)n + 1);
+    vsnprintf(buf, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    return buf;
+}
+
+char *str_appendf(char *acc, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = format_len(fmt, ap);
+    size_t base = acc ? strlen(acc) : 0;
+    char *buf = realloc(acc, base + (size_t)n + 1);
+    if (!buf) {
+        fprintf(stderr, "fcc: out of memory\n");
+        exit(1);
+    }
+    vsnprintf(buf + base, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    return buf;
+}
+
 /* ---- String interning ---- */
 
 static uint32_t fnv1a(const char *s, int len) {
@@ -128,6 +187,22 @@ const char *intern_cstr(InternTable *t, const char *s) {
     return intern(t, s, (int)strlen(s));
 }
 
+const char *intern_sprintf(InternTable *t, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = format_len(fmt, ap);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) {
+        fprintf(stderr, "fcc: out of memory\n");
+        exit(1);
+    }
+    vsnprintf(buf, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    const char *result = intern(t, buf, n);
+    free(buf);
+    return result;
+}
+
 /* ---- C identifier hygiene ---- */
 
 /* C reserved spellings that FC permits as identifiers and that therefore must
@@ -159,11 +234,5 @@ bool is_c_reserved(const char *name) {
 
 const char *c_safe_ident(InternTable *t, const char *name) {
     if (!is_c_reserved(name)) return name;
-    size_t n = strlen(name);
-    char *buf = malloc(n + 5);  /* "fc__" + name + NUL */
-    memcpy(buf, "fc__", 4);
-    memcpy(buf + 4, name, n + 1);
-    const char *result = intern_cstr(t, buf);
-    free(buf);
-    return result;
+    return intern_sprintf(t, "fc__%s", name);
 }

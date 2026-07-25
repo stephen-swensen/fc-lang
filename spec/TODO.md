@@ -418,6 +418,49 @@ sizeless form instead of typing it; the bare-identifier spelling `alloca(point)`
 reported this via the `alloca(expr)` path, and the type spellings now agree. Tests
 `memory/alloca_{bare,module}_type_err`.
 
+## Fixed-buffer name/path truncation swept out of the compiler — FIXED 2026-07-25
+
+Noted while fixing the `alloc`/`alloca` bug above: `parse_type` assembled a module-qualified
+type name with `snprintf` into a `char buf[512]`. A sweep of `src/` found the same shape at
+every layer, and it is a genuinely nasty failure mode rather than a cosmetic one — **a
+truncated name is not invalid, it is a different valid name**. `snprintf` reports the cut only
+in a return value that name-building code drops, and nothing downstream can tell.
+
+Confirmed wrong against a build of the previous commit:
+
+- **Module-qualified type names** (`parse_type`, and the struct-literal spelling in
+  `parse_prefix`): a dotted name over ~500 chars became `unknown type name`.
+- **Namespace paths** (`namespace a::b`, `from a::b::`): two namespaces agreeing in their
+  first 510 characters mangled to one prefix and their same-named modules **merged** —
+  invisibly, since both `from` clauses clipped identically and still resolved.
+- **Numeric literals**: the digit string was copied into `char buf[72]` / `char buf[128]`
+  before `strtoull`/`strtod`. The clipped prefix parses cleanly and sets no `ERANGE`, so
+  `0x<90 zeros>42` silently evaluated to **0**, and a float clipped before its exponent to
+  **0.0** with no underflow flag.
+- **Instantiation descriptors** (`fmt_generic_inst`, mono's static_assert message,
+  `gen_inst_diag`): long template names lost their `<args>` suffix and the message after it.
+  `fmt_generic_inst`'s output also *keys the memo* that stops the generic-validation descent
+  from re-walking an instantiation, so two instances clipping to the same text deduped to one.
+- **`type_name()`**: rotating `char[256]` slots both truncated and — because each slot was
+  claimed *before* its operands were formatted into it — let a nested call scribble on the
+  partially-built name of the caller that invoked it (`pair<a<i32>, b<i32>, c<i32>, d<i32>>`
+  wrapped the ring mid-accumulation). The slots now own exactly-sized heap strings and are
+  published only once complete.
+- **LSP**: go-to-definition's `file://` URI, the `@lsp.rsp` token, and the directory
+  buffers behind unit keying and sibling discovery. The last of those silently split one
+  project into per-file units past the cap.
+
+`common.h` now provides `str_sprintf`/`str_vsprintf`/`arena_sprintf`/`str_appendf`/
+`intern_sprintf`; the rule and the "bounded by construction" exemption are recorded in
+CLAUDE.md. Buffers holding only compiler-generated text (`_fc_back_%d`, a `%g` rendering, a
+mangling tag) were deliberately left alone.
+
+Oracle: the emitted C is **byte-identical** to the previous commit on 1709 of 1710 single-file
+test cases; the one difference is the new literal test, where the numbers are now right.
+Tests `expressions/long_numeric_literals`, `modules/long_qualified_type`,
+`modules/long_namespace_path`, `generics/static_assert_long_name_fail`,
+`generics/generic_chain_long_name_err` — each verified to fail against the previous commit.
+
 ## Discarded pure value as a no-op error — extend the self-assignment rule
 
 Surfaced 2026-07-12 by a hand-written `factorial` whose `loop` had no `break`: the arm

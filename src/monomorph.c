@@ -86,6 +86,18 @@ static int mono_type_arg_depth(Type *t) {
     }
 }
 
+/* Spell an instantiation the way the user wrote it — "uwide<100>" — for a
+ * diagnostic. Grown to fit rather than formatted into a fixed buffer: both the
+ * template name and every argument spelling are unbounded, and a clipped
+ * descriptor names an instance the reader cannot find in their source. Caller
+ * frees. */
+static char *fmt_inst_display(const char *disp, Type **args, int count) {
+    char *acc = str_sprintf("%s<", disp);
+    for (int i = 0; i < count; i++)
+        acc = str_appendf(acc, "%s%s", i ? ", " : "", type_name(args[i]));
+    return str_appendf(acc, ">");
+}
+
 const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
                           const char *name, const char *ns_prefix,
                           Type **type_args, int count,
@@ -99,9 +111,10 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
     /* Build the base name for mangling */
     const char *base = name;
     if (ns_prefix) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "%s__%s", ns_prefix, name);
-        base = intern_cstr(intern_tbl, buf);
+        /* Exact-sized: this base feeds mangle_generic_name, so a clipped prefix
+         * would not fail — two differently-named generics would mangle onto one
+         * C symbol and silently merge. */
+        base = intern_sprintf(intern_tbl, "%s__%s", ns_prefix, name);
     }
     const char *mangled = mangle_generic_name(a, intern_tbl, base, type_args, count);
 
@@ -198,15 +211,9 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         }
         if (san > 0) {
             /* Human-readable instance descriptor: "uwide<100>" (the owner
-             * name captured at parse time — decl names get mangled). */
+             * name captured at parse time — decl names get mangled). Spelled on
+             * demand, since only the two failure paths below need it. */
             const char *disp = sas[0].owner ? sas[0].owner : name;
-            char inst_buf[256];
-            int pos = snprintf(inst_buf, sizeof(inst_buf), "%s<", disp);
-            for (int i = 0; i < count && pos > 0 && pos < (int)sizeof(inst_buf); i++)
-                pos += snprintf(inst_buf + pos, sizeof(inst_buf) - (size_t)pos,
-                                "%s%s", i ? ", " : "", type_name(type_args[i]));
-            if (pos > 0 && pos < (int)sizeof(inst_buf))
-                snprintf(inst_buf + pos, sizeof(inst_buf) - (size_t)pos, ">");
 
             int nbind = tp_count < count ? tp_count : count;
             for (int i = 0; i < san; i++) {
@@ -217,18 +224,22 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
                 int64_t v;
                 if (const_type_eval(&wrapper, type_params, type_args, nbind, &v)) {
                     if (v == 0) {
+                        char *inst = fmt_inst_display(disp, type_args, count);
                         diag_error(sas[i].loc,
                             "static assertion failed in instantiation of '%s': %s",
-                            inst_buf, sas[i].msg);
+                            inst, sas[i].msg);
+                        free(inst);
                         return mangled;   /* rejected — never registered */
                     }
                 } else {
                     SrcLoc eloc = {0};
                     const char *emsg = const_eval_take_error(&eloc);
+                    char *inst = fmt_inst_display(disp, type_args, count);
                     diag_error((emsg && eloc.filename) ? eloc : sas[i].loc,
                         "%s (in static_assert of '%s')",
                         emsg ? emsg : "could not evaluate static_assert condition",
-                        inst_buf);
+                        inst);
+                    free(inst);
                     return mangled;
                 }
             }

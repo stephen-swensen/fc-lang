@@ -146,12 +146,38 @@ one of them deliberately:
 `c_safe_ident` now escapes only *member* names (struct fields, union variant
 payloads), which live in per-type namespaces.
 
-Related: the emitters that descend into a value (`emit_pat_predicate`,
-`emit_pat_bindings`, `emit_value_eq`) build their member-access paths with
-`path_cat`, which is arena-backed. Never give these a fixed buffer — FC
-identifiers are unbounded, `snprintf` truncation is silent, and a cut inside a
-member name can land on a *shorter member of the same type*, which compiles
-clean and reads the wrong bytes.
+### No fixed buffers for names, paths, or types
+
+Whenever formatted text embeds an **FC identifier, a qualified name, a type
+spelling, a diagnostic descriptor, or a filesystem path**, size the allocation
+to the result. All of those are unbounded, `snprintf` reports a cut only in a
+return value that name-building code routinely drops, and — the reason this is
+an invariant rather than a style note — **a truncated name is not invalid, it is
+a different valid name**. It fails silently and plausibly:
+
+- a member path cut inside a member name lands on a *shorter member of the same
+  type* (`.u.abq` → `.u.ab`), which compiles clean under `-Wall -Werror` and
+  reads the wrong bytes;
+- two namespaces cut to a common prefix mangle onto one C symbol and merge;
+- a dotted type name cut short resolves to another symbol, or to none;
+- a digit string cut short parses fine and sets no `ERANGE`, so the literal is
+  simply the wrong number;
+- a descriptor that keys a memo makes two different instantiations compare
+  equal, silently skipping work.
+
+`common.h` provides the exact-size builders: `str_sprintf`/`str_vsprintf`
+(malloc'd, caller frees), `arena_sprintf` (arena lifetime), `str_appendf` (grow
+an accumulator, `NULL` starts it), and `intern_sprintf` (format then intern —
+the shape most name building wants). `path_cat` in codegen.c and
+`dup_type_name` in lsp.c are the local wrappers.
+
+A fixed buffer is fine only where the content is **bounded by construction** —
+a compiler-generated `_fc_back_%d`, an integer or `%g` float rendering, a
+mangling tag — and reads that way at a glance.
+
+`type_name()` has no arena, so it returns into rotating per-kind slots that own
+heap strings: the pointer stays valid until that slot comes round again. Hold
+more than a couple at once and you need a copy (`dup_type_name`).
 
 ### Types and Literals
 - Default integer: `i32`; default float: `f64`

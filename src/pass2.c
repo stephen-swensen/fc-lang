@@ -2158,21 +2158,17 @@ static const char *fmt_type_inst(Arena *arena, const char *mangled_name,
                                  Type **args, int nargs) {
     const char *base = mangled_name ? mangled_name : "?";
     for (const char *p = base; (p = strstr(p, "__")); p += 2) base = p + 2;
-    char buf[256];
-    int pos = snprintf(buf, sizeof(buf), "%s", base);
-    if (pos < 0) pos = 0;
-    if (nargs > 0 && pos < (int)sizeof(buf)) {
-        int n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, "<");
-        if (n > 0) pos += n;
-        for (int i = 0; i < nargs && pos < (int)sizeof(buf); i++) {
-            n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s%s",
-                         i ? ", " : "", args && args[i] ? type_name(args[i]) : "?");
-            if (n > 0) pos += n;
-        }
-        if (pos < (int)sizeof(buf))
-            snprintf(buf + pos, sizeof(buf) - (size_t)pos, ">");
+    char *buf = str_sprintf("%s", base);
+    if (nargs > 0) {
+        buf = str_appendf(buf, "<");
+        for (int i = 0; i < nargs; i++)
+            buf = str_appendf(buf, "%s%s", i ? ", " : "",
+                              args && args[i] ? type_name(args[i]) : "?");
+        buf = str_appendf(buf, ">");
     }
-    return arena_strdup(arena, buf, (int)strlen(buf));
+    const char *result = arena_strdup(arena, buf, (int)strlen(buf));
+    free(buf);
+    return result;
 }
 
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
@@ -3401,19 +3397,14 @@ static Provenance assign_dest_prov(Expr *target) {
 static const char *fmt_generic_inst(const char *func_name, Arena *arena,
     Type *func_type, const char **type_params, Type **bindings, int ntp)
 {
-    static char buf[512];
-    const int cap = (int)sizeof(buf);
-    int pos = 0;
-    /* Clamp pos to [0, cap] after every append so the remaining-size argument
-     * never underflows when a deeply nested instantiation's name overflows the
-     * buffer (the descriptor just truncates — it is depth-keyed for dedup). */
-    #define FGI_APPEND(...) do { \
-        if (pos < cap) { \
-            int _n = snprintf(buf + pos, (size_t)(cap - pos), __VA_ARGS__); \
-            if (_n > 0) pos += _n; \
-            if (pos > cap) pos = cap; \
-        } \
-    } while (0)
+    /* Grown to fit. This descriptor is not only display text: it also keys the
+     * gen_seen memo, so a clipped spelling makes two genuinely different
+     * instantiations of a long-named generic compare equal — silently halting a
+     * divergent descent before the depth backstop can report it. (The depth
+     * prefix the callers prepend was the workaround for exactly that; with an
+     * exact descriptor it is now belt-and-braces.) */
+    char *buf = NULL;
+    #define FGI_APPEND(...) (buf = str_appendf(buf, __VA_ARGS__))
     FGI_APPEND("%s", func_name);
     /* When any binding is a const argument, spell the full binding list —
      * "f<3>(...)" — both for the diagnostic and because this descriptor keys
@@ -3443,7 +3434,9 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
     }
     FGI_APPEND(")");
     #undef FGI_APPEND
-    return buf;
+    const char *result = arena_strdup(arena, buf, (int)strlen(buf));
+    free(buf);
+    return result;
 }
 
 /* Bounds transitive (cross-function-body) generic validation so a pathological
@@ -3523,9 +3516,8 @@ static int gen_inst_type_depth(Type *t) {
  * bounds the total work. Without it, a body with two self-calls re-descends
  * 2^depth times and exhausts memory (a single such test OOM-kills the process).
  * Keyed on (callee symbol, concrete signature) so same-named generics in
- * different modules never alias. fmt_generic_inst() returns a shared static
- * buffer, so descriptors are stored as strcmp-comparable arena copies. The memo
- * is reset at each independent top-level entry. */
+ * different modules never alias. Descriptors are stored as strcmp-comparable
+ * arena copies. The memo is reset at each independent top-level entry. */
 typedef struct { const Symbol *sym; const char *desc; } GenSeen;
 static GenSeen *g_gen_seen = NULL;
 static int g_gen_seen_n = 0, g_gen_seen_cap = 0;
@@ -3568,10 +3560,9 @@ static const InstFrame *inst_frame_root(const InstFrame *f) {
  * chain, previously collapsed to just the innermost frame, is visible. The
  * primary location is the outermost (entry) call site, the user's actionable code. */
 static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fmt, ...) {
-    char msg[512];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(msg, sizeof(msg), fmt, ap);
+    char *msg = str_vsprintf(fmt, ap);
     va_end(ap);
 
     SrcLoc primary = inst_frame_root(frame)->site;
@@ -3580,28 +3571,24 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
         /* Single-level: identical to the original format. */
         diag_error(primary, "in %s at %d:%d: %s",
                    frame->desc, err_loc.line, err_loc.col, msg);
+        free(msg);
         return;
     }
 
-    /* Multi-level: head line + one continuation per frame (innermost first). */
-    char buf[4096];
-    int pos = 0;
-    const int cap = (int) sizeof(buf);
-    #define GID_APPEND(...) do { \
-        if (pos < cap) { \
-            int _n = snprintf(buf + pos, (size_t)(cap - pos), __VA_ARGS__); \
-            if (_n > 0) pos += _n; \
-            if (pos > cap) pos = cap; \
-        } \
-    } while (0)
-    GID_APPEND("in %s at %d:%d: %s", frame->desc, err_loc.line, err_loc.col, msg);
+    /* Multi-level: head line + one continuation per frame (innermost first).
+     * Grown to fit — a deep chain of long instantiation descriptors is exactly
+     * the case that overran the old fixed buffer, and truncating drops the
+     * outermost frames, which are the actionable ones. */
+    char *buf = str_sprintf("in %s at %d:%d: %s",
+                            frame->desc, err_loc.line, err_loc.col, msg);
+    free(msg);
     for (const InstFrame *f = frame; f; f = f->parent) {
         const char *fn = f->site.filename ? f->site.filename : diag_filename();
-        GID_APPEND("\n    %s instantiated at %s:%d:%d",
-                   f->desc, fn, f->site.line, f->site.col);
+        buf = str_appendf(buf, "\n    %s instantiated at %s:%d:%d",
+                          f->desc, fn, f->site.line, f->site.col);
     }
-    #undef GID_APPEND
     diag_error(primary, "%s", buf);
+    free(buf);
 }
 
 /* Per-instance validation of a type operand (default/alloc/sizeof/alignof
@@ -3821,26 +3808,18 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                     }
                     ok = false;
                 } else {
-                    /* fmt_generic_inst returns a shared static buffer; copy into the
-                     * arena so the descriptor stays valid across the recursive
-                     * descent (which calls fmt_generic_inst again). cdesc is the
-                     * human-readable substitution context threaded into diagnostics.
-                     * Validate each distinct instantiation once — recursive or diamond
-                     * generic calls otherwise re-descend exponentially. */
-                    const char *tmp = fmt_generic_inst(callee->name, arena, cft,
+                    /* cdesc is the human-readable substitution context threaded
+                     * into diagnostics; it lives in the arena, so it stays valid
+                     * across the recursive descent. Validate each distinct
+                     * instantiation once — recursive or diamond generic calls
+                     * otherwise re-descend exponentially. */
+                    const char *cdesc = fmt_generic_inst(callee->name, arena, cft,
                         callee->type_params, cbind, cntp);
-                    const char *cdesc = arena_strdup(arena, tmp, (int) strlen(tmp));
-                    /* Memo key is depth-prefixed (kept separate from the display
-                     * descriptor): fmt_generic_inst truncates in its fixed buffer, so
-                     * two different-depth instantiations of a long-named generic can
-                     * format identically; without the depth in the key such a collision
-                     * would dedup them and silently halt a divergent descent before the
-                     * backstop above fires. */
-                    char keybuf[512];
-                    int klen = snprintf(keybuf, sizeof(keybuf), "%d:%s", maxd, tmp);
-                    if (klen < 0) klen = 0;
-                    if (klen >= (int)sizeof(keybuf)) klen = (int)sizeof(keybuf) - 1;
-                    const char *ckey = arena_strdup(arena, keybuf, klen);
+                    /* The memo key adds the structural depth, so two
+                     * instantiations that differ only in nesting stay distinct
+                     * even where the printed signature does not distinguish
+                     * them. Kept separate from the display descriptor. */
+                    const char *ckey = arena_sprintf(arena, "%d:%s", maxd, cdesc);
                     if (gen_seen_add(arena, callee, ckey)) {
                         Expr *cfn = callee->decl->let.init;
                         /* Push a chain frame: this callee instantiation, required
@@ -4518,18 +4497,18 @@ static Symbol *extern_fn_value_symbol(Expr *e, Type *t) {
 
 /* Best-effort source spelling of a name-bearing expr for a diagnostic:
  * "abs" for a bare ident, "c.abs" for module-qualified access. A deeper object
- * chain collapses to the field name (still unambiguous with the error loc). */
-static const char *value_ref_display(Expr *e, char *buf, size_t n) {
+ * chain collapses to the field name (still unambiguous with the error loc).
+ * Arena-backed: FC identifiers are unbounded, and this spelling is quoted back
+ * to the user as the name to go fix. */
+static const char *value_ref_display(Arena *a, Expr *e) {
     if (e->kind == EXPR_IDENT)
-        snprintf(buf, n, "%s", e->ident.name);
-    else if ((e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD) &&
-             e->field.object && e->field.object->kind == EXPR_IDENT)
-        snprintf(buf, n, "%s.%s", e->field.object->ident.name, e->field.name);
-    else if (e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD)
-        snprintf(buf, n, "%s", e->field.name);
-    else
-        snprintf(buf, n, "?");
-    return buf;
+        return e->ident.name;
+    if ((e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD) &&
+        e->field.object && e->field.object->kind == EXPR_IDENT)
+        return arena_sprintf(a, "%s.%s", e->field.object->ident.name, e->field.name);
+    if (e->kind == EXPR_FIELD || e->kind == EXPR_DEREF_FIELD)
+        return e->field.name;
+    return "?";
 }
 
 /* Judge a format spec's modifiers against its conversion and operand type.
@@ -4675,8 +4654,7 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
      * body calls the extern). This mirrors the fat-pointer-only reach of the
      * `&f` C-interop escape hatch (spec §Address-of). */
     if (in_value_position && extern_fn_value_symbol(e, t)) {
-        char nm[128];
-        value_ref_display(e, nm, sizeof nm);
+        const char *nm = value_ref_display(ctx->arena, e);
         diag_error(e->loc,
             "extern function '%s' cannot be used as a value; call it directly, "
             "e.g. %s(...), or wrap it in a lambda that calls it, e.g. (x) -> %s(x)",
@@ -6297,9 +6275,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         tmpl_has_errors = last->type && type_is_error(last->type);
                     }
                     if (!tmpl_has_errors) {
-                        const char *tmp = fmt_generic_inst(callee_sym->name, ctx->arena,
-                            ft, callee_sym->type_params, bindings, ntp);
-                        const char *inst_desc = arena_strdup(ctx->arena, tmp, (int) strlen(tmp));
+                        const char *inst_desc = fmt_generic_inst(callee_sym->name,
+                            ctx->arena, ft, callee_sym->type_params, bindings, ntp);
                         /* Fresh memo for this top-level validation; seed it with the
                          * entry instantiation so its own self-calls don't re-descend
                          * into an identical body. The memo key is depth-prefixed to
@@ -6310,12 +6287,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                             int d = gen_inst_type_depth(bindings[i]);
                             if (d > seed_d) seed_d = d;
                         }
-                        char seedbuf[512];
-                        int slen = snprintf(seedbuf, sizeof(seedbuf), "%d:%s", seed_d, tmp);
-                        if (slen < 0) slen = 0;
-                        if (slen >= (int)sizeof(seedbuf)) slen = (int)sizeof(seedbuf) - 1;
                         gen_seen_reset();
-                        gen_seen_add(ctx->arena, callee_sym, arena_strdup(ctx->arena, seedbuf, slen));
+                        gen_seen_add(ctx->arena, callee_sym,
+                            arena_sprintf(ctx->arena, "%d:%s", seed_d, inst_desc));
                         /* Entry (root) chain frame: this instantiation, required by
                          * the user's call `e`. Transitive descents push children. */
                         InstFrame root = { inst_desc, e->loc, NULL };
@@ -9135,11 +9109,10 @@ static const Expr *resolve_pattern_const_path(CheckCtx *ctx, Pattern *pat) {
     if (type_is_error(t)) return NULL;  /* diagnostic already emitted */
     const Expr *lit = error_const_literal(node);
     if (!lit) {
-        char path[256];
-        int n = 0;
-        for (int i = 0; i < pat->const_path.part_count && n < (int)sizeof path - 1; i++)
-            n += snprintf(path + n, sizeof path - (size_t)n, "%s%s",
-                          i ? "." : "", pat->const_path.parts[i]);
+        const char *path = "";
+        for (int i = 0; i < pat->const_path.part_count; i++)
+            path = arena_sprintf(ctx->arena, "%s%s%s", path, i ? "." : "",
+                                 pat->const_path.parts[i]);
         diag_error(pat->loc,
             "'%s' in a pattern must name a declared error constant "
             "(a member of an 'error' group)", path);

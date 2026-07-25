@@ -374,9 +374,15 @@ static JsonValue *mk_range(Arena *a, int l0, int c0, int l1, int c1) {
 /* Type rendering (type_name uses rotating static buffers — copy at once)   */
 /* ======================================================================== */
 
-static void copy_type_name(Type *t, char *out, size_t n) {
+/* Snapshot a type's spelling into the message arena. type_name() hands back a
+ * rotating slot that a later call reclaims, so any caller holding more than one
+ * spelling — or holding one across further type_name() calls — needs its own
+ * copy. Sized to the spelling rather than a fixed `char tn[512]`: a type name
+ * is unbounded (nested generics, long qualified names), and a clipped one is
+ * shown to the user as if it were the type. */
+static const char *dup_type_name(Arena *a, Type *t) {
     const char *tn = type_name(t);   /* rotating static buffer */
-    snprintf(out, n, "%s", tn ? tn : "?");
+    return arena_sprintf(a, "%s", tn ? tn : "?");
 }
 
 /* ======================================================================== */
@@ -1267,13 +1273,15 @@ static char *find_lsp_rsp(const char *doc_path) {
     const char *slash = strrchr(doc_path, '/');
     if (!slash) return NULL;
     int dlen = (int)(slash - doc_path);
-    if (dlen <= 0 || dlen >= 4096) return NULL;
-    char dirbuf[4096];
-    memcpy(dirbuf, doc_path, (size_t)dlen);
-    dirbuf[dlen] = '\0';
+    if (dlen <= 0) return NULL;
+    /* Sized to the path rather than capped at 4096: over the cap this silently
+     * returned NULL, so a project nested deeply enough lost lsp.rsp discovery
+     * and fell back to the sibling heuristic with no explanation. */
+    char *dirbuf = str_sprintf("%.*s", dlen, doc_path);
 
     /* Resolve the directory (the file itself may be unsaved/virtual). */
     char *dir = realpath(dirbuf, NULL);
+    free(dirbuf);
     if (!dir) return NULL;
 
     char *result = NULL;
@@ -1305,26 +1313,28 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
     const char *slash = strrchr(doc_path, '/');
     if (!slash) return;
     int dlen = (int)(slash - doc_path);
-    char dir[4096];
-    if (dlen <= 0 || dlen >= (int)sizeof dir) return;
-    memcpy(dir, doc_path, (size_t)dlen);
-    dir[dlen] = '\0';
+    if (dlen <= 0) return;
+    char *dir = str_sprintf("%.*s", dlen, doc_path);
 
     DIR *d = opendir(dir);
-    if (!d) return;
+    if (!d) { free(dir); return; }
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         const char *nm = e->d_name;
         size_t l = strlen(nm);
         if (l < 4 || strcmp(nm + l - 3, ".fc") != 0) continue;
-        char full[4096];
-        if (snprintf(full, sizeof full, "%s/%s", dir, nm) >= (int)sizeof full) continue;
-        if (strcmp(full, doc_path) == 0) continue;          /* the open file itself */
+        /* Sized to fit: over the old cap the sibling was silently skipped, so a
+         * deep path quietly shrank the compilation unit. */
+        char *full = str_sprintf("%s/%s", dir, nm);
         struct stat st;
-        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) continue;
-        DA_APPEND(*out, *count, *cap, dup_cstr(full));
+        if (strcmp(full, doc_path) != 0 &&                  /* not the open file */
+            !(stat(full, &st) == 0 && S_ISDIR(st.st_mode)))
+            DA_APPEND(*out, *count, *cap, full);
+        else
+            free(full);
     }
     closedir(d);
+    free(dir);
 #endif
 }
 
@@ -1358,17 +1368,14 @@ static char *unit_key(LspDoc *doc) {
     /* Directory of doc->path (canonicalized so symlinked spellings coincide). */
     const char *slash = strrchr(doc->path, '/');
     int dlen = slash ? (int)(slash - doc->path) : 0;
-    char dirbuf[4096];
-    if (dlen <= 0 || dlen >= (int)sizeof dirbuf) {
-        return dup_cstr(doc->path);          /* no directory: unique key */
-    }
-    memcpy(dirbuf, doc->path, (size_t)dlen);
-    dirbuf[dlen] = '\0';
+    if (dlen <= 0) return dup_cstr(doc->path);   /* no directory: unique key */
+    /* Sized to fit. This string is a *unit key*: over the old cap two documents
+     * in different deep directories both fell back to their own path, splitting
+     * one project into per-file units (and re-analyzing each separately). */
+    char *dirbuf = str_sprintf("%.*s", dlen, doc->path);
     char *c = canon_path(dirbuf);
-    size_t n = strlen(c);
-    char *k = malloc(n + 3);
-    memcpy(k, "D:", 2);
-    memcpy(k + 2, c, n + 1);
+    free(dirbuf);
+    char *k = str_sprintf("D:%s", c);
     free(c);
     return k;
 #endif
@@ -1435,8 +1442,9 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
 
     char *rsp_path = find_lsp_rsp(doc->path);
     if (rsp_path) {
-        char at[4096];
-        snprintf(at, sizeof at, "@%s", rsp_path);
+        /* Sized to the path: a clipped "@..." names a different file (or none),
+         * and args_expand would report that as a broken response file. */
+        char *at = str_sprintf("@%s", rsp_path);
         char *fake_argv[] = { (char *)"fcc", at };
         char *aerr = NULL;
         if (args_expand(2, fake_argv, &rsp_expanded, &aerr) &&
@@ -1476,6 +1484,7 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
             args_compile_free(&rsp_ca);
             args_expand_free(&rsp_expanded);
         }
+        free(at);
         free(rsp_path);
     }
 
@@ -1562,11 +1571,10 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
     /* lsp.rsp existed but couldn't be used: attach one file-level diagnostic so
      * the editor explains the fallback instead of silently differing. */
     if (rsp_err) {
-        char m[512];
-        snprintf(m, sizeof m, "lsp.rsp ignored: %s", rsp_err);
+        /* rsp_err quotes a path from the response file — unbounded. */
         Diagnostic d;
         d.loc = (SrcLoc){ .filename = u->result->filename, .line = 1, .col = 1 };
-        d.message = arena_strdup(&u->result->arena, m, (int)strlen(m));
+        d.message = arena_sprintf(&u->result->arena, "lsp.rsp ignored: %s", rsp_err);
         DA_APPEND(u->result->diags, u->result->diag_count, u->result->diag_cap, d);
         free(rsp_err);
     }
@@ -2025,14 +2033,12 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
          * result type of this occurrence when it carries information (skip void
          * builtins like free/assert, and any node pass2 couldn't type). */
         const BuiltinDoc *bd = hit.builtin;
-        char rt[256]; rt[0] = '\0';
+        const char *rt = NULL;
         if (hit.type && !type_is_error(hit.type) && hit.type->kind != TYPE_VOID)
-            copy_type_name(hit.type, rt, sizeof rt);
-        const char *fmt = rt[0] ? "```fc\n%s\n```\n\n%s\n\n*Result type: `%s`*"
-                                : "```fc\n%s\n```\n\n%s";
-        int need = snprintf(NULL, 0, fmt, bd->sig, bd->doc, rt) + 1;
-        md = arena_alloc(a, (size_t)need);
-        snprintf(md, (size_t)need, fmt, bd->sig, bd->doc, rt);
+            rt = dup_type_name(a, hit.type);
+        md = rt ? arena_sprintf(a, "```fc\n%s\n```\n\n%s\n\n*Result type: `%s`*",
+                                bd->sig, bd->doc, rt)
+                : arena_sprintf(a, "```fc\n%s\n```\n\n%s", bd->sig, bd->doc);
     } else {
         /* Doc comment at the definition site. The site may live in another file (a
          * sibling or the stdlib), so read whichever buffer backs it; reuse the open
@@ -2066,18 +2072,18 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
             Decl *dd = hit.type_ref_sym ? hit.type_ref_sym->decl : hit.decl_site;
             DeclKind dk = hit.type_ref_sym ? hit.type_ref_sym->kind
                                            : hit.decl_site->kind;
-            char header[600];
+            const char *header;
             if (dk == DECL_ENUM) {
                 Type *repr = (dd && dd->kind == DECL_ENUM && dd->enu.repr)
                            ? dd->enu.repr : type_int32();
-                snprintf(header, sizeof header, "enum %s of %s", nm, type_name(repr));
+                header = arena_sprintf(a, "enum %s of %s", nm, type_name(repr));
             } else {
                 const char *kw = dk == DECL_STRUCT ? "struct"
                                : dk == DECL_UNION  ? "union"
                                : (dd && dd->kind == DECL_MODULE &&
                                   dd->module.is_error_group) ? "error"
                                : "module";
-                snprintf(header, sizeof header, "%s %s", kw, nm);
+                header = arena_sprintf(a, "%s %s", kw, nm);
             }
 
             /* Companion module's doc, read at its own declaration line. */
@@ -2104,34 +2110,22 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
                  * with the theme's editorHoverWidget.border, which is
                  * invisible in themes that draw borderless hovers. */
                 #define HOVER_RULE "────────────────────────────────"
-                const char *cfmt = comp_md
-                    ? HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s"
-                    : HOVER_RULE "\n\n```fc\nmodule %s\n```";
-                int cneed = snprintf(NULL, 0, cfmt, nm, comp_md) + 1;
-                char *comp_sec = arena_alloc(a, (size_t)cneed);
-                snprintf(comp_sec, (size_t)cneed, cfmt, nm, comp_md);
-                const char *fmt = doc_md
-                    ? "```fc\n%s\n```\n\n%s\n\n%s"
-                    : "```fc\n%s\n```\n\n%s";
-                int need = doc_md
-                    ? snprintf(NULL, 0, fmt, header, doc_md, comp_sec) + 1
-                    : snprintf(NULL, 0, fmt, header, comp_sec) + 1;
-                md = arena_alloc(a, (size_t)need);
-                if (doc_md) snprintf(md, (size_t)need, fmt, header, doc_md, comp_sec);
-                else        snprintf(md, (size_t)need, fmt, header, comp_sec);
+                char *comp_sec = comp_md
+                    ? arena_sprintf(a, HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s",
+                                    nm, comp_md)
+                    : arena_sprintf(a, HOVER_RULE "\n\n```fc\nmodule %s\n```", nm);
+                md = doc_md
+                    ? arena_sprintf(a, "```fc\n%s\n```\n\n%s\n\n%s",
+                                    header, doc_md, comp_sec)
+                    : arena_sprintf(a, "```fc\n%s\n```\n\n%s", header, comp_sec);
             } else {
-                const char *fmt = doc_md ? "```fc\n%s\n```\n\n%s" : "```fc\n%s\n```";
-                int need = snprintf(NULL, 0, fmt, header, doc_md) + 1;
-                md = arena_alloc(a, (size_t)need);
-                snprintf(md, (size_t)need, fmt, header, doc_md);
+                md = doc_md ? arena_sprintf(a, "```fc\n%s\n```\n\n%s", header, doc_md)
+                            : arena_sprintf(a, "```fc\n%s\n```", header);
             }
         } else {
-            char tn[512];
-            copy_type_name(hit.type, tn, sizeof tn);
-            const char *fmt = doc_md ? "```fc\n%s: %s\n```\n\n%s" : "```fc\n%s: %s\n```";
-            int need = snprintf(NULL, 0, fmt, nm, tn, doc_md) + 1;
-            md = arena_alloc(a, (size_t)need);
-            snprintf(md, (size_t)need, fmt, nm, tn, doc_md);
+            const char *tn = dup_type_name(a, hit.type);
+            md = doc_md ? arena_sprintf(a, "```fc\n%s: %s\n```\n\n%s", nm, tn, doc_md)
+                        : arena_sprintf(a, "```fc\n%s: %s\n```", nm, tn);
         }
     }
 
@@ -2192,12 +2186,12 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
         dc0 = dcol - 1;
     }
 
-    /* Build a file:// uri for the definition path. */
-    char def_uri[2048];
-    if (strcmp(def_path, doc->path) == 0)
-        snprintf(def_uri, sizeof def_uri, "%s", doc->uri);
-    else
-        snprintf(def_uri, sizeof def_uri, "file://%s", def_path);
+    /* Build a file:// uri for the definition path. Sized to the path: a clipped
+     * URI still looks like a URI, so the editor would silently open the wrong
+     * file (or nothing) rather than report a problem. */
+    const char *def_uri = strcmp(def_path, doc->path) == 0
+        ? doc->uri
+        : arena_sprintf(a, "file://%s", def_path);
 
     JsonValue *loc = json_object(a);
     json_object_set(a, loc, "uri", json_str(a, def_uri));
@@ -2237,22 +2231,19 @@ static int name_end_col(const LineIndex *idx, const char *src, int line, int nam
 static void lens_emit(LensCtx *lc, int let_line, int let_col, bool is_mut,
                       Type *type, bool init_is_lambda) {
     if (!type) return;
-    char title[560];
+    const char *title;
     /* For a lambda binding the parameter types are written explicitly at the
      * definition site, so the only new information is the inferred return type:
      * render `:-> ret`. Everything else — including a plain function-reference
      * binding (`let f = g`), whose params are NOT visible here — shows the full
      * type. Hover is unaffected and always reports the full type. */
     if (init_is_lambda && type->kind == TYPE_FUNC && type->func.return_type) {
-        char rt[512];
-        copy_type_name(type->func.return_type, rt, sizeof rt);
         /* Inline keeps a space after the colon to match the plain `: T` hints
          * (`let f: -> ret`); the standalone CodeLens reads fine tight (`:-> ret`). */
-        snprintf(title, sizeof title, lc->inlay ? ": -> %s" : ":-> %s", rt);
+        title = arena_sprintf(lc->a, lc->inlay ? ": -> %s" : ":-> %s",
+                              type_name(type->func.return_type));
     } else {
-        char tn[512];
-        copy_type_name(type, tn, sizeof tn);
-        snprintf(title, sizeof title, ": %s", tn);
+        title = arena_sprintf(lc->a, ": %s", type_name(type));
     }
 
     FindCtx fc = {0};
@@ -2484,11 +2475,9 @@ static void emit_module_members(Arena *a, JsonValue *arr, Symbol *mod) {
     for (int i = 0; i < m->count; i++) {
         if (m->symbols[i].is_private) continue;
         if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
-        char detail[512];
-        detail[0] = '\0';
-        if (m->symbols[i].type) copy_type_name(m->symbols[i].type, detail, sizeof detail);
-        add_item(a, arr, m->symbols[i].name, sym_kind_to_cik(&m->symbols[i]),
-                 detail[0] ? detail : NULL);
+        const char *detail = m->symbols[i].type
+            ? dup_type_name(a, m->symbols[i].type) : NULL;
+        add_item(a, arr, m->symbols[i].name, sym_kind_to_cik(&m->symbols[i]), detail);
     }
 }
 
@@ -2570,7 +2559,7 @@ static bool complete_type_properties(Arena *a, JsonValue *arr, Type *tn) {
     if (!tn) return false;
     bool is_int = type_is_integer(tn), is_float = type_is_float(tn);
     if (!is_int && !is_float) return false;          /* bool/char/str/etc.: none */
-    char ty[128]; copy_type_name(tn, ty, sizeof ty);
+    const char *ty = dup_type_name(a, tn);
     add_item(a, arr, "bits", CIK_FIELD, "i32");       /* bit width */
     add_item(a, arr, "min",  CIK_FIELD, ty);          /* smallest value */
     add_item(a, arr, "max",  CIK_FIELD, ty);          /* largest value */
@@ -2715,11 +2704,9 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     /* Slice fat-pointer fields (covers str = u8[]). */
     if (t->kind == TYPE_SLICE) {
         add_item(a, arr, "len", CIK_FIELD, "i64");
-        char ety[128]; ety[0] = '\0';
-        if (t->slice.elem) copy_type_name(t->slice.elem, ety, sizeof ety);
-        char pdetail[160];
-        snprintf(pdetail, sizeof pdetail, "%s*", ety[0] ? ety : "any");
-        add_item(a, arr, "ptr", CIK_FIELD, pdetail);
+        add_item(a, arr, "ptr", CIK_FIELD,
+                 arena_sprintf(a, "%s*", t->slice.elem ? type_name(t->slice.elem)
+                                                       : "any"));
         return true;
     }
     /* Option discriminant fields (the value itself needs `!` to unwrap). */
@@ -2736,11 +2723,9 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     }
     /* Struct fields (tuples are indexed, not named). */
     if (t->kind == TYPE_STRUCT && !t->struc.is_tuple) {
-        for (int i = 0; i < t->struc.field_count; i++) {
-            char detail[512];
-            copy_type_name(t->struc.fields[i].type, detail, sizeof detail);
-            add_item(a, arr, t->struc.fields[i].name, CIK_FIELD, detail);
-        }
+        for (int i = 0; i < t->struc.field_count; i++)
+            add_item(a, arr, t->struc.fields[i].name, CIK_FIELD,
+                     dup_type_name(a, t->struc.fields[i].type));
         return true;
     }
     /* Union variants (bare-name construction site). */
@@ -2840,11 +2825,10 @@ static void complete_scope(Arena *a, JsonValue *items, NameSet *seen,
                 if (m->symbols[i].is_private) continue;
                 if (sym_is_mangled_type_twin(&m->symbols[i])) continue;
                 if (!nameset_add(seen, m->symbols[i].name)) continue;
-                char detail[512]; detail[0] = '\0';
-                if (m->symbols[i].type)
-                    copy_type_name(m->symbols[i].type, detail, sizeof detail);
                 add_item(a, items, m->symbols[i].name,
-                         sym_kind_to_cik(&m->symbols[i]), detail[0] ? detail : NULL);
+                         sym_kind_to_cik(&m->symbols[i]),
+                         m->symbols[i].type ? dup_type_name(a, m->symbols[i].type)
+                                            : NULL);
             }
         }
         emit_imports(a, items, seen, ms->imports);
@@ -2954,10 +2938,9 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
             if (!st->symbols[i].name) continue;
             if (sym_is_mangled_type_twin(&st->symbols[i])) continue;
             if (!nameset_add(&seen, st->symbols[i].name)) continue;
-            char detail[512]; detail[0] = '\0';
-            if (st->symbols[i].type) copy_type_name(st->symbols[i].type, detail, sizeof detail);
             add_item(a, items, st->symbols[i].name, sym_kind_to_cik(&st->symbols[i]),
-                     detail[0] ? detail : NULL);
+                     st->symbols[i].type ? dup_type_name(a, st->symbols[i].type)
+                                         : NULL);
         }
         free(seen.names);
     }
@@ -3087,14 +3070,14 @@ static bool load_stdlib_from_dir(LspServer *S, const char *dir) {
         const char *nm = e->d_name;
         size_t l = strlen(nm);
         if (l < 4 || strcmp(nm + l - 3, ".fc") != 0) continue;
-        char full[4096];
-        if (snprintf(full, sizeof full, "%s/%s", dir, nm) >= (int)sizeof full) continue;
+        char *full = str_sprintf("%s/%s", dir, nm);   /* sized to fit */
         struct stat st;
-        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) continue;
         int len;
-        char *buf = read_whole_file(full, &len);
-        if (!buf) continue;
-        AnalysisSource src = { dup_cstr(full), buf, len };
+        char *buf = NULL;
+        if (!(stat(full, &st) == 0 && S_ISDIR(st.st_mode)))
+            buf = read_whole_file(full, &len);
+        if (!buf) { free(full); continue; }
+        AnalysisSource src = { full, buf, len };
         DA_APPEND(S->stdlib, S->stdlib_count, S->stdlib_cap, src);
         any = true;
     }

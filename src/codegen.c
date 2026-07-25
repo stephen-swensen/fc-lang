@@ -55,10 +55,7 @@ static const char *pat_binding_c_name(const Pattern *p) {
  * same struct or union* (`.u.abq` → `.u.ab`), which compiles clean under
  * -Wall -Werror and reads the wrong bytes. */
 static const char *path_cat(const char *base, const char *sep, const char *tail) {
-    size_t n = strlen(base) + strlen(sep) + strlen(tail) + 1;
-    char *buf = arena_alloc(g_arena, n);
-    snprintf(buf, n, "%s%s%s", base, sep, tail);
-    return buf;
+    return arena_sprintf(g_arena, "%s%s%s", base, sep, tail);
 }
 
 /* The C member holding a union's variant payloads. Naming the inner union — C
@@ -7316,16 +7313,12 @@ static void symmap_add(const char *c_name, const char *fc_name,
  * allocation. Returns a stable pointer suitable for storing in the symmap. */
 static const char *fmt_mono_display(Arena *arena, const char *template_name,
                                     Type **type_args, int type_arg_count) {
-    char buf[512];
-    int off = snprintf(buf, sizeof buf, "%s<", template_name);
-    for (int i = 0; i < type_arg_count && off < (int)sizeof buf; i++) {
+    const char *disp = arena_sprintf(arena, "%s<", template_name);
+    for (int i = 0; i < type_arg_count; i++) {
         const char *tn = type_name(type_args[i]);
-        off += snprintf(buf + off, sizeof buf - (size_t)off, "%s%s",
-                        i == 0 ? "" : ", ", tn ? tn : "?");
+        disp = arena_sprintf(arena, "%s%s%s", disp, i == 0 ? "" : ", ", tn ? tn : "?");
     }
-    if (off < (int)sizeof buf) off += snprintf(buf + off, sizeof buf - (size_t)off, ">");
-    if (off >= (int)sizeof buf) off = (int)sizeof buf - 1;
-    return arena_strdup(arena, buf, off);
+    return arena_sprintf(arena, "%s>", disp);
 }
 
 /* Lambda display name.  The location is rendered separately as

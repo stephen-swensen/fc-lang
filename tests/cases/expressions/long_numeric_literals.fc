@@ -1,0 +1,29 @@
+// Numeric literals longer than any fixed scratch buffer.
+//
+// The digit string used to be copied into a `char buf[72]` (int) and
+// `char buf[128]` (float) before strtoull/strtod. Truncation there is not a
+// detectable error — the surviving prefix parses cleanly and sets no ERANGE —
+// so a literal padded past the buffer silently evaluated to the wrong number.
+// Both buffers are now sized from the token, which cannot be shorter than the
+// digits it holds.
+let main = (args: str[]) ->
+    // Leading zeros are insignificant, so the value is small but the token is
+    // long. Clipped at 72 chars this read as 0.
+    let hex = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000042
+    assert(hex == 66)
+
+    let dec = 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012345
+    assert(dec == 12345)
+
+    let bin = 0b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101
+    assert(bin == 5)
+
+    let oct = 0o00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017
+    assert(oct == 15)
+
+    // A float whose exponent sits past the old 128-char cut: clipping before
+    // `e300` left 0.0, with no underflow flag to show for it.
+    let f = 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e300
+    assert(f > 9.0e168)
+    assert(f < 1.1e169)
+    0

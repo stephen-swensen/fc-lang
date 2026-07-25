@@ -4,21 +4,37 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-/* Accumulating snprintf into a fixed buffer, robust to overflow: clamps *pos to
- * [0, cap] so the remaining-size argument can never underflow to a huge size_t
- * when a deeply nested type name exceeds the buffer (the name just truncates).
- * The naive `snprintf(buf + pos, cap - (size_t)pos, ...)` idiom overflows the
- * buffer once pos > cap — reachable for e.g. wrap<wrap<...>> at depth ~50+. */
-static void tn_appendf(char *buf, int *pos, int cap, const char *fmt, ...) {
-    if (*pos < 0) *pos = 0;
-    if (*pos >= cap) { *pos = cap; return; }
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(buf + *pos, (size_t)(cap - *pos), fmt, ap);
-    va_end(ap);
-    if (n > 0) *pos += n;
-    if (*pos > cap) *pos = cap;
+/* A rotating slot holding one finished type spelling.
+ *
+ * type_name() has no arena and no caller-frees contract, so its results live in
+ * rotating storage: a returned pointer stays valid until that slot comes round
+ * again, which is what lets `diag_error("%s vs %s", type_name(a), type_name(b))`
+ * work. Each kind keeps its own small ring, exactly as before.
+ *
+ * Two things changed from the fixed `char buf[256]` these used to be. The slot
+ * now *owns* a heap string sized to the spelling, so a long name (a deep
+ * wrap<wrap<…>>, a many-argument instantiation) is printed in full rather than
+ * clipped mid-identifier — and a clipped type name is not visibly broken, it
+ * reads as a different, plausible type. And the spelling is assembled in a
+ * private allocation and only then published, so a nested type_name() call can
+ * no longer scribble on the partially-built name of the caller that invoked it
+ * (with fixed slots, `pair<a<i32>, b<i32>, c<i32>, d<i32>>` wrapped the ring
+ * mid-accumulation and garbled the result). */
+typedef struct { char *s; } TnSlot;
+
+static const char *tn_publish(TnSlot *slots, int n, int *idx, char *owned) {
+    TnSlot *slot = &slots[*idx];
+    *idx = (*idx + 1) % n;
+    free(slot->s);
+    slot->s = owned;
+    return owned;
 }
+
+#define TN_PUBLISH(nslots, owned) do {                  \
+        static TnSlot _slots[nslots];                   \
+        static int _idx = 0;                            \
+        return tn_publish(_slots, (nslots), &_idx, (owned)); \
+    } while (0)
 
 static char *str_dup(const char *s) {
     size_t len = strlen(s) + 1;
@@ -484,24 +500,20 @@ static const char *primitive_names[] = {
 
 /* Print a const-generic expression tree for diagnostics/hover: binary nodes
  * parenthesized ("('n * 2)"), matching the required source spelling. */
-static void const_expr_print(char *buf, int *pos, int cap, Expr *e) {
-    if (!e) { tn_appendf(buf, pos, cap, "?"); return; }
+static char *const_expr_print(char *acc, Expr *e) {
+    if (!e) return str_appendf(acc, "?");
     switch (e->kind) {
     case EXPR_INT_LIT:
-        tn_appendf(buf, pos, cap, "%lld", (long long)e->int_lit.value);
-        return;
+        return str_appendf(acc, "%lld", (long long)e->int_lit.value);
     case EXPR_TYPE_VAR_REF:
-        tn_appendf(buf, pos, cap, "%s", e->type_var_ref.name);
-        return;
+        return str_appendf(acc, "%s", e->type_var_ref.name);
     case EXPR_BOOL_LIT:
-        tn_appendf(buf, pos, cap, "%s", e->bool_lit.value ? "true" : "false");
-        return;
+        return str_appendf(acc, "%s", e->bool_lit.value ? "true" : "false");
     case EXPR_UNARY_PREFIX:
-        tn_appendf(buf, pos, cap, "%s",
+        acc = str_appendf(acc, "%s",
                    e->unary_prefix.op == TOK_TILDE ? "~"
                  : e->unary_prefix.op == TOK_BANG ? "!" : "-");
-        const_expr_print(buf, pos, cap, e->unary_prefix.operand);
-        return;
+        return const_expr_print(acc, e->unary_prefix.operand);
     case EXPR_BINARY: {
         const char *op = "?";
         switch (e->binary.op) {
@@ -517,20 +529,17 @@ static void const_expr_print(char *buf, int *pos, int cap, Expr *e) {
         case TOK_AMPAMP: op = "&&"; break; case TOK_PIPEPIPE: op = "||"; break;
         default: break;
         }
-        tn_appendf(buf, pos, cap, "(");
-        const_expr_print(buf, pos, cap, e->binary.left);
-        tn_appendf(buf, pos, cap, " %s ", op);
-        const_expr_print(buf, pos, cap, e->binary.right);
-        tn_appendf(buf, pos, cap, ")");
-        return;
+        acc = str_appendf(acc, "(");
+        acc = const_expr_print(acc, e->binary.left);
+        acc = str_appendf(acc, " %s ", op);
+        acc = const_expr_print(acc, e->binary.right);
+        return str_appendf(acc, ")");
     }
     case EXPR_CAST:
-        tn_appendf(buf, pos, cap, "(%s) ", type_name(e->cast.target));
-        const_expr_print(buf, pos, cap, e->cast.operand);
-        return;
+        acc = str_appendf(acc, "(%s) ", type_name(e->cast.target));
+        return const_expr_print(acc, e->cast.operand);
     default:
-        tn_appendf(buf, pos, cap, "?");
-        return;
+        return str_appendf(acc, "?");
     }
 }
 
@@ -540,18 +549,12 @@ const char *type_name(Type *t) {
     if (t->is_const) {
         if (is_str_type(t)) return "const str";
         if (is_cstr_type(t)) return "const cstr";
-        static char cbufs[4][256];
-        static int cidx = 0;
-        char *buf = cbufs[cidx & 3]; cidx++;
+        if (t->kind == TYPE_ANY_PTR) return "const any*";
         if (t->kind == TYPE_POINTER)
-            snprintf(buf, 256, "const %s*", type_name(t->pointer.pointee));
-        else if (t->kind == TYPE_SLICE)
-            snprintf(buf, 256, "const %s[]", type_name(t->slice.elem));
-        else if (t->kind == TYPE_ANY_PTR)
-            snprintf(buf, 256, "const any*");
-        else
-            snprintf(buf, 256, "const ?");
-        return buf;
+            TN_PUBLISH(4, str_sprintf("const %s*", type_name(t->pointer.pointee)));
+        if (t->kind == TYPE_SLICE)
+            TN_PUBLISH(4, str_sprintf("const %s[]", type_name(t->slice.elem)));
+        return "const ?";
     }
     if (t->alias) return t->alias;
     if (t->kind < TYPE_POINTER) {
@@ -562,131 +565,66 @@ const char *type_name(Type *t) {
     if (is_cstr_type(t)) return "cstr";
     /* For compound types, build a recursive name */
     switch (t->kind) {
-    case TYPE_POINTER: {
-        static char pbufs[4][256];
-        static int pidx = 0;
-        char *buf = pbufs[pidx & 3]; pidx++;
-        snprintf(buf, 256, "%s*", type_name(t->pointer.pointee));
-        return buf;
-    }
-    case TYPE_SLICE: {
-        static char sbufs[4][256];
-        static int sidx = 0;
-        char *buf = sbufs[sidx & 3]; sidx++;
-        snprintf(buf, 256, "%s[]", type_name(t->slice.elem));
-        return buf;
-    }
-    case TYPE_OPTION: {
-        static char obufs[4][256];
-        static int oidx = 0;
-        char *buf = obufs[oidx & 3]; oidx++;
-        snprintf(buf, 256, "%s?", type_name(t->option.inner));
-        return buf;
-    }
-    case TYPE_RESULT: {
-        static char rbufs[4][256];
-        static int ridx = 0;
-        char *buf = rbufs[ridx & 3]; ridx++;
-        snprintf(buf, 256, "%s!", type_name(t->result.inner));
-        return buf;
-    }
-    case TYPE_FIXED_ARRAY: {
-        static char fabufs[4][256];
-        static int faidx = 0;
-        char *buf = fabufs[faidx & 3]; faidx++;
+    case TYPE_POINTER:
+        TN_PUBLISH(4, str_sprintf("%s*", type_name(t->pointer.pointee)));
+    case TYPE_SLICE:
+        TN_PUBLISH(4, str_sprintf("%s[]", type_name(t->slice.elem)));
+    case TYPE_OPTION:
+        TN_PUBLISH(4, str_sprintf("%s?", type_name(t->option.inner)));
+    case TYPE_RESULT:
+        TN_PUBLISH(4, str_sprintf("%s!", type_name(t->result.inner)));
+    case TYPE_FIXED_ARRAY:
         if (t->fixed_array.size_ref)
-            snprintf(buf, 256, "%s[%s]", type_name(t->fixed_array.elem),
-                     type_name(t->fixed_array.size_ref));
-        else
-            snprintf(buf, 256, "%s[%lld]", type_name(t->fixed_array.elem),
-                     (long long)t->fixed_array.size);
-        return buf;
-    }
-    case TYPE_CONST_INT: {
-        static char cibufs[4][32];
-        static int ciidx = 0;
-        char *buf = cibufs[ciidx & 3]; ciidx++;
-        snprintf(buf, 32, "%lld", (long long)t->const_int.value);
-        return buf;
-    }
-    case TYPE_CONST_EXPR: {
-        static char cebufs[4][256];
-        static int ceidx = 0;
-        char *buf = cebufs[ceidx & 3]; ceidx++;
-        int pos = 0;
-        const_expr_print(buf, &pos, 256, t->const_expr.expr);
-        return buf;
-    }
+            TN_PUBLISH(4, str_sprintf("%s[%s]", type_name(t->fixed_array.elem),
+                                      type_name(t->fixed_array.size_ref)));
+        TN_PUBLISH(4, str_sprintf("%s[%lld]", type_name(t->fixed_array.elem),
+                                  (long long)t->fixed_array.size));
+    case TYPE_CONST_INT:
+        TN_PUBLISH(4, str_sprintf("%lld", (long long)t->const_int.value));
+    case TYPE_CONST_EXPR:
+        TN_PUBLISH(4, const_expr_print(NULL, t->const_expr.expr));
     case TYPE_FUNC: {
-        static char bufs[2][256];
-        static int bidx = 0;
-        char *buf = bufs[bidx & 1]; bidx++;
-        int pos = 0;
+        char *buf = NULL;
         if (t->func.type_param_count > 0) {
-            tn_appendf(buf, &pos, 256, "<");
-            for (int i = 0; i < t->func.type_param_count; i++) {
-                if (i > 0) tn_appendf(buf, &pos, 256, ", ");
-                tn_appendf(buf, &pos, 256, "%s", t->func.type_params[i]);
-            }
-            tn_appendf(buf, &pos, 256, ">");
+            buf = str_appendf(buf, "<");
+            for (int i = 0; i < t->func.type_param_count; i++)
+                buf = str_appendf(buf, "%s%s", i ? ", " : "", t->func.type_params[i]);
+            buf = str_appendf(buf, ">");
         }
-        tn_appendf(buf, &pos, 256, "(");
-        for (int i = 0; i < t->func.param_count; i++) {
-            if (i > 0) tn_appendf(buf, &pos, 256, ", ");
-            tn_appendf(buf, &pos, 256, "%s", type_name(t->func.param_types[i]));
-        }
-        if (t->func.is_variadic) {
-            if (t->func.param_count > 0) tn_appendf(buf, &pos, 256, ", ");
-            tn_appendf(buf, &pos, 256, "...");
-        }
-        tn_appendf(buf, &pos, 256, ") -> %s", type_name(t->func.return_type));
-        return buf;
+        buf = str_appendf(buf, "(");
+        for (int i = 0; i < t->func.param_count; i++)
+            buf = str_appendf(buf, "%s%s", i ? ", " : "",
+                              type_name(t->func.param_types[i]));
+        if (t->func.is_variadic)
+            buf = str_appendf(buf, "%s...", t->func.param_count > 0 ? ", " : "");
+        buf = str_appendf(buf, ") -> %s", type_name(t->func.return_type));
+        TN_PUBLISH(2, buf);
     }
     case TYPE_STRUCT: {
         if (t->struc.is_tuple) {
-            static char ttbufs[4][512];
-            static int ttidx = 0;
-            char *buf = ttbufs[ttidx & 3]; ttidx++;
-            int pos = 0;
-            tn_appendf(buf, &pos, 512, "{");
-            for (int i = 0; i < t->struc.field_count; i++) {
-                if (i > 0) tn_appendf(buf, &pos, 512, ", ");
-                tn_appendf(buf, &pos, 512, "%s", type_name(t->struc.fields[i].type));
-            }
-            tn_appendf(buf, &pos, 512, "}");
-            return buf;
+            char *buf = str_sprintf("{");
+            for (int i = 0; i < t->struc.field_count; i++)
+                buf = str_appendf(buf, "%s%s", i ? ", " : "",
+                                  type_name(t->struc.fields[i].type));
+            TN_PUBLISH(4, str_appendf(buf, "}"));
         }
         if (t->struc.type_arg_count > 0 && t->struc.qualified_name) {
-            static char stbufs[4][256];
-            static int stidx = 0;
-            char *buf = stbufs[stidx & 3]; stidx++;
-            const char *display = t->struc.qualified_name;
-            int pos = 0;
-            tn_appendf(buf, &pos, 256, "%s<", display);
-            for (int i = 0; i < t->struc.type_arg_count; i++) {
-                if (i > 0) tn_appendf(buf, &pos, 256, ", ");
-                tn_appendf(buf, &pos, 256, "%s", type_name(t->struc.type_args[i]));
-            }
-            tn_appendf(buf, &pos, 256, ">");
-            return buf;
+            char *buf = str_sprintf("%s<", t->struc.qualified_name);
+            for (int i = 0; i < t->struc.type_arg_count; i++)
+                buf = str_appendf(buf, "%s%s", i ? ", " : "",
+                                  type_name(t->struc.type_args[i]));
+            TN_PUBLISH(4, str_appendf(buf, ">"));
         }
         if (t->struc.qualified_name) return t->struc.qualified_name;
         return t->struc.name;
     }
     case TYPE_UNION: {
         if (t->unio.type_arg_count > 0 && t->unio.qualified_name) {
-            static char utbufs[4][256];
-            static int utidx = 0;
-            char *buf = utbufs[utidx & 3]; utidx++;
-            const char *display = t->unio.qualified_name;
-            int pos = 0;
-            tn_appendf(buf, &pos, 256, "%s<", display);
-            for (int i = 0; i < t->unio.type_arg_count; i++) {
-                if (i > 0) tn_appendf(buf, &pos, 256, ", ");
-                tn_appendf(buf, &pos, 256, "%s", type_name(t->unio.type_args[i]));
-            }
-            tn_appendf(buf, &pos, 256, ">");
-            return buf;
+            char *buf = str_sprintf("%s<", t->unio.qualified_name);
+            for (int i = 0; i < t->unio.type_arg_count; i++)
+                buf = str_appendf(buf, "%s%s", i ? ", " : "",
+                                  type_name(t->unio.type_args[i]));
+            TN_PUBLISH(4, str_appendf(buf, ">"));
         }
         if (t->unio.qualified_name) return t->unio.qualified_name;
         return t->unio.name;

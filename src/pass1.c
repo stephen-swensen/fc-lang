@@ -164,14 +164,14 @@ static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
     }
 }
 
-/* Build the one legal self-reference form, "name<'a, 'b>", for the diagnostic. */
-static const char *uniform_self_form(const char *name, const char **params, int pc) {
-    static char buf[256];
-    int pos = snprintf(buf, sizeof(buf), "%s<", name);
-    for (int i = 0; i < pc && pos < (int)sizeof(buf); i++)
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s%s", i ? ", " : "", params[i]);
-    if (pos < (int)sizeof(buf)) snprintf(buf + pos, sizeof(buf) - (size_t)pos, ">");
-    return buf;
+/* Build the one legal self-reference form, "name<'a, 'b>", for the diagnostic.
+ * Caller frees. Grown to fit — the type name and its parameter list are both
+ * unbounded, and this form is quoted to the user as the spelling to write. */
+static char *uniform_self_form(const char *name, const char **params, int pc) {
+    char *buf = str_sprintf("%s<", name);
+    for (int i = 0; i < pc; i++)
+        buf = str_appendf(buf, "%s%s", i ? ", " : "", params[i]);
+    return str_appendf(buf, ">");
 }
 
 static void check_type_def_recursion(Decl *d) {
@@ -203,11 +203,13 @@ static void check_type_def_recursion(Decl *d) {
             bad = find_nonuniform_self_ref(d->unio.variants[i].payload, self_name, params, pc);
     }
     if (bad) {
+        char *form = uniform_self_form(self_name, params, pc);
         diag_error(d->loc,
             "non-uniform recursive type '%s' is not supported: a generic type may "
             "only refer to itself uniformly as '%s'; a self-reference with any other "
             "type arguments would require infinitely many monomorphized instances",
-            self_name, uniform_self_form(self_name, params, pc));
+            self_name, form);
+        free(form);
     }
     free(params);
 }
@@ -559,12 +561,7 @@ Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_pr
  * This avoids collisions between e.g. namespace foo:: module bar (foo__bar)
  * and global module foo_bar (foo_bar). */
 static const char *make_mangled(InternTable *intern, const char *prefix, const char *name) {
-    int needed = snprintf(NULL, 0, "%s__%s", prefix, name) + 1;
-    char *buf = malloc((size_t)needed);
-    snprintf(buf, (size_t)needed, "%s__%s", prefix, name);
-    const char *result = intern_cstr(intern, buf);
-    free(buf);
-    return result;
+    return intern_sprintf(intern, "%s__%s", prefix, name);
 }
 
 /* The mangling prefix for a declaration path rooted at namespace `ns` (NULL =

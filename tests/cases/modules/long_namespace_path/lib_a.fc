@@ -1,0 +1,13 @@
+// Two namespaces that agree for the first 510 characters and differ only in
+// their final segment.
+//
+// The namespace path was assembled by snprintf-ing each `::` segment onto a
+// `char buf[512]`, in both the `namespace` declaration and the `from` clause.
+// Past the cap the trailing segment was clipped away, so these two distinct
+// namespaces mangled to one name and their same-named `cfg` modules merged —
+// silently, since both `from` clauses clipped to the same prefix and therefore
+// still resolved to it. Both halves are now sized to the path.
+namespace nspre_qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq::aaa::
+
+module cfg =
+    let v = 1

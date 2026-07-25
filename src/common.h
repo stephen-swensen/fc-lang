@@ -1,4 +1,5 @@
 #pragma once
+#include <stdarg.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -36,6 +37,36 @@ void *arena_alloc(Arena *a, size_t size);
 char *arena_strdup(Arena *a, const char *s, int len);
 void arena_free(Arena *a);
 
+/* ---- Exact-size string formatting ---- */
+
+/* printf-format into a fresh allocation sized exactly to the result.
+ *
+ * These are the replacement for the `char buf[N]` + snprintf idiom anywhere the
+ * formatted text embeds an FC identifier, a qualified name, a type spelling, or
+ * a filesystem path. All of those are unbounded, and snprintf reports a cut only
+ * through a return value that name-building code routinely drops — so the
+ * failure is silent, and a truncated *name* does not become invalid, it becomes
+ * a **different valid name**: `a.bcd` cut to `a.bc` resolves to a real other
+ * symbol, and two namespaces cut to a common prefix mangle onto one C symbol.
+ *
+ * `str_sprintf` returns malloc'd memory the caller frees — the right shape when
+ * the result is interned and then discarded. `arena_sprintf` returns arena
+ * memory that lives as long as the arena. Both abort on allocation failure,
+ * matching arena_alloc, so callers never see NULL. */
+char *str_sprintf(const char *fmt, ...);
+char *arena_sprintf(Arena *a, const char *fmt, ...);
+
+/* va_list form of str_sprintf, for the varargs functions that forward. `ap` is
+ * consumed (the caller still owns the va_end). */
+char *str_vsprintf(const char *fmt, va_list ap);
+
+/* Append printf-formatted text to a malloc'd string, returning the (possibly
+ * moved) result and freeing nothing the caller still holds — the old pointer is
+ * consumed. Passing NULL starts a fresh string, so a build loop needs no special
+ * first iteration. This is the growing counterpart to str_sprintf: the way to
+ * assemble a name, path, or diagnostic descriptor of unknown final length. */
+char *str_appendf(char *acc, const char *fmt, ...);
+
 /* ---- String interning ---- */
 
 typedef struct InternEntry {
@@ -54,6 +85,12 @@ typedef struct InternTable {
 void intern_init(InternTable *t, Arena *a);
 const char *intern(InternTable *t, const char *s, int len);
 const char *intern_cstr(InternTable *t, const char *s);
+
+/* Format and intern in one step. This is the shape almost every name-building
+ * site wants — a qualified name, a mangled prefix, a namespace path — where the
+ * formatted text is a temporary and only the interned result is kept. Sized
+ * exactly (see str_sprintf), so no component can be silently clipped. */
+const char *intern_sprintf(InternTable *t, const char *fmt, ...);
 
 /* ---- C identifier hygiene ---- */
 

@@ -341,16 +341,15 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
                 const char *slash = strrchr(base, '/');
                 if (slash) base = slash + 1;
             }
-            char msg[256];
-            if (base)
-                snprintf(msg, sizeof msg,
+            /* Sized to fit: the prose alone nearly filled the old 256-byte
+             * buffer, so a long filename clipped the sentence that names it. */
+            const char *msg = base
+                ? arena_sprintf(&r->arena,
                          "analysis incomplete: an error in an included file (%s) "
                          "halted type checking — hover, definition, and lenses are "
-                         "unavailable for this file until it is resolved", base);
-            else
-                snprintf(msg, sizeof msg,
-                         "analysis incomplete: type checking did not run — hover, "
-                         "definition, and lenses are unavailable for this file");
+                         "unavailable for this file until it is resolved", base)
+                : "analysis incomplete: type checking did not run — hover, "
+                  "definition, and lenses are unavailable for this file";
             Diagnostic d;
             d.loc = (SrcLoc){ .filename = r->filename, .line = 1, .col = 1 };
             d.message = arena_strdup(&r->arena, msg, (int)strlen(msg));

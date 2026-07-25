@@ -6,7 +6,7 @@
 #define _DEFAULT_SOURCE
 
 #include "args.h"
-#include "common.h"     /* DA_APPEND */
+#include "common.h"     /* DA_APPEND, str_sprintf */
 #include "platform.h"   /* platform_detect_flags */
 
 #include <stdio.h>
@@ -24,17 +24,7 @@
 /* ---- small helpers ---- */
 
 /* malloc'd formatted message (caller frees). */
-static char *msgf(const char *fmt, ...) {
-    va_list ap; va_start(ap, fmt);
-    va_list ap2; va_copy(ap2, ap);
-    int n = vsnprintf(NULL, 0, fmt, ap);
-    va_end(ap);
-    if (n < 0) n = 0;
-    char *s = malloc((size_t)n + 1);
-    vsnprintf(s, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    return s;
-}
+#define msgf str_sprintf
 
 static char *dupn(const char *s, int n) {
     char *r = malloc((size_t)n + 1);
