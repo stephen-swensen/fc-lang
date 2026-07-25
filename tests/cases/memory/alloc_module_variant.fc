@@ -1,0 +1,25 @@
+// The negative space of the type reading: a module-qualified name that is
+// neither a type nor a plain constant. `shapes.tag.b` is variant construction,
+// an ordinary expression, and alloc of a union value is a supported form.
+// The old syntax-only heuristic committed any dotted operand to parse_type and
+// reported "unknown type name 'shapes.tag.b'"; resolving the name for real
+// keeps the expression reading.
+module shapes =
+    union tag =
+        | a(i32)
+        | b
+
+let main = (args: str[]) ->
+    let u = alloc(shapes.tag.b)!
+    defer free(u)
+    let v = alloc(shapes.tag.a(7))!
+    defer free(v)
+
+    match *u with
+    | a(_) -> assert(false)
+    | b -> void()
+
+    match *v with
+    | a(n) -> assert(n == 7)
+    | b -> assert(false)
+    0

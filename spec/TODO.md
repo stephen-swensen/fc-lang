@@ -350,12 +350,11 @@ Incidental fix: qualified reassignment of a module member (`m.n = 5`) was never 
 the immutable-binding check only inspected bare-identifier targets — so a module-level `let`
 was silently rebindable through its qualified name. The read-only root check closes it.
 
-## BUG: `alloc`/`alloca` of a module-qualified *value* is misread as a type
+## BUG: `alloc`/`alloca` of a module-qualified *value* is misread as a type — FIXED 2026-07-25
 
 Found 2026-07-25 while stress-testing module constants; **pre-existing** (reproduces
-identically on the 2026-07-21 build), and unrelated to the read-only change — recorded
-rather than fixed, because the remedy belongs with `alloc`'s type-vs-expression
-disambiguation rather than with module constants.
+identically on the 2026-07-21 build), and unrelated to the read-only change. Fixed the same
+day, together with a second crash the investigation surfaced (sizeless `alloca(T)`, below).
 
 `alloc(expr)`/`alloca(expr)` decide between the `alloc(T)` and `alloc(expr)` readings in the
 **parser**, on syntax alone (`parser.c`, the `try_type` branch): a leading identifier
@@ -378,12 +377,46 @@ Two failure modes, both bad: `alloc` compiles clean and produces a zero-filled o
 correct — `alloc(p)` on a local reports "alloc(expr) requires a literal or slice expression"
 — so only the dotted form is affected.
 
-This is the *semantic questions get semantic answers* rule (CLAUDE.md) unmet: the fix is to
-gate the type reading on whether the dotted name resolves to a type, the same shape as the
-`<` disambiguation pre-pass built for const generics, and to restore the existing
-backtracking when it does not. Add tests for both operators against a module `let`, a module
-`let mut`, and a genuine module-qualified type (`alloc(shapes.point)`), which must keep
-working.
+This was the *semantic questions get semantic answers* rule (CLAUDE.md) unmet. **Resolution:**
+rather than a token pre-pass, the dotted form was made to behave exactly like its
+bare-identifier twin, which was already correct — the parser defers the ambiguous case and
+pass2 answers it with real name resolution:
+
+- **parser.c** (`TOK_ALLOC`/`TOK_ALLOCA`) applies the bare-identifier rule to dotted names:
+  `[` and `,` still force the type reading (no `alloc(expr)` form starts that way), while a
+  name followed by `)` stays an expression. `try_type`/backtracking is retained for the other
+  tails (`<`).
+- **pass2.c** settles it once at the head of `case EXPR_ALLOC`, before the stack/heap split so
+  both operators share the judgment: flatten the `EXPR_FIELD` chain (`expr_dotted_name`,
+  arena-backed — a fixed buffer would truncate silently into the wrong symbol), and take the
+  type reading only when `resolve_dotted_name` yields a `DECL_STRUCT`/`DECL_UNION`/`DECL_ENUM`.
+  `resolve_dotted_name` is non-erroring, so a value name falls through to the expression path.
+  A local binding shadowing the module is checked first, matching the bare case's local-first
+  order (the old heuristic got this wrong too: `let m = 5` did not stop `alloc(m.s)` from
+  resolving module `m`'s type).
+
+Two behaviors improved beyond the reported bug: `alloc(m.union.variant)` — an ordinary
+expression the old heuristic reported as `unknown type name 'shapes.tag.b'` — now works, and
+`alloc(m.undefined)` reports `module 'm' has no member` instead of `unknown type name`.
+
+Tests: `memory/alloc_module_{type,variant}` (happy paths across struct/union/enum, nested
+module paths, raw/slice/alloca forms) and `memory/{alloc,alloca}_module_{,mut_}value_err` +
+`memory/alloc_module_shadowed_err`.
+
+### Sub-bug found while fixing: sizeless `alloca(T)` crashed codegen — FIXED 2026-07-25
+
+Verifying that `alloca(shapes.point)` "must keep working" showed it never did: **every**
+spelling of the sizeless form crashed the compiler (`alloca(i32)`, `alloca(m.point)`,
+`alloca('a)` — SIGSEGV in `emit_expr` on a NULL init expression). pass2 typed `alloca(T) → T*`
+but codegen had no case for it, so the form existed only as a crash.
+
+It is not a language form: §Dynamic stack allocation lists exactly four shapes
+(`alloca(T, n)`, `alloca(T[n] { })`, an interpolation, a `(cstr)` cast) and states the reason —
+`alloca` exists so that *runtime*-sized stack allocation is deliberate and visible. A
+fixed-size stack object is what an ordinary `let` binding already is. So pass2 now rejects the
+sizeless form instead of typing it; the bare-identifier spelling `alloca(point)` already
+reported this via the `alloca(expr)` path, and the type spellings now agree. Tests
+`memory/alloca_{bare,module}_type_err`.
 
 ## Discarded pure value as a no-op error — extend the self-assignment rule
 

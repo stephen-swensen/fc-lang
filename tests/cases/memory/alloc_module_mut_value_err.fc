@@ -1,0 +1,13 @@
+// The `let mut` twin of alloc_module_value_err — mutability of the module
+// member does not change whether the name denotes a type.
+struct point =
+    x: i32
+    y: i32
+
+module k =
+    let mut q = point { x = 5, y = 6 }
+
+let main = (args: str[]) ->
+    let hq = alloc(k.q)!
+    defer free(hq)
+    0

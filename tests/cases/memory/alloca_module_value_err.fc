@@ -1,0 +1,12 @@
+// alloca's twin of alloc_module_value_err. This one crashed the compiler
+// outright (the type reading reached codegen with no init expression).
+struct point =
+    x: i32
+    y: i32
+
+module k =
+    let p = point { x = 3, y = 4 }
+
+let main = (args: str[]) ->
+    let sp = alloca(k.p)
+    0

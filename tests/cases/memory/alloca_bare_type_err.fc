@@ -1,0 +1,6 @@
+// alloca is for *runtime*-sized stack allocation; a fixed-size stack object is
+// what an ordinary let binding already is. The sizeless alloca(T) form has no
+// codegen and was never one of the four sanctioned shapes — pass2 rejects it.
+let main = (args: str[]) ->
+    let p = alloca(i32)
+    0

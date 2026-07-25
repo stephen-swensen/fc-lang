@@ -1,0 +1,15 @@
+// A module-qualified *value* is not a type name: alloc must read it as an
+// expression and reject it, not silently emit a zero-filled calloc of the
+// value's type. Regression test — this compiled clean and produced a zeroed
+// object, the exit-0-with-broken-output failure mode.
+struct point =
+    x: i32
+    y: i32
+
+module k =
+    let p = point { x = 3, y = 4 }
+
+let main = (args: str[]) ->
+    let hp = alloc(k.p)!
+    defer free(hp)
+    0

@@ -1,0 +1,11 @@
+// A local binding shadows a module of the same name, so `m.s` is field access
+// on the local, never a module-qualified type name.
+module m =
+    struct s =
+        x: i32
+
+let main = (args: str[]) ->
+    let m = 5
+    let a = alloc(m.s)!
+    defer free(a)
+    0

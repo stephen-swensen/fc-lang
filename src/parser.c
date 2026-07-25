@@ -2571,9 +2571,24 @@ static Expr *parse_prefix(Parser *p) {
                 if (next->kind == TOK_LBRACKET || next->kind == TOK_COMMA) {
                     is_type = true;
                 } else if (next->kind == TOK_DOT) {
-                    /* Could be module-qualified type — try type with backtracking */
-                    try_type = true;
-                    save = p->pos;
+                    /* Module-qualified name: a type (alloc(shapes.point)) or a
+                     * value (alloc(cfg.origin)) — indistinguishable here, since
+                     * whether the name denotes a type is a question only name
+                     * resolution can answer.  Apply the same rule as the bare
+                     * identifier above: '[' and ',' force the type reading (no
+                     * alloc(expr) form starts that way), while a name followed
+                     * by ')' stays an expression and pass2 disambiguates it
+                     * against the real symbol table.  Committing to the type
+                     * reading here on syntax alone made alloc(m.value) emit a
+                     * zero-filled calloc and crashed alloca(m.value). */
+                    int off = 1;
+                    while (peek_at(p, off)->kind == TOK_DOT &&
+                           peek_at(p, off + 1)->kind == TOK_IDENT)
+                        off += 2;
+                    if (peek_at(p, off)->kind != TOK_RPAREN) {
+                        try_type = true;
+                        save = p->pos;
+                    }
                 } else if (next->kind == TOK_LT) {
                     /* Could be generic type args or comparison — try type */
                     try_type = true;

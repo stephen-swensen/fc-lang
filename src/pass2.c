@@ -1851,6 +1851,45 @@ static Expr *dotted_name_expr(CheckCtx *ctx, const char *name, SrcLoc loc) {
     }
 }
 
+/* Flatten a chain of EXPR_FIELD over an EXPR_IDENT back into the dotted name
+ * (`gfx.mode.count`) — the inverse of dotted_name_expr above. Returns NULL for
+ * any other shape (a field access on a call, an index, a deref), which by
+ * construction cannot be a module-qualified type name. Arena-backed rather than
+ * snprintf'd into a fixed buffer: FC identifiers are unbounded and a silent
+ * truncation here would resolve to the wrong symbol.
+ *
+ * Purely syntactic — callers run before the chain is type-checked, so none of
+ * pass2's EXPR_FIELD annotations (is_variant_constructor and friends) are set
+ * yet. Whether the flattened name denotes anything is the caller's question to
+ * ask of the symbol table. */
+static const char *expr_dotted_name(CheckCtx *ctx, Expr *e) {
+    int n = 0;
+    for (Expr *w = e; w->kind == EXPR_FIELD; w = w->field.object) n++;
+    if (n == 0) return NULL;
+    Expr *base = e;
+    while (base->kind == EXPR_FIELD) base = base->field.object;
+    if (base->kind != EXPR_IDENT) return NULL;
+
+    const char **segs = arena_alloc(ctx->arena, sizeof(const char *) * (size_t)(n + 1));
+    segs[0] = base->ident.name;
+    int i = n;
+    for (Expr *w = e; w->kind == EXPR_FIELD; w = w->field.object)
+        segs[i--] = w->field.name;
+
+    size_t len = 0;
+    for (i = 0; i <= n; i++) len += strlen(segs[i]) + 1; /* + '.' or NUL */
+    char *buf = arena_alloc(ctx->arena, len);
+    size_t at = 0;
+    for (i = 0; i <= n; i++) {
+        if (i) buf[at++] = '.';
+        size_t sl = strlen(segs[i]);
+        memcpy(buf + at, segs[i], sl);
+        at += sl;
+    }
+    buf[at] = '\0';
+    return buf;
+}
+
 /* A dotted name in a const-argument slot may denote a *type property* rather
  * than a named constant: an enum's variant count (`dir.count`,
  * `gfx.mode.count`) or a built-in type's `bits`/`min`/`max` (`i32.bits`). Those
@@ -8633,6 +8672,42 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_ALLOC: {
+        /* A module-qualified name in the operand slot — alloc(shapes.point) vs
+         * alloc(cfg.origin) — is a type reading or a value reading depending on
+         * what the name denotes, which only name resolution can answer. The
+         * parser hands every `)`-terminated dotted operand here as an
+         * expression; settle it once, before the stack/heap split, so both
+         * operators share the judgment. Committing to the type reading in the
+         * parser on syntax alone made alloc(m.value) emit a zero-filled calloc
+         * (exit 0, broken output) and crashed alloca(m.value).
+         * resolve_dotted_name is non-erroring, so a value name simply stays an
+         * expression and flows to the alloc(expr)/alloca(expr) paths below. */
+        if (!e->alloc_expr.alloc_type && e->alloc_expr.init_expr &&
+            e->alloc_expr.init_expr->kind == EXPR_FIELD) {
+            /* A local binding shadows a module of the same name, so `m.s` is
+             * field access on the local, never a module-qualified type — the
+             * same local-first order the bare-identifier case below uses. */
+            Expr *base = e->alloc_expr.init_expr;
+            while (base->kind == EXPR_FIELD) base = base->field.object;
+            bool shadowed = base->kind == EXPR_IDENT &&
+                scope_lookup_capture(ctx->scope, base->ident.name,
+                                     NULL, NULL, NULL, NULL, NULL, NULL) != NULL;
+            const char *dotted = shadowed ? NULL
+                : expr_dotted_name(ctx, e->alloc_expr.init_expr);
+            Symbol *sym = dotted ? resolve_dotted_name(ctx, dotted) : NULL;
+            if (sym && (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION ||
+                        sym->kind == DECL_ENUM)) {
+                Type *stub = arena_alloc(ctx->arena, sizeof(Type));
+                memset(stub, 0, sizeof(Type));
+                stub->kind = TYPE_STUB;
+                stub->stub.name = intern_cstr(ctx->intern, dotted);
+                Type *ty = resolve_type(ctx, stub);
+                if (!type_is_error(ty) && ty != stub) {
+                    e->alloc_expr.alloc_type = ty;
+                    e->alloc_expr.init_expr = NULL;
+                }
+            }
+        }
         if (e->alloc_expr.is_stack) {
             /* alloca(...) — dynamic stack. Same shapes as alloc but the result is
              * the value directly (no option, no failure sentinel) and it is tagged
@@ -8654,7 +8729,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         ? type_pointer(ctx->arena, ty)   /* alloca(T, N) → T* */
                         : type_slice(ctx->arena, ty);    /* alloca(T[n] { }) → T[] */
                 } else {
-                    e->type = type_pointer(ctx->arena, ty);  /* alloca(T) → T* */
+                    /* alloca(T) — a fixed-size stack object, which is what an
+                     * ordinary local binding already is. alloca exists only to
+                     * make *runtime*-sized stack allocation deliberate and
+                     * visible (§Dynamic stack allocation), so the sizeless form
+                     * is not one of the four sanctioned shapes and codegen never
+                     * emitted it — it read the absent init expression and
+                     * crashed. The bare-identifier spelling alloca(point)
+                     * already reported this; type spellings that reach here
+                     * (alloca(i32), alloca(m.point), alloca('a)) now agree. */
+                    diag_error(e->loc,
+                        "alloca(%s) has no runtime size — use a plain let binding "
+                        "for a fixed-size local, or alloca(T, n) / alloca(T[n] {}) "
+                        "for a runtime-sized buffer", type_name(ty));
+                    e->type = type_error();
+                    return e->type;
                 }
                 e->prov = PROV_STACK;
                 return e->type;

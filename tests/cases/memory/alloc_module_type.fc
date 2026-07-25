@@ -1,0 +1,64 @@
+// A module-qualified *type* in the alloc operand slot keeps its type reading,
+// across every type shape a module can declare and at every nesting depth.
+// The value twin (alloc of a module constant) is alloc_module_value_err.
+module shapes =
+    struct point =
+        x: i32
+        y: i32
+    union tag =
+        | a(i32)
+        | b
+    enum dir of u8 =
+        | north
+        | south = 1
+
+module deep =
+    module inner =
+        struct node =
+            v: i32
+
+let main = (args: str[]) ->
+    // bare module-qualified type
+    let p = alloc(shapes.point)!
+    defer free(p)
+    p.x = 10
+    p.y = 20
+    assert(p.x + p.y == 30)
+
+    // union and enum shapes, zero-initialized to their first variant
+    let u = alloc(shapes.tag)!
+    defer free(u)
+    match *u with
+    | a(n) -> assert(n == 0)
+    | b -> assert(false)
+
+    let d = alloc(shapes.dir)!
+    defer free(d)
+    assert(*d == shapes.dir.north)
+
+    // nested module path
+    let nd = alloc(deep.inner.node)!
+    defer free(nd)
+    nd.v = 9
+    assert(nd.v == 9)
+
+    // raw buffer and slice forms over a module-qualified element type
+    let buf = alloc(shapes.point, 4)!
+    defer free(buf)
+    buf[3].x = 7
+    assert(buf[3].x == 7)
+
+    let arr = alloc(shapes.point[3] { })!
+    defer free(arr)
+    assert(arr.len == 3)
+    assert(arr[0].x == 0)
+
+    // alloca's runtime-sized forms take module-qualified element types too
+    let n = 2
+    let sbuf = alloca(shapes.point, n)
+    sbuf[0].x = 1
+    assert(sbuf[0].x == 1)
+
+    let sarr = alloca(shapes.point[n] { })
+    assert(sarr.len == 2)
+    0

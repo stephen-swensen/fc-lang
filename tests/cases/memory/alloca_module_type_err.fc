@@ -1,0 +1,10 @@
+// The module-qualified spelling of alloca_bare_type_err. This spelling reached
+// the type reading and crashed codegen; every spelling now agrees.
+module shapes =
+    struct point =
+        x: i32
+        y: i32
+
+let main = (args: str[]) ->
+    let p = alloca(shapes.point)
+    0

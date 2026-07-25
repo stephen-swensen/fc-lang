@@ -1,0 +1,11 @@
+// The `let mut` twin of alloca_module_value_err.
+struct point =
+    x: i32
+    y: i32
+
+module k =
+    let mut q = point { x = 5, y = 6 }
+
+let main = (args: str[]) ->
+    let sq = alloca(k.q)
+    0
