@@ -1,0 +1,42 @@
+struct point =
+    x: i32
+    y: i32
+
+union shape =
+    | circle(i32)
+    | empty
+
+enum dir of u8 =
+    | north = 0
+    | south = 1
+
+// Every const-expr shape a module constant can take, read back through the
+// freeze: nothing here writes, so all of it must still compile and run.
+module k =
+    let p = point { x = 1, y = 2 }
+    let opt = some(7)
+    let sh = shape.circle(5)
+    let tup = { 1, 2 }
+    let d = dir.south
+    let cs = c"hi"
+    let s = "hello"
+    let tbl = i32[3] { 10, 20, 30 }
+
+let main = (args: str[]) ->
+    let mut acc = 0
+    for v in k.tbl do
+        acc = acc + v
+    assert(acc == 60)
+    match k.sh with
+    | circle(r) -> assert(r == 5)
+    | empty -> assert(false)
+    match k.opt with
+    | some(v) -> assert(v == 7)
+    | none -> assert(false)
+    assert(k.p == point { x = 1, y = 2 })
+    assert(k.tup[0] == 1)
+    assert(k.d == dir.south)
+    assert(k.s.len == 5)
+    assert(k.tbl[1] == 20)
+    assert(sizeof(point) > 0)
+    0

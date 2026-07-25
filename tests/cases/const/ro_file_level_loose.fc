@@ -1,0 +1,12 @@
+struct point =
+    x: i32
+    y: i32
+
+// File-level top-level bindings are the script zone and stay permissive:
+// a `let` there still patches its contents, unlike a module constant.
+let origin = point { x = 1, y = 2 }
+
+let main = (args: str[]) ->
+    origin.x = 30
+    assert(origin.x == 30)
+    0

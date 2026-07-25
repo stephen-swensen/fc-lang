@@ -1,0 +1,12 @@
+// A frozen table reads as `const i32[]`, so it cannot be handed to a callee
+// that could write it. `const i32[]` accepts a plain `i32[]`, so making the
+// parameter const is the backward-compatible fix.
+let write_first = (s: i32[]) ->
+    s[0] = 9
+    s[0]
+
+module tbl =
+    let steps = i32[4] { 1, 2, 4, 8 }
+
+let main = (args: str[]) ->
+    write_first(tbl.steps)

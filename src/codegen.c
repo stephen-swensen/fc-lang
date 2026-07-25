@@ -4334,8 +4334,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 emit_expr(e->array_lit.size_expr, out);
                 fprintf(out, " }");
             } else {
-                fprintf(out, "){ .ptr = %s, .len = ",
-                        e->array_lit.codegen_backing_name);
+                fprintf(out, "){ .ptr = ");
+                if (e->array_lit.codegen_backing_rodata) {
+                    fprintf(out, "(");
+                    emit_type(e->array_lit.elem_type, out);
+                    fprintf(out, "*)");
+                }
+                fprintf(out, "%s, .len = ", e->array_lit.codegen_backing_name);
                 emit_expr(e->array_lit.size_expr, out);
                 fprintf(out, " }");
             }
@@ -6384,7 +6389,7 @@ static void collect_trampolines_expr(Expr *e, TrampolineSet *ts);
  * inline aggregate initializer at the use site rather than a backing array,
  * so we skip backing assignment for those specific children.
  */
-static void collect_const_backings(Expr *e) {
+static void collect_const_backings(Expr *e, bool rodata) {
     if (!e) return;
     switch (e->kind) {
     case EXPR_ARRAY_LIT: {
@@ -6395,16 +6400,17 @@ static void collect_const_backings(Expr *e) {
             int n = snprintf(buf, sizeof buf, "_fc_const_backing_%d",
                              g_const_backing_counter++);
             e->array_lit.codegen_backing_name = arena_strdup(g_arena, buf, n);
+            e->array_lit.codegen_backing_rodata = rodata;
             DA_APPEND(g_const_backings, g_const_backing_count,
                       g_const_backing_cap, e);
         }
         for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_const_backings(e->array_lit.elems[i]);
+            collect_const_backings(e->array_lit.elems[i], rodata);
         break;
     }
     case EXPR_SLICE_LIT:
-        collect_const_backings(e->slice_lit.ptr_expr);
-        collect_const_backings(e->slice_lit.len_expr);
+        collect_const_backings(e->slice_lit.ptr_expr, rodata);
+        collect_const_backings(e->slice_lit.len_expr, rodata);
         break;
     case EXPR_STRUCT_LIT: {
         Type *st = e->type;
@@ -6426,50 +6432,50 @@ static void collect_const_backings(Expr *e) {
             if (is_fixed_field && v && v->kind == EXPR_ARRAY_LIT) {
                 /* Recurse into elements but do not lift the outer array */
                 for (int j = 0; j < v->array_lit.elem_count; j++)
-                    collect_const_backings(v->array_lit.elems[j]);
+                    collect_const_backings(v->array_lit.elems[j], rodata);
             } else {
-                collect_const_backings(v);
+                collect_const_backings(v, rodata);
             }
         }
         break;
     }
     case EXPR_SOME:
-        collect_const_backings(e->some_expr.value);
+        collect_const_backings(e->some_expr.value, rodata);
         break;
     case EXPR_OK:
-        collect_const_backings(e->ok_expr.value);
+        collect_const_backings(e->ok_expr.value, rodata);
         break;
     case EXPR_ERR:
-        collect_const_backings(e->err_expr.code);
+        collect_const_backings(e->err_expr.code, rodata);
         break;
     case EXPR_ERROR_NAME:
-        collect_const_backings(e->error_name_expr.code);
+        collect_const_backings(e->error_name_expr.code, rodata);
         break;
     case EXPR_CALL:
         if (e->call.func->kind == EXPR_FIELD &&
             e->call.func->field.is_variant_constructor) {
             for (int i = 0; i < e->call.arg_count; i++)
-                collect_const_backings(e->call.args[i]);
+                collect_const_backings(e->call.args[i], rodata);
         }
         break;
     case EXPR_UNARY_PREFIX:
-        collect_const_backings(e->unary_prefix.operand);
+        collect_const_backings(e->unary_prefix.operand, rodata);
         break;
     case EXPR_BINARY:
-        collect_const_backings(e->binary.left);
-        collect_const_backings(e->binary.right);
+        collect_const_backings(e->binary.left, rodata);
+        collect_const_backings(e->binary.right, rodata);
         break;
     case EXPR_CAST:
-        collect_const_backings(e->cast.operand);
+        collect_const_backings(e->cast.operand, rodata);
         break;
     case EXPR_BITCAST:
-        collect_const_backings(e->bitcast_expr.operand);
+        collect_const_backings(e->bitcast_expr.operand, rodata);
         break;
     case EXPR_ENUM_OF:
-        collect_const_backings(e->enum_of_expr.operand);
+        collect_const_backings(e->enum_of_expr.operand, rodata);
         break;
     case EXPR_GUARD:
-        collect_const_backings(e->guard.body);
+        collect_const_backings(e->guard.body, rodata);
         break;
     default:
         /* Leaves: literals, extern-const/no-payload variant EXPR_FIELD, type
@@ -8492,7 +8498,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d) && d->let.is_module_member &&
             d->let.init && d->let.init->kind != EXPR_FUNC) {
-            collect_const_backings(d->let.init);
+            collect_const_backings(d->let.init, d->let.is_frozen);
         }
     }
 
@@ -8503,7 +8509,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         g_const_context = true;
         for (int i = 0; i < g_const_backing_count; i++) {
             Expr *al = g_const_backings[i];
-            fprintf(out, "static ");
+            /* A frozen module constant's backing is the bytes we want in
+             * read-only memory — the whole point on the retro targets. Every
+             * write through it was already rejected in pass2, so the .ptr cast
+             * at the use site casts away a const nothing can reach. */
+            fprintf(out, al->array_lit.codegen_backing_rodata
+                         ? "static const " : "static ");
             emit_type(al->array_lit.elem_type, out);
             fprintf(out, " %s[] = {", al->array_lit.codegen_backing_name);
             for (int j = 0; j < al->array_lit.elem_count; j++) {
@@ -8531,7 +8542,17 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             if (d->let.is_module_member) {
                 /* Module member: emit with initializer (must be const expr).
                  * Flip const context so array/struct-with-fixed-array/etc.
-                 * take the aggregate-initializer path. */
+                 * take the aggregate-initializer path.
+                 *
+                 * A read-only module constant takes C's `const` so the object
+                 * itself can live in read-only memory. It is spelled *east* —
+                 * `T const name` — because that is the one placement that is
+                 * correct for every emitted type form: on a pointer constant
+                 * `uint8_t *const` freezes the pointer while leaving the
+                 * pointee writable, which is exactly the MMIO rule
+                 * (`let vga = (u8*) 0xA0000usize`); a leading `const` would
+                 * wrongly freeze the pointee instead. */
+                if (!d->let.is_mut) fprintf(out, " const");
                 fprintf(out, " %s = ", cname);
                 g_const_context = true;
                 emit_expr(d->let.init, out);

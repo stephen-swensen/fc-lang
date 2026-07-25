@@ -1,0 +1,10 @@
+struct point =
+    x: i32
+    y: i32
+
+module cfg =
+    let origin = point { x = 1, y = 2 }
+
+let main = (args: str[]) ->
+    cfg.origin.x = 30
+    cfg.origin.x

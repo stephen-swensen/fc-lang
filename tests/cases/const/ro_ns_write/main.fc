@@ -1,0 +1,5 @@
+import cfg from acme::
+
+let main = (args: str[]) ->
+    cfg.steps[0] = 99
+    cfg.steps[0]

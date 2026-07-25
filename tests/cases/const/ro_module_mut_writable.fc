@@ -1,0 +1,17 @@
+struct point =
+    x: i32
+    y: i32
+
+module state =
+    let mut origin = point { x = 1, y = 2 }
+    let mut counter = 0
+    let mut buf = i32[3] { 0, 0, 0 }
+
+let main = (args: str[]) ->
+    state.origin.x = 30
+    state.counter = 5
+    state.buf[0] = 7
+    assert(state.origin.x == 30)
+    assert(state.counter == 5)
+    assert(state.buf[0] == 7)
+    0

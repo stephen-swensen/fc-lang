@@ -1,0 +1,9 @@
+struct blk =
+    bytes: u8[4]
+
+module store =
+    let b = blk { bytes = u8[4] { 1u8, 2u8, 3u8, 4u8 } }
+
+let main = (args: str[]) ->
+    store.b.bytes[0] = 9u8
+    (i32) store.b.bytes[0]

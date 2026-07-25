@@ -1,0 +1,5 @@
+import origin from acme::cfg
+
+let main = (args: str[]) ->
+    origin.x = 30
+    origin.x

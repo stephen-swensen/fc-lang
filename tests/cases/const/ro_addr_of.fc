@@ -1,0 +1,17 @@
+struct point =
+    x: i32
+    y: i32
+
+let read_x = (p: const point*) ->
+    p.x
+
+let read_i = (p: const i32*) ->
+    *p
+
+module cfg =
+    let origin = point { x = 3, y = 4 }
+
+let main = (args: str[]) ->
+    assert(read_x(&cfg.origin) == 3)
+    assert(read_i(&cfg.origin.x) == 3)
+    0

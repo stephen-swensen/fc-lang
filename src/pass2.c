@@ -3203,7 +3203,98 @@ static Type *resolve_type_property(const char *type_name, const char *prop,
     return (Type *)-1;  /* valid type, invalid property */
 }
 
-static bool is_write_through_const(Expr *target) {
+/* A non-function `let` at *module* scope is read-only: its initializer is
+ * already required to be a constant expression, so it is a single
+ * program-lifetime object the compiler statically initializes, emitted `const`
+ * into read-only memory. `let mut` at module scope is the writable global.
+ *
+ * File-level top-level bindings are deliberately exempt — that scope is the
+ * script zone (entry-file-only, a looser init gate that admits alloc, hoisted
+ * into main rather than statically initialized) and stays as permissive as
+ * possible.
+ *
+ * Both spellings of a reference carry the Symbol: a bare name resolves onto
+ * EXPR_IDENT.resolved_sym (set by every global path in name resolution), a
+ * qualified `m.x` onto EXPR_FIELD.resolved_member. Reading them here is what
+ * keeps read-only-ness derived at one site rather than stamped alongside
+ * is_mut at each of resolution's five global paths. */
+static bool sym_is_ro_module_const(Symbol *s) {
+    return s && s->decl && s->decl->kind == DECL_LET &&
+           s->decl->let.is_module_member && !s->decl->let.is_mut &&
+           s->decl->let.init && s->decl->let.init->kind != EXPR_FUNC;
+}
+
+/* The read-only module constant this expression names directly, or NULL — the
+ * one place the two spellings are turned into a Symbol, so the walkers below
+ * differ only in how far down a path they look. */
+static Symbol *ro_const_sym(Expr *e) {
+    if (!e) return NULL;
+    Symbol *s = e->kind == EXPR_IDENT ? e->ident.resolved_sym
+              : e->kind == EXPR_FIELD ? e->field.resolved_member : NULL;
+    return sym_is_ro_module_const(s) ? s : NULL;
+}
+
+/* The read-only module constant whose *own storage* this lvalue writes into,
+ * or NULL. Descends only through value field access — the bytes of the
+ * constant itself. It deliberately stops at `*p`, `p.field` on a pointer, and
+ * `s[i]`: those write through an address the constant merely *holds*, to
+ * memory it does not own (`let vga = (u8*) 0xA0000usize` must keep
+ * `vga[i] = c` legal). Writes to storage the compiler *did* emit for the
+ * constant — a slice literal's backing array — are rejected instead by the
+ * const-qualified type its reads carry, through the cases below. */
+static Expr *ro_const_storage_root(Expr *target) {
+    if (!target) return NULL;
+    if (ro_const_sym(target)) return target;
+    if (target->kind == EXPR_FIELD) return ro_const_storage_root(target->field.object);
+    return NULL;
+}
+
+/* For diagnostics only: the module constant an lvalue path runs through,
+ * looking through index and deref as well so `m.tbl[i] = v` can name `tbl`.
+ * Never decides a rejection — it is consulted only once one has fired, to say
+ * which constant is in the way and how to make it writable. */
+static Symbol *ro_const_on_path(Expr *target) {
+    if (!target) return NULL;
+    Symbol *here = ro_const_sym(target);
+    if (here) return here;
+    switch (target->kind) {
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD: return ro_const_on_path(target->field.object);
+    case EXPR_INDEX:       return ro_const_on_path(target->index.object);
+    case EXPR_SLICE:       return ro_const_on_path(target->slice.object);
+    case EXPR_UNARY_PREFIX:
+        return target->unary_prefix.op == TOK_STAR
+             ? ro_const_on_path(target->unary_prefix.operand) : NULL;
+    default: return NULL;
+    }
+}
+
+/* Does this read reach inside storage the compiler emitted for a frozen module
+ * constant? Descends the whole access path — value field, index, slice — so a
+ * reference read out of any depth of a frozen constant can be const-qualified
+ * and cannot escape as a writable view of read-only memory. Like
+ * ro_const_storage_root it stops at a dereference: past one, the path has left
+ * the constant's own bytes for whatever address it held. */
+static bool reads_frozen_const_storage(Expr *e) {
+    if (!e) return false;
+    Symbol *here = ro_const_sym(e);
+    if (here) return here->decl->let.is_frozen;
+    switch (e->kind) {
+    case EXPR_FIELD: return reads_frozen_const_storage(e->field.object);
+    case EXPR_INDEX: return reads_frozen_const_storage(e->index.object);
+    case EXPR_SLICE: return reads_frozen_const_storage(e->slice.object);
+    default:         return false;
+    }
+}
+
+/* Writes rejected because a *type* on the access path is const-qualified — the
+ * const-view rule. Kept separate from the read-only-root check above, and
+ * self-recursive, so that reaching an element or a pointee asks only whether
+ * the reference it went through was const: a module constant's slice header is
+ * its own storage (frozen), while what that slice *points at* is frozen only
+ * when the compiler emitted it, which its const-qualified element type is what
+ * records. */
+static bool is_write_through_const_type(Expr *target) {
     if (!target) return false;
     switch (target->kind) {
     case EXPR_UNARY_PREFIX:
@@ -3214,16 +3305,21 @@ static bool is_write_through_const(Expr *target) {
     case EXPR_DEREF_FIELD:
         return (target->field.object->type &&
                 target->field.object->type->is_const) ||
-               is_write_through_const(target->field.object);
+               is_write_through_const_type(target->field.object);
     case EXPR_FIELD:
-        return is_write_through_const(target->field.object);
+        return is_write_through_const_type(target->field.object);
     case EXPR_INDEX:
         return (target->index.object->type &&
                 target->index.object->type->is_const) ||
-               is_write_through_const(target->index.object);
+               is_write_through_const_type(target->index.object);
     default:
         return false;
     }
+}
+
+static bool is_write_through_const(Expr *target) {
+    return ro_const_storage_root(target) != NULL ||
+           is_write_through_const_type(target);
 }
 
 /* Provenance of the storage that a write to this lvalue lands in. Walks the
@@ -6661,7 +6757,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
         }
         if (is_write_through_const(e->assign.target)) {
-            diag_error(e->loc, "cannot assign through const pointer/slice");
+            Symbol *roc = ro_const_on_path(e->assign.target);
+            if (roc)
+                diag_error(e->loc, "cannot write to module constant '%s' — a module-level "
+                    "'let' is read-only; use 'let mut' for a writable global", roc->name);
+            else
+                diag_error(e->loc, "cannot assign through const pointer/slice");
         }
         /* Reject assignment to slice .len and .ptr fields */
         if (e->assign.target->kind == EXPR_FIELD) {
@@ -7724,6 +7825,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         e->elem_prov = e->field.object->elem_prov;
                     }
                 }
+                /* Deep const, rooted at a binding instead of a pointer: a
+                   reference read out of a frozen module constant carries the
+                   freeze with it, so it cannot be handed to a callee as a
+                   writable view of read-only memory. Value fields need no type
+                   change — the write is rejected on the path. */
+                if (reads_frozen_const_storage(e->field.object))
+                    e->type = type_make_const(ctx->arena, e->type);
                 return e->type;
             }
         }
@@ -7798,6 +7906,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
 
         if (obj_type->kind == TYPE_SLICE) {
             e->type = obj_type->slice.elem;
+            /* Deep const through the element: loading a reference out of a
+             * read-only slice must not launder it into a writable one, whether
+             * the slice is a const view or a frozen module constant. */
+            if (obj_type->is_const || reads_frozen_const_storage(e->index.object))
+                e->type = type_make_const(ctx->arena, e->type);
             /* A load yields the *stored value*, whose provenance is the
              * container's element provenance — not the backing store's. A heap
              * slice parked in a stack slice stays freeable; a stack pointer
@@ -10915,9 +11028,25 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     }
 }
 
-/* Check if an expression is a compile-time constant (no variable refs or calls) */
-static bool is_const_expr(Expr *e) {
+/* Check if an expression is a compile-time constant (no variable refs or calls).
+ *
+ * `all_emitted` (optional) rides the same walk to answer a second question about
+ * the same tree: is every byte of this value storage the *compiler* emits? It is
+ * cleared by a pointer value — an address the program supplied, `(u8*)
+ * 0xA0000usize` on the retro targets — and by a slice built over a raw address,
+ * because neither names memory the compiler owns and writes through them must
+ * stay legal. Threaded through this one walk rather than a parallel one so the
+ * two questions can never disagree about the const-expr grammar.
+ *
+ * The `&&` short-circuits mean a *non*-constant tree may leave `all_emitted`
+ * unvisited past the first rejection. That is harmless in both directions: an
+ * over-set flag only over-restricts writes, and an under-set one only forgoes
+ * the freeze — neither can license a write to read-only storage. */
+static bool is_const_expr_ex(Expr *e, bool *all_emitted) {
     if (!e) return true;
+    if (all_emitted && e->type &&
+        (e->type->kind == TYPE_POINTER || e->type->kind == TYPE_ANY_PTR))
+        *all_emitted = false;
     switch (e->kind) {
     /* Literals — always valid C constants */
     case EXPR_INT_LIT:
@@ -10936,7 +11065,7 @@ static bool is_const_expr(Expr *e) {
     /* Unary prefix — only negate and boolean-not emit simple C infix */
     case EXPR_UNARY_PREFIX:
         if (e->unary_prefix.op == TOK_MINUS || e->unary_prefix.op == TOK_BANG)
-            return is_const_expr(e->unary_prefix.operand);
+            return is_const_expr_ex(e->unary_prefix.operand, all_emitted);
         return false;
     /* Binary — safelist operators that emit simple C infix at file scope.
      * Integer div/mod emit zero-check statement expressions.
@@ -10948,21 +11077,21 @@ static bool is_const_expr(Expr *e) {
         case TOK_AMP: case TOK_PIPE: case TOK_CARET:
         case TOK_AMPAMP: case TOK_PIPEPIPE:
         case TOK_LT: case TOK_GT: case TOK_LTEQ: case TOK_GTEQ:
-            return is_const_expr(e->binary.left) &&
-                   is_const_expr(e->binary.right);
+            return is_const_expr_ex(e->binary.left, all_emitted) &&
+                   is_const_expr_ex(e->binary.right, all_emitted);
         case TOK_SLASH: case TOK_PERCENT:
             /* Float div/mod emits simple infix; integer emits zero-check */
             if (e->type && type_is_integer(e->type)) return false;
-            return is_const_expr(e->binary.left) &&
-                   is_const_expr(e->binary.right);
+            return is_const_expr_ex(e->binary.left, all_emitted) &&
+                   is_const_expr_ex(e->binary.right, all_emitted);
         case TOK_EQEQ: case TOK_BANGEQ:
             /* Primitive equality is simple infix; aggregate types emit
              * generated comparison function calls */
             if (e->binary.left->type &&
                 type_needs_eq_func(e->binary.left->type))
                 return false;
-            return is_const_expr(e->binary.left) &&
-                   is_const_expr(e->binary.right);
+            return is_const_expr_ex(e->binary.left, all_emitted) &&
+                   is_const_expr_ex(e->binary.right, all_emitted);
         default:
             return false;
         }
@@ -10972,7 +11101,7 @@ static bool is_const_expr(Expr *e) {
             ((is_str_type(e->cast.operand->type) && is_cstr_type(e->cast.target)) ||
              (is_cstr_type(e->cast.operand->type) && is_str_type(e->cast.target))))
             return false;
-        return is_const_expr(e->cast.operand);
+        return is_const_expr_ex(e->cast.operand, all_emitted);
     /* Extern constants — C macros/enums are compile-time constants.
      * Static type properties (int32.min, float64.nan, ...) emit C macros or
      * folded literals — all valid C constant expressions.
@@ -10983,40 +11112,42 @@ static bool is_const_expr(Expr *e) {
     /* Struct literal — valid if all field values are const */
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (!is_const_expr(e->struct_lit.fields[i].value)) return false;
+            if (!is_const_expr_ex(e->struct_lit.fields[i].value, all_emitted)) return false;
         return true;
     /* Tuple literal — valid if all elements are const (a plain compound literal) */
     case EXPR_TUPLE_LIT:
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (!is_const_expr(e->tuple_lit.elems[i])) return false;
+            if (!is_const_expr_ex(e->tuple_lit.elems[i], all_emitted)) return false;
         return true;
     /* Array literal — valid if all elements and size are const.  Codegen
      * lifts the backing array to file scope in const context. */
     case EXPR_ARRAY_LIT:
         for (int i = 0; i < e->array_lit.elem_count; i++)
-            if (!is_const_expr(e->array_lit.elems[i])) return false;
-        return is_const_expr(e->array_lit.size_expr);
-    /* Slice literal — valid if both ptr and len are const.  In practice
-     * ptr_expr is always an EXPR_ARRAY_LIT at module scope, which is handled
-     * above; other ptr forms (ident/&expr) are rejected by their own cases. */
+            if (!is_const_expr_ex(e->array_lit.elems[i], all_emitted)) return false;
+        return is_const_expr_ex(e->array_lit.size_expr, all_emitted);
+    /* Slice literal — valid if both ptr and len are const.  Unlike an array
+     * literal, this builds a slice over an address the program supplies
+     * (`u8[] { ptr = (u8*) 0xA0000usize, len = … }`), so the pointee is not
+     * storage the compiler owns and must stay writable. */
     case EXPR_SLICE_LIT:
-        return is_const_expr(e->slice_lit.ptr_expr) &&
-               is_const_expr(e->slice_lit.len_expr);
+        if (all_emitted) *all_emitted = false;
+        return is_const_expr_ex(e->slice_lit.ptr_expr, all_emitted) &&
+               is_const_expr_ex(e->slice_lit.len_expr, all_emitted);
     /* some(x) — valid if payload is const.  Emits a plain compound literal. */
     case EXPR_SOME:
-        return is_const_expr(e->some_expr.value);
+        return is_const_expr_ex(e->some_expr.value, all_emitted);
     /* ok(x) / err(T, c) — valid if payload/code is const. (A possibly-zero
      * err code is rejected separately by const_fold_expr.) */
     case EXPR_OK:
-        return is_const_expr(e->ok_expr.value);
+        return is_const_expr_ex(e->ok_expr.value, all_emitted);
     case EXPR_ERR:
-        return is_const_expr(e->err_expr.code);
+        return is_const_expr_ex(e->err_expr.code, all_emitted);
     /* Union variant constructor with payload — valid if all args are const. */
     case EXPR_CALL:
         if (e->call.func->kind == EXPR_FIELD &&
             e->call.func->field.is_variant_constructor) {
             for (int i = 0; i < e->call.arg_count; i++)
-                if (!is_const_expr(e->call.args[i])) return false;
+                if (!is_const_expr_ex(e->call.args[i], all_emitted)) return false;
             return true;
         }
         return false;
@@ -11025,6 +11156,8 @@ static bool is_const_expr(Expr *e) {
         return false;
     }
 }
+
+static bool is_const_expr(Expr *e) { return is_const_expr_ex(e, NULL); }
 
 /* Check if an expression is valid in a file-level initializer.
  * More permissive than is_const_expr: allows alloc, some, unwrap, array/slice
@@ -11167,6 +11300,22 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     if (recursive_ret) {
         Type *actual_ret = t->kind == TYPE_FUNC ? t->func.return_type : t;
         *recursive_ret = *actual_ret;
+    }
+
+    /* Freeze a read-only module constant whose storage is entirely
+     * compiler-emitted, and qualify its type here — before the decl, its
+     * Symbol, and the module scope entry below all take a copy of `t` — so
+     * every way of naming it (bare, qualified `m.x`, imported, cross-namespace)
+     * observes the const without a per-path stamp. type_make_const is a no-op
+     * for anything but a pointer/slice/any*, so scalars and structs pass
+     * through; reaching a reference *inside* a frozen struct is handled on the
+     * access path (reads_frozen_const_storage). */
+    if (d->let.is_module_member && !d->let.is_mut &&
+        d->let.init && d->let.init->kind != EXPR_FUNC) {
+        bool all_emitted = true;
+        is_const_expr_ex(d->let.init, &all_emitted);
+        d->let.is_frozen = all_emitted;
+        if (all_emitted) t = type_make_const(ctx->arena, t);
     }
 
     d->let.resolved_type = t;

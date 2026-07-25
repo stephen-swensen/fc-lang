@@ -1074,6 +1074,8 @@ Overflow detection is **deterministic**, independent of optimization level — F
 | let | let binding | no | read-only (`&x` → `const T*`) | yes | yes — captured by copy |
 | let mut | mutable let binding | yes | yes (`&x` → `T*`) | yes | no |
 
+The **Contents assignable** column reads `yes` for a local or file-level binding. At *module* scope it reads `no` for `let`: a module-level non-function `let` is a module constant and its contents are frozen (§Module constants are read-only). `let mut` is unchanged at every scope.
+
 All bindings must be initialized at declaration. Types are always inferred — there are no explicit type annotations on bindings.
 
 ```fc
@@ -1130,6 +1132,8 @@ q = point { x = 5.0, y = 6.0 }   // ok — reassigning q to a new value
 
 This is consistent with the pointer rule — writing through a `let` binding pointer (`*px = 99`) is valid because you are not changing the pointer, you are changing what it points to.
 
+**Module scope is where this stops.** A non-function `let` declared in a module body is a **module constant**, and its contents are frozen — see §Module constants are read-only. Locals and file-level top-level bindings are unaffected: `let p = point { … }` followed by `p.x = 3` stays legal in both.
+
 #### One rule, three knobs
 
 A binding appears to have three separate mutability properties — reassignability, addressability, and content mutability (the table at §let and let mut). They are assigned by one rule: **the keyword governs the *binding*; the contents of the bound value are always assignable.** The two derived columns follow from reassignability:
@@ -1147,7 +1151,9 @@ let pp = &p    // ok — const point*; a write *pp = v (reassigning p) won't com
 
 This is not a contradiction: `p.x = v` operates on the *value* (always allowed), while `&p` and `p = v` operate on the *binding* — and `&p` grants only what the binding permits, which for a `let` is reading, not reassigning. The split mirrors F#'s: `let` vs `let mutable` divides reassignment the same way, and mutable locals likewise cannot be captured by closures (F# directs you to a heap `ref` cell where FC directs you to capturing a pointer); and a record field declared `mutable` is assignable through an immutable binding — `let p = {...}` then `p.X <- 10` — exactly as every FC field is.
 
-Where FC departs from the ML school is only the default: OCaml and F# freeze record fields unless a field opts in with `mutable`, while FC follows C — every field of every struct is assignable, with no per-field opt-out. The `const` qualifier (below) recovers content-immutability at the pointer/slice boundary: `const T*` / `const T[]` are read-only *views* through which no write compiles, deeply (§Deep const). But a view is a property of an access path, not of the data — FC has no way to declare a struct binding or field whose contents are frozen everywhere. That is a deliberate omission, not an oversight: systems code initializes, patches, and reuses structures in place, and where a read-only guarantee matters it is at a boundary — an API handing out access to data it owns — which is exactly where a `const` view sits.
+Where FC departs from the ML school is only the default: OCaml and F# freeze record fields unless a field opts in with `mutable`, while FC follows C — every field of every struct is assignable, with no per-field opt-out. The `const` qualifier (below) recovers content-immutability at the pointer/slice boundary: `const T*` / `const T[]` are read-only *views* through which no write compiles, deeply (§Deep const). A view is a property of an access path, not of the data, and for locals, fields, and file-level bindings that is all FC offers — deliberately, not by oversight: systems code initializes, patches, and reuses structures in place, and where a read-only guarantee matters it is at a boundary — an API handing out access to data it owns — which is exactly where a `const` view sits.
+
+**Module constants are the one exception, and it is a fact about storage rather than a discipline imposed on users.** At module scope a `let` is not a binding over a value you own and evolve — it *is* the object: singular, program-lifetime, with no shadowing or scoping available to evolve it, and an initializer already required to be a constant expression. There is nothing to evolve, so its contents are frozen and it can be placed in read-only memory (§Module constants are read-only). A writable global says `let mut`.
 
 ### The const qualifier
 
@@ -1168,16 +1174,17 @@ const cstr       // read-only C string (alias for const u8*)
 const any*       // read-only opaque pointer (maps to const void* in C)
 ```
 
-`const` is not valid on bare value types — `const i32` is a compile error. A value binding needs no qualifier to prevent reassignment (that is `let`), and FC has no frozen-*contents* value binding (§One rule, three knobs) — a read-only view of a value is expressed at the pointer/slice boundary.
+`const` is not valid on bare value types — `const i32` is a compile error. A value binding needs no qualifier to prevent reassignment (that is `let`), and a *local* has no frozen-contents form (§One rule, three knobs) — a read-only view of a value is expressed at the pointer/slice boundary. A module constant is frozen without a qualifier, by virtue of where it is declared (§Module constants are read-only); there is no `const` keyword to write on a binding.
 
 #### Const sources
 
-Const enters the type system at four sites and propagates from there through inference:
+Const enters the type system at five sites and propagates from there through inference:
 
 - **String and cstring literals**: `"hello"` has type `const str`, `c"hello"` has type `const cstr`. The data lives in static read-only memory.
 - **Function parameter annotations**: `let f = (s: const str) -> ...` declares that `f` will not modify `s`.
 - **Struct field declarations**: `struct config = name: const str` declares a read-only field.
 - **Address-of an immutable binding**: `&p` where `p` is a `let` binding (including a parameter or an immutable global) has type `const T*`. Reassignment through the pointer is the write `let` forecloses, so the address is read-only (§Address-of).
+- **Reads out of a module constant**: a pointer or slice read from a module constant's own storage — at any depth — is `const`-qualified, so the freeze cannot escape as a writable view (§Module constants are read-only).
 
 Since FC has no type annotations on `let` bindings, local variable types are always inferred from the right-hand side. A binding inherits whatever constness the expression produces.
 
@@ -1232,7 +1239,9 @@ let f = (n: const node*) ->
 
 Deep const chains naturally: `const_ptr.a.b.c.d.e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
 
-`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`.
+`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`. Loading a reference *out of* a read-only slice is const too — the element type of a `const T[]` carries the restriction, so an element cannot be laundered into a writable view.
+
+The same chain runs from a module constant, which is a read-only **root** rather than a read-only view: `cfg.a.b.c` and `cfg.rows[i].data` are frozen at every depth, and any pointer or slice they yield is const. The chain stops where the path leaves the constant's own storage — at a dereference of an address the constant holds (§Module constants are read-only).
 
 #### Write rejection
 
@@ -1273,6 +1282,46 @@ let copy = alloc(s)!      // str (non-const — new heap memory)
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `enum`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `enum`, `module`, `import`, and `extern`.
 
 **Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`i32.min`, `f64.nan`, `isize.bits`, …), enum variants and `E.count`, struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
+
+#### Module constants are read-only
+
+Because a module-level non-function `let` is initialized from a constant expression, it is a single object the compiler lays out once, initializes once, and never writes. FC treats it accordingly: it is a **module constant**, and its contents are frozen everywhere, not just where it is declared.
+
+```fc
+module cfg =
+    let origin = point { x = 1, y = 2 }
+    let steps  = i32[4] { 1, 2, 4, 8 }
+    let mut hits = 0                  // the writable global
+
+cfg.origin.x = 30       // compile error — cannot write to module constant 'origin'
+cfg.steps[0] = 99       // compile error — element of a module constant
+cfg.origin = other      // compile error — reassignment through the qualified name
+cfg.hits = 1            // ok — let mut is the writable global
+```
+
+Two guarantees follow, and they do not reach equally far.
+
+**Its own storage is read-only — always, for every module constant.** Reassigning it, and writing any field of it at any depth, are compile errors wherever they appear. This holds unconditionally: no analysis decides it, and there is no module constant it does not cover.
+
+**Its contents are frozen, and it is placed in read-only memory, when every byte it occupies is storage the compiler emitted** — no pointer value and no raw-address slice anywhere in its initializer. That is the case the placement matters for: a lookup table's bytes, which would otherwise occupy writable memory for the life of the program. On targets where read-only data is genuinely read-only (ROM, `.rodata`), this is what makes a table cost no RAM.
+
+For such a constant the freeze is **deep**: it follows every field, element, and subslice of its storage, whatever the nesting, and it travels with the value. A reference read out of it is `const`-qualified — `cfg.steps` has type `const i32[]` — so it cannot be handed to a function that could write it. Since a plain `T[]` coerces to `const T[]`, marking such a parameter `const` accepts both and breaks no existing caller. Value reads need no qualification: a copy of a constant is an ordinary value the recipient owns.
+
+The second condition is judged **per declaration**, not per field. A constant that mixes a lifted table with a raw address keeps its own storage read-only, but its table stays writable and in writable memory — a conservative whole-declaration answer, preferred to a partial one that would have to prove which subobject a given access path reaches. Splitting the two apart into separate constants recovers the placement for the table.
+
+The freeze **stops at an address the constant merely holds**. A pointer value, and a slice built over a raw address, name memory the program supplied rather than storage the compiler emitted, so writes through them stay legal — which is what keeps memory-mapped I/O expressible:
+
+```fc
+module hw =
+    let vga  = (u8*) 0xA0000usize
+    let vram = u8[] { ptr = (u8*) 0xA0000usize, len = 64000 }
+
+hw.vga[0] = 7u8         // ok — the pointee is not the constant's storage
+hw.vram[1] = 9u8        // ok — a slice over an address hw does not own
+hw.vga = other_ptr      // compile error — the pointer itself is the constant
+```
+
+Neither the freeze nor the placement changes constant evaluation: a module constant still folds in a fixed-array size slot (`u8[cfg.words]`), in `static_assert`, and in another constant's initializer.
 
 **Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine. Static type properties follow the same split: a fixed-width integer `.min`, `.max`, or `.bits` is folded to its literal value (so it can take part in const division/modulo and comparisons, e.g. `i32.min / 2`), while float properties and the target-defined `isize`/`usize` `.min`/`.max`/`.bits` are emitted as their C macro and left to the C compiler.
 
@@ -4839,7 +4888,7 @@ A pure-integer program with no string interpolation and no floats gets a 7-heade
 
 ## Memory Management
 
-FC's memory model is manual — no garbage collector, no borrow checker. Memory lives either on the stack or the heap, and the programmer is responsible for managing heap allocations explicitly.
+FC's memory model is manual — no garbage collector, no borrow checker. Memory lives on the stack, on the heap, or in **static storage**, and the programmer is responsible for managing heap allocations explicitly. Static storage is not allocated or freed: it is laid out by the compiler and lives for the whole program. Module constants, their lifted slice-literal backing arrays, and string literals live there, and because none of them can be written they are placed in *read-only* static storage — `.rodata` on a hosted target, ROM on a target that has one (§Module constants are read-only). A `let mut` module-level binding is static storage too, but writable.
 
 Five built-in compile-time operators handle memory and runtime checking operations that require compiler participation to resolve:
 

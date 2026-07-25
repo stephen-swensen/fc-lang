@@ -1,0 +1,12 @@
+struct point =
+    x: i32
+    y: i32
+
+module cfg =
+    private let origin = point { x = 1, y = 2 }
+    let bump = () ->
+        origin.x = 3
+        origin.x
+
+let main = (args: str[]) ->
+    cfg.bump()

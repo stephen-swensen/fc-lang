@@ -1,0 +1,12 @@
+struct point =
+    x: i32
+    y: i32
+
+let main = (args: str[]) ->
+    let p = point { x = 1, y = 2 }
+    p.x = 30
+    assert(p.x == 30)
+    let mut buf = i32[3] { 1, 2, 3 }
+    buf[0] = 9
+    assert(buf[0] == 9)
+    0

@@ -1,0 +1,6 @@
+module tbl =
+    let steps = i32[4] { 1, 2, 4, 8 }
+
+let main = (args: str[]) ->
+    tbl.steps[0] = 99
+    tbl.steps[0]

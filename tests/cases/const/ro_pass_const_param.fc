@@ -1,0 +1,9 @@
+let first = (s: const i32[]) ->
+    s[0]
+
+module tbl =
+    let steps = i32[4] { 1, 2, 4, 8 }
+
+let main = (args: str[]) ->
+    assert(first(tbl.steps) == 1)
+    0

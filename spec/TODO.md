@@ -310,32 +310,80 @@ unchanged.
   confirm the capture-a-pointer idiom composes (it should: same as capturing any `let` pointer,
   programmer owns the lifetime).
 
-## Deferred (future): a `const` binding for frozen constants at global scope
+## Module constants are read-only — IMPLEMENTED 2026-07-25; no new keyword
 
 Surfaced 2026-07-24 while stress-testing the const/`let`/`let mut` model against an F#
-value-vs-variable lens. **Conclusion: FC's chosen axis stands — the owner controls content.**
-`let` vs `let mut` governs only the *root* (reassignability, and derived from it whole-value
-address-taking); a value's contents are always mutable *by the binding that owns them*, and
-content-immutability is expressed only at a reference boundary (`const T*` / `const T[]`).
-This is deliberate (see §One rule, three knobs) and we affirmed it rather than reworking it.
+value-vs-variable lens: a module-level `let config = point{…}` permitted `config.x = 3` from
+anywhere, so a "constant" was distinguishable from `let mut` only by rebindability, and its
+bytes sat in writable memory for the life of the program. The sketch then was a `const x`
+modifier at global scope (Zig/Rust precedent). **Shipped instead: module-level non-function
+`let` simply *is* frozen.** Spec §Module constants are read-only; tests
+`tests/cases/const/ro_*`.
 
-We explored filling the rest of the two-bit `{rebind?} × {patch contents?}` square that FC's
-rebind/field-write split makes expressible — a frozen `let const` (no rebind, no patch) and a
-rebind-but-no-patch `let mut const` (≈ F#'s `let mutable` of an immutable record). Both are
-*coherent*, but: local frozen bindings are mostly author self-discipline (which FC punts to
-the programmer — no style diagnostics), and rebind-no-patch hands consumers no guarantee a
-plain `let mut` + const view doesn't already give. So neither earns a language feature.
+Three findings decided the shape:
 
-The **one** extension left open, as a *possible future feature* (not scheduled): a `const`
-modifier at **global/module scope only**, declaring a genuinely frozen constant — no rebind,
-no content write from anywhere — which would (a) make such globals ROM-able (emit C `const`,
-land in `.rodata`; a real win for the 16-bit/retro target) and (b) close the one edge where
-today's model reads oddly: a module/file-level `let config = point{…}` currently permits
-`config.x = 3` from anywhere (verified 2026-07-24), i.e. `let` globals are "mutable constants"
-distinguishable from `let mut` only by rebindability. Likely spelling `const x` as a peer of
-`let`/`let mut` (Zig/Rust precedent), with **no** `const mut`. Local `const` bindings are
-explicitly out of scope. Note this is orthogonal to — and larger than — the read-only
-address-of feature above; ship that first.
+- **Representation-only was not available.** Module-level `let` already requires a
+  constant-expression initializer, so "any constant-foldable module binding" is *every*
+  module binding — there is no subset to select. And `.rodata` placement while `cfg.x = 3`
+  still compiles is a clean build that segfaults: emitting C `const` **is** the decision to
+  reject the writes.
+- **A keyword would mark what the declaration form already guarantees.** `let mut` was
+  already the module-scope spelling for mutable global state (`stdlib/net.fc` —
+  `let mut wsa_initialized`), and at global scope it carries no capture penalty. A third
+  form bought nothing and would have left plain `let` constants still patchable — adding a
+  spelling rather than closing the edge.
+- **The break was empirically free.** Nothing in `stdlib/`, `demos/`, or `../wolf-fc` wrote
+  a module constant's contents; all three built unchanged. wolf-fc moved 18 tables /
+  2016 bytes and 512 constant objects from `.data` to `.rodata`.
+
+The cost owned: §One rule, three knobs gains a module-scope clause. Locals and **file-level**
+top-level bindings keep initialize-then-patch — the entry-point file is the script zone
+(looser init gate, hoisted into `main`) and stays as permissive as possible. The freeze is
+deep through the constant's own storage but **stops at an address it merely holds**, so
+`let vga = (u8*) 0xA0000usize` and `u8[] { ptr = …, len = … }` stay writable *through* —
+memory-mapped I/O is exactly why. A constant is placed in read-only memory only when every
+byte it occupies is compiler-emitted; that judgment is per declaration, so a constant mixing
+a table with a raw address is read-only in its own storage without its backing being frozen
+(conservative and complete, rather than proving which subobject an access path reaches).
+
+Incidental fix: qualified reassignment of a module member (`m.n = 5`) was never rejected —
+the immutable-binding check only inspected bare-identifier targets — so a module-level `let`
+was silently rebindable through its qualified name. The read-only root check closes it.
+
+## BUG: `alloc`/`alloca` of a module-qualified *value* is misread as a type
+
+Found 2026-07-25 while stress-testing module constants; **pre-existing** (reproduces
+identically on the 2026-07-21 build), and unrelated to the read-only change — recorded
+rather than fixed, because the remedy belongs with `alloc`'s type-vs-expression
+disambiguation rather than with module constants.
+
+`alloc(expr)`/`alloca(expr)` decide between the `alloc(T)` and `alloc(expr)` readings in the
+**parser**, on syntax alone (`parser.c`, the `try_type` branch): a leading identifier
+followed by `.` is committed to `parse_type` as a possible module-qualified type name, and
+whenever that parse reaches `)` the type reading wins. Nothing afterwards checks that the
+dotted name actually *denotes* a type, and the saved backtrack position is never used on
+that path. A module-qualified **value** therefore silently becomes `alloc(T)`:
+
+```fc
+module k =
+    let p = point { x = 3, y = 4 }
+    let mut q = point { x = 5, y = 6 }
+
+let hp = alloc(k.p)!     // emits calloc(1, sizeof(point)) — k.p is never read
+let hq = alloca(k.q)     // segfaults the compiler
+```
+
+Two failure modes, both bad: `alloc` compiles clean and produces a zero-filled object (exit
+0 with broken output), and `alloca` crashes the compiler. The bare-identifier twin is already
+correct — `alloc(p)` on a local reports "alloc(expr) requires a literal or slice expression"
+— so only the dotted form is affected.
+
+This is the *semantic questions get semantic answers* rule (CLAUDE.md) unmet: the fix is to
+gate the type reading on whether the dotted name resolves to a type, the same shape as the
+`<` disambiguation pre-pass built for const generics, and to restore the existing
+backtracking when it does not. Add tests for both operators against a module `let`, a module
+`let mut`, and a genuine module-qualified type (`alloc(shapes.point)`), which must keep
+working.
 
 ## Discarded pure value as a no-op error — extend the self-assignment rule
 

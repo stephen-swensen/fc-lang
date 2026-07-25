@@ -1,0 +1,6 @@
+module msg =
+    let greeting = "hello"
+
+let main = (args: str[]) ->
+    msg.greeting[0] = 72u8
+    (i32) msg.greeting.len

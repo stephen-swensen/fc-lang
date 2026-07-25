@@ -318,6 +318,11 @@ struct Expr {
                                                  static (const context) or a
                                                  function-entry local (stack context,
                                                  reused per loop iteration) */
+            bool codegen_backing_rodata;      /* the lifted backing belongs to a frozen
+                                                 module constant, so it is emitted
+                                                 `static const` and the slice header
+                                                 casts its .ptr — FC has already
+                                                 rejected every write through it */
         } array_lit;
 
         /* EXPR_SLICE_LIT — T[] { ptr = expr, len = expr } */
@@ -573,6 +578,15 @@ struct Decl {
             const char *codegen_name;   /* mangled C name for module members */
             bool is_mut;
             bool is_module_member;      /* true if declared inside a module body */
+            /* Read-only module constant (is_module_member && !is_mut && non-function)
+             * whose every byte is storage the *compiler* emits — no pointer value and
+             * no slice built over a raw address anywhere in its initializer. Only then
+             * are its contents frozen: reference-typed reads out of it carry const and
+             * its lifted backing arrays emit `static const`. Set in pass2's
+             * check_decl_let; false leaves the constant read-only in its own storage
+             * only, which is what keeps `let vga = (u8*) 0xA0000usize` writable
+             * through. */
+            bool is_frozen;
             Expr *init;
             Type *resolved_type;    /* filled by pass2 */
             /* Const-fold cache for module-member lets. Lazily populated during

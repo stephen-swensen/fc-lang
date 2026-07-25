@@ -1,0 +1,12 @@
+struct inner =
+    v: i32
+
+struct outer =
+    i: inner
+
+module cfg =
+    let nest = outer { i = inner { v = 1 } }
+
+let main = (args: str[]) ->
+    cfg.nest.i.v = 5
+    cfg.nest.i.v

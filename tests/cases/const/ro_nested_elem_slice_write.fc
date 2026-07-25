@@ -1,0 +1,9 @@
+struct row =
+    data: i32[]
+
+module grid =
+    let rows = row[2] { row { data = i32[2] { 1, 2 } }, row { data = i32[2] { 3, 4 } } }
+
+let main = (args: str[]) ->
+    grid.rows[0].data[0] = 9
+    grid.rows[0].data[0]

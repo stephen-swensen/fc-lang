@@ -1,0 +1,6 @@
+module cfg =
+    let limit = 7
+
+let main = (args: str[]) ->
+    cfg.limit = 11
+    cfg.limit

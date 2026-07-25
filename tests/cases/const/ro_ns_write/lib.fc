@@ -1,0 +1,9 @@
+namespace acme::
+
+struct point =
+    x: i32
+    y: i32
+
+module cfg =
+    let origin = point { x = 1, y = 2 }
+    let steps = i32[4] { 1, 2, 4, 8 }

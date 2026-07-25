@@ -1,0 +1,14 @@
+// A module constant still folds in a fixed-array size slot — the freeze is
+// about writes, not about constant evaluation.
+module cfg =
+    let words = 4
+
+struct blk =
+    data: u8[cfg.words]
+
+let main = (args: str[]) ->
+    let b = default(blk)
+    assert(b.data.len == 4)
+    assert(cfg.words == 4)
+    static_assert(cfg.words > 0, "words must be positive")
+    0

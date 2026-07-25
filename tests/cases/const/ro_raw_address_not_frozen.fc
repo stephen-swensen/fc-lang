@@ -1,0 +1,18 @@
+// The freeze stops at an address the constant merely holds: a pointer
+// constant and a slice built over a raw address both stay writable through,
+// which is what keeps memory-mapped I/O expressible. Proven by type — these
+// pass to non-const parameters, which a frozen constant could not.
+let takes_mut_ptr = (p: u8*) ->
+    1
+
+let takes_mut_slice = (s: u8[]) ->
+    2
+
+module hw =
+    let vga = (u8*) 0xA0000usize
+    let vram = u8[] { ptr = (u8*) 0xA0000usize, len = 8 }
+
+let main = (args: str[]) ->
+    assert(takes_mut_ptr(hw.vga) == 1)
+    assert(takes_mut_slice(hw.vram) == 2)
+    0

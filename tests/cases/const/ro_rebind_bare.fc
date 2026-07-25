@@ -1,0 +1,8 @@
+module cfg =
+    let limit = 7
+    let bump = () ->
+        limit = 11
+        limit
+
+let main = (args: str[]) ->
+    cfg.bump()
