@@ -39,15 +39,24 @@ Requires SDL2 installed for your environment:
 - Fire a bubble into the raft. Land it against **three or more** of its own
   colour and the whole group pops.
 - Anything left hanging with no path back to the ceiling **falls** — that is
-  where the points are. A dropped group of *n* bubbles scores `n * n * 20`,
-  so cutting the raft off at the neck beats nibbling at it. Popped bubbles
-  themselves are only 10 each.
-- The ceiling grinds down one row every few shots. **Popping resets that
-  counter**, so a clean run keeps the ceiling up; a run of misses walks it
-  down. The `DROP IN` pips on the right show how many shots you have left.
+  where the points are. Each bubble that falls **doubles** the payout: one is
+  20, two is 40, three is 80, and a dozen is over forty thousand. Popped
+  bubbles themselves are only 10 each. Cutting the raft off at the neck is
+  not a tidier way to play, it is the whole game.
+- The ceiling grinds down one row on a fixed count of **shots landed**.
+  Popping pays in points, not in time — the ceiling is a metronome, not a
+  penalty for missing. The `DROP IN` pips on the right show what is left.
+- That count comes from **how many colours are still on the board**, not from
+  the level number: a board down to two colours is an easy board, so it earns
+  a faster ceiling. Clearing a colour off tightens the screw immediately.
+- **You are on a turn clock.** Deliberate too long and the launcher starts
+  flashing `HURRY!`; keep deliberating and it fires wherever you left it
+  aimed. Roughly five seconds to the warning, ten to the shot.
 - Push the raft past the red line and the run is over.
-- Clear the board and the next level starts: more rows, more colours, and a
-  shorter fuse on the ceiling. Clearing pays `500 * level`.
+- Clear the board and the next level starts: more rows and more colours.
+  Clearing pays `500 * level` plus a **speed bonus** that starts at 50,000,
+  decays every few seconds, and pays nothing at all past 65. The `BONUS`
+  readout in the left panel is that number, falling while you watch.
 - The launcher is only ever loaded with a colour still on the board, so you
   can never be handed a dead shot.
 - Best score persists to `~/.fuzzel-fobble/highscore.txt`.
@@ -96,6 +105,16 @@ that is already floating.
 **The aim guide is the physics.** The dotted trajectory walks the shot's own
 path — wall bounces and all — through the same `hits_bubble` test the live
 shot uses, so the preview can never disagree with what happens when you fire.
+
+**Pacing is four rules, not a difficulty curve.** There is no level-indexed
+table of numbers anywhere. The ceiling counts landed shots; the interval is
+read off the colours on the board; the turn clock runs while it is your shot
+to take; and the payouts (doubling for drops, decaying for speed) put the
+pressure in the scoring rather than in an escalating handicap. Between them
+they keep a competent player on a knife edge without the game ever deciding
+in advance how hard it should be. All four are longstanding arcade
+bubble-shooter conventions rather than anything invented here; the specific
+numbers are this demo's own.
 
 ## FC features demonstrated
 

@@ -62,6 +62,35 @@ let max_drifters = 40
 
 let num_colors = 6
 
+// Ceiling pacing. The countdown runs on shots landed and nothing else — a
+// pop scores, it does not buy time back. The interval itself comes from how
+// many colours are still on the board: a board down to two colours is an
+// easy board, so it earns a faster ceiling. Pressure tracks the position,
+// not the level number. (Both rules are how the arcade bubble-shooters have
+// always paced themselves; they are what keeps the game from stalling out
+// into a solved puzzle.)
+let drop_shots_min = 5
+let drop_shots_max = 10
+
+// The turn clock, in frames at roughly 60 Hz. Stall and the launcher starts
+// nagging; keep stalling and it fires without you. A shooter with no clock
+// lets every shot be solved at leisure, which is a different, slower game.
+let hurry_warn = 300
+let hurry_fire = 600
+
+// A dropped bubble is worth double the one before it, up to a ceiling on the
+// doublings — past that the curve is academic and the score runs away. This
+// is what makes cutting the raft loose at the neck the point of the game
+// rather than a bonus for tidiness.
+let drop_score_base = 20
+let drop_score_max_doubles = 14
+
+// Clearing the board pays for speed: the bonus decays every few seconds and
+// expires outright, so there is a reason to shoot rather than to study.
+let clear_bonus_base = 50000
+let clear_bonus_step = 5        // seconds per decay step
+let clear_bonus_expiry = 65     // seconds after which a clear pays no bonus
+
 // ============================================================
 // Types
 // ============================================================
@@ -131,6 +160,11 @@ struct game_state =
     drop_interval: i32
     row_parity: i32         // 0 = row 0 is a wide row, 1 = row 0 is offset
     shots_fired: i32
+
+    // Clocks
+    idle_timer: i32         // frames the turn has been sitting unfired
+    level_frames: i32       // frames spent on this level, for the speed bonus
+    bonus_paid: i32         // the speed bonus the last clear actually paid
 
     // Presentation
     show_symbols: bool
@@ -414,6 +448,60 @@ let color_in_play = (w: world*, c: i32) ->
         if w.grid[i] == c then found = true
     found
 
+let count_colors_in_play = (w: world*) ->
+    let mut seen = i32[6] { 0, 0, 0, 0, 0, 0 }
+    for i in 0..grid_cells do
+        let v = w.grid[i]
+        if v >= 0 then
+            seen[v] = 1
+    let mut n = 0
+    for c in 0..num_colors do
+        if seen[c] == 1 then n = n + 1
+    n
+
+// Shots between ceiling descents, derived from the colours still on the
+// board. Fewer colours is an easier board, so it gets a shorter fuse.
+let drop_interval_for = (colors: i32) ->
+    imin(imax(colors + 4, drop_shots_min), drop_shots_max)
+
+// Re-derived after every landing, so a colour leaving the board tightens the
+// countdown at once. The clamp matters: the interval can shrink underneath a
+// countdown that is already running.
+let refresh_drop_interval = (w: world*) ->
+    w.game.drop_interval = drop_interval_for(count_colors_in_play(w))
+    if w.game.shots_left > w.game.drop_interval then
+        w.game.shots_left = w.game.drop_interval
+
+// ============================================================
+// Scoring
+// ============================================================
+
+// Popped bubbles are flat rate; bubbles you cut loose double with each one
+// that falls, which is what makes severing the raft worth aiming for.
+let drop_score = (n: i32) ->
+    if n <= 0 then
+        return 0
+    let mut v = drop_score_base
+    let doubles = imin(n - 1, drop_score_max_doubles)
+    for i in 0..doubles do
+        v = v * 2
+    v
+
+// The speed bonus for clearing a board: full value if you are quick, decayed
+// a notch for every few seconds after that, and nothing at all once the
+// clock runs past the expiry.
+let clear_bonus = (frames: i32) ->
+    let secs = frames / 60
+    if secs >= clear_bonus_expiry then
+        return 0
+    let mut v = clear_bonus_base
+    let mut t = secs
+    loop
+        if t < clear_bonus_step then break
+        v = v * 3 / 4
+        t = t - clear_bonus_step
+    v
+
 // ============================================================
 // Particles
 // ============================================================
@@ -628,7 +716,6 @@ let drop_floaters = (w: world*, rng: pcg_random*) ->
 
 let level_colors = (level: i32) -> imin(3 + (level - 1) / 2, num_colors)
 let level_rows = (level: i32) -> imin(5 + (level - 1) / 2, 8)
-let level_drop = (level: i32) -> imax(12 - level, 6)
 
 // Picks a colour for the launcher. Only colours actually on the board are
 // eligible — handing out a colour with nothing to match would be a dud shot.
@@ -863,16 +950,19 @@ let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
         gained = popped * 10
         let dropped = drop_floaters(w, rng)
         if dropped > 0 then
-            // Cutting a big raft loose is the whole game: score it squared.
-            gained = gained + dropped * dropped * 20
+            gained = gained + drop_score(dropped)
             play(s, s.drop)
         else
             play(s, s.pop)
-        // Popping buys back the countdown to the next ceiling descent.
-        w.game.shots_left = w.game.drop_interval
     else
         play(s, s.stick)
-        w.game.shots_left = w.game.shots_left - 1
+
+    // The countdown runs on shots landed, full stop. A pop pays in points,
+    // not in time — the ceiling is a metronome, not a penalty for missing.
+    w.game.shots_left = w.game.shots_left - 1
+    // That pop may also have taken a colour off the board, which shortens
+    // the fuse from here on.
+    refresh_drop_interval(w)
 
     if gained > 0 then
         w.game.score = w.game.score + gained
@@ -885,10 +975,13 @@ let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
     if w.game.shots_left <= 0 then
         if count_bubbles(w) > 0 then
             descend(w, rng)
+            // The new row can reintroduce a colour and slacken the fuse.
+            refresh_drop_interval(w)
         w.game.shots_left = w.game.drop_interval
 
     if count_bubbles(w) == 0 then
-        w.game.score = w.game.score + 500 * w.game.level
+        w.game.bonus_paid = clear_bonus(w.game.level_frames)
+        w.game.score = w.game.score + 500 * w.game.level + w.game.bonus_paid
         w.game.phase = game_phase.level_clear
         w.game.phase_timer = 120
         play(s, s.clear)
@@ -942,6 +1035,7 @@ let fire = (w: world*, rng: pcg_random*, s: sfx*) ->
     w.game.cur_color = w.game.next_color
     w.game.next_color = pick_shot_color(w, rng)
     w.game.shots_fired = w.game.shots_fired + 1
+    w.game.idle_timer = 0
     play(s, s.shoot)
 
 // ============================================================
@@ -952,11 +1046,13 @@ let start_level = (w: world*, rng: pcg_random*) ->
     w.shot.active = false
     clear_fallers(w)
     build_level(w, rng)
-    w.game.drop_interval = level_drop(w.game.level)
+    w.game.drop_interval = drop_interval_for(count_colors_in_play(w))
     w.game.shots_left = w.game.drop_interval
     w.game.cur_color = pick_shot_color(w, rng)
     w.game.next_color = pick_shot_color(w, rng)
     w.game.angle = 0.0
+    w.game.idle_timer = 0
+    w.game.level_frames = 0
     w.game.popup_timer = 0
     w.game.phase = game_phase.playing
     w.game.phase_timer = 0
@@ -1123,6 +1219,18 @@ let draw_shot = (w: world*, r: any*) ->
         draw_bubble(r, (i32) w.shot.x, (i32) w.shot.y, w.shot.color, 255u8,
                     w.game.show_symbols)
 
+// The turn clock made visible: it says nothing until the launcher starts to
+// lose patience, then blinks, then blinks twice as fast for the last stretch
+// before it fires on its own.
+let draw_hurry = (w: world*, r: any*) ->
+    if w.shot.active || w.game.idle_timer < hurry_warn then
+        return
+    let urgent = w.game.idle_timer > (hurry_warn + hurry_fire) / 2
+    let span = if urgent then 7 else 15
+    if (w.game.idle_timer / span) % 2 == 0 then
+        let g = if urgent then 70 else 160
+        draw_text_centered(r, "HURRY!", 640, 556, 6, 255u8, (u8) g, 70u8)
+
 let draw_popup = (w: world*, r: any*) ->
     if w.game.popup_timer > 0 then
         let rise = (75 - w.game.popup_timer) / 3
@@ -1164,6 +1272,13 @@ let draw_hud = (w: world*, r: any*) ->
     let shots_str = "%d{w.game.shots_fired}"
     draw_label_value(r, "SHOTS", (const str) shots_str, 40, 500,
                      190u8, 200u8, 230u8)
+    // Visible and falling, so the reward for clearing quickly is something
+    // you can watch yourself spending.
+    let bonus = clear_bonus(w.game.level_frames)
+    let bonus_str = "%d{bonus}"
+    let bg = if bonus > 0 then 190 else 90
+    draw_label_value(r, "BONUS", (const str) bonus_str, 40, 600,
+                     255u8, (u8) bg, 90u8)
 
     // --- Right panel: what's coming, and how long you have ---
     let rx = field_x1 + 40
@@ -1220,8 +1335,11 @@ let draw_paused = (r: any*) ->
 let draw_level_clear = (w: world*, r: any*) ->
     fill(r, field_x0, 280, field_x1 - field_x0, 180, 0u8, 0u8, 0u8, 190u8)
     draw_text_centered(r, "CLEAR.", 640, 310, 8, 130u8, 255u8, 180u8)
+    if w.game.bonus_paid > 0 then
+        let b = "SPEED BONUS %d{w.game.bonus_paid}"
+        draw_text_centered(r, (const str) b, 640, 372, 3, 255u8, 200u8, 90u8)
     let nxt = "LEVEL %d{w.game.level + 1}"
-    draw_text_centered(r, (const str) nxt, 640, 400, 4, 255u8, 255u8, 255u8)
+    draw_text_centered(r, (const str) nxt, 640, 408, 4, 255u8, 255u8, 255u8)
 
 let draw_game_over = (w: world*, r: any*) ->
     fill(r, field_x0, 250, field_x1 - field_x0, 240, 0u8, 0u8, 0u8, 200u8)
@@ -1264,6 +1382,8 @@ let render = (w: world*, r: any*, frame: i32) ->
         draw_launcher(w, r, frame)
         draw_shot(w, r)
     draw_particles(w, r)
+    if aiming then
+        draw_hurry(w, r)
     draw_popup(w, r)
 
     // Panels last: they own the strips outside the playfield, so nothing
@@ -1475,6 +1595,7 @@ let main = (args: str[]) ->
 
         match w.game.phase with
         | playing ->
+            w.game.level_frames = w.game.level_frames + 1
             if w.game.aim_left then
                 w.game.angle = w.game.angle - aim_speed
             if w.game.aim_right then
@@ -1484,6 +1605,15 @@ let main = (args: str[]) ->
             if w.game.angle > aim_limit then
                 w.game.angle = aim_limit
             update_shot(w, &rng, &s)
+            // The turn clock only runs while the shot is yours to take. Sit
+            // on it long enough and the launcher fires wherever you left it
+            // aimed — deliberating is a cost, not a free action.
+            if w.shot.active then
+                w.game.idle_timer = 0
+            else
+                w.game.idle_timer = w.game.idle_timer + 1
+                if w.game.idle_timer >= hurry_fire then
+                    fire(w, &rng, &s)
         | level_clear ->
             w.game.phase_timer = w.game.phase_timer - 1
             if w.game.phase_timer <= 0 then
