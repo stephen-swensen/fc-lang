@@ -70,8 +70,8 @@ Three of them, arriving as you go:
 
 | | What it is | What it does |
 |---|---|---|
-| **Star** (white, gold rim) | on the board, from level 2 | Land any colour against it and **every bubble of that colour** goes, wherever it is on the board — adjacency doesn't matter. The star goes too. |
-| **Stone** (matte grey, hatched) | on the board, from level 3 | Indestructible. It never pops, not to a match and not to a metal shot. The only way to be rid of it is to **cut it loose** and let it fall. |
+| **Star** (gold star on white) | on the board, from level 2 | Land any colour against it and **every bubble of that colour** goes, wherever it is on the board — adjacency doesn't matter. The star goes too. |
+| **Stone** (grey faceted hexagon) | on the board, from level 3 | Indestructible. It never pops, not to a match and not to a metal shot. The only way to be rid of it is to **cut it loose** and let it fall. |
 | **Metal** (chrome) | loaded into the launcher, from level 2 | Doesn't stick to anything. It **ploughs straight up through the raft**, popping everything it touches, and leaves at the ceiling. Stones shrug it off. |
 
 A star is worth aiming *at* rather than around — it is the one shot that
@@ -86,9 +86,10 @@ can arrive there later.
 
 The bubbles can also carry a small mark (diamond, ring, cross, star, square,
 tree) so the six colours stay distinguishable without relying on hue. That is
-**off** by default; **S** turns it on. The star's starburst and the stone's
-hatching are not part of that setting — those marks say what a bubble *does*,
-so they are always drawn.
+**off** by default; **S** turns it on. The specials are not part of that
+setting: a star is a gold star inscribed across its whole face and a stone is
+a faceted hexagon rather than a sphere, so both are told apart by shape at
+any distance, and neither is the player's to switch off.
 
 ## Display
 
