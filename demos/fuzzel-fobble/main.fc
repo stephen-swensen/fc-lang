@@ -469,9 +469,10 @@ let hex_vertex = (cx: i32, cy: i32, rad: i32, i: i32) ->
     let a = (f64) i * 1.0471976
     { (f64) cx + math.cos(a) * (f64) rad, (f64) cy + math.sin(a) * (f64) rad }
 
-// A star always wears its star and a stone always wears its hatching: those
-// marks say what the bubble *does*, so unlike the colour-blind marks they are
-// not the player's to switch off.
+// The specials are told apart by shape, not by decoration: a star wears a
+// star across its whole face and a stone is not a sphere at all. That says
+// what the bubble *does*, so unlike the colour-blind marks it is not the
+// player's to switch off.
 let draw_star_bubble = (r: any*, cx: i32, cy: i32, alpha: u8) ->
     let { br, bg, bb } = cell_rgb(cell_star)
     // Gold rim, white body, and a gold star inscribed across the whole face.
