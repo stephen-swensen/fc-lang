@@ -504,12 +504,21 @@ let draw_stone_bubble = (r: any*, cx: i32, cy: i32, alpha: u8) ->
 
 let draw_metal_bubble = (r: any*, cx: i32, cy: i32, alpha: u8) ->
     let { br, bg, bb } = cell_rgb(shot_metal)
-    disc(r, cx, cy, 23, 4, shade(br, 40), shade(bg, 40), shade(bb, 44), alpha)
-    disc(r, cx - 2, cy - 2, 19, 3, br, bg, bb, alpha)
-    // Chrome: a hard bright band across the top and a dark one beneath.
-    fill(r, cx - 13, cy - 7, 26, 3, 255u8, 255u8, 255u8, amul(alpha, 78))
-    fill(r, cx - 11, cy + 3, 22, 3, shade(br, 34), shade(bg, 34), shade(bb, 38), alpha)
-    disc(r, cx - 8, cy - 10, 6, 2, 255u8, 255u8, 255u8, amul(alpha, 85))
+    // A polished ball: discs of rising brightness, each stepped a little
+    // further toward the light, so what is left showing of each is a crescent
+    // and the crescents stack into a curve. The coloured bubbles do this with
+    // two discs; steel just needs more of them, because its falloff from hot
+    // spot to shadow is far shorter than glass's.
+    disc(r, cx,     cy,     23, 4, shade(br, 26), shade(bg, 26), shade(bb, 28), alpha)
+    disc(r, cx - 1, cy - 1, 21, 3, shade(br, 44), shade(bg, 44), shade(bb, 46), alpha)
+    disc(r, cx - 2, cy - 3, 17, 3, shade(br, 64), shade(bg, 64), shade(bb, 66), alpha)
+    disc(r, cx - 4, cy - 5, 12, 2, shade(br, 84), shade(bg, 84), shade(bb, 86), alpha)
+    disc(r, cx - 5, cy - 7,  7, 2, br, bg, bb, alpha)
+    disc(r, cx - 7, cy - 9,  3, 2, 255u8, 255u8, 255u8, alpha)
+    // Light bounced up off the shadow side. Without it a metal ball reads as
+    // a grey one — the second, dimmer highlight is the whole tell.
+    disc(r, cx + 8, cy + 9, 4, 2, shade(br, 76), shade(bg, 76), shade(bb, 80),
+         amul(alpha, 80))
 
 let draw_bubble = (r: any*, cx: i32, cy: i32, color: i32, alpha: u8, symbols: bool) ->
     if color == cell_star then
