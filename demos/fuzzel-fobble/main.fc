@@ -62,6 +62,27 @@ let max_drifters = 40
 
 let num_colors = 6
 
+// A grid cell holds -1 for empty, a colour index below num_colors, or one of
+// these. `shot_metal` is a launcher payload only and never reaches the grid.
+// Anything that reads a cell value has to decide what it means for these
+// three, which is why `is_color` exists rather than a bare `>= 0` test.
+let cell_star = 6       // hit it with a colour and every bubble of that colour goes
+let cell_stone = 7      // indestructible: never pops, only falls
+let shot_metal = 8      // ploughs through the raft, sticks to nothing
+
+// When each special starts appearing, and how often. Stars and stones are
+// part of the board; a metal shot is handed to the launcher.
+let star_from_level = 2
+let stone_from_level = 3
+let metal_from_level = 2
+let star_pct = 6         // per placed bubble, once stars are in play
+let stone_pct = 7        // per placed bubble, never in the ceiling row
+let metal_pct = 5        // per launcher reload
+
+// The aim guide is a tutorial device: it draws the bounce for you while you
+// learn the geometry, and comes off after this level.
+let guide_levels = 1
+
 // Ceiling pacing. The countdown runs on shots landed and nothing else — a
 // pop scores, it does not buy time back. The interval itself comes from how
 // many colours are still on the board: a board down to two colours is an
@@ -358,11 +379,80 @@ let symbol_bits = (c: i32) ->
     | 4 -> 0b11111_10001_10001_10001_11111      // square
     | _ -> 0b00100_00100_01110_01110_11111      // tree
 
+// True for a plain playfield colour, false for empty and for every special.
+// Any code that treats a cell value as an index into a colour table has to
+// ask this first — `>= 0` alone will hand it a star or a stone.
+let is_color = (v: i32) -> v >= 0 && v < num_colors
+
+// Colour for any cell or shot value, specials included.
+let cell_rgb = (v: i32) ->
+    if v == cell_star then
+        // Near-white, not gold: a gold star sat two shades from lemon and the
+        // two were a genuine muddle on a busy board. No playfield colour is
+        // white, so white is the one hue that cannot be mistaken for a colour.
+        { 252u8, 248u8, 232u8 }
+    else if v == cell_stone then
+        { 128u8, 134u8, 150u8 }
+    else if v == shot_metal then
+        { 206u8, 214u8, 228u8 }
+    else
+        bubble_rgb(v)
+
 // Scales an alpha by a percentage — keeps highlights translucent when the
 // whole bubble is fading.
 let amul = (a: u8, pct: i32) -> (u8) ((i32) a * pct / 100)
 
+// Stamps a packed 5x5 mark across the face of a bubble.
+let stamp_mark = (r: any*, cx: i32, cy: i32, bits: i32,
+                  mr: u8, mg: u8, mb: u8, alpha: u8) ->
+    for row in 0..5 do
+        let rowbits = (bits >> ((4 - row) * 5)) & 31
+        for col in 0..5 do
+            if (rowbits >> (4 - col)) & 1 == 1 then
+                fill(r, cx - 5 + col * 2, cy - 4 + row * 2, 2, 2, mr, mg, mb, alpha)
+
+// A star always wears its star and a stone always wears its hatching: those
+// marks say what the bubble *does*, so unlike the colour-blind marks they are
+// not the player's to switch off.
+let draw_star_bubble = (r: any*, cx: i32, cy: i32, alpha: u8) ->
+    let { br, bg, bb } = cell_rgb(cell_star)
+    // Gold rim, white body, gold starburst: the ring is what carries at a
+    // glance and the mark is what confirms it.
+    disc(r, cx, cy, 23, 4, 228u8, 158u8, 44u8, alpha)
+    disc(r, cx - 2, cy - 2, 19, 3, br, bg, bb, alpha)
+    stamp_mark(r, cx - 2, cy - 2, 0b10101_01110_11111_01110_10101,
+               224u8, 146u8, 28u8, alpha)
+    disc(r, cx - 9, cy - 10, 4, 2, 255u8, 255u8, 255u8, amul(alpha, 80))
+
+let draw_stone_bubble = (r: any*, cx: i32, cy: i32, alpha: u8) ->
+    let { br, bg, bb } = cell_rgb(cell_stone)
+    // No inset body and no gloss: a stone reads as matte where every real
+    // bubble reads as glass, which is most of what tells them apart.
+    disc(r, cx, cy, 23, 4, shade(br, 60), shade(bg, 60), shade(bb, 60), alpha)
+    disc(r, cx - 1, cy - 1, 20, 3, br, bg, bb, alpha)
+    stamp_mark(r, cx - 1, cy - 1, 0b10101_01010_10101_01010_10101,
+               shade(br, 55), shade(bg, 55), shade(bb, 55), alpha)
+
+let draw_metal_bubble = (r: any*, cx: i32, cy: i32, alpha: u8) ->
+    let { br, bg, bb } = cell_rgb(shot_metal)
+    disc(r, cx, cy, 23, 4, shade(br, 40), shade(bg, 40), shade(bb, 44), alpha)
+    disc(r, cx - 2, cy - 2, 19, 3, br, bg, bb, alpha)
+    // Chrome: a hard bright band across the top and a dark one beneath.
+    fill(r, cx - 13, cy - 7, 26, 3, 255u8, 255u8, 255u8, amul(alpha, 78))
+    fill(r, cx - 11, cy + 3, 22, 3, shade(br, 34), shade(bg, 34), shade(bb, 38), alpha)
+    disc(r, cx - 8, cy - 10, 6, 2, 255u8, 255u8, 255u8, amul(alpha, 85))
+
 let draw_bubble = (r: any*, cx: i32, cy: i32, color: i32, alpha: u8, symbols: bool) ->
+    if color == cell_star then
+        draw_star_bubble(r, cx, cy, alpha)
+        return
+    if color == cell_stone then
+        draw_stone_bubble(r, cx, cy, alpha)
+        return
+    if color == shot_metal then
+        draw_metal_bubble(r, cx, cy, alpha)
+        return
+
     let { br, bg, bb } = bubble_rgb(color)
 
     // Rim first, then the body inset up-left: the offset between the two
@@ -372,16 +462,8 @@ let draw_bubble = (r: any*, cx: i32, cy: i32, color: i32, alpha: u8, symbols: bo
 
     // Colour-blind-friendly mark, dark and low-contrast so it reads as texture.
     if symbols then
-        let sr = shade(br, 40)
-        let sg = shade(bg, 40)
-        let sb = shade(bb, 40)
-        let bits = symbol_bits(color)
-        for row in 0..5 do
-            let rowbits = (bits >> ((4 - row) * 5)) & 31
-            for col in 0..5 do
-                if (rowbits >> (4 - col)) & 1 == 1 then
-                    fill(r, cx - 5 + col * 2, cy - 4 + row * 2, 2, 2,
-                         sr, sg, sb, amul(alpha, 62))
+        stamp_mark(r, cx, cy, symbol_bits(color),
+                   shade(br, 40), shade(bg, 40), shade(bb, 40), amul(alpha, 62))
 
     // Specular highlight
     disc(r, cx - 8, cy - 9, 5, 2, 255u8, 255u8, 255u8, amul(alpha, 62))
@@ -452,7 +534,7 @@ let count_colors_in_play = (w: world*) ->
     let mut seen = i32[6] { 0, 0, 0, 0, 0, 0 }
     for i in 0..grid_cells do
         let v = w.grid[i]
-        if v >= 0 then
+        if is_color(v) then
             seen[v] = 1
     let mut n = 0
     for c in 0..num_colors do
@@ -627,8 +709,10 @@ let draw_drifters = (w: world*, r: any*) ->
 let flood_same_color = (w: world*, row: i32, col: i32) ->
     for i in 0..grid_cells do
         w.mark[i] = 0
+    // Only a plain colour has a cluster. A star or a stone matches nothing,
+    // not even another of its own kind.
     let color = cell_get(w, row, col)
-    if color < 0 then
+    if !is_color(color) then
         return 0
 
     let start = cell_index(row, col)
@@ -689,7 +773,7 @@ let clear_marked = (w: world*, rng: pcg_random*) ->
             if w.mark[ci] == 1 && w.grid[ci] >= 0 then
                 let c = w.grid[ci]
                 let { cx, cy } = cell_center(w, row, col)
-                let { pr, pg, pb } = bubble_rgb(c)
+                let { pr, pg, pb } = cell_rgb(c)
                 spawn_burst(w, rng, cx, cy, 12, pr, pg, pb)
                 w.grid[ci] = -1
                 popped = popped + 1
@@ -717,13 +801,16 @@ let drop_floaters = (w: world*, rng: pcg_random*) ->
 let level_colors = (level: i32) -> imin(3 + (level - 1) / 2, num_colors)
 let level_rows = (level: i32) -> imin(5 + (level - 1) / 2, 8)
 
+let roll = (rng: pcg_random*, pct: i32) ->
+    (i32) pcg_random.next_bounded_u32(rng, 100u32) < pct
+
 // Picks a colour for the launcher. Only colours actually on the board are
 // eligible — handing out a colour with nothing to match would be a dud shot.
 let pick_shot_color = (w: world*, rng: pcg_random*) ->
     let mut avail = i32[6] { 0, 0, 0, 0, 0, 0 }
     for i in 0..grid_cells do
         let v = w.grid[i]
-        if v >= 0 then
+        if is_color(v) then
             avail[v] = 1
     let mut n = 0
     for c in 0..num_colors do
@@ -740,6 +827,15 @@ let pick_shot_color = (w: world*, rng: pcg_random*) ->
             if seen == pick then result = c
     result
 
+// What the launcher loads: usually a colour that is on the board, and now and
+// then a metal shot. Only the launcher queue draws from this — a descending
+// row uses the plain colour pick, since the specials are not the ceiling's
+// to hand out.
+let pick_launcher = (w: world*, rng: pcg_random*) ->
+    if w.game.level >= metal_from_level && roll(rng, metal_pct) then
+        return shot_metal
+    pick_shot_color(w, rng)
+
 let build_level = (w: world*, rng: pcg_random*) ->
     for i in 0..grid_cells do
         w.grid[i] = -1
@@ -747,21 +843,31 @@ let build_level = (w: world*, rng: pcg_random*) ->
 
     let colors = level_colors(w.game.level)
     let rows = level_rows(w.game.level)
+    let stars = w.game.level >= star_from_level
+    // A stone in the ceiling row could never be cut loose, and a board you
+    // cannot finish is not a hard board, it is a broken one. Row 0 stays
+    // clean, and since the raft only ever moves *down*, no stone can reach it.
+    let stones = w.game.level >= stone_from_level
     for row in 0..rows do
         let rc = row_cols(w, row)
         let mut prev = -1
         for col in 0..rc do
             // The bottom row is ragged, which gives the opening shots
             // somewhere interesting to go.
-            let hole = row == rows - 1 &&
-                       pcg_random.next_bounded_u32(rng, 100u32) < 35u32
+            let hole = row == rows - 1 && roll(rng, 35)
             if hole then
+                prev = -1
+            else if stones && row > 0 && roll(rng, stone_pct) then
+                w.grid[cell_index(row, col)] = cell_stone
+                prev = -1
+            else if stars && roll(rng, star_pct) then
+                w.grid[cell_index(row, col)] = cell_star
                 prev = -1
             else
                 // Repeating the left neighbour part of the time clumps the
                 // colours into shapes worth shooting at, instead of static.
                 let mut c = (i32) pcg_random.next_bounded_u32(rng, (u32) colors)
-                if prev >= 0 && pcg_random.next_bounded_u32(rng, 100u32) < 45u32 then
+                if prev >= 0 && roll(rng, 45) then
                     c = prev
                 w.grid[cell_index(row, col)] = c
                 prev = c
@@ -781,8 +887,14 @@ let descend = (w: world*, rng: pcg_random*) ->
     for col in 0..grid_cols do
         w.grid[cell_index(0, col)] = -1
     let rc = row_cols(w, 0)
+    let stars = w.game.level >= star_from_level
     for col in 0..rc do
-        w.grid[cell_index(0, col)] = pick_shot_color(w, rng)
+        // Stars can ride down with a new row; stones cannot, for the reason
+        // build_level gives.
+        if stars && roll(rng, star_pct) then
+            w.grid[cell_index(0, col)] = cell_star
+        else
+            w.grid[cell_index(0, col)] = pick_shot_color(w, rng)
 
 // ============================================================
 // Sound effects — square waves with a linear attack/decay envelope,
@@ -928,34 +1040,40 @@ let settle_cell = (w: world*) ->
                         best = cell_index(row, col)
     best
 
+// A queued colour that has left the board is a dud shot, so it gets swapped
+// out. A metal shot is never a dud — it needs nothing to match — so it is
+// exempt from the check rather than being quietly thrown away.
 let refresh_queue = (w: world*, rng: pcg_random*) ->
-    if !color_in_play(w, w.game.cur_color) then
+    if w.game.cur_color != shot_metal && !color_in_play(w, w.game.cur_color) then
         w.game.cur_color = pick_shot_color(w, rng)
-    if !color_in_play(w, w.game.next_color) then
+    if w.game.next_color != shot_metal && !color_in_play(w, w.game.next_color) then
         w.game.next_color = pick_shot_color(w, rng)
 
-let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
-    w.shot.active = false
-    let idx = settle_cell(w)
-    if idx < 0 then
-        return
-    let row = idx / grid_cols
-    let col = idx % grid_cols
-    w.grid[idx] = w.shot.color
+// Marks every cell holding `color`, plus the stars that set them off, and
+// pops the lot. This is the star's whole trick: it ignores adjacency, so a
+// single bubble against a star takes its entire colour off the board.
+let star_burst = (w: world*, rng: pcg_random*, color: i32) ->
+    for i in 0..grid_cells do
+        w.mark[i] = 0
+    for row in 0..grid_rows do
+        let rc = row_cols(w, row)
+        for col in 0..rc do
+            let ci = cell_index(row, col)
+            if w.grid[ci] == color || w.grid[ci] == cell_star then
+                w.mark[ci] = 1
+    clear_marked(w, rng)
 
-    let cluster = flood_same_color(w, row, col)
-    let mut gained = 0
-    if cluster >= 3 then
-        let popped = clear_marked(w, rng)
-        gained = popped * 10
-        let dropped = drop_floaters(w, rng)
-        if dropped > 0 then
-            gained = gained + drop_score(dropped)
-            play(s, s.drop)
-        else
-            play(s, s.pop)
-    else
-        play(s, s.stick)
+// Shared tail of a turn. A bubble that lands and a metal shot that ploughs
+// straight through both end up here: bank the points, run the countdown down
+// one, and see what the board has become.
+let finish_turn = (w: world*, rng: pcg_random*, s: sfx*,
+                   gained: i32, px: i32, py: i32) ->
+    if gained > 0 then
+        w.game.score = w.game.score + gained
+        w.game.popup_val = gained
+        w.game.popup_x = px
+        w.game.popup_y = py - 30
+        w.game.popup_timer = 75
 
     // The countdown runs on shots landed, full stop. A pop pays in points,
     // not in time — the ceiling is a metronome, not a penalty for missing.
@@ -963,14 +1081,6 @@ let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
     // That pop may also have taken a colour off the board, which shortens
     // the fuse from here on.
     refresh_drop_interval(w)
-
-    if gained > 0 then
-        w.game.score = w.game.score + gained
-        let { px, py } = cell_center(w, row, col)
-        w.game.popup_val = gained
-        w.game.popup_x = (i32) px
-        w.game.popup_y = (i32) py - 30
-        w.game.popup_timer = 75
 
     if w.game.shots_left <= 0 then
         if count_bubbles(w) > 0 then
@@ -992,8 +1102,109 @@ let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
     else
         refresh_queue(w, rng)
 
+let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
+    w.shot.active = false
+    let idx = settle_cell(w)
+    if idx < 0 then
+        return
+    let row = idx / grid_cols
+    let col = idx % grid_cols
+    w.grid[idx] = w.shot.color
+
+    // A star next door fires first, and it does not care how big the cluster
+    // is — that is what makes a star worth aiming at rather than around.
+    let mut hit_star = false
+    for k in 0..6 do
+        let { nr, nc } = neighbor(w, row, col, k)
+        if cell_get(w, nr, nc) == cell_star then
+            hit_star = true
+
+    let mut gained = 0
+    if hit_star then
+        let popped = star_burst(w, rng, w.shot.color)
+        gained = popped * 10
+        let dropped = drop_floaters(w, rng)
+        gained = gained + drop_score(dropped)
+        play(s, s.drop)
+    else
+        let cluster = flood_same_color(w, row, col)
+        if cluster >= 3 then
+            let popped = clear_marked(w, rng)
+            gained = popped * 10
+            let dropped = drop_floaters(w, rng)
+            if dropped > 0 then
+                gained = gained + drop_score(dropped)
+                play(s, s.drop)
+            else
+                play(s, s.pop)
+        else
+            play(s, s.stick)
+
+    let { px, py } = cell_center(w, row, col)
+    finish_turn(w, rng, s, gained, (i32) px, (i32) py)
+
+// Everything the metal shot is currently touching, gone. Stones shrug it
+// off — indestructible has to mean indestructible or it means nothing — so
+// the metal passes through them without either one stopping.
+let metal_smash = (w: world*, rng: pcg_random*, x: f64, y: f64) ->
+    let mut popped = 0
+    for row in 0..grid_rows do
+        let rc = row_cols(w, row)
+        for col in 0..rc do
+            let ci = cell_index(row, col)
+            if w.grid[ci] >= 0 && w.grid[ci] != cell_stone then
+                let { cx, cy } = cell_center(w, row, col)
+                let dx = x - cx
+                let dy = y - cy
+                if dx * dx + dy * dy < collide_d2 then
+                    let { pr, pg, pb } = cell_rgb(w.grid[ci])
+                    spawn_burst(w, rng, cx, cy, 12, pr, pg, pb)
+                    w.grid[ci] = -1
+                    popped = popped + 1
+    popped
+
+// The metal shot's whole flight: it never settles, so it is resolved when it
+// runs out of board rather than when it touches something.
+let update_metal = (w: world*, rng: pcg_random*, s: sfx*) ->
+    let mut gained = 0
+    for step in 0..shot_substeps do
+        if !w.shot.active then break
+        w.shot.x = w.shot.x + w.shot.vx
+        w.shot.y = w.shot.y + w.shot.vy
+
+        let left = (f64) (field_x0 + bubble_r)
+        let right = (f64) (field_x1 - bubble_r)
+        if w.shot.x < left then
+            w.shot.x = left
+            w.shot.vx = -w.shot.vx
+            spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+        if w.shot.x > right then
+            w.shot.x = right
+            w.shot.vx = -w.shot.vx
+            spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+
+        let popped = metal_smash(w, rng, w.shot.x, w.shot.y)
+        if popped > 0 then
+            gained = gained + popped * 10
+            play(s, s.pop)
+
+        if w.shot.y - (f64) bubble_r <= (f64) ceiling_y then
+            w.shot.active = false
+
+    if !w.shot.active then
+        let px = (i32) w.shot.x
+        let py = (i32) w.shot.y
+        let dropped = drop_floaters(w, rng)
+        if dropped > 0 then
+            gained = gained + drop_score(dropped)
+            play(s, s.drop)
+        finish_turn(w, rng, s, gained, px, py)
+
 let update_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
     if !w.shot.active then
+        return
+    if w.shot.color == shot_metal then
+        update_metal(w, rng, s)
         return
     for step in 0..shot_substeps do
         if !w.shot.active then break
@@ -1033,7 +1244,7 @@ let fire = (w: world*, rng: pcg_random*, s: sfx*) ->
     w.shot.color = w.game.cur_color
     w.shot.active = true
     w.game.cur_color = w.game.next_color
-    w.game.next_color = pick_shot_color(w, rng)
+    w.game.next_color = pick_launcher(w, rng)
     w.game.shots_fired = w.game.shots_fired + 1
     w.game.idle_timer = 0
     play(s, s.shoot)
@@ -1048,8 +1259,8 @@ let start_level = (w: world*, rng: pcg_random*) ->
     build_level(w, rng)
     w.game.drop_interval = drop_interval_for(count_colors_in_play(w))
     w.game.shots_left = w.game.drop_interval
-    w.game.cur_color = pick_shot_color(w, rng)
-    w.game.next_color = pick_shot_color(w, rng)
+    w.game.cur_color = pick_launcher(w, rng)
+    w.game.next_color = pick_launcher(w, rng)
     w.game.angle = 0.0
     w.game.idle_timer = 0
     w.game.level_frames = 0
@@ -1192,7 +1403,8 @@ let draw_aim_guide = (w: world*, r: any*) ->
     let mut y = (f64) shooter_y
     let mut vx = math.sin(a) * 9.0
     let mut vy = -math.cos(a) * 9.0
-    let { gr, gg, gb } = bubble_rgb(w.game.cur_color)
+    let { gr, gg, gb } = cell_rgb(w.game.cur_color)
+    let plough = w.game.cur_color == shot_metal
     let left = (f64) (field_x0 + bubble_r)
     let right = (f64) (field_x1 - bubble_r)
 
@@ -1207,7 +1419,7 @@ let draw_aim_guide = (w: world*, r: any*) ->
             vx = -vx
         if y - (f64) bubble_r <= (f64) ceiling_y then
             break
-        if hits_bubble(w, x, y) then
+        if !plough && hits_bubble(w, x, y) then
             break
         if i % 3 == 0 then
             let fade = 190 - i * 2
@@ -1340,6 +1552,10 @@ let draw_level_clear = (w: world*, r: any*) ->
         draw_text_centered(r, (const str) b, 640, 372, 3, 255u8, 200u8, 90u8)
     let nxt = "LEVEL %d{w.game.level + 1}"
     draw_text_centered(r, (const str) nxt, 640, 408, 4, 255u8, 255u8, 255u8)
+    // Losing the guide without warning reads as a glitch rather than a rule.
+    if w.game.level == guide_levels then
+        draw_text_centered(r, "AIM GUIDE OFF FROM HERE", 640, 436, 2,
+                           255u8, 180u8, 90u8)
 
 let draw_game_over = (w: world*, r: any*) ->
     fill(r, field_x0, 250, field_x1 - field_x0, 240, 0u8, 0u8, 0u8, 200u8)
@@ -1369,9 +1585,12 @@ let render = (w: world*, r: any*, frame: i32) ->
     let live = match w.game.phase with
     | splash -> false
     | _ -> true
-    let aiming = match w.game.phase with
+    let your_turn = match w.game.phase with
     | playing -> true
     | _ -> false
+    // And the guide is the tutorial. Level 1 draws the bounce for you so the
+    // geometry is legible; after that, reading the angle is the skill.
+    let aiming = your_turn && w.game.level <= guide_levels
 
     if aiming then
         draw_aim_guide(w, r)
@@ -1382,7 +1601,8 @@ let render = (w: world*, r: any*, frame: i32) ->
         draw_launcher(w, r, frame)
         draw_shot(w, r)
     draw_particles(w, r)
-    if aiming then
+    // The turn clock runs at every level, guide or no guide.
+    if your_turn then
         draw_hurry(w, r)
     draw_popup(w, r)
 
@@ -1483,7 +1703,8 @@ let main = (args: str[]) ->
     // something to sit in front of.
     w.game.high_score = load_high_score()
     w.game.level = 1
-    w.game.show_symbols = true
+    // The colour-blind marks are an aid, not the default look.
+    w.game.show_symbols = false
     w.game.angle = 0.0
     start_level(w, &rng)
     w.game.phase = game_phase.splash

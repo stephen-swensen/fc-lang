@@ -29,7 +29,7 @@ Requires SDL2 installed for your environment:
 | ENTER | Start / restart |
 | TAB | Swap the loaded bubble with the next one |
 | P | Pause |
-| S | Toggle the colour marks |
+| S | Toggle the colour marks (off by default) |
 | F11 | Toggle fullscreen |
 | ESC | Quit |
 | C (splash only) | Clear best score |
@@ -59,11 +59,36 @@ Requires SDL2 installed for your environment:
   readout in the left panel is that number, falling while you watch.
 - The launcher is only ever loaded with a colour still on the board, so you
   can never be handed a dead shot.
+- **The aim guide only runs on level 1.** It draws the bounce for you while
+  the geometry is new; after that, reading the angle is the skill. The
+  `CLEAR.` screen tells you it is going.
 - Best score persists to `~/.fuzzel-fobble/highscore.txt`.
 
-The bubbles carry a small mark (diamond, ring, cross, star, square, tree) as
-well as a colour, so the board stays readable without relying on hue. **S**
-turns them off.
+## Special bubbles
+
+Three of them, arriving as you go:
+
+| | What it is | What it does |
+|---|---|---|
+| **Star** (white, gold rim) | on the board, from level 2 | Land any colour against it and **every bubble of that colour** goes, wherever it is on the board — adjacency doesn't matter. The star goes too. |
+| **Stone** (matte grey, hatched) | on the board, from level 3 | Indestructible. It never pops, not to a match and not to a metal shot. The only way to be rid of it is to **cut it loose** and let it fall. |
+| **Metal** (chrome) | loaded into the launcher, from level 2 | Doesn't stick to anything. It **ploughs straight up through the raft**, popping everything it touches, and leaves at the ceiling. Stones shrug it off. |
+
+A star is worth aiming *at* rather than around — it is the one shot that
+ignores the three-of-a-colour rule entirely. A stone is the opposite: it
+can't be removed directly, so it turns into an anchor you have to plan
+around, and cutting a stone loose is the only way it ever leaves.
+
+Stones never appear in the ceiling row. One there could never be cut loose,
+and a board you can't finish isn't a hard board, it's a broken one — so the
+generator won't place one, and since the raft only ever moves *down*, none
+can arrive there later.
+
+The bubbles can also carry a small mark (diamond, ring, cross, star, square,
+tree) so the six colours stay distinguishable without relying on hue. That is
+**off** by default; **S** turns it on. The star's starburst and the stone's
+hatching are not part of that setting — those marks say what a bubble *does*,
+so they are always drawn.
 
 ## Display
 
@@ -105,6 +130,15 @@ that is already floating.
 **The aim guide is the physics.** The dotted trajectory walks the shot's own
 path — wall bounces and all — through the same `hits_bubble` test the live
 shot uses, so the preview can never disagree with what happens when you fire.
+
+**One cell value, several kinds of thing.** The grid is still a flat `i32`
+per cell — `-1` empty, `0..5` a colour, then a star or a stone. That makes
+`>= 0` ("is something here?") and "is this a colour I can index a table
+with?" two different questions, which is what `is_color` is for: every site
+that treats a cell as a colour — the palette, the cluster fill, the launcher's
+colour pool, the interval's colour count — asks it first. The metal shot
+shares the same numbering but is a launcher payload only and never reaches
+the grid, which the autoplay harness asserts on every shot.
 
 **Pacing is four rules, not a difficulty curve.** There is no level-indexed
 table of numbers anywhere. The ceiling counts landed shots; the interval is
