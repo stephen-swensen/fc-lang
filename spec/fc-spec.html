@@ -4320,7 +4320,9 @@ filename.fc:line:col: error: description
 
 **Error accumulation** — the compiler reports as many errors as it can in a single invocation rather than stopping at the first error. When the type checker encounters an error, it marks the erroneous expression with a poison type and continues checking the rest of the program. The poison type propagates silently through subsequent operations, suppressing cascading false positives. For example, if `let a = 1 + true` produces a type error, later uses of `a` in arithmetic, function calls, or assignments will not generate additional spurious errors.
 
-Syntax errors (lexer and parser) remain fatal — they prevent the compiler from building a well-formed AST, so compilation stops immediately on the first syntax error.
+**Syntax errors accumulate too.** The parser recovers at the point of failure and resumes, so one invocation reports every syntax error across every input file rather than stopping at the first. It does not, however, continue past parsing while any are outstanding: a program with a syntax error is never type-checked, because the tree that checking would run over is incomplete. Syntax errors and type errors therefore never appear in the same run — fix the syntax, then the next run reports the type errors.
+
+**Lexical errors are the one fatal class.** A tab in indentation, an indentation level that matches no enclosing block, an unterminated string or block comment, a malformed numeric literal, an identifier containing `__`, or a broken `#if` directive leaves the token stream itself undefined, and there is no well-defined point to resume from. Compilation stops at the first one.
 
 After all errors are reported, the compiler prints a summary:
 
@@ -4339,7 +4341,7 @@ After all errors are reported, the compiler prints a summary:
 
 The compiler processes source in five stages:
 
-1. **Lex & parse** — each source file is tokenized (with indentation converted to `INDENT`/`DEDENT` tokens) and parsed into an AST. Syntax errors are fatal.
+1. **Lex & parse** — each source file is tokenized (with indentation converted to `INDENT`/`DEDENT` tokens) and parsed into an AST. Lexical errors are fatal; syntax errors are accumulated across all files, and any of them stops the pipeline here.
 2. **Pass 1 (declaration collection)** — all files are scanned to collect top-level names, struct/union layouts, function signatures, module and namespace declarations. This enables forward references and cross-file module access regardless of file order.
 3. **Pass 2 (type checking)** — expressions are type-checked bottom-up with scope tracking. Type errors are accumulated, not fatal. Generic function and type instantiations are registered as they are encountered.
 4. **Monomorphization** — transitive generic instantiations are discovered (generic functions calling other generic functions), concrete types are built for all instantiations, and type dependencies are topologically sorted so by-value struct/union dependencies are emitted before their dependents.

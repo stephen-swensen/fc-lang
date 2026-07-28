@@ -12,19 +12,24 @@ This is disclosed up front because FC is also intended as a demonstration of wha
 
 ## Key Features
 
-- **C11 target** — generates portable C using `<stdint.h>` types and `_Static_assert`
+- **C11 target** — generates portable, self-contained C using `<stdint.h>` types and `_Static_assert`; the whole runtime dependency is six libc symbols
 - **Indentation-based syntax** — offside rule, spaces only
 - **Type inference** — directional (bottom-up, inside-out), no global unification
-- **Monomorphized generics** — zero runtime cost
-- **Manual memory management** — follows C's philosophy
-- **No null** — option types (`T?`) replace nullable values
-- **Expressions everywhere** — `if`, `match`, and `loop` produce values
+- **Monomorphized generics** — zero runtime cost, including const parameters (`wide<256>`) that parameterize layout
+- **Manual memory management** — follows C's philosophy; escape analysis catches dangling stack pointers at compile time
+- **No null** — option types (`T?`) replace nullable values, and result types (`T!`) carry errors that can't be silently discarded
+- **Expressions everywhere** — `if`, `match`, and `loop` produce values; `match` is exhaustive
+- **Defined behavior by default** — bounds checks, wrapping signed overflow, masked shifts, left-to-right evaluation, with `unguarded`/`checked` to opt out or in per region
+- **Real C interop** — `extern` functions, structs, unions, and constants bound to actual headers, plus variadics and opaque handles
+- **Batteries and tooling** — eight stdlib modules, an in-process language server (`fcc --lsp`) with a VSCode extension, and opt-in FC-level backtraces
+
+See [FEATURES.md](FEATURES.md) for the complete inventory.
 
 ## Status
 
-FC is at version 1.0.0-rc.6. The compiler implements the features in the language specification, with 1250+ tests passing on gcc and clang across Linux and Windows (MSYS2/UCRT64). Breaking changes are still possible during the release-candidate phase as the surface settles.
+FC is at version 1.0.0-rc.6. The compiler implements the features in the language specification, with 2000+ tests passing on gcc and clang across Linux and Windows (MSYS2/UCRT64). Breaking changes are still possible during the release-candidate phase as the surface settles.
 
-Beyond the test suite, a few real programs exercise the language and stdlib in practice. The largest is **[wolf-fc](https://github.com/stephen-swensen/wolf-fc)**, a ~10,000-line port of id Software's *Wolfenstein 3D* written in FC. It uses a game loop, SDL bindings via `extern`, manual `alloc`/`free` with `defer`, modules and namespaces, structs and unions, slices, options, string interpolation, closures, and five of the seven stdlib modules (`io`, `sys`, `math`, `random`, `text`). It runs on Linux and Windows.
+Beyond the test suite, a few real programs exercise the language and stdlib in practice. The largest is **[wolf-fc](https://github.com/stephen-swensen/wolf-fc)**, a ~10,000-line port of id Software's *Wolfenstein 3D* written in FC. It uses a game loop, SDL bindings via `extern`, manual `alloc`/`free` with `defer`, modules and namespaces, structs and unions, slices, options, string interpolation, closures, and five of the eight stdlib modules (`io`, `sys`, `math`, `random`, `text`). It runs on Linux and Windows.
 
 Smaller programs in [`demos/`](demos/) round out the surface:
 
@@ -35,7 +40,9 @@ Smaller programs in [`demos/`](demos/) round out the surface:
 - **`fing`** (~160 lines) — `ping` clone, uses `std::net` (raw ICMP).
 - **`furl`** (~220 lines) — `curl`-style HTTP client, uses `std::net` (TCP).
 
-`fing` and `furl` cover `std::net`, which wolf-fc doesn't use. `std::data` is the one stdlib module not exercised by a demo; its coverage lives in `tests/cases/stdlib/`.
+`fing` and `furl` cover `std::net`, which wolf-fc doesn't use.
+
+**[euler-fc](https://github.com/stephen-swensen/euler-fc)** picks up the two stdlib modules no demo reaches — Project Euler problems solved in FC, using `std::data`'s `array_list` and `std::wideint`'s const-generic `uwide<'n>` big integers. It is also the one FC codebase written **100% by hand, with no AI assistance**. Given that the specification and compiler were developed with heavy AI involvement, solving real problems in the language unaided is the deliberate counterweight — and the honest read on whether FC is actually pleasant for a human to write.
 
 ## Building
 
@@ -144,6 +151,7 @@ The test runner (`tests/run_tests.sh`) compiles each FC file to C, compiles the 
 - **`stdlib/`** — Standard library modules (`std::io`, `std::sys`, etc.), written in FC.
 - **`spec/`** — Language specification (`fc-spec.html`, best viewed in a browser) and formal grammar.
 - **`tests/cases/`** — Integration tests organized by functional areas.
+- **[`FEATURES.md`](FEATURES.md)** — Complete inventory of language and tooling features.
 
 For code examples, see the full language specification in `spec/fc-spec.html`.
 
