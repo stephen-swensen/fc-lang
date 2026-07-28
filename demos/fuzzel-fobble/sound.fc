@@ -180,8 +180,9 @@ module snd =
 
     private let tempo_bpm = 100
 
-    // Melody as (note, length in eighths). Twelve bars of 4/4 and a
-    // half-bar breath: 100 eighths, the span the chord table covers.
+    // Melody as (note, length in eighths — the grid is set to 2 steps
+    // per beat below). Twelve bars of 4/4 and a half-bar breath: 100
+    // eighths, exactly the span the 25-entry chord table covers.
     private let melody = i32[86] {
         60,2, 60,2, 67,2, 67,2,     // Twin-kle twin-kle lit-tle star,
         69,2, 69,2, 67,4,           // how I won-der what you are.
@@ -211,7 +212,7 @@ module snd =
     // Root of each chord, two octaves under the melody's C.
     private let roots = i32[3] { 36, 41, 43 }
 
-    // Four eighths of arpeggio per chord, voiced as inversions so the line
+    // Four arpeggio notes per chord, voiced as inversions so the line
     // stays inside one octave and walks by step between chords rather than
     // leaping.
     private let arps = i32[12] {
@@ -219,9 +220,6 @@ module snd =
         48, 53, 57, 53,     // F major:  C F A F
         47, 50, 55, 50      // G major:  B D G D
     }
-
-    // Eighths in one time round the tune.
-    private let loop_eighths = 100
 
     // ============================================================
     // Assembly
@@ -248,7 +246,8 @@ module snd =
                 chords = chords,
                 roots = roots,
                 arps = arps,
-                length8 = loop_eighths,
+                grid = 2,           // eighth-note resolution
+                arp_len = 4,
                 bpm = tempo_bpm,
                 lead = ins_music_box,
                 bass = ins_bass,
