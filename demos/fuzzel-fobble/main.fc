@@ -5,12 +5,14 @@
 // connected to the ceiling — falls, and falling bubbles are where the points
 // are. Every few shots the ceiling grinds down another row.
 //
-// Pure FC: no C helper files. SDL2 comes in through demos/shared/sdl2.fc.
+// Pure FC: no C helper files. SDL2 comes in through demos/shared/sdl2.fc,
+// and every sound is FM-synthesised on an emulated OPL2 (YM3812) — the
+// chip module is demos/shared/opl2.fc, the instruments and sequencers are
+// in sound.fc next door.
 
 import sdl2 from sdl2::
 import rect from sdl2::sdl2
 import sdl_event from sdl2::sdl2
-import audio_spec from sdl2::sdl2
 import io from std::
 import text from std::
 import sys from std::
@@ -975,99 +977,6 @@ let descend = (w: world*, rng: pcg_random*) ->
             w.grid[cell_index(0, col)] = pick_shot_color(w, rng)
 
 // ============================================================
-// Sound effects — square waves with a linear attack/decay envelope,
-// generated once at startup and queued straight to the audio device.
-// ============================================================
-
-struct sound =
-    data: any*
-    bytes: u32
-
-struct sfx =
-    dev: u32
-    shoot: sound
-    stick: sound
-    pop: sound
-    drop: sound
-    clear: sound
-    over: sound
-
-let play = (s: sfx*, snd: sound) ->
-    if s.dev > 0u32 then
-        sdl2.clear_audio(s.dev)
-        sdl2.queue_audio(s.dev, snd.data, snd.bytes)
-
-let samples_ms = (ms: i32) -> 44100 * ms / 1000
-
-let fill_tone = (buf: i16*, offset: i32, freq: i32, duration_ms: i32, amp: i32) ->
-    let num_samples = samples_ms(duration_ms)
-    let period = if freq > 0 then 44100 / freq else 44100
-    let half = period / 2
-    for i in 0..num_samples do
-        let fade = if i < num_samples / 4
-                   then (i * 4) * 256 / num_samples
-                   else if i > num_samples * 3 / 4
-                        then ((num_samples - i) * 4) * 256 / num_samples
-                        else 256
-        let v = amp * fade / 256
-        if (i % period) < half then
-            buf[offset + i] = (i16) v
-        else
-            buf[offset + i] = (i16) -v
-    offset + num_samples
-
-let make_sound = (n: i32, buf: i16*) ->
-    sound { data = (any*) buf, bytes = (u32) (n * 2) }
-
-let gen_shoot = () ->
-    let n = samples_ms(45)
-    let mem = alloc(i16, (usize) n)!
-    fill_tone(mem, 0, 700, 45, 6000)
-    make_sound(n, mem)
-
-let gen_stick = () ->
-    let n = samples_ms(30) + samples_ms(40)
-    let mem = alloc(i16, (usize) n)!
-    let off = fill_tone(mem, 0, 260, 30, 6500)
-    fill_tone(mem, off, 180, 40, 5000)
-    make_sound(n, mem)
-
-let gen_pop = () ->
-    let n = samples_ms(40) + samples_ms(40) + samples_ms(60)
-    let mem = alloc(i16, (usize) n)!
-    let mut off = fill_tone(mem, 0, 620, 40, 7500)
-    off = fill_tone(mem, off, 880, 40, 7500)
-    fill_tone(mem, off, 1245, 60, 7000)
-    make_sound(n, mem)
-
-let gen_drop = () ->
-    let n = samples_ms(55) + samples_ms(55) + samples_ms(55) + samples_ms(90)
-    let mem = alloc(i16, (usize) n)!
-    let mut off = fill_tone(mem, 0, 1245, 55, 8000)
-    off = fill_tone(mem, off, 880, 55, 8000)
-    off = fill_tone(mem, off, 620, 55, 8000)
-    fill_tone(mem, off, 415, 90, 7500)
-    make_sound(n, mem)
-
-let gen_clear = () ->
-    let n = samples_ms(90) + samples_ms(90) + samples_ms(90) + samples_ms(200)
-    let mem = alloc(i16, (usize) n)!
-    let mut off = fill_tone(mem, 0, 523, 90, 8000)
-    off = fill_tone(mem, off, 659, 90, 8000)
-    off = fill_tone(mem, off, 784, 90, 8000)
-    fill_tone(mem, off, 1047, 200, 8000)
-    make_sound(n, mem)
-
-let gen_over = () ->
-    let n = samples_ms(160) + samples_ms(160) + samples_ms(180) + samples_ms(320)
-    let mem = alloc(i16, (usize) n)!
-    let mut off = fill_tone(mem, 0, 392, 160, 9000)
-    off = fill_tone(mem, off, 330, 160, 9000)
-    off = fill_tone(mem, off, 262, 180, 9000)
-    fill_tone(mem, off, 196, 320, 9000)
-    make_sound(n, mem)
-
-// ============================================================
 // Collision and settling
 // ============================================================
 
@@ -1144,7 +1053,7 @@ let star_burst = (w: world*, rng: pcg_random*, color: i32) ->
 // Shared tail of a turn. A bubble that lands and a metal shot that ploughs
 // straight through both end up here: bank the points, run the countdown down
 // one, and see what the board has become.
-let finish_turn = (w: world*, rng: pcg_random*, s: sfx*,
+let finish_turn = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
                    gained: i32, px: i32, py: i32) ->
     if gained > 0 then
         w.game.score = w.game.score + gained
@@ -1165,6 +1074,7 @@ let finish_turn = (w: world*, rng: pcg_random*, s: sfx*,
             descend(w, rng)
             // The new row can reintroduce a colour and slacken the fuse.
             refresh_drop_interval(w)
+            opl_audio.play(s, snd.sfx_descend)
         w.game.shots_left = w.game.drop_interval
 
     if count_bubbles(w) == 0 then
@@ -1172,15 +1082,19 @@ let finish_turn = (w: world*, rng: pcg_random*, s: sfx*,
         w.game.score = w.game.score + 500 * w.game.level + w.game.bonus_paid
         w.game.phase = game_phase.level_clear
         w.game.phase_timer = 120
-        play(s, s.clear)
+        opl_audio.play(s, snd.sfx_clear)
     else if deepest_row(w) >= death_row then
         w.game.phase = game_phase.game_over
         w.game.phase_timer = 0
-        play(s, s.over)
+        // The tune stops here rather than playing over the run's own
+        // ending; `music_end` also rewinds, so the next game opens on
+        // the first bar instead of wherever this one happened to die.
+        opl_audio.music_end(s)
+        opl_audio.play(s, snd.sfx_over)
     else
         refresh_queue(w, rng)
 
-let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
+let land_shot = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
     w.shot.active = false
     let idx = settle_cell(w)
     if idx < 0 then
@@ -1203,20 +1117,23 @@ let land_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
         gained = popped * 10
         let dropped = drop_floaters(w, rng)
         gained = gained + drop_score(dropped)
-        play(s, s.drop)
+        // Two voices, both heard: the star's own sparkle, and the
+        // glissando of whatever it cut loose on the way.
+        opl_audio.play(s, snd.sfx_star)
+        if dropped > 0 then
+            opl_audio.play(s, snd.sfx_drop)
     else
         let cluster = flood_same_color(w, row, col)
         if cluster >= 3 then
             let popped = clear_marked(w, rng)
             gained = popped * 10
             let dropped = drop_floaters(w, rng)
+            opl_audio.play(s, snd.sfx_pop)
             if dropped > 0 then
                 gained = gained + drop_score(dropped)
-                play(s, s.drop)
-            else
-                play(s, s.pop)
+                opl_audio.play(s, snd.sfx_drop)
         else
-            play(s, s.stick)
+            opl_audio.play(s, snd.sfx_stick)
 
     let { px, py } = cell_center(w, row, col)
     finish_turn(w, rng, s, gained, (i32) px, (i32) py)
@@ -1243,7 +1160,7 @@ let metal_smash = (w: world*, rng: pcg_random*, x: f64, y: f64) ->
 
 // The metal shot's whole flight: it never settles, so it is resolved when it
 // runs out of board rather than when it touches something.
-let update_metal = (w: world*, rng: pcg_random*, s: sfx*) ->
+let update_metal = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
     let mut gained = 0
     for step in 0..shot_substeps do
         if !w.shot.active then break
@@ -1256,15 +1173,17 @@ let update_metal = (w: world*, rng: pcg_random*, s: sfx*) ->
             w.shot.x = left
             w.shot.vx = -w.shot.vx
             spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+            opl_audio.play(s, snd.sfx_bounce)
         if w.shot.x > right then
             w.shot.x = right
             w.shot.vx = -w.shot.vx
             spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+            opl_audio.play(s, snd.sfx_bounce)
 
         let popped = metal_smash(w, rng, w.shot.x, w.shot.y)
         if popped > 0 then
             gained = gained + popped * 10
-            play(s, s.pop)
+            opl_audio.play(s, snd.sfx_pop)
 
         if w.shot.y - (f64) bubble_r <= (f64) ceiling_y then
             w.shot.active = false
@@ -1275,10 +1194,10 @@ let update_metal = (w: world*, rng: pcg_random*, s: sfx*) ->
         let dropped = drop_floaters(w, rng)
         if dropped > 0 then
             gained = gained + drop_score(dropped)
-            play(s, s.drop)
+            opl_audio.play(s, snd.sfx_drop)
         finish_turn(w, rng, s, gained, px, py)
 
-let update_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
+let update_shot = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
     if !w.shot.active then
         return
     if w.shot.color == shot_metal then
@@ -1295,10 +1214,12 @@ let update_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
             w.shot.x = left
             w.shot.vx = -w.shot.vx
             spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+            opl_audio.play(s, snd.sfx_bounce)
         if w.shot.x > right then
             w.shot.x = right
             w.shot.vx = -w.shot.vx
             spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+            opl_audio.play(s, snd.sfx_bounce)
 
         if w.shot.y - (f64) bubble_r <= (f64) ceiling_y then
             w.shot.y = (f64) (ceiling_y + bubble_r)
@@ -1310,7 +1231,7 @@ let update_shot = (w: world*, rng: pcg_random*, s: sfx*) ->
             // one escape the field and hang the turn.
             w.shot.active = false
 
-let fire = (w: world*, rng: pcg_random*, s: sfx*) ->
+let fire = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
     if w.shot.active then
         return
     let a = deg2rad(w.game.angle)
@@ -1325,7 +1246,7 @@ let fire = (w: world*, rng: pcg_random*, s: sfx*) ->
     w.game.next_color = pick_launcher(w, rng)
     w.game.shots_fired = w.game.shots_fired + 1
     w.game.idle_timer = 0
-    play(s, s.shoot)
+    opl_audio.play(s, snd.sfx_shoot)
 
 // ============================================================
 // Round setup
@@ -1712,6 +1633,7 @@ let main = (args: str[]) ->
     io.write("  TAB         Swap current and next bubble\n", stdout)
     io.write("  P           Pause\n", stdout)
     io.write("  S           Toggle colour marks\n", stdout)
+    io.write("  M           Mute / unmute the music\n", stdout)
     io.write("  F11         Toggle fullscreen\n", stdout)
     io.write("  ESC         Quit\n", stdout)
     io.write("  C (splash)  Clear best score\n\n", stdout)
@@ -1755,27 +1677,19 @@ let main = (args: str[]) ->
     w.particles = alloc(particle[256] { })!
     w.drifters = alloc(drifter[40] { })!
 
-    // Audio
-    let desired = default(audio_spec)
-    desired.freq = 44100
-    desired.format = sdl2.audio_s16sys
-    desired.channels = 1u8
-    desired.samples = 1024u16
-    desired.callback = (any*) 0usize
-    desired.userdata = (any*) 0usize
-    let mut obtained = default(audio_spec)
-    let audio_dev = sdl2.open_audio((any*) 0usize, 0, &desired, &obtained, 0)
-    if audio_dev > 0u32 then
-        sdl2.pause_audio(audio_dev, 0)
-
-    let mut s = default(sfx)
-    s.dev = audio_dev
-    s.shoot = gen_shoot()
-    s.stick = gen_stick()
-    s.pop = gen_pop()
-    s.drop = gen_drop()
-    s.clear = gen_clear()
-    s.over = gen_over()
+    // Audio. The engine generates samples on SDL's own audio thread, in
+    // SDL's callback, at the sound card's rate — never in this loop. A
+    // game loop that produced the samples would also be their clock, and
+    // every frame that ran long or short would bend the music's pitch and
+    // tempo audibly. Here a slow frame cannot reach the sound at all.
+    //
+    // What that costs is a second thread on the chips, and it is paid in
+    // one place: the calls below post commands onto a lock-free ring that
+    // the callback drains. Nothing here ever waits on the audio thread.
+    let s = snd.init(44100)
+    if !opl_audio.start(s) then
+        io.write("Audio: device open failed - running silent\n", stdout)
+    opl_audio.music_begin(s)
 
     // Startup state. A real board is built immediately so the splash has
     // something to sit in front of.
@@ -1797,7 +1711,16 @@ let main = (args: str[]) ->
         frame_count = frame_count + 1
 
         // --------- Input ---------
+        // Bounded drain. An unbounded one is a frame that never ends if
+        // the window server ever delivers events at least as fast as they
+        // are consumed, and a game loop that never reaches its render is
+        // a window the desktop reports as not responding. Anything left
+        // over stays in SDL's queue and is read next frame; 256 events in
+        // a frame is already an order of magnitude past a human.
+        let mut events_left = 256
         loop
+            if events_left <= 0 then break
+            events_left = events_left - 1
             let has = sdl2.poll_event(&event)
             if has == 0 then break
 
@@ -1836,15 +1759,23 @@ let main = (args: str[]) ->
 
                 if k == sdl2.key_space then
                     match w.game.phase with
-                    | playing -> fire(w, &rng, &s)
-                    | splash -> reset_game(w, &rng)
-                    | game_over -> reset_game(w, &rng)
+                    | playing -> fire(w, &rng, s)
+                    | splash ->
+                        reset_game(w, &rng)
+                        opl_audio.music_begin(s)
+                    | game_over ->
+                        reset_game(w, &rng)
+                        opl_audio.music_begin(s)
                     | _ -> void()
 
                 if k == sdl2.key_return then
                     match w.game.phase with
-                    | splash -> reset_game(w, &rng)
-                    | game_over -> reset_game(w, &rng)
+                    | splash ->
+                        reset_game(w, &rng)
+                        opl_audio.music_begin(s)
+                    | game_over ->
+                        reset_game(w, &rng)
+                        opl_audio.music_begin(s)
                     | _ -> void()
 
                 if k == sdl2.key_tab then
@@ -1858,12 +1789,21 @@ let main = (args: str[]) ->
 
                 if k == sdl2.key_p then
                     match w.game.phase with
-                    | playing -> w.game.phase = game_phase.paused
-                    | paused -> w.game.phase = game_phase.playing
+                    | playing ->
+                        w.game.phase = game_phase.paused
+                        // Hold, don't end: the tune picks up mid-phrase
+                        // where it left off.
+                        opl_audio.music_hold(s)
+                    | paused ->
+                        w.game.phase = game_phase.playing
+                        opl_audio.music_unhold(s)
                     | _ -> void()
 
                 if k == sdl2.key_s then
                     w.game.show_symbols = !w.game.show_symbols
+
+                if k == sdl2.key_m then
+                    opl_audio.music_toggle_mute(s)
 
                 if k == sdl2.key_c then
                     match w.game.phase with
@@ -1903,7 +1843,7 @@ let main = (args: str[]) ->
                 w.game.angle = -aim_limit
             if w.game.angle > aim_limit then
                 w.game.angle = aim_limit
-            update_shot(w, &rng, &s)
+            update_shot(w, &rng, s)
             // The turn clock only runs while the shot is yours to take. Sit
             // on it long enough and the launcher fires wherever you left it
             // aimed — deliberating is a cost, not a free action.
@@ -1912,7 +1852,7 @@ let main = (args: str[]) ->
             else
                 w.game.idle_timer = w.game.idle_timer + 1
                 if w.game.idle_timer >= hurry_fire then
-                    fire(w, &rng, &s)
+                    fire(w, &rng, s)
         | level_clear ->
             w.game.phase_timer = w.game.phase_timer - 1
             if w.game.phase_timer <= 0 then
@@ -1938,9 +1878,15 @@ let main = (args: str[]) ->
 
     io.write("Final score: %d{w.game.score} (level %d{w.game.level})\n", stdout)
 
-    if audio_dev > 0u32 then
-        sdl2.close_audio(audio_dev)
+    // Deliberately no SDL_CloseAudioDevice, no SDL_Quit, and nothing freed
+    // out of the audio engine: both of those calls *join* the audio
+    // callback thread, and a host audio server that has wedged that thread
+    // makes the join - and the exiting game - hang forever. The process is
+    // ending; the kernel reaps the thread, the device and the memory. See
+    // `shutdown_note` at the foot of demos/shared/opl_audio.fc.
+    //
+    // Window and renderer we do tear down: that is video, which an audio
+    // wedge cannot block, and it closes the window cleanly.
     sdl2.destroy_renderer(ren)
     sdl2.destroy_window(win)
-    sdl2.quit()
     0

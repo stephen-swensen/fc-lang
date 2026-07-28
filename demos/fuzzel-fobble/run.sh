@@ -9,7 +9,8 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
-SRCS="demos/shared/sdl2.fc demos/fuzzel-fobble/main.fc \
+SRCS="demos/shared/sdl2.fc demos/shared/opl2.fc demos/shared/opl_audio.fc \
+      demos/fuzzel-fobble/sound.fc demos/fuzzel-fobble/main.fc \
       stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/math.fc stdlib/random.fc"
 
 case "$(uname -s)" in

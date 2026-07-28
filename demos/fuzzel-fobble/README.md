@@ -30,6 +30,7 @@ Requires SDL2 installed for your environment:
 | TAB | Swap the loaded bubble with the next one |
 | P | Pause |
 | S | Toggle the colour marks (off by default) |
+| M | Mute / unmute the music |
 | F11 | Toggle fullscreen |
 | ESC | Quit |
 | C (splash only) | Clear best score |
@@ -101,6 +102,42 @@ backing pixels at blit time. **F11** toggles a borderless window sized to the
 display bounds — the same "fake fullscreen" approach `face-invaders` uses,
 which sidesteps a class of DPI/drawable-size quirks on some window managers.
 
+## Sound
+
+Everything you hear is FM synthesis on an emulated **OPL2 (YM3812)** — the
+chip an AdLib or Sound Blaster card put in a 1990 PC. Three files:
+`demos/shared/opl2.fc` is the chip (shared with the `wolf-fc` project, which
+uses it to play Wolfenstein 3D's own IMF music), `demos/shared/opl_audio.fc`
+is the reusable engine built on it, and `sound.fc` next to `main.fc` is this
+game's content — eleven instruments, nine effect scripts, one tune.
+
+Two chips run side by side. One plays a three-voice arrangement of *Twinkle,
+Twinkle, Little Star* — music box on top, plucked bass underneath, and a
+chiming inner arpeggio filling the eighth notes between melody notes — on a
+thirty-second loop. The other is a six-voice effects chip: a launch chirp, a
+wall tick, a landing thock, a pop, a falling glissando, a star sparkle, a
+ceiling grind, a brass fanfare for a cleared board, and a sagging reed for the
+end of a run. Splitting them means a burst of pops can never steal a register
+out from under the tune.
+
+Nothing is pre-rendered and nothing is on disk. Samples are generated inside
+**SDL's audio callback, on SDL's own thread**, at the sound card's rate —
+never by the game loop. That is not an implementation detail: a game loop that
+produces the samples is also their clock, so every frame that runs long or
+short bends the music's pitch and tempo, and a frame slow enough to empty the
+buffer stops the tune mid-note. A callback asks for exactly the samples the
+device needs at exactly the moment it needs them, so the frame rate cannot
+reach the sound at all.
+
+The game thread never touches a chip. It posts commands ("play sound 3", "stop
+the music") onto a lock-free single-producer ring that the callback drains, so
+the chips have exactly one mutator, nothing takes a lock, and no frame ever
+waits on audio. A full ring drops the request — a sound nobody hears costs
+less than a frame nobody sees.
+
+**M** mutes the music without touching the effects; **P** holds it mid-phrase
+and picks it up where it left off.
+
 ## Notes on the implementation
 
 **Hex packing without a hex library.** Rows alternate wide (12 bubbles, flush
@@ -168,8 +205,13 @@ numbers are this demo's own.
   `level_clear`, `game_over`, dispatched with `match`.
 - **Extern structs and functions** for SDL2 C interop via
   `demos/shared/sdl2.fc`.
-- **Procedural audio** — square waves with a linear attack/decay envelope,
-  generated at startup and queued through SDL audio.
+- **Procedural audio** — two emulated OPL2 chips driven by note-list
+  sequencers on SDL's audio thread. See **Sound** above.
+- **Lock-free threading** — `demos/shared/opl_audio.fc` carries game-thread
+  requests to the audio thread over an `spsc.ring<cmd, 64>`, a
+  const-generic single-producer queue using `atomic_load_acquire` /
+  `atomic_store_release` and a power-of-two capacity enforced by
+  `static_assert`. It is the only shared state between the two threads.
 - **Drawing primitives built from rectangles** — SDL2 has no circle, so
   `disc` scanlines one out of horizontal bands and `thick_line` walks a
   segment normal. Every bubble, pip, and gloss highlight is those two calls.
