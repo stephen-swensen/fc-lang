@@ -9,20 +9,21 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
-SRCS="demos/shared/sdl2.fc demos/fasteroids/main.fc \
-      stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/math.fc stdlib/random.fc"
+# The source list lives in lsp.rsp, so this script and `fcc --lsp` compile
+# exactly the same unit.
+RSP="@demos/fasteroids/lsp.rsp"
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        "$FCC" $SRCS -o "$OUTDIR/fasteroids.c"
+        "$FCC" "$RSP" -o "$OUTDIR/fasteroids.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fasteroids.exe" "$OUTDIR/fasteroids.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fasteroids..."
         "$OUTDIR/fasteroids.exe"
         echo "[exit: $?]"
         ;;
     *)
-        "$FCC" $SRCS -o /tmp/fasteroids.c
+        "$FCC" "$RSP" -o /tmp/fasteroids.c
         cc -std=c11 -Wall -Werror -o /tmp/fasteroids-bin /tmp/fasteroids.c -lSDL2 -lm
         echo "Running Fasteroids..."
         /tmp/fasteroids-bin

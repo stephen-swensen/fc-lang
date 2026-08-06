@@ -8,15 +8,19 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
+# The source list lives in lsp.rsp, so this script and `fcc --lsp` compile
+# exactly the same unit.
+RSP="@demos/fing/lsp.rsp"
+
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        "$FCC" demos/fing/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc -o "$OUTDIR/fing.c"
+        "$FCC" "$RSP" -o "$OUTDIR/fing.c"
         gcc -std=c11 -Wall -Werror -o "$OUTDIR/fing.exe" "$OUTDIR/fing.c" -lws2_32
         "$OUTDIR/fing.exe" "$@"
         ;;
     *)
-        "$FCC" demos/fing/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc -o /tmp/fing.c
+        "$FCC" "$RSP" -o /tmp/fing.c
         cc -std=c11 -Wall -Werror -o /tmp/fing-bin /tmp/fing.c
 
         # ICMP sockets need cap_net_raw (same as /usr/bin/ping)

@@ -1,0 +1,14 @@
+# Fibbles — the compilation unit.
+#
+# Used by run.sh (`fcc @demos/fibbles/lsp.rsp`) and discovered by
+# `fcc --lsp` so the editor resolves names exactly the way the build does.
+# Paths are relative to this file.
+
+../shared/sdl2.fc
+main.fc
+
+# stdlib modules this demo imports
+../../stdlib/io.fc
+../../stdlib/text.fc
+../../stdlib/sys.fc
+../../stdlib/random.fc

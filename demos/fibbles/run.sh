@@ -10,17 +10,21 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
+# The source list lives in lsp.rsp, so this script and `fcc --lsp` compile
+# exactly the same unit.
+RSP="@demos/fibbles/lsp.rsp"
+
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        "$FCC" demos/shared/sdl2.fc demos/fibbles/main.fc stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/random.fc -o "$OUTDIR/fibbles.c"
+        "$FCC" "$RSP" -o "$OUTDIR/fibbles.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fibbles.exe" "$OUTDIR/fibbles.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fibbles..."
         "$OUTDIR/fibbles.exe"
         echo "[exit: $?]"
         ;;
     *)
-        "$FCC" demos/shared/sdl2.fc demos/fibbles/main.fc stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/random.fc -o /tmp/fibbles.c
+        "$FCC" "$RSP" -o /tmp/fibbles.c
         cc -std=c11 -Wall -Werror -o /tmp/fibbles-bin /tmp/fibbles.c -lSDL2 -lm
         echo "Running Fibbles..."
         /tmp/fibbles-bin

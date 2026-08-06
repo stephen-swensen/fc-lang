@@ -6,15 +6,19 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
+# The source list lives in lsp.rsp, so this script and `fcc --lsp` compile
+# exactly the same unit.
+RSP="@demos/furl/lsp.rsp"
+
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        "$FCC" demos/furl/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc stdlib/text.fc -o "$OUTDIR/furl.c"
+        "$FCC" "$RSP" -o "$OUTDIR/furl.c"
         gcc -std=c11 -Wall -Werror -o "$OUTDIR/furl.exe" "$OUTDIR/furl.c" -lws2_32
         "$OUTDIR/furl.exe" "$@"
         ;;
     *)
-        "$FCC" demos/furl/main.fc stdlib/net.fc stdlib/io.fc stdlib/sys.fc stdlib/text.fc -o /tmp/furl.c
+        "$FCC" "$RSP" -o /tmp/furl.c
         cc -std=c11 -Wall -Werror -o /tmp/furl-bin /tmp/furl.c
         /tmp/furl-bin "$@"
         ;;

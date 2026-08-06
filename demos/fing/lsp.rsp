@@ -1,0 +1,12 @@
+# fing — the compilation unit.
+#
+# Used by run.sh (`fcc @demos/fing/lsp.rsp`) and discovered by
+# `fcc --lsp` so the editor resolves names exactly the way the build does.
+# Paths are relative to this file.
+
+main.fc
+
+# stdlib modules this demo imports
+../../stdlib/net.fc
+../../stdlib/io.fc
+../../stdlib/sys.fc

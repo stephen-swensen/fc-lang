@@ -2,7 +2,8 @@
 
 Modules the demos have in common. Nothing here is a library in the stdlib
 sense — these are demo-support files, and a demo pulls in only the ones it
-needs by listing them in its `run.sh`.
+needs by listing them in its `lsp.rsp` (the response file its `run.sh` builds
+from, and the one `fcc --lsp` reads to scope the editor's analysis).
 
 | File | What it is | Depends on |
 |---|---|---|
@@ -28,13 +29,19 @@ burst of effects can never disturb the music's registers.
 
 ## Wiring it into a game
 
-Add three files to your `run.sh` source list (order is irrelevant; FC compiles
-whole-program):
+Add three files to your demo's `lsp.rsp` (order is irrelevant; FC compiles
+whole-program). Paths there are relative to the response file itself:
 
-```sh
-SRCS="demos/shared/sdl2.fc demos/shared/opl2.fc demos/shared/opl_audio.fc \
-      demos/yourgame/sound.fc demos/yourgame/main.fc \
-      stdlib/io.fc stdlib/math.fc ..."
+```
+# demos/yourgame/lsp.rsp
+../shared/sdl2.fc
+../shared/opl2.fc
+../shared/opl_audio.fc
+sound.fc
+main.fc
+
+../../stdlib/io.fc
+../../stdlib/math.fc
 ```
 
 Then, in `main`:

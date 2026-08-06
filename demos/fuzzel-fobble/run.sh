@@ -9,21 +9,21 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
-SRCS="demos/shared/sdl2.fc demos/shared/opl2.fc demos/shared/opl_audio.fc \
-      demos/fuzzel-fobble/sound.fc demos/fuzzel-fobble/main.fc \
-      stdlib/io.fc stdlib/text.fc stdlib/sys.fc stdlib/math.fc stdlib/random.fc"
+# The source list lives in lsp.rsp, so this script and `fcc --lsp` compile
+# exactly the same unit.
+RSP="@demos/fuzzel-fobble/lsp.rsp"
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
-        "$FCC" $SRCS -o "$OUTDIR/fuzzel-fobble.c"
+        "$FCC" "$RSP" -o "$OUTDIR/fuzzel-fobble.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fuzzel-fobble.exe" "$OUTDIR/fuzzel-fobble.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fuzzel Fobble..."
         "$OUTDIR/fuzzel-fobble.exe"
         echo "[exit: $?]"
         ;;
     *)
-        "$FCC" $SRCS -o /tmp/fuzzel-fobble.c
+        "$FCC" "$RSP" -o /tmp/fuzzel-fobble.c
         cc -std=c11 -Wall -Werror -o /tmp/fuzzel-fobble-bin /tmp/fuzzel-fobble.c -lSDL2 -lm
         echo "Running Fuzzel Fobble..."
         /tmp/fuzzel-fobble-bin
