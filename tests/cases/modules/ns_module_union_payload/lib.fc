@@ -1,0 +1,20 @@
+// The union twin: a variant *payload* typed by a sibling module's struct, from
+// inside a namespace. Variant payloads go through the same field-stub
+// canonicalization as struct fields (canonicalize_stub_names walks both), so
+// they need the same coverage.
+namespace engine::
+
+module shapes =
+    struct point =
+        x: i32
+        y: i32
+
+module scene =
+    union node =
+        | leaf(shapes.point)
+        | empty
+
+    let x_of = (n: node) ->
+        match n with
+        | leaf(p) -> p.x
+        | empty -> 0

@@ -1,0 +1,9 @@
+import shapes from engine::
+import scene from engine::
+
+let main = (args: str[]) ->
+    let n = scene.node.leaf(shapes.point { x = 9, y = 1 })
+    assert(scene.x_of(n) == 9)
+    let e = scene.node.empty
+    assert(scene.x_of(e) == 0)
+    0

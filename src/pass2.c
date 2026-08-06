@@ -1183,11 +1183,14 @@ static Symbol *import_scope_lookup_kind_until(ImportScope *scope, const char *na
  * walk all entries rather than stopping at the first name match.
  *
  * Module-scoped types are registered under mangled names (e.g. "m__entry"),
- * so they don't collide with top-level user-visible names. */
+ * so they don't collide with top-level user-visible names — and a mangled name
+ * carries its own namespace, so it is matched from every namespace rather than
+ * filtered (the kindless twin of symtab_lookup_kind_ns's rule; see there). */
 static Symbol *global_lookup(SymbolTable *symtab, const char *name, const char *current_ns) {
+    bool any_ns = is_mangled_root_name(name);
     for (int i = 0; i < symtab->count; i++) {
         Symbol *s = &symtab->symbols[i];
-        if (s->name == name && s->ns_prefix == current_ns) return s;
+        if (s->name == name && (any_ns || s->ns_prefix == current_ns)) return s;
     }
     return NULL;
 }

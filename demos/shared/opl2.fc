@@ -51,6 +51,8 @@
 // sample, so the rate constants are calibrated against the output
 // rate; this matches Adlib reference timing within a small constant.
 
+namespace shared::
+
 module opl2 =
     import math from std::
 

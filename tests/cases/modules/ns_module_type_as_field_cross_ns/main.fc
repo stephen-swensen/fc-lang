@@ -1,0 +1,8 @@
+import chip from hw::
+import audio from engine::
+
+let main = (args: str[]) ->
+    let mut s = chip.state { acc = 7 }
+    let mut d = audio.device { c = &s, gain = 6 }
+    assert(audio.level(&d) == 42)
+    0

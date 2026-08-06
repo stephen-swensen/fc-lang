@@ -110,6 +110,16 @@ bool is_c_reserved(const char *name);
  * both call this agree without any shared state. */
 const char *c_safe_ident(InternTable *t, const char *name);
 
+/* True if `name` is rooted at `fc__` — the reserved root every FC declaration's
+ * emitted name lives under (mangle_root, pass1.c). Such a name already spells
+ * its whole declaration path (`fc__ns__mod__type`), so it names exactly one
+ * declaration program-wide and is *self-identifying*: it must resolve from any
+ * namespace, and the ns_prefix filter that disambiguates source names across
+ * namespaces can only hide it. No user-written name reaches this — the lexer
+ * forbids `__` in FC identifiers, and the parser rejects an extern C name in
+ * this root outright. */
+bool is_mangled_root_name(const char *name);
+
 /* ---- Dynamic array ---- */
 
 #define DA_APPEND(arr, len, cap, val) do {          \

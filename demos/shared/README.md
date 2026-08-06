@@ -5,9 +5,14 @@ sense — these are demo-support files, and a demo pulls in only the ones it
 needs by listing them in its `lsp.rsp` (the response file its `run.sh` builds
 from, and the one `fcc --lsp` reads to scope the editor's analysis).
 
+Everything here lives in **`namespace shared::`**, so a demo names what it uses
+(`import sdl2 from shared::`) the same way it does for `std::`. Within the
+namespace the modules see each other without imports, which is why `opl_audio`
+can drive `opl2` and SDL with no import lines of its own.
+
 | File | What it is | Depends on |
 |---|---|---|
-| `sdl2.fc` | SDL2 bindings (`namespace sdl2::`, `module sdl2`) | SDL2 headers + `-lSDL2` |
+| `sdl2.fc` | SDL2 bindings (`module sdl2`) | SDL2 headers + `-lSDL2` |
 | `opl2.fc` | OPL2 / YM3812 FM chip emulator (`module opl2`) | `stdlib/math.fc` |
 | `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, `sdl2.fc`, `stdlib/math.fc`, `stdlib/io.fc` |
 
@@ -42,6 +47,14 @@ main.fc
 
 ../../stdlib/io.fc
 ../../stdlib/math.fc
+```
+
+Then import what you name directly — `opl2` stays an implementation detail of
+the engine, so a game never mentions it:
+
+```fc
+import sdl2 from shared::
+import opl_audio from shared::
 ```
 
 Then, in `main`:
@@ -444,7 +457,7 @@ constants are calibrated against the output rate.
 
 # sdl2.fc — the bindings
 
-Hand-written externs against `SDL2/SDL.h`, in `namespace sdl2::` as
+Hand-written externs against `SDL2/SDL.h`, in `namespace shared::` as
 `module sdl2`. It covers the union of what the demos need, not all of SDL:
 accelerated rendering, high-DPI, alpha blending, textures, events, timing, and
 audio. Add what you need — that is the file's job.

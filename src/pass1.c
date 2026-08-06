@@ -351,12 +351,20 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
 /* Namespace-filtered lookup by name and kind. Returns the entry whose
  * ns_prefix pointer matches (both NULL or same interned ptr). Needed for
  * global symtab where top-level types may be registered under the same name
- * across multiple namespaces. */
+ * across multiple namespaces.
+ *
+ * The filter applies to *source* names only. A mangled name already spells its
+ * namespace, so its alias is registered with ns_prefix=NULL and is matched from
+ * every namespace (is_mangled_root_name). Filtering those would make a
+ * canonicalized field stub — which carries the mangled spelling — resolvable
+ * only from a namespace-less file. */
 Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
                                const char *ns_prefix) {
+    bool any_ns = is_mangled_root_name(name);
     for (int i = 0; i < t->count; i++) {
         Symbol *s = &t->symbols[i];
-        if (s->name == name && s->kind == kind && s->ns_prefix == ns_prefix) {
+        if (s->name == name && s->kind == kind &&
+            (any_ns || s->ns_prefix == ns_prefix)) {
             return s;
         }
     }

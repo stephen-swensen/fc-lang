@@ -1,0 +1,10 @@
+import chip from engine::
+import audio from engine::
+
+let main = (args: str[]) ->
+    let mut s = chip.make(5)
+    let mut d = audio.device { c = &s, gain = 3 }
+    assert(audio.advance(&d) == 15)
+    assert(audio.advance(&d) == 30)
+    assert(s.acc == 10)
+    0

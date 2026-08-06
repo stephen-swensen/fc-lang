@@ -1,0 +1,17 @@
+// The generic twin: the field names a generic *instance* of a sibling module's
+// struct. The instance's mangled name is a second spelling that has to survive
+// the same namespace-filtered lookup, and the concrete (non-generic) declaring
+// struct is the path mono's machinery does not cover.
+namespace engine::
+
+module boxes =
+    struct box =
+        v: 'a
+
+module holder =
+    struct pair =
+        a: boxes.box<i32>
+        b: boxes.box<boxes.box<i32> >
+
+    let sum = (p: pair) ->
+        return p.a.v + p.b.v.v

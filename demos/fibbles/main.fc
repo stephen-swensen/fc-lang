@@ -1,10 +1,10 @@
 // Fibbles — a Nibbles/Snake clone in FC using SDL2
 // Pure FC implementation (no C helper files).
 
-import sdl2 from sdl2::
-import rect from sdl2::sdl2
-import sdl_event from sdl2::sdl2
-import audio_spec from sdl2::sdl2
+import sdl2 from shared::
+import rect from shared::sdl2
+import sdl_event from shared::sdl2
+import audio_spec from shared::sdl2
 import io from std::
 import text from std::
 import sys from std::

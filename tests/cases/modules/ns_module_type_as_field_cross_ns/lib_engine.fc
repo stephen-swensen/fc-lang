@@ -1,0 +1,14 @@
+// The field's type comes from a DIFFERENT namespace than the one declaring it.
+// The mangled alias (fc__hw__chip__state) belongs to neither `engine` nor the
+// global namespace, so an exact ns_prefix match can never find it.
+namespace engine::
+
+import chip from hw::
+
+module audio =
+    struct device =
+        c: chip.state*
+        gain: i32
+
+    let level = (d: device*) ->
+        return d.c.acc * d.gain

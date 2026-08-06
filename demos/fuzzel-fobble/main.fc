@@ -10,9 +10,10 @@
 // chip module is demos/shared/opl2.fc, the instruments and sequencers are
 // in sound.fc next door.
 
-import sdl2 from sdl2::
-import rect from sdl2::sdl2
-import sdl_event from sdl2::sdl2
+import sdl2 from shared::
+import rect from shared::sdl2
+import sdl_event from shared::sdl2
+import opl_audio from shared::
 import io from std::
 import text from std::
 import sys from std::

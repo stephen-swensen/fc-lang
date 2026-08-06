@@ -1,0 +1,12 @@
+// The negative space of the mangled-name lookup bypass. Skipping the namespace
+// filter is only sound because a mangled name spells its whole path, so two
+// same-named module types in different namespaces mangle differently
+// (fc__alpha__cfg__rec vs fc__beta__cfg__rec) and cannot merge. Both shapes
+// below are named `cfg.rec` and differ in layout, so a mix-up is a wrong answer
+// rather than a silent tie. (a_alpha.fc sorts first, so alpha's `rec` registers
+// first; the consumer's second field targets beta's.)
+namespace alpha::
+
+module cfg =
+    struct rec =
+        v: i32

@@ -4364,7 +4364,7 @@ static ExternProtocol parse_extern_protocol(Parser *p) {
  * backstop still covers extern-vs-declaration as defense in depth. Returns
  * true when it reported. */
 static bool extern_c_name_in_reserved_root(SrcLoc loc, const char *c_name) {
-    if (strncmp(c_name, "fc__", 4) != 0) return false;
+    if (!is_mangled_root_name(c_name)) return false;
     diag_error(loc, "extern C name '%s' starts with 'fc__', the reserved root "
         "every FC declaration is emitted under — it could only alias a "
         "compiler-emitted symbol; refer to the FC declaration directly instead",

@@ -236,3 +236,10 @@ const char *c_safe_ident(InternTable *t, const char *name) {
     if (!is_c_reserved(name)) return name;
     return intern_sprintf(t, "fc__%s", name);
 }
+
+/* The `fc__` root test. c_safe_ident's escape also lands here, but it is applied
+ * only to *member* names (per-type namespaces), which never enter the symbol
+ * tables this predicate gates. */
+bool is_mangled_root_name(const char *name) {
+    return name && strncmp(name, "fc__", 4) == 0;
+}

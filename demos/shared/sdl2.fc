@@ -4,7 +4,7 @@
 // high-DPI awareness, alpha blending, audio, events, and the
 // drawing primitives both demos use.
 
-namespace sdl2::
+namespace shared::
 
 module sdl2 from "SDL2/SDL.h" =
     // --- Extern structs ---

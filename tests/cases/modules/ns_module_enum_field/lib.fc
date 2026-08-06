@@ -1,0 +1,19 @@
+// The enum twin: enums get the same mangled global-symtab alias as structs and
+// unions (pass1 registers all three), so a field typed by a sibling module's
+// enum takes the same lookup path.
+namespace engine::
+
+module dirs =
+    enum dir =
+        | north
+        | south
+
+module mover =
+    struct actor =
+        facing: dirs.dir
+        speed: i32
+
+    let go = (a: actor) ->
+        match a.facing with
+        | north -> a.speed
+        | south -> 0 - a.speed

@@ -53,7 +53,9 @@
 // its sustain level (organ) or keeps decaying to nothing on its own
 // (bell, pluck).
 
-import sdl2 from sdl2::
+namespace shared::
+
+// sdl2 and opl2 are siblings in `shared::`, so they need no import here.
 import io from std::
 
 // ============================================================

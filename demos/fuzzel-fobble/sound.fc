@@ -11,6 +11,8 @@
 // while the key is down or decays away on its own. The engine's header
 // comment has the longer version.
 
+import opl_audio from shared::
+
 module snd =
 
     // ============================================================

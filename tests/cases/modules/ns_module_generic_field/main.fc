@@ -1,0 +1,10 @@
+import boxes from engine::
+import holder from engine::
+
+let main = (args: str[]) ->
+    let p = holder.pair {
+        a = boxes.box { v = 4 },
+        b = boxes.box { v = boxes.box { v = 5 } }
+    }
+    assert(holder.sum(p) == 9)
+    0

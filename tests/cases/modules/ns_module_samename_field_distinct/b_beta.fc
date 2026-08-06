@@ -1,0 +1,6 @@
+namespace beta::
+
+module cfg =
+    struct rec =
+        w: i32
+        extra: i32

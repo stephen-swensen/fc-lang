@@ -1,0 +1,9 @@
+import dirs from engine::
+import mover from engine::
+
+let main = (args: str[]) ->
+    let a = mover.actor { facing = dirs.dir.north, speed = 4 }
+    assert(mover.go(a) == 4)
+    let b = mover.actor { facing = dirs.dir.south, speed = 4 }
+    assert(mover.go(b) == -4)
+    0

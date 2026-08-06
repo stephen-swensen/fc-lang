@@ -1,0 +1,12 @@
+namespace app::
+
+import cfg as acfg from alpha::
+import cfg as bcfg from beta::
+
+module holder =
+    struct both =
+        a: acfg.rec
+        b: bcfg.rec
+
+    let total = (h: both) ->
+        return h.a.v + h.b.w + h.b.extra

@@ -1,0 +1,29 @@
+// A module-scoped type used as another module's field type, from inside a
+// namespace. pass2 canonicalizes a field's type stub to the mangled C name
+// (fc__engine__chip__state); pass1 registers that alias with no namespace of
+// its own, because a mangled name already spells its whole path. The global
+// lookup must therefore skip the namespace filter for it — filtering made the
+// field resolvable only from a namespace-less file, so any namespaced library
+// was unable to compose types across its own modules.
+namespace engine::
+
+module chip =
+    struct state =
+        acc: i32
+        step: i32
+
+    let make = (step: i32) ->
+        state { acc = 0, step = step }
+
+    let tick = (s: state*) ->
+        s.acc = s.acc + s.step
+
+module audio =
+    // Field typed by a sibling module's struct — same namespace, no import.
+    struct device =
+        c: chip.state*
+        gain: i32
+
+    let advance = (d: device*) ->
+        chip.tick(d.c)
+        return d.c.acc * d.gain

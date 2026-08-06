@@ -2,10 +2,10 @@
 // Vector-styled polygonal asteroids with neon glow lines, particle bursts,
 // thrust-and-rotate ship with screen wrap, procedural audio, and a starfield.
 
-import sdl2 from sdl2::
-import rect from sdl2::sdl2
-import sdl_event from sdl2::sdl2
-import audio_spec from sdl2::sdl2
+import sdl2 from shared::
+import rect from shared::sdl2
+import sdl_event from shared::sdl2
+import audio_spec from shared::sdl2
 import io from std::
 import text from std::
 import sys from std::

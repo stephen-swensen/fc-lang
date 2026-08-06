@@ -1,0 +1,11 @@
+import cfg as acfg from alpha::
+import cfg as bcfg from beta::
+import holder from app::
+
+let main = (args: str[]) ->
+    let h = holder.both {
+        a = acfg.rec { v = 1 },
+        b = bcfg.rec { w = 20, extra = 300 }
+    }
+    assert(holder.total(h) == 321)
+    0
