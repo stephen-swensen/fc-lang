@@ -661,6 +661,22 @@ struct Decl {
             const char *from_module;
             const char *from_namespace;
             bool is_wildcard;
+            /* Token locations of the identifiers written in the statement, for
+             * editor queries. `.line == 0` where the token is absent (a wildcard
+             * has no name, an unaliased import no alias, `from ns::` no module). */
+            SrcLoc name_loc;
+            SrcLoc alias_loc;
+            SrcLoc module_loc;
+            /* What the statement resolved to, stamped by pass1 where the import
+             * is processed (the single-resolution invariant: consumers read these
+             * rather than re-resolving). `resolved_sym` is what `name` — and the
+             * `alias`, which is only another spelling of it — denotes;
+             * `resolved_companion` the module imported alongside a type of the
+             * same name; `resolved_module` the module named in the `from` clause.
+             * All NULL when the import did not resolve. */
+            struct Symbol *resolved_sym;
+            struct Symbol *resolved_companion;
+            struct Symbol *resolved_module;
         } import;
 
         /* DECL_EXTERN */

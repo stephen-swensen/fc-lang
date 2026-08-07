@@ -1115,6 +1115,47 @@ static void consider_decl_name(FindCtx *c, Decl *d, int kw_len, const char *decl
         c->decl_site = d;
 }
 
+/* One identifier written in an import statement. pass1 stamped what the
+ * statement resolved to (import.resolved_*), so this is a pure position match —
+ * no re-resolution here. `span` is the written token's length while `name` is
+ * the symbol's own spelling: for an `as` alias the two differ, and hovering the
+ * alias should report the thing it aliases, which is what the reader came to
+ * look up. An unresolved import contributes nothing (there is no symbol to
+ * describe, and the diagnostic already says so). */
+static void consider_import_ident(FindCtx *c, SrcLoc loc, int span,
+                                  const char *name, Symbol *sym, Symbol *companion) {
+    if (loc.line == 0 || span <= 0 || !name || !sym) return;
+    Type *t = sym->type;
+    if (!t && sym->decl && sym->decl->kind == DECL_LET) t = sym->decl->let.resolved_type;
+    consider(c, loc.line, loc.col, span, t, name, sym, NO_LOC, NO_LOC, false);
+    if (!c->found || c->start_line != loc.line || c->start_col != loc.col) return;
+    /* A type or module reference hovers in declaration form (`struct point`,
+     * `module io`), same as a use-site reference to it would. */
+    if (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION ||
+        sym->kind == DECL_ENUM   || sym->kind == DECL_MODULE) {
+        c->type_ref_sym = sym;
+        c->companion = companion;
+    }
+}
+
+/* The identifiers of an import statement: the imported name, its `as` alias,
+ * and the module named in the `from` clause. A namespace path (`std::`) names
+ * no declaration, so its segments are deliberately not offered. */
+static void consider_import(FindCtx *c, Decl *d) {
+    const char *name = d->import.name;
+    Symbol *sym = d->import.resolved_sym;
+    Symbol *comp = d->import.resolved_companion;
+    if (name) {
+        consider_import_ident(c, d->import.name_loc, (int)strlen(name), name, sym, comp);
+        if (d->import.alias)
+            consider_import_ident(c, d->import.alias_loc, (int)strlen(d->import.alias),
+                                  name, sym, comp);
+    }
+    if (d->import.from_module)
+        consider_import_ident(c, d->import.module_loc, (int)strlen(d->import.from_module),
+                              d->import.from_module, d->import.resolved_module, NULL);
+}
+
 static void find_in_decl(Decl *d, FindCtx *c) {
     if (!d) return;
     /* The merged program holds decls from several files with overlapping line
@@ -1157,6 +1198,9 @@ static void find_in_decl(Decl *d, FindCtx *c) {
             break;
         case DECL_ENUM:
             consider_decl_name(c, d, 4, d->enu.name);
+            break;
+        case DECL_IMPORT:
+            consider_import(c, d);
             break;
         default: break;
     }
@@ -2021,8 +2065,10 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
+    /* type_ref_sym alone is enough to render: a MODULE symbol carries no value
+     * type, but its declaration-form header (`module io`) is the whole hover. */
     if (!locate(S, doc, &idx, (int)line, (int)ch, &hit) ||
-        (!hit.type && !hit.builtin && !hit.decl_site)) {
+        (!hit.type && !hit.builtin && !hit.decl_site && !hit.type_ref_sym)) {
         lsp_reply(a, id, json_null(a));
         return;
     }

@@ -1846,5 +1846,205 @@ check("completion after '.' on a union type name merges companion members and va
 check("completion on a struct VALUE still offers its fields",
       "limbs" in cm_labels(5) and "zero" not in cm_labels(5), str(cm_labels(5)))
 
+# --- import statements: hover + go-to-definition on their identifiers ---------
+# Every identifier written in an import — the imported name, its `as` alias, and
+# the module named in the `from` clause — resolves to the symbol pass1 bound it
+# to. A namespace path segment (`acme`) names no declaration and is deliberately
+# inert, as is the `import`/`from`/`as` keyword itself.
+IMP_LIB = (
+    "// Outer bag.\n"                            # 0
+    "module outer =\n"                           # 1
+    "    // Inner bag.\n"                        # 2
+    "    module inner =\n"                       # 3
+    "        // Adds one.\n"                     # 4
+    "        let bump = (n: i32) ->\n"           # 5
+    "            n + 1\n"                        # 6
+    "\n"                                         # 7
+    "    // Doubles n.\n"                        # 8
+    "    let double = (n: i32) ->\n"             # 9
+    "        n * 2\n"                            # 10
+    "\n"                                         # 11
+    "    // Triples n.\n"                        # 12
+    "    let triple = (n: i32) ->\n"             # 13
+    "        n * 3\n"                            # 14
+)
+IMP_NSLIB = (
+    "namespace acme::\n"                         # 0
+    "\n"                                         # 1
+    "// A colour.\n"                             # 2
+    "struct color =\n"                           # 3
+    "    r: u8\n"                                # 4
+    "\n"                                         # 5
+    "// Colour helpers.\n"                       # 6
+    "module color =\n"                           # 7
+    "    let black = () ->\n"                    # 8
+    "        color { r = 0u8 }\n"                # 9
+    "\n"                                         # 10
+    "// Palette bag.\n"                          # 11
+    "module palette =\n"                         # 12
+    "    // The default shade.\n"                # 13
+    "    let shade = () ->\n"                    # 14
+    "        7\n"                                # 15
+)
+IMP_MAIN = (
+    "import color from acme::\n"                 # 0  cross-ns companion pair
+    "import shade from acme::palette\n"          # 1  member of a namespaced module
+    "import double as dbl, triple from outer\n"  # 2  alias + multi-item
+    "import * from outer\n"                      # 3  wildcard
+    "import outer.inner\n"                       # 4  dotted
+    "\n"                                         # 5
+    "module app =\n"                             # 6
+    "    import inner from outer\n"              # 7  module-body module import
+    "    import bump from inner\n"               # 8  ...resolved through it
+    "\n"                                         # 9
+    "    let go = () ->\n"                       # 10
+    "        bump(1)\n"                          # 11
+    "\n"                                         # 12
+    "let main = (args: str[]) ->\n"              # 13
+    "    let c = color { r = 3u8 }\n"            # 14
+    "    let a = dbl(1) + triple(2) + shade()\n" # 15
+    "    let b = app.go() + inner.bump(0)\n"     # 16
+    "    return (i32) c.r + a + b\n"             # 17
+)
+# `import nosuch from outer` never resolves: hover/definition must stay silent
+# (the diagnostic already says what is wrong) and must not take the server down.
+IMP_BAD = (
+    "import nosuch from outer\n"
+    "\n"
+    "let main = (args: str[]) ->\n"
+    "    return 0\n"
+)
+impdir = tempfile.mkdtemp(prefix="fc_lsp_imp_")
+with open(os.path.join(impdir, "lib.fc"), "w") as f:   f.write(IMP_LIB)
+with open(os.path.join(impdir, "nslib.fc"), "w") as f: f.write(IMP_NSLIB)
+with open(os.path.join(impdir, "main.fc"), "w") as f:  f.write(IMP_MAIN)
+impuri = "file://" + os.path.join(impdir, "main.fc")
+IL = IMP_MAIN.split("\n")
+
+def imp_at(line, token, occurrence=0):
+    """Character offset of `token` on IMP_MAIN's `line`, +1 to land inside it."""
+    col, s = -1, IL[line]
+    for _ in range(occurrence + 1):
+        col = s.index(token, col + 1)
+    return col + 1
+
+# (id, label, line, token) — each probed with both hover and definition.
+IMP_PROBES = [
+    (10, "ns type name",      0, "color"),
+    (11, "ns member name",    1, "shade"),
+    (12, "ns module in path", 1, "palette"),
+    (13, "namespace segment", 1, "acme"),
+    (14, "source name",       2, "double"),
+    (15, "as alias",          2, "dbl"),
+    (16, "2nd item of a list",2, "triple"),
+    (17, "from module",       2, "outer"),
+    (18, "wildcard module",   3, "outer"),
+    (19, "dotted qualifier",  4, "outer"),
+    (20, "dotted member",     4, "inner"),
+    (21, "module-body name",  8, "bump"),
+    (22, "module-body module",8, "inner"),
+    (23, "import keyword",    0, "import"),
+]
+imp = [req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+       note("textDocument/didOpen", {"textDocument": {"uri": impuri, "languageId": "fc",
+            "version": 1, "text": IMP_MAIN}})]
+for rid, _, line, token in IMP_PROBES:
+    pos = {"line": line, "character": imp_at(line, token)}
+    imp.append(req(rid, "textDocument/hover", {"textDocument": {"uri": impuri}, "position": pos}))
+    imp.append(req(rid + 100, "textDocument/definition",
+                   {"textDocument": {"uri": impuri}, "position": pos}))
+imp += [
+    note("textDocument/didChange", {"textDocument": {"uri": impuri, "version": 2},
+         "contentChanges": [{"text": IMP_BAD}]}),
+    req(50, "textDocument/hover", {"textDocument": {"uri": impuri},
+        "position": {"line": 0, "character": 8}}),      # inside `nosuch`
+    req(51, "textDocument/definition", {"textDocument": {"uri": impuri},
+        "position": {"line": 0, "character": 8}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+impresp, _, impbf, imprc, _ = run_session(imp)
+
+def imp_hov(rid):
+    r = impresp.get(rid, {}).get("result")
+    return ((r or {}).get("contents") or {}).get("value") or ""
+def imp_def(rid):
+    """(basename, line0, char0) of a definition response, or None."""
+    r = impresp.get(rid + 100, {}).get("result")
+    if not isinstance(r, dict): return None
+    st = r["range"]["start"]
+    return (r["uri"].split("/")[-1], st["line"], st["character"])
+
+# The first publish is the well-formed IMP_MAIN; the last is IMP_BAD, edited in
+# deliberately broken at the end of the session.
+check("imports: the probe unit is clean", impbf.get("main.fc", [["?"]])[0] == [],
+      str(impbf.get("main.fc")))
+# A cross-namespace import of a companion pair brings in both halves under one
+# name, so its hover merges both docs exactly as a use-site reference does.
+check("imports: a cross-namespace type name hovers as the merged companion pair",
+      "struct color" in imp_hov(10) and "module color" in imp_hov(10)
+      and "A colour." in imp_hov(10) and "Colour helpers." in imp_hov(10), imp_hov(10))
+check("imports: go-to-definition on it lands on the struct in the other file",
+      imp_def(10) == ("nslib.fc", 3, 0), str(imp_def(10)))
+check("imports: an imported function hovers with its type and doc comment",
+      "shade: () -> i32" in imp_hov(11) and "The default shade." in imp_hov(11), imp_hov(11))
+check("imports: go-to-definition on an imported function lands on its `let`",
+      imp_def(11) == ("nslib.fc", 14, 4), str(imp_def(11)))
+check("imports: the module in a `from ns::mod` path hovers as a module",
+      "module palette" in imp_hov(12) and "Palette bag." in imp_hov(12), imp_hov(12))
+check("imports: go-to-definition on that module lands on its declaration",
+      imp_def(12) == ("nslib.fc", 12, 0), str(imp_def(12)))
+# A namespace names no declaration — there is nothing to jump to, so its
+# segments stay inert rather than resolving to something arbitrary.
+check("imports: a namespace path segment offers nothing",
+      imp_hov(13) == "" and imp_def(13) is None, repr((imp_hov(13), imp_def(13))))
+check("imports: the source name of an aliased import hovers as that symbol",
+      "double: (i32) -> i32" in imp_hov(14) and "Doubles n." in imp_hov(14), imp_hov(14))
+# The alias is only another spelling of the same symbol, so it reports the same
+# thing — under the SOURCE name, which is what the reader came to look up.
+check("imports: the `as` alias hovers as the symbol it aliases",
+      "double: (i32) -> i32" in imp_hov(15) and "Doubles n." in imp_hov(15), imp_hov(15))
+check("imports: hovering the alias highlights the alias token, not the source name",
+      (impresp.get(15, {}).get("result") or {}).get("range", {})
+        == {"start": {"line": 2, "character": IL[2].index("dbl")},
+            "end":   {"line": 2, "character": IL[2].index("dbl") + 3}},
+      json.dumps((impresp.get(15, {}).get("result") or {}).get("range")))
+check("imports: go-to-definition on the alias lands on the aliased definition",
+      imp_def(15) == ("lib.fc", 9, 4), str(imp_def(15)))
+# Each name in `a, b from m` is its own decl sharing one `from` clause: the
+# second item must resolve to ITS symbol, not the first's.
+check("imports: the 2nd name of a comma list resolves to its own symbol",
+      "triple: (i32) -> i32" in imp_hov(16) and "Triples n." in imp_hov(16), imp_hov(16))
+check("imports: go-to-definition on the 2nd name lands on its own `let`",
+      imp_def(16) == ("lib.fc", 13, 4), str(imp_def(16)))
+check("imports: the `from` module hovers as a module with its doc",
+      "module outer" in imp_hov(17) and "Outer bag." in imp_hov(17), imp_hov(17))
+check("imports: go-to-definition on the `from` module lands on its declaration",
+      imp_def(17) == ("lib.fc", 1, 0), str(imp_def(17)))
+check("imports: a wildcard import's module resolves (there is no name to hover)",
+      "module outer" in imp_hov(18) and imp_def(18) == ("lib.fc", 1, 0),
+      repr((imp_hov(18), imp_def(18))))
+# In `import a.b` the qualifier is the module and the tail the member, so the
+# two token locs swap roles relative to the `from` form.
+check("imports: the qualifier of a dotted import resolves to the module",
+      "module outer" in imp_hov(19) and imp_def(19) == ("lib.fc", 1, 0),
+      repr((imp_hov(19), imp_def(19))))
+check("imports: the member of a dotted import resolves to the submodule",
+      "module inner" in imp_hov(20) and "Inner bag." in imp_hov(20)
+      and imp_def(20) == ("lib.fc", 3, 4), repr((imp_hov(20), imp_def(20))))
+check("imports: an import inside a module body resolves its name",
+      "bump: (i32) -> i32" in imp_hov(21) and "Adds one." in imp_hov(21)
+      and imp_def(21) == ("lib.fc", 5, 8), repr((imp_hov(21), imp_def(21))))
+check("imports: an import inside a module body resolves its `from` module",
+      "module inner" in imp_hov(22) and imp_def(22) == ("lib.fc", 3, 4),
+      repr((imp_hov(22), imp_def(22))))
+check("imports: the `import` keyword itself offers nothing",
+      imp_hov(23) == "" and imp_def(23) is None, repr((imp_hov(23), imp_def(23))))
+check("imports: an unresolved import offers nothing (hover)",
+      impresp.get(50, {}).get("result") is None, json.dumps(impresp.get(50)))
+check("imports: an unresolved import offers nothing (definition)",
+      impresp.get(51, {}).get("result") is None, json.dumps(impresp.get(51)))
+check("imports: SERVER SURVIVED the unresolved-import probes",
+      50 in impresp and 51 in impresp and imprc == 0, f"rc={imprc}")
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

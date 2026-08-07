@@ -20,6 +20,8 @@ built-in language server (`fcc --lsp`).
 - **Go to definition** — module-level functions, structs, unions, modules;
   block-locals (parameters, `let`s, `for` variables, match bindings); and
   struct fields (jumps to the field's declaration).
+- **Imports** — the names in an `import` statement are live: hover or jump from
+  the imported name, its `as` alias, or the module in the `from` clause.
 - **Completion** — keywords, in-scope/top-level names, and `.`/`::` members.
 
 By default the server merges the installed standard library and the open file's

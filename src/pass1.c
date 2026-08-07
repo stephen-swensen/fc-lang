@@ -464,7 +464,13 @@ static ImportTable *get_file_imports(FileImportScopes *scopes, const char *filen
 
 /* Process a member import (wildcard or named) into an ImportTable.
  * Handles: import * from MODULE, import NAME [as ALIAS] from MODULE.
- * Does NOT handle whole-module imports (import MODULE [as ALIAS]). */
+ * Does NOT handle whole-module imports (import MODULE [as ALIAS]).
+ *
+ * Also stamps what the statement resolved to onto the Decl (import.resolved_*),
+ * so consumers — the editor's hover/go-to-definition — read the resolution
+ * rather than repeating it. Safe to hold these Symbol pointers: import
+ * processing (pass1 phase 3) runs after the last symtab_add, so the by-value
+ * `symbols` arrays no longer realloc under them. */
 static void process_member_import(Decl *d, ImportTable *target,
                                    SymbolTable *symtab, InternTable *intern  __attribute__((unused)),
                                    const char *current_ns) {
@@ -501,6 +507,7 @@ static void process_member_import(Decl *d, ImportTable *target,
         diag_error(d->loc, "unknown module '%s'", mod_name);
         return;
     }
+    d->import.resolved_module = mod_sym;
 
     if (d->import.is_wildcard) {
         /* import * from MODULE: add all non-private members */
@@ -539,6 +546,7 @@ static void process_member_import(Decl *d, ImportTable *target,
         }
         import_table_add(target, import_name, d->import.name, msym->kind,
                          mod_sym->members, msym);
+        d->import.resolved_sym = msym;
         /* Type-associated module: if importing a type, also import its
          * associated module under the same name. */
         if (msym->kind == DECL_STRUCT || msym->kind == DECL_UNION ||
@@ -548,6 +556,7 @@ static void process_member_import(Decl *d, ImportTable *target,
             if (assoc_mod && !assoc_mod->is_private) {
                 import_table_add(target, import_name, d->import.name,
                                  DECL_MODULE, mod_sym->members, assoc_mod);
+                d->import.resolved_companion = assoc_mod;
             }
         }
     }
@@ -1401,6 +1410,7 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab,
                     import_name);
             }
             import_table_add_module(imports, import_name, src, global_symtab);
+            d->import.resolved_sym = src;
         } else {
             /* import MODULE [as ALIAS] — bare whole-module imports are not supported.
              * Same-namespace modules are already visible by name; cross-namespace
@@ -2350,6 +2360,10 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
                 import_table_add(file_tbl, import_name, name, type_sym->kind,
                                  symtab, type_sym);
             }
+            /* A companion pair imports both halves under one name; the type is
+             * what the name primarily denotes, the module its companion. */
+            d->import.resolved_sym = type_sym ? type_sym : mod;
+            d->import.resolved_companion = type_sym ? mod : NULL;
             continue;
         }
 

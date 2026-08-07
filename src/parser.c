@@ -4079,18 +4079,30 @@ static Decl *parse_module_decl(Parser *p) {
     return d;
 }
 
+/* Source location of a token, tagged with the file being parsed. */
+static SrcLoc tok_loc(Parser *p, const Token *t) {
+    SrcLoc l = loc_from_token(t);
+    l.filename = p->filename;
+    return l;
+}
+
 /* Parse a from clause: from [namespace::path::]module
- * Sets *out_ns and *out_mod. */
-static void parse_from_clause(Parser *p, const char **out_ns, const char **out_mod) {
+ * Sets *out_ns and *out_mod, and *out_mod_loc to the module name token's
+ * location (left zeroed when the clause names a bare namespace). */
+static void parse_from_clause(Parser *p, const char **out_ns, const char **out_mod,
+                              SrcLoc *out_mod_loc) {
     /* Parse IDENT [:: IDENT [:: ...]]
      * If path ends with ::, last part is namespace; out_mod is the next IDENT (or NULL for bare ns).
      * If path does NOT end with ::, last IDENT is the module name. */
-    const char *first = tok_intern(p, expect(p, TOK_IDENT));
+    *out_mod_loc = (SrcLoc){0};
+    Token *first_tok = expect(p, TOK_IDENT);
+    const char *first = tok_intern(p, first_tok);
 
     if (!check(p, TOK_COLONCOLON)) {
         /* Simple: from module_name */
         *out_ns = NULL;
         *out_mod = first;
+        *out_mod_loc = tok_loc(p, first_tok);
         return;
     }
 
@@ -4100,11 +4112,13 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
     while (check(p, TOK_COLONCOLON)) {
         advance_p(p); /* consume :: */
         if (check(p, TOK_IDENT)) {
-            const char *part = tok_intern(p, expect(p, TOK_IDENT));
+            Token *part_tok = expect(p, TOK_IDENT);
+            const char *part = tok_intern(p, part_tok);
             if (!check(p, TOK_COLONCOLON)) {
                 /* This IDENT is NOT followed by ::, so it's the module name */
                 *out_ns = ns;
                 *out_mod = part;
+                *out_mod_loc = tok_loc(p, part_tok);
                 return;
             }
             /* More :: follows — this is still namespace.
@@ -4133,7 +4147,8 @@ static Decl *parse_import_decl(Parser *p) {
         advance_p(p);
         expect(p, TOK_FROM);
         const char *from_ns = NULL, *from_mod = NULL;
-        parse_from_clause(p, &from_ns, &from_mod);
+        SrcLoc mod_loc;
+        parse_from_clause(p, &from_ns, &from_mod, &mod_loc);
         Decl *d = arena_alloc(p->arena, sizeof(Decl));
         d->kind = DECL_IMPORT;
         d->loc = loc;
@@ -4143,18 +4158,23 @@ static Decl *parse_import_decl(Parser *p) {
         d->import.from_module = from_mod;
         d->import.from_namespace = from_ns;
         d->import.is_wildcard = true;
+        d->import.module_loc = mod_loc;
         return d;
     }
 
     /* Parse first name [as alias] */
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    Token *name_tok = expect(p, TOK_IDENT);
+    const char *name = tok_intern(p, name_tok);
+    SrcLoc name_loc = tok_loc(p, name_tok);
     const char *alias = NULL;
+    SrcLoc alias_loc = {0};
 
     /* Check for import module.submodule syntax */
     if (check(p, TOK_DOT) && !check(p, TOK_AS) && !check(p, TOK_FROM) && !check(p, TOK_COMMA)) {
         /* import module_a.module_b → equivalent to import module_b from module_a */
         advance_p(p); /* consume . */
-        const char *sub = tok_intern(p, expect(p, TOK_IDENT));
+        Token *sub_tok = expect(p, TOK_IDENT);
+        const char *sub = tok_intern(p, sub_tok);
         Decl *d = arena_alloc(p->arena, sizeof(Decl));
         d->kind = DECL_IMPORT;
         d->loc = loc;
@@ -4164,41 +4184,54 @@ static Decl *parse_import_decl(Parser *p) {
         d->import.from_module = name;
         d->import.from_namespace = NULL;
         d->import.is_wildcard = false;
+        /* The qualifier parsed as `name` is the module here, the dotted tail the
+         * imported member — so the two token locs swap roles with it. */
+        d->import.name_loc = tok_loc(p, sub_tok);
+        d->import.module_loc = name_loc;
         return d;
     }
 
     if (check(p, TOK_AS)) {
         advance_p(p);
-        alias = tok_intern(p, expect(p, TOK_IDENT));
+        Token *alias_tok = expect(p, TOK_IDENT);
+        alias = tok_intern(p, alias_tok);
+        alias_loc = tok_loc(p, alias_tok);
     }
 
     /* Check for multi-symbol import: name1 [as a1], name2 [as a2], ... from mod */
     if (check(p, TOK_COMMA)) {
         /* Collect all name/alias pairs */
-        typedef struct { const char *n; const char *a; } ImportItem;
+        typedef struct { const char *n; const char *a; SrcLoc nl, al; } ImportItem;
         ImportItem *items = NULL;
         int item_count = 0, item_cap = 0;
 
-        ImportItem first = { name, alias };
+        ImportItem first = { name, alias, name_loc, alias_loc };
         DA_APPEND(items, item_count, item_cap, first);
 
         while (check(p, TOK_COMMA)) {
             advance_p(p);
-            const char *n = tok_intern(p, expect(p, TOK_IDENT));
+            Token *n_tok = expect(p, TOK_IDENT);
+            const char *n = tok_intern(p, n_tok);
             const char *a = NULL;
+            SrcLoc al = {0};
             if (check(p, TOK_AS)) {
                 advance_p(p);
-                a = tok_intern(p, expect(p, TOK_IDENT));
+                Token *a_tok = expect(p, TOK_IDENT);
+                a = tok_intern(p, a_tok);
+                al = tok_loc(p, a_tok);
             }
-            ImportItem it = { n, a };
+            ImportItem it = { n, a, tok_loc(p, n_tok), al };
             DA_APPEND(items, item_count, item_cap, it);
         }
 
         expect(p, TOK_FROM);
         const char *from_ns = NULL, *from_mod = NULL;
-        parse_from_clause(p, &from_ns, &from_mod);
+        SrcLoc mod_loc;
+        parse_from_clause(p, &from_ns, &from_mod, &mod_loc);
 
-        /* Create import decl for item 0 (returned), push rest to pending */
+        /* Create import decl for item 0 (returned), push rest to pending.
+         * Each item keeps its own name/alias token locs; they share the one
+         * `from` clause, so every decl carries the same module_loc. */
         for (int i = 1; i < item_count; i++) {
             Decl *extra = arena_alloc(p->arena, sizeof(Decl));
             extra->kind = DECL_IMPORT;
@@ -4209,6 +4242,9 @@ static Decl *parse_import_decl(Parser *p) {
             extra->import.from_module = from_mod;
             extra->import.from_namespace = from_ns;
             extra->import.is_wildcard = false;
+            extra->import.name_loc = items[i].nl;
+            extra->import.alias_loc = items[i].al;
+            extra->import.module_loc = mod_loc;
             DA_APPEND(p->pending_decls, p->pending_count, p->pending_cap, extra);
         }
 
@@ -4221,6 +4257,9 @@ static Decl *parse_import_decl(Parser *p) {
         d->import.from_module = from_mod;
         d->import.from_namespace = from_ns;
         d->import.is_wildcard = false;
+        d->import.name_loc = items[0].nl;
+        d->import.alias_loc = items[0].al;
+        d->import.module_loc = mod_loc;
         free(items);
         return d;
     }
@@ -4228,10 +4267,11 @@ static Decl *parse_import_decl(Parser *p) {
     /* Single import with optional from clause */
     const char *from_module = NULL;
     const char *from_ns = NULL;
+    SrcLoc mod_loc = {0};
 
     if (check(p, TOK_FROM)) {
         advance_p(p);
-        parse_from_clause(p, &from_ns, &from_module);
+        parse_from_clause(p, &from_ns, &from_module, &mod_loc);
     }
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
@@ -4243,6 +4283,9 @@ static Decl *parse_import_decl(Parser *p) {
     d->import.from_module = from_module;
     d->import.from_namespace = from_ns;
     d->import.is_wildcard = false;
+    d->import.name_loc = name_loc;
+    d->import.alias_loc = alias_loc;
+    d->import.module_loc = mod_loc;
     return d;
 }
 
