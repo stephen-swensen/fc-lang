@@ -23,6 +23,10 @@ built-in language server (`fcc --lsp`).
 - **Imports** — the names in an `import` statement are live: hover or jump from
   the imported name, its `as` alias, or the module in the `from` clause.
 - **Completion** — keywords, in-scope/top-level names, and `.`/`::` members.
+  Inside an `import`, the names offered are the ones its `from` clause actually
+  exposes, and the `from` clause itself completes modules, namespaces, and
+  dotted routes. (Write the `from` clause first: it is what the names on the
+  left are looked up in.)
 
 By default the server merges the installed standard library and the open file's
 sibling `.fc` files into every analysis, so `import ... from std::...` resolves

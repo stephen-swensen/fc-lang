@@ -2083,5 +2083,139 @@ check("imports: the left-dotted spelling is reported, once, as an error",
 check("imports: SERVER SURVIVED the malformed-import probes",
       all(i in impresp for i in (50, 51, 52, 53)) and imprc == 0, f"rc={imprc}")
 
+# --- completion inside an import statement ------------------------------------
+# An import resolves against its `from` clause, not lexical scope: the left of
+# `from` offers what that clause exposes (a module's members, or a namespace's
+# top-level symbols), the right offers the modules a route may continue with. An
+# import line never falls through to the global keyword/scope list, and each
+# probe is a half-typed statement — the state the parser recovers from — so the
+# candidates come from the source text, not from a Decl that may not exist.
+CIMP_LIB = (
+    "module outer =\n"                           # 0
+    "    module inner =\n"                       # 1
+    "        let bump = (n: i32) ->\n"           # 2
+    "            n + 1\n"                        # 3
+    "    let double = (n: i32) ->\n"             # 4
+    "        n * 2\n"                            # 5
+    "    let triple = (n: i32) ->\n"             # 6
+    "        n * 3\n"                            # 7
+    "    private let hidden = (n: i32) ->\n"     # 8
+    "        n\n"                                # 9
+    "    module mid =\n"                         # 10
+    "        module deep =\n"                    # 11
+    "            let two = () ->\n"              # 12
+    "                2\n"                        # 13
+)
+CIMP_NS = (
+    "namespace acme::\n\n"
+    "struct color =\n    r: u8\n\n"
+    "module color =\n    let black = () ->\n        color { r = 0u8 }\n\n"
+    "module palette =\n    let shade = () ->\n        7\n"
+)
+CIMP_NS2 = (
+    "namespace acme::deeper::\n\n"
+    "module gadget =\n    let go = () ->\n        1\n"
+)
+cimpdir = tempfile.mkdtemp(prefix="fc_lsp_cimp_")
+for nm, txt in (("clib.fc", CIMP_LIB), ("cnslib.fc", CIMP_NS), ("cns2.fc", CIMP_NS2)):
+    with open(os.path.join(cimpdir, nm), "w") as f:
+        f.write(txt)
+cimpuri = "file://" + os.path.join(cimpdir, "doc.fc")
+
+def cdoc(*lines):
+    """A probe document: the given lines, then an entry point."""
+    return "".join(l + "\n" for l in lines) + "\nlet main = (args: str[]) ->\n    return 0\n"
+
+# (id, label, doc lines, line index of the cursor, text left of the cursor).
+# The cursor column is the length of that text, so each probe reads as the
+# keystroke that produced it.
+CIMP_PROBES = [
+    (60, "name list from a module",     ("import d from outer",), 0, "import d"),
+    (61, "second item of a list",       ("import double, t from outer",), 0, "import double, t"),
+    (62, "the `as` alias position",     ("import double as x from outer",), 0, "import double as x"),
+    (63, "the wildcard",                ("import * from outer",), 0, "import * "),
+    (64, "name list from a namespace",  ("import c from acme::",), 0, "import c"),
+    (65, "name list over a route",      ("import tw from outer.mid.deep",), 0, "import tw"),
+    (66, "no `from` written yet",       ("import x",), 0, "import x"),
+    (67, "the route head",              ("import x from o",), 0, "import x from o"),
+    (68, "after a namespace `::`",      ("import x from acme::p",), 0, "import x from acme::p"),
+    (69, "after a route `.`",           ("import x from outer.m",), 0, "import x from outer.m"),
+    (70, "deeper in a route",           ("import x from outer.mid.d",), 0, "import x from outer.mid.d"),
+    (71, "inside a module body",
+         ("module app =", "    import inner from outer", "    import b from inner"), 2,
+         "    import b"),
+    (72, "inside the `import` keyword", ("import x from outer",), 0, "imp"),
+    (73, "inside a trailing comment",   ("import double from outer // no",), 0,
+         "import double from outer // n"),
+]
+cimp = [req(1, "initialize", {"capabilities": {}}), note("initialized", {})]
+for n, (rid, _, lines, ln, prefix) in enumerate(CIMP_PROBES):
+    text = cdoc(*lines)
+    cimp.append(note("textDocument/didOpen" if n == 0 else "textDocument/didChange",
+        {"textDocument": {"uri": cimpuri, "languageId": "fc", "version": n + 1,
+                          "text": text}} if n == 0 else
+        {"textDocument": {"uri": cimpuri, "version": n + 1},
+         "contentChanges": [{"text": text}]}))
+    cimp.append(req(rid, "textDocument/completion",
+        {"textDocument": {"uri": cimpuri},
+         "position": {"line": ln, "character": len(prefix)}}))
+cimp += [req(9, "shutdown", None), note("exit", None)]
+cimpresp, _, _, cimprc, _ = run_session(cimp)
+
+def cimp_labels(rid):
+    res = cimpresp.get(rid, {}).get("result") or {}
+    its = res.get("items") if isinstance(res, dict) else res
+    return [it.get("label") for it in (its or [])]
+
+l60 = cimp_labels(60)
+check("import completion: names offered are the module's public members",
+      set(l60) >= {"double", "triple", "inner", "mid"} and "hidden" not in l60, str(l60))
+check("import completion: a name list never offers keywords or globals",
+      "let" not in l60 and "outer" not in l60, str(l60))
+check("import completion: a name already in the list is not offered again",
+      "triple" in cimp_labels(61) and "double" not in cimp_labels(61), str(cimp_labels(61)))
+check("import completion: the `as` alias position offers nothing",
+      cimp_labels(62) == [], str(cimp_labels(62)))
+check("import completion: a wildcard import offers no names",
+      cimp_labels(63) == [], str(cimp_labels(63)))
+check("import completion: `from ns::` offers the namespace's top-level symbols",
+      set(cimp_labels(64)) >= {"color", "palette"}
+      and "shade" not in cimp_labels(64) and "gadget" not in cimp_labels(64),
+      str(cimp_labels(64)))
+check("import completion: a companion pair is offered once",
+      cimp_labels(64).count("color") == 1, str(cimp_labels(64)))
+check("import completion: a dotted route resolves to the module it reads from",
+      cimp_labels(65) == ["two"], str(cimp_labels(65)))
+check("import completion: with no `from` there is nothing to resolve against",
+      cimp_labels(66) == [], str(cimp_labels(66)))
+l67 = cimp_labels(67)
+check("import completion: the route head offers visible modules and namespaces",
+      "outer" in l67 and "acme" in l67 and "std" in l67, str(l67))
+check("import completion: the head does not offer namespaced modules bare",
+      "palette" not in l67 and "gadget" not in l67, str(l67))
+check("import completion: the head is modules only, not the global list",
+      "let" not in l67 and "main" not in l67, str(l67))
+l68 = cimp_labels(68)
+check("import completion: `ns::` offers that namespace's modules",
+      set(l68) >= {"color", "palette"} and "outer" not in l68, str(l68))
+check("import completion: `ns::` also offers the next namespace segment",
+      "deeper" in l68 and "gadget" not in l68, str(l68))
+check("import completion: a route `.` offers only nested modules",
+      set(cimp_labels(69)) == {"inner", "mid"}, str(cimp_labels(69)))
+check("import completion: a route continues past its second segment",
+      cimp_labels(70) == ["deep"], str(cimp_labels(70)))
+check("import completion: a module-body import resolves through its own imports",
+      cimp_labels(71) == ["bump"], str(cimp_labels(71)))
+check("import completion: the `import` keyword itself is not an import context",
+      "let" in cimp_labels(72), str(cimp_labels(72))[:120])
+# In the comment the cursor gets what any other comment gets — the ordinary
+# global list — not the route's modules-and-namespaces (`acme` is a namespace,
+# so it is offered only by the route head).
+check("import completion: a trailing comment is not part of the statement",
+      "let" in cimp_labels(73) and "acme" not in cimp_labels(73),
+      str(cimp_labels(73))[:120])
+check("import completion: SERVER SURVIVED every half-typed import",
+      all(rid in cimpresp for rid, *_ in CIMP_PROBES) and cimprc == 0, f"rc={cimprc}")
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

@@ -2898,6 +2898,435 @@ static void complete_scope(Arena *a, JsonValue *items, NameSet *seen,
     }
 }
 
+/* ======================================================================== */
+/* Import-statement completion                                              */
+/* ======================================================================== */
+
+/* An import statement is its own resolution world. What may be written on the
+ * left of `from` is decided entirely by the `from` clause (a module's members,
+ * or a namespace's top-level symbols), and what may be written on the right is
+ * a route of modules — not an expression. So an import line is completed here
+ * in full, including its `.` and `::` positions, which must never reach
+ * complete_members, and it offers exactly these candidates or none: the
+ * lexical-scope list is meaningless here.
+ *
+ * The statement is read from the SOURCE LINE rather than the AST. A half-typed
+ * import (`import x from `, `from a.`) is precisely the state the parser
+ * recovers from, so its Decl is either a DECL_ERROR or is missing the very part
+ * being completed. The resolutions the text then drives are the ones pass1
+ * performs (process_member_import and phase 3b), read out of the symbol table.
+ *
+ * Known limit, accepted: the `from` clause decides the name list, so until it is
+ * written there is nothing to resolve names against and the left side offers
+ * nothing. */
+
+/* A name as written in the document (not interned, so no pointer compare). */
+typedef struct { const char *s; int n; } TextRef;
+
+static bool id_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
+
+static TextRef tr_of(const char *s) {
+    TextRef t = { s, (int)strlen(s) };
+    return t;
+}
+static bool tr_eq_str(TextRef t, const char *name) {
+    return name && t.n > 0 && (int)strlen(name) == t.n &&
+           memcmp(t.s, name, (size_t)t.n) == 0;
+}
+
+/* Dedup set over written text (NameSet's pointer compare needs interned names,
+ * which the text scanned out of the buffer is not). */
+typedef struct { TextRef *v; int n, cap; } TextSet;
+static bool tset_add(TextSet *s, TextRef t) {
+    for (int i = 0; i < s->n; i++)
+        if (s->v[i].n == t.n && memcmp(s->v[i].s, t.s, (size_t)t.n) == 0) return false;
+    DA_APPEND(s->v, s->n, s->cap, t);
+    return true;
+}
+
+/* A `from` clause as written: `[ns::[ns::]…][head][.seg…]`. */
+typedef struct {
+    char    *ns;        /* mangled namespace path ("a__b"); NULL when unwritten */
+    TextRef  head;      /* head module; .n == 0 for a bare `from ns::` */
+    TextRef *segs;      /* dotted route segments after the head */
+    int      seg_count, seg_cap;
+} FromText;
+
+static void from_text_free(FromText *f) { free(f->ns); free(f->segs); }
+
+/* Parse the text in [s,e) as a from clause, mirroring parse_from_clause: parts
+ * separated by `::` are namespace segments, except a trailing one not followed
+ * by `::`, which is the head module; a `.` route may follow the head. Every
+ * component may be empty (the cursor is mid-typing), which the callers read as
+ * "unwritten". */
+static void from_text_parse(const char *s, const char *e, FromText *out) {
+    memset(out, 0, sizeof *out);
+    const char *p = s;
+    for (;;) {
+        while (p < e && isspace((unsigned char)*p)) p++;
+        const char *w = p;
+        while (p < e && id_char(*p)) p++;
+        TextRef part = { w, (int)(p - w) };
+        const char *q = p;
+        while (q < e && isspace((unsigned char)*q)) q++;
+        if (q + 1 < e && q[0] == ':' && q[1] == ':') {
+            if (part.n)
+                out->ns = str_appendf(out->ns, out->ns ? "__%.*s" : "%.*s",
+                                      part.n, part.s);
+            p = q + 2;
+            continue;
+        }
+        out->head = part;
+        p = q;
+        break;
+    }
+    while (p < e && *p == '.') {
+        p++;
+        while (p < e && isspace((unsigned char)*p)) p++;
+        const char *w = p;
+        while (p < e && id_char(*p)) p++;
+        TextRef seg = { w, (int)(p - w) };
+        DA_APPEND(out->segs, out->seg_count, out->seg_cap, seg);
+        while (p < e && isspace((unsigned char)*p)) p++;
+    }
+}
+
+/* Namespace prefixes are interned, but a prefix typed into the buffer is not,
+ * so namespace identity compares by string here. Both NULL = global. */
+static bool ns_eq(const char *sym_ns, const char *ns) {
+    if (!sym_ns || !ns) return sym_ns == ns;
+    return strcmp(sym_ns, ns) == 0;
+}
+
+static Symbol *find_top_module(SymbolTable *st, TextRef name, const char *ns) {
+    for (int i = 0; i < st->count; i++) {
+        Symbol *s = &st->symbols[i];
+        if (s->kind != DECL_MODULE || !tr_eq_str(name, s->name)) continue;
+        if (ns_eq(s->ns_prefix, ns)) return s;
+    }
+    return NULL;
+}
+
+static Symbol *find_member_module(SymbolTable *members, TextRef name) {
+    if (!members) return NULL;
+    for (int i = 0; i < members->count; i++)
+        if (members->symbols[i].kind == DECL_MODULE &&
+            tr_eq_str(name, members->symbols[i].name))
+            return &members->symbols[i];
+    return NULL;
+}
+
+/* The module a written `from` clause reads from, counting route segments
+ * [0,upto). Mirrors process_member_import: the head resolves in the namespace
+ * written before `::` (else the enclosing one), falling back to a whole-module
+ * import already in this scope; every further segment is a module member of its
+ * predecessor. NULL when any part is unwritten or unresolved. */
+static Symbol *resolve_from_text(AnalysisResult *r, ImportTable *scope_imports,
+                                 const char *cur_ns, const FromText *f, int upto) {
+    if (f->head.n == 0) return NULL;
+    const char *ns = f->ns ? f->ns : cur_ns;
+    Symbol *mod = find_top_module(&r->symtab, f->head, ns);
+    if (!mod && scope_imports) {
+        for (int i = 0; i < scope_imports->count; i++) {
+            ImportRef *ref = &scope_imports->entries[i];
+            if (ref->kind != DECL_MODULE || !ref->module_members) continue;
+            if (!tr_eq_str(f->head, ref->local_name)) continue;
+            mod = ref->ns_prefix
+                ? symtab_lookup_module(ref->source_members, ref->source_name,
+                                       ref->ns_prefix)
+                : symtab_lookup(ref->source_members, ref->source_name);
+            if (mod && mod->kind != DECL_MODULE) mod = NULL;
+            break;
+        }
+    }
+    for (int i = 0; mod && i < upto; i++)
+        mod = find_member_module(mod->members, f->segs[i]);
+    return mod;
+}
+
+/* The innermost module whose body contains `line` (NULL at file level) — the
+ * same line-span walk complete_scope uses, kept separate because this one wants
+ * the module Symbol rather than its members. */
+static Symbol *enclosing_module_at(Decl **decls, int n, SymbolTable *scope,
+                                   const char *file, int line) {
+    Decl *enc = NULL;
+    for (int i = 0; i < n; i++) {
+        Decl *d = decls[i];
+        if (!d) continue;
+        if (file && (!d->loc.filename || strcmp(d->loc.filename, file) != 0)) continue;
+        if (d->loc.line <= 0 || d->loc.line > line) continue;
+        enc = d;
+    }
+    if (!enc || enc->kind != DECL_MODULE) return NULL;
+    Symbol *ms = module_sym_for(scope, enc);
+    if (!ms) return NULL;
+    Symbol *inner = enclosing_module_at(enc->module.decls, enc->module.decl_count,
+                                        ms->members, file, line);
+    return inner ? inner : ms;
+}
+
+/* The namespace in force at `line` of `file` (pass1 phase 3b's `current_ns`). */
+static const char *file_ns_at(AnalysisResult *r, const char *file, int line) {
+    const char *ns = NULL;
+    if (!r->program) return NULL;
+    for (int i = 0; i < r->program->decl_count; i++) {
+        Decl *d = r->program->decls[i];
+        if (!d || d->kind != DECL_NAMESPACE) continue;
+        if (file && (!d->loc.filename || strcmp(d->loc.filename, file) != 0)) continue;
+        if (d->loc.line <= 0 || d->loc.line > line) continue;
+        ns = d->ns.name;
+    }
+    return ns;
+}
+
+static ImportTable *file_imports_for(AnalysisResult *r, const char *file) {
+    for (int i = 0; i < r->file_scopes.count; i++) {
+        FileImportScope *fs = &r->file_scopes.scopes[i];
+        if (fs->filename && file && strcmp(fs->filename, file) != 0) continue;
+        return &fs->imports;
+    }
+    return NULL;
+}
+
+/* Namespace segments that may follow `prefix` (NULL = the first segment of every
+ * namespace). Paths are stored mangled (`acme::graphics` → `acme__graphics`), so
+ * a segment runs to the next `__`. */
+static void emit_ns_segments(Arena *a, JsonValue *items, TextSet *seen,
+                             SymbolTable *st, const char *prefix) {
+    size_t plen = prefix ? strlen(prefix) : 0;
+    for (int i = 0; i < st->count; i++) {
+        const char *ns = st->symbols[i].ns_prefix;
+        if (!ns) continue;
+        const char *seg = ns;
+        if (prefix) {
+            if (strncmp(ns, prefix, plen) != 0 || ns[plen] != '_' || ns[plen + 1] != '_')
+                continue;
+            seg = ns + plen + 2;
+        }
+        const char *end = strstr(seg, "__");
+        TextRef t = { seg, end ? (int)(end - seg) : (int)strlen(seg) };
+        if (t.n == 0 || !tset_add(seen, t)) continue;
+        add_item(a, items, arena_sprintf(a, "%.*s", t.n, t.s), CIK_MODULE, "namespace");
+    }
+}
+
+static void emit_modules_in_ns(Arena *a, JsonValue *items, TextSet *seen,
+                               SymbolTable *st, const char *ns) {
+    for (int i = 0; i < st->count; i++) {
+        Symbol *s = &st->symbols[i];
+        if (s->kind != DECL_MODULE || s->is_private || !s->name) continue;
+        if (!ns_eq(s->ns_prefix, ns)) continue;
+        if (!tset_add(seen, tr_of(s->name))) continue;
+        add_item(a, items, s->name, CIK_MODULE, NULL);
+    }
+}
+
+static void emit_nested_modules(Arena *a, JsonValue *items, TextSet *seen,
+                                Symbol *mod) {
+    SymbolTable *m = mod->members;
+    if (!m) return;
+    for (int i = 0; i < m->count; i++) {
+        Symbol *s = &m->symbols[i];
+        if (s->kind != DECL_MODULE || s->is_private || !s->name) continue;
+        if (!tset_add(seen, tr_of(s->name))) continue;
+        add_item(a, items, s->name, CIK_MODULE, NULL);
+    }
+}
+
+/* Modules a whole-module import already brought into this scope — heads pass1
+ * accepts for a `from` clause alongside the symbol table's own. */
+static void emit_import_modules(Arena *a, JsonValue *items, TextSet *seen,
+                                ImportTable *imp) {
+    if (!imp) return;
+    for (int i = 0; i < imp->count; i++) {
+        ImportRef *ref = &imp->entries[i];
+        if (ref->kind != DECL_MODULE || !ref->module_members) continue;
+        if (!tset_add(seen, tr_of(ref->local_name))) continue;
+        add_item(a, items, ref->local_name, CIK_MODULE, NULL);
+    }
+}
+
+/* Candidates for `import <name> from mod`: the module's public members. */
+static void emit_module_import_names(Arena *a, JsonValue *items, TextSet *used,
+                                     Symbol *mod) {
+    SymbolTable *m = mod->members;
+    if (!m) return;
+    for (int i = 0; i < m->count; i++) {
+        Symbol *s = &m->symbols[i];
+        if (s->is_private || !s->name) continue;
+        if (sym_is_mangled_type_twin(s)) continue;
+        if (!tset_add(used, tr_of(s->name))) continue;
+        add_item(a, items, s->name, sym_kind_to_cik(s),
+                 s->type ? dup_type_name(a, s->type) : NULL);
+    }
+}
+
+/* Candidates for `import <name> from ns::`, which names a whole top-level
+ * symbol rather than a member — a module, struct, union or enum (a companion
+ * pair being two symbols of one name, hence the dedup). */
+static void emit_ns_import_names(Arena *a, JsonValue *items, TextSet *used,
+                                 SymbolTable *st, const char *ns) {
+    for (int i = 0; i < st->count; i++) {
+        Symbol *s = &st->symbols[i];
+        if (s->is_private || !s->name) continue;
+        if (s->kind != DECL_MODULE && s->kind != DECL_STRUCT &&
+            s->kind != DECL_UNION && s->kind != DECL_ENUM) continue;
+        if (!ns_eq(s->ns_prefix, ns)) continue;
+        if (sym_is_mangled_type_twin(s)) continue;
+        if (!tset_add(used, tr_of(s->name))) continue;
+        add_item(a, items, s->name, sym_kind_to_cik(s), NULL);
+    }
+}
+
+/* True if the standalone keyword `kw` appears in [s,e) of `txt`. */
+static bool has_word(const char *txt, int s, int e, const char *kw) {
+    int n = (int)strlen(kw);
+    for (int i = s; i + n <= e; i++) {
+        if (strncmp(txt + i, kw, (size_t)n) != 0) continue;
+        if (i > 0 && id_char(txt[i - 1])) continue;
+        if (i + n < e && id_char(txt[i + n])) continue;
+        return true;
+    }
+    return false;
+}
+
+/* The first identifier written in [s,e) — an import item's bound name, the part
+ * before any `as`. .n == 0 when the item is empty or starts with `*`. */
+static TextRef first_ident(const char *txt, int s, int e) {
+    while (s < e && isspace((unsigned char)txt[s])) s++;
+    int w = s;
+    while (s < e && id_char(txt[s])) s++;
+    TextRef t = { txt + w, s - w };
+    return t;
+}
+
+/* Complete inside the import statement on `line1` (1-based), with the cursor at
+ * byte `cur`. Returns true when the cursor is in an import statement — the reply
+ * is then exactly what this appended, possibly nothing. */
+static bool complete_import(LspServer *S, LspDoc *doc, const LineIndex *idx,
+                            int line1, int cur, JsonValue *items) {
+    Arena *a = &S->msg_arena;
+    const char *txt = doc->text;
+    int ls = idx->starts[line1 - 1];
+    int le = (line1 < idx->count) ? idx->starts[line1] : idx->len;
+    while (le > ls && (txt[le - 1] == '\n' || txt[le - 1] == '\r')) le--;
+    if (cur < ls || cur > le) return false;
+
+    /* An import statement holds no string literal, so a `//` on the line can
+     * only start a comment: the statement ends there, and a cursor past it is
+     * in the comment, which is nobody's context (the fall-through's global list
+     * is what every other comment in the file gets). */
+    for (int i = ls; i + 1 < le; i++)
+        if (txt[i] == '/' && txt[i + 1] == '/') { le = i; break; }
+    if (cur > le) return false;
+
+    int p = ls;
+    while (p < le && (txt[p] == ' ' || txt[p] == '\t')) p++;
+    if (le - p < 6 || strncmp(txt + p, "import", 6) != 0) return false;
+    int kw_end = p + 6;
+    if (kw_end < le && id_char(txt[kw_end])) return false;
+    /* Inside the `import` keyword itself the word being typed is the keyword. */
+    if (cur <= kw_end) return false;
+
+    /* `from` is a keyword, so no written name can spell it: the first standalone
+     * occurrence is the clause separator. */
+    int from_start = -1, from_end = -1;
+    for (int i = kw_end; i + 4 <= le; i++) {
+        if (strncmp(txt + i, "from", 4) != 0) continue;
+        if (id_char(txt[i - 1])) continue;
+        if (i + 4 < le && id_char(txt[i + 4])) continue;
+        from_start = i; from_end = i + 4;
+        break;
+    }
+    /* Cursor inside the `from` keyword: neither side, and nothing to offer. */
+    if (from_start >= 0 && cur > from_start && cur <= from_end) return true;
+
+    AnalysisResult *r = query_result(S, doc);
+    if (!r) return true;
+
+    Symbol *encl = r->program
+        ? enclosing_module_at(r->program->decls, r->program->decl_count,
+                              &r->symtab, doc->path, line1)
+        : NULL;
+    const char *cur_ns = encl ? encl->ns_prefix : file_ns_at(r, doc->path, line1);
+    ImportTable *scope_imports = encl ? encl->imports
+                                      : file_imports_for(r, doc->path);
+    TextSet seen = {0};
+
+    if (from_start >= 0 && cur > from_end) {
+        /* Route region: the separator immediately left of the word being typed
+         * decides which continuation is legal. */
+        int w = cur;
+        while (w > from_end && id_char(txt[w - 1])) w--;
+        int q = w;
+        while (q > from_end && (txt[q - 1] == ' ' || txt[q - 1] == '\t')) q--;
+
+        if (q > from_end && txt[q - 1] == '.') {
+            /* `from head[.seg]….` — the nested modules of what precedes it. */
+            FromText f;
+            from_text_parse(txt + from_end, txt + (q - 1), &f);
+            Symbol *mod = resolve_from_text(r, scope_imports, cur_ns, &f,
+                                            f.seg_count);
+            if (mod) emit_nested_modules(a, items, &seen, mod);
+            from_text_free(&f);
+        } else if (q - 1 > from_end && txt[q - 1] == ':' && txt[q - 2] == ':') {
+            /* `from ns::` — modules of that namespace, and its next segment.
+             * The `::` stays inside the parsed text so the whole path reads as
+             * a namespace rather than the last part reading as a head. */
+            FromText f;
+            from_text_parse(txt + from_end, txt + q, &f);
+            emit_modules_in_ns(a, items, &seen, &r->symtab, f.ns);
+            emit_ns_segments(a, items, &seen, &r->symtab, f.ns);
+            from_text_free(&f);
+        } else {
+            /* The head: modules visible where pass1 looks one up, plus the
+             * namespaces a `::` path may start with. */
+            emit_modules_in_ns(a, items, &seen, &r->symtab, cur_ns);
+            emit_import_modules(a, items, &seen, scope_imports);
+            emit_ns_segments(a, items, &seen, &r->symtab, NULL);
+        }
+        free(seen.v);
+        return true;
+    }
+
+    /* Name region: `*` | name [as alias] {, name [as alias]}. */
+    int reg_end = (from_start >= 0) ? from_start : le;
+    if (cur > reg_end) cur = reg_end;          /* trailing space before `from` */
+    int istart = kw_end;
+    for (int i = kw_end; i < cur; i++)
+        if (txt[i] == ',') istart = i + 1;
+    for (int i = kw_end; i < cur; i++)
+        if (txt[i] == '*') { free(seen.v); return true; }   /* wildcard: no names */
+    /* Past an `as`, the word being typed is a new name being introduced. */
+    if (has_word(txt, istart, cur, "as")) { free(seen.v); return true; }
+
+    if (from_start >= 0) {
+        /* Names already written in the list are no longer candidates; the item
+         * under the cursor is not one of them. */
+        int item = kw_end;
+        for (int i = kw_end; i <= reg_end; i++) {
+            if (i != reg_end && txt[i] != ',') continue;
+            if (item != istart) {
+                TextRef t = first_ident(txt, item, i);
+                if (t.n) tset_add(&seen, t);
+            }
+            item = i + 1;
+        }
+        FromText f;
+        from_text_parse(txt + from_end, txt + le, &f);
+        if (f.head.n) {
+            Symbol *mod = resolve_from_text(r, scope_imports, cur_ns, &f,
+                                            f.seg_count);
+            if (mod) emit_module_import_names(a, items, &seen, mod);
+        } else if (f.ns) {
+            emit_ns_import_names(a, items, &seen, &r->symtab, f.ns);
+        }
+        from_text_free(&f);
+    }
+    free(seen.v);
+    return true;
+}
+
 static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     Arena *a = &S->msg_arena;
     JsonValue *td = json_get(params, "textDocument");
@@ -2926,6 +3355,15 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     int line1, col1;
     lsp_to_loc(&idx, doc->text, (int)line, (int)ch, &line1, &col1);
     int cur = loc_byte_offset(&idx, line1, col1);
+
+    /* An import statement resolves against its `from` clause, not lexical scope,
+     * so it is completed in full before anything below sees it: a '.'/'::' in an
+     * import route is a module path, never an expression, and an import line
+     * must never fall through to the global list. */
+    if (complete_import(S, doc, &idx, line1, cur, items)) {
+        lsp_reply(a, id, items);
+        return;
+    }
 
     /* Member context: scan back over an in-progress member name to the operator
      * just before the object — '.', '::', or '->'. dot_byte is the operator's
