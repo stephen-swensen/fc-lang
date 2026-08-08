@@ -4137,6 +4137,62 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
     *out_mod = NULL;
 }
 
+/* The optional `as ALIAS` tail of an import item. Returns NULL (leaving
+ * *out_loc zeroed) when there is no alias. Both forms that name a single
+ * imported thing share this — a lone `name` and a comma-list item. */
+static const char *parse_import_alias(Parser *p, SrcLoc *out_loc) {
+    memset(out_loc, 0, sizeof *out_loc);
+    if (!check(p, TOK_AS)) return NULL;
+    advance_p(p);
+    Token *t = expect(p, TOK_IDENT);
+    *out_loc = tok_loc(p, t);
+    return tok_intern(p, t);
+}
+
+/* An import statement is `import <names> from [<ns>::]<module>`: it always has a
+ * `from`, and neither side of it is a path. `.` navigates modules in *expression*
+ * position only (`a.b.f(x)` needs no import at all), so a dot anywhere in an
+ * import is an error. Both dot rejections consume the whole dotted run, so a
+ * malformed path yields exactly one diagnostic rather than one per segment. */
+
+/* Consume `. IDENT { . IDENT }`, returning the first tail segment (never NULL
+ * once TOK_DOT is current) and the number of dots crossed via *out_dots. */
+static const char *consume_dotted_tail(Parser *p, int *out_dots) {
+    const char *first = NULL;
+    *out_dots = 0;
+    while (check(p, TOK_DOT)) {
+        advance_p(p);
+        const char *seg = tok_intern(p, expect(p, TOK_IDENT));
+        if (!first) first = seg;
+        (*out_dots)++;
+    }
+    return first;
+}
+
+/* `import a.b` — the retired dotted spelling. Reports it against the `from`
+ * form the reader should write instead. */
+static void reject_dotted_import(SrcLoc loc, const char *head,
+                                 const char *tail, int dots) {
+    if (dots == 1) {
+        diag_error(loc, "'.' is not allowed in an import; "
+            "use 'import %s from %s'", tail, head);
+    } else {
+        diag_error(loc, "'.' is not allowed in an import; each import names one "
+            "module, so import '%s' from '%s' first", tail, head);
+    }
+}
+
+/* `from a.b` — a dotted module path in a `from` clause. Returns true when it
+ * fired, so the caller drops the statement. */
+static bool reject_dotted_from(Parser *p, SrcLoc loc, const char *mod) {
+    if (!check(p, TOK_DOT) || !mod) return false;
+    int dots;
+    const char *tail = consume_dotted_tail(p, &dots);
+    diag_error(loc, "'.' is not allowed in a 'from' clause; 'from' names a single "
+        "module, so import '%s' from '%s' first", tail, mod);
+    return true;
+}
+
 static Decl *parse_import_decl(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     loc.filename = p->filename;
@@ -4149,6 +4205,7 @@ static Decl *parse_import_decl(Parser *p) {
         const char *from_ns = NULL, *from_mod = NULL;
         SrcLoc mod_loc;
         parse_from_clause(p, &from_ns, &from_mod, &mod_loc);
+        if (reject_dotted_from(p, loc, from_mod)) return alloc_decl_error(p, loc);
         Decl *d = arena_alloc(p->arena, sizeof(Decl));
         d->kind = DECL_IMPORT;
         d->loc = loc;
@@ -4169,34 +4226,15 @@ static Decl *parse_import_decl(Parser *p) {
     const char *alias = NULL;
     SrcLoc alias_loc = {0};
 
-    /* Check for import module.submodule syntax */
-    if (check(p, TOK_DOT) && !check(p, TOK_AS) && !check(p, TOK_FROM) && !check(p, TOK_COMMA)) {
-        /* import module_a.module_b → equivalent to import module_b from module_a */
-        advance_p(p); /* consume . */
-        Token *sub_tok = expect(p, TOK_IDENT);
-        const char *sub = tok_intern(p, sub_tok);
-        Decl *d = arena_alloc(p->arena, sizeof(Decl));
-        d->kind = DECL_IMPORT;
-        d->loc = loc;
-        d->is_private = false;
-        d->import.name = sub;
-        d->import.alias = NULL;
-        d->import.from_module = name;
-        d->import.from_namespace = NULL;
-        d->import.is_wildcard = false;
-        /* The qualifier parsed as `name` is the module here, the dotted tail the
-         * imported member — so the two token locs swap roles with it. */
-        d->import.name_loc = tok_loc(p, sub_tok);
-        d->import.module_loc = name_loc;
-        return d;
+    if (check(p, TOK_DOT)) {
+        int dots;
+        const char *tail = consume_dotted_tail(p, &dots);
+        reject_dotted_import(loc, name, tail, dots);
+        parse_import_alias(p, &alias_loc); /* swallow a trailing `as A` too */
+        return alloc_decl_error(p, loc);
     }
 
-    if (check(p, TOK_AS)) {
-        advance_p(p);
-        Token *alias_tok = expect(p, TOK_IDENT);
-        alias = tok_intern(p, alias_tok);
-        alias_loc = tok_loc(p, alias_tok);
-    }
+    alias = parse_import_alias(p, &alias_loc);
 
     /* Check for multi-symbol import: name1 [as a1], name2 [as a2], ... from mod */
     if (check(p, TOK_COMMA)) {
@@ -4212,14 +4250,8 @@ static Decl *parse_import_decl(Parser *p) {
             advance_p(p);
             Token *n_tok = expect(p, TOK_IDENT);
             const char *n = tok_intern(p, n_tok);
-            const char *a = NULL;
-            SrcLoc al = {0};
-            if (check(p, TOK_AS)) {
-                advance_p(p);
-                Token *a_tok = expect(p, TOK_IDENT);
-                a = tok_intern(p, a_tok);
-                al = tok_loc(p, a_tok);
-            }
+            SrcLoc al;
+            const char *a = parse_import_alias(p, &al);
             ImportItem it = { n, a, tok_loc(p, n_tok), al };
             DA_APPEND(items, item_count, item_cap, it);
         }
@@ -4228,6 +4260,10 @@ static Decl *parse_import_decl(Parser *p) {
         const char *from_ns = NULL, *from_mod = NULL;
         SrcLoc mod_loc;
         parse_from_clause(p, &from_ns, &from_mod, &mod_loc);
+        if (reject_dotted_from(p, loc, from_mod)) {
+            free(items);
+            return alloc_decl_error(p, loc);
+        }
 
         /* Create import decl for item 0 (returned), push rest to pending.
          * Each item keeps its own name/alias token locs; they share the one
@@ -4272,6 +4308,7 @@ static Decl *parse_import_decl(Parser *p) {
     if (check(p, TOK_FROM)) {
         advance_p(p);
         parse_from_clause(p, &from_ns, &from_module, &mod_loc);
+        if (reject_dotted_from(p, loc, from_module)) return alloc_decl_error(p, loc);
     }
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));

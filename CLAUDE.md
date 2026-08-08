@@ -328,9 +328,23 @@ Corner-case classes that reviews have caught untested (write these alongside the
 The `spec/` folder contains:
 - **`fc-spec.html`** — Full language specification. Self-contained HTML with embedded markdown rendered by `marked.js`. Open in a browser to read.
 - **`examples.fc`** — Runnable quick reference demonstrating all core syntax and semantics. Read this first for a fast overview of the language.
-- **`grammar.bnf`** — BNF grammar for the language syntax.
 - **`TODO.md`** — Outstanding spec/compiler tasks.
 - **`hist/`** — Historical design artifacts and analysis documents.
+
+**`fc-spec.html` and the compiler are the only authorities on the language.** A
+question about what FC permits is answered by the spec prose plus what `src/`
+implements — nothing else. There is deliberately **no BNF grammar file**:
+`spec/grammar.bnf` was deleted because it had drifted into describing forms the
+language does not have, and a second normative-looking document that nothing
+validates is worse than none. Don't recreate it, and don't treat a stale
+reference to it in `spec/hist/` or a design doc as authority — those files
+record what was believed at the time. If a syntax question isn't settled by the
+spec, settle it with the user and write the answer into the spec.
+
+The drift was not hypothetical: `grammar.bnf` sanctioned `import a.b.c` and
+`import ns::a.b`, neither of which FC has ever accepted, and its
+`["as" IDENT]` on a dotted import prompted a feature that had to be reverted —
+the spec's own import section requires a `from` clause on every import.
 
 Spec sections are organized as:
 - Part 1 — Foundations (types, literals, operators, let/mut, inference)

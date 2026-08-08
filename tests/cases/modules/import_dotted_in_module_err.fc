@@ -1,0 +1,10 @@
+module outer =
+    module inner =
+        let bump = (n: i32) -> n + 1
+
+module app =
+    import outer.inner
+    let run = (n: i32) -> n
+
+let main = (args: str[]) ->
+    0

@@ -1,0 +1,9 @@
+import a.b.c
+
+module a =
+    module b =
+        module c =
+            let deep = (n: i32) -> n + 1
+
+let main = (args: str[]) ->
+    0

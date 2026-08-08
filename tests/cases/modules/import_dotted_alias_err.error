@@ -1,0 +1,1 @@
+'.' is not allowed in an import; use 'import inner from outer'
