@@ -462,6 +462,17 @@ static ImportTable *get_file_imports(FileImportScopes *scopes, const char *filen
     return &scopes->scopes[scopes->count - 1].imports;
 }
 
+/* The `from` route as written, up to but not including segment `upto` — so
+ * `route_path(d, 0)` is the head alone and `route_path(d, route_count)` the
+ * whole path. For diagnostics, which should name the route the reader wrote
+ * rather than the one segment that failed. Caller frees. */
+static char *route_path(const Decl *d, int upto) {
+    char *s = str_sprintf("%s", d->import.from_module);
+    for (int i = 0; i < upto; i++)
+        s = str_appendf(s, ".%s", d->import.route[i].name);
+    return s;
+}
+
 /* Process a member import (wildcard or named) into an ImportTable.
  * Handles: import * from MODULE, import NAME [as ALIAS] from MODULE.
  * Does NOT handle whole-module imports (import MODULE [as ALIAS]).
@@ -509,6 +520,36 @@ static void process_member_import(Decl *d, ImportTable *target,
     }
     d->import.resolved_module = mod_sym;
 
+    /* Walk the rest of a dotted route (`from a.b.c`): each segment is a module
+     * member of its predecessor — the same navigation `.` performs in
+     * expression position. A companion module (a struct/union/enum paired with
+     * a same-named module) is a valid segment: looking the segment up by
+     * DECL_MODULE selects the module half of the pair. */
+    for (int i = 0; i < d->import.route_count; i++) {
+        ImportRouteSeg *seg = &d->import.route[i];
+        Symbol *next = symtab_lookup_kind(mod_sym->members, seg->name, DECL_MODULE);
+        if (!next) {
+            char *path = route_path(d, i);
+            diag_error(d->loc, "module '%s' has no module '%s'", path, seg->name);
+            free(path);
+            return;
+        }
+        if (next->is_private) {
+            char *path = route_path(d, i);
+            diag_error(d->loc, "cannot import through private module '%s' of module '%s'",
+                seg->name, path);
+            free(path);
+            return;
+        }
+        seg->sym = next;
+        mod_sym = next;
+    }
+    /* Diagnostics below name the module the import reads from, which is the
+     * whole route when there is one. NULL for the plain one-segment form, where
+     * `mod_name` already spells it. */
+    char *route_disp = d->import.route_count ? route_path(d, d->import.route_count) : NULL;
+    if (route_disp) mod_name = route_disp;
+
     if (d->import.is_wildcard) {
         /* import * from MODULE: add all non-private members */
         SymbolTable *members = mod_sym->members;
@@ -524,12 +565,12 @@ static void process_member_import(Decl *d, ImportTable *target,
         if (!msym) {
             diag_error(d->loc, "module '%s' has no member '%s'",
                 mod_name, d->import.name);
-            return;
+            goto done;
         }
         if (msym->is_private) {
             diag_error(d->loc, "cannot import private member '%s' from module '%s'",
                 d->import.name, mod_name);
-            return;
+            goto done;
         }
         const char *import_name = d->import.alias ? d->import.alias : d->import.name;
         /* §7.8: an `as` alias may not rename a type or module onto a built-in
@@ -560,6 +601,8 @@ static void process_member_import(Decl *d, ImportTable *target,
             }
         }
     }
+done:
+    free(route_disp);
 }
 
 /* Find a module symbol by name and namespace prefix */

@@ -1,0 +1,16 @@
+// A routed import works in a module body, where it is scoped to that module.
+module outer =
+    module inner =
+        let bump = (n: i32) -> n + 1
+        struct point =
+            x: i32
+        module point =
+            let zero = () -> point { x = 7 }
+
+module app =
+    import bump from outer.inner
+    let run = (n: i32) -> bump(n)
+
+let main = (args: str[]) ->
+    assert(app.run(1) == 2)
+    0

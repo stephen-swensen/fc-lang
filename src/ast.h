@@ -567,6 +567,16 @@ typedef enum {
 
 typedef struct Decl Decl;
 
+/* One module segment written after the head of an import's `from` route
+ * (`from a.b.c` has segments `b` and `c`). `sym` is what the segment resolved
+ * to, stamped by pass1 where the import is processed, so editor queries read
+ * the resolution rather than repeating it; NULL if the route did not resolve. */
+typedef struct {
+    const char *name;
+    SrcLoc loc;
+    struct Symbol *sym;
+} ImportRouteSeg;
+
 struct Decl {
     DeclKind kind;
     SrcLoc loc;
@@ -673,10 +683,21 @@ struct Decl {
              * `alias`, which is only another spelling of it — denotes;
              * `resolved_companion` the module imported alongside a type of the
              * same name; `resolved_module` the module named in the `from` clause.
-             * All NULL when the import did not resolve. */
+             * All NULL when the import did not resolve. `resolved_module` is the
+             * *head* of the `from` route; the module the import actually reads
+             * from is the route's last segment, i.e.
+             * `route_count ? route[route_count-1].sym : resolved_module`. */
             struct Symbol *resolved_sym;
             struct Symbol *resolved_companion;
             struct Symbol *resolved_module;
+            /* The `from` clause names a route of one or more modules. The head —
+             * the name resolved in the enclosing scope — is `from_module`, and
+             * `route` holds the segments written after it (`from a.b.c` → head
+             * "a", route {"b","c"}), each a module member of its predecessor,
+             * exactly as `.` navigates in expression position. Empty for the
+             * one-segment form and for a bare `from ns::`. */
+            ImportRouteSeg *route;
+            int route_count;
         } import;
 
         /* DECL_EXTERN */

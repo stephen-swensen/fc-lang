@@ -1139,8 +1139,9 @@ static void consider_import_ident(FindCtx *c, SrcLoc loc, int span,
 }
 
 /* The identifiers of an import statement: the imported name, its `as` alias,
- * and the module named in the `from` clause. A namespace path (`std::`) names
- * no declaration, so its segments are deliberately not offered. */
+ * and every module segment of the `from` route — each answering for the module
+ * it names, so `from a.b.c` hovers and jumps per segment. A namespace path
+ * (`std::`) names no declaration, so its segments are deliberately not offered. */
 static void consider_import(FindCtx *c, Decl *d) {
     const char *name = d->import.name;
     Symbol *sym = d->import.resolved_sym;
@@ -1154,6 +1155,11 @@ static void consider_import(FindCtx *c, Decl *d) {
     if (d->import.from_module)
         consider_import_ident(c, d->import.module_loc, (int)strlen(d->import.from_module),
                               d->import.from_module, d->import.resolved_module, NULL);
+    for (int i = 0; i < d->import.route_count; i++) {
+        const ImportRouteSeg *seg = &d->import.route[i];
+        consider_import_ident(c, seg->loc, (int)strlen(seg->name), seg->name,
+                              seg->sym, NULL);
+    }
 }
 
 static void find_in_decl(Decl *d, FindCtx *c) {

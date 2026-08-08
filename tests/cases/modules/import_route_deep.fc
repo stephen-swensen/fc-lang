@@ -1,0 +1,16 @@
+// A route is any depth, and importing over one binds only the name imported —
+// the modules it passed through stay unbound, which is what distinguishes it
+// from the chain of imports that would otherwise be needed.
+import deep from a.b.c
+
+module a =
+    module b =
+        module c =
+            let deep = (n: i32) -> n + 1
+
+let main = (args: str[]) ->
+    assert(deep(1) == 2)
+    // `a` is a top-level module and still reachable; `b` and `c` were never
+    // bound here, so the long form goes through `a`.
+    assert(a.b.c.deep(2) == 3)
+    0

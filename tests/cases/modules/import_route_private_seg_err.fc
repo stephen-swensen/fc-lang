@@ -1,0 +1,8 @@
+import bump from outer.hidden
+
+module outer =
+    private module hidden =
+        let bump = (n: i32) -> n + 1
+
+let main = (args: str[]) ->
+    0

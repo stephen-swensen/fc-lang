@@ -1,9 +1,8 @@
-import bump, hop from outer.inner
+import inner.bump from outer
 
 module outer =
     module inner =
         let bump = (n: i32) -> n + 1
-        let hop = (n: i32) -> n - 1
 
 let main = (args: str[]) ->
     0

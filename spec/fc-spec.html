@@ -4503,6 +4503,10 @@ import func_a from module_a                           // named member
 import func_a as f, func_b from module_a              // multiple with alias
 import * from module_a                                // all public members
 
+// The source may be a nested module, named by a dotted route
+import func_c from module_a.inner                     // member of a nested module
+import * from module_a.inner.deeper                   // any depth
+
 // Cross-namespace top-level imports (module, struct, or union)
 import module_a from acme::graphics::                 // brings module into scope
 import point    from acme::graphics::                 // brings a top-level struct
@@ -4510,8 +4514,11 @@ import shape    from acme::graphics::                 // brings a top-level unio
 ```
 
 **Rules:**
-- Every import has a `from` clause, and **neither side of it is a path**. The left names the imported symbols (`*`, or one or more `IDENT [as IDENT]`); the right names exactly one source — `[ns::]module`, or a bare `ns::`. A `.` on either side is a compile error: `import outer.inner` and `import bump from outer.inner` are written `import inner from outer` and `import bump from inner`
-- `::` terminates namespace paths; `.` navigates into modules and submodules in **expression** position only (§Direct module access), where it requires no import at all — `outer.inner.bump(n)` reaches any depth from a visible root. Importing a nested module shortens a name; it is never the only way in
+- Every import has a `from` clause. The left of it names the imported symbols (`*`, or one or more `IDENT [as IDENT]`); the right names one source — `[ns::]module[.module...]`, or a bare `ns::`
+- **Only the right side is a path.** A `.` on the left is a compile error: that side names what is being bound, and a dotted item would give each entry of a comma list a different source. `import outer.inner` is written `import inner from outer`
+- The right side is a route of nested modules: `import bump from outer.inner` reaches `inner` without binding it. Each segment after the first is a module member of the one before, and a route may be any depth. A struct's, union's, or enum's companion module is a module like any other, so it can appear anywhere in a route
+- `::` terminates the namespace path and `.` routes into modules from there — `import f from acme::a.b.c`. Every segment must be visible: a private module cannot be routed through
+- `.` navigates modules in expression position too, where it requires no import at all — `outer.inner.bump(n)` reaches any depth from a visible root. An import shortens a name; it is never the only way in
 - `import *` works on modules only — not bare namespaces
 - `import T from M` (member import) brings both the type `T` (struct or union) and its type-associated module `T` (if any) into scope
 - `import T from ns::` (namespace import) works the same way: it brings a top-level `module`, `struct`, or `union` named `T` from the namespace, pulling in a same-named companion module automatically

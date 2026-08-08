@@ -1,0 +1,23 @@
+// A struct's companion module is a module, so it is a valid route segment —
+// `outer.point` routes through the module half of the pair, and the route
+// continues past it. The last segment may also *be* a companion pair, which
+// imports both halves under one name.
+import zero from outer.point
+import two from outer.point.deeper
+import point from outer
+
+module outer =
+    struct point =
+        x: i32
+    module point =
+        let zero = () -> point { x = 7 }
+        module deeper =
+            let two = () -> 2
+
+let main = (args: str[]) ->
+    assert(zero().x == 7)
+    assert(two() == 2)
+    let p = point { x = 3 }
+    assert(p.x == 3)
+    assert(point.zero().x == 7)
+    0

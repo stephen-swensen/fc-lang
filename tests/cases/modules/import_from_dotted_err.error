@@ -1,1 +1,0 @@
-'.' is not allowed in a 'from' clause; 'from' names a single module, so import 'inner' from 'outer' first

@@ -1,0 +1,11 @@
+// A `from` clause names a route of modules: `outer.inner` reaches the nested
+// module directly, without first importing `inner` into scope.
+import bump from outer.inner
+
+module outer =
+    module inner =
+        let bump = (n: i32) -> n + 1
+
+let main = (args: str[]) ->
+    assert(bump(1) == 2)
+    0

@@ -1,4 +1,4 @@
-import bump from outer.inner
+import x from outer.inner.bump
 
 module outer =
     module inner =

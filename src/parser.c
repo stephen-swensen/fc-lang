@@ -4086,23 +4086,52 @@ static SrcLoc tok_loc(Parser *p, const Token *t) {
     return l;
 }
 
-/* Parse a from clause: from [namespace::path::]module
- * Sets *out_ns and *out_mod, and *out_mod_loc to the module name token's
- * location (left zeroed when the clause names a bare namespace). */
-static void parse_from_clause(Parser *p, const char **out_ns, const char **out_mod,
-                              SrcLoc *out_mod_loc) {
+/* What a `from` clause names: an optional namespace, the head module, and the
+ * dotted route of nested modules written after it. */
+typedef struct {
+    const char *ns;
+    const char *mod;          /* head module; NULL for a bare `from ns::` */
+    SrcLoc mod_loc;           /* head token; zeroed when there is no head */
+    ImportRouteSeg *route;    /* segments after the head, arena-allocated */
+    int route_count;
+} FromClause;
+
+/* The `.b.c` tail of a `from` route. `from a.b.c` names module `a`'s nested
+ * module `b`'s nested module `c`: every segment after the head is a member of
+ * its predecessor, the same navigation `.` performs in expression position.
+ * Leaves the route empty when no dot follows. */
+static void parse_from_route(Parser *p, FromClause *fc) {
+    ImportRouteSeg *segs = NULL;
+    int count = 0, cap = 0;
+    while (check(p, TOK_DOT)) {
+        advance_p(p);
+        Token *t = expect(p, TOK_IDENT);
+        ImportRouteSeg seg = { tok_intern(p, t), tok_loc(p, t), NULL };
+        DA_APPEND(segs, count, cap, seg);
+    }
+    if (count > 0) {
+        fc->route = arena_alloc(p->arena, (size_t)count * sizeof(ImportRouteSeg));
+        memcpy(fc->route, segs, (size_t)count * sizeof(ImportRouteSeg));
+        fc->route_count = count;
+    }
+    free(segs);
+}
+
+/* Parse a from clause: from [namespace::path::]module[.module...] */
+static void parse_from_clause(Parser *p, FromClause *fc) {
     /* Parse IDENT [:: IDENT [:: ...]]
-     * If path ends with ::, last part is namespace; out_mod is the next IDENT (or NULL for bare ns).
-     * If path does NOT end with ::, last IDENT is the module name. */
-    *out_mod_loc = (SrcLoc){0};
+     * If path ends with ::, last part is namespace; the head is the next IDENT
+     * (or NULL for a bare ns). If the path does NOT end with ::, the last IDENT
+     * is the head module. Either way a `.` route may follow the head. */
+    memset(fc, 0, sizeof *fc);
     Token *first_tok = expect(p, TOK_IDENT);
     const char *first = tok_intern(p, first_tok);
 
     if (!check(p, TOK_COLONCOLON)) {
         /* Simple: from module_name */
-        *out_ns = NULL;
-        *out_mod = first;
-        *out_mod_loc = tok_loc(p, first_tok);
+        fc->mod = first;
+        fc->mod_loc = tok_loc(p, first_tok);
+        parse_from_route(p, fc);
         return;
     }
 
@@ -4115,10 +4144,11 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
             Token *part_tok = expect(p, TOK_IDENT);
             const char *part = tok_intern(p, part_tok);
             if (!check(p, TOK_COLONCOLON)) {
-                /* This IDENT is NOT followed by ::, so it's the module name */
-                *out_ns = ns;
-                *out_mod = part;
-                *out_mod_loc = tok_loc(p, part_tok);
+                /* This IDENT is NOT followed by ::, so it's the head module */
+                fc->ns = ns;
+                fc->mod = part;
+                fc->mod_loc = tok_loc(p, part_tok);
+                parse_from_route(p, fc);
                 return;
             }
             /* More :: follows — this is still namespace.
@@ -4126,15 +4156,13 @@ static void parse_from_clause(Parser *p, const char **out_ns, const char **out_m
             ns = intern_sprintf(p->intern, "%s__%s", ns, part);
         } else {
             /* Bare namespace ending: from acme:: or from acme::graphics:: */
-            *out_ns = ns;
-            *out_mod = NULL;
+            fc->ns = ns;
             return;
         }
     }
 
     /* Shouldn't reach here, but just in case */
-    *out_ns = ns;
-    *out_mod = NULL;
+    fc->ns = ns;
 }
 
 /* The optional `as ALIAS` tail of an import item. Returns NULL (leaving
@@ -4149,48 +4177,45 @@ static const char *parse_import_alias(Parser *p, SrcLoc *out_loc) {
     return tok_intern(p, t);
 }
 
-/* An import statement is `import <names> from [<ns>::]<module>`: it always has a
- * `from`, and neither side of it is a path. `.` navigates modules in *expression*
- * position only (`a.b.f(x)` needs no import at all), so a dot anywhere in an
- * import is an error. Both dot rejections consume the whole dotted run, so a
- * malformed path yields exactly one diagnostic rather than one per segment. */
-
-/* Consume `. IDENT { . IDENT }`, returning the first tail segment (never NULL
- * once TOK_DOT is current) and the number of dots crossed via *out_dots. */
-static const char *consume_dotted_tail(Parser *p, int *out_dots) {
+/* An import statement is `import <names> from [<ns>::]<route>`: it always has a
+ * `from`, and only its right side is a path. The right side is a route to one
+ * module, so its segments are dotted like the same navigation in expression
+ * position; the left side is the list of names being bound, where a dot would
+ * give each item in the list a different source and put routing where a binding
+ * name belongs. `import a.b` is therefore an error — it names the module `a`'s
+ * member `b` on the side that binds names, and means `import b from a`.
+ *
+ * The rejection consumes the whole statement — the dotted run, an `as` alias,
+ * and any `from` clause — so a malformed left side yields exactly one
+ * diagnostic rather than one per segment plus a cascade from the tail. */
+static void reject_dotted_import(Parser *p, SrcLoc loc, const char *head) {
     const char *first = NULL;
-    *out_dots = 0;
+    int dots = 0;
     while (check(p, TOK_DOT)) {
         advance_p(p);
         const char *seg = tok_intern(p, expect(p, TOK_IDENT));
         if (!first) first = seg;
-        (*out_dots)++;
+        dots++;
     }
-    return first;
-}
-
-/* `import a.b` — the retired dotted spelling. Reports it against the `from`
- * form the reader should write instead. */
-static void reject_dotted_import(SrcLoc loc, const char *head,
-                                 const char *tail, int dots) {
-    if (dots == 1) {
-        diag_error(loc, "'.' is not allowed in an import; "
-            "use 'import %s from %s'", tail, head);
+    SrcLoc discard;
+    parse_import_alias(p, &discard);
+    bool had_from = check(p, TOK_FROM);
+    if (had_from) {
+        advance_p(p);
+        FromClause fc;
+        parse_from_clause(p, &fc);
+    }
+    /* `import a.b` has one unambiguous rewrite, so quote it. With a `from`
+     * already present the fix is to extend *its* route, and the head written
+     * here need not be reachable on its own — so name the rule instead of
+     * inventing a path that may not resolve. */
+    if (dots == 1 && !had_from) {
+        diag_error(loc, "'.' is not allowed on the left of 'from'; "
+            "use 'import %s from %s'", first, head);
     } else {
-        diag_error(loc, "'.' is not allowed in an import; each import names one "
-            "module, so import '%s' from '%s' first", tail, head);
+        diag_error(loc, "'.' is not allowed on the left of 'from'; the left names "
+            "what is imported, so the module path belongs on the right of 'from'");
     }
-}
-
-/* `from a.b` — a dotted module path in a `from` clause. Returns true when it
- * fired, so the caller drops the statement. */
-static bool reject_dotted_from(Parser *p, SrcLoc loc, const char *mod) {
-    if (!check(p, TOK_DOT) || !mod) return false;
-    int dots;
-    const char *tail = consume_dotted_tail(p, &dots);
-    diag_error(loc, "'.' is not allowed in a 'from' clause; 'from' names a single "
-        "module, so import '%s' from '%s' first", tail, mod);
-    return true;
 }
 
 static Decl *parse_import_decl(Parser *p) {
@@ -4198,24 +4223,24 @@ static Decl *parse_import_decl(Parser *p) {
     loc.filename = p->filename;
     expect(p, TOK_IMPORT);
 
-    /* import * from [ns::]MODULE */
+    /* import * from [ns::]MODULE[.MODULE...] */
     if (check(p, TOK_STAR)) {
         advance_p(p);
         expect(p, TOK_FROM);
-        const char *from_ns = NULL, *from_mod = NULL;
-        SrcLoc mod_loc;
-        parse_from_clause(p, &from_ns, &from_mod, &mod_loc);
-        if (reject_dotted_from(p, loc, from_mod)) return alloc_decl_error(p, loc);
+        FromClause fc;
+        parse_from_clause(p, &fc);
         Decl *d = arena_alloc(p->arena, sizeof(Decl));
         d->kind = DECL_IMPORT;
         d->loc = loc;
         d->is_private = false;
         d->import.name = NULL;
         d->import.alias = NULL;
-        d->import.from_module = from_mod;
-        d->import.from_namespace = from_ns;
+        d->import.from_module = fc.mod;
+        d->import.from_namespace = fc.ns;
         d->import.is_wildcard = true;
-        d->import.module_loc = mod_loc;
+        d->import.module_loc = fc.mod_loc;
+        d->import.route = fc.route;
+        d->import.route_count = fc.route_count;
         return d;
     }
 
@@ -4227,9 +4252,7 @@ static Decl *parse_import_decl(Parser *p) {
     SrcLoc alias_loc = {0};
 
     if (check(p, TOK_DOT)) {
-        int dots;
-        const char *tail = consume_dotted_tail(p, &dots);
-        reject_dotted_import(loc, name, tail, dots);
+        reject_dotted_import(p, loc, name);
         parse_import_alias(p, &alias_loc); /* swallow a trailing `as A` too */
         return alloc_decl_error(p, loc);
     }
@@ -4257,17 +4280,15 @@ static Decl *parse_import_decl(Parser *p) {
         }
 
         expect(p, TOK_FROM);
-        const char *from_ns = NULL, *from_mod = NULL;
-        SrcLoc mod_loc;
-        parse_from_clause(p, &from_ns, &from_mod, &mod_loc);
-        if (reject_dotted_from(p, loc, from_mod)) {
-            free(items);
-            return alloc_decl_error(p, loc);
-        }
+        FromClause fc;
+        parse_from_clause(p, &fc);
 
         /* Create import decl for item 0 (returned), push rest to pending.
          * Each item keeps its own name/alias token locs; they share the one
-         * `from` clause, so every decl carries the same module_loc. */
+         * `from` clause, so every decl carries the same module_loc and route.
+         * The route array is shared, not copied: pass1 stamps each segment's
+         * symbol with the same resolution for every item, so one walk's result
+         * is what all of them would independently produce. */
         for (int i = 1; i < item_count; i++) {
             Decl *extra = arena_alloc(p->arena, sizeof(Decl));
             extra->kind = DECL_IMPORT;
@@ -4275,12 +4296,14 @@ static Decl *parse_import_decl(Parser *p) {
             extra->is_private = false;
             extra->import.name = items[i].n;
             extra->import.alias = items[i].a;
-            extra->import.from_module = from_mod;
-            extra->import.from_namespace = from_ns;
+            extra->import.from_module = fc.mod;
+            extra->import.from_namespace = fc.ns;
             extra->import.is_wildcard = false;
             extra->import.name_loc = items[i].nl;
             extra->import.alias_loc = items[i].al;
-            extra->import.module_loc = mod_loc;
+            extra->import.module_loc = fc.mod_loc;
+            extra->import.route = fc.route;
+            extra->import.route_count = fc.route_count;
             DA_APPEND(p->pending_decls, p->pending_count, p->pending_cap, extra);
         }
 
@@ -4290,25 +4313,25 @@ static Decl *parse_import_decl(Parser *p) {
         d->is_private = false;
         d->import.name = items[0].n;
         d->import.alias = items[0].a;
-        d->import.from_module = from_mod;
-        d->import.from_namespace = from_ns;
+        d->import.from_module = fc.mod;
+        d->import.from_namespace = fc.ns;
         d->import.is_wildcard = false;
         d->import.name_loc = items[0].nl;
         d->import.alias_loc = items[0].al;
-        d->import.module_loc = mod_loc;
+        d->import.module_loc = fc.mod_loc;
+        d->import.route = fc.route;
+        d->import.route_count = fc.route_count;
         free(items);
         return d;
     }
 
     /* Single import with optional from clause */
-    const char *from_module = NULL;
-    const char *from_ns = NULL;
-    SrcLoc mod_loc = {0};
+    FromClause fc;
+    memset(&fc, 0, sizeof fc);
 
     if (check(p, TOK_FROM)) {
         advance_p(p);
-        parse_from_clause(p, &from_ns, &from_module, &mod_loc);
-        if (reject_dotted_from(p, loc, from_module)) return alloc_decl_error(p, loc);
+        parse_from_clause(p, &fc);
     }
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
@@ -4317,12 +4340,14 @@ static Decl *parse_import_decl(Parser *p) {
     d->is_private = false;
     d->import.name = name;
     d->import.alias = alias;
-    d->import.from_module = from_module;
-    d->import.from_namespace = from_ns;
+    d->import.from_module = fc.mod;
+    d->import.from_namespace = fc.ns;
     d->import.is_wildcard = false;
     d->import.name_loc = name_loc;
     d->import.alias_loc = alias_loc;
-    d->import.module_loc = mod_loc;
+    d->import.module_loc = fc.mod_loc;
+    d->import.route = fc.route;
+    d->import.route_count = fc.route_count;
     return d;
 }
 
@@ -4630,5 +4655,11 @@ Program *parse_program(Parser *p) {
     }
     prog->decl_count = count;
     free(decls);
+    /* The pending queue is drained as it is filled, but its backing array
+     * outlives every drain — freeing it here is what keeps a comma-list import
+     * from costing the long-running server one allocation per analysis. */
+    free(p->pending_decls);
+    p->pending_decls = NULL;
+    p->pending_count = p->pending_cap = 0;
     return prog;
 }

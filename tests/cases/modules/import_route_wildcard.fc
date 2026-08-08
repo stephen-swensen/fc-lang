@@ -1,0 +1,12 @@
+// A wildcard import takes its members from the module the route ends at.
+import * from outer.inner
+
+module outer =
+    module inner =
+        let bump = (n: i32) -> n + 1
+        let hop = (n: i32) -> n - 1
+
+let main = (args: str[]) ->
+    assert(bump(1) == 2)
+    assert(hop(1) == 0)
+    0

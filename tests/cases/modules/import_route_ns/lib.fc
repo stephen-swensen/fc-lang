@@ -1,0 +1,7 @@
+namespace acme
+
+module m1 =
+    module m2 =
+        module m3 =
+            let f = (n: i32) -> n + 1
+        let g = (n: i32) -> n + 2

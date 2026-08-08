@@ -1,0 +1,9 @@
+// `::` terminates the namespace path, then `.` routes into nested modules —
+// the two separators compose in one `from` clause.
+import f from acme::m1.m2.m3
+import g from acme::m1.m2
+
+let main = (args: str[]) ->
+    assert(f(1) == 2)
+    assert(g(1) == 3)
+    0

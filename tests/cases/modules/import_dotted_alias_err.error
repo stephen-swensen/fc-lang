@@ -1,1 +1,1 @@
-'.' is not allowed in an import; use 'import inner from outer'
+'.' is not allowed on the left of 'from'; use 'import inner from outer'

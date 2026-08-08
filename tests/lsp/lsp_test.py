@@ -1867,6 +1867,14 @@ IMP_LIB = (
     "    // Triples n.\n"                        # 12
     "    let triple = (n: i32) ->\n"             # 13
     "        n * 3\n"                            # 14
+    "\n"                                         # 15
+    "    // Middle bag.\n"                       # 16
+    "    module mid =\n"                         # 17
+    "        // Deep bag.\n"                     # 18
+    "        module deep =\n"                    # 19
+    "            // Answers two.\n"              # 20
+    "            let two = () ->\n"              # 21
+    "                2\n"                        # 22
 )
 IMP_NSLIB = (
     "namespace acme::\n"                         # 0
@@ -1891,24 +1899,25 @@ IMP_MAIN = (
     "import shade from acme::palette\n"          # 1  member of a namespaced module
     "import double as dbl, triple from outer\n"  # 2  alias + multi-item
     "import * from outer\n"                      # 3  wildcard (also brings `inner`)
-    "\n"                                         # 4
-    "module app =\n"                             # 5
-    "    import inner from outer\n"              # 6  module-body module import
-    "    import bump from inner\n"               # 7  ...resolved through it
-    "\n"                                         # 8
-    "    let go = () ->\n"                       # 9
-    "        bump(1)\n"                          # 10
-    "\n"                                         # 11
-    "let main = (args: str[]) ->\n"              # 12
-    "    let c = color { r = 3u8 }\n"            # 13
-    "    let a = dbl(1) + triple(2) + shade()\n" # 14
-    "    let b = app.go() + inner.bump(0)\n"     # 15
-    "    return (i32) c.r + a + b\n"             # 16
+    "import two as t2 from outer.mid.deep\n"     # 4  dotted `from` route + alias
+    "\n"                                         # 5
+    "module app =\n"                             # 6
+    "    import inner from outer\n"              # 7  module-body module import
+    "    import bump from inner\n"               # 8  ...resolved through it
+    "\n"                                         # 9
+    "    let go = () ->\n"                       # 10
+    "        bump(1)\n"                          # 11
+    "\n"                                         # 12
+    "let main = (args: str[]) ->\n"              # 13
+    "    let c = color { r = 3u8 }\n"            # 14
+    "    let a = dbl(1) + triple(2) + shade()\n" # 15
+    "    let b = app.go() + inner.bump(0) + t2()\n"  # 16
+    "    return (i32) c.r + a + b\n"             # 17
 )
-# Two imports that produce no symbol: one that never resolves, and one written in
-# the retired dotted spelling (rejected in the parser, so it yields no Decl at
-# all). Hover/definition must stay silent on both — the diagnostic already says
-# what is wrong — and neither may take the server down.
+# Two imports that produce no symbol: one that never resolves, and one with a dot
+# on the LEFT of `from` (rejected in the parser, so it yields no Decl at all).
+# Hover/definition must stay silent on both — the diagnostic already says what is
+# wrong — and neither may take the server down.
 IMP_BAD = (
     "import nosuch from outer\n"
     "import outer.inner\n"
@@ -1941,9 +1950,14 @@ IMP_PROBES = [
     (16, "2nd item of a list",2, "triple"),
     (17, "from module",       2, "outer"),
     (18, "wildcard module",   3, "outer"),
-    (21, "module-body name",  7, "bump"),
-    (22, "module-body module",7, "inner"),
+    (21, "module-body name",  8, "bump"),
+    (22, "module-body module",8, "inner"),
     (23, "import keyword",    0, "import"),
+    (24, "route head",        4, "outer"),
+    (25, "route mid segment", 4, "mid"),
+    (26, "route tail segment",4, "deep"),
+    (27, "name over a route", 4, "two"),
+    (28, "alias over a route",4, "t2"),
 ]
 imp = [req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
        note("textDocument/didOpen", {"textDocument": {"uri": impuri, "languageId": "fc",
@@ -2035,18 +2049,36 @@ check("imports: an import inside a module body resolves its `from` module",
       repr((imp_hov(22), imp_def(22))))
 check("imports: the `import` keyword itself offers nothing",
       imp_hov(23) == "" and imp_def(23) is None, repr((imp_hov(23), imp_def(23))))
+# A dotted `from` route answers PER SEGMENT: each names its own module, so the
+# reader can hover or jump anywhere along the path rather than only at its head.
+check("imports: the head of a `from` route hovers as its module",
+      "module outer" in imp_hov(24) and "Outer bag." in imp_hov(24)
+      and imp_def(24) == ("lib.fc", 1, 0), repr((imp_hov(24), imp_def(24))))
+check("imports: a middle route segment resolves to its own nested module",
+      "module mid" in imp_hov(25) and "Middle bag." in imp_hov(25)
+      and imp_def(25) == ("lib.fc", 17, 4), repr((imp_hov(25), imp_def(25))))
+check("imports: the last route segment resolves to the module imported from",
+      "module deep" in imp_hov(26) and "Deep bag." in imp_hov(26)
+      and imp_def(26) == ("lib.fc", 19, 8), repr((imp_hov(26), imp_def(26))))
+check("imports: a name imported over a route resolves through it",
+      "two: () -> i32" in imp_hov(27) and "Answers two." in imp_hov(27)
+      and imp_def(27) == ("lib.fc", 21, 12), repr((imp_hov(27), imp_def(27))))
+check("imports: an `as` alias over a route reports the routed symbol",
+      "two: () -> i32" in imp_hov(28) and imp_def(28) == ("lib.fc", 21, 12),
+      repr((imp_hov(28), imp_def(28))))
 check("imports: an unresolved import offers nothing (hover)",
       impresp.get(50, {}).get("result") is None, json.dumps(impresp.get(50)))
 check("imports: an unresolved import offers nothing (definition)",
       impresp.get(51, {}).get("result") is None, json.dumps(impresp.get(51)))
-# A dotted import is rejected in the parser, so there is no Decl to walk — the
-# position lookup must simply find nothing rather than reading a half-built one.
-check("imports: a dotted import offers nothing (hover)",
+# A dot on the LEFT of `from` is rejected in the parser, so there is no Decl to
+# walk — the position lookup must simply find nothing rather than reading a
+# half-built one.
+check("imports: a left-dotted import offers nothing (hover)",
       impresp.get(52, {}).get("result") is None, json.dumps(impresp.get(52)))
-check("imports: a dotted import offers nothing (definition)",
+check("imports: a left-dotted import offers nothing (definition)",
       impresp.get(53, {}).get("result") is None, json.dumps(impresp.get(53)))
-check("imports: the dotted spelling is reported, once, as an error",
-      [m for m in impbf.get("main.fc", [[]])[-1] if "not allowed in an import" in m]
+check("imports: the left-dotted spelling is reported, once, as an error",
+      [m for m in impbf.get("main.fc", [[]])[-1] if "not allowed on the left of 'from'" in m]
         and len(impbf.get("main.fc", [[]])[-1]) == 2, str(impbf.get("main.fc")))
 check("imports: SERVER SURVIVED the malformed-import probes",
       all(i in impresp for i in (50, 51, 52, 53)) and imprc == 0, f"rc={imprc}")

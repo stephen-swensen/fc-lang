@@ -1,7 +1,8 @@
-import * from outer.inner
+import secret from outer.inner
 
 module outer =
     module inner =
+        private let secret = 42
         let bump = (n: i32) -> n + 1
 
 let main = (args: str[]) ->

@@ -1,0 +1,13 @@
+// A comma list and an `as` alias both work over a routed `from` clause; every
+// item in the list shares the one route.
+import bump as up, hop from outer.inner
+
+module outer =
+    module inner =
+        let bump = (n: i32) -> n + 1
+        let hop = (n: i32) -> n - 1
+
+let main = (args: str[]) ->
+    assert(up(1) == 2)
+    assert(hop(1) == 0)
+    0
