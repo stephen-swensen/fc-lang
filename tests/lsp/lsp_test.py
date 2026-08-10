@@ -87,9 +87,14 @@ msgs = [
     note("exit", None),
 ]
 
+PUBS = []   # (uri, [messages]) of every publishDiagnostics of the LAST run_session,
+            # in order — for assertions about the URI itself, which the basename
+            # keys of `diags_by_file` cannot distinguish.
+
 def run_session(messages, env=None):
     """Spawn `fcc --lsp`, send framed messages, return (responses{id}, diags[],
     diags_by_file{name->[msgs]}, returncode, stderr)."""
+    PUBS.clear()
     inp = b"".join(frame(m) for m in messages)
     p = subprocess.run([BIN, "--lsp"], input=inp, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, timeout=60, env=env)
@@ -110,7 +115,9 @@ def run_session(messages, env=None):
         elif obj.get("method") == "textDocument/publishDiagnostics":
             diags.append(obj["params"]["diagnostics"])
             name = obj["params"]["uri"].split("/")[-1]
-            by_file.setdefault(name, []).append([d["message"] for d in obj["params"]["diagnostics"]])
+            msgs_ = [d["message"] for d in obj["params"]["diagnostics"]]
+            by_file.setdefault(name, []).append(msgs_)
+            PUBS.append((obj["params"]["uri"], msgs_))
     return responses, diags, by_file, p.returncode, p.stderr
 
 responses, diags, _, returncode, stderr = run_session(msgs)
@@ -2216,6 +2223,106 @@ check("import completion: a trailing comment is not part of the statement",
       str(cimp_labels(73))[:120])
 check("import completion: SERVER SURVIVED every half-typed import",
       all(rid in cimpresp for rid, *_ in CIMP_PROBES) and cimprc == 0, f"rc={cimprc}")
+
+# --- cross-unit membership: editing a file another unit LISTS re-runs that unit --
+# A document keys the unit it would open on its own, but an lsp.rsp reaches across
+# directories, so a shared file is routinely a member of units it does not key:
+# here `shared/lib.fc` keys its own directory while `proj/lsp.rsp` lists it as
+# `../shared/lib.fc`. Editing it must re-run BOTH. Re-running only the key-matched
+# unit left `proj` holding an analysis of the previous revision — whose positions
+# are then read against the file's CURRENT text, so a hover in main.fc resolved the
+# stale declaration line and a moved doc comment simply never appeared (until the
+# server restarted). Also covers the path-spelling half: the rsp's `../shared/...`
+# route must be recognized as the open document, so the LIVE (unsaved) buffer wins
+# over the file on disk.
+xroot = tempfile.mkdtemp(prefix="fc_lsp_xunit_")
+xproj = os.path.join(xroot, "proj"); xshared = os.path.join(xroot, "shared")
+os.mkdir(xproj); os.mkdir(xshared)
+xmain = os.path.join(xproj, "main.fc"); xlib = os.path.join(xshared, "lib.fc")
+
+XMAIN = ("let main = (args: str[]) ->\n"
+         "    return lib.greet()\n")            # line 1: `lib` at character 11
+XLIB1 = ("// Old doc.\n"
+         "module lib =\n"
+         "    let greet = () ->\n"
+         "        1\n")
+XLIB2 = ("// New doc, moved down.\n"            # the doc comment (and the module
+         "// Second line.\n"                    # declaration) shift by a line
+         "module lib =\n"
+         "    let greet = () ->\n"
+         "        1\n")
+XLIB3 = ("module lib =\n"                       # renamed: breaks main.fc
+         "    let hello = () ->\n"
+         "        1\n")
+
+with open(os.path.join(xproj, "lsp.rsp"), "w") as f: f.write("../shared/lib.fc\nmain.fc\n")
+with open(xmain, "w") as f: f.write(XMAIN)
+with open(xlib, "w") as f: f.write(XLIB1)       # disk stays at v1 for the whole run
+
+def xuri(p): return "file://" + p
+def xopen(p, t): return note("textDocument/didOpen",
+    {"textDocument": {"uri": xuri(p), "languageId": "fc", "version": 1, "text": t}})
+def xchange(p, v, t): return note("textDocument/didChange",
+    {"textDocument": {"uri": xuri(p), "version": v}, "contentChanges": [{"text": t}]})
+def xhover(i, p, l, c): return req(i, "textDocument/hover",
+    {"textDocument": {"uri": xuri(p)}, "position": {"line": l, "character": c}})
+
+xm = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    xopen(xmain, XMAIN), xopen(xlib, XLIB1),
+    xhover(40, xmain, 1, 11),                    # `lib` in main.fc -> old doc
+    xchange(xlib, 2, XLIB2),
+    xhover(41, xmain, 1, 11),                    # -> the moved doc, from the buffer
+    xhover(42, xlib, 2, 8),                      # the declaration's own file agrees
+    xchange(xlib, 3, XLIB3),                     # rename greet -> hello
+    xhover(43, xmain, 1, 11),                    # forces the flush that publishes
+    xchange(xlib, 4, XLIB2),                     # put it back
+    xhover(44, xmain, 1, 11),
+    req(9, "shutdown", None), note("exit", None),
+]
+xresp, _, xbf, xrc, _ = run_session(xm)
+
+def xhov(rid):
+    r = xresp.get(rid, {}).get("result")
+    if not r: return "<none>"
+    c = r.get("contents")
+    return c.get("value", "") if isinstance(c, dict) else str(c)
+
+check("cross-unit: hover in the importer reads the shared file's doc comment",
+      "Old doc." in xhov(40), repr(xhov(40)))
+check("cross-unit: editing the shared file refreshes the IMPORTER's unit",
+      "New doc, moved down." in xhov(41) and "Old doc." not in xhov(41), repr(xhov(41)))
+check("cross-unit: the shared file's own unit refreshes too",
+      "New doc, moved down." in xhov(42), repr(xhov(42)))
+check("cross-unit: the unsaved buffer wins over the on-disk copy (rsp `../` route)",
+      "Second line." in xhov(41), repr(xhov(41)))
+xmain_diags = xbf.get("main.fc", [])
+check("cross-unit: a rename in the shared file cascades an error onto the importer",
+      any(d for d in xmain_diags), str(xmain_diags))
+check("cross-unit: reverting the shared file clears the importer's error",
+      xmain_diags and xmain_diags[-1] == [], str(xmain_diags))
+check("cross-unit: hover recovers after the round trip",
+      "New doc, moved down." in xhov(44), repr(xhov(44)))
+check("cross-unit: SERVER SURVIVED", xrc == 0, f"rc={xrc}")
+
+# --- a unit member that is NOT open is published under its canonical URI --------
+# With only main.fc open, `../shared/lib.fc` is a unit member the server reads from
+# disk; its diagnostics are published to a synthesized URI. Built from the rsp's
+# literal route that URI is `file://.../proj/../shared/lib.fc` — a different
+# document to the client than the one it opens when you click the error.
+with open(xlib, "w") as f: f.write("module lib =\n    let bad = 1 + true\n")
+xm2 = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    xopen(xmain, XMAIN),
+    xhover(50, xmain, 1, 11),
+    req(9, "shutdown", None), note("exit", None),
+]
+run_session(xm2)
+libpubs = [(u, m) for (u, m) in PUBS if u.endswith("lib.fc")]
+check("cross-unit: a non-open member's diagnostics use its canonical URI",
+      libpubs and all(".." not in u for u, _ in libpubs), str([u for u, _ in libpubs]))
+check("cross-unit: a non-open member's error is published at all",
+      any(m for _, m in libpubs), str(libpubs))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

@@ -34,6 +34,11 @@
 typedef struct {
     char           *uri;        /* owned */
     char           *path;       /* owned: filesystem path decoded from uri */
+    char           *real;       /* owned: canonical `path` (see canon_path), so this
+                                 * document is recognized under any spelling another
+                                 * file uses for it — an lsp.rsp route like
+                                 * `../shared/sdl2.fc`, a symlink. Refreshed each
+                                 * flush (the file may not have existed at didOpen). */
     char           *text;       /* owned: current full document text (UTF-8) */
     int             text_len;
     long            version;
@@ -57,6 +62,14 @@ typedef struct {
  * open doc's live buffer). Owns its analyses; keyed by unit_key(). */
 typedef struct {
     char           *key;        /* owned: the unit identity (see unit_key()) */
+    char          **files;      /* owned: canonical path of every source the last
+                                 * analysis merged (primary + lsp.rsp inputs /
+                                 * siblings / stdlib feed). A doc may be a MEMBER of
+                                 * a unit without bearing its key — an lsp.rsp reaches
+                                 * across directories — so this is what tells
+                                 * flush_dirty that editing that doc invalidates this
+                                 * unit. Rebuilt by each analyze_unit. */
+    int             file_count, file_cap;
     AnalysisResult *result;     /* latest analysis; NULL until first analyze */
     AnalysisResult *last_good;  /* most recent analysis that type-checked (result
                                  * itself when fresh is good), retained so a
@@ -96,16 +109,32 @@ typedef struct {
     int             pub_count, pub_cap;
 } LspServer;
 
+static char *canon_path(const char *path);      /* defined below */
+
 static LspDoc *store_find(LspDocStore *s, const char *uri) {
     for (int i = 0; i < s->count; i++)
         if (strcmp(s->docs[i].uri, uri) == 0) return &s->docs[i];
     return NULL;
 }
 
+/* The open document for `path`, under WHATEVER spelling names it. The exact
+ * string is tried first, then canonical paths (each doc caches its own): a
+ * unit's files come from an lsp.rsp, which spells them file-relative
+ * (`../shared/sdl2.fc`), while the editor opens that same file by its resolved
+ * path. A raw strcmp misses, and every "is this file open?" question then
+ * answers no — feeding the analysis the file's *saved* copy instead of the live
+ * buffer, and publishing its diagnostics to a synthesized URI beside the real
+ * document's. */
 static LspDoc *store_find_by_path(LspDocStore *s, const char *path) {
+    if (!path) return NULL;
     for (int i = 0; i < s->count; i++)
         if (s->docs[i].path && strcmp(s->docs[i].path, path) == 0) return &s->docs[i];
-    return NULL;
+    char *real = canon_path(path);
+    LspDoc *hit = NULL;
+    for (int i = 0; i < s->count; i++)
+        if (s->docs[i].real && strcmp(s->docs[i].real, real) == 0) { hit = &s->docs[i]; break; }
+    free(real);
+    return hit;
 }
 
 static UnitEntry *unit_find(LspServer *S, const char *key) {
@@ -139,6 +168,22 @@ static void unit_free_results(UnitEntry *u) {
     if (u->result) analysis_free(u->result);
     u->result = NULL;
     u->last_good = NULL;
+}
+
+/* Drop the recorded member set (rebuilt by the next analyze_unit). */
+static void unit_free_files(UnitEntry *u) {
+    for (int i = 0; i < u->file_count; i++) free(u->files[i]);
+    free(u->files);
+    u->files = NULL;
+    u->file_count = u->file_cap = 0;
+}
+
+/* Is `real` (a canonical path) one of the sources this unit last analyzed? */
+static bool unit_has_file(const UnitEntry *u, const char *real) {
+    if (!real) return false;
+    for (int i = 0; i < u->file_count; i++)
+        if (strcmp(u->files[i], real) == 0) return true;
+    return false;
 }
 
 /* ======================================================================== */
@@ -1451,6 +1496,7 @@ static void unit_prune(LspServer *S) {
                 strcmp(S->store.docs[d].unit_key, S->units[i].key) == 0) { used = true; break; }
         if (used) { i++; continue; }
         unit_free_results(&S->units[i]);
+        unit_free_files(&S->units[i]);
         free(S->units[i].key);
         S->units[i] = S->units[--S->unit_count];
     }
@@ -1472,6 +1518,9 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
     /* The previous fresh result is retired below, AFTER the new analysis, so it
      * can be kept as last_good when the new one fails to type-check. */
     AnalysisResult *prev = u->result;
+
+    /* Membership is rebuilt from this run's sources (see the record below). */
+    unit_free_files(u);
 
     AnalysisSource *extra = NULL;
     int n = 0, cap = 0;
@@ -1509,9 +1558,13 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
                 /* The open document arrives as the primary source; never add it
                  * again, and its live buffer must win over the on-disk copy. */
                 bool is_open = (strcmp(doc_real, in_real) == 0);
+                if (is_open) { free(in_real); continue; }
+                /* Match by canonical path: the rsp spells its inputs file-relative
+                 * (`../shared/sdl2.fc`), the editor opened this one by its resolved
+                 * path — a raw-spelling miss would feed the stale on-disk copy and
+                 * silently ignore the buffer's unsaved edits. */
+                LspDoc *od = store_find_by_path(&S->store, in_real);
                 free(in_real);
-                if (is_open) continue;
-                LspDoc *od = store_find_by_path(&S->store, rsp_ca.inputs[i]);
                 if (od && od != doc) {              /* open elsewhere: live text */
                     AnalysisSource s = { od->path, od->text, od->text_len };
                     DA_APPEND(extra, n, cap, s);
@@ -1614,6 +1667,15 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
         free(have_text);
         free(have_len);
     }
+
+    /* Record the unit's member set (canonical, so any spelling of a file matches):
+     * every source this analysis merges. flush_dirty consults it so editing a file
+     * that belongs to a unit it does NOT key — the shared `sdl2.fc` two directories
+     * up from the demo whose lsp.rsp lists it — still re-runs that unit, instead of
+     * leaving it serving an AST whose positions no longer match the file. */
+    DA_APPEND(u->files, u->file_count, u->file_cap, canon_path(doc->path));
+    for (int i = 0; i < n; i++)
+        DA_APPEND(u->files, u->file_count, u->file_cap, canon_path(extra[i].filename));
 
     u->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count,
                         &S->lex_cache);
@@ -1727,7 +1789,12 @@ static void publish_project_diagnostics(LspServer *S) {
             text = od->text;
             tlen = od->text_len;
         } else {                                   /* not open: synthesize URI, read disk */
-            uri = path_to_uri(file);
+            /* From the canonical path: the filename may be an lsp.rsp's relative
+             * route, and `file:///proj/../shared/lib.fc` is a different document
+             * to the client than the one it would open. */
+            char *fr = canon_path(file);
+            uri = path_to_uri(fr);
+            free(fr);
             owned = read_whole_file(file, &tlen);
             text = owned;
         }
@@ -1787,18 +1854,32 @@ static void publish_project_diagnostics(LspServer *S) {
  * ONCE (with any of its open docs as the fresh primary), not once per open tab:
  * N tabs of the same project cost one analysis, not N. Only units containing a
  * dirty doc are re-run; untouched units keep their result. publish_project_
- * diagnostics then surfaces every unit's result on all its files, open or not. */
+ * diagnostics then surfaces every unit's result on all its files, open or not.
+ *
+ * "Containing" is MEMBERSHIP, not key equality. A document keys the unit it would
+ * open on its own, but an lsp.rsp reaches across directories, so one file is
+ * routinely a member of units it does not key: `demos/shared/sdl2.fc` keys its own
+ * directory while `demos/fibbles/lsp.rsp` and `demos/face-invaders/lsp.rsp` both
+ * list it. Re-running only the editor's key-matched unit leaves those serving an
+ * analysis of the file's previous revision — with the file's CURRENT text read at
+ * query time, so a hover resolves a stale declaration line against fresh source
+ * and reads the wrong lines (a moved doc comment simply vanishes) until the server
+ * restarts. So the second pass below re-runs every unit that lists a dirty file. */
 static void flush_dirty(LspServer *S) {
     bool any_dirty = false;
     for (int i = 0; i < S->store.count; i++)
         if (S->store.docs[i].dirty) { any_dirty = true; break; }
     if (!any_dirty) return;
 
-    /* Refresh each open doc's unit identity (an lsp.rsp may have appeared/changed). */
+    /* Refresh each open doc's unit identity (an lsp.rsp may have appeared/changed)
+     * and its canonical path (the file may not have existed at didOpen). */
     for (int i = 0; i < S->store.count; i++) {
         char *k = unit_key(&S->store.docs[i]);
         free(S->store.docs[i].unit_key);
         S->store.docs[i].unit_key = k;
+        char *r = canon_path(S->store.docs[i].path);
+        free(S->store.docs[i].real);
+        S->store.docs[i].real = r;
     }
 
     /* Analyze each DIRTY unit once. A unit is dirty if any of its docs changed;
@@ -1823,6 +1904,32 @@ static void flush_dirty(LspServer *S) {
                 strcmp(S->store.docs[p].unit_key, key) == 0) { primary = &S->store.docs[p]; break; }
         if (!primary) continue;                 /* unreachable: doc i has this key */
         analyze_unit(S, unit_find_or_create(S, key), primary);
+    }
+
+    /* Then every OTHER existing unit that LISTS a dirty file among its sources (see
+     * the header note). Indexed, not pointer-held: the pass above may have grown
+     * S->units. A unit only exists while some open doc keys it, so a primary is
+     * always found. */
+    for (int ui = 0; ui < S->unit_count; ui++) {
+        const char *key = S->units[ui].key;
+        bool seen = false;
+        for (int j = 0; j < dn; j++)
+            if (strcmp(done[j], key) == 0) { seen = true; break; }
+        if (seen) continue;
+
+        bool touched = false;
+        for (int i = 0; i < S->store.count && !touched; i++)
+            touched = S->store.docs[i].dirty &&
+                      unit_has_file(&S->units[ui], S->store.docs[i].real);
+        if (!touched) continue;
+
+        LspDoc *primary = NULL;
+        for (int p = 0; p < S->store.count; p++)
+            if (S->store.docs[p].unit_key &&
+                strcmp(S->store.docs[p].unit_key, key) == 0) { primary = &S->store.docs[p]; break; }
+        if (!primary) continue;
+        DA_APPEND(done, dn, dcap, key);
+        analyze_unit(S, &S->units[ui], primary);
     }
     free(done);
 
@@ -1861,6 +1968,7 @@ static void handle_did_open(LspServer *S, JsonValue *params) {
         LspDoc nd = {0};
         nd.uri = dup_cstr(uri);
         nd.path = uri_to_path(uri);
+        nd.real = canon_path(nd.path);   /* refreshed each flush; see flush_dirty */
         DA_APPEND(S->store.docs, S->store.count, S->store.cap, nd);
         doc = &S->store.docs[S->store.count - 1];
     } else {
@@ -1912,7 +2020,7 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
     for (int i = 0; i < S->store.count; i++) {
         if (strcmp(S->store.docs[i].uri, uri) == 0) {
             LspDoc *d = &S->store.docs[i];
-            free(d->uri); free(d->path); free(d->text); free(d->unit_key);
+            free(d->uri); free(d->path); free(d->real); free(d->text); free(d->unit_key);
             S->store.docs[i] = S->store.docs[--S->store.count];
             removed = true;
             break;
@@ -3664,12 +3772,14 @@ int lsp_main(void) {
     for (int i = 0; i < S.store.count; i++) {
         free(S.store.docs[i].uri);
         free(S.store.docs[i].path);
+        free(S.store.docs[i].real);
         free(S.store.docs[i].text);
         free(S.store.docs[i].unit_key);
     }
     free(S.store.docs);
     for (int i = 0; i < S.unit_count; i++) {
         unit_free_results(&S.units[i]);
+        unit_free_files(&S.units[i]);
         free(S.units[i].key);
     }
     free(S.units);
