@@ -1,10 +1,22 @@
 namespace shared::
 
-// SDL2 bindings for FC demos.
-// Shared by fibbles and face-invaders. Covers the union of bindings
-// either demo needs: accelerated rendering, fullscreen-desktop support,
-// high-DPI awareness, alpha blending, audio, events, and the
-// drawing primitives both demos use.
+// SDL2 bindings for the FC demos — a hand-picked subset of <SDL2/SDL.h>,
+// not a complete binding. It covers the union of what the demos in this
+// repository need: init and lifecycle, display and window management
+// (including fullscreen-desktop and high-DPI), accelerated rendering with
+// alpha blending, streaming textures, the drawing primitives, timing, the
+// event loop with keyboard input, and the audio device.
+//
+// SDL's own names are rebound to FC convention — SDL_RenderCopy becomes
+// render_copy, SDL_WINDOW_FULLSCREEN_DESKTOP becomes
+// window_fullscreen_desktop — so calling code reads as FC rather than as C
+// with an accent. Opaque SDL handles are any*; the structs that must be
+// laid out (rect, point, event, audio_spec) are extern structs mirroring
+// SDL's own definitions.
+//
+// Add to this file when a demo needs something it doesn't yet bind. Because
+// every demo compiles it as a source file, an unused binding costs nothing:
+// FC emits externs only where they are referenced.
 module sdl2 from "SDL2/SDL.h" =
     // --- Extern structs ---
     extern struct SDL_Rect as rect =

@@ -1,5 +1,25 @@
 namespace std::
 
+// String parsing and manipulation over str (a u8[] of bytes, conventionally
+// UTF-8): numeric parsing, searching (contains, starts_with, ends_with,
+// index_of), trimming, ASCII case conversion, and split/join.
+//
+// parse_i32, parse_i64, parse_f32, and parse_f64 return results and are
+// whole-string strict — every byte of the input must belong to the number,
+// so leading whitespace or a trailing character fails rather than being
+// silently skipped; trim first when the input may carry whitespace. Failures
+// are fully named in `error parse` (text.parse.invalid, overflow, too_long),
+// with nothing passed through raw: the platform has no code for "not a
+// number", so every parse failure is FC's own judgement. Not finding a
+// substring is absence rather than failure, so index_of stays i64?.
+//
+// Watch what each function gives back. trim, trim_left, and trim_right
+// return a subslice of the input and allocate nothing. copy, to_upper,
+// to_lower, and join return a heap-allocated string, and split returns a
+// heap-allocated array whose elements are subslices of the input (the array
+// is the caller's to free; the parts are views, not copies). Case conversion
+// and the case helpers are ASCII-only — they leave every other byte alone,
+// which keeps them safe on UTF-8 data but is not Unicode case folding.
 module text =
     // Named parse failure conditions. Parse errors are FC-judged (the
     // platform has no code for "not a number"), so every failure is named —

@@ -68,6 +68,11 @@ import io from std::
 // ring needs no allocation of its own: pass the address of a field, and
 // the zero value (head == tail == 0) is already a valid empty ring.
 module spsc =
+    // The queue itself: 'cap slots inline, plus the two counters. `head` and
+    // `tail` are free-running totals rather than wrapped indices, so their
+    // difference is the occupancy and the empty and full states never look
+    // alike. All-zero is a valid empty ring, which is why a ring embedded in
+    // a zeroed struct needs no initialization step.
     struct ring =
         static_assert('cap > 0 && ('cap & ('cap - 1)) == 0,
             "spsc.ring capacity must be a power of two")
@@ -99,6 +104,34 @@ module spsc =
             some(v)
 
 
+// A small FM sound engine for the demos: OPL2 voices for sound effects, a
+// three-part music sequencer, and an SDL audio device to play both through.
+// It brings no sounds of its own — a game supplies a `bank` of effects and a
+// `song`, both plain data.
+//
+// Audio is generated on SDL's audio callback thread, not pushed from the
+// game loop, so a frame that runs long or short cannot bend the music's
+// timebase. The price is a second thread touching the chips, and the whole
+// threading contract exists to pay it: the game thread only ever *describes*
+// what it wants by posting a command, and the callback drains that lock-free
+// ring and is the sole mutator of every chip, voice, and sequencer field.
+// Nothing else is shared, nothing blocks, and a full ring drops the request
+// rather than stalling the frame.
+//
+// ```fc
+// let a = opl_audio.init(rate, fx, tune, music_gain, sfx_gain)
+// if opl_audio.start(a) then ...      // opens the device; false = no sound
+// opl_audio.play(a, sound_id)
+// ```
+//
+// Everything the game thread may call is in "The game thread's API" below —
+// play, music_begin, music_end, music_hold, music_unhold, music_toggle_mute,
+// music_muted. Nothing else on `audio` is safe to touch once the device is
+// running. `render` is the offline path for tools and headless tests: it
+// fills a buffer directly, through the same ring, with no device open.
+//
+// There is deliberately no close or destroy — see `shutdown_note` at the
+// bottom of this file for why leaving the device open is the robust choice.
 module opl_audio =
 
     // ============================================================
@@ -228,6 +261,8 @@ module opl_audio =
     // Commands — the game thread's only way in
     // ============================================================
 
+    // What a command asks the audio thread to do. The game thread never acts
+    // on the engine directly — it posts one of these and returns.
     enum op =
         | play_sound
         | music_start       // from the top
@@ -236,6 +271,10 @@ module opl_audio =
         | music_resume
         | music_set_mute    // arg: 1 = muted
 
+    // One posted command: the op and its single i32 argument — a sound id
+    // for play_sound, 1 or 0 for music_set_mute, unused otherwise. Small and
+    // trivially copyable on purpose: it crosses the thread boundary by value
+    // through the ring, so it can own no memory.
     struct cmd =
         kind: op
         arg: i32
@@ -555,6 +594,11 @@ module opl_audio =
     private let post = (a: audio*, kind: op, arg: i32) ->
         ignore spsc.enqueue(&a.ring, cmd { kind = kind, arg = arg })
 
+    // Play a sound effect: `id` indexes the bank's `sounds`. Voices are
+    // handed out round-robin, so a new effect eventually steals the oldest
+    // one still ringing; an id outside the bank is ignored rather than an
+    // error. Returns nothing and never blocks — the sound starts when the
+    // audio thread next drains the ring.
     let play = (a: audio*, id: i32) -> post(a, op.play_sound, id)
 
     // Start the tune from the top.
@@ -563,8 +607,10 @@ module opl_audio =
     // Stop it, and rewind so the next run opens on the first bar.
     let music_end = (a: audio*) -> post(a, op.music_stop, 0)
 
-    // Hold it where it is (pause), and pick it back up there.
+    // Hold it where it is — a pause, not a stop: the position is kept.
     let music_hold = (a: audio*) -> post(a, op.music_pause, 0)
+
+    // Pick it back up from where music_hold left it.
     let music_unhold = (a: audio*) -> post(a, op.music_resume, 0)
 
     // The player's own switch, independent of the game's start/stop.
@@ -572,6 +618,9 @@ module opl_audio =
         a.muted = !a.muted
         post(a, op.music_set_mute, if a.muted then 1 else 0)
 
+    // Whether the player's mute switch is on — the game thread's own mirror
+    // of it, readable straight from a HUD without touching audio-thread
+    // state. Independent of whether the game currently wants music playing.
     let music_muted = (a: audio*) -> a.muted
 
     // ============================================================

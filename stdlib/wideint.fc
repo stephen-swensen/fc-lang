@@ -387,21 +387,25 @@ module wideint =
             limbs_mul_full(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise a & b.
         let and = (a: uwide<'n>, b: uwide<'n>) ->
             let r = default(uwide<'n>)
             limbs_and(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise a | b.
         let or = (a: uwide<'n>, b: uwide<'n>) ->
             let r = default(uwide<'n>)
             limbs_or(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise a ^ b.
         let xor = (a: uwide<'n>, b: uwide<'n>) ->
             let r = default(uwide<'n>)
             limbs_xor(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise complement of a — every one of the 'n bits flipped.
         let not = (a: uwide<'n>) ->
             let r = default(uwide<'n>)
             limbs_not(r.limbs, a.limbs)
@@ -423,6 +427,8 @@ module wideint =
         let cmp = (a: uwide<'n>, b: uwide<'n>) ->
             limbs_cmp(a.limbs, b.limbs)
 
+        // True if a is zero. Equivalent to a == default(uwide<'n>), but
+        // stops at the first non-zero limb.
         let is_zero = (a: uwide<'n>) ->
             limbs_is_zero(a.limbs)
 
@@ -540,6 +546,7 @@ module wideint =
             r.limbs['n / 32 - 1] = 0x7FFFFFFFu32
             r
 
+        // True if a is negative — that is, if its top bit is set.
         let is_neg = (a: iwide<'n>) ->
             limbs_sign(a.limbs) == 1u32
 
@@ -653,21 +660,26 @@ module wideint =
                 "iwide.checked_div: iwide<%d{'n}>.min / -1 overflows")
             iwide.div(a, b)
 
+        // Bitwise a & b, on the raw two's-complement bits.
         let and = (a: iwide<'n>, b: iwide<'n>) ->
             let r = default(iwide<'n>)
             limbs_and(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise a | b, on the raw two's-complement bits.
         let or = (a: iwide<'n>, b: iwide<'n>) ->
             let r = default(iwide<'n>)
             limbs_or(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise a ^ b, on the raw two's-complement bits.
         let xor = (a: iwide<'n>, b: iwide<'n>) ->
             let r = default(iwide<'n>)
             limbs_xor(r.limbs, a.limbs, b.limbs)
             r
 
+        // Bitwise complement of a — every one of the 'n bits flipped, so
+        // not(a) is -a - 1 and not(0) is -1.
         let not = (a: iwide<'n>) ->
             let r = default(iwide<'n>)
             limbs_not(r.limbs, a.limbs)
@@ -689,6 +701,8 @@ module wideint =
         let cmp = (a: iwide<'n>, b: iwide<'n>) ->
             limbs_cmp_signed(a.limbs, b.limbs)
 
+        // True if a is zero. Equivalent to a == default(iwide<'n>), but
+        // stops at the first non-zero limb.
         let is_zero = (a: iwide<'n>) ->
             limbs_is_zero(a.limbs)
 

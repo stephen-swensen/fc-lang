@@ -1,5 +1,27 @@
 namespace std::
 
+// IPv4 networking over the platform's own sockets — sys/socket.h,
+// netinet/in.h, arpa/inet.h, and netdb.h on POSIX; the same FC signatures
+// over winsock and WSAGetLastError on Windows. A socket is a plain i32
+// descriptor.
+//
+// Covers the socket lifecycle (open_tcp, open_udp, open_icmp, close,
+// shutdown), address construction (make_addr, make_addr_str), the TCP
+// sequence (bind_addr, listen, accept, connect_addr), transfer (send_bytes,
+// recv_bytes, send_to, recv_from), byte-order conversion (host_to_net16 and
+// host_to_net32 with their inverses), name resolution (resolve), socket
+// options (set_reuse_addr), and local_port. The exported constants —
+// af_inet, sock_stream, sock_dgram, shut_rd/shut_wr/shut_rdwr, inaddr_any,
+// inaddr_loopback and friends — are read from the platform's headers at
+// C-compile time rather than hardcoded here.
+//
+// Every fallible call returns a result: socket creation and accept are i32!,
+// transfers are i64! (recv_bytes yields ok(0) when the peer closes),
+// local_port is u16!, resolve is u32!, and bind_addr, listen, connect_addr,
+// set_reuse_addr, shutdown, and close are void!. Named conditions live in
+// `error conn` (net.conn.refused, reset, timed_out, unreachable, in_use,
+// would_block) and `error dns` (net.dns.host_not_found); anything else is
+// the raw platform code passed through.
 module net =
     // Named connection-level failure conditions. Wrappers map the branchable
     // platform codes (errno on POSIX, WSA codes on Windows) to these;

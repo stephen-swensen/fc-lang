@@ -53,6 +53,38 @@
 
 namespace shared::
 
+// A YM3812 (OPL2) FM synthesizer in pure FC, written against the chip's
+// application manual and the Adlib programmer's manual. Nine melodic
+// channels, two operators each — a modulator and a carrier — wired either
+// in FM (the modulator bends the carrier's phase) or additive (both sum to
+// the output). Rhythm mode is not implemented.
+//
+// A chip is a heap value driven exactly as the hardware was: program its
+// registers, key notes on and off, and pull samples out one at a time.
+//
+// ```fc
+// let c = opl2.init(44100.0)              // sample rate, Hz
+// opl2.load_instrument(c, 0, ...)         // 11 AdLib bytes onto a channel
+// opl2.note_on(c, 0, block, fnum)         // key on
+// let s = opl2.sample(c)                  // one mono sample; repeat
+// ```
+//
+// `write` takes raw register/value pairs for anything the helpers don't
+// cover, so an existing Adlib register dump plays back unchanged.
+// `fill_ticked` and `fill_ticked_vol` run the common driver shape — fill a
+// stereo i32 buffer while calling back at a fixed tick rate — for music and
+// effect drivers that advance on their own clock. Chips are independent, so
+// music and sound effects can each have their own.
+//
+// Two things a caller owns. Sampling runs at the host's audio rate rather
+// than the chip's native 49716 Hz, with the envelope rate constants
+// calibrated against the output rate. And `sample` does not clamp: a full
+// chip sums to roughly ±9 * op_peak in FM mode, so the final limiting
+// belongs to the caller's mixer.
+//
+// The comment at the top of this file documents the internal precision
+// model — envelope units, operator scale, and the rate generator's sub-rate
+// patterns — for anyone reading or modifying the emulation itself.
 module opl2 =
     import math from std::
 
@@ -60,7 +92,10 @@ module opl2 =
     // Constants
     // ============================================================
 
+    // Melodic channels on the chip. Valid channel arguments are 0..8.
     let num_channels  = 9
+
+    // Operators, two per channel: a modulator and a carrier.
     let num_operators = 18
 
     // Envelope stages. Tag 0 = `off`, which lets a zero-initialised
@@ -113,6 +148,17 @@ module opl2 =
     // Chip state
     // ============================================================
 
+    // One emulated chip: every operator's and channel's state, the global
+    // LFO and rate-generator counter, and the precomputed log-sin and gain
+    // tables. State is flat arrays indexed by operator (0..17) or channel
+    // (0..8) rather than nested structs, which is what keeps the per-sample
+    // inner loop a straight walk over i32 arrays.
+    //
+    // Build one with `init` rather than by hand: a zeroed chip has every
+    // operator at full volume in the `off` stage with empty tables, whereas
+    // init silences the operators, seeds the rate caches, and fills the
+    // tables the sample path indexes. Nothing here is shared between chips,
+    // so a program can run as many as it has voices for.
     struct chip =
         // ---- Per-operator state ----
         // Phase accumulator, 0..1 (wraps). Top 10 bits index the wave
@@ -192,6 +238,10 @@ module opl2 =
     // Initialization
     // ============================================================
 
+    // Allocate and initialize a chip for the given output sample rate (Hz).
+    // Every operator starts silent in the `off` stage, and the log-sin and
+    // gain tables are built here — the one place they are computed, since
+    // they never change afterwards. The caller owns the returned chip*.
     let init = (sample_rate: f64) ->
         let c = alloc(chip)!
         c.rate = sample_rate
@@ -382,6 +432,9 @@ module opl2 =
         else if i == 14 then 63
         else 64
 
+    // Recompute one operator's cached key-scale-level attenuation, which
+    // depends on the channel's block and F-number as well as the KSL field.
+    // Called on every write that can change any of the three.
     let recompute_op_ksl = (c: chip*, idx: i32, block: i32, fnum: i32) ->
         let ksl = c.op_ksl[idx]
         if ksl == 0 then
@@ -405,11 +458,18 @@ module opl2 =
     // Rate cache invalidation
     // ============================================================
 
+    // Recompute one operator's cached effective attack/decay/release rates
+    // from its rate fields, its KSR bit, and the channel's key scale. The
+    // rate generator reads the cache every sample, so it is refreshed here
+    // on write rather than recomputed in the inner loop.
     let recompute_op_rates = (c: chip*, idx: i32, ks: i32) ->
         c.op_eff_ar[idx] = effective_rate(c.op_ar[idx], c.op_ksr[idx], ks)
         c.op_eff_dr[idx] = effective_rate(c.op_dr[idx], c.op_ksr[idx], ks)
         c.op_eff_rr[idx] = effective_rate(c.op_rr[idx], c.op_ksr[idx], ks)
 
+    // Refresh both of a channel's operators after its block or F-number
+    // moved — the two things that feed key scale, and so every rate and KSL
+    // cache hanging off it.
     let refresh_channel_ops = (c: chip*, ch: i32) ->
         let ks = key_scale(c.ch_block[ch], c.ch_fnum[ch])
         recompute_op_rates(c, ch * 2, ks)
@@ -421,6 +481,11 @@ module opl2 =
     // Register write
     // ============================================================
 
+    // Write one OPL2 register, exactly as software wrote the hardware port:
+    // `reg` is the register number and `val` its byte. This is the chip's
+    // whole control surface — load_instrument, note_on, and note_off are
+    // conveniences over it — so an Adlib register dump can be replayed
+    // straight through. Registers this emulation does not model are ignored.
     let write = (c: chip*, reg: i32, val: i32) ->
         // Operator-indexed groups (0x20/0x40/0x60/0x80/0xE0) span 32
         // register slots each with gaps for the unused operators in

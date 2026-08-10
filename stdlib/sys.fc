@@ -1,5 +1,16 @@
 namespace std::
 
+// Process and platform services: environment variables (env), process exit
+// (exit), wall-clock time as milliseconds since the Unix epoch (time),
+// sleeping (sleep), the process id (get_pid), and the conventional temporary
+// and home directories (temp_dir, home_dir).
+//
+// Each name presents one FC signature over per-platform implementations —
+// Win32 on Windows, POSIX elsewhere — so calling code needs no conditional
+// compilation of its own. Absence stays an option rather than becoming an
+// error: env, temp_dir, and home_dir all return const str?, none meaning the
+// variable is unset. The results are const because they point into the
+// process environment block, which the caller does not own.
 module sys =
     private module c from "stdlib.h" =
         extern getenv: (const cstr) -> const cstr?

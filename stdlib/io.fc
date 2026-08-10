@@ -1,5 +1,26 @@
 namespace std::
 
+// File I/O over C stdio, plus the filesystem operations around it: open,
+// close, read, write, seek, tell, flush, sync, remove, rename, mkdir,
+// ensure_dir, list_dir, and read_all. Handles are opaque any* (C's FILE*),
+// and the built-in globals stdin, stdout, and stderr are already typed any*
+// and available without importing this module.
+//
+// Fallible operations return results — open is any*!, read_all is str!,
+// list_dir is str[]!, tell is i64!, and close/flush/sync/seek/remove/rename/
+// mkdir are void! — with named conditions in `error file`: io.file.not_found,
+// denied, exists, and no_space. A platform code with no curated name passes
+// through raw, so nothing is lost. Predicates (exists, can_read, can_write,
+// eof) stay bool, and the raw byte-count primitives read and write stay i64,
+// because a partial transfer is data rather than a failure. read_char is
+// u8?!: ok(some(b)) is a byte, ok(none) is end of file, err(e) is a real
+// read error.
+//
+// mkdir reports an existing path as err(io.file.exists); ensure_dir folds
+// just that condition back into ok, so "make sure this directory exists" is
+// idempotent and can honestly be written ensure_dir(p)? instead of ignored.
+// `defer close(f)` discards close's result as best-effort cleanup; a caller
+// that must observe it writes close(f)? or close(f)!.
 module io =
     // Named I/O failure conditions. Wrappers map the branchable platform
     // codes to these; anything without a curated name passes through raw

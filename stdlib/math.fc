@@ -1,5 +1,14 @@
 namespace std::
 
+// Floating-point mathematics over f64, wrapping C11 <math.h>: the constants
+// pi and e; sqrt, abs, pow, min, max, hypot, fmod; the rounding family floor,
+// ceil, round, and trunc; trigonometry (sin, cos, tan, asin, acos, atan,
+// atan2); exponential and logarithmic exp, log, log2, log10; and the
+// classifiers is_nan, is_inf, is_finite.
+//
+// Every function takes and returns f64. FC never converts between integers
+// and floats implicitly, so an integer argument needs an explicit cast:
+// math.sqrt((f64) n). On Linux the generated C must be linked with -lm.
 module math =
     private module c from "math.h" =
         extern sqrt: (f64) -> f64
@@ -26,7 +35,11 @@ module math =
         extern log10: (f64) -> f64
 
     // Constants
+
+    // Ratio of a circle's circumference to its diameter.
     let pi = 3.14159265358979323846
+
+    // Base of the natural logarithm.
     let e = 2.71828182845904523536
 
     // Square root of x.

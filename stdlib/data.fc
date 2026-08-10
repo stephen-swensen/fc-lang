@@ -1,5 +1,29 @@
 namespace std::
 
+// Generic containers and collection utilities: the growable array_list, the
+// doubly-linked linked_list, the open-addressing hash_dict and hash_set, and
+// a slice module of functional operations over the built-in 'a[].
+//
+// Each container follows the companion pattern — a struct beside a module of
+// the same name — and is a reference-semantics handle: make() heap-allocates
+// the header and returns a pointer (array_list<'a>*), every operation takes
+// that pointer, and destroy() frees both the backing storage and the header.
+// Because there is only ever one header, a mutation through any alias is seen
+// by all of them, including a grow or rehash that moves the buffer — no copy
+// of the handle can go stale. Functions that build a new container (copy, map,
+// filter, scan) likewise return a pointer the caller must destroy. The slice
+// module is the exception: it works on built-in 'a[] values, which are already
+// fat-pointer references, so it takes them by value.
+//
+// The sequential collections (array_list, linked_list, slice) share one
+// functional API — fold_left, fold_right, reduce, scan, map, mapi, filter,
+// iter, iteri, any, all, find, count — alongside the in-place sort, reverse,
+// retain, apply, and applyi. A try_ prefix returns an option; the bare name
+// force-unwraps (try_find vs find).
+//
+// Internal allocations are unwrapped with alloc(...)!, so a container aborts
+// on out-of-memory rather than reporting it — an operation never fails for
+// want of memory.
 module data =
 
     // =========================================================================
