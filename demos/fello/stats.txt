@@ -1,0 +1,170 @@
+fello — footprint of a "hello world" FC binary
+==============================================
+
+Regenerate with: ./demos/fello/measure.sh   (Linux only)
+
+The program is demos/fello/main.fc: one import of std::io and one io.write
+to stdout. It is the floor of the language — what an FC binary costs before
+you have written any program.
+
+Two controls are built and measured identically alongside it:
+
+  hello   the same program hand-written in C (fwrite to stdout) — the
+          control for what FC costs over the C you'd otherwise write
+  nul     int main(void) { return 0; } — process startup with no work,
+          the floor beneath both
+
+Measured on
+-----------
+  host       Linux 6.17.0-1030-oem x86_64
+  libc       ldd (Ubuntu GLIBC 2.39-0ubuntu8.8) 2.39
+  cc         cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+  ld         GNU ld (GNU Binutils for Ubuntu) 2.42
+  fcc        v1.0.0-rc.7-8-g15fee21-dirty  (build/linux/fcc)
+  C flags    -std=c11 -Wall -Werror -O2
+  date       2026-08-10 23:39 UTC
+
+
+ON DISK
+=======
+
+Dynamically linked at -O2 — the default build, what run.sh produces.
+
+                             fello   hello (C)         nul fello - hello
+  binary                   16440 B     16008 B     15776 B        +432 B
+  binary, stripped         14472 B     14472 B     14336 B          +0 B
+  .text                      457 B       281 B       249 B        +176 B
+  .rodata                     48 B        19 B         4 B         +29 B
+  .data                       16 B        16 B        16 B          +0 B
+  .bss                        16 B        16 B         8 B          +0 B
+  mapped image              3337 B      2877 B      2585 B        +460 B
+
+"mapped image" is the sum of PT_LOAD MemSiz — the address space the
+executable itself needs, before libc.
+
+Stripped size is identical for fello and hello, and within a rounding step
+of nul's. At this scale an ELF file is headers, program/section tables,
+symbol and relocation data and 4 KB segment alignment; the code is the
+small part. All three programs' .text fits in the same page, so all three
+files come out the same size once the symbol table is gone. The +432 B
+unstripped is debug and symbol data for the extra generated functions,
+which is not loaded at runtime and vanishes on strip.
+
+Statically linked at -O2 — glibc pulled in whole. Not FC's default; shown
+because it separates what this program costs from what libc costs.
+
+                             fello   hello (C)         nul fello - hello
+  binary                  785576 B    785232 B    785240 B        +344 B
+  .text                   513376 B    513184 B    513168 B        +192 B
+
+Shared objects loaded: 3 — linux-vdso.so.1 libc.so.6 /lib64/ld-linux-x86-64.so.2 
+
+FC links nothing of its own. There is no FC runtime library to link
+against: the compiler emits C, and the C it emits calls libc.
+
+
+IN MEMORY
+=========
+
+Peak RSS, reported by the kernel from the process's own rusage after it
+exits (/usr/bin/time -f %M, worst of 25 runs, no probe attached).
+
+                             fello   hello (C)         nul fello - hello
+  dynamic                  1304 KB     1304 KB     1248 KB         +0 KB
+  static                    584 KB      584 KB      584 KB         +0 KB
+
+Composition at exit, from /proc/self/smaps_rollup, dynamic build, median
+of 9 runs. A destructor in a preloaded .so reads the rollup after main
+returns; that .so inflates all three columns by the same constant, so read
+these across the row, not as absolutes.
+
+                             fello   hello (C)         nul fello - hello
+  RSS                      1436 KB     1436 KB     1428 KB         +0 KB
+  PSS                       156 KB      156 KB      148 KB         +0 KB
+  private dirty             144 KB      144 KB      136 KB         +0 KB
+  shared clean             1292 KB     1292 KB     1292 KB         +0 KB
+
+Do not read the delta column here as signal. These figures are
+page-granular — the smallest difference they can express is one 4 KB page —
+and run-to-run jitter is exactly that size: run measure.sh twice and the
+fello-minus-hello delta lands on +4 KB, 0 and -4 KB with no pattern, in
+both the rusage and smaps tables. The reading is not "FC costs N KB more
+than C"; it is that FC and C are indistinguishable in memory here. The FC
+program's extra 176 bytes of code and 29 bytes of constants do not add a
+page to anything.
+
+Nearly all of the RSS is shared_clean: glibc and the dynamic loader,
+mapped from page cache, shared with every other process on the machine,
+paid for once system-wide. PSS (RSS with each shared page divided among
+its sharers) and private dirty are what this process actually costs, and
+they are within a page of an empty C program's. The static rows show the
+same thing from the other side — no loader, no libc mapping, less than
+half the RSS, in exchange for a 47x larger file.
+
+The program touches the heap zero times: no allocator call, no arena, no
+GC. Its one runtime allocation is the argv -> str[] slice FC's entry
+wrapper builds with alloca — on the stack, sized to argc, gone on return.
+
+
+BUILD AND RUN TIME
+==================
+
+  fcc   main.fc + stdlib/io.fc -> C            4.20 ms   (fcc peak RSS 2448 KB)
+  cc    -O2, generated C -> binary            91.00 ms
+  run   fork + exec + write + exit             1.50 ms   (mean of 1000)
+  run   the nul control, same loop             1.22 ms   (fork/exec floor)
+
+The run figures include the shell's fork and exec, which is most of what
+they measure — the nul row is that floor. fcc is ~21x faster than the C
+compiler it feeds, on the same input.
+
+
+CODE SIZE
+=========
+
+  main.fc                       12 lines      462 B
+  stdlib/io.fc, merged in      448 lines    20582 B
+  generated C                  447 lines    33020 B
+
+fcc emits an imported module whole rather than tree-shaking it: every
+function of stdlib/io.fc — open, read_all, list_dir, all of it — is in the
+generated C. It emits them as 'static __attribute__((unused))', so the C
+compiler discards the unreferenced ones and the linker never sees them.
+447 lines of C become 457 bytes of .text, and the only functions
+left in the binary are crt's plus one:
+
+  deregister_tm_clones __do_global_dtors_aux _fini frame_dummy 
+  _init main register_tm_clones _start 
+
+io.write and fc_main were both inlined into that main.
+
+One thing survives DCE that a reader might not predict: io.fc's
+module-level constants — io.seek_set/cur/end and the four io.file error
+codes — are emitted as file-scope C globals with external linkage, so the
+linker must keep them even though nothing reads them. 28 bytes of
+.rodata across 7 constants. That is the entire residue of importing
+std::io and calling one function from it.
+
+
+WHERE THE DELTA OVER C GOES
+===========================
+
+fello's .text is 176 bytes larger than the hand-written C control's, and
+that is the whole difference between them. It isn't overhead in the sense
+of a runtime — FC has none — it is one thing fello does that hello does
+not. FC's main takes str[], so the entry wrapper walks argv, calls strlen
+on each element, and builds a slice before calling into FC code:
+
+  int main(int argc, char **argv) {
+      fc_str *_args = alloca((size_t)argc * sizeof(fc_str));
+      for (int _i = 0; _i < argc; _i++) {
+          _args[_i].ptr = (uint8_t*)argv[_i];
+          _args[_i].len = (int64_t)strlen(argv[_i]);
+      }
+      return fc_main((fc_slice_fc_str){ .ptr = _args, .len = argc });
+  }
+
+The io.write call itself compiles to the same fwrite the C control calls
+directly. There is no allocator, no runtime init, no GC, no exception
+machinery, no type metadata, no startup hook: the binary's constructor and
+destructor lists are the ones crt puts in any C program.

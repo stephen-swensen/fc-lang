@@ -1,0 +1,12 @@
+// fello — the smallest complete FC program: one line to stdout, exit 0.
+//
+// This demo exists to be measured rather than read. It is the baseline for
+// "what does an FC binary cost before you have written any program" — see
+// stats.txt for the on-disk and in-memory footprint of the -O2 build, and
+// measure.sh for the commands that produce those numbers.
+
+import io from std::
+
+let main = (args: str[]) ->
+    io.write("Hello, world!\n", stdout)
+    0

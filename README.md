@@ -39,8 +39,16 @@ Smaller programs in [`demos/`](demos/) round out the surface:
 - **`fibbles`** (~640 lines) — Snake/Nibbles clone, SDL2 graphics + audio.
 - **`fing`** (~160 lines) — `ping` clone, uses `std::net` (raw ICMP).
 - **`furl`** (~220 lines) — `curl`-style HTTP client, uses `std::net` (TCP).
+- **`fello`** (5 lines) — hello world, kept as a measuring stick.
 
 `fing` and `furl` cover `std::net`, which wolf-fc doesn't use.
+
+`fello` is there to answer "what does an FC binary cost before you've written
+any program?" — [`demos/fello/stats.txt`](demos/fello/stats.txt) measures its
+`-O2` build on disk and in memory against the same program hand-written in C.
+Stripped, the two binaries are the same size; peak RSS is identical; FC's
+entire measurable difference is 176 bytes of `.text`, the wrapper that turns
+`argv` into the `str[]` that `main` takes. There is no FC runtime to link.
 
 **[euler-fc](https://github.com/stephen-swensen/euler-fc)** picks up the two stdlib modules no demo reaches — Project Euler problems solved in FC, using `std::data`'s `array_list` and `std::wideint`'s const-generic `uwide<'n>` big integers. It is also the one FC codebase written **100% by hand, with no AI assistance**. Given that the specification and compiler were developed with heavy AI involvement, solving real problems in the language unaided is the deliberate counterweight — and the honest read on whether FC is actually pleasant for a human to write.
 
