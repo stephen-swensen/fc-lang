@@ -27,3 +27,7 @@ scratch*/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vendored raylib source + build, fetched on demand by
+# demos/fuzzel-fobble-raylib/run.sh. Never committed.
+/demos/shared/raylib/

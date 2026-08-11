@@ -8,17 +8,23 @@ from, and the one `fcc --lsp` reads to scope the editor's analysis).
 Everything here lives in **`namespace shared::`**, so a demo names what it uses
 (`import sdl2 from shared::`) the same way it does for `std::`. Within the
 namespace the modules see each other without imports, which is why `opl_audio`
-can drive `opl2` and SDL with no import lines of its own.
+can drive `opl2` and the platform layer with no import lines of its own.
 
 | File | What it is | Depends on |
 |---|---|---|
 | `sdl2.fc` | SDL2 bindings (`module sdl2`) | SDL2 headers + `-lSDL2` |
+| `raylib.fc` | raylib bindings (`module raylib`) | raylib source, fetched and built by `demos/fuzzel-fobble-raylib/run.sh` into the gitignored `raylib/` |
 | `opl2.fc` | OPL2 / YM3812 FM chip emulator (`module opl2`) | `stdlib/math.fc` |
-| `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, `sdl2.fc`, `stdlib/math.fc`, `stdlib/io.fc` |
+| `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, one of `sdl2.fc` / `raylib.fc`, `stdlib/math.fc`, `stdlib/io.fc` |
 
-`fuzzel-fobble` is the worked example of all three. Its `sound.fc` is nothing
-but data — instruments, effect scripts, a tune — which is the shape a game's
-audio file is meant to have.
+`fuzzel-fobble` is the worked example of the SDL2 set. Its `sound.fc` is
+nothing but data — instruments, effect scripts, a tune — which is the shape a
+game's audio file is meant to have.
+
+`sdl2.fc` and `raylib.fc` cover deliberately the same ground, because
+`fuzzel-fobble` and `fuzzel-fobble-raylib` are the same game over each of
+them — see [that demo's README](../fuzzel-fobble-raylib/README.md) for what
+the swap costs and buys.
 
 ---
 
@@ -27,10 +33,15 @@ audio file is meant to have.
 Everything is FM synthesis on an emulated **OPL2 (YM3812)**, the chip an AdLib
 or Sound Blaster card put in a 1990 PC. No samples, no assets, no files: a
 game supplies register values and note numbers, and the engine turns them into
-audio inside SDL's callback.
+audio inside the host's audio callback.
 
 Two chips run per engine instance — one for music, one for effects — so a
 burst of effects can never disturb the music's registers.
+
+The engine is backend-agnostic: only the ~30-line Device section at the foot
+of `opl_audio.fc` names SDL or raylib, and it is `#if`-gated. Everything
+else — the chips, the ring, the sequencers, the mixdown — is the same code
+either way. See [Picking a backend](#picking-a-backend) below.
 
 ## Wiring it into a game
 
@@ -85,6 +96,41 @@ constants (`instr = i_shoot`) compiles at module level and is rejected at file
 level. Module scope also freezes the tables, which is what gives them the
 `const i32[]` / `const instrument[]` types the `bank` and `song` fields expect.
 
+### Picking a backend
+
+The SDL2 backend is the default and needs nothing said. To run the engine on
+raylib instead, list `../shared/raylib.fc` in place of `../shared/sdl2.fc` and
+add the flag to your `lsp.rsp`:
+
+```
+--flag raylib_audio
+```
+
+The only visible difference is `start`. raylib's audio callback is
+`void (*)(void *buffer, unsigned int frames)` with **no userdata pointer**, so
+the engine instance it drives cannot be passed in and has to be reachable from
+file scope — which FC allows only in the entry-point file. So the raylib
+`start` takes the callback rather than owning it, and your `main.fc` supplies
+a two-line trampoline over the public `opl_audio.render`:
+
+```fc
+let mut audio_engine = default(any*)            // file scope, entry-point file
+
+let audio_callback = (buffer: any*, frames: u32) ->
+    let a = (opl_audio.audio*) audio_engine
+    opl_audio.render(a, i16[] { ptr = (i16*) buffer, len = (i64) frames },
+                     (i32) frames)
+
+// in main, before the device opens — the callback reads it immediately after
+audio_engine = (any*) a
+if !opl_audio.start(a, &audio_callback) then
+    io.write("Audio: device open failed - running silent\n", stdout)
+```
+
+`demos/fuzzel-fobble-raylib` is the worked example. Everything else in this
+document — the threading rules, the API surface, the shutdown note — applies
+unchanged to both.
+
 ### API surface
 
 The game thread calls only these. Everything else in `opl_audio` belongs to
@@ -93,14 +139,14 @@ the audio thread.
 | Call | Effect |
 |---|---|
 | `init(rate, bank, song, music_gain, sfx_gain) -> audio*` | Build the engine. No device yet. |
-| `start(a) -> bool` | Open the device and start the callback. `false` = no audio device. |
+| `start(a) -> bool` | Open the device and start the callback. `false` = no audio device. Takes `(a, cb)` under `raylib_audio` — see [Picking a backend](#picking-a-backend). |
 | `play(a, id)` | Fire effect `id` on the next voice by rotation. |
 | `music_begin(a)` | Start the tune from the top. |
 | `music_end(a)` | Stop it and rewind, so the next `music_begin` opens on bar 1. |
 | `music_hold(a)` / `music_unhold(a)` | Pause mid-phrase and resume there. |
 | `music_toggle_mute(a)` | The player's own switch, independent of the above. |
 | `music_muted(a) -> bool` | For a HUD indicator. |
-| `render(a, out, frames)` | Offline only — see [Tuning without launching](#tuning-without-launching-the-game). |
+| `render(a, out, frames)` | The consumer side of the ring. Called *by* the callback under `raylib_audio`; otherwise offline only — see [Tuning without launching](#tuning-without-launching-the-game). Exactly one caller, ever. |
 
 `music_end` and `music_hold` are different on purpose: a run ending should
 rewind, a pause menu should not. The mute switch is tracked separately again,
@@ -108,9 +154,9 @@ so the game's stop/start and the player's mute can never undo each other.
 
 ## Threading contract
 
-Samples are generated **in SDL's audio callback, on SDL's thread**, at the
-sound card's rate. They are *not* generated by the game loop and pushed with
-`SDL_QueueAudio`.
+Samples are generated **in the host's audio callback, on the host's audio
+thread**, at the sound card's rate. They are *not* generated by the game loop
+and pushed (`SDL_QueueAudio`, raylib's `UpdateAudioStream`).
 
 That is the whole reason this engine exists. Under the push model the game
 loop is the sample clock: every frame that runs long or short bends the
@@ -137,20 +183,21 @@ exceptions are `dev` and `muted`, which the game thread owns.
 
 ## Shutdown
 
-**Do not call `SDL_CloseAudioDevice`. Do not call `SDL_Quit`. Do not free
-anything reachable from `audio*`.**
+**Do not call `SDL_CloseAudioDevice`. Do not call `SDL_Quit`. Do not call
+raylib's `CloseAudioDevice`. Do not free anything reachable from `audio*`.**
 
-Both of those SDL calls *join* the audio callback thread. When a host audio
+Every one of those calls *joins* the audio callback thread. When a host audio
 server wedges that thread — a sink disappearing mid-session is the usual way —
-the join never returns and the exiting game hangs forever. SDL offers no
-close-with-timeout, so the robust shutdown is not to join at all: let the
-process exit and the kernel reap the thread, the device, and the memory.
+the join never returns and the exiting game hangs forever. Neither library
+offers a close-with-timeout, so the robust shutdown is not to join at all: let
+the process exit and the kernel reap the thread, the device, and the memory.
 Closing the audio connection by process death also releases the device cleanly
 for the next launch. Freeing engine state while the device is open is unsafe
 anyway — a live callback could read a chip mid-free.
 
 Tearing down the window and renderer *is* correct and worth doing: that is
-video, which an audio wedge cannot block.
+video, which an audio wedge cannot block. raylib's `CloseWindow` does not
+touch the audio device, so it is safe on that side too.
 
 Verified in fuzzel-fobble: exit code 0 in ~1 s with the device live and the
 callback running.
@@ -402,8 +449,10 @@ let buf = alloc(i16[44100 * 2] { })!
 opl_audio.render(a, buf, 44100 * 2)      // two seconds, tail included
 ```
 
-Do not call it while a device is open: the callback is already the consumer,
-and this would be a second one.
+Do not call it from the game thread while a device is open. There must be
+exactly one consumer of the ring, and with a device open the callback is
+already it — under the SDL backend by doing this work inline, under the raylib
+backend by calling this very function.
 
 A useful trick for checking a tune's parts against each other — silence two of
 the three music channels by writing their carrier `TL` directly, which leaves
@@ -495,3 +544,62 @@ Conventions and things worth knowing:
   `SDL_RENDER_SCALE_QUALITY=linear` hint before creating the renderer.
 - **`SDL_INIT_AUDIO`** must be in the `sdl2.init` flags, or the device will not
   open.
+
+---
+
+# raylib.fc — the bindings
+
+Hand-written externs against `raylib.h`, in `namespace shared::` as
+`module raylib`. Deliberately scoped to the same ground `sdl2.fc` covers, so
+that `fuzzel-fobble` and `fuzzel-fobble-raylib` are a fair comparison: init and
+lifecycle, window management, 2D shapes, render textures, keyboard input,
+timing, and a raw audio stream. Nothing 3D.
+
+The library is **not in this repository**. `demos/fuzzel-fobble-raylib/run.sh`
+fetches raylib's source into `demos/shared/raylib/` on first run and builds it
+there; that directory is gitignored. Delete it to force a clean re-fetch.
+
+```fc
+extern struct Color as color =
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+extern DrawCircle as fill_circle: (i32, i32, f32, color) -> void
+extern LoadRenderTexture as load_render_texture: (i32, i32) -> render_texture
+extern KEY_SPACE as key_space: i32
+```
+
+What the port taught us about binding raylib specifically:
+
+- **Structs cross by value, in both directions.** This is the defining shape
+  of raylib's API — `Color` on every draw call, `Vector2` and `Rectangle` as
+  arguments, `AudioStream` and `RenderTexture2D` *returned* by value, with
+  `RenderTexture` nesting two `Texture`s inside it. All of it works through
+  `extern struct` with no special handling. FC emits `struct <tag>`, and every
+  raylib type is a tagged `typedef struct Name { … } Name;`, so the tag and
+  the typedef name coincide.
+- **There is no context handle to bind.** raylib keeps the window, the GL
+  context and the current draw target in its own globals, so no drawing
+  function takes one. That is why this file's drawing externs have one fewer
+  parameter than their SDL2 counterparts, and why the demo's own `draw_*`
+  helpers do too.
+- **`SetAudioStreamCallback` takes a bare function pointer with no userdata**,
+  unlike `SDL_AudioSpec.callback`. Bind it as `any*` and pass `&fn` the same
+  way — but see [Picking a backend](#picking-a-backend) for the global it
+  forces on the caller.
+- **Enum constants bind as `extern NAME as alias: i32`.** raylib's key codes,
+  config flags, log levels and texture filters are all plain C enumerators, so
+  they need no special treatment.
+- **`FLAG_WINDOW_HIGHDPI` is not usable as of raylib 5.5** — at least on X11
+  with a 2x desktop. It makes `GetScreenWidth()` report physical pixels while
+  raylib's projection stays in logical ones, so anything you size from those
+  queries comes out scaled by the DPI factor. This reproduces in plain C; it is
+  not a binding artifact. Leave the flag off.
+- **There is no `SDL_RenderSetLogicalSize`.** Draw into a `RenderTexture2D` at
+  the fixed size and blit it yourself with `DrawTexturePro`, with a **negative
+  source height** — GL framebuffers are bottom-up, and flipping the source
+  rectangle is how raylib says so. `demos/fuzzel-fobble-raylib/main.fc`'s
+  `present` is the worked example.
+- **`SetTraceLogLevel(LOG_WARNING)`** early, or raylib narrates every texture
+  and shader it loads over the game's own stdout.

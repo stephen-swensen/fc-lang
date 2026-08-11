@@ -36,6 +36,11 @@ Smaller programs in [`demos/`](demos/) round out the surface:
 - **`fasteroids`** (~1300 lines) — vector-style Asteroids clone, SDL2.
 - **`face-invaders`** (~1500 lines) — Space Invaders clone, SDL2.
 - **`fuzzel-fobble`** (~1500 lines) — Puzzle Bobble clone, SDL2.
+- **`fuzzel-fobble-raylib`** (~1500 lines) — the same game on raylib instead,
+  as a like-for-like comparison of the two libraries. The game logic is
+  untouched; only the platform layer differs, and
+  [its README](demos/fuzzel-fobble-raylib/README.md) tallies what the swap
+  costs and buys.
 - **`fibbles`** (~640 lines) — Snake/Nibbles clone, SDL2 graphics + audio.
 - **`fing`** (~160 lines) — `ping` clone, uses `std::net` (raw ICMP).
 - **`furl`** (~220 lines) — `curl`-style HTTP client, uses `std::net` (TCP).
