@@ -45,10 +45,29 @@ let row_h = 42
 let ceiling_y = 92             // top edge of row 0
 let death_row = 12             // a bubble reaching this row ends the run
 
-// A shot sticks when it comes within this distance of a settled bubble.
-// Slightly under a full diameter, so a bubble can squeeze into a gap
-// before it grabs on.
-let collide_d2 = 1936.0        // 44 * 44
+// A shot sticks when its centre comes within this distance of a settled
+// bubble's centre. It is three quarters of the drawn bubble, not a whole
+// one, and that gap between what you see and what stops you is the genre's
+// oldest tolerance: the sprite decides what the board looks like, a smaller
+// circle decides what the shot can get through.
+//
+// What it buys, in this raft's own numbers: a one-bubble hole in a row
+// leaves its two flanking centres 96 apart, so a shot threads it while its
+// centre stays 36 clear of each — a 24 wide lane down the middle of a 48
+// wide hole. At the old 44 that lane was 8 wide, less than one press of the
+// aim key moves the shot at raft range, so the needle-thread was a shot that
+// existed on paper and not in the hands.
+//
+// The floor is 27.9. Three touching bubbles leave an interstice with that
+// circumradius, and a sticking circle under it would let a shot tunnel clean
+// through a solid raft. 36 clears it by a third, so there is no hole in the
+// board that isn't a real one.
+let collide_d2 = 1296.0        // 36 * 36
+
+// What the metal shot destroys is a different question from what a colour
+// shot sticks to, so it keeps its own radius rather than riding the one
+// above — loosening the grab must not thin out the plough.
+let smash_d2 = 1936.0          // 44 * 44
 
 let shooter_x = 640
 let shooter_y = 656
@@ -58,6 +77,14 @@ let shot_speed = 15.0
 let shot_substeps = 5
 let aim_limit = 78.0
 let aim_speed = 1.7
+
+// The aim guide walks the live shot's substep (shot_speed / shot_substeps =
+// 3 px) so it can't disagree with it, and draws one dot in nine — the same
+// 27 px spacing a coarser walk used to give, the same 29 dots, out to the
+// same 756 px. Only the collision sampling got finer. The walk runs a little
+// past where the fade gives out, which is what stops the dots.
+let guide_steps = 288
+let guide_dot_every = 9
 
 let max_fallers = 96
 let max_particles = 256
@@ -1152,7 +1179,7 @@ let metal_smash = (w: world*, rng: pcg_random*, x: f64, y: f64) ->
                 let { cx, cy } = cell_center(w, row, col)
                 let dx = x - cx
                 let dy = y - cy
-                if dx * dx + dy * dy < collide_d2 then
+                if dx * dx + dy * dy < smash_d2 then
                     let { pr, pg, pb } = cell_rgb(w.grid[ci])
                     spawn_burst(w, rng, cx, cy, 12, pr, pg, pb)
                     w.grid[ci] = -1
@@ -1394,21 +1421,27 @@ let draw_launcher = (w: world*, r: any*, frame: i32) ->
         draw_bubble(r, shooter_x, shooter_y, w.game.cur_color, 255u8, w.game.show_symbols)
 
 // Walks the shot's path — bounces and all — and dots it out. Reuses the
-// live collision test, so the guide can never disagree with the physics.
+// live collision test, and walks it at the shot's own substep rather than a
+// coarser one: a preview that samples the path more sparsely than the shot
+// does is a preview that can stride over a graze the shot will catch, and
+// then the guide has drawn you through a gap the shot sticks in. Same step,
+// same order of tests, so the two cannot disagree. Dots are thinned on the
+// way out instead, one every `guide_dot_every` steps.
 let draw_aim_guide = (w: world*, r: any*) ->
     if w.shot.active then
         return
     let a = deg2rad(w.game.angle)
+    let per_step = shot_speed / (f64) shot_substeps
     let mut x = (f64) shooter_x
     let mut y = (f64) shooter_y
-    let mut vx = math.sin(a) * 9.0
-    let mut vy = -math.cos(a) * 9.0
+    let mut vx = math.sin(a) * per_step
+    let mut vy = -math.cos(a) * per_step
     let { gr, gg, gb } = cell_rgb(w.game.cur_color)
     let plough = w.game.cur_color == shot_metal
     let left = (f64) (field_x0 + bubble_r)
     let right = (f64) (field_x1 - bubble_r)
 
-    for i in 0..96 do
+    for i in 0..guide_steps do
         x = x + vx
         y = y + vy
         if x < left then
@@ -1421,8 +1454,8 @@ let draw_aim_guide = (w: world*, r: any*) ->
             break
         if !plough && hits_bubble(w, x, y) then
             break
-        if i % 3 == 0 then
-            let fade = 190 - i * 2
+        if i % guide_dot_every == 0 then
+            let fade = 190 - (i / guide_dot_every) * 6
             if fade > 20 then
                 disc(r, (i32) x, (i32) y, 4, 2, gr, gg, gb, (u8) fade)
 

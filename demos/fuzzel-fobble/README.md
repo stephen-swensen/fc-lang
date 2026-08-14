@@ -165,9 +165,26 @@ could actually hold onto (row 0, or a cell with an occupied neighbour). That
 is more forgiving on tight shots and it structurally cannot place a bubble
 that is already floating.
 
+**The shot is smaller than it looks.** What stops a shot is a circle three
+quarters of the drawn bubble's width, which is the tolerance every arcade
+bubble shooter is built on: the sprite says what the board looks like, a
+smaller circle says what you can get through. It is the difference between a
+threadable gap and a decorative one. A one-bubble hole in a row leaves its
+flanking centres 96 apart, so the shot has a 24-wide lane down the middle of
+a 48-wide hole — where a full-width test would leave a lane of nothing, and
+even a near-full one leaves a lane narrower than a tap of the aim key moves
+the shot at that range. The floor is 27.9, the interstice between three
+touching bubbles; go under it and shots tunnel through solid raft. Everything
+between those two numbers is a judgement call about how generous the game is,
+and the genre has always answered generously.
+
 **The aim guide is the physics.** The dotted trajectory walks the shot's own
 path — wall bounces and all — through the same `hits_bubble` test the live
 shot uses, so the preview can never disagree with what happens when you fire.
+That means the same *step*, too, not just the same test: a guide that samples
+the path more coarsely than the shot does can stride over a graze the shot
+will catch, and then it has drawn you through a gap you stick in. It walks
+the 3 px substep and thins the dots on the way out.
 
 **One cell value, several kinds of thing.** The grid is still a flat `i32`
 per cell — `-1` empty, `0..5` a colour, then a star or a stone. That makes
@@ -176,7 +193,9 @@ with?" two different questions, which is what `is_color` is for: every site
 that treats a cell as a colour — the palette, the cluster fill, the launcher's
 colour pool, the interval's colour count — asks it first. The metal shot
 shares the same numbering but is a launcher payload only and never reaches
-the grid, which the autoplay harness asserts on every shot.
+the grid. It also keeps its own collision radius: what the metal ploughs
+through is a question about overlap, not about sticking, so loosening the
+grab doesn't thin out the plough.
 
 **Pacing is four rules, not a difficulty curve.** There is no level-indexed
 table of numbers anywhere. The ceiling counts landed shots; the interval is
