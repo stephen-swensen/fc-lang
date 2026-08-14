@@ -87,6 +87,10 @@ module raylib from "raylib.h" =
     extern TEXTURE_FILTER_POINT as filter_point: i32
     extern TEXTURE_FILTER_BILINEAR as filter_bilinear: i32
 
+    // --- Blend modes ---
+    extern BLEND_ALPHA as blend_alpha: i32
+    extern BLEND_ALPHA_PREMULTIPLY as blend_premultiplied: i32
+
     // --- Keys ---
     // raylib key codes are the printable ASCII value for character keys and
     // GLFW's numbering above that, so there is no key/scancode split to pick
@@ -168,6 +172,14 @@ module raylib from "raylib.h" =
     extern EndTextureMode as end_texture_mode: () -> void
     extern SetTextureFilter as set_texture_filter: (texture, i32) -> void
     extern DrawTexturePro as draw_texture_pro: (texture, rect, rect, vec2, f32, color) -> void
+
+    // Blending. Anything that draws into a render texture needs this, for a
+    // reason that is not obvious: raylib's default alpha blend is a plain
+    // glBlendFunc, not the ...Separate variant, so it corrupts the target's
+    // alpha channel. See `present` in fuzzel-fobble-raylib for the full
+    // story and the one-line fix.
+    extern BeginBlendMode as begin_blend_mode: (i32) -> void
+    extern EndBlendMode as end_blend_mode: () -> void
 
     // --- 2D shapes ---
     // The reason a demo reaches for raylib: circles, thick lines and regular

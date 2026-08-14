@@ -601,5 +601,18 @@ What the port taught us about binding raylib specifically:
   source height** — GL framebuffers are bottom-up, and flipping the source
   rectangle is how raylib says so. `demos/fuzzel-fobble-raylib/main.fc`'s
   `present` is the worked example.
+- **Blit a render texture with `BLEND_ALPHA_PREMULTIPLY`, not the default.**
+  raylib's `BLEND_ALPHA` is `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)`
+  — not the `…Separate` variant (`rlgl.h`) — so the source alpha scales the
+  target's *alpha* channel as well as its colour. Draw a 62%-opaque white into
+  a render texture and that texel keeps alpha 0.62² + 0.38 = 0.764 instead of
+  the 1.0 an opaque target should have; blitting it back with alpha blending
+  then multiplies its colour by 0.764, and everything translucent in the frame
+  comes out about 24% too dark. Premultiplied blending is
+  `glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)`, which drops the alpha factor
+  from the colour term — correct whenever the target was cleared opaque. This
+  bit the demo for real: its bubble highlights rendered at `(189,141,146)`
+  instead of the SDL2 build's `(247,185,191)`, uniformly across all three
+  channels, until the blend mode was set.
 - **`SetTraceLogLevel(LOG_WARNING)`** early, or raylib narrates every texture
   and shader it loads over the game's own stdout.

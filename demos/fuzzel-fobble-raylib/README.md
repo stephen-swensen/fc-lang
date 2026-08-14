@@ -126,6 +126,16 @@ Three helpers collapsed this way:
 - `hex_fill` + `hex_half_width` — 18 lines to 4. A hexagon of circumradius
   `rad` is exactly `DrawPoly(centre, 6, rad, 0)`.
 
+The quality gap is widest on the *small* discs, which is not where you would
+expect to look for it. A bubble's specular highlight is `rad = 5` at
+`step = 2` — five bands, of widths 6, 8, 10, 8, 6, i.e. a lumpy octagon. And
+`(i32) math.sqrt(inside)` floors every half-width, biting up to a pixel off
+each side, so the shading — which is entirely the crescent between the rim
+disc (`rad` 23, `step` 4) and the body disc (`rad` 19, `step` 3) — comes out
+ragged where two staircases of different riser heights fail to line up. In
+raylib both are true circles and the crescent is a clean lune, which is most
+of why the raylib bubbles read as glossier rather than merely smoother.
+
 Verdict: **the reason to pick raylib for this kind of game.** It is not only
 shorter, it is *better*: the circles are round instead of stepped, and they
 cost one draw call instead of a dozen. The SDL2 build's banded edges were a
@@ -180,12 +190,27 @@ let present = (target: raylib.render_texture) ->
 ```
 
 About 20 lines, plus a `LoadRenderTexture` / `SetTextureFilter` at startup and
-a `BeginTextureMode` / `EndTextureMode` pair around the frame. Two traps in
-it, both of which cost real debugging time:
+a `BeginTextureMode` / `EndTextureMode` pair around the frame. Three traps in
+it, all of which cost real debugging time:
 
 - **The source height must be negative.** An OpenGL framebuffer's rows run
   bottom-up; flipping the source rectangle is how raylib says "read it the
   other way". Get it wrong and the game renders upside down.
+- **The blit needs `BLEND_ALPHA_PREMULTIPLY`.** raylib's default `BLEND_ALPHA`
+  is `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)` — not the
+  `…Separate` variant — so the source alpha scales the target's *alpha*
+  channel too. A 62%-opaque white (the bubble specular) leaves its texel at
+  alpha 0.62² + 0.38 = 0.764 rather than 1.0, and blitting that back with
+  alpha blending multiplies the colour by 0.764. Every translucent thing in
+  the frame — highlights, glints, the danger line, particle fades, the
+  splash/pause/game-over dimming — renders about 24% too dark. Measured: the
+  cherry specular came out `(189,141,146)` against SDL2's `(247,185,191)`,
+  the same 0.764 factor on all three channels, while the opaque body colour
+  matched exactly. This one is nastier than the upside-down bug precisely
+  because it *looks* fine — the softer highlights read as tasteful until you
+  put a colour picker on them. The SDL2 build blends straight to the
+  backbuffer and never meets it; it is a cost of the render texture, not of
+  raylib's blending as such.
 - **`FLAG_WINDOW_HIGHDPI` breaks the arithmetic.** The SDL2 build passes
   `SDL_WINDOW_ALLOW_HIGHDPI` and logical size absorbs the difference. Under
   raylib's flag on a 2x X11 desktop, `GetScreenWidth()` starts reporting
@@ -199,6 +224,16 @@ it, both of which cost real debugging time:
 Verdict: **the one place SDL2 is plainly better for this game.** A fixed
 logical resolution with letterboxing is what nearly every 2D game wants, and
 in raylib you write it, own it, and own its bugs.
+
+One accidental consolation, worth naming because it cuts against the verdict:
+the two approaches scale *different things*, and raylib's happens to look
+better. `SDL_RenderSetLogicalSize` scales **geometry** — every rectangle is
+rasterized crisply at the window's real resolution, so a 4px logical band
+becomes a hard-edged ~7px staircase on a 2x display. raylib rasterizes into
+the 1280x720 texture and then bilinearly upscales that **raster**, which
+antialiases the polygon edges into gradients. So the raylib build renders at
+lower effective resolution than the SDL2 one and still comes out smoother.
+The indirection you are forced to write pays for a little of itself.
 
 ### 5. Audio: the same design, minus a pointer
 

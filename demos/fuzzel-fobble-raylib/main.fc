@@ -1626,7 +1626,7 @@ let render = (w: world*, frame: i32) ->
 // first and centred in what's left over — which is what SDL2's logical
 // size does for free, in one call at renderer setup.
 //
-// Two traps, both paid for once:
+// Three traps, all paid for once:
 //
 //   * The source height is *negative* on purpose. An OpenGL framebuffer's
 //     rows run bottom-up, and flipping the source rectangle is how raylib
@@ -1634,6 +1634,19 @@ let render = (w: world*, frame: i32) ->
 //   * The sizes come from screen_width/screen_height, which is the space
 //     raylib's own draw calls are in. render_* is the framebuffer, and
 //     the two part company under FLAG_WINDOW_HIGHDPI — see `main`.
+//   * The blit runs in blend_premultiplied, not the default alpha blend,
+//     because drawing into a render texture corrupts its alpha channel.
+//     raylib's BLEND_ALPHA is glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+//     — not glBlendFuncSeparate — so the source alpha scales the *alpha*
+//     channel as well as the colour. A 62%-opaque white (the bubble
+//     specular) leaves that texel at alpha = 0.62^2 + 0.38 = 0.764 rather
+//     than the 1.0 an opaque target should have, and blitting that back
+//     with alpha blending multiplies its colour by 0.764: every
+//     translucent thing in the frame comes out 24% too dark. Premultiplied
+//     blending is glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA), which drops
+//     the alpha factor from the colour term — exactly right here, since
+//     the target is cleared opaque and nothing under it shows through.
+//     The SDL2 build has no intermediate texture and so never meets this.
 let present = (target: raylib.render_texture) ->
     let sw = raylib.screen_width()
     let sh = raylib.screen_height()
@@ -1643,6 +1656,7 @@ let present = (target: raylib.render_texture) ->
 
     raylib.begin_drawing()
     raylib.clear_background(rgba(0u8, 0u8, 0u8, 255u8))
+    raylib.begin_blend_mode(raylib.blend_premultiplied)
     raylib.draw_texture_pro(target.texture,
         raylib.rect { x = 0.0f32, y = 0.0f32,
                       width = (f32) logical_w, height = -(f32) logical_h },
@@ -1650,6 +1664,7 @@ let present = (target: raylib.render_texture) ->
                       width = dw, height = dh },
         raylib.vec2 { x = 0.0f32, y = 0.0f32 }, 0.0f32,
         rgba(255u8, 255u8, 255u8, 255u8))
+    raylib.end_blend_mode()
     raylib.end_drawing()
 
 // ============================================================
