@@ -1,0 +1,59 @@
+namespace shared::
+
+// The SDL2 audio device for `opl_audio` — one of two interchangeable files
+// that define `module opl_dev`, the other being `opl_audio_raylib.fc`. A
+// build lists whichever one matches the library it links, exactly the way
+// `demos/fuzzel-fobble` lists one of its two `gfx` backends. Neither is a
+// flag: the file list is the selection.
+//
+// `opl_audio.fc` itself names no library and reads no flag. It is the chips,
+// the sequencers and the lock-free ring; everything about *where the samples
+// go* is here, in thirty lines, and a program that wants the engine with no
+// device at all (a renderer writing to a file, a headless test) simply lists
+// neither device file.
+//
+// The threading contract is `opl_audio`'s and is unchanged by the split: the
+// callback below is the single consumer of the ring, the game thread is the
+// single producer, and nothing else may call `render` while a device is open.
+
+module opl_dev =
+    // SDL's audio callback, running on SDL's own audio thread.
+    //
+    // Non-capturing (it references only its parameters), so
+    // `&opl_dev.callback` is a plain C function pointer. `stream` is typed
+    // u8* rather than any* so the emitted C matches SDL_AudioCallback's
+    // `void (*)(void*, Uint8*, int)` exactly.
+    //
+    // SDL carries a userdata pointer, so the engine arrives as an argument
+    // and this file needs no global. raylib's callback does not — see the
+    // note in opl_audio_raylib.fc.
+    private let callback = (userdata: any*, stream: u8*, len: i32) ->
+        let a = (opl_audio.audio*) userdata
+        let frames = len / 2          // mono i16: 2 bytes per frame
+        let out = i16[] { ptr = (i16*) stream, len = (i64) frames }
+        opl_audio.render(a, out, frames)
+
+    // Open the device and start the callback. Returns false if no device
+    // could be opened, in which case every engine call stays a silent no-op
+    // and the game carries on without sound.
+    //
+    // Call it after `opl_audio.init` has finished building the state, because
+    // the callback starts reading that state the moment the device unpauses.
+    //
+    // The device id is a local: nothing closes or pauses the device later.
+    // See `shutdown_note` at the foot of opl_audio.fc for why there is no
+    // teardown to keep it for.
+    let start = (a: opl_audio.audio*) ->
+        let spec = sdl2.audio_spec {
+            freq = a.rate, format = sdl2.audio_s16sys,
+            channels = 1u8, silence = 0u8,
+            samples = (u16) opl_audio.device_frames, padding = 0u16, size = 0u32,
+            callback = &callback, userdata = (any*) a
+        }
+        let mut got = default(sdl2.audio_spec)
+        let dev = sdl2.open_audio(default(any*), 0, &spec, &got, 0)
+        if dev == 0u32 then
+            false
+        else
+            sdl2.pause_audio(dev, 0)
+            true

@@ -21,6 +21,7 @@
 
 import raylib from shared::
 import opl_audio from shared::
+import opl_dev from shared::
 import io from std::
 import math from std::
 
@@ -117,7 +118,7 @@ module gfx =
     // find it.
     let audio_start = (a: opl_audio.audio*) ->
         engine = (any*) a
-        opl_audio.start(a, &audio_callback)
+        opl_dev.start(a, &audio_callback)
 
     // ============================================================
     // Input

@@ -19,9 +19,12 @@ art.fc
 sound.fc
 main.fc
 
-# Sound engine (its audio device follows --flag backend).
+# Sound engine, and the SDL2 device for it. opl_audio.fc names no library
+# and reads no flag; the device file next to it is the SDL2 half of the same
+# either/or the gfx line above is.
 ../shared/opl2.fc
 ../shared/opl_audio.fc
+../shared/opl_audio_sdl.fc
 
 # stdlib modules this demo imports
 ../../stdlib/io.fc

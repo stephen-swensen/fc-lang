@@ -143,8 +143,13 @@ exactly one of them. The response files decide which:
 --flag backend=sdl2             --flag backend=raylib
 ../shared/sdl2.fc               ../shared/raylib.fc
 gfx_sdl2.fc                     gfx_raylib.fc
+../shared/opl_audio_sdl.fc      ../shared/opl_audio_raylib.fc
 plat.fc game.fc art.fc …        plat.fc game.fc art.fc …          <- identical
 ```
+
+The same trick appears twice: `module gfx` is the renderer, and `module
+opl_dev` — the audio device for the shared OPL2 engine — is the same either/or
+one directory over (§5 below).
 
 This is deliberately **not** a struct of function pointers. `gfx.disc(...)` is
 a direct call resolved at compile time; the layering costs nothing at run time,
@@ -155,23 +160,19 @@ it. The compilation unit is the unit of substitution — the same technique a C
 project uses when it compiles one of `platform_win32.c` / `platform_posix.c`,
 with the difference that FC resolves and type-checks the call at the boundary.
 
-The `backend` flag is required, and it is checked in three places, each
-catching a different mistake:
+The `backend` flag is required, and it is checked in two places, each catching
+a different mistake:
 
 - `main.fc` static_asserts that it is one of the two values at all — a build
   with no flag fails there;
 - each backend static_asserts that it names *that* backend — so a unit can't
-  end up with one backend's sources and the other's flag;
-- `demos/shared/opl_audio.fc` reads it to pick raylib's audio device over
-  SDL's, which is the one place the choice reaches shared code (it has to:
-  raylib's audio device is in the same library as raylib's window, so a demo
-  that isn't linking raylib can't open one) — and static_asserts on a value
-  it doesn't recognise, so a typo can't be quietly served the SDL device.
+  end up with one backend's sources and the other's flag.
 
-There the flag is *optional* rather than required, which is the right default
-for a shared module: a demo that only ever links SDL2 has one legal answer and
-shouldn't have to write it down. Required is a property of this game, which
-genuinely has two.
+Nothing in `demos/shared/` reads the flag. The audio engine used to, to pick
+its device; now the device is a file of its own that the response file lists
+(§5 below), so the flag stays a fact about *this game*, which genuinely has
+two answers, rather than something a shared module has to know the answer set
+for.
 
 ### Where the line falls
 
@@ -384,8 +385,11 @@ cleanly. It does, including nested structs returned by value.
 
 Both builds run the OPL2 engine from the host's audio callback, on the host's
 audio thread, and both post commands to it over the same lock-free ring.
-`demos/shared/opl_audio.fc` is shared: only its ~30-line Device section
-differs, behind `#if backend != "raylib"`.
+`demos/shared/opl_audio.fc` is shared *and library-free*: the device is a
+separate thirty-line file — `opl_audio_sdl.fc` or `opl_audio_raylib.fc`, each
+defining `module opl_dev` — and the response file lists one, exactly as it
+lists one `gfx` backend. The engine itself names no library and reads no
+flag.
 
 The one real difference is that raylib's callback signature is
 

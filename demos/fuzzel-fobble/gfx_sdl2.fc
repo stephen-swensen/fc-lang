@@ -23,6 +23,7 @@ import sdl2 from shared::
 import rect from shared::sdl2
 import sdl_event from shared::sdl2
 import opl_audio from shared::
+import opl_dev from shared::
 import io from std::
 import math from std::
 
@@ -88,8 +89,11 @@ module gfx =
     let set_title = (t: const cstr) ->
         sdl2.set_title(win, t)
 
+    // The device itself is demos/shared/opl_audio_sdl.fc — SDL's callback
+    // carries a userdata pointer, so the engine reaches it as an argument
+    // and nothing has to be kept here.
     let audio_start = (a: opl_audio.audio*) ->
-        opl_audio.start(a)
+        opl_dev.start(a)
 
     // ============================================================
     // Input

@@ -16,7 +16,9 @@ can drive `opl2` and the platform layer with no import lines of its own.
 | `sdl2.fc` | SDL2 bindings (`module sdl2`) | SDL2 headers + `-lSDL2` |
 | `raylib.fc` | raylib bindings (`module raylib`) | raylib source, fetched and built by `demos/fuzzel-fobble/run-raylib.sh` into the gitignored `raylib/` |
 | `opl2.fc` | OPL2 / YM3812 FM chip emulator (`module opl2`) | `stdlib/math.fc` |
-| `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, one of `sdl2.fc` / `raylib.fc`, `stdlib/math.fc`, `stdlib/io.fc` |
+| `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, `stdlib/math.fc`, `stdlib/io.fc` — **no platform library** |
+| `opl_audio_sdl.fc` | SDL2 audio device for the engine (`module opl_dev`) | `opl_audio.fc`, `sdl2.fc` |
+| `opl_audio_raylib.fc` | raylib audio device for the engine (`module opl_dev`) | `opl_audio.fc`, `raylib.fc` |
 
 `fuzzel-fobble` is the worked example of the SDL2 set. Its `sound.fc` is
 nothing but data — instruments, effect scripts, a tune — which is the shape a
@@ -39,14 +41,18 @@ audio inside the host's audio callback.
 Two chips run per engine instance — one for music, one for effects — so a
 burst of effects can never disturb the music's registers.
 
-The engine is backend-agnostic: only the ~30-line Device section at the foot
-of `opl_audio.fc` names SDL or raylib, and it is `#if`-gated. Everything
-else — the chips, the ring, the sequencers, the mixdown — is the same code
-either way. See [Picking a backend](#picking-a-backend) below.
+The engine is backend-agnostic, and literally so: `opl_audio.fc` names no
+platform library, contains no `#if`, and reads no flag. Everything about
+*where the samples go* is one of the two thirty-line device files beside it,
+each defining `module opl_dev`, of which a build lists one — the same
+either/or, and the same mechanism, that `demos/fuzzel-fobble` uses to pick a
+`gfx` backend. A program that wants the engine with no device at all (a tool
+rendering to a file, a headless test) lists neither. See
+[Supplying a device](#supplying-a-device) below.
 
 ## Wiring it into a game
 
-Add three files to your demo's `lsp.rsp` (order is irrelevant; FC compiles
+Add four files to your demo's `lsp.rsp` (order is irrelevant; FC compiles
 whole-program). Paths there are relative to the response file itself:
 
 ```
@@ -54,6 +60,7 @@ whole-program). Paths there are relative to the response file itself:
 ../shared/sdl2.fc
 ../shared/opl2.fc
 ../shared/opl_audio.fc
+../shared/opl_audio_sdl.fc      # the device — swap for _raylib.fc on raylib
 sound.fc
 main.fc
 
@@ -67,6 +74,7 @@ the engine, so a game never mentions it:
 ```fc
 import sdl2 from shared::
 import opl_audio from shared::
+import opl_dev from shared::      // whichever device file you listed
 ```
 
 Then, in `main`:
@@ -75,7 +83,7 @@ Then, in `main`:
 sdl2.init(sdl2.init_video | sdl2.init_audio)   // init_audio is required
 
 let a = snd.init(44100)                        // your sound.fc builds the bank + song
-if !opl_audio.start(a) then                    // opens the device, starts the callback
+if !opl_dev.start(a) then                      // opens the device, starts the callback
     io.write("Audio: device open failed - running silent\n", stdout)
 
 opl_audio.music_begin(a)                       // start the tune
@@ -97,39 +105,34 @@ constants (`instr = i_shoot`) compiles at module level and is rejected at file
 level. Module scope also freezes the tables, which is what gives them the
 `const i32[]` / `const instrument[]` types the `bank` and `song` fields expect.
 
-### Picking a backend
+### Supplying a device
 
-The SDL2 backend is the default and needs nothing said. To run the engine on
-raylib instead, list `../shared/raylib.fc` in place of `../shared/sdl2.fc` and
-set the backend flag in your response file:
+`opl_audio.fc` produces samples; it does not open anything. A device file
+does that, and there are two, each defining `module opl_dev`:
 
-```
---flag backend=raylib
-```
+| List this | With | For |
+|---|---|---|
+| `../shared/opl_audio_sdl.fc` | `sdl2.fc` | SDL2 |
+| `../shared/opl_audio_raylib.fc` | `raylib.fc` | raylib |
+| *neither* | — | rendering to a file, headless tests — call `render` yourself |
 
-The device rides the same flag the renderer does rather than having one of its
-own because it has to: raylib's audio device is in the same library as raylib's
-window, so a demo that is not linking raylib cannot open one.
+There is **no flag**: the file list is the selection, the same way
+`demos/fuzzel-fobble` picks one of two files defining `module gfx`. A build
+that lists the wrong one gets an undefined name from the bindings it isn't
+linking, at compile time. This replaces an earlier `#if` inside the engine —
+which meant a shared, library-agnostic module had to know the set of backends
+that existed, and had to guess what an unrecognised one meant.
 
-The flag is **optional but not loose** — the three cases are the whole rule:
+Both device files are thirty lines and both do the same thing: open the host's
+device and call `opl_audio.render` from its callback.
 
-| `--flag backend=…` | Device |
-|---|---|
-| unset, or `sdl2` | SDL's. A demo that predates raylib needs no change. |
-| `raylib` | raylib's. |
-| anything else | A compile error naming the flag. |
-
-The last row is why the `#if` is written as three arms rather than one
-`!= "raylib"` test: a typo or a backend this file has no device for would
-otherwise be handed to SDL silently, and the consumer would find out at the
-link line or not at all.
-
-The only visible difference is `start`. raylib's audio callback is
+The only visible difference between them is `start`. raylib's audio callback is
 `void (*)(void *buffer, unsigned int frames)` with **no userdata pointer**, so
 the engine instance it drives cannot be passed in and has to be reachable from
 file scope. The raylib `start` therefore takes the callback rather than owning
-it, and you supply a two-line trampoline over the public `opl_audio.render`
-alongside a writable global to hold the engine:
+it — a program may hold more than one engine, and only the caller knows which
+one a given stream is for — so you supply a two-line trampoline over the
+public `opl_audio.render` alongside a writable global to hold the engine:
 
 ```fc
 module gfx =
@@ -144,12 +147,13 @@ module gfx =
         engine = (any*) a                       // before the device opens —
                                                 // the callback reads it
                                                 // immediately after
-        opl_audio.start(a, &audio_callback)
+        opl_dev.start(a, &audio_callback)
 ```
 
-`demos/fuzzel-fobble/gfx_raylib.fc` is the worked example. Everything else in
-this document — the threading rules, the API surface, the shutdown note —
-applies unchanged to both.
+`demos/fuzzel-fobble/gfx_raylib.fc` is the worked example: it keeps the engine
+pointer beside the trampoline that reads it, and its `audio_start` is the two
+lines above. Everything else in this document — the threading rules, the API
+surface, the shutdown note — applies unchanged to both devices.
 
 ### API surface
 
@@ -159,14 +163,14 @@ the audio thread.
 | Call | Effect |
 |---|---|
 | `init(rate, bank, song, music_gain, sfx_gain) -> audio*` | Build the engine. No device yet. |
-| `start(a) -> bool` | Open the device and start the callback. `false` = no audio device. Takes `(a, cb)` under `backend=raylib` — see [Picking a backend](#picking-a-backend). |
+| *(the device's `opl_dev.start`)* | Open the device and start the callback. `false` = no audio device. Lives in the device file, not here — see [Supplying a device](#supplying-a-device). |
 | `play(a, id)` | Fire effect `id` on the next voice by rotation. |
 | `music_begin(a)` | Start the tune from the top. |
 | `music_end(a)` | Stop it and rewind, so the next `music_begin` opens on bar 1. |
 | `music_hold(a)` / `music_unhold(a)` | Pause mid-phrase and resume there. |
 | `music_toggle_mute(a)` | The player's own switch, independent of the above. |
 | `music_muted(a) -> bool` | For a HUD indicator. |
-| `render(a, out, frames)` | The consumer side of the ring. Called *by* the callback under `backend=raylib`; otherwise offline only — see [Tuning without launching](#tuning-without-launching-the-game). Exactly one caller, ever. |
+| `render(a, out, frames)` | The consumer side of the ring, and the only way samples leave the engine. Called *by* the device's callback — or directly, with no device open, see [Tuning without launching](#tuning-without-launching-the-game). Exactly one caller, ever. |
 
 `music_end` and `music_hold` are different on purpose: a run ending should
 rewind, a pause menu should not. The mute switch is tracked separately again,
@@ -606,7 +610,7 @@ What the port taught us about binding raylib specifically:
   helpers do too.
 - **`SetAudioStreamCallback` takes a bare function pointer with no userdata**,
   unlike `SDL_AudioSpec.callback`. Bind it as `any*` and pass `&fn` the same
-  way — but see [Picking a backend](#picking-a-backend) for the global it
+  way — but see [Supplying a device](#supplying-a-device) for the global it
   forces on the caller.
 - **Enum constants bind as `extern NAME as alias: i32`.** raylib's key codes,
   config flags, log levels and texture filters are all plain C enumerators, so

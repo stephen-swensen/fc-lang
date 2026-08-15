@@ -1,0 +1,50 @@
+namespace shared::
+
+// The raylib audio device for `opl_audio` — one of two interchangeable files
+// that define `module opl_dev`, the other being `opl_audio_sdl.fc`. A build
+// lists whichever one matches the library it links, exactly the way
+// `demos/fuzzel-fobble` lists one of its two `gfx` backends. Neither is a
+// flag: the file list is the selection.
+//
+// See opl_audio_sdl.fc for what the split buys; the threading contract is
+// `opl_audio`'s and is unchanged by it.
+//
+// ------------------------------------------------------------------
+// Why this one takes the callback instead of owning it
+// ------------------------------------------------------------------
+//
+// raylib's audio-stream callback is
+//
+//     void (*AudioCallback)(void *buffer, unsigned int frames)
+//
+// with **no userdata pointer** — the one place raylib's API is thinner than
+// SDL's. The engine instance the callback drives therefore has to be
+// reachable from the callback without being passed in, which means a
+// writable global, which means a decision about *whose* global. It is the
+// caller's: a program may hold more than one engine, and only the caller
+// knows which one this stream is for. So `start` takes the address of a
+// trampoline the caller supplies, and that trampoline reads the caller's own
+// global — two lines, over the public `opl_audio.render`. See
+// `demos/fuzzel-fobble/gfx_raylib.fc` for the worked example.
+
+module opl_dev =
+    // `frames` is whatever raylib's resampler asks for on the call, and the
+    // buffer the callback receives is in the *stream's* format — mono i16 at
+    // `a.rate` — not the device's. raylib converts on the way out.
+    //
+    // The stream handle is a local: nothing closes or pauses it later. See
+    // `shutdown_note` at the foot of opl_audio.fc for why there is no
+    // teardown to keep it for.
+    let start = (a: opl_audio.audio*, cb: any*) ->
+        // Sized in the stream's own frames; raylib rounds up to the
+        // device's period if that is coarser. Only the pull side sees it.
+        raylib.set_audio_buffer_size(opl_audio.device_frames)
+        raylib.init_audio_device()
+        if !raylib.is_audio_device_ready() then
+            return false
+        let stream = raylib.load_audio_stream((u32) a.rate, 16u32, 1u32)
+        if !raylib.is_audio_stream_valid(stream) then
+            return false
+        raylib.set_audio_stream_callback(stream, cb)
+        raylib.play_audio_stream(stream)
+        true

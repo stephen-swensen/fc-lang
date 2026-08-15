@@ -1,14 +1,19 @@
 // A small FM sound engine for the demos: OPL2 (YM3812) voices, a
-// sound-effect bank, a three-part music sequencer, and an audio device to
-// play them through. Bring your own instruments and note data — this file
-// has no sounds of its own.
+// sound-effect bank and a three-part music sequencer, producing samples on
+// demand. Bring your own instruments and note data — this file has no sounds
+// of its own — and your own audio device: it names no platform library and
+// opens nothing.
 //
 // The chip emulation is opl2.fc next door; this is the layer that turns it
 // into game audio. Compile with `demos/shared/opl2.fc`, `stdlib/math.fc`
-// (which opl2 needs), `stdlib/io.fc` (one diagnostic, on bad song data),
-// and one backend: `demos/shared/sdl2.fc` by default, or
-// `demos/shared/raylib.fc` with `--flag backend=raylib`. Only the ~30-line
-// Device section at the foot of this file differs between the two.
+// (which opl2 needs) and `stdlib/io.fc` (one diagnostic, on bad song data).
+//
+// To hear it, add a device: `opl_audio_sdl.fc` or `opl_audio_raylib.fc`,
+// interchangeable files defining `module opl_dev`, of which a build lists
+// the one matching the library it links. Both are thirty lines and both do
+// the same thing — call `render` from the host's audio callback. A program
+// that wants the engine without a device (rendering to a file, a headless
+// test) lists neither.
 //
 // ------------------------------------------------------------------
 // Threading — the part that matters
@@ -58,8 +63,7 @@
 
 namespace shared::
 
-// opl2 and the backend module (sdl2 or raylib) are siblings in `shared::`,
-// so they need no import here.
+// opl2 is a sibling in `shared::`, so it needs no import here.
 import io from std::
 
 // ============================================================
@@ -108,31 +112,30 @@ module spsc =
             some(v)
 
 
-// A small FM sound engine for the demos: OPL2 voices for sound effects, a
-// three-part music sequencer, and an SDL audio device to play both through.
-// It brings no sounds of its own — a game supplies a `bank` of effects and a
-// `song`, both plain data.
+// A small FM sound engine for the demos: OPL2 voices for sound effects and a
+// three-part music sequencer. It brings no sounds of its own — a game
+// supplies a `bank` of effects and a `song`, both plain data — and no device:
+// samples leave through `render`, and whoever opened the device calls it.
 //
-// Audio is generated on SDL's audio callback thread, not pushed from the
-// game loop, so a frame that runs long or short cannot bend the music's
-// timebase. The price is a second thread touching the chips, and the whole
-// threading contract exists to pay it: the game thread only ever *describes*
-// what it wants by posting a command, and the callback drains that lock-free
-// ring and is the sole mutator of every chip, voice, and sequencer field.
-// Nothing else is shared, nothing blocks, and a full ring drops the request
-// rather than stalling the frame.
+// Audio is meant to be generated on the host's audio callback thread, not
+// pushed from the game loop, so a frame that runs long or short cannot bend
+// the music's timebase. The price is a second thread touching the chips, and
+// the whole threading contract exists to pay it: the game thread only ever
+// *describes* what it wants by posting a command, and the callback drains
+// that lock-free ring and is the sole mutator of every chip, voice, and
+// sequencer field. Nothing else is shared, nothing blocks, and a full ring
+// drops the request rather than stalling the frame.
 //
 // ```fc
 // let a = opl_audio.init(rate, fx, tune, music_gain, sfx_gain)
-// if opl_audio.start(a) then ...      // opens the device; false = no sound
+// if opl_dev.start(a) then ...        // a device file opens it; false = silent
 // opl_audio.play(a, sound_id)
 // ```
 //
 // Everything the game thread may call is in "The game thread's API" below —
 // play, music_begin, music_end, music_hold, music_unhold, music_toggle_mute,
-// music_muted. Nothing else on `audio` is safe to touch once the device is
-// running. `render` is the offline path for tools and headless tests: it
-// fills a buffer directly, through the same ring, with no device open.
+// music_muted. Nothing else on `audio` is safe to touch once a device is
+// running.
 //
 // There is deliberately no close or destroy — see `shutdown_note` at the
 // bottom of this file for why leaving the device open is the robust choice.
@@ -287,10 +290,11 @@ module opl_audio =
     // State
     // ============================================================
 
-    // Everything below `dev` is owned by the audio callback thread and
-    // must not be touched from the game thread once the device is
-    // unpaused. `ring` is the crossing point; `dev` and `muted` belong to
-    // the game thread.
+    // Everything from `music_chip` down is owned by the audio callback
+    // thread and must not be touched from the game thread once a device is
+    // running. `ring` is the crossing point; `muted` belongs to the game
+    // thread. There is no device handle here: the file that opened the
+    // device keeps it.
     struct audio =
         rate: i32
         music_chip: opl2.chip*
@@ -327,16 +331,6 @@ module opl_audio =
         // The crossing point.
         ring: spsc.ring<cmd, 64>
 
-        // Game-thread side. The device handle's shape is the backend's:
-        // SDL hands back an integer id, raylib a stream struct by value.
-        // An unrecognised backend takes the SDL shape here and is diagnosed
-        // once, in the Device section — a second complaint about a field
-        // would say nothing the first one doesn't.
-#if backend == "raylib"
-        dev: raylib.audio_stream
-#else
-        dev: u32
-#end
         muted: bool             // mirror of music_mute, for the game's HUD
 
     // Music voices live on channels 0..2 of the music chip.
@@ -555,113 +549,6 @@ module opl_audio =
             out[i] = (i16) soft_clip(sum)
 
     // ============================================================
-    // Device
-    //
-    // Both backends below are the same design: the host's audio thread
-    // calls back for exactly the samples the device needs, and that
-    // callback is the sole mutator of the chips, voices and sequencers.
-    // The game thread never touches them — it only posts onto `ring`,
-    // which the callback drains. That is what makes the whole thing
-    // lock-free: the game loop never blocks waiting on audio, and audio
-    // never waits on a frame.
-    //
-    // Which one is compiled follows the `backend` flag a demo sets in its
-    // response file, and the three arms below are the whole rule:
-    //
-    //     unset, or backend=sdl2   SDL's device  (so a demo that predates
-    //                                             raylib needs no change)
-    //     backend=raylib           raylib's device
-    //     anything else            a compile error, right here
-    //
-    // The third arm is the point of writing it this way. A single
-    // `!= "raylib"` test would hand every other spelling — `sdl`, a typo,
-    // a backend this file has no device for — to SDL silently, and the
-    // consumer would find out at the link line or not at all. The flag is
-    // still optional, because a demo that only ever links SDL2 has one
-    // legal answer and shouldn't have to write it down; what is not
-    // optional is that an answer this file doesn't recognise says so.
-    //
-    // The device rides the same flag the renderer does because it has to:
-    // raylib's audio device is in the same library as raylib's window, and
-    // a demo that is not linking raylib cannot open one.
-    // ============================================================
-
-#if !backend || backend == "sdl2"
-    // SDL's audio callback, running on SDL's own audio thread.
-    //
-    // Non-capturing (it references only module-level bindings), so
-    // `&opl_audio.callback` is a plain C function pointer. `stream` is
-    // typed u8* rather than any* so the emitted C matches
-    // SDL_AudioCallback's `void (*)(void*, Uint8*, int)` exactly.
-    let callback = (userdata: any*, stream: u8*, len: i32) ->
-        let a = (audio*) userdata
-        drain(a)
-        let frames = len / 2          // mono i16: 2 bytes per frame
-        let out = i16[] { ptr = (i16*) stream, len = (i64) frames }
-        fill(a, out, frames)
-
-    // Open the device and start the callback. Returns false if no device
-    // could be opened, in which case everything below is a silent no-op
-    // and the game carries on without sound.
-    //
-    // Called after `init` has finished building the state, because the
-    // callback starts reading that state the moment the device unpauses.
-    let start = (a: audio*) ->
-        let spec = sdl2.audio_spec {
-            freq = a.rate, format = sdl2.audio_s16sys,
-            channels = 1u8, silence = 0u8,
-            samples = (u16) device_frames, padding = 0u16, size = 0u32,
-            callback = &callback, userdata = (any*) a
-        }
-        let mut got = default(sdl2.audio_spec)
-        a.dev = sdl2.open_audio(default(any*), 0, &spec, &got, 0)
-        if a.dev == 0u32 then
-            false
-        else
-            sdl2.pause_audio(a.dev, 0)
-            true
-#else if backend == "raylib"
-    // raylib's audio-stream callback is
-    //
-    //     void (*AudioCallback)(void *buffer, unsigned int frames)
-    //
-    // with **no userdata pointer** — the one place raylib's API is thinner
-    // than SDL's, and the reason `start` takes the callback rather than
-    // owning it. The engine instance the callback drives has to be
-    // reachable from the callback without being passed in, so the caller
-    // keeps it in a writable global — a module-level `let mut` — and hands
-    // this function the address of a trampoline that reads it. That
-    // trampoline's body is the two lines SDL's `callback` above spends on
-    // the same job, over the public `render`; see
-    // `demos/fuzzel-fobble/gfx_raylib.fc`.
-    //
-    // `frames` is whatever raylib's resampler asks for on the call, and
-    // `buffer` is in the *stream's* format — mono i16 at `a.rate` — not
-    // the device's. raylib converts on the way out.
-    let start = (a: audio*, cb: any*) ->
-        // Sized in the stream's own frames; raylib rounds up to the
-        // device's period if that is coarser. Only the pull side sees it.
-        raylib.set_audio_buffer_size(device_frames)
-        raylib.init_audio_device()
-        if !raylib.is_audio_device_ready() then
-            return false
-        a.dev = raylib.load_audio_stream((u32) a.rate, 16u32, 1u32)
-        if !raylib.is_audio_stream_valid(a.dev) then
-            return false
-        raylib.set_audio_stream_callback(a.dev, cb)
-        raylib.play_audio_stream(a.dev)
-        true
-#else
-    // A backend this file has no device for. `start` is defined anyway, in
-    // the shape the default arm has, so the build stops on the sentence
-    // below rather than on a pile of undefined names underneath it.
-    let start = (a: audio*) ->
-        static_assert(false,
-            "opl_audio: unrecognised --flag backend — this file has devices for sdl2 (the default when the flag is unset) and raylib")
-        false
-#end
-
-    // ============================================================
     // The game thread's API — posts commands, touches nothing else
     // ============================================================
 
@@ -705,14 +592,11 @@ module opl_audio =
     // ============================================================
 
     // Produce `frames` samples into `out`, running the command ring and
-    // both sequencers. This *is* the consumer side of the ring — it is what
-    // the SDL callback above does inline, and what the raylib backend's
-    // callback calls, since raylib's callback carries no userdata and so
-    // has to live in the game's own file.
-    //
-    // Also usable with no device at all: for tools that write the audio to
-    // a file and for headless tests it exercises the real producer -> ring
-    // -> consumer path rather than a bypass.
+    // both sequencers. This *is* the consumer side of the ring, and the one
+    // way samples leave this engine: an audio callback calls it (see
+    // `opl_audio_sdl.fc` / `opl_audio_raylib.fc`), and so does a tool that
+    // writes the audio to a file or a headless test — those exercise the
+    // real producer -> ring -> consumer path rather than a bypass.
     //
     // There must be exactly one caller. Calling it from the game thread
     // while a device is open makes a second consumer of a single-consumer
