@@ -328,12 +328,16 @@ module opl_bank_gm =
 
         // ---------- 15-17  bass ----------
 
-        // Acoustic bass — Fuzzel Fobble's `ins_bass`, unchanged. Feedback on
-        // a 1:1 pair turns the carrier's sine into a saw, which is the
-        // round, woody bottom end this wants. Plucked, medium decay.
+        // Acoustic bass — Fuzzel Fobble's `ins_bass`. Feedback on a 1:1 pair
+        // turns the carrier's sine into a saw, which is the round, woody
+        // bottom end this wants. Plucked, medium decay. Its carrier TL is
+        // the one thing changed from the original: 11 was right for a voice
+        // that played alone, and 7 is right for one that has to hold its own
+        // against a melody at TL 2 — a bass eight decibels under everything
+        // else reads as missing rather than as quiet.
         opl_midi.patch {
             m_char = 0x01, m_scale = 0x18, m_atk = 0xF4, m_sus = 0x36, m_wave = 0x00,
-            c_char = 0x01, c_scale = 0x0B, c_atk = 0xF3, c_sus = 0x26, c_wave = 0x00,
+            c_char = 0x01, c_scale = 0x07, c_atk = 0xF3, c_sus = 0x26, c_wave = 0x00,
             n_conn = 0x0A },
         // Electric bass. The same idea run brighter and shorter — more
         // finger noise, less body.

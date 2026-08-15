@@ -670,3 +670,108 @@ Listening is the user's. What was checked mechanically:
   the game.
 - **The retrigger path holds**: 20 note-ons of one note with no note-offs
   between them use one voice and steal nothing.
+
+---
+
+## 14. After the first listen
+
+The user's listening pass raised two things, and both turned out to be real.
+Neither was a defect in `opl_midi` or `opl_audio`; both were consequences of
+the work landing, and both were fixed where they belonged.
+
+### 14a. The effects had got harsh
+
+The effect instruments were carried over from the bespoke engine byte for
+byte, so the change had to be the chip — and it was. `note_off` used to write
+a bare 0 to 0xB0, which zeroes the F-number as well as the key bit, and a
+zero F-number freezes the phase generator: the release decayed as DC instead
+of ringing at pitch. Nine effects had therefore been authored against a chip
+that silenced their tails, and four of them were carrying release rates
+nobody had ever heard. Measured, one effect at a time, as time-to-0.1%-of-
+full-scale:
+
+| Effect | Script | Old (frozen) | After the fix | Retuned | Comment claims |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `shoot` | 35 ms | 173 | 135 | 135 | "gone in 150 ms" |
+| `stick` | 35 ms | 382 | 319 | 176 | "a soft rubbery thock" |
+| `pop` | 35 ms | 385 | 253 | 144 | "a short blip" |
+| `drop` | 64 ms | 788 | 559 | 311 | "so a glissando doesn't machine-gun" |
+| `descend` | 100 ms | 1645 | 1357 | 414 | "grinds in rather than hits" |
+
+The other four — `bounce`, `star`, `clear`, `over` — already matched their
+comments and are untouched; `star` and `over` ring for half a second and a
+second and a third *on purpose*.
+
+Length was not the only symptom. On the loudest 93 ms window, the share of
+energy above 2 kHz went 63% → 77% for `shoot` and 63% → 84% for `pop`: the
+frozen tail had been sitting under the attack as a low thump, and removing it
+let the bright pitched ring dominate. That is the "harsh". The fix is four
+instruments, one nibble each, in `demos/fuzzel-fobble/sound.fc`.
+
+`wolf-fc` reached the opposite conclusion for the opposite reason and is also
+right: its 87 effects are Wolfenstein's own data, authored against AdLib's
+bare-0 driver and not retunable, so it keeps a local key-off that writes the
+zero. Sound of one's own gets retuned; sound that arrives as a fixed format
+gets the old stream back. The comment on `opl2.note_off` said "every AdLib-era
+driver kept a shadow of this register" — that was wrong, AdLib's driver did
+write a bare 0, and the comment now says so in both copies.
+
+### 14b. The music was melody and nothing else
+
+Also real, also measurable, and not a mixing bug — the arrangement was thin.
+Rendering each channel alone and measuring RMS and duty cycle (the share of
+10 ms blocks above 1% of full scale) over the 48 s song:
+
+| Part | Duty | RMS | |
+| --- | ---: | ---: | --- |
+| Melody | 89% | −24.2 dBFS | |
+| Bass (pizzicato) | 7% | −39.6 | two blips a bar, ~100 ms each |
+| Chords (harpsichord) | 2% | −45.3 | one stab a bar, second half only |
+| Inner line (celesta) | 1% | −52.0 | one note a bar, decays in 0.5 s |
+| Drums | 2% | −43.2 | |
+
+The accompaniment sounded for a fiftieth of the time at a twentieth of the
+level. There was nothing to hear but the tune, exactly as reported.
+
+The rewrite, in `tools/mkmid.fc`:
+
+- **The whole minuet, not half of it.** Part II (bars 17–32) is now here,
+  melody and bass, from the score. With both halves' repeats taken that is
+  four sections, sixty-four bars, ninety-six seconds.
+- **A sustained harmony part** on GM 48, whose EGT bit is set, holding a
+  two-note chord for each whole bar. This is the change that matters: it fills
+  time instead of decaying out of the way.
+- **The score's real left hand** instead of a root-and-fifth reduction — it
+  walks, so it sounds three-quarters of the time rather than a fifteenth.
+- **Harpsichord figuration on the repeats**, four eighths across beats two and
+  three, one voice at a time.
+- **CC7 per channel**, so the balance is a property of the file.
+
+| Part | Duty | RMS | |
+| --- | ---: | ---: | --- |
+| Melody | 90% | −23.2 dBFS | |
+| Harmony (strings) | 78% | −26.1 | |
+| Bass | 77% | −28.9 | |
+| Harpsichord | 6% | −44.6 | repeats only, by design |
+| Drums | 3% | −42.2 | |
+| **Sum** | **99%** | **−20.4** | peak 15224, 0 clipped, **0 steals** |
+
+`opl_bank_gm`'s acoustic bass gave up its carrier TL of 11 for 7. Eleven was
+right for a voice that played alone in the old engine; against a melody at TL
+2 it read as missing rather than as quiet.
+
+### Verification of this round
+
+- **1594 events, 6442 bytes, format 1, 6 tracks** — validated against the
+  independent Python SMF reader: every note closed, every EOT exactly at its
+  chunk end, all bytes consumed.
+- **Peak six simultaneous notes** of nine, and the renderer reports **0 voice
+  steals** over the full 96 s.
+- **The loop seam is inaudible**: over 190 s the largest sample-to-sample step
+  at the 96 s wrap is 3370, against 3408 for a typical busy bar elsewhere.
+  Both passes measure the same RMS (3112.5 / 3118.6).
+- **The sum has more room than before, not less**: RMS −23.9 → −20.4 dBFS
+  while peak fell 22968 → 15224, so the effects land on top of a fuller mix
+  with a better crest factor.
+- Every demo and both fuzzel-fobble backends compile, the SDL2 build links,
+  and `wolf-fc` builds with the mirrored comment.

@@ -799,9 +799,15 @@ module opl2 =
     // instead of ringing out at pitch. And the envelope rates are key-scaled
     // by (block, fnum), so `refresh_channel_ops` recomputes the release at
     // the lowest key scale and the note fades more slowly than the hardware
-    // would at its real pitch. Every AdLib-era driver kept a shadow of this
-    // register and wrote it back with bit 5 cleared; the chip struct already
-    // holds the state, so we can do the same directly.
+    // would at its real pitch. The chip struct already shadows both, so
+    // key-off can clear bit 5 and leave the rest.
+    //
+    // AdLib's own driver did write a bare 0, and effect data authored against
+    // that driver was tuned with the frozen tail in the mix — it can need the
+    // zero back, and the place for that is a local key-off in the driver, not
+    // here. Sound of one's own is better retuned than reverted: what the tail
+    // should be is the instrument's release rate, which is now audible and
+    // was not before.
     let note_off = (c: chip*, channel: i32) ->
         write(c, 0xB0 + channel,
             ((c.ch_block[channel] & 7) << 2) | ((c.ch_fnum[channel] >> 8) & 3))

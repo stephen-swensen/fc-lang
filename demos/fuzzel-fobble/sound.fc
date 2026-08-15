@@ -14,6 +14,18 @@
 // ratio that picks the timbre, and the EGT bit says whether a note holds
 // while the key is down or decays away on its own. The engine's header
 // comment has the longer version.
+//
+// Release rates — the low nibble of `*_sus` — are load-bearing here, which
+// they did not used to be. `opl2.note_off` once wrote a zero F-number along
+// with the key bit, which froze the operator's phase, so an effect's release
+// came out as a decaying DC thump instead of the note dying away at pitch.
+// That was a chip bug and it is fixed; the consequence is that four of these
+// instruments were carrying release rates nobody had ever heard, and their
+// tails ran two to thirteen times longer than the comments beside them claim
+// (`stick` 319 ms, `pop` 253, `drop` 559, `descend` 1357). Retuned by
+// measurement — render one effect at a time and time the decay to 0.1% of
+// full scale — they now land at 176, 144, 311 and 414 ms. The other five
+// were already right and are untouched.
 
 import opl_audio from shared::
 import opl_midi from shared::
@@ -55,19 +67,19 @@ module snd =
         // striking.
         opl_audio.instrument {
             m_char = 0x01, m_scale = 0x12, m_atk = 0xF8, m_sus = 0x78, m_wave = 0x00,
-            c_char = 0x01, c_scale = 0x05, c_atk = 0xF7, c_sus = 0x57, c_wave = 0x00,
+            c_char = 0x01, c_scale = 0x05, c_atk = 0xF7, c_sus = 0x58, c_wave = 0x00,
             n_conn = 0x08 },
         // Pop: half-sine on the modulator adds the odd harmonics that make
         // a short blip read as *wet* rather than as a beep.
         opl_audio.instrument {
-            m_char = 0x02, m_scale = 0x0E, m_atk = 0xF7, m_sus = 0x67, m_wave = 0x01,
-            c_char = 0x01, c_scale = 0x02, c_atk = 0xF6, c_sus = 0x47, c_wave = 0x00,
+            m_char = 0x02, m_scale = 0x0E, m_atk = 0xF7, m_sus = 0x68, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF6, c_sus = 0x48, c_wave = 0x00,
             n_conn = 0x02 },
         // Falling bubbles: the pop voice softened, so a glissando down it
         // doesn't machine-gun.
         opl_audio.instrument {
-            m_char = 0x02, m_scale = 0x11, m_atk = 0xF5, m_sus = 0x45, m_wave = 0x00,
-            c_char = 0x01, c_scale = 0x03, c_atk = 0xF6, c_sus = 0x36, c_wave = 0x00,
+            m_char = 0x02, m_scale = 0x11, m_atk = 0xF5, m_sus = 0x47, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x03, c_atk = 0xF6, c_sus = 0x37, c_wave = 0x00,
             n_conn = 0x00 },
         // Star burst: 7:1 is far enough up the harmonic series to be pure
         // glitter, with a long release so the sparkle hangs in the air.
@@ -83,8 +95,8 @@ module snd =
         // a chip with no noise generator. Slow attack, so it grinds in
         // rather than hits.
         opl_audio.instrument {
-            m_char = 0x20, m_scale = 0x05, m_atk = 0xC4, m_sus = 0x04, m_wave = 0x00,
-            c_char = 0x21, c_scale = 0x03, c_atk = 0xD4, c_sus = 0x05, c_wave = 0x00,
+            m_char = 0x20, m_scale = 0x05, m_atk = 0xC4, m_sus = 0x07, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0xD4, c_sus = 0x07, c_wave = 0x00,
             n_conn = 0x0C },
         // Level clear: a brass fanfare. Both operators sustain (EGT set)
         // at SL 0, so the notes hold at full weight for as long as the key

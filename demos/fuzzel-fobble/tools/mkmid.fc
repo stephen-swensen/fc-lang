@@ -1,26 +1,44 @@
 // Writes Fuzzel Fobble's music out as a Standard MIDI File.
 //
-// The tune is an arrangement of the **Minuet in G major, BWV Anh. 114** — the
-// one everybody knows from the *Notebook for Anna Magdalena Bach*, and which
-// scholarship now attributes to Christian Petzold rather than to Bach himself.
-// Public domain either way; the credit is the only thing in question.
+// The tune is the **Minuet in G major, BWV Anh. 114** — the one everybody
+// knows from the *Notebook for Anna Magdalena Bach*, and which scholarship now
+// attributes to Christian Petzold rather than to Bach himself. Public domain
+// either way; the credit is the only thing in question.
 //
-// The melody and the harmony are the Minuet's. The voicing — which instrument
-// plays what, the inner line, the chords, the drum part — is this file's, and
-// exists to give the player something multi-timbral to chew on: the piece runs
-// twice, thinly the first time and fully scored the second.
+// Both halves are here, all thirty-two bars, melody and bass exactly as the
+// score has them. What this file adds is the scoring — which instrument plays
+// what, the sustained harmony, the keyboard figuration, the drum part — and
+// that exists to give the player something multi-timbral to chew on.
 //
-//     bars  1-16   music box melody, pizzicato bass, light hi-hat
-//     bars 17-32   the same, plus a celesta inner line, harpsichord chords
-//                  and a fuller drum part
+// ------------------------------------------------------------------
+// The shape
+// ------------------------------------------------------------------
 //
-// Six tracks in SMF format 1, five sounding channels, and up to eight
-// simultaneous notes in the second half — enough to work the voice allocator
-// without pinning it. The two note-off encodings are used deliberately: the
-// melody and bass end notes with a real 0x80 status, the other parts with the
-// 0x90-and-velocity-zero form, so the shipped file exercises both paths
-// through `opl_midi.parse`. Running status is emitted wherever it applies, for
-// the same reason.
+// The minuet is two sixteen-bar halves, each marked to be repeated. Taking
+// those repeats gives four sections and sixty-four bars, and the repeat is
+// where the arrangement changes rather than the notes:
+//
+//     bars  1-16   part I           melody, bass, sustained harmony, hi-hat
+//     bars 17-32   part I repeated  + harpsichord figuration, kick, tambourine
+//     bars 33-48   part II          melody, bass, harmony, hi-hat, kick
+//     bars 49-64   part II repeated + harpsichord figuration, full drums
+//
+// Every section carries harmony under the melody, which is the whole point of
+// the layout: an earlier version left the accompaniment to one chord stab and
+// one held note per bar, and measured against the melody's 89% those parts
+// sounded 2% and 5% of the time. You could hear the tune and essentially
+// nothing else. The sustained string part below is what fixes that — it holds
+// through the bar on a patch whose EGT bit is set, so it fills time instead of
+// decaying out of the way.
+//
+// Six tracks in SMF format 1, five sounding channels, and at most six
+// simultaneous notes — enough to work the voice allocator without ever making
+// it steal. Each channel sets its own CC7 volume, so the balance lives in the
+// file where it can be edited, not in the player. The two note-off encodings
+// are used deliberately: the melody and bass end notes with a real 0x80
+// status, the other parts with the 0x90-and-velocity-zero form, so the shipped
+// file exercises both paths through `opl_midi.parse`. Running status is
+// emitted wherever it applies, for the same reason.
 //
 // Run it once and check the result in; it is here for provenance and so the
 // tune stays editable as music rather than as bytes.
@@ -40,20 +58,19 @@ module tune =
     let division = 480
     let beat = 480
     let bar = 1440
-    let half = 960
     let eighth = 240
 
-    // Sixteen bars, one pass. Sixteen more of the same follow it, and the
-    // whole thing loops on the bar line at the end of the second.
-    let pass_ticks = 16 * 1440
-    let song_ticks = 32 * 1440
+    // Four sixteen-bar sections: part I, part I again, part II, part II again.
+    let section_bars = 16
+    let section_ticks = 16 * 1440
+    let song_ticks = 4 * 16 * 1440
 
-    // ---- Melody --------------------------------------------------
+    // ---- Melody, part I (bars 1-16) ------------------------------
     //
     // (note, duration) pairs, played end to end with no rests, so the bar
     // lines below are a reading aid rather than something the data encodes.
-    // Middle C is 60, so the tune sits between F#4 (66) and G5 (79).
-    let melody = i32[128] {
+    // Middle C is 60, so this half sits between F#4 (66) and G5 (79).
+    let melody_a = i32[128] {
         74, 480,  67, 240,  69, 240,  71, 240,  72, 240,   // 1   d' | g a b c
         74, 480,  67, 480,  67, 480,                       // 2   d' | g | g
         76, 480,  72, 240,  74, 240,  76, 240,  78, 240,   // 3   e' | c d e f#
@@ -71,58 +88,112 @@ module tune =
         69, 480,  71, 240,  69, 240,  67, 240,  66, 240,   // 15  a  | b a g f#
         67, 1440 }                                         // 16  g......
 
-    // ---- Bass ----------------------------------------------------
+    // ---- Melody, part II (bars 17-32) ----------------------------
     //
-    // Root on the downbeat, fifth on the third beat — the plain minuet
-    // pattern. The harmony it spells out is
-    //   G G C G/B C G D D  G G C G/B C G D G
-    let bass = i32[60] {
-        43, 960,  50, 480,                                 // 1   G
-        43, 960,  50, 480,                                 // 2   G
-        48, 960,  55, 480,                                 // 3   C
-        47, 960,  50, 480,                                 // 4   G/B
-        48, 960,  55, 480,                                 // 5   C
-        43, 960,  50, 480,                                 // 6   G
-        50, 960,  45, 480,                                 // 7   D
-        50, 1440,                                          // 8   D
-        43, 960,  50, 480,                                 // 9   G
-        43, 960,  50, 480,                                 // 10  G
-        48, 960,  55, 480,                                 // 11  C
-        47, 960,  50, 480,                                 // 12  G/B
-        48, 960,  55, 480,                                 // 13  C
-        43, 960,  50, 480,                                 // 14  G
-        50, 960,  45, 480,                                 // 15  D
-        43, 1440 }                                         // 16  G
+    // The second half opens an octave above where the first one lives —
+    // B5 (83) is the top note of the piece — works down through a rising
+    // scale in bar 21, and comes home through the running eighths of bar 29.
+    let melody_b = i32[124] {
+        83, 480,  79, 240,  81, 240,  83, 240,  79, 240,   // 17  b' | g a b g
+        81, 480,  74, 240,  76, 240,  78, 240,  74, 240,   // 18  a  | d e f# d
+        79, 480,  76, 240,  78, 240,  79, 240,  74, 240,   // 19  g  | e f# g d
+        73, 480,  71, 240,  73, 240,  69, 480,             // 20  c# | b c# | a
+        69, 240,  71, 240,  73, 240,  74, 240,  76, 240,  78, 240,
+                                                           // 21  a b c# d e f#
+        79, 480,  78, 480,  76, 480,                       // 22  g | f# | e
+        78, 480,  69, 480,  73, 480,                       // 23  f# | a | c#
+        74, 1440,                                          // 24  d......
+        74, 480,  67, 240,  66, 240,  67, 480,             // 25  d | g f# | g
+        76, 480,  67, 240,  66, 240,  67, 480,             // 26  e | g f# | g
+        74, 480,  72, 480,  71, 480,                       // 27  d | c | b
+        69, 240,  67, 240,  66, 240,  67, 240,  69, 480,   // 28  a g f# g | a
+        62, 240,  64, 240,  66, 240,  67, 240,  69, 240,  71, 240,
+                                                           // 29  d e f# g a b
+        72, 480,  71, 480,  69, 480,                       // 30  c | b | a
+        71, 240,  74, 240,  67, 480,  66, 480,             // 31  b d | g | f#
+        67, 1440 }                                         // 32  g......
 
-    // ---- Inner line ----------------------------------------------
+    // ---- Bass, part I --------------------------------------------
     //
-    // One sustained note per bar, sitting an octave under the melody and
-    // moving as little as the harmony allows. It is there to thicken the
-    // second pass, not to be noticed.
-    let inner = i32[16] {
-        59, 59, 60, 59, 60, 59, 57, 57,
-        59, 59, 60, 59, 60, 59, 57, 59 }
+    // The score's own left hand, not a root-and-fifth reduction of it: it
+    // walks in bars 8 and 12 and steps down to the low G at the cadence,
+    // and those are the moments that make the half sound finished.
+    let bass_a = i32[70] {
+        55, 960,  57, 480,                                 // 1   G . | A
+        59, 1440,                                          // 2   B
+        60, 1440,                                          // 3   C
+        59, 1440,                                          // 4   B
+        57, 1440,                                          // 5   A
+        55, 1440,                                          // 6   G
+        62, 480,  59, 480,  55, 480,                       // 7   D B G
+        62, 480,  50, 240,  60, 240,  59, 240,  57, 240,   // 8   D | d c b a
+        59, 960,  57, 480,                                 // 9   B . | A
+        55, 480,  59, 480,  55, 480,                       // 10  G B G
+        60, 1440,                                          // 11  C
+        59, 480,  60, 240,  59, 240,  57, 240,  55, 240,   // 12  B | c b a g
+        57, 960,  54, 480,                                 // 13  A . | F#
+        55, 960,  59, 480,                                 // 14  G . | B
+        60, 480,  62, 480,  50, 480,                       // 15  C D d
+        55, 960,  43, 480 }                                // 16  G . | G,
 
-    // ---- Chords --------------------------------------------------
+    // ---- Bass, part II -------------------------------------------
     //
-    // Three notes on each downbeat, one quarter long, following the same
-    // harmony as the bass. Written low to high, three per bar.
-    let chords = i32[48] {
-        55, 59, 62,   55, 59, 62,   60, 64, 67,   59, 62, 67,    // 1-4
-        60, 64, 67,   55, 59, 62,   62, 66, 69,   62, 66, 69,    // 5-8
-        55, 59, 62,   55, 59, 62,   60, 64, 67,   59, 62, 67,    // 9-12
-        60, 64, 67,   55, 59, 62,   62, 66, 69,   55, 59, 62 }   // 13-16
+    // A rest in bar 28 — the one place the bass stops — which is why
+    // `lay_line` understands a negative note as a rest.
+    let bass_b = i32[72] {
+        55, 1440,                                          // 17  G
+        54, 1440,                                          // 18  F#
+        52, 480,  55, 480,  52, 480,                       // 19  E G E
+        57, 960,  45, 480,                                 // 20  A . | A,
+        57, 1440,                                          // 21  A
+        59, 480,  62, 480,  61, 480,                       // 22  B D C#
+        62, 480,  54, 480,  57, 480,                       // 23  D F# A
+        62, 480,  50, 480,  60, 480,                       // 24  D d C
+        59, 960,  59, 480,                                 // 25  B . | B
+        60, 960,  60, 480,                                 // 26  C . | C
+        59, 480,  57, 480,  55, 480,                       // 27  B A G
+        62, 960,  -1, 480,                                 // 28  D . | rest
+        50, 1440,                                          // 29  d
+        52, 480,  55, 480,  54, 480,                       // 30  E G F#
+        55, 480,  47, 480,  50, 480,                       // 31  G B, d
+        55, 480,  50, 480,  43, 480 }                      // 32  G d G,
+
+    // ---- Sustained harmony ---------------------------------------
+    //
+    // Two notes a bar, held for the whole bar on a patch that sustains, so
+    // there is always something under the melody. A zero means the bar is
+    // left open — the four bars where the harmony moves faster than one
+    // chord would cover, and where the bass and melody are busy enough on
+    // their own. Written low note first, both between F#3 (54) and G4 (67)
+    // so the part sits under the melody and over the bass.
+    let pad_a = i32[32] {
+        59, 62,   62, 67,   64, 67,   62, 67,              // 1-4    G  G/B C  G/B
+        62, 66,   59, 62,   59, 62,   54, 60,              // 5-8    D  G   G  D7
+        62, 67,   59, 62,   64, 67,   62, 67,              // 9-12   G  G   C  G/B
+        62, 66,   59, 62,    0,  0,   59, 62 }             // 13-16  D  G   -  G
+
+    let pad_b = i32[32] {
+        59, 62,   57, 62,   59, 64,   61, 64,              // 17-20  G  D  Em  A
+        61, 64,    0,  0,   57, 62,   54, 60,              // 21-24  A  -  D   D7
+        62, 67,   64, 67,    0,  0,   57, 62,              // 25-28  G/B C  -  D
+        54, 60,    0,  0,    0,  0,   59, 62 }             // 29-32  D7 -  -  G
 
     // General MIDI programs, 0-based as the wire format numbers them.
     let prog_music_box = 10
-    let prog_celesta = 8
-    let prog_pizzicato = 45
+    let prog_strings = 48
+    let prog_bass = 32
     let prog_harpsichord = 6
 
     // General MIDI percussion notes.
     let drum_kick = 36
     let drum_hat = 42
     let drum_tamb = 54
+
+// Which of the four sections is which. A section is "full" when it is a
+// repeat, and the second pair of sections plays part II.
+let section_start = (s: i32) -> s * tune.section_ticks
+let is_full = (s: i32) -> s % 2 == 1
+let is_part_b = (s: i32) -> s >= 2
 
 // ============================================================
 // Event lists
@@ -160,6 +231,11 @@ let note = (t: track*, ch: i32, tick: i32, dur: i32, n: i32, vel: i32,
     emit(t, tick, 0x90 | ch, n, vel, 3)
     if off_style == 0 then emit(t, tick + dur, 0x80 | ch, n, 0, 3)
     else emit(t, tick + dur, 0x90 | ch, n, 0, 3)
+
+// Channel volume, so the balance between the parts is a property of the file
+// rather than of whatever plays it.
+let set_volume = (t: track*, ch: i32, v: i32) ->
+    emit(t, 0, 0xB0 | ch, 7, v, 3)
 
 // Sort a track into tick order, stably. Insertion sort because the lists
 // arrive nearly sorted — notes are added in time order and only their
@@ -288,6 +364,8 @@ let put_conductor = (w: writer*) ->
     put8(w, 0xFF)                       // meta
     put8(w, 0x51)                       // set tempo
     put8(w, 0x03)
+    // 500000 us a quarter is 120 bpm. Editions mark this minuet anywhere
+    // from 120 to 140; the slower end leaves room for the sound effects.
     put8(w, 500000 >> 16)
     put8(w, (500000 >> 8) & 255)
     put8(w, 500000 & 255)
@@ -301,80 +379,116 @@ let put_conductor = (w: writer*) ->
     put32(w, body_len)
     w.n = save
 
-// Lay a (note, duration) list down from `base`, returning nothing — the list
-// is continuous, so each note starts where the last one ended.
+// Lay a (note, duration) list down from `base`. The list is continuous, so
+// each note starts where the last one ended; a negative note is a rest, which
+// advances the clock and sounds nothing.
 let lay_line = (t: track*, ch: i32, base: i32, pairs: const i32[], vel: i32,
                 off_style: i32) ->
     let mut at = base
     for i in 0i64..(pairs.len / 2i64) do
         let n = pairs[i * 2i64]
         let d = pairs[i * 2i64 + 1i64]
-        note(t, ch, at, d - 20, n, vel, off_style)   // a hair of separation
+        if n >= 0 then note(t, ch, at, d - 20, n, vel, off_style)
         at = at + d
 
 let build_melody = () ->
     let mut t = track_new()
     emit(&t, 0, 0xC0, tune.prog_music_box, 0, 2)
-    lay_line(&t, 0, 0, tune.melody, 100, 0)
-    lay_line(&t, 0, tune.pass_ticks, tune.melody, 112, 0)
+    set_volume(&t, 0, 112)
+    for s in 0..4 do
+        let at = section_start(s)
+        let vel = if is_full(s) then 110 else 100
+        if is_part_b(s) then lay_line(&t, 0, at, tune.melody_b, vel, 0)
+        else lay_line(&t, 0, at, tune.melody_a, vel, 0)
     sort_track(&t)
     t
 
 let build_bass = () ->
     let mut t = track_new()
-    emit(&t, 0, 0xC2, tune.prog_pizzicato, 0, 2)
-    lay_line(&t, 2, 0, tune.bass, 84, 0)
-    lay_line(&t, 2, tune.pass_ticks, tune.bass, 92, 0)
+    emit(&t, 0, 0xC2, tune.prog_bass, 0, 2)
+    set_volume(&t, 2, 112)
+    for s in 0..4 do
+        let at = section_start(s)
+        let vel = if is_full(s) then 100 else 92
+        if is_part_b(s) then lay_line(&t, 2, at, tune.bass_b, vel, 0)
+        else lay_line(&t, 2, at, tune.bass_a, vel, 0)
     sort_track(&t)
     t
 
-// The inner line and the chords play only on the second pass, which is the
-// whole shape of the arrangement: the same sixteen bars, scored twice.
-let build_inner = () ->
+// One harmony note of one bar, or 0 where the bar is left open.
+let pad_note = (s: i32, b: i32, k: i32) ->
+    if is_part_b(s) then tune.pad_b[b * 2 + k] else tune.pad_a[b * 2 + k]
+
+// The sustained part, and the reason the texture is never just melody: the
+// notes are a whole bar long and the patch holds them, so this channel sounds
+// essentially all the time.
+let build_pad = () ->
     let mut t = track_new()
-    emit(&t, 0, 0xC1, tune.prog_celesta, 0, 2)
-    for b in 0..16 do
-        let at = tune.pass_ticks + b * tune.bar
-        note(&t, 1, at, tune.bar - 40, tune.inner[b], 66, 1)
+    emit(&t, 0, 0xC1, tune.prog_strings, 0, 2)
+    set_volume(&t, 1, 70)
+    for s in 0..4 do
+        let base = section_start(s)
+        let vel = if is_full(s) then 82 else 74
+        for b in 0..tune.section_bars do
+            let at = base + b * tune.bar
+            for k in 0..2 do
+                let n = pad_note(s, b, k)
+                if n > 0 then note(&t, 1, at, tune.bar - 40, n, vel, 1)
     sort_track(&t)
     t
 
-let build_chords = () ->
+// Keyboard figuration on the repeats: the bar's two harmony notes alternating
+// as four eighths across beats two and three, which is what a minuet's left
+// hand does and what leaves beat one to the bass. One voice at a time, so it
+// costs the allocator nothing.
+let build_harpsi = () ->
     let mut t = track_new()
     emit(&t, 0, 0xC3, tune.prog_harpsichord, 0, 2)
-    for b in 0..16 do
-        let at = tune.pass_ticks + b * tune.bar
-        for k in 0..3 do
-            note(&t, 3, at, tune.beat - 60, tune.chords[b * 3 + k], 62, 1)
+    set_volume(&t, 3, 96)
+    for s in 0..4 do
+        if is_full(s) then
+            let base = section_start(s)
+            for b in 0..tune.section_bars do
+                let lo = pad_note(s, b, 0)
+                let hi = pad_note(s, b, 1)
+                if lo > 0 && hi > 0 then
+                    let at = base + b * tune.bar + tune.beat
+                    for k in 0..4 do
+                        let n = if k % 2 == 0 then lo else hi
+                        note(&t, 3, at + k * tune.eighth, tune.eighth - 30,
+                            n, 78, 1)
     sort_track(&t)
     t
 
-// Percussion, on General MIDI's channel 9. Light through the first pass —
-// hi-hat on the second and third beats and nothing on the downbeat, which is
-// what keeps a minuet feeling like one — and a full pattern through the
-// second.
+// Percussion, on General MIDI's channel 9. Nothing on the downbeat through
+// the opening section — which is what keeps a minuet feeling like one — and
+// progressively more from there.
 let build_drums = () ->
     let mut t = track_new()
-    for b in 0..32 do
+    set_volume(&t, 9, 88)
+    for b in 0..64 do
         let at = b * tune.bar
-        let second = b >= 16
-        if second then note(&t, 9, at, 120, tune.drum_kick, 82, 1)
-        note(&t, 9, at + tune.beat, 120, tune.drum_hat, if second then 52 else 44, 1)
+        let sec = b / tune.section_bars
+        let full = is_full(sec)
+        if full || is_part_b(sec) then
+            note(&t, 9, at, 120, tune.drum_kick, 82, 1)
+        note(&t, 9, at + tune.beat, 120, tune.drum_hat,
+            if full then 52 else 44, 1)
         note(&t, 9, at + tune.beat * 2, 120, tune.drum_hat,
-            if second then 52 else 44, 1)
-        if second && (b - 16) % 4 == 0 then
+            if full then 52 else 44, 1)
+        if full && b % 4 == 0 then
             note(&t, 9, at, 120, tune.drum_tamb, 58, 1)
     sort_track(&t)
     t
 
 let run = (path: const str) ->
     let mut melody = build_melody()
-    let mut inner = build_inner()
+    let mut pad = build_pad()
     let mut bass = build_bass()
-    let mut chords = build_chords()
+    let mut harpsi = build_harpsi()
     let mut drums = build_drums()
 
-    let mut w = writer_new(65536i64)
+    let mut w = writer_new(131072i64)
     put_tag(&w, "MThd")
     put32(&w, 6)
     put16(&w, 1)                        // format 1: parallel tracks
@@ -382,9 +496,9 @@ let run = (path: const str) ->
     put16(&w, tune.division)
     put_conductor(&w)
     put_track(&w, &melody, tune.song_ticks)
-    put_track(&w, &inner, tune.song_ticks)
+    put_track(&w, &pad, tune.song_ticks)
     put_track(&w, &bass, tune.song_ticks)
-    put_track(&w, &chords, tune.song_ticks)
+    put_track(&w, &harpsi, tune.song_ticks)
     put_track(&w, &drums, tune.song_ticks)
 
     let f = match io.open(path, "wb") with

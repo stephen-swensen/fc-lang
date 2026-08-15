@@ -485,21 +485,32 @@ effects — nine instruments and nine scripts.
 and which scholarship now attributes to Christian Petzold rather than to Bach.
 Public domain either way; the credit is the only thing in question.
 
-The melody and harmony are the Minuet's; the scoring is ours. The sixteen bars
-play twice, thinly and then fully:
+Both halves are here, all thirty-two bars, melody and bass exactly as the score
+has them. What is ours is the scoring. The minuet's two halves are each marked
+to be repeated, which gives four sections and sixty-four bars — ninety-six
+seconds — and the repeat is where the arrangement changes rather than the
+notes:
 
-| Bars | Channel | Program | Part |
-|---|---|---|---|
-| 1–32 | 0 | 10 Music Box | Melody |
-| 1–32 | 2 | 45 Pizzicato Strings | Bass |
-| 1–32 | 9 | — | Hi-hat |
-| 17–32 | 1 | 8 Celesta | Inner line |
-| 17–32 | 3 | 6 Harpsichord | Chords |
-| 17–32 | 9 | — | Kick and tambourine |
+| Bars | Section | Channel | Program | Part |
+|---|---|---|---|---|
+| 1–64 | all four | 0 | 10 Music Box | Melody |
+| 1–64 | all four | 1 | 48 String Ensemble | Sustained harmony |
+| 1–64 | all four | 2 | 32 Acoustic Bass | Bass |
+| 1–64 | all four | 9 | — | Hi-hat |
+| 17–32, 49–64 | the repeats | 3 | 6 Harpsichord | Keyboard figuration |
+| 17–64 | from the repeat on | 9 | — | Kick, tambourine |
 
-Six tracks in SMF format 1, five sounding channels, and six to eight
-simultaneous notes in the second half — enough to work the voice allocator
-without pinning it. It steals zero voices, which is another way of saying the
+The string part is what makes the texture work. It holds a two-note chord for
+each whole bar on a patch whose EGT bit is set, so it sustains instead of
+decaying, and it sounds 78% of the time against the melody's 90% — where the
+first version of this arrangement gave the accompaniment one chord stab and one
+held note per bar and got 5% and 2%. You could hear the tune and essentially
+nothing else. Each channel also sets its own CC7 volume, so the balance lives
+in the file where it can be edited rather than in the player: melody −23 dBFS,
+harmony −26, bass −29.
+
+Six tracks in SMF format 1, five sounding channels, and at most six
+simultaneous notes. It steals zero voices, which is another way of saying the
 arrangement was written to fit nine.
 
 `tools/mkmid.fc` is where the music actually lives: the note tables are FC
