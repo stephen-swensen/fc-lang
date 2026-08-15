@@ -775,3 +775,61 @@ right for a voice that played alone in the old engine; against a melody at TL
   with a better crest factor.
 - Every demo and both fuzzel-fobble backends compile, the SDL2 build links,
   and `wolf-fc` builds with the mirrored comment.
+
+### 14c. The harpsichord was inaudible
+
+Reported after the second listen, and the most interesting of the three
+because the obvious diagnosis was wrong twice.
+
+Removing the harpsichord track from the mix changed it by **0.07 dB**. The
+first guess was masking by register — the figuration was derived from
+`pad_note()`, so it played the exact pitches the sustained strings were
+already holding. That guess was testable and false: moving it an octave up
+made it *worse*, because sources add in quadrature and a broadband energy
+metric cannot see a critical band. The second guess was level, and its own
+arithmetic refuted it — the patch's carrier already sat at TL 0, so velocity
+and CC7 together had barely six decibels left to give.
+
+A per-band comparison against everything else playing found the real answer:
+the part was 13 to 27 dB under its masker **in every band**, not just in the
+one it shared. Almost all of that was the envelope. The bank's harpsichord
+had SL 7 — a 21 dB drop inside the first tenth of a second — so a 0.22 s
+eighth note was nearly all attack and no note, and its average energy was
+tiny however loud the attack was.
+
+Three changes, none of them large:
+
+| | |
+| --- | --- |
+| `opl_bank_gm` harpsichord | SL 7 → 2 and a slower decay, on both operators |
+| `mkmid` figuration | octave-doubled — one more voice out of nine, +3 dB that velocity could not buy |
+| `mkmid` harmony | CC7 70 → 56 for the length of each repeat, so the masker steps back rather than the figuration shouting |
+
+The last one is why the mix did not get peaky doing this. Raising the
+harpsichord alone reached the same audibility at a peak of 24846 against
+15224 before; making room for it instead lands at 20890, of which only five
+samples in ninety-six seconds exceed 20000.
+
+Calibrating each part against the rest of the mix in its own strongest band —
+the same measurement for all five, so the parts are comparable:
+
+| Part | Band | Before | After |
+| --- | --- | ---: | ---: |
+| Melody | 2–4 kHz | +26.0 dB | +13.4 dB |
+| Bass | 125–250 Hz | +3.0 | +3.8 |
+| Harmony | 250–500 Hz | +1.8 | −1.3 |
+| **Harpsichord** | **500 Hz–1 kHz** | **−14.9** | **−6.1** |
+| Drums | 125–250 Hz | −9.5 | −9.1 |
+
+The melody's drop from +26 to +13 is relative, not absolute: its own level is
+unchanged to a tenth of a decibel, and what fell is its share of 2–4 kHz now
+that something else lives there. Absolute levels moved only where intended —
+melody, bass and drums identical, harmony −1.1 dB from the duck, harpsichord
++12.5 dB.
+
+Verified as before: 1813 events and 7105 bytes validate against the
+independent SMF reader with every note closed, peak seven simultaneous notes
+of nine, **0 voice steals**, and the loop seam still joins on a step of 22
+against 3408 for a typical busy bar. (An earlier ±50 ms window reported 5296
+and looked like a regression; the step was an ordinary note attack 39 ms
+before the wrap, not the seam.)

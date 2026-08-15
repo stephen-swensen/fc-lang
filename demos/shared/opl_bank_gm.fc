@@ -236,11 +236,16 @@ module opl_bank_gm =
             m_char = 0x02, m_scale = 0x54, m_atk = 0xE3, m_sus = 0x34, m_wave = 0x01,
             c_char = 0x01, c_scale = 0x03, c_atk = 0xE2, c_sus = 0x25, c_wave = 0x00,
             n_conn = 0x06 },
-        // Harpsichord. Instant attack, fast decay, half-sine on both
-        // operators for the plectrum's buzz.
+        // Harpsichord. Instant attack, half-sine on both operators for the
+        // plectrum's buzz. Its sustain level used to be 7 — a 21 dB drop
+        // inside the first tenth of a second — which made an eighth note
+        // almost all attack and no note, and buried the part in any mix that
+        // had something sustaining in the same register. SL 2 lets a plucked
+        // string ring the way one does, and leaves the clavinet below as the
+        // short, rude member of the family.
         opl_midi.patch {
-            m_char = 0x01, m_scale = 0x45, m_atk = 0xF5, m_sus = 0x66, m_wave = 0x01,
-            c_char = 0x01, c_scale = 0x00, c_atk = 0xF6, c_sus = 0x76, c_wave = 0x01,
+            m_char = 0x01, m_scale = 0x45, m_atk = 0xF3, m_sus = 0x26, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x00, c_atk = 0xF4, c_sus = 0x26, c_wave = 0x01,
             n_conn = 0x0C },
         // Clavinet. Maximum feedback on a 1:1 pair, very short — the
         // percussive, almost rude end of the plucked-string family.

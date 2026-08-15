@@ -539,10 +539,10 @@ fcc demos/shared/tools/midi_render.fc demos/shared/opl_midi.fc \
 cc -std=c11 -o /tmp/mr /tmp/mr.c -lm
 
 /tmp/mr demos/fuzzel-fobble/music/minuet.mid /tmp/out.wav
-  demos/fuzzel-fobble/music/minuet.mid: division 480, 1594 events, 92160 ticks
+  demos/fuzzel-fobble/music/minuet.mid: division 480, 1813 events, 92160 ticks
   bank fc-gm: 60 voices
   rendered 4233600 frames (96.00 s) at 44100 Hz to /tmp/out.wav
-  peak 15224 of 32767, 0 clipped samples, 0 voice steals
+  peak 20890 of 32767, 0 clipped samples, 0 voice steals
 ```
 
 A third argument sets the length in seconds — ask for more than the song has

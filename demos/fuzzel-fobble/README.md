@@ -505,11 +505,29 @@ each whole bar on a patch whose EGT bit is set, so it sustains instead of
 decaying, and it sounds 78% of the time against the melody's 90% — where the
 first version of this arrangement gave the accompaniment one chord stab and one
 held note per bar and got 5% and 2%. You could hear the tune and essentially
-nothing else. Each channel also sets its own CC7 volume, so the balance lives
-in the file where it can be edited rather than in the player: melody −23 dBFS,
-harmony −26, bass −29.
+nothing else.
 
-Six tracks in SMF format 1, five sounding channels, and at most six
+The harpsichord is octave-doubled, and the strings drop from CC7 70 to 56 for
+the length of each repeat. Both are there for the same reason: a single
+plucked eighth measured fifteen decibels under the rest of the mix in its own
+strongest band, which is five below the drums, and no amount of velocity was
+going to fix it — the patch's carrier already sits at TL 0. A second note an
+octave up, a sustain level that lets the string ring, and the harmony stepping
+back where the figuration plays put it at −6 dB in that band, which is three
+*above* the drums.
+
+Each channel sets its own CC7 volume, so the balance lives in the file where
+it can be edited rather than in the player:
+
+| Part | Level | Sounding |
+|---|---:|---:|
+| Melody | −23 dBFS | 90% |
+| Harmony | −27 | 78% |
+| Bass | −29 | 77% |
+| Harpsichord | −32 | 32% |
+| Drums | −42 | 3% |
+
+Six tracks in SMF format 1, five sounding channels, and at most seven
 simultaneous notes. It steals zero voices, which is another way of saying the
 arrangement was written to fit nine.
 
