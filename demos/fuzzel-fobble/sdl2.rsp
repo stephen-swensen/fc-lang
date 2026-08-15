@@ -1,0 +1,31 @@
+# Fuzzel Fobble — the SDL2 build.
+#
+# Used by run-sdl2.sh (`fcc @demos/fuzzel-fobble/sdl2.rsp`), and by the editor
+# when lsp.rsp points here. Paths are relative to this file.
+
+# The backend. Required: main.fc static_asserts on it, and gfx_sdl2.fc
+# static_asserts that it names *this* backend, so a build cannot end up with
+# one backend's sources and the other's flag.
+--flag backend=sdl2
+
+# The backend, and the bindings only it needs.
+../shared/sdl2.fc
+gfx_sdl2.fc
+
+# The game, identical in both builds.
+plat.fc
+game.fc
+art.fc
+sound.fc
+main.fc
+
+# Sound engine (its audio device follows --flag backend).
+../shared/opl2.fc
+../shared/opl_audio.fc
+
+# stdlib modules this demo imports
+../../stdlib/io.fc
+../../stdlib/text.fc
+../../stdlib/sys.fc
+../../stdlib/math.fc
+../../stdlib/random.fc

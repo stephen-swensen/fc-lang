@@ -2,8 +2,9 @@
 
 Modules the demos have in common. Nothing here is a library in the stdlib
 sense — these are demo-support files, and a demo pulls in only the ones it
-needs by listing them in its `lsp.rsp` (the response file its `run.sh` builds
-from, and the one `fcc --lsp` reads to scope the editor's analysis).
+needs by listing them in its response file (the one its `run.sh` builds from,
+and the one `fcc --lsp` reads — `lsp.rsp` by convention — to scope the editor's
+analysis).
 
 Everything here lives in **`namespace shared::`**, so a demo names what it uses
 (`import sdl2 from shared::`) the same way it does for `std::`. Within the
@@ -13,7 +14,7 @@ can drive `opl2` and the platform layer with no import lines of its own.
 | File | What it is | Depends on |
 |---|---|---|
 | `sdl2.fc` | SDL2 bindings (`module sdl2`) | SDL2 headers + `-lSDL2` |
-| `raylib.fc` | raylib bindings (`module raylib`) | raylib source, fetched and built by `demos/fuzzel-fobble-raylib/run.sh` into the gitignored `raylib/` |
+| `raylib.fc` | raylib bindings (`module raylib`) | raylib source, fetched and built by `demos/fuzzel-fobble/run-raylib.sh` into the gitignored `raylib/` |
 | `opl2.fc` | OPL2 / YM3812 FM chip emulator (`module opl2`) | `stdlib/math.fc` |
 | `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, one of `sdl2.fc` / `raylib.fc`, `stdlib/math.fc`, `stdlib/io.fc` |
 
@@ -22,8 +23,8 @@ nothing but data — instruments, effect scripts, a tune — which is the shape 
 game's audio file is meant to have.
 
 `sdl2.fc` and `raylib.fc` cover deliberately the same ground, because
-`fuzzel-fobble` and `fuzzel-fobble-raylib` are the same game over each of
-them — see [that demo's README](../fuzzel-fobble-raylib/README.md) for what
+`fuzzel-fobble` builds on either of them from one set of sources — see
+[that demo's README](../fuzzel-fobble/README.md) for what
 the swap costs and buys.
 
 ---
@@ -100,36 +101,55 @@ level. Module scope also freezes the tables, which is what gives them the
 
 The SDL2 backend is the default and needs nothing said. To run the engine on
 raylib instead, list `../shared/raylib.fc` in place of `../shared/sdl2.fc` and
-add the flag to your `lsp.rsp`:
+set the backend flag in your response file:
 
 ```
---flag raylib_audio
+--flag backend=raylib
 ```
+
+The device rides the same flag the renderer does rather than having one of its
+own because it has to: raylib's audio device is in the same library as raylib's
+window, so a demo that is not linking raylib cannot open one.
+
+The flag is **optional but not loose** — the three cases are the whole rule:
+
+| `--flag backend=…` | Device |
+|---|---|
+| unset, or `sdl2` | SDL's. A demo that predates raylib needs no change. |
+| `raylib` | raylib's. |
+| anything else | A compile error naming the flag. |
+
+The last row is why the `#if` is written as three arms rather than one
+`!= "raylib"` test: a typo or a backend this file has no device for would
+otherwise be handed to SDL silently, and the consumer would find out at the
+link line or not at all.
 
 The only visible difference is `start`. raylib's audio callback is
 `void (*)(void *buffer, unsigned int frames)` with **no userdata pointer**, so
 the engine instance it drives cannot be passed in and has to be reachable from
-file scope — which FC allows only in the entry-point file. So the raylib
-`start` takes the callback rather than owning it, and your `main.fc` supplies
-a two-line trampoline over the public `opl_audio.render`:
+file scope. The raylib `start` therefore takes the callback rather than owning
+it, and you supply a two-line trampoline over the public `opl_audio.render`
+alongside a writable global to hold the engine:
 
 ```fc
-let mut audio_engine = default(any*)            // file scope, entry-point file
+module gfx =
+    private let mut engine = default(any*)      // module-level `let mut`:
+                                                // static storage, writable
+    private let audio_callback = (buffer: any*, frames: u32) ->
+        let a = (opl_audio.audio*) engine
+        opl_audio.render(a, i16[] { ptr = (i16*) buffer, len = (i64) frames },
+                         (i32) frames)
 
-let audio_callback = (buffer: any*, frames: u32) ->
-    let a = (opl_audio.audio*) audio_engine
-    opl_audio.render(a, i16[] { ptr = (i16*) buffer, len = (i64) frames },
-                     (i32) frames)
-
-// in main, before the device opens — the callback reads it immediately after
-audio_engine = (any*) a
-if !opl_audio.start(a, &audio_callback) then
-    io.write("Audio: device open failed - running silent\n", stdout)
+    let audio_start = (a: opl_audio.audio*) ->
+        engine = (any*) a                       // before the device opens —
+                                                // the callback reads it
+                                                // immediately after
+        opl_audio.start(a, &audio_callback)
 ```
 
-`demos/fuzzel-fobble-raylib` is the worked example. Everything else in this
-document — the threading rules, the API surface, the shutdown note — applies
-unchanged to both.
+`demos/fuzzel-fobble/gfx_raylib.fc` is the worked example. Everything else in
+this document — the threading rules, the API surface, the shutdown note —
+applies unchanged to both.
 
 ### API surface
 
@@ -139,14 +159,14 @@ the audio thread.
 | Call | Effect |
 |---|---|
 | `init(rate, bank, song, music_gain, sfx_gain) -> audio*` | Build the engine. No device yet. |
-| `start(a) -> bool` | Open the device and start the callback. `false` = no audio device. Takes `(a, cb)` under `raylib_audio` — see [Picking a backend](#picking-a-backend). |
+| `start(a) -> bool` | Open the device and start the callback. `false` = no audio device. Takes `(a, cb)` under `backend=raylib` — see [Picking a backend](#picking-a-backend). |
 | `play(a, id)` | Fire effect `id` on the next voice by rotation. |
 | `music_begin(a)` | Start the tune from the top. |
 | `music_end(a)` | Stop it and rewind, so the next `music_begin` opens on bar 1. |
 | `music_hold(a)` / `music_unhold(a)` | Pause mid-phrase and resume there. |
 | `music_toggle_mute(a)` | The player's own switch, independent of the above. |
 | `music_muted(a) -> bool` | For a HUD indicator. |
-| `render(a, out, frames)` | The consumer side of the ring. Called *by* the callback under `raylib_audio`; otherwise offline only — see [Tuning without launching](#tuning-without-launching-the-game). Exactly one caller, ever. |
+| `render(a, out, frames)` | The consumer side of the ring. Called *by* the callback under `backend=raylib`; otherwise offline only — see [Tuning without launching](#tuning-without-launching-the-game). Exactly one caller, ever. |
 
 `music_end` and `music_hold` are different on purpose: a run ending should
 rewind, a pause menu should not. The mute switch is tracked separately again,
@@ -551,11 +571,11 @@ Conventions and things worth knowing:
 
 Hand-written externs against `raylib.h`, in `namespace shared::` as
 `module raylib`. Deliberately scoped to the same ground `sdl2.fc` covers, so
-that `fuzzel-fobble` and `fuzzel-fobble-raylib` are a fair comparison: init and
+that `fuzzel-fobble`'s two backends are a fair comparison: init and
 lifecycle, window management, 2D shapes, render textures, keyboard input,
 timing, and a raw audio stream. Nothing 3D.
 
-The library is **not in this repository**. `demos/fuzzel-fobble-raylib/run.sh`
+The library is **not in this repository**. `demos/fuzzel-fobble/run-raylib.sh`
 fetches raylib's source into `demos/shared/raylib/` on first run and builds it
 there; that directory is gitignored. Delete it to force a clean re-fetch.
 
@@ -599,8 +619,8 @@ What the port taught us about binding raylib specifically:
 - **There is no `SDL_RenderSetLogicalSize`.** Draw into a `RenderTexture2D` at
   the fixed size and blit it yourself with `DrawTexturePro`, with a **negative
   source height** — GL framebuffers are bottom-up, and flipping the source
-  rectangle is how raylib says so. `demos/fuzzel-fobble-raylib/main.fc`'s
-  `present` is the worked example.
+  rectangle is how raylib says so. `demos/fuzzel-fobble/gfx_raylib.fc`'s
+  `frame_end` is the worked example.
 - **Blit a render texture with `BLEND_ALPHA_PREMULTIPLY`, not the default.**
   raylib's `BLEND_ALPHA` is `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)`
   — not the `…Separate` variant (`rlgl.h`) — so the source alpha scales the

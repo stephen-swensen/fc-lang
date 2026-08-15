@@ -1,0 +1,266 @@
+// Fuzzel Fobble — the raylib backend.
+//
+// The other definition of `module gfx` (the contract is in plat.fc), and the
+// point of keeping two: the game above this line does not change at all, so
+// everything that *does* change between SDL2 and raylib is exactly the
+// contents of this file versus gfx_sdl2.fc. Read them side by side.
+//
+// What raylib gives the layer above, in one sentence each:
+//
+//   * no handles — the window, the GL context and the draw target are
+//     raylib's own globals, so nothing here is threaded anywhere;
+//   * circles, regular polygons and thick lines as primitives, so `disc`,
+//     `hex` and `thick_line` are one call each;
+//   * no logical-size mode, so the letterbox is drawn by hand through a
+//     render texture (see `frame_end`);
+//   * polled input, not queued: raylib latches the keyboard once a frame
+//     and answers both "is it down" and "did it just go down" from the
+//     latch, so this file keeps no key state at all;
+//   * an audio callback with no userdata pointer, which is why `engine`
+//     below exists.
+
+import raylib from shared::
+import opl_audio from shared::
+import io from std::
+import math from std::
+
+module gfx =
+    // The logical-size target. Everything the game draws goes here at
+    // 1280x720 and `frame_end` scales it to the window.
+    private let mut target = default(raylib.render_texture)
+    private let mut logical_w = 0
+    private let mut logical_h = 0
+
+    // The audio engine, reachable from file scope because raylib's
+    // AudioCallback is `void (*)(void *buffer, unsigned int frames)` — no
+    // userdata pointer, the one place raylib's API is thinner than SDL's.
+    // Written once in `audio_start` before the device opens, read only by
+    // the audio thread after.
+    private let mut engine = default(any*)
+
+    // ============================================================
+    // Lifecycle
+    // ============================================================
+
+    let open = (lw: i32, lh: i32, title: const cstr) ->
+#if backend != "raylib"
+        static_assert(false, "gfx_raylib.fc is the raylib backend and needs --flag backend=raylib (run demos/fuzzel-fobble/run-raylib.sh)")
+#end
+        logical_w = lw
+        logical_h = lh
+
+        // raylib narrates every load and unload on stdout; the game's own
+        // output is more useful than the inventory.
+        raylib.set_log_level(raylib.log_warning)
+
+        // Config flags are set *before* the window exists — there is no
+        // window-vs-renderer split, so vsync is requested here rather than
+        // at renderer creation the way the SDL2 backend does.
+        //
+        // Deliberately *not* flag_highdpi, which the SDL2 backend's
+        // counterpart (SDL_WINDOW_ALLOW_HIGHDPI) does pass. On a 2x X11
+        // desktop it makes screen_width() report physical pixels while
+        // raylib's own projection stays in logical ones, so every
+        // measurement taken from raylib disagrees with the space raylib
+        // draws into by the DPI factor and the letterbox lands at twice its
+        // size. Without it the two agree, and the render texture is upscaled
+        // by the compositor instead of by us — softer on a HiDPI panel, but
+        // correct everywhere.
+        raylib.set_config_flags(raylib.flag_vsync | raylib.flag_resizable)
+
+        // One call: window, OpenGL context, 2D renderer and input. There is
+        // no handle — raylib keeps all of it in globals of its own.
+        raylib.init_window(960, 540, title)
+        raylib.maximize_window()
+        raylib.set_min_size(lw / 2, lh / 2)
+        raylib.hide_cursor()
+
+        target = raylib.load_render_texture(lw, lh)
+        raylib.set_texture_filter(target.texture, raylib.filter_bilinear)
+
+        // The size at window creation, not after the maximise: raylib's
+        // window state calls are GLFW requests the window manager honours on
+        // some later frame, where SDL_MaximizeWindow followed by
+        // SDL_GetRendererOutputSize reads back the new size straight away.
+        // Nothing depends on this — `frame_end` re-measures every frame —
+        // but it is why the number below is the one that was asked for.
+        io.write("Window at startup: %d{raylib.screen_width()}x%d{raylib.screen_height()} (logical %d{lw}x%d{lh}, letterboxed per frame)\n",
+                 stdout)
+        return
+
+    // Deliberately no CloseAudioDevice: closing the device *joins* the audio
+    // callback thread, and a host audio server that has wedged that thread
+    // makes the join — and the exiting game — hang forever. The process is
+    // ending; the kernel reaps the thread, the device and the memory. See
+    // `shutdown_note` at the foot of demos/shared/opl_audio.fc.
+    //
+    // The window we do tear down: that is video, which an audio wedge cannot
+    // block. raylib's CloseWindow does not touch the audio device.
+    let close = () ->
+        raylib.unload_render_texture(target)
+        raylib.close_window()
+
+    let set_title = (t: const cstr) ->
+        raylib.set_title(t)
+
+    // Runs on miniaudio's audio thread. `buffer` is in the *stream's* format
+    // — mono i16 at the engine's rate — and `frames` is whatever raylib's
+    // resampler wants this call, so there is no fixed block size to match.
+    // `render` is the same drain-then-fill the SDL2 callback does inline.
+    private let audio_callback = (buffer: any*, frames: u32) ->
+        let a = (opl_audio.audio*) engine
+        let out = i16[] { ptr = (i16*) buffer, len = (i64) frames }
+        opl_audio.render(a, out, (i32) frames)
+
+    // `engine` is published before the device opens, because the callback
+    // starts reading it the moment the stream plays and has no other way to
+    // find it.
+    let audio_start = (a: opl_audio.audio*) ->
+        engine = (any*) a
+        opl_audio.start(a, &audio_callback)
+
+    // ============================================================
+    // Input
+    // ============================================================
+
+    private let latch = (inp: input*, key: i32, action: i32) ->
+        if raylib.is_key_down(key) then
+            inp.held = inp.held | action
+        if raylib.is_key_pressed(key) then
+            inp.tapped = inp.tapped | action
+
+    // No event loop, and no key state kept here: raylib latches the keyboard
+    // once, inside end_drawing, and answers every query below from that
+    // latch — so this is a flat list of questions about the current frame
+    // rather than a drain over a queue of changes.
+    //
+    // What is lost is the queue's exactness: two presses of the same key
+    // inside one frame read as one, where SDL2 would deliver both. At 60 Hz
+    // that is not a distinction a player can make, and this game has no
+    // rhythm input, so the trade is free here — it would not be in a
+    // fighting game.
+    let pump = (inp: input*) ->
+        // Window close and the ESC key both land here — ESC is raylib's
+        // default exit key — so this one call is the SDL2 backend's quit
+        // event and its ESC arm together. It clears the close flag as it
+        // reads it, so it belongs in exactly one place, once a frame.
+        inp.quit = raylib.window_should_close()
+
+        // ToggleBorderlessWindowed is the whole of what the SDL2 backend
+        // hand-rolls as get-display-bounds, unborder, move, resize. It
+        // restores the previous geometry on the way back, so there is no
+        // flag to keep either — the library remembers which way it goes.
+        if raylib.is_key_pressed(raylib.key_f11) then
+            raylib.toggle_borderless()
+
+        inp.held = 0
+        inp.tapped = 0
+        latch(inp, raylib.key_left,  plat.aim_left)
+        latch(inp, raylib.key_a,     plat.aim_left)
+        latch(inp, raylib.key_right, plat.aim_right)
+        latch(inp, raylib.key_d,     plat.aim_right)
+        latch(inp, raylib.key_space, plat.fire)
+        latch(inp, raylib.key_enter, plat.start)
+        latch(inp, raylib.key_tab,   plat.swap)
+        latch(inp, raylib.key_p,     plat.pause)
+        latch(inp, raylib.key_s,     plat.symbols)
+        latch(inp, raylib.key_m,     plat.mute)
+        latch(inp, raylib.key_c,     plat.clear_best)
+
+    // ============================================================
+    // Frame
+    // ============================================================
+
+    // Alpha blending is raylib's default state, so unlike the SDL2 backend
+    // there is no blend mode to set and unset around the clear.
+    let frame_begin = (cr: u8, cg: u8, cb: u8) ->
+        raylib.begin_texture_mode(target)
+        raylib.clear_background(rgba(cr, cg, cb, 255u8))
+
+    // SDL_RenderSetLogicalSize has no counterpart here, so the letterbox is
+    // ours to compute: the game has drawn at logical size into an off-screen
+    // target, and this blits it, scaled by whichever axis runs out first and
+    // centred in what's left over.
+    //
+    // Three traps, all paid for once:
+    //
+    //   * The source height is *negative* on purpose. An OpenGL
+    //     framebuffer's rows run bottom-up, and flipping the source
+    //     rectangle is how raylib says "read it the other way".
+    //   * The sizes come from screen_width/screen_height, which is the space
+    //     raylib's own draw calls are in. render_* is the framebuffer, and
+    //     the two part company under FLAG_WINDOW_HIGHDPI — see `open`.
+    //   * The blit runs in blend_premultiplied, not the default alpha blend,
+    //     because drawing into a render texture corrupts its alpha channel.
+    //     raylib's BLEND_ALPHA is glBlendFunc(GL_SRC_ALPHA,
+    //     GL_ONE_MINUS_SRC_ALPHA) — not glBlendFuncSeparate — so the source
+    //     alpha scales the *alpha* channel as well as the colour. A
+    //     62%-opaque white (the bubble specular) leaves that texel at alpha
+    //     = 0.62^2 + 0.38 = 0.764 rather than the 1.0 an opaque target
+    //     should have, and blitting that back with alpha blending multiplies
+    //     its colour by 0.764: every translucent thing in the frame comes
+    //     out 24% too dark. Premultiplied blending is glBlendFunc(GL_ONE,
+    //     GL_ONE_MINUS_SRC_ALPHA), which drops the alpha factor from the
+    //     colour term — exactly right here, since the target is cleared
+    //     opaque and nothing under it shows through. The SDL2 backend has no
+    //     intermediate texture and so never meets this.
+    //
+    // end_drawing is also where raylib swaps buffers, waits out vsync and
+    // re-latches the keyboard, so there is no sleep to add — the SDL2
+    // backend's SDL_Delay(1) safety net is end_drawing's job here.
+    let frame_end = () ->
+        raylib.end_texture_mode()
+
+        let sw = raylib.screen_width()
+        let sh = raylib.screen_height()
+        let scale = math.min((f64) sw / (f64) logical_w,
+                             (f64) sh / (f64) logical_h)
+        let dw = (f32) (scale * (f64) logical_w)
+        let dh = (f32) (scale * (f64) logical_h)
+
+        raylib.begin_drawing()
+        raylib.clear_background(rgba(0u8, 0u8, 0u8, 255u8))
+        raylib.begin_blend_mode(raylib.blend_premultiplied)
+        raylib.draw_texture_pro(target.texture,
+            raylib.rect { x = 0.0f32, y = 0.0f32,
+                          width = (f32) logical_w, height = -(f32) logical_h },
+            raylib.rect { x = ((f32) sw - dw) * 0.5f32,
+                          y = ((f32) sh - dh) * 0.5f32,
+                          width = dw, height = dh },
+            raylib.vec2 { x = 0.0f32, y = 0.0f32 }, 0.0f32,
+            rgba(255u8, 255u8, 255u8, 255u8))
+        raylib.end_blend_mode()
+        raylib.end_drawing()
+
+    // ============================================================
+    // Primitives
+    //
+    // raylib passes its colour by value where SDL sets a current draw
+    // colour, so the struct is built once here, at the boundary; the art
+    // above stays in loose channels.
+    // ============================================================
+
+    private let rgba = (cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.color { r = cr, g = cg, b = cb, a = ca }
+
+    let fill = (x: i32, y: i32, w: i32, h: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_rect(x, y, w, h, rgba(cr, cg, cb, ca))
+
+    let disc = (cx: i32, cy: i32, rad: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_circle(cx, cy, (f32) rad, rgba(cr, cg, cb, ca))
+
+    // A hexagon of circumradius `rad` with a vertex at angle 0 is exactly
+    // what fill_poly draws at rotation 0 — the same hexagon `art.hex_vertex`
+    // walks when it lights the stone's facet edges.
+    let hex = (cx: i32, cy: i32, rad: i32,
+               cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_poly(raylib.vec2 { x = (f32) cx, y = (f32) cy },
+                         6, (f32) rad, 0.0f32, rgba(cr, cg, cb, ca))
+
+    let thick_line = (x1: f64, y1: f64, x2: f64, y2: f64, th: i32,
+                      cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.draw_line_ex(raylib.vec2 { x = (f32) x1, y = (f32) y1 },
+                            raylib.vec2 { x = (f32) x2, y = (f32) y2 },
+                            (f32) th, rgba(cr, cg, cb, ca))

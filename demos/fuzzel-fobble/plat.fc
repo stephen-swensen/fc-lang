@@ -1,0 +1,86 @@
+// Fuzzel Fobble — the platform contract.
+//
+// The line between the two halves of this demo, and the one file both halves
+// depend on. It fixes two things:
+//
+//   * what a frame of input looks like, in the game's vocabulary rather than
+//     any library's — nine actions and a quit, no key codes;
+//   * what a backend has to provide, which is the `gfx` module tabulated at
+//     the foot of this file.
+//
+// `gfx_sdl2.fc` and `gfx_raylib.fc` each define exactly one `module gfx`, and
+// a build takes exactly one of them (`sdl2.rsp` / `raylib.rsp`). FC has no
+// interfaces and no traits, and this is deliberately *not* a struct of
+// function pointers: the interface is a module name, the build picks which
+// file defines it, and every call through it is a direct call resolved at
+// compile time. The layering costs nothing at run time — which is the only
+// kind of abstraction a language with no GC to foot the bill should offer.
+
+// One frame's input, as the game understands it. `held` is the set of actions
+// the player is holding right now; `tapped` is the subset that went down on
+// *this* frame. Both are bit sets over the constants below.
+//
+// The two are different questions and the game asks both: aiming wants "is it
+// held", firing wants "did it just go down" — one press should cost one
+// bubble. Which of the two a backend gets for free differs (SDL2 delivers
+// changes and has to be asked to remember; raylib remembers and has to be
+// asked what changed), and reconciling that is the backend's job, not the
+// game's.
+struct input =
+    quit: bool
+    held: i32
+    tapped: i32
+
+module plat =
+    // The actions. A backend maps its own key codes onto these; nothing
+    // downstream ever learns which key it was.
+    let aim_left   = 1
+    let aim_right  = 2
+    let fire       = 4
+    let start      = 8
+    let swap       = 16
+    let pause      = 32
+    let symbols    = 64
+    let mute       = 128
+    let clear_best = 256
+
+    // Is this action being held? / did it go down this frame?
+    let down = (inp: const input*, action: i32) -> inp.held & action != 0
+    let tap  = (inp: const input*, action: i32) -> inp.tapped & action != 0
+
+// ============================================================
+// What a backend must define
+//
+// module gfx =
+//
+//   Lifecycle
+//     open(lw, lh, title: const cstr)   Window, renderer and a lw x lh
+//                                       logical board. Everything drawn
+//                                       afterwards is in those coordinates.
+//     close()                           Tear the window down. Video only —
+//                                       see the note in either backend for
+//                                       why the audio device is left alone.
+//     set_title(t: const cstr)
+//     audio_start(a: opl_audio.audio*) -> bool
+//                                       Open the sound device and start its
+//                                       callback. `false` = run silent.
+//
+//   Frame
+//     pump(inp: input*)                 Fill `inp` for this frame: quit,
+//                                       held, tapped. Also where a backend
+//                                       handles what is its own business and
+//                                       not the game's — F11, for one.
+//     frame_begin(cr, cg, cb)           Start a frame; clear to that colour.
+//     frame_end()                       Put it on the window, letterboxed.
+//
+//   Primitives — logical coordinates, alpha blended, loose u8 channels
+//     fill(x, y, w, h, r, g, b, a)                  filled rect
+//     disc(cx, cy, rad, r, g, b, a)                 filled circle
+//     hex(cx, cy, rad, r, g, b, a)                  filled hexagon, flat top
+//     thick_line(x1, y1, x2, y2, th, r, g, b, a)    f64 endpoints
+//
+// Four primitives is the whole surface art.fc draws on. That is not a
+// minimal-API exercise: it is what the two libraries genuinely agree on.
+// Everything above it — the font, the bubbles, the HUD — is built out of
+// these four in art.fc and is identical in both builds.
+// ============================================================

@@ -29,5 +29,5 @@ scratch*/
 Thumbs.db
 
 # Vendored raylib source + build, fetched on demand by
-# demos/fuzzel-fobble-raylib/run.sh. Never committed.
+# demos/fuzzel-fobble/run-raylib.sh. Never committed.
 /demos/shared/raylib/

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build and run Fuzzel Fobble (raylib).
+# Build and run Fuzzel Fobble on raylib. For the SDL2 build, run run-sdl2.sh
+# instead — same game, same sources, one different backend file.
 #
 # Unlike the SDL2 demos, this one has no system package to install: raylib is
 # fetched from source on first run, built into a static library under
@@ -117,10 +118,10 @@ fi
 make -s
 FCC="$(make -s print-bin)"
 
-# The source list lives in lsp.rsp, so this script and `fcc --lsp` compile
-# exactly the same unit — including the --flag that selects opl_audio's
-# raylib device backend.
-RSP="@demos/fuzzel-fobble-raylib/lsp.rsp"
+# The source list and the backend flag live in raylib.rsp, so this script
+# compiles exactly the unit the editor analyses when lsp.rsp points there. The
+# flag also picks opl_audio's raylib device backend.
+RSP="@demos/fuzzel-fobble/raylib.rsp"
 
 "$FCC" "$RSP" -o "$OUTDIR/fuzzel-fobble-raylib.c"
 cc -std=c11 -Wall -Werror -I"$RAYLIB_SRC" \

@@ -1,0 +1,267 @@
+// Fuzzel Fobble — the SDL2 backend.
+//
+// One of the two files that define `module gfx` (the contract is in
+// plat.fc). A build takes this one or gfx_raylib.fc and never both — they
+// declare the same module, and each pulls in a library the other doesn't.
+//
+// Every SDL-shaped line in the program is in this file. Nothing above it
+// names a window, a renderer, a key code or a blend mode.
+//
+// What SDL2 gives the layer above, in one sentence each:
+//
+//   * a renderer handle, which is why the two below are the only mutable
+//     globals in the program;
+//   * points, lines and axis-aligned rects — no circle, no polygon, no
+//     thick line, so `disc`, `hex` and `thick_line` are built here out of
+//     rects and lines;
+//   * a logical size, so the letterbox is one call at startup and costs
+//     this file nothing per frame;
+//   * an event queue, which reports *changes*, so a held key is state this
+//     file has to keep.
+
+import sdl2 from shared::
+import rect from shared::sdl2
+import sdl_event from shared::sdl2
+import opl_audio from shared::
+import io from std::
+import math from std::
+
+module gfx =
+    // SDL hands back two handles and both outlive `open`, so they live here.
+    // A module-level `let mut` is FC's writable global: static storage, a
+    // constant initializer, exactly the C file-scope variable it compiles
+    // to. (A module-level plain `let` is the opposite — frozen and ROM-able.)
+    private let mut win = default(any*)
+    private let mut ren = default(any*)
+    private let mut fullscreen = false
+    private let mut logical_w = 0
+    private let mut logical_h = 0
+
+    // ============================================================
+    // Lifecycle
+    // ============================================================
+
+    let open = (lw: i32, lh: i32, title: const cstr) ->
+#if backend != "sdl2"
+        static_assert(false, "gfx_sdl2.fc is the SDL2 backend and needs --flag backend=sdl2 (run demos/fuzzel-fobble/run-sdl2.sh)")
+#end
+        logical_w = lw
+        logical_h = lh
+
+        // Request smooth linear scaling when SDL blits logical -> physical.
+        sdl2.set_hint(c"SDL_RENDER_SCALE_QUALITY", c"linear")
+        sdl2.init(sdl2.init_video | sdl2.init_audio)
+
+        let flags = sdl2.window_shown | sdl2.window_allow_highdpi | sdl2.window_resizable
+        win = sdl2.create_window(title, sdl2.pos_centered, sdl2.pos_centered,
+                                 960, 540, flags)
+        sdl2.maximize_window(win)
+
+        ren = sdl2.create_renderer(win, -1,
+                                   sdl2.renderer_accel | sdl2.renderer_vsync)
+        // The whole of the letterbox: SDL scales and centres a logical-size
+        // board into the window for us, on every draw call, for free.
+        sdl2.set_logical_size(ren, lw, lh)
+        sdl2.set_blend_mode(ren, sdl2.blend_alpha)
+        sdl2.show_cursor(0)
+
+        let mut out_w = 0
+        let mut out_h = 0
+        sdl2.get_output_size(ren, &out_w, &out_h)
+        io.write("Renderer backing: %d{out_w}x%d{out_h} (logical %d{lw}x%d{lh})\n",
+                 stdout)
+        return
+
+    // Deliberately no SDL_CloseAudioDevice and no SDL_Quit: both of those
+    // *join* the audio callback thread, and a host audio server that has
+    // wedged that thread makes the join — and the exiting game — hang
+    // forever. The process is ending; the kernel reaps the thread, the
+    // device and the memory. See `shutdown_note` at the foot of
+    // demos/shared/opl_audio.fc.
+    //
+    // The window and renderer we do tear down: that is video, which an audio
+    // wedge cannot block, and it closes the window cleanly.
+    let close = () ->
+        sdl2.destroy_renderer(ren)
+        sdl2.destroy_window(win)
+
+    let set_title = (t: const cstr) ->
+        sdl2.set_title(win, t)
+
+    let audio_start = (a: opl_audio.audio*) ->
+        opl_audio.start(a)
+
+    // ============================================================
+    // Input
+    // ============================================================
+
+    private let action_for = (k: i32) ->
+        if k == sdl2.key_left || k == sdl2.key_a then plat.aim_left
+        else if k == sdl2.key_right || k == sdl2.key_d then plat.aim_right
+        else if k == sdl2.key_space then plat.fire
+        else if k == sdl2.key_return then plat.start
+        else if k == sdl2.key_tab then plat.swap
+        else if k == sdl2.key_p then plat.pause
+        else if k == sdl2.key_s then plat.symbols
+        else if k == sdl2.key_m then plat.mute
+        else if k == sdl2.key_c then plat.clear_best
+        else 0
+
+    // Fake fullscreen: a borderless window sized to the display bounds.
+    // Sidesteps SDL's real fullscreen path and its DPI-drawable quirks on
+    // some WMs. Which way the toggle goes is ours to remember.
+    private let toggle_fullscreen = () ->
+        fullscreen = !fullscreen
+        if fullscreen then
+            let mut db = rect { x = 0, y = 0, w = 0, h = 0 }
+            sdl2.get_display_bounds(0, &db)
+            sdl2.set_bordered(win, 0)
+            sdl2.set_window_position(win, db.x, db.y)
+            sdl2.set_window_size(win, db.w, db.h)
+        else
+            sdl2.set_bordered(win, 1)
+            sdl2.restore_window(win)
+            sdl2.maximize_window(win)
+        sdl2.set_logical_size(ren, logical_w, logical_h)
+
+    // Bounded drain. An unbounded one is a frame that never ends if the
+    // window server ever delivers events at least as fast as they are
+    // consumed, and a game loop that never reaches its render is a window
+    // the desktop reports as not responding. Anything left over stays in
+    // SDL's queue and is read next frame; 256 events in a frame is already
+    // an order of magnitude past a human.
+    //
+    // `held` persists across calls because that is exactly what a queue of
+    // *changes* cannot tell you — it is rebuilt from keydown and keyup, and
+    // is the one piece of state this file keeps on the game's behalf.
+    // `tapped` is rebuilt from scratch every frame.
+    let pump = (inp: input*) ->
+        inp.tapped = 0
+        let mut event = default(sdl_event)
+        let mut events_left = 256
+        loop
+            if events_left <= 0 then break
+            events_left = events_left - 1
+            if sdl2.poll_event(&event) == 0 then break
+
+            if (i32) event.type == sdl2.quit_event then
+                inp.quit = true
+
+            if (i32) event.type == sdl2.keydown_event then
+                let k = event.key.keysym.sym
+                // A key held down repeats, and a repeat is not a press: one
+                // press must cost one bubble. raylib's is_key_pressed draws
+                // the same line, so both builds agree.
+                if event.key.repeat == 0u8 then
+                    let a = action_for(k)
+                    inp.held = inp.held | a
+                    inp.tapped = inp.tapped | a
+                    if k == sdl2.key_escape then
+                        inp.quit = true
+                    if k == sdl2.key_f11 then
+                        toggle_fullscreen()
+
+            if (i32) event.type == sdl2.keyup_event then
+                inp.held = inp.held & ~action_for(event.key.keysym.sym)
+
+    // ============================================================
+    // Frame
+    // ============================================================
+
+    // The clear runs unblended so it resets the target outright; everything
+    // after it blends.
+    let frame_begin = (cr: u8, cg: u8, cb: u8) ->
+        sdl2.set_blend_mode(ren, sdl2.blend_none)
+        sdl2.set_color(ren, cr, cg, cb, 255u8)
+        sdl2.clear(ren)
+        sdl2.set_blend_mode(ren, sdl2.blend_alpha)
+        return
+
+    let frame_end = () ->
+        sdl2.present(ren)
+        // Vsync paces us; this is the safety net if vsync is unavailable.
+        sdl2.delay(1u32)
+
+    // ============================================================
+    // Primitives
+    // ============================================================
+
+    let fill = (x: i32, y: i32, w: i32, h: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        let rc = rect { x = x, y = y, w = w, h = h }
+        sdl2.set_color(ren, cr, cg, cb, ca)
+        sdl2.fill_rect(ren, &rc)
+        return
+
+    private let line = (x1: i32, y1: i32, x2: i32, y2: i32,
+                        cr: u8, cg: u8, cb: u8, ca: u8) ->
+        sdl2.set_color(ren, cr, cg, cb, ca)
+        sdl2.draw_line(ren, x1, y1, x2, y2)
+        return
+
+    // Band height for a scanlined round thing. It scales with the radius
+    // because the stepping that reads as pixel art on a 48px bubble reads as
+    // a staircase on a 6px spark. The raylib backend has circle and polygon
+    // primitives and no such knob, which is exactly why the band is decided
+    // here rather than passed in: it is not a fact about the picture.
+    private let band = (rad: i32) ->
+        if rad >= 22 then 4 else if rad >= 10 then 3 else 2
+
+    // A filled circle drawn as horizontal bands. SDL2 has no circle
+    // primitive, and bands are cheap: a 48px bubble costs a dozen rects
+    // instead of a texture and an upload.
+    let disc = (cx: i32, cy: i32, rad: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        let step = band(rad)
+        let fr = (f64) rad
+        let mut y = -rad
+        loop
+            if y >= rad then break
+            let mid = (f64) y + (f64) step * 0.5
+            let inside = fr * fr - mid * mid
+            if inside > 0.0 then
+                let hw = (i32) math.sqrt(inside)
+                if hw > 0 then
+                    fill(cx - hw, cy + y, hw * 2, step, cr, cg, cb, ca)
+            y = y + step
+
+    // Half-width of a flat-topped hexagon `rad` across, at vertical offset
+    // dy. Full width at the middle, tapering to half at the flat top and
+    // bottom.
+    private let hex_half_width = (dy: i32, rad: i32) ->
+        let hh = rad * 866 / 1000
+        let ady = if dy < 0 then -dy else dy
+        if ady > hh then
+            return 0
+        rad - ady * rad / (2 * hh)
+
+    // Scanlined in bands, exactly as `disc` is — the stepped diagonal is the
+    // same pixel-art edge every other round thing in here has. raylib draws
+    // the same shape with one DrawPoly call.
+    let hex = (cx: i32, cy: i32, rad: i32,
+               cr: u8, cg: u8, cb: u8, ca: u8) ->
+        let step = 2
+        let hh = rad * 866 / 1000
+        let mut dy = -hh
+        loop
+            if dy > hh then break
+            let hw = hex_half_width(dy + step / 2, rad)
+            if hw > 0 then
+                fill(cx - hw, cy + dy, hw * 2 + 1, step, cr, cg, cb, ca)
+            dy = dy + step
+
+    // A line with body, drawn as `th` parallel lines along the segment
+    // normal, which this file computes itself.
+    let thick_line = (x1: f64, y1: f64, x2: f64, y2: f64, th: i32,
+                      cr: u8, cg: u8, cb: u8, ca: u8) ->
+        let dx = x2 - x1
+        let dy = y2 - y1
+        let len = math.hypot(dx, dy)
+        if len < 0.001 then return
+        let nx = -dy / len
+        let ny = dx / len
+        let half = th / 2
+        for i in 0..th do
+            let t = (f64) (i - half)
+            line((i32) (x1 + nx * t), (i32) (y1 + ny * t),
+                 (i32) (x2 + nx * t), (i32) (y2 + ny * t), cr, cg, cb, ca)

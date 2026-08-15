@@ -7,7 +7,7 @@
 // into game audio. Compile with `demos/shared/opl2.fc`, `stdlib/math.fc`
 // (which opl2 needs), `stdlib/io.fc` (one diagnostic, on bad song data),
 // and one backend: `demos/shared/sdl2.fc` by default, or
-// `demos/shared/raylib.fc` with `--flag raylib_audio`. Only the ~30-line
+// `demos/shared/raylib.fc` with `--flag backend=raylib`. Only the ~30-line
 // Device section at the foot of this file differs between the two.
 //
 // ------------------------------------------------------------------
@@ -329,10 +329,13 @@ module opl_audio =
 
         // Game-thread side. The device handle's shape is the backend's:
         // SDL hands back an integer id, raylib a stream struct by value.
-#if !raylib_audio
-        dev: u32
-#else
+        // An unrecognised backend takes the SDL shape here and is diagnosed
+        // once, in the Device section — a second complaint about a field
+        // would say nothing the first one doesn't.
+#if backend == "raylib"
         dev: raylib.audio_stream
+#else
+        dev: u32
 #end
         muted: bool             // mirror of music_mute, for the game's HUD
 
@@ -562,12 +565,28 @@ module opl_audio =
     // lock-free: the game loop never blocks waiting on audio, and audio
     // never waits on a frame.
     //
-    // Which one is compiled is chosen by the `raylib_audio` flag, set in
-    // a demo's lsp.rsp. Without it the SDL backend is used, so a demo
-    // that predates raylib needs no change.
+    // Which one is compiled follows the `backend` flag a demo sets in its
+    // response file, and the three arms below are the whole rule:
+    //
+    //     unset, or backend=sdl2   SDL's device  (so a demo that predates
+    //                                             raylib needs no change)
+    //     backend=raylib           raylib's device
+    //     anything else            a compile error, right here
+    //
+    // The third arm is the point of writing it this way. A single
+    // `!= "raylib"` test would hand every other spelling — `sdl`, a typo,
+    // a backend this file has no device for — to SDL silently, and the
+    // consumer would find out at the link line or not at all. The flag is
+    // still optional, because a demo that only ever links SDL2 has one
+    // legal answer and shouldn't have to write it down; what is not
+    // optional is that an answer this file doesn't recognise says so.
+    //
+    // The device rides the same flag the renderer does because it has to:
+    // raylib's audio device is in the same library as raylib's window, and
+    // a demo that is not linking raylib cannot open one.
     // ============================================================
 
-#if !raylib_audio
+#if !backend || backend == "sdl2"
     // SDL's audio callback, running on SDL's own audio thread.
     //
     // Non-capturing (it references only module-level bindings), so
@@ -601,7 +620,7 @@ module opl_audio =
         else
             sdl2.pause_audio(a.dev, 0)
             true
-#else
+#else if backend == "raylib"
     // raylib's audio-stream callback is
     //
     //     void (*AudioCallback)(void *buffer, unsigned int frames)
@@ -609,11 +628,12 @@ module opl_audio =
     // with **no userdata pointer** — the one place raylib's API is thinner
     // than SDL's, and the reason `start` takes the callback rather than
     // owning it. The engine instance the callback drives has to be
-    // reachable from the callback without being passed in, and FC allows a
-    // mutable binding at file scope only in the entry-point file, so the
-    // trampoline lives in the game's own main.fc and hands its address in
-    // here. Its body is the two lines SDL's `callback` above spends on the
-    // same job, over the public `render`.
+    // reachable from the callback without being passed in, so the caller
+    // keeps it in a writable global — a module-level `let mut` — and hands
+    // this function the address of a trampoline that reads it. That
+    // trampoline's body is the two lines SDL's `callback` above spends on
+    // the same job, over the public `render`; see
+    // `demos/fuzzel-fobble/gfx_raylib.fc`.
     //
     // `frames` is whatever raylib's resampler asks for on the call, and
     // `buffer` is in the *stream's* format — mono i16 at `a.rate` — not
@@ -631,6 +651,14 @@ module opl_audio =
         raylib.set_audio_stream_callback(a.dev, cb)
         raylib.play_audio_stream(a.dev)
         true
+#else
+    // A backend this file has no device for. `start` is defined anyway, in
+    // the shape the default arm has, so the build stops on the sentence
+    // below rather than on a pile of undefined names underneath it.
+    let start = (a: audio*) ->
+        static_assert(false,
+            "opl_audio: unrecognised --flag backend — this file has devices for sdl2 (the default when the flag is unset) and raylib")
+        false
 #end
 
     // ============================================================

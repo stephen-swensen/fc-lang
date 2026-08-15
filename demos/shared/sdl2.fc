@@ -164,6 +164,10 @@ module sdl2 from "SDL2/SDL.h" =
         sym: i32
     extern struct SDL_KeyboardEvent as keyboard_event =
         type: u32
+        // Non-zero when this keydown is the auto-repeat of a key already
+        // held. A demo that treats a keydown as "the player pressed it" has
+        // to check it — one press should cost one action.
+        repeat: u8
         keysym: sdl_keysym
     extern union SDL_Event as sdl_event =
         type: u32

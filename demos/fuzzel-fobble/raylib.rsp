@@ -1,0 +1,36 @@
+# Fuzzel Fobble — the raylib build.
+#
+# Used by run-raylib.sh (`fcc @demos/fuzzel-fobble/raylib.rsp`), and by the
+# editor when lsp.rsp points here. Paths are relative to this file.
+#
+# Note what is *not* here: ../shared/sdl2.fc and gfx_sdl2.fc. The two backends
+# define the same module and each names a library the other doesn't, so a
+# build takes one or the other. Everything below the backend line is shared
+# with sdl2.rsp, byte for byte.
+
+# The backend. Required: main.fc static_asserts on it, gfx_raylib.fc
+# static_asserts that it names *this* backend, and demos/shared/opl_audio.fc
+# reads it to pick raylib's audio device over SDL's.
+--flag backend=raylib
+
+# The backend, and the bindings only it needs.
+../shared/raylib.fc
+gfx_raylib.fc
+
+# The game, identical in both builds.
+plat.fc
+game.fc
+art.fc
+sound.fc
+main.fc
+
+# Sound engine (its audio device follows --flag backend).
+../shared/opl2.fc
+../shared/opl_audio.fc
+
+# stdlib modules this demo imports
+../../stdlib/io.fc
+../../stdlib/text.fc
+../../stdlib/sys.fc
+../../stdlib/math.fc
+../../stdlib/random.fc

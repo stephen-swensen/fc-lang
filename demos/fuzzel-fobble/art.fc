@@ -1,0 +1,598 @@
+// Fuzzel Fobble — the look.
+//
+// Everything the game puts on screen: the 3x5 font, the bubbles and their
+// shading, the playfield, the HUD panels, the overlays, and `render`, which
+// draws one whole frame.
+//
+// It sits between the two halves and touches both. From game.fc it reads the
+// world it is looking at (and the palette, which is game data — see the note
+// there); from `gfx` it takes four primitives — a rect, a disc, a hexagon and
+// a thick line — and builds the rest itself. It names no library, holds no
+// handle, and knows nothing about the window it ends up in.
+//
+// Which is why this file is shared, byte for byte, between the SDL2 and
+// raylib builds. The art is not the part that ports.
+//
+// Coordinates are logical (1280x720). `gfx.frame_end` scales them.
+
+import * from game
+import math from std::
+
+module art =
+    // ============================================================
+    // 3x5 pixel font (bitmap packed into an i32: 5 rows of 3 bits)
+    // ============================================================
+
+    let glyph = (ch: u8) ->
+        match ch with
+        | 'A' -> 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+        | 'B' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+        | 'C' -> 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+        | 'D' -> 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+        | 'E' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+        | 'F' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+        | 'G' -> 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+        | 'H' -> 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+        | 'I' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+        | 'J' -> 1 | (1 << 3) | (1 << 6) | (5 << 9) | (2 << 12)
+        | 'K' -> 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+        | 'L' -> 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+        | 'M' -> 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+        | 'N' -> 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+        | 'O' -> 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+        | 'P' -> 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+        | 'Q' -> 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+        | 'R' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+        | 'S' -> 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+        | 'T' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+        | 'U' -> 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+        | 'V' -> 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+        | 'W' -> 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+        | 'X' -> 5 | (5 << 3) | (2 << 6) | (5 << 9) | (5 << 12)
+        | 'Y' -> 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+        | 'Z' -> 7 | (1 << 3) | (2 << 6) | (4 << 9) | (7 << 12)
+        | '0' -> 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+        | '1' -> 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+        | '2' -> 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+        | '3' -> 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+        | '4' -> 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
+        | '5' -> 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+        | '6' -> 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+        | '7' -> 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+        | '8' -> 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+        | '9' -> 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
+        | '+' -> 0 | (2 << 3) | (7 << 6) | (2 << 9) | (0 << 12)
+        | '-' -> 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
+        | ':' -> 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+        | '!' -> 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+        | '.' -> 0 | (0 << 3) | (0 << 6) | (0 << 9) | (2 << 12)
+        | _ -> 0
+
+    let draw_char = (ch: u8, ox: i32, oy: i32, scale: i32,
+                     cr: u8, cg: u8, cb: u8) ->
+        let g = glyph(ch)
+        for row in 0..5 do
+            let bits = (g >> (row * 3)) & 7
+            for col in 0..3 do
+                if (bits >> (2 - col)) & 1 == 1 then
+                    gfx.fill(ox + col * scale, oy + row * scale, scale, scale, cr, cg, cb, 255u8)
+
+    let text_width = (s: const str, scale: i32) ->
+        (i32) s.len * 4 * scale - scale
+
+    let draw_text = (s: const str, ox: i32, oy: i32, scale: i32,
+                     cr: u8, cg: u8, cb: u8) ->
+        let mut x = ox
+        for ch in s do
+            if ch != ' ' then
+                draw_char(ch, x, oy, scale, cr, cg, cb)
+            x = x + 4 * scale
+
+    let draw_text_centered = (s: const str, cx: i32, oy: i32, scale: i32,
+                              cr: u8, cg: u8, cb: u8) ->
+        let w = text_width(s, scale)
+        draw_text(s, cx - w / 2, oy, scale, cr, cg, cb)
+
+    // ============================================================
+    // Bubble art
+    // ============================================================
+
+    // Scales a colour channel to `pct` percent — the shading primitive.
+    let shade = (v: u8, pct: i32) -> (u8) ((i32) v * pct / 100)
+
+    // Scales an alpha by a percentage — keeps highlights translucent when the
+    // whole bubble is fading.
+    let amul = (a: u8, pct: i32) -> (u8) ((i32) a * pct / 100)
+
+    // A 5x5 mark stamped on each bubble so the colours stay distinguishable
+    // without relying on hue alone. Packed as five 5-bit rows, MSB leftmost.
+    let symbol_bits = (c: i32) ->
+        match c with
+        | 0 -> 0b00100_01110_11111_01110_00100      // diamond
+        | 1 -> 0b01110_10001_10001_10001_01110      // ring
+        | 2 -> 0b00100_00100_11111_00100_00100      // cross
+        | 3 -> 0b10001_01010_00100_01010_10001      // star
+        | 4 -> 0b11111_10001_10001_10001_11111      // square
+        | _ -> 0b00100_00100_01110_01110_11111      // tree
+
+    // Stamps a packed 5x5 mark across the face of a bubble.
+    let stamp_mark = (cx: i32, cy: i32, bits: i32,
+                      mr: u8, mg: u8, mb: u8, alpha: u8) ->
+        for row in 0..5 do
+            let rowbits = (bits >> ((4 - row) * 5)) & 31
+            for col in 0..5 do
+                if (rowbits >> (4 - col)) & 1 == 1 then
+                    gfx.fill(cx - 5 + col * 2, cy - 4 + row * 2, 2, 2, mr, mg, mb, alpha)
+
+    // A five-pointed star on a 15x15 grid, one bit per cell, MSB leftmost. Too
+    // wide to pack into an i32 the way the 5x5 marks are, so it is a row table
+    // like the font. Inscribed at 2px a cell it very nearly fills the bubble,
+    // which is the point: the star *is* the bubble, not a badge stuck on one.
+    let star_row = (y: i32) ->
+        match y with
+        | 0  -> 0b000000010000000
+        | 1  -> 0b000000111000000
+        | 2  -> 0b000000111000000
+        | 3  -> 0b000001111100000
+        | 4  -> 0b000001111100000
+        | 5  -> 0b111111111111111
+        | 6  -> 0b011111111111110
+        | 7  -> 0b001111111111100
+        | 8  -> 0b000111111111000
+        | 9  -> 0b000011111110000
+        | 10 -> 0b000011111110000
+        | 11 -> 0b000111111111000
+        | 12 -> 0b000111000111000
+        | 13 -> 0b001110000011100
+        | _  -> 0b001000000000100
+
+    let stamp_star = (cx: i32, cy: i32, cell: i32,
+                      mr: u8, mg: u8, mb: u8, alpha: u8) ->
+        let span = 15 * cell
+        for row in 0..15 do
+            let bits = star_row(row)
+            for col in 0..15 do
+                if (bits >> (14 - col)) & 1 == 1 then
+                    gfx.fill(cx - span / 2 + col * cell, cy - span / 2 + row * cell,
+                             cell, cell, mr, mg, mb, alpha)
+
+    // Corner `i` of the hexagon `gfx.hex` fills: circumradius `rad`, first
+    // vertex at angle 0. Used to light the stone's facet edges, so it has to
+    // agree with whatever the backend draws — both of them do.
+    let hex_vertex = (cx: i32, cy: i32, rad: i32, i: i32) ->
+        let a = (f64) i * 1.0471976
+        { (f64) cx + math.cos(a) * (f64) rad, (f64) cy + math.sin(a) * (f64) rad }
+
+    // The specials are told apart by shape, not by decoration: a star wears a
+    // star across its whole face and a stone is not a sphere at all. That says
+    // what the bubble *does*, so unlike the colour-blind marks it is not the
+    // player's to switch off.
+    let draw_star_bubble = (cx: i32, cy: i32, alpha: u8) ->
+        let { br, bg, bb } = cell_rgb(cell_star)
+        // Gold rim, white body, and a gold star inscribed across the whole face.
+        // The dark star sits a pixel down-right of the bright one, so the points
+        // keep an edge instead of dissolving into the white behind them.
+        gfx.disc(cx, cy, 23, 228u8, 158u8, 44u8, alpha)
+        gfx.disc(cx - 2, cy - 2, 19, br, bg, bb, alpha)
+        stamp_star(cx - 1, cy - 1, 2, 168u8, 100u8, 12u8, alpha)
+        stamp_star(cx - 2, cy - 2, 2, 242u8, 174u8, 50u8, alpha)
+
+    let draw_stone_bubble = (cx: i32, cy: i32, alpha: u8) ->
+        let { br, bg, bb } = cell_rgb(cell_stone)
+        // A cut block rather than a sphere: a faceted hexagon with a flat table
+        // and no gloss anywhere. Every other thing on the board is round and
+        // glassy, so silhouette alone says "this one does not pop".
+        gfx.hex(cx, cy, 22, shade(br, 58), shade(bg, 58), shade(bb, 58), alpha)
+        gfx.hex(cx, cy, 19, br, bg, bb, alpha)
+        gfx.hex(cx - 1, cy - 1, 10, shade(br, 126), shade(bg, 126), shade(bb, 126), alpha)
+        // Facet edges: table corners out to the hull corners. Lit on the upper
+        // ridges and shadowed on the lower ones, off the same upper-left light
+        // the glass bubbles use — uniformly dark ridges read as scratches on a
+        // grey disc rather than as a cut stone.
+        for i in 0..6 do
+            let { ix, iy } = hex_vertex(cx - 1, cy - 1, 10, i)
+            let { ox, oy } = hex_vertex(cx, cy, 20, i)
+            let pct = if i >= 3 then 138 else 50
+            gfx.thick_line(ix, iy, ox, oy, 2,
+                           shade(br, pct), shade(bg, pct), shade(bb, pct), alpha)
+
+    let draw_metal_bubble = (cx: i32, cy: i32, alpha: u8) ->
+        let { br, bg, bb } = cell_rgb(shot_metal)
+        // A polished ball: discs of rising brightness, each stepped a little
+        // further toward the light, so what is left showing of each is a crescent
+        // and the crescents stack into a curve. The coloured bubbles do this with
+        // two discs; steel just needs more of them, because its falloff from hot
+        // spot to shadow is far shorter than glass's.
+        gfx.disc(cx,     cy,     23, shade(br, 26), shade(bg, 26), shade(bb, 28), alpha)
+        gfx.disc(cx - 1, cy - 1, 21, shade(br, 44), shade(bg, 44), shade(bb, 46), alpha)
+        gfx.disc(cx - 2, cy - 3, 17, shade(br, 64), shade(bg, 64), shade(bb, 66), alpha)
+        gfx.disc(cx - 4, cy - 5, 12, shade(br, 84), shade(bg, 84), shade(bb, 86), alpha)
+        gfx.disc(cx - 5, cy - 7,  7, br, bg, bb, alpha)
+        gfx.disc(cx - 7, cy - 9,  3, 255u8, 255u8, 255u8, alpha)
+        // Light bounced up off the shadow side. Without it a metal ball reads as
+        // a grey one — the second, dimmer highlight is the whole tell.
+        gfx.disc(cx + 8, cy + 9, 4, shade(br, 76), shade(bg, 76), shade(bb, 80),
+                 amul(alpha, 80))
+
+    let draw_bubble = (cx: i32, cy: i32, color: i32, alpha: u8, symbols: bool) ->
+        if color == cell_star then
+            draw_star_bubble(cx, cy, alpha)
+            return
+        if color == cell_stone then
+            draw_stone_bubble(cx, cy, alpha)
+            return
+        if color == shot_metal then
+            draw_metal_bubble(cx, cy, alpha)
+            return
+
+        let { br, bg, bb } = bubble_rgb(color)
+
+        // Rim first, then the body inset up-left: the offset between the two
+        // discs *is* the shading — a crescent of rim shows on the lower right.
+        gfx.disc(cx, cy, 23, shade(br, 52), shade(bg, 52), shade(bb, 52), alpha)
+        gfx.disc(cx - 2, cy - 2, 19, br, bg, bb, alpha)
+
+        // Colour-blind-friendly mark, dark and low-contrast so it reads as texture.
+        if symbols then
+            stamp_mark(cx, cy, symbol_bits(color),
+                       shade(br, 40), shade(bg, 40), shade(bb, 40), amul(alpha, 62))
+
+        // Specular highlight
+        gfx.disc(cx - 8, cy - 9, 5, 255u8, 255u8, 255u8, amul(alpha, 62))
+        gfx.fill(cx - 2, cy - 15, 5, 3, 255u8, 255u8, 255u8, amul(alpha, 40))
+
+    // ============================================================
+    // The loose stuff — sparks, falling bubbles, background drift
+    //
+    // The rules move all three (game.fc); this is only what they look like.
+    // ============================================================
+
+    let draw_particles = (w: world*) ->
+        for i in 0..max_particles do
+            if w.particles[i].life > 0 then
+                let t = (f64) w.particles[i].life / (f64) w.particles[i].max_life
+                let alpha = (u8) (t * 255.0)
+                let size = if t > 0.6 then 5 else if t > 0.3 then 3 else 2
+                gfx.fill((i32) w.particles[i].x - size / 2,
+                            (i32) w.particles[i].y - size / 2,
+                            size, size,
+                            w.particles[i].r, w.particles[i].g, w.particles[i].b, alpha)
+
+    let draw_fallers = (w: world*) ->
+        for i in 0..max_fallers do
+            if w.fallers[i].alive then
+                draw_bubble((i32) w.fallers[i].x, (i32) w.fallers[i].y,
+                            w.fallers[i].color, 235u8, w.game.show_symbols)
+
+    let draw_drifters = (w: world*) ->
+        for i in 0..max_drifters do
+            let x = (i32) w.drifters[i].x
+            let y = (i32) w.drifters[i].y
+            let a = w.drifters[i].alpha
+            gfx.disc(x, y, w.drifters[i].rad, 150u8, 210u8, 255u8, a)
+            gfx.fill(x - w.drifters[i].rad / 3, y - w.drifters[i].rad / 2, 3, 3,
+                     255u8, 255u8, 255u8, amul(a, 220))
+
+    // ============================================================
+    // Playfield rendering
+    // ============================================================
+
+    let draw_field_bg = () ->
+        // Vertical gradient, deep at the top and warmer near the launcher.
+        for band in 0..24 do
+            let h = (field_y1 - field_y0) / 24
+            let y = field_y0 + band * h
+            let v = (u8) (10 + band / 2)
+            gfx.fill(field_x0, y, field_x1 - field_x0, h + 1,
+                     v, (u8) (v + 8u8), (u8) (v + 26u8), 255u8)
+
+        // Faint column guides through the raft zone — a nod to the grid the
+        // bubbles snap to, and a sighting aid for long bank shots.
+        for col in 0..grid_cols do
+            let x = field_x0 + col * bubble_d
+            gfx.fill(x, ceiling_y, 1, danger_y - ceiling_y, 255u8, 255u8, 255u8, 7u8)
+
+    let draw_grid = (w: world*) ->
+        for row in 0..grid_rows do
+            let rc = row_cols(w, row)
+            for col in 0..rc do
+                let c = w.grid[cell_index(row, col)]
+                if c >= 0 then
+                    let { cx, cy } = cell_center(w, row, col)
+                    draw_bubble((i32) cx, (i32) cy, c, 255u8, w.game.show_symbols)
+
+    let draw_ceiling = () ->
+        // Steel bar the raft hangs from, drawn over the top row so the bubbles
+        // look like they are gripping its underside.
+        gfx.fill(field_x0, field_y0, field_x1 - field_x0, ceiling_y - field_y0,
+                 64u8, 74u8, 104u8, 255u8)
+        gfx.fill(field_x0, field_y0, field_x1 - field_x0, 3, 128u8, 148u8, 190u8, 255u8)
+        gfx.fill(field_x0, ceiling_y - 3, field_x1 - field_x0, 3, 26u8, 30u8, 48u8, 255u8)
+        let mut x = field_x0 + 12
+        loop
+            if x > field_x1 - 16 then break
+            gfx.fill(x, field_y0 + 4, 4, 4, 150u8, 170u8, 210u8, 255u8)
+            x = x + 32
+
+    let draw_danger_line = (w: world*, frame: i32) ->
+        let deep = deepest_row(w)
+        let close = deep >= death_row - 2
+        let pulse = if close then (i32) (math.sin((f64) frame * 0.16) * 60.0 + 130.0)
+                    else 60
+        let a = (u8) imax(imin(pulse, 255), 0)
+        // Dashed warning line
+        let mut x = field_x0 + 4
+        loop
+            if x > field_x1 - 10 then break
+            gfx.fill(x, danger_y, 12, 3, 255u8, 70u8, 70u8, a)
+            x = x + 22
+        if close then
+            gfx.fill(field_x0, danger_y + 3, field_x1 - field_x0, 40,
+                     255u8, 40u8, 40u8, amul(a, 12))
+
+    let draw_launcher = (w: world*, frame: i32) ->
+        let a = deg2rad(w.game.angle)
+        let dx = math.sin(a)
+        let dy = -math.cos(a)
+        let fx = (f64) shooter_x
+        let fy = (f64) shooter_y
+
+        // Barrel — long enough to read past the bubble sitting in the chamber
+        gfx.thick_line(fx - dx * 8.0, fy - dy * 8.0, fx + dx * 68.0, fy + dy * 68.0,
+                       18, 44u8, 52u8, 78u8, 255u8)
+        gfx.thick_line(fx - dx * 8.0, fy - dy * 8.0, fx + dx * 64.0, fy + dy * 64.0,
+                       10, 150u8, 175u8, 215u8, 255u8)
+        // Muzzle ring
+        gfx.disc((i32) (fx + dx * 64.0), (i32) (fy + dy * 64.0), 9,
+                 200u8, 220u8, 255u8, 255u8)
+
+        // Turret base
+        gfx.disc(shooter_x, shooter_y, 34, 40u8, 48u8, 72u8, 255u8)
+        gfx.disc(shooter_x, shooter_y, 30, 62u8, 74u8, 108u8, 255u8)
+        // Rotating trim so the launcher never looks frozen
+        for i in 0..8 do
+            let t = (f64) i * 0.7853981 + (f64) frame * 0.01
+            let px = fx + math.cos(t) * 32.0
+            let py = fy + math.sin(t) * 32.0
+            gfx.fill((i32) px - 2, (i32) py - 2, 4, 4, 140u8, 170u8, 220u8, 200u8)
+
+        // The bubble sitting in the chamber
+        if !w.shot.active then
+            draw_bubble(shooter_x, shooter_y, w.game.cur_color, 255u8, w.game.show_symbols)
+
+    // Walks the shot's path — bounces and all — and dots it out. Reuses the
+    // live collision test, and walks it at the shot's own substep rather than a
+    // coarser one: a preview that samples the path more sparsely than the shot
+    // does is a preview that can stride over a graze the shot will catch, and
+    // then the guide has drawn you through a gap the shot sticks in. Same step,
+    // same order of tests, so the two cannot disagree. Dots are thinned on the
+    // way out instead, one every `guide_dot_every` steps.
+    let draw_aim_guide = (w: world*) ->
+        if w.shot.active then
+            return
+        let a = deg2rad(w.game.angle)
+        let per_step = shot_speed / (f64) shot_substeps
+        let mut x = (f64) shooter_x
+        let mut y = (f64) shooter_y
+        let mut vx = math.sin(a) * per_step
+        let mut vy = -math.cos(a) * per_step
+        let { gr, gg, gb } = cell_rgb(w.game.cur_color)
+        let plough = w.game.cur_color == shot_metal
+        let left = (f64) (field_x0 + bubble_r)
+        let right = (f64) (field_x1 - bubble_r)
+
+        for i in 0..guide_steps do
+            x = x + vx
+            y = y + vy
+            if x < left then
+                x = left
+                vx = -vx
+            if x > right then
+                x = right
+                vx = -vx
+            if y - (f64) bubble_r <= (f64) ceiling_y then
+                break
+            if !plough && hits_bubble(w, x, y) then
+                break
+            if i % guide_dot_every == 0 then
+                let fade = 190 - (i / guide_dot_every) * 6
+                if fade > 20 then
+                    gfx.disc((i32) x, (i32) y, 4, gr, gg, gb, (u8) fade)
+
+    let draw_shot = (w: world*) ->
+        if w.shot.active then
+            draw_bubble((i32) w.shot.x, (i32) w.shot.y, w.shot.color, 255u8,
+                        w.game.show_symbols)
+
+    // The turn clock made visible: it says nothing until the launcher starts to
+    // lose patience, then blinks, then blinks twice as fast for the last stretch
+    // before it fires on its own.
+    let draw_hurry = (w: world*) ->
+        if w.shot.active || w.game.idle_timer < hurry_warn then
+            return
+        let urgent = w.game.idle_timer > (hurry_warn + hurry_fire) / 2
+        let span = if urgent then 7 else 15
+        if (w.game.idle_timer / span) % 2 == 0 then
+            let g = if urgent then 70 else 160
+            draw_text_centered("HURRY!", 640, 556, 6, 255u8, (u8) g, 70u8)
+
+    let draw_popup = (w: world*) ->
+        if w.game.popup_timer > 0 then
+            let rise = (75 - w.game.popup_timer) / 3
+            let s = "+%d{w.game.popup_val}"
+            let a = if w.game.popup_timer > 20 then 255 else w.game.popup_timer * 12
+            draw_text_centered((const str) s, w.game.popup_x, w.game.popup_y - rise, 4,
+                               255u8, (u8) imin(a, 255), 120u8)
+
+    // ============================================================
+    // HUD panels
+    // ============================================================
+
+    let draw_panel_bg = () ->
+        gfx.fill(0, 0, field_x0, logical_h, 14u8, 16u8, 32u8, 255u8)
+        gfx.fill(field_x1, 0, logical_w - field_x1, logical_h, 14u8, 16u8, 32u8, 255u8)
+        gfx.fill(field_x0 - 4, 0, 4, logical_h, 90u8, 130u8, 200u8, 255u8)
+        gfx.fill(field_x1, 0, 4, logical_h, 90u8, 130u8, 200u8, 255u8)
+
+    let draw_label_value = (label: const str, value: const str,
+                            x: i32, y: i32, vr: u8, vg: u8, vb: u8) ->
+        draw_text(label, x, y, 3, 110u8, 150u8, 210u8)
+        draw_text(value, x, y + 26, 5, vr, vg, vb)
+
+    let draw_hud = (w: world*) ->
+        // --- Left panel: identity and score ---
+        draw_text("FUZZEL", 40, 40, 7, 120u8, 220u8, 255u8)
+        draw_text("FOBBLE", 40, 100, 7, 255u8, 130u8, 190u8)
+        gfx.fill(40, 160, 260, 3, 70u8, 90u8, 140u8, 255u8)
+
+        let score_str = "%d{w.game.score}"
+        draw_label_value("SCORE", (const str) score_str, 40, 200,
+                         255u8, 255u8, 255u8)
+        let high_str = "%d{w.game.high_score}"
+        draw_label_value("BEST", (const str) high_str, 40, 300,
+                         255u8, 230u8, 110u8)
+        let level_str = "%d{w.game.level}"
+        draw_label_value("LEVEL", (const str) level_str, 40, 400,
+                         150u8, 255u8, 190u8)
+        let shots_str = "%d{w.game.shots_fired}"
+        draw_label_value("SHOTS", (const str) shots_str, 40, 500,
+                         190u8, 200u8, 230u8)
+        // Visible and falling, so the reward for clearing quickly is something
+        // you can watch yourself spending.
+        let bonus = clear_bonus(w.game.level_frames)
+        let bonus_str = "%d{bonus}"
+        let bg = if bonus > 0 then 190 else 90
+        draw_label_value("BONUS", (const str) bonus_str, 40, 600,
+                         255u8, (u8) bg, 90u8)
+
+        // --- Right panel: what's coming, and how long you have ---
+        let rx = field_x1 + 40
+        draw_text("NEXT", rx, 200, 3, 110u8, 150u8, 210u8)
+        gfx.disc(rx + 44, 262, 34, 26u8, 30u8, 52u8, 255u8)
+        draw_bubble(rx + 44, 262, w.game.next_color, 255u8, w.game.show_symbols)
+
+        draw_text("DROP IN", rx, 340, 3, 110u8, 150u8, 210u8)
+        // One pip per shot left before the ceiling grinds down.
+        for i in 0..w.game.shots_left do
+            let px = rx + (i % 6) * 32
+            let py = 372 + (i / 6) * 32
+            gfx.disc(px + 10, py + 10, 9, 120u8, 200u8, 255u8, 230u8)
+        let left_str = "%d{w.game.shots_left}"
+        draw_text((const str) left_str, rx, 440, 4, 200u8, 220u8, 255u8)
+
+        // --- Right panel: controls ---
+        draw_text("ARROWS AIM", rx, 520, 2, 100u8, 120u8, 170u8)
+        draw_text("SPACE FIRE", rx, 546, 2, 100u8, 120u8, 170u8)
+        draw_text("TAB SWAP", rx, 572, 2, 100u8, 120u8, 170u8)
+        draw_text("P PAUSE", rx, 598, 2, 100u8, 120u8, 170u8)
+        draw_text("S MARKS", rx, 624, 2, 100u8, 120u8, 170u8)
+        draw_text("ESC QUIT", rx, 650, 2, 100u8, 120u8, 170u8)
+
+    // ============================================================
+    // Overlays
+    // ============================================================
+
+    let draw_splash = (frame: i32) ->
+        gfx.fill(field_x0, 0, field_x1 - field_x0, logical_h, 0u8, 0u8, 0u8, 190u8)
+
+        // An arc of bubbles bobbing above the title
+        for i in 0..6 do
+            let t = (f64) frame * 0.04 + (f64) i * 0.9
+            let x = field_x0 + 74 + i * 86
+            let y = 190 + (i32) (math.sin(t) * 14.0)
+            draw_bubble(x, y, i, 255u8, true)
+
+        draw_text_centered("FUZZEL", 640, 260, 11, 120u8, 220u8, 255u8)
+        draw_text_centered("FOBBLE", 640, 340, 11, 255u8, 130u8, 190u8)
+
+        draw_text_centered("MATCH THREE TO POP", 640, 440, 3, 200u8, 215u8, 240u8)
+        draw_text_centered("CUT THEM LOOSE TO SCORE", 640, 472, 3, 200u8, 215u8, 240u8)
+
+        let blink = (frame / 26) % 2 == 0
+        if blink then
+            draw_text_centered("PRESS ENTER", 640, 560, 5, 255u8, 230u8, 80u8)
+        draw_text_centered("C CLEARS BEST", 640, 630, 2, 110u8, 130u8, 180u8)
+
+    let draw_paused = () ->
+        gfx.fill(field_x0, 300, field_x1 - field_x0, 120, 0u8, 0u8, 0u8, 190u8)
+        draw_text_centered("PAUSED", 640, 330, 7, 255u8, 255u8, 255u8)
+
+    let draw_level_clear = (w: world*) ->
+        gfx.fill(field_x0, 280, field_x1 - field_x0, 180, 0u8, 0u8, 0u8, 190u8)
+        draw_text_centered("CLEAR.", 640, 310, 8, 130u8, 255u8, 180u8)
+        if w.game.bonus_paid > 0 then
+            let b = "SPEED BONUS %d{w.game.bonus_paid}"
+            draw_text_centered((const str) b, 640, 372, 3, 255u8, 200u8, 90u8)
+        let nxt = "LEVEL %d{w.game.level + 1}"
+        draw_text_centered((const str) nxt, 640, 408, 4, 255u8, 255u8, 255u8)
+        // Losing the guide without warning reads as a glitch rather than a rule.
+        if w.game.level == guide_levels then
+            draw_text_centered("AIM GUIDE OFF FROM HERE", 640, 436, 2,
+                               255u8, 180u8, 90u8)
+
+    let draw_game_over = (w: world*) ->
+        gfx.fill(field_x0, 250, field_x1 - field_x0, 240, 0u8, 0u8, 0u8, 200u8)
+        draw_text_centered("GAME", 640, 280, 9, 255u8, 100u8, 100u8)
+        draw_text_centered("OVER", 640, 350, 9, 255u8, 100u8, 100u8)
+        if w.game.new_high then
+            draw_text_centered("NEW BEST.", 640, 424, 4, 255u8, 230u8, 80u8)
+        draw_text_centered("ENTER TO RETRY", 640, 460, 3, 200u8, 200u8, 220u8)
+
+    // ============================================================
+    // Per-frame render
+    // ============================================================
+
+    // One whole frame, opening the backend's frame and closing it again.
+    // Between those two calls every coordinate is logical; `frame_end` is
+    // where the 1280x720 board meets whatever size the window actually is.
+    //
+    // The clear colour is passed in rather than assumed, because the strip
+    // below the playfield is the one place it shows through.
+    let render = (w: world*, frame: i32) ->
+        gfx.frame_begin(8u8, 10u8, 24u8)
+
+        draw_field_bg()
+        draw_drifters(w)
+        draw_danger_line(w, frame)
+
+        // The launcher is part of the machine and stays put whenever a board is
+        // in play; the aim guide belongs to the turn, so it only shows when the
+        // turn is actually yours.
+        let live = match w.game.phase with
+        | splash -> false
+        | _ -> true
+        let your_turn = match w.game.phase with
+        | playing -> true
+        | _ -> false
+        // And the guide is the tutorial. Level 1 draws the bounce for you so the
+        // geometry is legible; after that, reading the angle is the skill.
+        let aiming = your_turn && w.game.level <= guide_levels
+
+        if aiming then
+            draw_aim_guide(w)
+        draw_grid(w)
+        draw_ceiling()
+        draw_fallers(w)
+        if live then
+            draw_launcher(w, frame)
+            draw_shot(w)
+        draw_particles(w)
+        // The turn clock runs at every level, guide or no guide.
+        if your_turn then
+            draw_hurry(w)
+        draw_popup(w)
+
+        // Panels last: they own the strips outside the playfield, so nothing
+        // that leaks sideways can survive into the HUD.
+        draw_panel_bg()
+        draw_hud(w)
+
+        match w.game.phase with
+        | splash -> draw_splash(frame)
+        | paused -> draw_paused()
+        | level_clear -> draw_level_clear(w)
+        | game_over -> draw_game_over(w)
+        | _ -> void()
+
+        gfx.frame_end()
+

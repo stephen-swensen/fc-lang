@@ -176,8 +176,8 @@ module raylib from "raylib.h" =
     // Blending. Anything that draws into a render texture needs this, for a
     // reason that is not obvious: raylib's default alpha blend is a plain
     // glBlendFunc, not the ...Separate variant, so it corrupts the target's
-    // alpha channel. See `present` in fuzzel-fobble-raylib for the full
-    // story and the one-line fix.
+    // alpha channel. See `frame_end` in fuzzel-fobble's gfx_raylib.fc for the
+    // full story and the one-line fix.
     extern BeginBlendMode as begin_blend_mode: (i32) -> void
     extern EndBlendMode as end_blend_mode: () -> void
 

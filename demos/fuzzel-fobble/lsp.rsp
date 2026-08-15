@@ -1,18 +1,11 @@
-# Fuzzel Fobble — the compilation unit.
+# Fuzzel Fobble — the editor's compilation unit.
 #
-# Used by run.sh (`fcc @demos/fuzzel-fobble/lsp.rsp`) and discovered by
-# `fcc --lsp` so the editor resolves names exactly the way the build does.
-# Paths are relative to this file.
-
-../shared/sdl2.fc
-../shared/opl2.fc
-../shared/opl_audio.fc
-sound.fc
-main.fc
-
-# stdlib modules this demo imports
-../../stdlib/io.fc
-../../stdlib/text.fc
-../../stdlib/sys.fc
-../../stdlib/math.fc
-../../stdlib/random.fc
+# `fcc --lsp` discovers this file by name and analyses exactly what it lists,
+# so the editor resolves names the way a build does. A build is one backend
+# or the other, so this file has to pick one — and it picks SDL2, the build
+# that needs no download.
+#
+# To work on the raylib backend with live analysis, change the line below to
+# @raylib.rsp. gfx_raylib.fc is the only file the choice affects; everything
+# else in the program is in both units.
+@sdl2.rsp
