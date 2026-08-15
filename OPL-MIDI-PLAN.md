@@ -833,3 +833,97 @@ of nine, **0 voice steals**, and the loop seam still joins on a step of 22
 against 3408 for a typical busy bar. (An earlier ±50 ms window reported 5296
 and looked like a regression; the step was an ordinary note attack 39 ms
 before the wrap, not the seam.)
+
+---
+
+## 15. Calibrating the bank
+
+Prompted by "I can't hear the drums" and a request to generalise whatever the
+harpsichord taught. Both turned out to be the same defect at bank scale, so the
+work was to measure all sixty patches rather than to guess at a few.
+
+`demos/shared/tools/bank_probe.fc` (new, checked in) plays every patch under
+identical conditions and reports **loudness over the patch's own sounding
+span** — not a fixed window, which would rate a 60 ms hi-hat far below a held
+string purely for being short — and **length**, separately, because that is a
+different property. It takes an optional bank file, so a downloaded `.op2` can
+be measured against the built-in one.
+
+### Two rules, and one thing that is nobody's fault
+
+**SL is a level, not a rate.** On a voice with EGT clear the envelope runs
+attack → decay-to-SL → release, so SL is how far the note falls *before* the
+release rate gets a say, and it falls that far as fast as DR allows. SL 7
+throws away 21 dB in the first tenth of a second; SL 11 throws away 33 dB in
+ten. What is left is a high peak with nothing behind it — a patch that reads
+loud on a peak meter and vanishes in a mix. Twenty-five patches had it. The
+fix is the same every time: SL 0, and put the length in RR, which leaves a
+plain exponential decay. A high SL is not wrong by itself — the piano is SL 5
+and sounds for nearly three seconds, because its DR is slow enough that the
+two-stage fall reads as hammer decay. It hurts only when the drop is both far
+and fast, which is why the probe leads with the measurement and mentions SL
+second.
+
+**Patches must be level-matched, because velocity cannot do it for them.** The
+melodic voices spanned **23 dB** at the same velocity, so a program change was
+also a volume change and no arbitrary file could sound balanced through one.
+Calibrated to a common target (carrier TL for FM, both operators for additive,
+matching what `apply_level` does so timbre survives):
+
+| | before | after |
+| --- | ---: | ---: |
+| Melodic, middle 80% | 10.6 dB | **4.3 dB** |
+| Melodic, full range | 23.2 dB | 12.9 dB |
+| Drums, median | −27.9 dBFS | −26.9 dBFS |
+| Drums, full range | 13.1 dB | 9.3 dB |
+
+**And the part that is inherent.** The noise voices — snare, hats, cymbals,
+claps — stay 8–12 dB under everything else and cannot be brought up. They make
+their noise with a large inharmonic MULT on a pulse-sine with feedback, which
+spreads their energy thinly across the whole spectrum, and their carriers are
+already at TL 0. Three ways out were tried and measured before concluding
+that: raising modulation depth buys 2 dB across its entire range, moving them
+down four octaves buys 4 dB, and neither is worth the character it spends. The
+OPL2 has no noise generator; this is the bill. The probe reports these as
+residual outliers rather than pretending otherwise.
+
+Two hypotheses were tested and killed on the way, both worth recording because
+both were plausible: that the drums were *out of band* (their centroid is
+10–11 kHz, but dropping them four octaves barely moved it — pulse-sine plus
+feedback spreads harmonics to Nyquist regardless of fundamental), and that they
+were *undersampled* (a MULT of 15 on `fixed_note` 84 runs at 15.7 kHz, 2.8
+samples per cycle — but four octaves down bought only 4 dB).
+
+### The drums in this file
+
+Separately from the bank, `mkmid.fc` was writing the hi-hat at **velocity 44**.
+On `opl_midi`'s velocity curve that is 12.75 dB of attenuation, applied to the
+quietest voice in the bank. A part that should sit low in the mix is written
+low in the *mix*, which is what CC7 is for. Velocities are now 80–96 and the
+channel volumes were re-derived, since recalibrating the bank moved every
+patch under them.
+
+Balanced back to the mix already signed off, with the drums where they should
+have been all along:
+
+| Part | signed-off | now |
+| --- | ---: | ---: |
+| Melody | −23.2 dBFS | −23.2 |
+| Harmony | −27.2 | −27.2 |
+| Bass | −28.9 | −28.9 |
+| Harpsichord | −32.1 | −33.5 |
+| **Drums** | **−42.2** | **−34.9** |
+| Sum | −20.4 | −20.3 |
+
+Against the rest of the mix in their own strongest band, the drums go from
+**−9.5 dB to −0.8 dB**.
+
+### Verification
+
+- 1812 events, 7105 bytes, validated against the independent SMF reader: every
+  note closed, every EOT at its chunk end, all bytes consumed.
+- Peak seven simultaneous notes of nine, **0 voice steals**, peak sample 21028
+  with 0 clipped.
+- Loop seam joins on a step of 22 against 7240 for a typical busy bar.
+- Every demo and both fuzzel-fobble backends compile, SDL2 links, `make check`
+  green at 2362 passed / 0 failed / 4 skipped on gcc and clang.

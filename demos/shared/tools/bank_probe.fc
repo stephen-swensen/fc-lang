@@ -1,0 +1,219 @@
+// Play every patch in a bank under identical conditions and report what it
+// does, so a bank can be judged by measurement rather than by ear alone.
+//
+//     bank_probe [bank-file]
+//
+// With no argument it probes the built-in `opl_bank_gm`; with a `.op2`,
+// `.ibk` or `.sbi` it probes that instead, which is how a downloaded bank
+// gets compared against this one before you trust it with your music.
+//
+// ------------------------------------------------------------------
+// What it measures, and why those two things
+// ------------------------------------------------------------------
+//
+// A General MIDI file names a program and expects it to arrive at a sensible
+// level. Nothing enforces that but the bank, and when it is wrong the result
+// does not sound like a broken patch — it sounds like badly mixed music. Two
+// numbers catch nearly all of it:
+//
+//   **loudness** — RMS over the patch's own sounding span, which runs from
+//     the onset to where it falls 40 dB below its peak. Deliberately *not* a
+//     fixed window: a 60 ms hi-hat measured over 200 ms scores far below a
+//     held string purely for being short, which is not how the ear judges a
+//     drum. Peak is no good either — a patch can peak loud and carry almost
+//     no energy, which is exactly the failure this tool was written to find.
+//   **length** — how long it stays above 0.1% of full scale. A separate
+//     dimension from loudness, and the one that says whether a patch is a
+//     note or a click.
+//
+// Patches more than 6 dB under the bank's median are listed at the end, with
+// their sustain level, because SL is the usual culprit. SL is a *level*: on an
+// EGT-clear voice the note falls that far before the release rate gets a say,
+// and it falls as fast as DR allows. SL 7 throws away 21 dB in the first tenth
+// of a second and SL 11 throws away 33 dB in ten milliseconds — a high peak
+// with nothing behind it. Length belongs in RR.
+//
+// A high SL is not wrong by itself, which is why the report leads with the
+// measurement: a piano is SL 5 and sounds for nearly three seconds, because
+// its DR is slow enough that the two-stage fall is the hammer decay rather
+// than a cliff. SL only hurts when the drop is both far and fast.
+//
+//     fcc demos/shared/tools/bank_probe.fc demos/shared/opl_midi.fc \
+//         demos/shared/opl_bank_gm.fc demos/shared/opl2.fc \
+//         stdlib/io.fc stdlib/math.fc -o /tmp/bp.c
+//     cc -std=c11 -o /tmp/bp /tmp/bp.c -lm
+
+import opl_midi from shared::
+import opl_bank_gm from shared::
+import opl2 from shared::
+import io from std::
+import math from std::
+
+let rate = 44100
+
+// A MIDI note as the chip's (block, F-number), the same way opl_midi does it.
+let pitch_of = (n: i32) ->
+    let freq = 440.0 * math.pow(2.0, ((f64) n - 69.0) / 12.0)
+    let k = freq * 524288.0 / 49716.0
+    let mut block = 0
+    let mut fnum = k * 2.0
+    loop
+        if fnum < 1024.0 then break
+        if block >= 7 then break
+        block = block + 1
+        fnum = fnum / 2.0
+    let fi = (i32) (fnum + 0.5)
+    { block, if fi > 1023 then 1023 else fi }
+
+// Render one patch: key it on, hold, release, and fill `buf`.
+let render = (kit: opl_midi.bank, pi: i32, note: i32, buf: i16[], frames: i32,
+              hold_ms: i32) ->
+    let c = opl2.init((f64) rate)
+    let ins = kit.patches[pi]
+    opl2.load_instrument(c, 0,
+        ins.m_char, ins.c_char, ins.m_scale, ins.c_scale,
+        ins.m_atk,  ins.c_atk,  ins.m_sus,   ins.c_sus,
+        ins.m_wave, ins.c_wave, ins.n_conn)
+    let n = if ins.fixed_note > 0 then ins.fixed_note + ins.transpose
+            else note + ins.transpose
+    let { blk, fnv } = pitch_of(n)
+    opl2.note_on(c, 0, blk, fnv)
+    let off_at = hold_ms * rate / 1000
+    for i in 0..frames do
+        if i == off_at then opl2.note_off(c, 0)
+        buf[i] = (i16) opl2.sample(c)
+    free(c)
+
+let peak_of = (buf: i16[], frames: i32) ->
+    let mut peak = 0
+    for i in 0..frames do
+        let v = (i32) buf[i]
+        let a = if v < 0 then 0 - v else v
+        if a > peak then peak = a
+    peak
+
+// The last sample above `floor_amp`, as milliseconds.
+let span_of = (buf: i16[], frames: i32, floor_amp: i32) ->
+    let mut last = 0
+    for i in 0..frames do
+        let v = (i32) buf[i]
+        let a = if v < 0 then 0 - v else v
+        if a > floor_amp then last = i
+    last + 1
+
+// RMS over the patch's own sounding span, in dB relative to full scale.
+let loudness_of = (buf: i16[], frames: i32) ->
+    let peak = peak_of(buf, frames)
+    if peak == 0 then return -99.0
+    let floor_amp = if peak / 100 < 8 then 8 else peak / 100
+    let n = span_of(buf, frames, floor_amp)
+    let mut sum = 0.0
+    for i in 0..n do
+        sum = sum + (f64) buf[i] * (f64) buf[i]
+    let r = math.sqrt(sum / (f64) n)
+    if r < 1.0 then -99.0 else 20.0 * math.log10(r / 32768.0)
+
+// Insertion sort, so the summary can quote a median and a middle-80% spread
+// rather than a mean that one broken patch drags around.
+let sort = (v: f64[], n: i64) ->
+    for i in 1i64..n do
+        let x = v[i]
+        let mut j = i
+        loop
+            if j == 0i64 then break
+            if v[j - 1i64] <= x then break
+            v[j] = v[j - 1i64]
+            j = j - 1i64
+        v[j] = x
+
+let summarise = (label: const str, v: f64[], n: i64) ->
+    if n == 0i64 then return
+    sort(v, n)
+    let med = v[n / 2i64]
+    let lo = v[n / 10i64]
+    let hi = v[n - 1i64 - n / 10i64]
+    ignore io.write(alloca("%s{label}: %d{(i32) n} patches, median %.1f{med} dBFS, middle 80%% spans %.1f{hi - lo} dB (%.1f{lo} to %.1f{hi}), full range %.1f{v[n - 1i64] - v[0i64]} dB\n"), stdout)
+
+// The bank named as the first argument, or the built-in one. Its own function
+// because a `match` inside an `if` inside a `match` is more nesting than the
+// offside rule will take.
+let choose_bank = (args: str[]) ->
+    if args.len <= 1i64 then ok(opl_bank_gm.make())
+    else
+        let bb = match io.read_all(args[1]) with
+                 | ok(b) -> b
+                 | err(e) -> return err(opl_midi.bank, opl_midi.smf.bad_bank)
+        defer free(bb)
+        opl_midi.load_bank(bb)
+
+let main = (args: str[]) ->
+    let kit = match choose_bank(args) with
+              | ok(k) -> k
+              | err(e) ->
+                  io.write("bank_probe: not a bank file this understands\n", stderr)
+                  return 1
+
+    let frames = rate * 3
+    let buf = alloc(i16[frames] {})!
+    let count = (i32) kit.patches.len
+    let mel = alloc(f64[256] {})!
+    let drm = alloc(f64[256] {})!
+    // Kept alongside the sorted copies, so an outlier can be named after the
+    // median is known.
+    let db_of = alloc(f64[256] {})!
+    let sl_of = alloc(i32[256] {})!
+    let mut nmel = 0i64
+    let mut ndrm = 0i64
+
+    io.write(alloca("bank %s{kit.name}: %d{count} voices\n\n"), stdout)
+    io.write("  idx  kind   loudness   length    peak   SL\n", stdout)
+    for pi in 0..count do
+        let ins = kit.patches[pi]
+        let drum = ins.fixed_note > 0
+        render(kit, pi, 60, buf, frames, if drum then 120 else 500)
+        let peak = peak_of(buf, frames)
+        let db = loudness_of(buf, frames)
+        let len = span_of(buf, frames, 32) * 1000 / rate
+        // EGT clear means the note decays on its own, and SL is how far it
+        // drops before RR is consulted at all.
+        let sl = if (ins.c_char & 0x20) == 0 then (ins.c_sus >> 4) & 15 else -1
+        db_of[pi] = db
+        sl_of[pi] = sl
+        io.write(alloca("  %d{pi}  %s{if drum then "drum" else "mel "}  %.1f{db} dBFS  %d{len} ms  %d{peak}  %d{sl}\n"), stdout)
+        if drum then
+            drm[ndrm] = db
+            ndrm = ndrm + 1i64
+        else
+            mel[nmel] = db
+            nmel = nmel + 1i64
+
+    io.write("\n", stdout)
+    // Medians first: `summarise` sorts in place, so the per-patch arrays above
+    // are the only thing still indexed by patch number after this.
+    sort(mel, nmel)
+    sort(drm, ndrm)
+    let mel_med = if nmel > 0i64 then mel[nmel / 2i64] else 0.0
+    let drm_med = if ndrm > 0i64 then drm[ndrm / 2i64] else 0.0
+    summarise("melodic", mel, nmel)
+    summarise("drums  ", drm, ndrm)
+
+    let mut flagged = 0
+    for pi in 0..count do
+        let med = if kit.patches[pi].fixed_note > 0 then drm_med else mel_med
+        if db_of[pi] < med - 6.0 then
+            if flagged == 0 then
+                io.write("\nWell under this bank's median, so a file that changes to one of\nthese will sound like it lost a fader:\n", stdout)
+            flagged = flagged + 1
+            if sl_of[pi] > 2 then
+                io.write(alloca("  patch %d{pi}: %.1f{db_of[pi]} dBFS, %.1f{db_of[pi] - med} against the median — SL %d{sl_of[pi]} on a voice that decays on its own\n"), stdout)
+            else
+                io.write(alloca("  patch %d{pi}: %.1f{db_of[pi]} dBFS, %.1f{db_of[pi] - med} against the median\n"), stdout)
+    if flagged > 0 then
+        io.write("\nUsual causes, in the order worth checking: a sustain level above 2 on\na voice that decays on its own (SL is a level, not a rate — the note\nfalls that far as fast as DR allows, before RR is consulted at all, so\nput the length in RR); then carrier TL. If the carrier is already at\nTL 0 the level is spent, and what is left is the envelope or the\nwaveform — a half-sine carrier costs about 3 dB, and a large\ninharmonic MULT on a pulse-sine spreads its energy so thinly that no\namount of TL brings it back.\n", stdout)
+    free(mel)
+    free(drm)
+    free(db_of)
+    free(sl_of)
+    free(buf)
+    opl_midi.free_bank(kit)
+    0

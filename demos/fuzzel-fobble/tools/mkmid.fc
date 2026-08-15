@@ -395,7 +395,7 @@ let lay_line = (t: track*, ch: i32, base: i32, pairs: const i32[], vel: i32,
 let build_melody = () ->
     let mut t = track_new()
     emit(&t, 0, 0xC0, tune.prog_music_box, 0, 2)
-    set_volume(&t, 0, 0, 112)
+    set_volume(&t, 0, 0, 95)
     for s in 0..4 do
         let at = section_start(s)
         let vel = if is_full(s) then 110 else 100
@@ -407,7 +407,7 @@ let build_melody = () ->
 let build_bass = () ->
     let mut t = track_new()
     emit(&t, 0, 0xC2, tune.prog_bass, 0, 2)
-    set_volume(&t, 2, 0, 112)
+    set_volume(&t, 2, 0, 66)
     for s in 0..4 do
         let at = section_start(s)
         let vel = if is_full(s) then 100 else 92
@@ -435,7 +435,7 @@ let build_pad = () ->
         // figuration audible is to open a hole for it rather than to shout
         // over it, which is what raising the harpsichord instead did to the
         // headroom the sound effects need.
-        set_volume(&t, 1, base, if is_full(s) then 56 else 70)
+        set_volume(&t, 1, base, if is_full(s) then 66 else 83)
         for b in 0..tune.section_bars do
             let at = base + b * tune.bar
             for k in 0..2 do
@@ -457,7 +457,7 @@ let build_pad = () ->
 let build_harpsi = () ->
     let mut t = track_new()
     emit(&t, 0, 0xC3, tune.prog_harpsichord, 0, 2)
-    set_volume(&t, 3, 0, 112)
+    set_volume(&t, 3, 0, 127)
     for s in 0..4 do
         if is_full(s) then
             let base = section_start(s)
@@ -478,21 +478,27 @@ let build_harpsi = () ->
 // Percussion, on General MIDI's channel 9. Nothing on the downbeat through
 // the opening section — which is what keeps a minuet feeling like one — and
 // progressively more from there.
+// Percussion, on General MIDI's channel 9. The velocities here are not
+// dynamics, they are level: the hi-hat used to be written at 44, which on
+// opl_midi's velocity curve is 12.75 dB of attenuation applied to the
+// quietest voice in the bank, and the result was a drum part nobody could
+// hear. A quiet part is written quiet in the *mix* — that is what CC7 is
+// for — not by throttling velocity into the floor.
 let build_drums = () ->
     let mut t = track_new()
-    set_volume(&t, 9, 0, 88)
+    set_volume(&t, 9, 0, 127)
     for b in 0..64 do
         let at = b * tune.bar
         let sec = b / tune.section_bars
         let full = is_full(sec)
         if full || is_part_b(sec) then
-            note(&t, 9, at, 120, tune.drum_kick, 82, 1)
+            note(&t, 9, at, 120, tune.drum_kick, 96, 1)
         note(&t, 9, at + tune.beat, 120, tune.drum_hat,
-            if full then 52 else 44, 1)
+            if full then 92 else 80, 1)
         note(&t, 9, at + tune.beat * 2, 120, tune.drum_hat,
-            if full then 52 else 44, 1)
+            if full then 92 else 80, 1)
         if full && b % 4 == 0 then
-            note(&t, 9, at, 120, tune.drum_tamb, 58, 1)
+            note(&t, 9, at, 120, tune.drum_tamb, 84, 1)
     sort_track(&t)
     t
 

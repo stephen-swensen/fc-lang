@@ -524,8 +524,15 @@ it can be edited rather than in the player:
 | Melody | −23 dBFS | 90% |
 | Harmony | −27 | 78% |
 | Bass | −29 | 77% |
-| Harpsichord | −32 | 32% |
-| Drums | −42 | 3% |
+| Harpsichord | −33 | 32% |
+| Drums | −35 | 3% |
+
+The drums used to sit at −42, which is inaudible, and the cause was in this
+file rather than in the kit: the hi-hat was written at **velocity 44**, and 44
+on `opl_midi`'s velocity curve is 12.75 dB of attenuation applied to the
+quietest voice in the bank. A part that should sit low in the mix is written
+low in the *mix* — that is what CC7 is for — not by throttling velocity into
+the floor.
 
 Six tracks in SMF format 1, five sounding channels, and at most seven
 simultaneous notes. It steals zero voices, which is another way of saying the

@@ -22,8 +22,9 @@ can drive `opl2` and the platform layer with no import lines of its own.
 | `opl_audio_sdl.fc` | SDL2 audio device for the engine (`module opl_dev`) | `opl_audio.fc`, `sdl2.fc` |
 | `opl_audio_raylib.fc` | raylib audio device for the engine (`module opl_dev`) | `opl_audio.fc`, `raylib.fc` |
 
-There is also `tools/midi_render.fc`, a standalone program that renders a
-`.mid` to a WAV file with no window and no audio device — see
+There are also two standalone tools in `tools/`: `midi_render.fc` renders a
+`.mid` to a WAV file with no window and no audio device, and `bank_probe.fc`
+plays every patch in a bank and reports what it measures — see
 [Tuning without launching the game](#tuning-without-launching-the-game).
 
 `fuzzel-fobble` is the worked example of the SDL2 set. Its `sound.fc` is
@@ -549,6 +550,30 @@ A third argument sets the length in seconds — ask for more than the song has
 and looping turns on, which is how you audition the wrap. A fourth loads a
 `.op2`/`.ibk`/`.sbi` bank in place of the built-in one, which is how two banks
 get compared on the same piece.
+
+**For the bank itself**, `tools/bank_probe.fc` plays every patch under
+identical conditions and reports two numbers per voice: its loudness, measured
+over its own sounding span rather than a fixed window, and how long it lasts.
+Then it names anything more than 6 dB under the bank's median, because that is
+what makes an arbitrary MIDI file sound badly mixed — a program change that is
+also a volume change. It takes an optional bank file, so a downloaded `.op2`
+can be compared against the built-in one before you trust it with your music.
+
+```
+/tmp/bp
+  bank fc-gm: 60 voices
+  ...
+  melodic: 44 patches, median -21.7 dBFS, middle 80% spans 4.3 dB
+  drums  : 16 patches, median -26.9 dBFS, middle 80% spans 8.8 dB
+```
+
+Writing it found two things worth knowing about any OPL bank. **SL is a level,
+not a rate**: on a voice that decays on its own, the note falls that far before
+the release rate is consulted at all, and as fast as DR allows — SL 11 threw
+away 33 dB in ten milliseconds and left a hi-hat that measured 24 dB under the
+rest of its kit. Length belongs in RR. And **patches have to be level-matched,
+because velocity cannot do it for them**: this bank's melodic voices once
+spanned 23 dB at the same velocity, and now sit inside about 4 dB.
 
 It reports levels rather than managing them. A game mixes this against effects
 and puts a soft knee after the sum; a tool that quietly did the same would hide
