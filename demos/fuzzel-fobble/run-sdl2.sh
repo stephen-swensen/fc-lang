@@ -11,6 +11,10 @@ cd "$(dirname "$0")/../.."
 make -s
 FCC="$(make -s print-bin)"
 
+# Arguments are forwarded to the game, so `./run-sdl2.sh --music other.mid`
+# plays a different Standard MIDI File. Paths are relative to the repository
+# root, which this script has already changed to.
+#
 # The source list and the backend flag live in sdl2.rsp, so this script and
 # `fcc --lsp` compile exactly the same unit.
 RSP="@demos/fuzzel-fobble/sdl2.rsp"
@@ -21,14 +25,14 @@ case "$(uname -s)" in
         "$FCC" "$RSP" -o "$OUTDIR/fuzzel-fobble-sdl2.c"
         gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fuzzel-fobble-sdl2.exe" "$OUTDIR/fuzzel-fobble-sdl2.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fuzzel Fobble (SDL2)..."
-        "$OUTDIR/fuzzel-fobble-sdl2.exe"
+        "$OUTDIR/fuzzel-fobble-sdl2.exe" "$@"
         echo "[exit: $?]"
         ;;
     *)
         "$FCC" "$RSP" -o /tmp/fuzzel-fobble-sdl2.c
         cc -std=c11 -Wall -Werror -o /tmp/fuzzel-fobble-sdl2-bin /tmp/fuzzel-fobble-sdl2.c -lSDL2 -lm
         echo "Running Fuzzel Fobble (SDL2)..."
-        /tmp/fuzzel-fobble-sdl2-bin
+        /tmp/fuzzel-fobble-sdl2-bin "$@"
         echo "[exit: $?]"
         ;;
 esac

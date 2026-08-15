@@ -41,6 +41,19 @@ packages on Linux (`libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev
 libxcursor-dev libxi-dev` on Debian/Ubuntu), nothing extra on MSYS2, and the
 Xcode command line tools on macOS.
 
+Both scripts forward their arguments to the game, and the one argument the
+game takes is `--music`:
+
+```
+./demos/fuzzel-fobble/run-sdl2.sh --music ~/some-other-song.mid
+```
+
+The music is an ordinary Standard MIDI File, loaded at startup rather than
+compiled in, so any `.mid` can be dropped in and heard as an OPL2 would have
+played it. Paths are relative to the repository root, which the run scripts
+change to. A file that will not load costs the music and nothing else — the
+game says which way it failed and runs on, with effects intact.
+
 Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`).
 
 ## Controls
@@ -126,10 +139,10 @@ Six files, in four layers:
 | `gfx_raylib.fc` | 101 | `module gfx` on raylib. |
 | `game.fc` | 792 | The rules. No pixels, no keys, no library. |
 | `art.fc` | 410 | The look, drawn on `gfx`'s four primitives. |
-| `sound.fc` | 143 | Eleven instruments, nine effects, one tune. |
-| `main.fc` | 46 | Hands them to each other and loops. |
+| `sound.fc` | 93 | Nine effect instruments and nine effect scripts. |
+| `main.fc` | 88 | Loads the music, hands the pieces to each other, and loops. |
 
-Everything but the backend is shared, byte for byte: **1407 lines of game
+Everything but the backend is shared, byte for byte: **1399 lines of game
 against 154 (SDL2) or 101 (raylib) lines of platform.** Adding a rule or
 retouching a bubble is one edit, not two edits kept in step.
 
@@ -453,29 +466,66 @@ from the display bounds on SDL2, `ToggleBorderlessWindowed()` on raylib.
 ## Sound
 
 Everything you hear is FM synthesis on an emulated **OPL2 (YM3812)** — the
-chip an AdLib or Sound Blaster card put in a 1990 PC. Three files:
-`demos/shared/opl2.fc` is the chip (shared with the `wolf-fc` project, which
-uses it to play Wolfenstein 3D's own IMF music), `demos/shared/opl_audio.fc`
-is the reusable engine built on it, and `sound.fc` is this game's content —
-eleven instruments, nine effect scripts, one tune.
+chip an AdLib or Sound Blaster card put in a 1990 PC. Nothing is pre-rendered
+and no audio file is shipped; the only asset is a MIDI file, which is notes
+rather than sound.
 
-Two chips run side by side. One plays a three-voice arrangement of *Twinkle,
-Twinkle, Little Star* — music box on top, plucked bass underneath, and a
-chiming inner arpeggio filling the eighth notes between melody notes — on a
-thirty-second loop. The other is a six-voice effects chip: a launch chirp, a
-wall tick, a landing thock, a pop, a falling glissando, a star sparkle, a
-ceiling grind, a brass fanfare for a cleared board, and a sagging reed for the
-end of a run. Splitting them means a burst of pops can never steal a register
-out from under the tune.
+Five files. `demos/shared/opl2.fc` is the chip (shared with the `wolf-fc`
+project, which uses it to play Wolfenstein 3D's own IMF music).
+`demos/shared/opl_midi.fc` parses Standard MIDI Files and plays them,
+`demos/shared/opl_bank_gm.fc` is the hand-authored General MIDI instrument
+bank it plays them through, `demos/shared/opl_audio.fc` is the reusable engine
+that mixes everything and talks to the device, and `sound.fc` is this game's
+effects — nine instruments and nine scripts.
 
-Nothing is pre-rendered and nothing is on disk. Samples are generated inside
-**the host's audio callback, on the host's own audio thread**, at the sound
-card's rate — never by the game loop. That is not an implementation detail: a
-game loop that produces the samples is also their clock, so every frame that
-runs long or short bends the music's pitch and tempo, and a frame slow enough
-to empty the buffer stops the tune mid-note. A callback asks for exactly the
-samples the device needs at exactly the moment it needs them, so the frame rate
-cannot reach the sound at all.
+### The music
+
+`music/minuet.mid` is an arrangement of the **Minuet in G major, BWV Anh.
+114** — the one everybody knows from the *Notebook for Anna Magdalena Bach*,
+and which scholarship now attributes to Christian Petzold rather than to Bach.
+Public domain either way; the credit is the only thing in question.
+
+The melody and harmony are the Minuet's; the scoring is ours. The sixteen bars
+play twice, thinly and then fully:
+
+| Bars | Channel | Program | Part |
+|---|---|---|---|
+| 1–32 | 0 | 10 Music Box | Melody |
+| 1–32 | 2 | 45 Pizzicato Strings | Bass |
+| 1–32 | 9 | — | Hi-hat |
+| 17–32 | 1 | 8 Celesta | Inner line |
+| 17–32 | 3 | 6 Harpsichord | Chords |
+| 17–32 | 9 | — | Kick and tambourine |
+
+Six tracks in SMF format 1, five sounding channels, and six to eight
+simultaneous notes in the second half — enough to work the voice allocator
+without pinning it. It steals zero voices, which is another way of saying the
+arrangement was written to fit nine.
+
+`tools/mkmid.fc` is where the music actually lives: the note tables are FC
+source, and it writes the `.mid` out. Both are checked in, so the tune stays
+editable as music rather than as bytes, and its provenance is unambiguous.
+
+### Effects
+
+The other chip is a six-voice effects chip: a launch chirp, a wall tick, a
+landing thock, a pop, a falling glissando, a star sparkle, a ceiling grind, a
+brass fanfare for a cleared board, and a sagging reed for the end of a run.
+
+Two chips rather than one, because that is eighteen voices instead of nine and
+because a burst of pops can then never take a voice away from the tune — nor a
+dense bar of music from a sound you are waiting to hear. They meet only in the
+final mix.
+
+### The callback
+
+Samples are generated inside **the host's audio callback, on the host's own
+audio thread**, at the sound card's rate — never by the game loop. That is not
+an implementation detail: a game loop that produces the samples is also their
+clock, so every frame that runs long or short bends the music's pitch and
+tempo, and a frame slow enough to empty the buffer stops the tune mid-note. A
+callback asks for exactly the samples the device needs at exactly the moment it
+needs them, so the frame rate cannot reach the sound at all.
 
 The game thread never touches a chip. It posts commands ("play sound 3", "stop
 the music") onto a lock-free single-producer ring that the callback drains, so

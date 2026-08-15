@@ -1,0 +1,196 @@
+// Render a MIDI file through opl_midi to a WAV file, and say what happened.
+//
+//     midi_render <in.mid> <out.wav> [seconds] [bank-file]
+//
+// No window, no audio device, no game — which is the point. Tuning a patch by
+// ear through a game launch is miserable; through a two-second command it is
+// pleasant, and the whole of `opl_bank_gm.fc` was written against this tool.
+// It also exercises parse → sequence → chip end to end, which is as close to a
+// test as this corner of the tree gets.
+//
+// `seconds` defaults to the song's own length, so a piece renders exactly once
+// through unless told otherwise; ask for longer and looping shows you the
+// wrap. A fourth argument loads a `.op2`, `.ibk` or `.sbi` bank in place of
+// the built-in one, which is how two banks get compared on the same piece.
+//
+// Levels are reported, not managed. A game mixes this against sound effects
+// and puts a soft knee after the sum (see `opl_audio.fc`); a tool that quietly
+// did the same would hide exactly the thing you are trying to hear, so this
+// one hard-clamps and then tells you how often it had to.
+//
+//     fcc demos/shared/tools/midi_render.fc demos/shared/opl_midi.fc \
+//         demos/shared/opl_bank_gm.fc demos/shared/opl2.fc \
+//         stdlib/io.fc stdlib/math.fc stdlib/text.fc -o /tmp/mr.c
+//     cc -std=c11 -o /tmp/mr /tmp/mr.c -lm
+
+import opl_midi from shared::
+import opl_bank_gm from shared::
+import opl2 from shared::
+import io from std::
+import text from std::
+
+// ============================================================
+// WAV output
+// ============================================================
+
+struct wav =
+    b: u8[]
+    n: i64
+
+let put8 = (w: wav*, v: i32) ->
+    w.b[w.n] = (u8) (v & 255)
+    w.n = w.n + 1i64
+
+// WAV is little-endian throughout, unlike the MIDI file that fed it.
+let put16 = (w: wav*, v: i32) ->
+    put8(w, v)
+    put8(w, v >> 8)
+
+let put32 = (w: wav*, v: i32) ->
+    put8(w, v)
+    put8(w, v >> 8)
+    put8(w, v >> 16)
+    put8(w, v >> 24)
+
+let put_tag = (w: wav*, s: const str) ->
+    for i in 0i64..s.len do
+        put8(w, (i32) s[i])
+
+// A canonical 44-byte header for 16-bit mono PCM, then the samples.
+let put_header = (w: wav*, rate: i32, frames: i32) ->
+    let data_bytes = frames * 2
+    put_tag(w, "RIFF")
+    put32(w, 36 + data_bytes)
+    put_tag(w, "WAVE")
+    put_tag(w, "fmt ")
+    put32(w, 16)                    // chunk size for PCM
+    put16(w, 1)                     // format 1 = PCM
+    put16(w, 1)                     // mono: the chip has no second channel
+    put32(w, rate)
+    put32(w, rate * 2)              // byte rate
+    put16(w, 2)                     // block align
+    put16(w, 16)                    // bits per sample
+    put_tag(w, "data")
+    put32(w, data_bytes)
+
+// ============================================================
+// Reporting
+// ============================================================
+
+let describe_error = (e: i32) ->
+    if e == opl_midi.smf.bad_header then "not a MIDI file, or a damaged header"
+    else if e == opl_midi.smf.bad_track then "a track's events do not decode"
+    else if e == opl_midi.smf.unsupported_format then
+        "SMF format 2 — a file of independent pieces, not one piece"
+    else if e == opl_midi.smf.no_tracks then "no tracks to play"
+    else if e == opl_midi.smf.truncated then
+        "the file is truncated — a chunk claims more bytes than are there"
+    else if e == opl_midi.smf.bad_bank then "not a bank file this understands"
+    else "unknown failure"
+
+// Ticks per second at the file's own time base, assuming the default 120 bpm
+// for a tick-per-quarter division. SMPTE divisions are absolute and need no
+// assumption at all.
+let ticks_per_second = (division: i32) ->
+    if division > 0 then (f64) division * 2.0
+    else
+        let fps = 0 - (division >> 8)
+        let tpf = division & 255
+        let d = (f64) fps * (f64) tpf
+        if d > 0.0 then d else 1000.0
+
+// The bank named as the fourth argument, or the built-in one. A bank file
+// replaces the built-in entirely rather than merging with it, so two banks
+// can be compared on the same piece without a rebuild.
+let choose_bank = (args: str[]) ->
+    if args.len <= 4i64 then ok(opl_bank_gm.make())
+    else
+        let bb = match io.read_all(args[4]) with
+                 | ok(b) -> b
+                 | err(e) -> return err(opl_midi.bank, opl_midi.smf.bad_bank)
+        defer free(bb)
+        opl_midi.load_bank(bb)
+
+let main = (args: str[]) ->
+    if args.len < 3i64 then
+        io.write("usage: midi_render <in.mid> <out.wav> [seconds] [bank-file]\n", stderr)
+        return 1
+    let in_path = args[1]
+    let out_path = args[2]
+    let rate = 44100
+
+    let bytes = match io.read_all(in_path) with
+                | ok(b) -> b
+                | err(e) ->
+                    io.write(alloca("cannot read %s{in_path}\n"), stderr)
+                    return 1
+    defer free(bytes)
+
+    let tune = match opl_midi.parse(bytes) with
+               | ok(s) -> s
+               | err(e) ->
+                   io.write(alloca("%s{in_path}: %s{describe_error(e)}\n"), stderr)
+                   return 1
+    defer opl_midi.free_song(tune)
+
+    let kit = match choose_bank(args) with
+              | ok(k) -> k
+              | err(e) ->
+                  io.write(alloca("bank: %s{describe_error(e)}\n"), stderr)
+                  return 1
+    defer opl_midi.free_bank(kit)
+
+    let p = opl_midi.init(rate, tune, kit)
+    defer opl_midi.free_player(p)
+
+    // The song's own length in seconds. A tempo change later on moves the
+    // real duration, so this is a default rather than a measurement — which
+    // is why it is both stated in the report and overridable.
+    let song_secs = (f64) tune.length / ticks_per_second(tune.division)
+    let mut secs = song_secs
+    if args.len > 3i64 then
+        match text.parse_f64(args[3]) with
+        | ok(v) -> secs = v
+        | err(e) -> void()
+    if secs < 0.1 then secs = 0.1
+    let frames = (i32) ((f64) rate * secs)
+
+    // Looping off unless the caller asked for more time than the song has:
+    // rendering one pass is the common case, and hearing the wrap is the
+    // reason to ask for more.
+    opl_midi.set_loop(p, secs > song_secs + 0.05)
+
+    let w_buf = alloc(u8[44i64 + (i64) frames * 2i64] {})!
+    defer free(w_buf)
+    let mut w = wav { b = w_buf, n = 0i64 }
+    put_header(&w, rate, frames)
+
+    opl_midi.start(p)
+    let mut peak = 0
+    let mut clipped = 0
+    for i in 0..frames do
+        opl_midi.advance(p)
+        let s = opl2.sample(p.chip)
+        let mag = if s < 0 then 0 - s else s
+        if mag > peak then peak = mag
+        let c = if s > 32767 then 32767 else if s < -32768 then -32768 else s
+        if c != s then clipped = clipped + 1
+        put16(&w, c)
+
+    let f = match io.open(out_path, "wb") with
+            | ok(h) -> h
+            | err(e) ->
+                io.write(alloca("cannot write %s{out_path}\n"), stderr)
+                return 1
+    io.write(w.b[0i64..w.n], f)
+    match io.close(f) with
+    | ok -> void()
+    | err(e) ->
+        io.write("close failed\n", stderr)
+        void()
+
+    io.write(alloca("%s{in_path}: division %d{tune.division}, %d{(i32) tune.events.len} events, %d{tune.length} ticks\n"), stdout)
+    io.write(alloca("bank %s{kit.name}: %d{(i32) kit.patches.len} voices\n"), stdout)
+    io.write(alloca("rendered %d{frames} frames (%.2f{secs} s) at %d{rate} Hz to %s{out_path}\n"), stdout)
+    io.write(alloca("peak %d{peak} of 32767, %d{clipped} clipped samples, %d{(i32) p.steals} voice steals\n"), stdout)
+    0

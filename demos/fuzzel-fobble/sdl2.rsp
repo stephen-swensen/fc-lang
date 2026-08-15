@@ -23,6 +23,8 @@ main.fc
 # and reads no flag; the device file next to it is the SDL2 half of the same
 # either/or the gfx line above is.
 ../shared/opl2.fc
+../shared/opl_midi.fc
+../shared/opl_bank_gm.fc
 ../shared/opl_audio.fc
 ../shared/opl_audio_sdl.fc
 

@@ -1,12 +1,23 @@
 // A small FM sound engine for the demos: OPL2 (YM3812) voices, a
-// sound-effect bank and a three-part music sequencer, producing samples on
+// sound-effect bank and a General MIDI music player, producing samples on
 // demand. Bring your own instruments and note data — this file has no sounds
 // of its own — and your own audio device: it names no platform library and
 // opens nothing.
 //
-// The chip emulation is opl2.fc next door; this is the layer that turns it
-// into game audio. Compile with `demos/shared/opl2.fc`, `stdlib/math.fc`
-// (which opl2 needs) and `stdlib/io.fc` (one diagnostic, on bad song data).
+// The chip emulation is opl2.fc next door and the music player is
+// opl_midi.fc; this is the layer that turns them into game audio. Compile
+// with `demos/shared/opl2.fc`, `demos/shared/opl_midi.fc` and
+// `stdlib/math.fc` (which both of those need).
+//
+// ------------------------------------------------------------------
+// Two chips
+// ------------------------------------------------------------------
+//
+// Music and effects each get their own emulated chip, and that is a decision
+// rather than an accident. One chip is nine voices; two are eighteen, and —
+// far more to the point — a burst of six overlapping effects can never steal
+// a voice from the tune, nor a dense bar of music from a sound the player is
+// waiting to hear. The two mix at the very end and never contend.
 //
 // To hear it, add a device: `opl_audio_sdl.fc` or `opl_audio_raylib.fc`,
 // interchangeable files defining `module opl_dev`, of which a build lists
@@ -63,8 +74,7 @@
 
 namespace shared::
 
-// opl2 is a sibling in `shared::`, so it needs no import here.
-import io from std::
+// opl2 and opl_midi are siblings in `shared::`, so they need no import here.
 
 // ============================================================
 // Single-producer / single-consumer ring
@@ -112,10 +122,11 @@ module spsc =
             some(v)
 
 
-// A small FM sound engine for the demos: OPL2 voices for sound effects and a
-// three-part music sequencer. It brings no sounds of its own — a game
-// supplies a `bank` of effects and a `song`, both plain data — and no device:
-// samples leave through `render`, and whoever opened the device calls it.
+// A small FM sound engine for the demos: OPL2 voices for sound effects, and a
+// General MIDI player for the music. It brings no sounds of its own — a game
+// supplies a `bank` of effects as plain data and an `opl_midi.player` for the
+// tune — and no device: samples leave through `render`, and whoever opened
+// the device calls it.
 //
 // Audio is meant to be generated on the host's audio callback thread, not
 // pushed from the game loop, so a frame that runs long or short cannot bend
@@ -127,7 +138,8 @@ module spsc =
 // drops the request rather than stalling the frame.
 //
 // ```fc
-// let a = opl_audio.init(rate, fx, tune, music_gain, sfx_gain)
+// let p = opl_midi.init(rate, opl_midi.parse(bytes)?, opl_bank_gm.make())
+// let a = opl_audio.init(rate, fx, p, music_gain, sfx_gain)
 // if opl_dev.start(a) then ...        // a device file opens it; false = silent
 // opl_audio.play(a, sound_id)
 // ```
@@ -178,32 +190,6 @@ module opl_audio =
         sounds: const sound[]
         script: const i32[]
         tick_rate: i32          // steps per second; 140 is the AdLib rate
-
-    // A three-part tune: a melody over a bass line and an inner arpeggio.
-    //
-    // Only the melody carries note data. The other two parts are read off
-    // `chords` — one chord index per half-bar — which is why a whole
-    // arrangement costs little more than the tune itself.
-    //
-    // `grid` is the sequencer's resolution in steps per beat, and every
-    // duration in the song is counted in those steps: 2 puts the grid on
-    // eighth notes, 4 on sixteenths, 3 on beat-triplets. It buys
-    // resolution, not range — a melody note is any whole number of steps,
-    // so at grid 2 a quarter note is `2` and a dotted half is `6`.
-    //
-    // The loop length is not stated: it is `chords.len` half-bars, because
-    // the chord table *is* the form. Nothing can disagree with itself.
-    struct song =
-        melody: const i32[]     // (note, length in grid steps) pairs; -1 = rest
-        chords: const i32[]     // one chord index per half-bar
-        roots: const i32[]      // bass note per chord index
-        arps: const i32[]       // `arp_len` arpeggio notes per chord index
-        grid: i32               // sequencer steps per beat
-        arp_len: i32            // arpeggio notes per half-bar; 0 = no arpeggio
-        bpm: i32
-        lead: instrument
-        bass: instrument
-        arp: instrument
 
     // ============================================================
     // Tunables
@@ -290,30 +276,23 @@ module opl_audio =
     // State
     // ============================================================
 
-    // Everything from `music_chip` down is owned by the audio callback
-    // thread and must not be touched from the game thread once a device is
-    // running. `ring` is the crossing point; `muted` belongs to the game
+    // Everything from `music` down is owned by the audio callback thread and
+    // must not be touched from the game thread once a device is running —
+    // including the player, which is the game's to build and the callback's
+    // to drive. `ring` is the crossing point; `muted` belongs to the game
     // thread. There is no device handle here: the file that opened the
     // device keeps it.
     struct audio =
         rate: i32
-        music_chip: opl2.chip*
         sfx_chip: opl2.chip*
         fx: bank
-        tune: song
 
-        // Music sequencer
+        // Music. The player owns its own chip and its own clock, so all this
+        // layer keeps is whether it should be running.
+        music: opl_midi.player*
         music_want: bool        // the game wants music here
         music_mute: bool        // the player asked for silence
         music_live: bool        // what the two above add up to
-        mus_accum: f64
-        mus_period: f64         // samples per grid step
-        pos: i32                // position in the loop, in grid steps
-        mel_idx: i32            // index of the current melody event
-        mel_left: i32           // grid steps left on the current melody note
-        // Derived from the song at init, so the tick loop does no division.
-        half_bar: i32           // grid steps per chord
-        loop_len: i32           // grid steps in one time round
 
         // Effect voices
         sfx_accum: f64
@@ -333,129 +312,43 @@ module opl_audio =
 
         muted: bool             // mirror of music_mute, for the game's HUD
 
-    // Music voices live on channels 0..2 of the music chip.
-    private let ch_lead = 0
-    private let ch_bass = 1
-    private let ch_arp  = 2
-
-    // Build the engine. The device is not open yet — call `start` once the
-    // rest of the game is ready to be heard.
-    let init = (sample_rate: i32, fx: bank, tune: song,
+    // Build the engine. The music player is the caller's to build — it needs
+    // a parsed song and a bank, neither of which this layer knows anything
+    // about — and this takes it over: from here until the process exits it
+    // belongs to the audio callback thread.
+    //
+    // The device is not open yet. A device file opens it once the rest of the
+    // game is ready to be heard.
+    let init = (sample_rate: i32, fx: bank, music: opl_midi.player*,
                 music_gain: f64, sfx_gain: f64) ->
         let a = alloc(audio)!
         a.rate = sample_rate
-        a.music_chip = opl2.init((f64) sample_rate)
         a.sfx_chip = opl2.init((f64) sample_rate)
         a.fx = fx
-        a.tune = tune
+        a.music = music
         a.music_gain = music_gain
         a.sfx_gain = sfx_gain
-        // One grid step is 60 / (bpm * grid) of a second.
-        a.mus_period = (f64) sample_rate * 60.0 / (f64) (tune.bpm * tune.grid)
         a.sfx_period = (f64) sample_rate / (f64) fx.tick_rate
-        // A half-bar is two beats — the span one chord covers.
-        a.half_bar = tune.grid * 2
-        a.loop_len = (i32) tune.chords.len * a.half_bar
-        load(a.music_chip, ch_lead, tune.lead)
-        load(a.music_chip, ch_bass, tune.bass)
-        load(a.music_chip, ch_arp, tune.arp)
-
-        // A melody longer than the chord progression is a data error with
-        // no audible signature: the loop wrap restarts the melody, so the
-        // overhanging notes are simply never reached and the tune is
-        // silently truncated at the bar line. Catch it here, on the first
-        // run, rather than leaving someone to wonder where the last phrase
-        // went.
-        //
-        // A melody *shorter* than the loop is deliberately fine — it
-        // repeats within the loop, which is how you write a two-bar figure
-        // under an eight-bar progression without spelling it out four
-        // times.
-        //
-        // This has to be a runtime check. The data is compile-time
-        // constant, but summing it needs iteration, and FC's
-        // constant-expression grammar admits no calls — so `static_assert`
-        // cannot see it. Checked once at init, not per tick.
-        let mut total = 0
-        let mut ev = 0
-        loop
-            if (i64) (ev * 2 + 1) >= tune.melody.len then break
-            total = total + tune.melody[ev * 2 + 1]
-            ev = ev + 1
-        if total > a.loop_len then
-            io.write(alloca("opl_audio: melody runs %d{total} grid steps but the chord progression is only %d{a.loop_len} (%d{(i32) tune.chords.len} half-bars of %d{a.half_bar}); the tail would never be heard\n"), stderr)
-        assert(total <= a.loop_len)
         a
 
     // ============================================================
     // Sequencers — audio thread only
     // ============================================================
 
-    private let rewind = (a: audio*) ->
-        a.pos = 0
-        a.mel_idx = 0
-        a.mel_left = 0
-        // Primed, not zeroed: the first sample of the next callback is
-        // then already an eighth-note boundary, so the tune starts on the
-        // downbeat instead of after a silent eighth.
-        a.mus_accum = a.mus_period
-
-    // Fold `music_want` and `music_mute` into the one flag the mixer
-    // reads, hushing the chip on the way down so a note can't hang. The
-    // two inputs are separate on purpose: the game starts and stops the
-    // tune around a run, the player mutes it, and neither should be able
-    // to undo the other.
+    // Fold `music_want` and `music_mute` into the one flag the mixer reads,
+    // and hold or release the player to match. The two inputs are separate on
+    // purpose: the game starts and stops the tune around a run, the person
+    // playing mutes it, and neither should be able to undo the other.
+    //
+    // Hold rather than stop, because this is the path a mute takes: unmuting
+    // should pick the tune up where it was rather than restart it. `pause`
+    // keys every note off on the way down, so nothing can hang.
     private let sync_music = (a: audio*) ->
         let live = a.music_want && !a.music_mute
         if live != a.music_live then
             a.music_live = live
-            if !live then
-                opl2.silence_voices(a.music_chip)
-
-    // One grid step. The melody runs off its own note list while the bass
-    // and arpeggio read the chord under the current beat, which is why the
-    // accompaniment needs no data beyond one chord index per half-bar.
-    private let music_tick = (a: audio*) ->
-        let t = a.tune
-        let bar_pos = a.pos % a.half_bar        // step within this chord
-        let bar = a.pos / a.half_bar
-        let ci = if (i64) bar >= t.chords.len then (i32) t.chords.len - 1
-                 else bar
-        let chord = t.chords[ci]
-
-        // Melody: advance the note list only when the held note expires. A
-        // melody shorter than the loop wraps here and repeats.
-        if a.mel_left <= 0 then
-            if (i64) (a.mel_idx * 2) >= t.melody.len then
-                a.mel_idx = 0
-            let note = t.melody[a.mel_idx * 2]
-            a.mel_left = t.melody[a.mel_idx * 2 + 1]
-            a.mel_idx = a.mel_idx + 1
-            if note >= 0 then
-                key_on(a.music_chip, ch_lead, note)
-            else
-                opl2.note_off(a.music_chip, ch_lead)
-        a.mel_left = a.mel_left - 1
-
-        // Bass on the chord change.
-        if bar_pos == 0 then
-            key_on(a.music_chip, ch_bass, t.roots[chord])
-
-        // Arpeggio: `arp_len` notes spread evenly across the half-bar, so
-        // the same figure keeps its rhythm at any grid. Multiplying before
-        // dividing is what keeps the index exact and in range for every
-        // combination — `k` is strictly below `arp_len` because `bar_pos`
-        // is strictly below `half_bar`. An `arp_len` that does not divide
-        // `half_bar` still plays, just on fewer of its notes.
-        if t.arp_len > 0 && bar_pos * t.arp_len % a.half_bar == 0 then
-            let k = bar_pos * t.arp_len / a.half_bar
-            key_on(a.music_chip, ch_arp, t.arps[chord * t.arp_len + k])
-
-        a.pos = a.pos + 1
-        if a.pos >= a.loop_len then
-            a.pos = 0
-            a.mel_idx = 0
-            a.mel_left = 0
+            if live then opl_midi.resume(a.music)
+            else opl_midi.pause(a.music)
 
     // Fire an effect on the next voice by rotation.
     private let trigger = (a: audio*, id: i32) ->
@@ -504,14 +397,18 @@ module opl_audio =
     private let apply = (a: audio*, c: cmd) ->
         match c.kind with
         | play_sound -> trigger(a, c.arg)
+        // Start and stop go through the player directly rather than through
+        // `sync_music`, because they mean "from the top" and "and rewind" —
+        // positions, not the hold that mute and pause want.
         | music_start ->
-            rewind(a)
             a.music_want = true
-            sync_music(a)
+            a.music_live = a.music_want && !a.music_mute
+            if a.music_live then opl_midi.start(a.music)
+            else opl_midi.stop(a.music)
         | music_stop ->
             a.music_want = false
-            sync_music(a)
-            rewind(a)
+            a.music_live = false
+            opl_midi.stop(a.music)
         | music_pause ->
             a.music_want = false
             sync_music(a)
@@ -539,11 +436,8 @@ module opl_audio =
             let fx_out = opl2.sample(a.sfx_chip)
             let mut mus_out = 0
             if a.music_live then
-                a.mus_accum = a.mus_accum + 1.0
-                if a.mus_accum >= a.mus_period then
-                    a.mus_accum = a.mus_accum - a.mus_period
-                    music_tick(a)
-                mus_out = opl2.sample(a.music_chip)
+                opl_midi.advance(a.music)
+                mus_out = opl2.sample(a.music.chip)
             let sum = (i32) ((f64) mus_out * a.music_gain)
                     + (i32) ((f64) fx_out * a.sfx_gain)
             out[i] = (i16) soft_clip(sum)

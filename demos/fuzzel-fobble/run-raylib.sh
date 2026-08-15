@@ -127,6 +127,9 @@ RSP="@demos/fuzzel-fobble/raylib.rsp"
 cc -std=c11 -Wall -Werror -I"$RAYLIB_SRC" \
    -o "$BIN" "$OUTDIR/fuzzel-fobble-raylib.c" "$LIB" "${RL_LIBS[@]}"
 
+# Arguments are forwarded to the game, so `./run-raylib.sh --music other.mid`
+# plays a different Standard MIDI File. Paths are relative to the repository
+# root, which this script has already changed to.
 echo "Running Fuzzel Fobble (raylib)..."
-"$BIN"
+"$BIN" "$@"
 echo "[exit: $?]"

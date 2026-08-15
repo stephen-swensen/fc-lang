@@ -16,13 +16,20 @@ can drive `opl2` and the platform layer with no import lines of its own.
 | `sdl2.fc` | SDL2 bindings (`module sdl2`) | SDL2 headers + `-lSDL2` |
 | `raylib.fc` | raylib bindings (`module raylib`) | raylib source, fetched and built by `demos/fuzzel-fobble/run-raylib.sh` into the gitignored `raylib/` |
 | `opl2.fc` | OPL2 / YM3812 FM chip emulator (`module opl2`) | `stdlib/math.fc` |
-| `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, `stdlib/math.fc`, `stdlib/io.fc` — **no platform library** |
+| `opl_midi.fc` | Standard MIDI File parser and General MIDI player (`module opl_midi`) | `opl2.fc`, `stdlib/math.fc` — **no I/O** |
+| `opl_bank_gm.fc` | A hand-authored General MIDI instrument bank (`module opl_bank_gm`) | `opl_midi.fc` |
+| `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, `opl_midi.fc`, `stdlib/math.fc` — **no platform library** |
 | `opl_audio_sdl.fc` | SDL2 audio device for the engine (`module opl_dev`) | `opl_audio.fc`, `sdl2.fc` |
 | `opl_audio_raylib.fc` | raylib audio device for the engine (`module opl_dev`) | `opl_audio.fc`, `raylib.fc` |
 
+There is also `tools/midi_render.fc`, a standalone program that renders a
+`.mid` to a WAV file with no window and no audio device — see
+[Tuning without launching the game](#tuning-without-launching-the-game).
+
 `fuzzel-fobble` is the worked example of the SDL2 set. Its `sound.fc` is
-nothing but data — instruments, effect scripts, a tune — which is the shape a
-game's audio file is meant to have.
+nothing but data — instruments and effect scripts — while its music is a real
+Standard MIDI File in `music/`, loaded at startup and swappable with
+`--music`.
 
 `sdl2.fc` and `raylib.fc` cover deliberately the same ground, because
 `fuzzel-fobble` builds on either of them from one set of sources — see
@@ -38,8 +45,16 @@ or Sound Blaster card put in a 1990 PC. No samples, no assets, no files: a
 game supplies register values and note numbers, and the engine turns them into
 audio inside the host's audio callback.
 
-Two chips run per engine instance — one for music, one for effects — so a
-burst of effects can never disturb the music's registers.
+Two chips run per engine instance — one for music, one for effects. That is
+eighteen voices rather than nine and, more to the point, a burst of six
+overlapping effects can never take a voice away from the tune, nor a dense bar
+of music from a sound the player is waiting to hear. The two mix at the very
+end and never contend.
+
+Music is a **Standard MIDI File**, played by `opl_midi.fc` through the
+instrument bank in `opl_bank_gm.fc`. Effects are a small bespoke format — a
+bank of instruments and scripts of `(note, ticks)` pairs — because an effect is
+a one-shot with tight timing rather than a piece of music.
 
 The engine is backend-agnostic, and literally so: `opl_audio.fc` names no
 platform library, contains no `#if`, and reads no flag. Everything about
@@ -52,13 +67,15 @@ rendering to a file, a headless test) lists neither. See
 
 ## Wiring it into a game
 
-Add four files to your demo's `lsp.rsp` (order is irrelevant; FC compiles
+Add six files to your demo's `lsp.rsp` (order is irrelevant; FC compiles
 whole-program). Paths there are relative to the response file itself:
 
 ```
 # demos/yourgame/lsp.rsp
 ../shared/sdl2.fc
 ../shared/opl2.fc
+../shared/opl_midi.fc
+../shared/opl_bank_gm.fc        # or your own bank, or none if you load one
 ../shared/opl_audio.fc
 ../shared/opl_audio_sdl.fc      # the device — swap for _raylib.fc on raylib
 sound.fc
@@ -74,6 +91,8 @@ the engine, so a game never mentions it:
 ```fc
 import sdl2 from shared::
 import opl_audio from shared::
+import opl_midi from shared::
+import opl_bank_gm from shared::
 import opl_dev from shared::      // whichever device file you listed
 ```
 
@@ -82,7 +101,10 @@ Then, in `main`:
 ```fc
 sdl2.init(sdl2.init_video | sdl2.init_audio)   // init_audio is required
 
-let a = snd.init(44100)                        // your sound.fc builds the bank + song
+let tune = opl_midi.parse(io.read_all("music/song.mid")?)?
+let p = opl_midi.init(44100, tune, opl_bank_gm.make())
+
+let a = snd.init(44100, p)                     // your sound.fc builds the effect bank
 if !opl_dev.start(a) then                      // opens the device, starts the callback
     io.write("Audio: device open failed - running silent\n", stdout)
 
@@ -162,11 +184,11 @@ the audio thread.
 
 | Call | Effect |
 |---|---|
-| `init(rate, bank, song, music_gain, sfx_gain) -> audio*` | Build the engine. No device yet. |
+| `init(rate, bank, player, music_gain, sfx_gain) -> audio*` | Build the engine over an effect bank and an `opl_midi.player*`. No device yet; the engine takes the player over from here. |
 | *(the device's `opl_dev.start`)* | Open the device and start the callback. `false` = no audio device. Lives in the device file, not here — see [Supplying a device](#supplying-a-device). |
 | `play(a, id)` | Fire effect `id` on the next voice by rotation. |
 | `music_begin(a)` | Start the tune from the top. |
-| `music_end(a)` | Stop it and rewind, so the next `music_begin` opens on bar 1. |
+| `music_end(a)` | Stop it and rewind, so the next `music_begin` opens on the first event. |
 | `music_hold(a)` / `music_unhold(a)` | Pause mid-phrase and resume there. |
 | `music_toggle_mute(a)` | The player's own switch, independent of the above. |
 | `music_muted(a) -> bool` | For a HUD indicator. |
@@ -374,77 +396,119 @@ The effect clock is independent of the music's: at `tick_rate = 140` a step is
 about 7 ms, which is about as fine as a sweep needs before the steps stop being
 audible.
 
-## Music: the song
+## Music: a MIDI file
+
+Music is a Standard MIDI File on disk. Parse it, build a player over an
+instrument bank, and hand the player to `opl_audio.init`:
 
 ```fc
-struct song =
-    melody: const i32[]     // (note, length in grid steps) pairs; -1 = rest
-    chords: const i32[]     // one chord index per half-bar
-    roots: const i32[]      // bass note per chord index
-    arps: const i32[]       // arp_len arpeggio notes per chord index
-    grid: i32               // sequencer steps per beat
-    arp_len: i32            // arpeggio notes per half-bar; 0 = no arpeggio
-    bpm: i32
-    lead: instrument
-    bass: instrument
-    arp: instrument
+let bytes = io.read_all("music/minuet.mid")?
+let tune  = opl_midi.parse(bytes)?          // bytes, not a path — see below
+let p     = opl_midi.init(44100, tune, opl_bank_gm.make())
+let a     = opl_audio.init(44100, fx, p, music_gain, sfx_gain)
 ```
 
-Three voices, but **only the melody carries note data**. The bass and the
-arpeggio are read off `chords`, one index per half-bar, which is why a whole
-arrangement costs barely more than the tune:
+`parse` takes a `const u8[]` and `opl_midi.fc` imports no I/O at all, so a song
+can come off disk, out of a static array compiled into the program, or over a
+socket. Whoever has the bytes decides where they came from.
+
+### What plays
+
+Formats 0 and 1 both work and both come out as a single merged event list —
+which is the whole of the difference between them once the tracks are merged.
+Format 2 is a file of *independent* pieces, so merging it would be wrong and
+playing only the first would be a guess; it is refused with a named error.
+
+Handled: note on/off (including the velocity-zero note-off convention),
+running status, program change, pitch bend, channel volume (CC7), expression
+(CC11), sustain pedal (CC64), bend range via RPN 0, all-notes-off and reset
+(CC120/121/123), tempo changes, and both time bases — ticks-per-quarter and
+SMPTE. Dropped at parse time rather than carried and ignored: aftertouch,
+sysex, and every meta event but tempo and end-of-track.
+
+**Pan (CC10) is not implementable.** The OPL2 sums its nine voices to one mono
+signal, so there is no per-voice output to place. This is a chip limit, not an
+omission — an OPL3 has stereo bits per channel and is a strict register
+superset, so the day this file grows an OPL3 mode is the day pan arrives.
+
+### Nine voices, sixteen channels
+
+A MIDI channel is **not** an OPL channel. MIDI has sixteen independent
+polyphonic channels; the chip has nine two-operator voices. Between them sits a
+voice allocator: a note is handed a physical voice at key-on and gives it back
+at key-off, and when all nine are busy the next note steals one. Every real OPL
+driver worked this way.
+
+Stealing prefers, in order: a voice the chip reports has finished sounding,
+then the longest-released one still ringing out, then the note that has been
+held longest. The first tier is why `opl2.channel_idle` exists — reusing a
+silent voice is inaudible and reusing a ringing one clicks.
+
+A typical General MIDI file wants more simultaneous notes than nine, so
+stealing runs more or less continuously. That thinning is what an AdLib card
+actually sounded like. `player.steals` counts it, and `midi_render` reports the
+total, which is the one number that says whether a piece fits the chip:
+fuzzel-fobble's minuet steals **0** times, a sixteen-channel torture file
+steals 711 in twenty seconds.
+
+### Instruments: the bank
+
+A MIDI file names its instruments and does not describe them — program 40 is
+"Violin", and what a violin *is* has to come from somewhere else. That
+somewhere is a `bank`:
 
 ```fc
-// 0 = C, 1 = F, 2 = G
-private let chords = i32[25] { 0,0,  1,0,  1,0,  2,0,  0,1,  0,2, ... }
-private let roots  = i32[3]  { 36, 41, 43 }                 // C3, F3, G3
-private let arps   = i32[12] { 48,52,55,52,  48,53,57,53,  47,50,55,50 }
+struct bank =
+    name: const str
+    patches: patch[]        // the distinct voices, however many
+    melodic: i32[]          // 128 entries: GM program -> index into patches
+    drums: i32[]            // 128 entries: note number -> index, -1 = silent
 ```
 
-**`grid` is resolution, not range.** It is the number of sequencer steps per
-beat: 2 puts the grid on eighths, 4 on sixteenths, 3 on beat-triplets. Every
-duration in the song is counted in those steps, and a melody note may be any
-whole number of them — at `grid = 2` a quarter note is `2`, a dotted half is
-`6`. Raising the grid does not change the music: the same tune written at
-`grid = 4` with every duration doubled renders byte-for-byte identically.
+The indirection is what keeps 128 programs from meaning 128 hand-authored
+voices. `opl_bank_gm.make()` returns sixty voices — three or four per GM family
+plus sixteen percussion — with every program pointed at the nearest, so nothing
+is silent and nothing is wildly wrong, though a bassoon and an oboe share a
+patch and a splash cymbal is a crash.
 
-**The loop length is not stated.** It is `chords.len` half-bars, because the
-chord table *is* the form — so the two cannot disagree.
+A `patch` is the same eleven register bytes as an effect `instrument`, plus two
+fields the register set has no room for: `transpose`, and `fixed_note` for
+percussion, where a drum's pitch belongs to the drum rather than to the note
+number that selected it. `fixed_note = 0` means pitched, so a zeroed `patch` is
+a valid melodic one and a bank written as source can omit both fields.
 
-The arpeggio spreads `arp_len` notes evenly across each half-bar, so a figure
-keeps its rhythm at any grid. Set `arp_len = 0` to drop the voice for a
-two-part tune.
+`opl_midi.load_bank` reads the three legacy formats — `.op2`/GENMIDI, `.ibk`
+and `.sbi` — sniffing the magic to tell which. Worth knowing: nearly every bank
+file in circulation was extracted from a commercial game and its
+redistribution terms are unclear. Loading one a user supplies is a different
+thing from shipping one, which is why `opl_bank_gm.fc` is written out by hand
+and checked in.
 
-### The one guard
+### Driving the player
 
-A melody **longer** than the chord progression aborts at `init` with a message
-naming both lengths. That case is silently truncated at the loop wrap — the
-overhanging notes are simply never reached — so it has no audible signature to
-debug from.
-
-A melody **shorter** than the loop is deliberately fine: it wraps and repeats,
-which is how you write a two-bar figure under an eight-bar progression without
-spelling it out four times.
-
-This is a runtime check, not a `static_assert`, and it cannot be one: the data
-is compile-time constant, but summing it needs iteration, and FC's
-constant-expression grammar admits no calls. Checked once at `init`, never per
-tick.
-
-## Pitch
-
-A note is `block * 12 + semitone`, so each block is an octave and **48 is
-middle C**. Range 0..95, clamped. Rests are `-1`.
-
-```
-        C   C#  D   D#  E   F   F#  G   G#  A   A#  B
-oct 3   36  37  38  39  40  41  42  43  44  45  46  47
-oct 4   48  49  50  51  52  53  54  55  56  57  58  59     A4 = 57 = 440 Hz
-oct 5   60  61  62  63  64  65  66  67  68  69  70  71
+```fc
+let start    = (p: player*)             // from the top
+let stop     = (p: player*)             // and rewind
+let pause    = (p: player*)             // hold position, key everything off
+let resume   = (p: player*)
+let set_loop = (p: player*, on: bool)   // on by default
+let finished = (p: player*) -> bool
+let advance  = (p: player*)             // one output sample of clock
 ```
 
-The engine's F-number table is one equal-tempered octave at A = 440, rounded
-for the YM3812's `f = fnum * 2^(block-1) * 49716 / 2^19`.
+`advance` moves the clock and dispatches whatever that reveals; it does **not**
+produce a sample. The caller pulls audio from `p.chip` with `opl2.sample`.
+Keeping the two apart is what lets `opl_audio` interleave two chips in one
+mixing loop and lets `midi_render` drive the same code with no device at all.
+
+Between two consecutive events the tempo is constant by construction — a tempo
+change *is* an event — so the clock counts samples down to the next event
+rather than ticking tick by tick. Cost is O(events), not O(ticks).
+
+A loop wrap silences the chip and resets all sixteen channels to General MIDI's
+defaults. Skipping that is the classic reason a looped MIDI gets quieter, or
+stranger, on each repeat: it would inherit whatever volume, bend and pedal
+state the last time round happened to end on.
 
 ## Levels and mixing
 
@@ -461,13 +525,43 @@ mix at ~70 % with only ~0.4 % of samples entering the knee.
 
 ## Tuning without launching the game
 
-`render(a, out, frames)` runs the ring, both sequencers and the mixer exactly
-as the callback does, but with no device attached. Point it at a `i16[]` and
-write a WAV, and you can iterate on instruments without opening a window — and
-listen to a single effect in isolation, which you cannot do in play.
+There are two ways in, one per half of the engine.
+
+**For music and instrument banks**, `tools/midi_render.fc` is a standalone
+program: it reads a `.mid`, renders it through `opl_midi` to a WAV file, and
+reports what happened. No window, no device, no game. The whole of
+`opl_bank_gm.fc` was written against it.
+
+```
+fcc demos/shared/tools/midi_render.fc demos/shared/opl_midi.fc \
+    demos/shared/opl_bank_gm.fc demos/shared/opl2.fc \
+    stdlib/io.fc stdlib/math.fc stdlib/text.fc -o /tmp/mr.c
+cc -std=c11 -o /tmp/mr /tmp/mr.c -lm
+
+/tmp/mr demos/fuzzel-fobble/music/minuet.mid /tmp/out.wav
+  demos/fuzzel-fobble/music/minuet.mid: division 480, 677 events, 46080 ticks
+  bank fc-gm: 60 voices
+  rendered 2116800 frames (48.00 s) at 44100 Hz to /tmp/out.wav
+  peak 22968 of 32767, 0 clipped samples, 0 voice steals
+```
+
+A third argument sets the length in seconds — ask for more than the song has
+and looping turns on, which is how you audition the wrap. A fourth loads a
+`.op2`/`.ibk`/`.sbi` bank in place of the built-in one, which is how two banks
+get compared on the same piece.
+
+It reports levels rather than managing them. A game mixes this against effects
+and puts a soft knee after the sum; a tool that quietly did the same would hide
+exactly the thing you are trying to hear, so this one hard-clamps and tells you
+how often it had to.
+
+**For effects**, `render(a, out, frames)` runs the ring, both sequencers and
+the mixer exactly as the callback does, but with no device attached. Point it
+at an `i16[]`, write a WAV, and you can listen to a single effect in isolation
+— which you cannot do in play.
 
 ```fc
-let a = snd.init(44100)
+let a = snd.init(44100, music)
 opl_audio.play(a, snd.sfx_pop)
 let buf = alloc(i16[44100 * 2] { })!
 opl_audio.render(a, buf, 44100 * 2)      // two seconds, tail included
@@ -477,14 +571,6 @@ Do not call it from the game thread while a device is open. There must be
 exactly one consumer of the ring, and with a device open the callback is
 already it — under the SDL backend by doing this work inline, under the raylib
 backend by calling this very function.
-
-A useful trick for checking a tune's parts against each other — silence two of
-the three music channels by writing their carrier `TL` directly, which leaves
-the sequencing untouched:
-
-```fc
-opl2.write(a.music_chip, 0x40 + opl2.op_mod_offset(ch) + 3, 63)
-```
 
 ## Cookbook
 

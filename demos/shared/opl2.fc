@@ -226,6 +226,15 @@ module opl2 =
         // wave-sample → gain pipeline carries through the chip's
         // actual precision.
         logsin_table: i32[256]
+        // Block → 2^(block-1), the octave multiplier in the YM3812
+        // frequency formula, and feedback level → 2^(9-fb), the divisor
+        // that turns the summed modulator history into a phase offset.
+        // Both are `math.pow` calls on small integer domains, and both
+        // sit in the per-sample per-channel path — nine voices at 44.1
+        // kHz is ~800k pow calls a second, which is worth eight table
+        // entries each to avoid.
+        block_scale: f64[8]
+        fb_div: f64[8]
         // Atten (1/16 env unit) → linear amplitude scaled to op_peak.
         // gain_table[i] = round(op_peak * 10^(-i * 0.01172 / 20)).
         // 16384 entries cover 0..192 dB at 0.01172 dB per step; beyond
@@ -268,6 +277,11 @@ module opl2 =
             let atten_db = (f64) i * fine_unit_db
             let amp = (f64) op_peak * math.pow(10.0, 0.0 - atten_db / 20.0)
             c.gain_table[i] = (i32) amp
+        // The two small exponent tables the sample path would otherwise
+        // recompute per channel per sample.
+        for b in 0..8 do
+            c.block_scale[b] = math.pow(2.0, (f64) (b - 1))
+            c.fb_div[b] = math.pow(2.0, (f64) (9 - b))
         c
 
     // ============================================================
@@ -667,7 +681,7 @@ module opl2 =
             let fnum = c.ch_fnum[ch]
             let block = c.ch_block[ch]
             // YM3812 frequency formula: f = fnum * 2^(block-1) * 49716 / 2^19.
-            let base_freq = (f64) fnum * math.pow(2.0, (f64) (block - 1))
+            let base_freq = (f64) fnum * c.block_scale[block]
                 * 49716.0 / 524288.0
             // Modulator phase advance (with vibrato if enabled).
             // floor wrap (not a single subtract) so per-sample advances
@@ -696,7 +710,7 @@ module opl2 =
             if fb > 0 then
                 let sum_int = c.ch_prev0[ch] + c.ch_prev1[ch]
                 fb_phase_offset = (f64) sum_int
-                    / math.pow(2.0, (f64) (9 - fb))
+                    / c.fb_div[fb]
                     / 1024.0
             let mout = wave_sample(c, c.op_phase[mi] + fb_phase_offset,
                 c.op_wf[mi], m_total_atten)
@@ -773,9 +787,44 @@ module opl2 =
         write(c, 0xA0 + channel, fnum & 255)
         write(c, 0xB0 + channel, 32 | ((block & 7) << 2) | ((fnum >> 8) & 3))
 
-    // Key-off: clear the keyon bit (triggers release envelope).
+    // Key-off: clear the keyon bit (triggers release envelope) while
+    // leaving block and F-number exactly as they were.
+    //
+    // Preserving them is not a nicety. Writing a bare 0 to 0xB0 is a legal
+    // register write, but it also zeroes the octave and the F-number's high
+    // bits, and the note is still sounding — key-off starts the release, it
+    // does not end it. Two things then go wrong. The phase generator runs at
+    // f = fnum * 2^(block-1) * 49716/2^19, which at fnum=0 is zero, so the
+    // operator's phase stops advancing and the tail decays as frozen DC
+    // instead of ringing out at pitch. And the envelope rates are key-scaled
+    // by (block, fnum), so `refresh_channel_ops` recomputes the release at
+    // the lowest key scale and the note fades more slowly than the hardware
+    // would at its real pitch. Every AdLib-era driver kept a shadow of this
+    // register and wrote it back with bit 5 cleared; the chip struct already
+    // holds the state, so we can do the same directly.
     let note_off = (c: chip*, channel: i32) ->
-        write(c, 0xB0 + channel, 0)
+        write(c, 0xB0 + channel,
+            ((c.ch_block[channel] & 7) << 2) | ((c.ch_fnum[channel] >> 8) & 3))
+
+    // Retune a channel without touching its key state. Key-on only fires on
+    // a rising edge of the key bit, so re-asserting it at a new frequency
+    // bends a sounding note instead of re-articulating it — which is exactly
+    // what a MIDI pitch-bend message wants, and the opposite of what
+    // `note_on` is for. Calling this on a silent channel is harmless.
+    let set_pitch = (c: chip*, channel: i32, block: i32, fnum: i32) ->
+        write(c, 0xA0 + channel, fnum & 255)
+        write(c, 0xB0 + channel,
+            (if c.ch_key[channel] then 32 else 0)
+            | ((block & 7) << 2) | ((fnum >> 8) & 3))
+
+    // Whether both of a channel's operators have finished releasing, so
+    // reprogramming it cannot cut off an audible note. A voice allocator
+    // wants this: stealing a genuinely silent channel is inaudible, while
+    // stealing a ringing one clicks.
+    let channel_idle = (c: chip*, channel: i32) ->
+        let mod_stage = c.op_stage[channel * 2]
+        let car_stage = c.op_stage[channel * 2 + 1]
+        mod_stage == envelope_stage.off && car_stage == envelope_stage.off
 
     // Force every voice into the silent `off` envelope stage and clear
     // phase + feedback history. Instrument programming (TL, KSL, mult,

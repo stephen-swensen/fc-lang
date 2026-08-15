@@ -1,0 +1,634 @@
+// A General MIDI instrument bank for opl_midi.fc, written by hand.
+//
+// A MIDI file names its instruments and does not describe them: program 40 is
+// "Violin", and what a violin *is* has to come from somewhere else. On real
+// hardware that somewhere was the driver's bank file. This is ours — sixty
+// two-operator voices and the two tables that point all 128 GM programs and
+// the whole percussion map at them.
+//
+// It is checked in rather than loaded so the demos have a voice out of the
+// box with no licensing question attached: nearly every OPL bank in
+// circulation was extracted from a commercial game. `opl_midi.load_bank`
+// reads those formats for anyone who has one and wants to swap it in.
+//
+// ------------------------------------------------------------------
+// Reading a patch
+// ------------------------------------------------------------------
+//
+// A voice is two operators, a modulator and a carrier. In FM connection
+// (`n_conn` bit 0 clear) the modulator bends the carrier's phase, so:
+//
+//   MULT (low nibble of `*_char`) is the frequency ratio between the two, and
+//     it picks the timbre more than anything else does. 1:1 with feedback is
+//     a sawtooth, 2:1 is hollow and woody, 3:1 and up go metallic and bell-
+//     like, and a large ratio with no harmonic relation reads as noise.
+//   TL (low six bits of `*_scale`) counts *down* — 0 is loudest, 63 silent.
+//     On the carrier it is loudness; on the modulator it is modulation depth,
+//     which the ear hears as brightness.
+//   EGT (bit 5 of `*_char`) decides whether a held note sustains (organ,
+//     strings, brass) or decays on its own regardless (piano, guitar, bell).
+//     It is the single bit that most determines what family a patch belongs
+//     to, and getting it wrong makes a string section sound like a marimba.
+//   AR/DR/SL/RR (`*_atk` and `*_sus`, a nibble each) are the envelope, rates
+//     0..15 with higher being faster. SL is a level, not a rate, and 15 is
+//     special: it decays to silence rather than holding.
+//   FB (bits 3..1 of `n_conn`) feeds the modulator back into itself, which
+//     on a 1:1 pair is what turns a sine into a saw.
+//
+// Additive connection (`n_conn` bit 0 set) sums both operators instead, which
+// makes fuller, flatter voices — organs and pads — and costs the FM
+// brightness. `opl_midi` scales both operators' levels in that mode and only
+// the carrier's in FM, so either kind responds correctly to velocity.
+//
+// ------------------------------------------------------------------
+// How complete this is
+// ------------------------------------------------------------------
+//
+// Sixty voices across 175 GM slots means families share. Every one of the
+// sixteen melodic families has three or four distinct voices and each program
+// points at the nearest, so nothing is silent and nothing is wildly wrong,
+// but a bassoon and an oboe are the same patch and a splash cymbal is a
+// crash. Percussion notes outside the standard 35..81 map are silent.
+//
+// Three of the melodic voices — celesta, music box and the plucked bass —
+// came from Fuzzel Fobble's own hand-tuned instrument set and are the most
+// finished things here.
+
+namespace shared::
+
+// opl_midi is a sibling in `shared::`, so it needs no import here.
+
+// A hand-authored General MIDI bank: sixty OPL2 voices indexed across all 128
+// melodic programs and the 35..81 percussion map.
+//
+// ```fc
+// let kit = opl_bank_gm.make()
+// let p = opl_midi.init(44100, tune, kit)
+// ```
+//
+// `make` allocates, so a bank it returns is released with
+// `opl_midi.free_bank`. See the file header for how to read a patch and for
+// what sixty voices across 175 slots does and does not cover.
+module opl_bank_gm =
+
+    // ============================================================
+    // Voice names
+    // ============================================================
+
+    // Indices into the patch table below. Naming them is what lets the two
+    // index tables read as instrument assignments rather than as walls of
+    // numbers — and what makes a mistake in them visible.
+    private let piano    = 0
+    private let epiano   = 1
+    private let harpsi   = 2
+    private let clav     = 3
+    private let celesta  = 4
+    private let mbox     = 5
+    private let vibes    = 6
+    private let marimba  = 7
+    private let bells    = 8
+    private let organ    = 9
+    private let percorg  = 10
+    private let pipeorg  = 11
+    private let nylon    = 12
+    private let steel    = 13
+    private let dist     = 14
+    private let acbass   = 15
+    private let elbass   = 16
+    private let synbass  = 17
+    private let strings  = 18
+    private let cello    = 19
+    private let pizz     = 20
+    private let harp     = 21
+    private let ensemble = 22
+    private let choir    = 23
+    private let synstr   = 24
+    private let trumpet  = 25
+    private let tbone    = 26
+    private let brass    = 27
+    private let sax      = 28
+    private let clar     = 29
+    private let oboe     = 30
+    private let flute    = 31
+    private let recdr    = 32
+    private let panfl    = 33
+    private let sqrlead  = 34
+    private let sawlead  = 35
+    private let callio   = 36
+    private let warmpad  = 37
+    private let brtpad   = 38
+    private let fxswp    = 39
+    private let ethnic   = 40
+    private let tperc    = 41
+    private let noise    = 42
+    private let timp     = 43
+    // Percussion.
+    private let kick     = 44
+    private let snare    = 45
+    private let rimshot  = 46
+    private let tom_lo   = 47
+    private let tom_mid  = 48
+    private let tom_hi   = 49
+    private let hat_shut = 50
+    private let hat_open = 51
+    private let crash    = 52
+    private let ride     = 53
+    private let clap     = 54
+    private let cowbell  = 55
+    private let woodblk  = 56
+    private let tamb     = 57
+    private let conga    = 58
+    private let ptick    = 59
+
+    // ============================================================
+    // Percussion note map
+    // ============================================================
+
+    // (note, voice) pairs covering General MIDI's percussion key map, notes
+    // 35..81. Notes outside it are left silent rather than pointed at a
+    // catch-all: a file reaching past the standard map is doing something
+    // this bank has no opinion about, and a wrong drum is worse than none.
+    //
+    // Several notes deliberately share a voice — the three crash and splash
+    // cymbals are one crash, the bongos and congas and timbales are one hand
+    // drum. Sixty voices do not stretch to a full drum kit, and the notes
+    // that share are the ones a listener is least likely to hear as wrong.
+    private let drum_map = i32[94] {
+        35, kick,       36, kick,       37, rimshot,    38, snare,
+        39, clap,       40, snare,      41, tom_lo,     42, hat_shut,
+        43, tom_lo,     44, hat_shut,   45, tom_lo,     46, hat_open,
+        47, tom_mid,    48, tom_mid,    49, crash,      50, tom_hi,
+        51, ride,       52, crash,      53, ride,       54, tamb,
+        55, crash,      56, cowbell,    57, crash,      58, tamb,
+        59, ride,       60, conga,      61, conga,      62, conga,
+        63, conga,      64, conga,      65, conga,      66, conga,
+        67, cowbell,    68, cowbell,    69, hat_shut,   70, hat_shut,
+        71, ptick,      72, ptick,      73, ptick,      74, ptick,
+        75, woodblk,    76, woodblk,    77, woodblk,    78, ptick,
+        79, ptick,      80, ptick,      81, ptick }
+
+    // ============================================================
+    // Program map
+    // ============================================================
+
+    // Every General MIDI program, 0-based as the wire format numbers them —
+    // so program 0 is the Acoustic Grand Piano that a printed GM chart calls
+    // number 1.
+    private let program_map = i32[128] {
+        // 0-7    pianos
+        piano, piano, piano, piano, epiano, epiano, harpsi, clav,
+        // 8-15   chromatic percussion
+        celesta, celesta, mbox, vibes, marimba, marimba, bells, marimba,
+        // 16-23  organ
+        organ, percorg, percorg, pipeorg, pipeorg, pipeorg, pipeorg, pipeorg,
+        // 24-31  guitar
+        nylon, steel, steel, steel, steel, dist, dist, nylon,
+        // 32-39  bass
+        acbass, elbass, elbass, acbass, synbass, synbass, synbass, synbass,
+        // 40-47  solo strings
+        strings, strings, cello, cello, strings, pizz, harp, timp,
+        // 48-55  ensemble
+        ensemble, ensemble, synstr, synstr, choir, choir, choir, brass,
+        // 56-63  brass
+        trumpet, tbone, tbone, trumpet, tbone, brass, brass, brass,
+        // 64-71  reed
+        sax, sax, sax, sax, oboe, oboe, oboe, clar,
+        // 72-79  pipe
+        recdr, flute, recdr, panfl, panfl, panfl, recdr, flute,
+        // 80-87  synth lead
+        sqrlead, sawlead, callio, callio, sawlead, callio, sawlead, sawlead,
+        // 88-95  synth pad
+        warmpad, warmpad, brtpad, warmpad, warmpad, brtpad, warmpad, brtpad,
+        // 96-103 synth effects
+        fxswp, fxswp, fxswp, fxswp, fxswp, fxswp, fxswp, fxswp,
+        // 104-111 ethnic
+        ethnic, ethnic, ethnic, ethnic, marimba, oboe, strings, oboe,
+        // 112-119 percussive
+        bells, tperc, tperc, tperc, tperc, tperc, tperc, noise,
+        // 120-127 sound effects
+        noise, noise, noise, noise, noise, noise, noise, noise }
+
+    // ============================================================
+    // The voices
+    // ============================================================
+
+    // Build the bank. Allocates; release it with `opl_midi.free_bank`.
+    //
+    // The patch table is built here rather than held as module data because a
+    // bank owns its three slices — see `opl_midi.bank` — and one ownership
+    // rule for both authored and loaded banks is worth one small startup
+    // allocation.
+    let make = () ->
+        let ps = alloc(opl_midi.patch[60] {
+
+        // ---------- 0-3  pianos ----------
+
+        // Acoustic piano. 1:1 with strong feedback for the hammer's bite,
+        // and both operators percussive (EGT clear) so a held key decays the
+        // way a real one does instead of ringing on forever.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x4B, m_atk = 0xF1, m_sus = 0x53, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x00, c_atk = 0xF2, c_sus = 0x54, c_wave = 0x00,
+            n_conn = 0x0A },
+        // Electric piano. 2:1 and a half-sine modulator give the tine its
+        // hollow knock; slower attack and a longer tail than the acoustic.
+        opl_midi.patch {
+            m_char = 0x02, m_scale = 0x54, m_atk = 0xE3, m_sus = 0x34, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x03, c_atk = 0xE2, c_sus = 0x25, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Harpsichord. Instant attack, fast decay, half-sine on both
+        // operators for the plectrum's buzz.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x45, m_atk = 0xF5, m_sus = 0x66, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x00, c_atk = 0xF6, c_sus = 0x76, c_wave = 0x01,
+            n_conn = 0x0C },
+        // Clavinet. Maximum feedback on a 1:1 pair, very short — the
+        // percussive, almost rude end of the plucked-string family.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x43, m_atk = 0xF7, m_sus = 0x87, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF7, c_sus = 0x87, c_wave = 0x00,
+            n_conn = 0x0E },
+
+        // ---------- 4-8  chromatic percussion ----------
+
+        // Celesta — Fuzzel Fobble's `ins_chime`, opened up a little for
+        // melodic use. Quiet, short and glassy.
+        opl_midi.patch {
+            m_char = 0x14, m_scale = 0x9A, m_atk = 0xF7, m_sus = 0x58, m_wave = 0x00,
+            c_char = 0x11, c_scale = 0x42, c_atk = 0xF6, c_sus = 0x37, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Music box — Fuzzel Fobble's `ins_music_box`, unchanged. A 3:1
+        // modulator gives the inharmonic ring of a struck metal bar, and
+        // both operators are percussive so a note blooms and fades on its
+        // own with nobody having to release it.
+        opl_midi.patch {
+            m_char = 0x03, m_scale = 0x53, m_atk = 0xF4, m_sus = 0x36, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF4, c_sus = 0x36, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Vibraphone. 4:1 and the AM bit on both operators, which is where
+        // the family's tremolo comes from; longer decay than the music box.
+        opl_midi.patch {
+            m_char = 0x94, m_scale = 0x53, m_atk = 0xF3, m_sus = 0x26, m_wave = 0x00,
+            c_char = 0x81, c_scale = 0x03, c_atk = 0xF2, c_sus = 0x25, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Marimba. 3:1 but with a fast decay and no ring, which is what
+        // reads as wood rather than metal.
+        opl_midi.patch {
+            m_char = 0x03, m_scale = 0x4E, m_atk = 0xF8, m_sus = 0x78, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF7, c_sus = 0x68, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Tubular bell. 7:1 is deliberately inharmonic, and the very slow
+        // decay is the whole character — this one rings for seconds.
+        opl_midi.patch {
+            m_char = 0x07, m_scale = 0x52, m_atk = 0xF2, m_sus = 0x14, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF1, c_sus = 0x13, c_wave = 0x00,
+            n_conn = 0x00 },
+
+        // ---------- 9-11  organ ----------
+
+        // Drawbar organ. Additive rather than FM, EGT set on both operators
+        // and SL 0, so the note holds dead flat for as long as the key is
+        // down and stops the instant it isn't. That envelope *is* the organ.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x1C, m_atk = 0xF0, m_sus = 0x0F, m_wave = 0x00,
+            c_char = 0x22, c_scale = 0x03, c_atk = 0xF0, c_sus = 0x0F, c_wave = 0x00,
+            n_conn = 0x01 },
+        // Percussive organ. The same flat sustain with a decaying attack
+        // transient on top, which is the drawbar's percussion stop.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x1B, m_atk = 0xF6, m_sus = 0x2F, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x02, c_atk = 0xF4, c_sus = 0x0F, c_wave = 0x00,
+            n_conn = 0x01 },
+        // Pipe organ. A 1:4 pair sounding two octaves apart, which is what
+        // an open diapason with a mixture stop drawn does.
+        opl_midi.patch {
+            m_char = 0x31, m_scale = 0x1D, m_atk = 0xF0, m_sus = 0x0F, m_wave = 0x00,
+            c_char = 0x24, c_scale = 0x04, c_atk = 0xF0, c_sus = 0x0F, c_wave = 0x00,
+            n_conn = 0x01 },
+
+        // ---------- 12-14  guitar ----------
+
+        // Nylon guitar. Gentle pluck, moderate feedback, medium decay.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x4C, m_atk = 0xF4, m_sus = 0x46, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF3, c_sus = 0x36, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Steel guitar. Brighter modulator and a half-sine give the string
+        // its metal; faster attack than the nylon.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x47, m_atk = 0xF6, m_sus = 0x55, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF5, c_sus = 0x45, c_wave = 0x00,
+            n_conn = 0x0A },
+        // Overdriven guitar. Full feedback, half-sine on both, and EGT set
+        // so the note sustains under the key the way a driven amp does.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x45, m_atk = 0xF3, m_sus = 0x2F, m_wave = 0x01,
+            c_char = 0x21, c_scale = 0x01, c_atk = 0xF2, c_sus = 0x1F, c_wave = 0x01,
+            n_conn = 0x0E },
+
+        // ---------- 15-17  bass ----------
+
+        // Acoustic bass — Fuzzel Fobble's `ins_bass`, unchanged. Feedback on
+        // a 1:1 pair turns the carrier's sine into a saw, which is the
+        // round, woody bottom end this wants. Plucked, medium decay.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x18, m_atk = 0xF4, m_sus = 0x36, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x0B, c_atk = 0xF3, c_sus = 0x26, c_wave = 0x00,
+            n_conn = 0x0A },
+        // Electric bass. The same idea run brighter and shorter — more
+        // finger noise, less body.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x14, m_atk = 0xF6, m_sus = 0x46, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x08, c_atk = 0xF5, c_sus = 0x37, c_wave = 0x00,
+            n_conn = 0x0A },
+        // Synth bass. EGT set so it holds flat under the key, and a
+        // half-sine carrier for the squared-off edge.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x10, m_atk = 0xF7, m_sus = 0x1F, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x05, c_atk = 0xF6, c_sus = 0x0F, c_wave = 0x01,
+            n_conn = 0x08 },
+
+        // ---------- 18-21  solo strings ----------
+
+        // Solo strings. Slow attack, sustaining, and the VIB bit on both
+        // operators — the chip's own vibrato is close enough to a player's
+        // that a bowed line does not need one written into the file.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1B, m_atk = 0x63, m_sus = 0x0C, m_wave = 0x00,
+            c_char = 0x61, c_scale = 0x04, c_atk = 0x74, c_sus = 0x0C, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Cello. Darker and slower off the mark than the violin above.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1D, m_atk = 0x53, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x05, c_atk = 0x64, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Pizzicato strings. Same family, opposite envelope: instant attack
+        // and an immediate decay, EGT clear.
+        opl_midi.patch {
+            m_char = 0x02, m_scale = 0x4B, m_atk = 0xF9, m_sus = 0x88, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF8, c_sus = 0x78, c_wave = 0x00,
+            n_conn = 0x02 },
+        // Harp. A pizzicato with a much longer tail and no bite.
+        opl_midi.patch {
+            m_char = 0x02, m_scale = 0x52, m_atk = 0xF6, m_sus = 0x35, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF5, c_sus = 0x25, c_wave = 0x00,
+            n_conn = 0x00 },
+
+        // ---------- 22-24  ensemble ----------
+
+        // String ensemble. Slower and quieter than the solo strings, and
+        // additive — a section is many instruments summing, not one being
+        // modulated, and additive is the closer analogy.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1E, m_atk = 0x42, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x61, c_scale = 0x06, c_atk = 0x53, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x01 },
+        // Choir. An abs-sine modulator adds the even harmonics a vowel needs
+        // without the buzz a half-sine would bring.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1C, m_atk = 0x62, m_sus = 0x0A, m_wave = 0x02,
+            c_char = 0x61, c_scale = 0x05, c_atk = 0x63, c_sus = 0x0A, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Synth strings. Brighter and more even than the acoustic section.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x19, m_atk = 0x52, m_sus = 0x0A, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0x63, c_sus = 0x0B, c_wave = 0x01,
+            n_conn = 0x01 },
+
+        // ---------- 25-27  brass ----------
+
+        // Trumpet. Brass is the one family where the *attack rate* carries
+        // the identity: a lip takes a moment to speak, so AR sits around 10
+        // rather than 15, and the modulator arrives fractionally ahead of
+        // the carrier so the note brightens as it starts.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x1A, m_atk = 0xA3, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0xB4, c_sus = 0x0C, c_wave = 0x00,
+            n_conn = 0x0A },
+        // Trombone and tuba. The same shape, darker and slower still.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x1C, m_atk = 0x93, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0xA4, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x08 },
+        // Brass section. Faster and louder than either — a section attacks
+        // together and so hides the individual lip.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x18, m_atk = 0xC4, m_sus = 0x0C, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x02, c_atk = 0xC5, c_sus = 0x0D, c_wave = 0x00,
+            n_conn = 0x0A },
+
+        // ---------- 28-30  reed ----------
+
+        // Saxophone. 1:2 with vibrato and moderate feedback — reedier than
+        // the clarinet, breathier than the oboe.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1B, m_atk = 0x93, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x62, c_scale = 0x03, c_atk = 0xA4, c_sus = 0x0C, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Clarinet. 2:1 with no feedback at all, which is the classic FM
+        // recipe for a closed pipe: odd harmonics only, and hollow.
+        opl_midi.patch {
+            m_char = 0x22, m_scale = 0x1F, m_atk = 0xB2, m_sus = 0x0A, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0xC3, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Oboe and bassoon. 3:1 is what makes it nasal, and the half-sine
+        // carrier sharpens it further.
+        opl_midi.patch {
+            m_char = 0x23, m_scale = 0x1A, m_atk = 0xA3, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0xB3, c_sus = 0x0B, c_wave = 0x01,
+            n_conn = 0x04 },
+
+        // ---------- 31-33  pipe ----------
+
+        // Flute. Very deep modulator TL, so there is barely any modulation
+        // at all — near a pure sine, which is very nearly what a flute is.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x2D, m_atk = 0x83, m_sus = 0x0A, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0x94, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Recorder and piccolo. Brighter and quicker to speak.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x27, m_atk = 0xA3, m_sus = 0x0B, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0xB4, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Pan flute. The breathiest of the three: slow attack, vibrato on
+        // both operators, quiet.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x2A, m_atk = 0x73, m_sus = 0x0A, m_wave = 0x00,
+            c_char = 0x61, c_scale = 0x05, c_atk = 0x84, c_sus = 0x0B, c_wave = 0x00,
+            n_conn = 0x00 },
+
+        // ---------- 34-36  synth lead ----------
+
+        // Square lead. Half-sine on both operators and a flat sustain.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x18, m_atk = 0xF6, m_sus = 0x0F, m_wave = 0x01,
+            c_char = 0x21, c_scale = 0x02, c_atk = 0xF5, c_sus = 0x0E, c_wave = 0x01,
+            n_conn = 0x00 },
+        // Saw lead. 1:1 with maximum feedback, which *is* a sawtooth.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x14, m_atk = 0xF5, m_sus = 0x0E, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x01, c_atk = 0xF4, c_sus = 0x0D, c_wave = 0x00,
+            n_conn = 0x0E },
+        // Calliope and the softer leads. Gentler attack, less modulation.
+        opl_midi.patch {
+            m_char = 0x21, m_scale = 0x22, m_atk = 0xB4, m_sus = 0x0C, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0xC4, c_sus = 0x0C, c_wave = 0x00,
+            n_conn = 0x00 },
+
+        // ---------- 37-38  synth pad ----------
+
+        // Warm pad. The slowest attack in the bank — AR 3 takes most of a
+        // second to arrive, which is what a pad is for.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1F, m_atk = 0x32, m_sus = 0x08, m_wave = 0x00,
+            c_char = 0x61, c_scale = 0x06, c_atk = 0x43, c_sus = 0x09, c_wave = 0x00,
+            n_conn = 0x01 },
+        // Bright pad. Faster and more present, with a half-sine carrier.
+        opl_midi.patch {
+            m_char = 0x61, m_scale = 0x1A, m_atk = 0x43, m_sus = 0x09, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0x54, c_sus = 0x0A, c_wave = 0x01,
+            n_conn = 0x01 },
+
+        // ---------- 39-43  effects, ethnic, percussive, orchestral ----------
+
+        // Synth effects. 7:1 with an abs-sine modulator, slow and
+        // inharmonic — atmosphere rather than a note.
+        opl_midi.patch {
+            m_char = 0x67, m_scale = 0x1A, m_atk = 0x53, m_sus = 0x14, m_wave = 0x02,
+            c_char = 0x21, c_scale = 0x05, c_atk = 0x64, c_sus = 0x15, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Plucked ethnic — sitar, banjo, shamisen, koto. Bright, buzzy,
+        // fast decay: half-sine on both and heavy feedback.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x46, m_atk = 0xF7, m_sus = 0x66, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF6, c_sus = 0x56, c_wave = 0x01,
+            n_conn = 0x0C },
+        // Tuned percussion — agogo, steel drum, woodblock, melodic tom.
+        // Metallic 5:1 with a very fast decay.
+        opl_midi.patch {
+            m_char = 0x05, m_scale = 0x4A, m_atk = 0xF9, m_sus = 0x87, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF8, c_sus = 0x77, c_wave = 0x00,
+            n_conn = 0x02 },
+        // Sound effects. A wildly inharmonic 15:14 pair on pulse-sine, which
+        // has no pitch left in it to speak of — which is the point.
+        opl_midi.patch {
+            m_char = 0x0F, m_scale = 0x45, m_atk = 0xF8, m_sus = 0x76, m_wave = 0x03,
+            c_char = 0x0E, c_scale = 0x03, c_atk = 0xF7, c_sus = 0x66, c_wave = 0x03,
+            n_conn = 0x06 },
+        // Timpani. Low, round, and slow to fade — pitched, unlike the kit
+        // drums below, because a MIDI file plays it as notes.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x0E, m_atk = 0xF6, m_sus = 0x25, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF5, c_sus = 0x15, c_wave = 0x00,
+            n_conn = 0x06 },
+
+        // ---------- 44-59  percussion ----------
+        //
+        // Every one of these sets `fixed_note`: a drum's pitch belongs to the
+        // drum, and the note number on channel 9 chose *which* drum rather
+        // than how high it sounds. Noisy voices (snare, hats, cymbals) get
+        // there through a large, deliberately inharmonic MULT ratio on
+        // pulse-sine waveforms — the OPL2 has no noise generator, so an
+        // unrelated ratio high in the spectrum is the closest thing to one.
+
+        // Kick. Low and short, almost pure sine. A real kick sweeps its
+        // pitch down as it decays and this cannot, so it leans on the
+        // envelope alone.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x08, m_atk = 0xF9, m_sus = 0x78, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x00, c_atk = 0xF8, c_sus = 0x68, c_wave = 0x00,
+            n_conn = 0x08, fixed_note = 26 },
+        // Snare. 12:14 on pulse-sine with heavy feedback — the closest this
+        // chip gets to a band of noise — cut short.
+        opl_midi.patch {
+            m_char = 0x0C, m_scale = 0x48, m_atk = 0xF9, m_sus = 0x79, m_wave = 0x03,
+            c_char = 0x0E, c_scale = 0x00, c_atk = 0xF9, c_sus = 0x68, c_wave = 0x03,
+            n_conn = 0x0C, fixed_note = 60 },
+        // Side stick. The same noise recipe an octave up and shorter still,
+        // so it reads as a click on the rim rather than a hit on the head.
+        opl_midi.patch {
+            m_char = 0x0D, m_scale = 0x4C, m_atk = 0xFB, m_sus = 0xAB, m_wave = 0x03,
+            c_char = 0x0F, c_scale = 0x02, c_atk = 0xFA, c_sus = 0x9A, c_wave = 0x03,
+            n_conn = 0x0A, fixed_note = 72 },
+        // Toms: one patch each, identical but for the note they sound. Three
+        // entries rather than one is what `fixed_note` costs — and what
+        // buys a kit whose toms are actually at different pitches.
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x0C, m_atk = 0xF8, m_sus = 0x67, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF7, c_sus = 0x57, c_wave = 0x00,
+            n_conn = 0x06, fixed_note = 36 },
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x0C, m_atk = 0xF8, m_sus = 0x67, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF7, c_sus = 0x57, c_wave = 0x00,
+            n_conn = 0x06, fixed_note = 43 },
+        opl_midi.patch {
+            m_char = 0x01, m_scale = 0x0C, m_atk = 0xF8, m_sus = 0x67, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xF7, c_sus = 0x57, c_wave = 0x00,
+            n_conn = 0x06, fixed_note = 50 },
+        // Closed hi-hat. The fastest release in the bank: a hat that rings
+        // at all sounds open, so RR is at maximum.
+        opl_midi.patch {
+            m_char = 0x0F, m_scale = 0x4A, m_atk = 0xFC, m_sus = 0xCC, m_wave = 0x03,
+            c_char = 0x0E, c_scale = 0x04, c_atk = 0xFB, c_sus = 0xBB, c_wave = 0x03,
+            n_conn = 0x0E, fixed_note = 84 },
+        // Open hi-hat. Same voice, allowed to decay.
+        opl_midi.patch {
+            m_char = 0x0F, m_scale = 0x4A, m_atk = 0xF6, m_sus = 0x35, m_wave = 0x03,
+            c_char = 0x0E, c_scale = 0x04, c_atk = 0xF5, c_sus = 0x25, c_wave = 0x03,
+            n_conn = 0x0E, fixed_note = 84 },
+        // Crash. The longest decay of the metal voices, and the loudest.
+        opl_midi.patch {
+            m_char = 0x0F, m_scale = 0x48, m_atk = 0xF4, m_sus = 0x12, m_wave = 0x03,
+            c_char = 0x0D, c_scale = 0x02, c_atk = 0xF3, c_sus = 0x12, c_wave = 0x03,
+            n_conn = 0x0E, fixed_note = 80 },
+        // Ride. Higher, tighter and more pitched than the crash — an
+        // abs-sine carrier keeps a little of the bell's ping.
+        opl_midi.patch {
+            m_char = 0x0E, m_scale = 0x4B, m_atk = 0xF5, m_sus = 0x24, m_wave = 0x03,
+            c_char = 0x0C, c_scale = 0x03, c_atk = 0xF4, c_sus = 0x23, c_wave = 0x02,
+            n_conn = 0x0C, fixed_note = 88 },
+        // Hand clap. A short mid-band burst.
+        opl_midi.patch {
+            m_char = 0x0D, m_scale = 0x49, m_atk = 0xFA, m_sus = 0x88, m_wave = 0x03,
+            c_char = 0x0F, c_scale = 0x01, c_atk = 0xF9, c_sus = 0x78, c_wave = 0x03,
+            n_conn = 0x0C, fixed_note = 66 },
+        // Cowbell and agogo. Pitched metal, 7:5 — inharmonic enough to
+        // clang, harmonic enough to have a note.
+        opl_midi.patch {
+            m_char = 0x07, m_scale = 0x4E, m_atk = 0xFA, m_sus = 0x88, m_wave = 0x00,
+            c_char = 0x05, c_scale = 0x02, c_atk = 0xF9, c_sus = 0x78, c_wave = 0x00,
+            n_conn = 0x08, fixed_note = 76 },
+        // Woodblock and claves. 3:1 sine, very short — wood is a pitch with
+        // no sustain rather than a noise.
+        opl_midi.patch {
+            m_char = 0x03, m_scale = 0x4B, m_atk = 0xFC, m_sus = 0xAA, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x01, c_atk = 0xFB, c_sus = 0x9A, c_wave = 0x00,
+            n_conn = 0x04, fixed_note = 82 },
+        // Tambourine. High jingle, medium decay.
+        opl_midi.patch {
+            m_char = 0x0F, m_scale = 0x4C, m_atk = 0xFA, m_sus = 0x77, m_wave = 0x03,
+            c_char = 0x0D, c_scale = 0x03, c_atk = 0xF9, c_sus = 0x67, c_wave = 0x03,
+            n_conn = 0x0C, fixed_note = 90 },
+        // Congas, bongos and timbales, all as one hand drum. A skin struck
+        // with a hand: pitched, quick, no metal.
+        opl_midi.patch {
+            m_char = 0x02, m_scale = 0x0E, m_atk = 0xF9, m_sus = 0x78, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF8, c_sus = 0x68, c_wave = 0x00,
+            n_conn = 0x06, fixed_note = 52 },
+        // The catch-all for whistles, guiros, cuicas and triangles: a quiet
+        // short tick that keeps a rhythm without pretending to be the
+        // instrument it stands in for.
+        opl_midi.patch {
+            m_char = 0x0C, m_scale = 0x50, m_atk = 0xFB, m_sus = 0xAA, m_wave = 0x03,
+            c_char = 0x0E, c_scale = 0x06, c_atk = 0xFA, c_sus = 0x9A, c_wave = 0x03,
+            n_conn = 0x0A, fixed_note = 78 } })!
+
+        let mel = alloc(i32[128] {})!
+        let drm = alloc(i32[128] {})!
+        for i in 0..128 do
+            mel[i] = program_map[i]
+            drm[i] = -1
+        for i in 0..(drum_map.len / 2i64) do
+            drm[drum_map[i * 2i64]] = drum_map[i * 2i64 + 1i64]
+        opl_midi.bank { name = "fc-gm", patches = ps, melodic = mel, drums = drm }

@@ -1,9 +1,13 @@
 // Fuzzel Fobble — the sounds themselves.
 //
-// The engine is demos/shared/opl_audio.fc (OPL2 voices, an effect bank, a
-// three-part music sequencer, and SDL's audio callback); the chip it plays
-// through is demos/shared/opl2.fc. This file is only the content: eleven
-// instruments, nine effect scripts, and one nursery tune.
+// The engine is demos/shared/opl_audio.fc (OPL2 voices, an effect bank, and
+// the audio callback); the chip it plays through is demos/shared/opl2.fc.
+// This file is only the effects: nine instruments and nine scripts.
+//
+// The music is not here any more. It is a Standard MIDI File in music/,
+// played by demos/shared/opl_midi.fc through the instrument bank in
+// demos/shared/opl_bank_gm.fc — so the tune is swappable at run time and this
+// file has nothing to say about it beyond the gain it is mixed at.
 //
 // Reading an instrument: the modulator's TL is brightness, the carrier's
 // TL is volume (and counts down — 0 is loudest), MULT is the frequency
@@ -12,38 +16,9 @@
 // comment has the longer version.
 
 import opl_audio from shared::
+import opl_midi from shared::
 
 module snd =
-
-    // ============================================================
-    // Music voices
-    // ============================================================
-
-    // Melody: a music box. Modulator at 3× the carrier gives the
-    // inharmonic ring of a struck metal bar, and both operators are
-    // percussive (EGT clear) so a note blooms and fades on its own without
-    // anyone having to release it. The ~1.2 s ring is twice the length of
-    // a note at this tempo, which is what puts the shimmer of one note
-    // under the next.
-    private let ins_music_box = opl_audio.instrument {
-        m_char = 0x03, m_scale = 0x53, m_atk = 0xF4, m_sus = 0x36, m_wave = 0x00,
-        c_char = 0x01, c_scale = 0x02, c_atk = 0xF4, c_sus = 0x36, c_wave = 0x00,
-        n_conn = 0x00 }
-
-    // Bass: 1:1 ratio with heavy feedback — feedback on a 1:1 pair is what
-    // turns the carrier's sine into a saw, which is the round, woody
-    // bottom end this needs. Plucked, medium decay.
-    private let ins_bass = opl_audio.instrument {
-        m_char = 0x01, m_scale = 0x18, m_atk = 0xF4, m_sus = 0x36, m_wave = 0x00,
-        c_char = 0x01, c_scale = 0x0B, c_atk = 0xF3, c_sus = 0x26, c_wave = 0x00,
-        n_conn = 0x0A }
-
-    // Inner arpeggio: the same music-box idea run quiet and short, so it
-    // fills the gaps between melody notes without ever competing.
-    private let ins_chime = opl_audio.instrument {
-        m_char = 0x14, m_scale = 0x9A, m_atk = 0xF7, m_sus = 0x58, m_wave = 0x00,
-        c_char = 0x11, c_scale = 0x4A, c_atk = 0xF6, c_sus = 0x37, c_wave = 0x00,
-        n_conn = 0x00 }
 
     // ============================================================
     // Effect voices
@@ -177,81 +152,23 @@ module snd =
     }
 
     // ============================================================
-    // The tune — "Twinkle, Twinkle, Little Star"
-    // ============================================================
-
-    private let tempo_bpm = 100
-
-    // Melody as (note, length in eighths — the grid is set to 2 steps
-    // per beat below). Twelve bars of 4/4 and a half-bar breath: 100
-    // eighths, exactly the span the 25-entry chord table covers.
-    private let melody = i32[86] {
-        60,2, 60,2, 67,2, 67,2,     // Twin-kle twin-kle lit-tle star,
-        69,2, 69,2, 67,4,           // how I won-der what you are.
-        65,2, 65,2, 64,2, 64,2,     // Up a-bove the world so high,
-        62,2, 62,2, 60,4,           // like a dia-mond in the sky.
-        67,2, 67,2, 65,2, 65,2,     // Twin-kle twin-kle lit-tle star,
-        64,2, 64,2, 62,4,           // how I won-der what you are.
-        67,2, 67,2, 65,2, 65,2,
-        64,2, 64,2, 62,4,
-        60,2, 60,2, 67,2, 67,2,
-        69,2, 69,2, 67,4,
-        65,2, 65,2, 64,2, 64,2,
-        62,2, 62,2, 60,4,
-        -1,4                        // breath before the loop
-    }
-
-    // One chord per half-bar: 0 = C, 1 = F, 2 = G. Twenty-five of them,
-    // the last carrying the breath, which is what makes the loop land back
-    // on the tonic instead of butting one phrase against the next.
-    private let chords = i32[25] {
-        0,0,  1,0,   1,0,  2,0,
-        0,1,  0,2,   0,1,  0,2,
-        0,0,  1,0,   1,0,  2,0,
-        0
-    }
-
-    // Root of each chord, two octaves under the melody's C.
-    private let roots = i32[3] { 36, 41, 43 }
-
-    // Four arpeggio notes per chord, voiced as inversions so the line
-    // stays inside one octave and walks by step between chords rather than
-    // leaping.
-    private let arps = i32[12] {
-        48, 52, 55, 52,     // C major:  C E G E
-        48, 53, 57, 53,     // F major:  C F A F
-        47, 50, 55, 50      // G major:  B D G D
-    }
-
-    // ============================================================
     // Assembly
     // ============================================================
 
     // Per-source trim. Music sits under the effects on purpose — it is a
-    // nursery tune playing behind a game, not the thing you are meant to
-    // be listening to.
+    // minuet playing behind a game, not the thing you are meant to be
+    // listening to.
     private let music_gain = 0.85
     private let sfx_gain   = 2.00
 
-    // Build the engine with this game's sounds in it. The device is opened
-    // separately by `opl_audio.start`, once the caller is ready to be
-    // heard.
-    let init = (sample_rate: i32) ->
+    // Build the engine with this game's sounds in it, over a music player
+    // the caller has already loaded a song into. The device is opened
+    // separately by the backend, once the caller is ready to be heard.
+    let init = (sample_rate: i32, music: opl_midi.player*) ->
         opl_audio.init(sample_rate,
             opl_audio.bank {
                 instruments = instruments,
                 sounds = sounds,
                 script = script,
                 tick_rate = tick_rate },
-            opl_audio.song {
-                melody = melody,
-                chords = chords,
-                roots = roots,
-                arps = arps,
-                grid = 2,           // eighth-note resolution
-                arp_len = 4,
-                bpm = tempo_bpm,
-                lead = ins_music_box,
-                bass = ins_bass,
-                arp = ins_chime },
-            music_gain, sfx_gain)
+            music, music_gain, sfx_gain)
