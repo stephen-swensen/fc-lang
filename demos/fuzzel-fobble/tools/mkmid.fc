@@ -492,13 +492,13 @@ let build_drums = () ->
         let sec = b / tune.section_bars
         let full = is_full(sec)
         if full || is_part_b(sec) then
-            note(&t, 9, at, 120, tune.drum_kick, 96, 1)
+            note(&t, 9, at, 120, tune.drum_kick, 120, 1)
         note(&t, 9, at + tune.beat, 120, tune.drum_hat,
-            if full then 92 else 80, 1)
+            if full then 118 else 104, 1)
         note(&t, 9, at + tune.beat * 2, 120, tune.drum_hat,
-            if full then 92 else 80, 1)
+            if full then 118 else 104, 1)
         if full && b % 4 == 0 then
-            note(&t, 9, at, 120, tune.drum_tamb, 84, 1)
+            note(&t, 9, at, 120, tune.drum_tamb, 108, 1)
     sort_track(&t)
     t
 

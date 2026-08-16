@@ -190,7 +190,11 @@ let main = (args: str[]) ->
         void()
 
     io.write(alloca("%s{in_path}: division %d{tune.division}, %d{(i32) tune.events.len} events, %d{tune.length} ticks\n"), stdout)
-    io.write(alloca("bank %s{kit.name}: %d{(i32) kit.patches.len} voices\n"), stdout)
+    // Rhythm mode is decided by `opl_midi.init` from the song and the bank
+    // together, so reporting it beats guessing: it is the difference between
+    // nine melodic voices and six, and between a drum kit made of noise and
+    // one made of an impression of noise.
+    io.write(alloca("bank %s{kit.name}: %d{(i32) kit.patches.len} voices, rhythm mode %s{if p.use_rhythm then "on" else "off"} (%d{p.vmax} melodic)\n"), stdout)
     io.write(alloca("rendered %d{frames} frames (%.2f{secs} s) at %d{rate} Hz to %s{out_path}\n"), stdout)
     io.write(alloca("peak %d{peak} of 32767, %d{clipped} clipped samples, %d{(i32) p.steals} voice steals\n"), stdout)
     0

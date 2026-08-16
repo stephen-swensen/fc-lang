@@ -200,6 +200,33 @@ module opl_midi =
         melodic: i32[]          // 128 entries: GM program -> index into patches
         drums: i32[]            // 128 entries: note number -> index, -1 silent
 
+        // The five voices of the chip's rhythm mode, if this bank has them:
+        // bass drum, snare, tom, cymbal, hi-hat, in that order. Empty means
+        // the bank has none and every drum plays on a melodic voice — which
+        // is what a bank read from a file gets, since none of the three file
+        // formats has anywhere to put them.
+        //
+        // Four of the five are single-operator voices and use only the
+        // modulator half of a `patch`, `m_char` through `m_wave`. The bass
+        // drum is a whole two-operator channel and uses all of it. Two of the
+        // `fixed_note`s tune a shared channel rather than one voice: the
+        // hi-hat's tunes channel 7, which it shares with the snare, and the
+        // tom's tunes channel 8, which it shares with the cymbal. The other
+        // three are ignored.
+        rhythm: patch[]
+        // 128 entries: note number -> 0..4 into `rhythm`, or -1 to fall
+        // through to `drums` and play on a melodic voice.
+        //
+        // Rhythm mode does the core kit very well and the rest not at all —
+        // it has one hi-hat, so open and closed would be the same sound, and
+        // no cowbell, conga or tambourine whatever. Leaving those at -1 is
+        // what makes the two paths a hybrid instead of a choice: the kick,
+        // snare, toms, closed hat and crash get the chip's real noise
+        // generator, and everything else keeps a melodic voice and stays
+        // distinct. It also means the drums that play on nearly every beat
+        // stop competing for the nine melodic voices at all.
+        rhythm_map: i32[]
+
     // ============================================================
     // Byte reading
     // ============================================================
@@ -560,6 +587,18 @@ module opl_midi =
             n_conn  = (i32) r.data[conn],
             transpose = 0, fixed_note = 0 }
 
+    // An empty rhythm section, for the file formats. None of `.op2`, `.ibk`
+    // or `.sbi` has anywhere to describe one, so a bank read from a file plays
+    // its whole kit on melodic voices — correctly, just without the chip's
+    // noise generator. Allocated rather than left null so that `free_bank`
+    // needs no special case.
+    private let no_rhythm = () -> alloc(patch[0] {})!
+    private let no_rhythm_map = () ->
+        let m = alloc(i32[128] {})!
+        for i in 0..128 do
+            m[i] = -1
+        m
+
     // A one-patch bank, for `.sbi`: every program and every drum note plays
     // the single voice the file contained. Auditioning one patch is what that
     // format is for.
@@ -570,7 +609,8 @@ module opl_midi =
         for i in 0..128 do
             mel[i] = 0
             drm[i] = 0
-        bank { name = "sbi", patches = ps, melodic = mel, drums = drm }
+        bank { name = "sbi", patches = ps, melodic = mel, drums = drm,
+               rhythm = no_rhythm(), rhythm_map = no_rhythm_map() }
 
     // GENMIDI (`.op2`), the lump DOOM shipped its instruments in: an eight
     // byte magic, then 175 records of 36 bytes — 128 melodic programs
@@ -604,7 +644,8 @@ module opl_midi =
                 mel[i] = i
                 // Percussion records cover notes 35..81 in order.
                 drm[i] = if i >= 35 && i <= 81 then 128 + (i - 35) else -1
-            ok(bank { name = "genmidi", patches = ps, melodic = mel, drums = drm })
+            ok(bank { name = "genmidi", patches = ps, melodic = mel, drums = drm,
+                      rhythm = no_rhythm(), rhythm_map = no_rhythm_map() })
 
     // `.ibk`: a four-byte magic, 128 sixteen-byte instruments, then 128 names
     // of nine bytes. Melodic only — a caller wanting drums keeps the ones from
@@ -621,7 +662,8 @@ module opl_midi =
                 ps[i] = patch_at(&r, v, v + 1i64, v + 10i64)
                 mel[i] = i
                 drm[i] = -1
-            ok(bank { name = "ibk", patches = ps, melodic = mel, drums = drm })
+            ok(bank { name = "ibk", patches = ps, melodic = mel, drums = drm,
+                      rhythm = no_rhythm(), rhythm_map = no_rhythm_map() })
 
     // `.sbi`: a four-byte magic, a 32-byte name, and one instrument's sixteen
     // register bytes. One patch, not a bank — the caller decides where it goes.
@@ -634,6 +676,8 @@ module opl_midi =
     // Release a bank that came from one of the `load_*` readers. A bank
     // written as source data is not heap-allocated and must not be passed here.
     let free_bank = (b: bank) ->
+        free(b.rhythm_map)
+        free(b.rhythm)
         free(b.drums)
         free(b.melodic)
         free(b.patches)
@@ -697,6 +741,13 @@ module opl_midi =
         channels: channel[16]
         voices: voice[9]
         serial: u32
+
+        // Whether the chip is in rhythm mode, which decides both where a
+        // percussion note goes and how many melodic voices there are.
+        use_rhythm: bool
+        // Melodic voices available: nine normally, six in rhythm mode, where
+        // channels 6..8 have become the drum kit.
+        vmax: i32
 
         // How many notes have had to take a voice away from a note that was
         // still sounding. Nothing reads it during playback — it is here for
@@ -832,11 +883,11 @@ module opl_midi =
     // that has been held longest. The first tier is why `channel_idle` exists:
     // reusing a silent voice is inaudible, and reusing a ringing one is not.
     private let alloc_voice = (p: player*) ->
-        for v in 0..9 do
+        for v in 0..p.vmax do
             if !p.voices[v].keyed && opl2.channel_idle(p.chip, v) then return v
         let mut best = -1
         let mut oldest = 0u32
-        for v in 0..9 do
+        for v in 0..p.vmax do
             if !p.voices[v].keyed then
                 if best < 0 || p.voices[v].serial < oldest then
                     best = v
@@ -845,7 +896,7 @@ module opl_midi =
         p.steals = p.steals + 1u32
         let mut b2 = 0
         let mut o2 = p.voices[0].serial
-        for v in 1..9 do
+        for v in 1..p.vmax do
             if p.voices[v].serial < o2 then
                 b2 = v
                 o2 = p.voices[v].serial
@@ -867,8 +918,111 @@ module opl_midi =
                 p.voices[v].keyed = false
                 p.voices[v].held = false
 
+    // ============================================================
+    // Rhythm mode
+    // ============================================================
+
+    // The rhythm voice a percussion note plays on, or -1 for "not one of the
+    // five" — which means the note falls through to a melodic voice.
+    private let rhythm_for = (p: player*, note: i32) ->
+        if !p.use_rhythm || note < 0 then -1
+        else if (i64) note >= p.kit.rhythm_map.len then -1
+        else
+            let v = p.kit.rhythm_map[note]
+            if v < 0 || (i64) v >= p.kit.rhythm.len then -1 else v
+
+    // Entry 5 is the open hi-hat, and it deliberately lands on the same
+    // operator as entry 4: rhythm mode has one hi-hat, so open and closed are
+    // the same voice with different envelopes, and `strike_rhythm` programs
+    // the envelope on every hit. Two map entries sharing an operator is the
+    // general mechanism, not a special case — a bank can use it for any of
+    // the four single-operator voices.
+    private let rhythm_voice_of = (i: i32) ->
+        if i == 0 then opl2.rhythm_voice.bass_drum
+        else if i == 1 then opl2.rhythm_voice.snare
+        else if i == 2 then opl2.rhythm_voice.tom
+        else if i == 3 then opl2.rhythm_voice.cymbal
+        else opl2.rhythm_voice.hihat
+
+    // Put the chip in rhythm mode and program what does not change per hit:
+    // the bass drum, which is a whole two-operator channel, and the three
+    // channel pitches. The four single-operator voices are programmed at
+    // strike time instead, which is what lets two map entries share one
+    // operator with different envelopes.
+    private let setup_rhythm = (p: player*) ->
+        opl2.rhythm_mode(p.chip, true)
+        let bd = p.kit.rhythm[0]
+        opl2.load_instrument(p.chip, 6,
+            bd.m_char, bd.c_char, bd.m_scale, bd.c_scale,
+            bd.m_atk,  bd.c_atk,  bd.m_sus,   bd.c_sus,
+            bd.m_wave, bd.c_wave, bd.n_conn)
+        // Three channels, three pitches — and only three, because the hi-hat
+        // shares channel 7 with the snare and the cymbal shares channel 8
+        // with the tom.
+        let bd_n = if bd.fixed_note > 0 then bd.fixed_note else 36
+        let hh_n = if p.kit.rhythm[4].fixed_note > 0 then p.kit.rhythm[4].fixed_note
+                   else 84
+        let tt_n = if p.kit.rhythm[2].fixed_note > 0 then p.kit.rhythm[2].fixed_note
+                   else 48
+        let { bblk, bfn } = block_fnum(freq_of((f64) bd_n))
+        opl2.set_pitch(p.chip, 6, bblk, bfn)
+        let { hblk, hfn } = block_fnum(freq_of((f64) hh_n))
+        opl2.set_pitch(p.chip, 7, hblk, hfn)
+        let { tblk, tfn } = block_fnum(freq_of((f64) tt_n))
+        opl2.set_pitch(p.chip, 8, tblk, tfn)
+
+    // Strike one drum: level it for the note's velocity, tune it if it is the
+    // tom, and key it.
+    private let strike_rhythm = (p: player*, rv: i32, note: i32, vel: i32) ->
+        let ins = p.kit.rhythm[rv]
+        let add = p.vel_tl[clamp(level_index(p, 9, vel), 0, 127)]
+        if rv == 0 then
+            // The bass drum is a two-operator channel, so its loudness is the
+            // carrier's total level, exactly as for a melodic voice.
+            let mo = opl2.op_mod_offset(6)
+            opl2.write(p.chip, 0x40 + mo + 3,
+                (ins.c_scale & 192) | clamp((ins.c_scale & 63) + add, 0, 63))
+        else
+            // The other four are single operators, and that one operator is
+            // both the whole voice and the whole output. Programmed in full
+            // on every hit rather than once at startup: it costs five
+            // register writes, and it is what lets the open and closed
+            // hi-hats be one operator wearing two envelopes.
+            opl2.load_rhythm_op(p.chip, rhythm_voice_of(rv),
+                ins.m_char,
+                (ins.m_scale & 192) | clamp((ins.m_scale & 63) + add, 0, 63),
+                ins.m_atk, ins.m_sus, ins.m_wave)
+        // The tom is the one rhythm voice with a pitch, so General MIDI's six
+        // tom notes really do come out at six pitches. It shares channel 8
+        // with the cymbal, which is detuned as a side effect — inaudible,
+        // because what the cymbal plays is mostly noise.
+        if rv == 2 then
+            let { blk, fnv } = block_fnum(freq_of((f64) note + (f64) ins.transpose))
+            opl2.set_pitch(p.chip, 8, blk, fnv)
+        opl2.rhythm_strike(p.chip, rhythm_voice_of(rv))
+
+    // Whether this song has any percussion the bank's rhythm section covers.
+    // Deciding once, up front, is what keeps the melodic voice count fixed for
+    // the length of the piece: a player that switched modes mid-song would
+    // have to steal three sounding voices to do it.
+    private let wants_rhythm = (tune: song, kit: bank) ->
+        if kit.rhythm.len < 5i64 || kit.rhythm_map.len < 128i64 then false
+        else
+            let mut want = false
+            for i in 0i64..tune.events.len do
+                match tune.events[i].m with
+                | note_on(n) ->
+                    if n.chan == 9 && n.note >= 0 && n.note < 128 then
+                        if kit.rhythm_map[n.note] >= 0 then want = true
+                | _ -> void()
+            want
+
     private let start_note = (p: player*, ch: i32, note: i32, vel: i32) ->
         if ch < 0 || ch > 15 || note < 0 || note > 127 then return
+        let rv = if ch == 9 then rhythm_for(p, note) else -1
+        if rv >= 0 then
+            strike_rhythm(p, rv, note, vel)
+            return
         let pi = patch_for(p, ch, note)
         if pi < 0 then return
         release_note(p, ch, note)
@@ -895,6 +1049,10 @@ module opl_midi =
         opl2.note_on(p.chip, v, blk, fnv)
 
     private let stop_note = (p: player*, ch: i32, note: i32) ->
+        let rv = if ch == 9 then rhythm_for(p, note) else -1
+        if rv >= 0 then
+            opl2.rhythm_release(p.chip, rhythm_voice_of(rv))
+            return
         for v in 0..9 do
             if p.voices[v].keyed && p.voices[v].midi_ch == ch
                     && p.voices[v].note == note then
@@ -1005,7 +1163,16 @@ module opl_midi =
             p.voices[v].keyed = false
             p.voices[v].held = false
             p.voices[v].serial = 0u32
+        // Drop the rhythm keys too, or a drum held across a stop keeps its
+        // key bit set and never articulates again — `rhythm_strike` needs a
+        // rising edge, and a bit that is already high has none to give.
+        if p.use_rhythm then
+            for i in 0..5 do
+                opl2.rhythm_release(p.chip, rhythm_voice_of(i))
         opl2.silence_voices(p.chip)
+        // `silence_voices` clears every operator, including the five the
+        // rhythm section owns, so the kit has to be programmed again.
+        if p.use_rhythm then setup_rhythm(p)
         p.serial = 0u32
 
     // Every channel back to General MIDI's defaults. A loop wrap that skipped
@@ -1079,6 +1246,15 @@ module opl_midi =
         p.kit = kit
         p.us_quarter = 500000
         p.looping = true
+        // Rhythm mode is decided here and never again: on if the bank has a
+        // kit and the song plays something it covers. It is not a knob
+        // because there is no interesting way to answer it wrong — a song
+        // with no percussion gains nothing and would lose three voices, and
+        // a song with percussion gains the chip's only noise generator *and*
+        // stops its drums competing for melodic voices at all.
+        p.use_rhythm = wants_rhythm(tune, kit)
+        p.vmax = if p.use_rhythm then 6 else 9
+        if p.use_rhythm then setup_rhythm(p)
         // Velocity index to total-level offset. TL is attenuation in 0.75 dB
         // steps counting down from 0, so a linear 0..1 level becomes
         // -20*log10(level)/0.75 steps of attenuation. Index 0 is silence

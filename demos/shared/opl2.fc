@@ -3,8 +3,9 @@
 // Written from scratch against the YM3812 Application Manual and the
 // Adlib programmer's manual. Models 9 melodic channels with two
 // operators each (modulator + carrier) connectable in FM (modulator
-// phase-modulates the carrier) or additive (both sum to output).
-// Rhythm mode (reg 0xBD bit 5) is not implemented — unused by Wolf3D.
+// phase-modulates the carrier) or additive (both sum to output), plus
+// rhythm mode (reg 0xBD bit 5) — five percussion voices on channels 6..8,
+// three of them driven by the chip's noise generator.
 //
 // Internal precision tracks the chip:
 //
@@ -57,7 +58,14 @@ namespace shared::
 // application manual and the Adlib programmer's manual. Nine melodic
 // channels, two operators each — a modulator and a carrier — wired either
 // in FM (the modulator bends the carrier's phase) or additive (both sum to
-// the output). Rhythm mode is not implemented.
+// the output).
+//
+// **Rhythm mode** turns channels 6, 7 and 8 into five percussion voices —
+// bass drum, snare, tom, cymbal and hi-hat — of which the snare, cymbal and
+// hi-hat are driven by the chip's noise generator rather than by a tone.
+// That is the only real noise source the OPL2 has, and the reason a drum kit
+// faked out of melodic voices always sounds thin: see `rhythm_mode` below.
+// It costs the three channels, leaving six melodic.
 //
 // A chip is a heap value driven exactly as the hardware was: program its
 // registers, key notes on and off, and pull samples out one at a time.
@@ -106,6 +114,21 @@ module opl2 =
         | decay
         | sustain
         | release
+
+    // The five voices rhythm mode puts on channels 6..8. The bass drum is a
+    // whole two-operator channel (channel 6) and behaves like any other
+    // melodic voice apart from where its key comes from; the other four are
+    // single operators that reach the output directly, with no modulation
+    // between them.
+    //
+    //   hihat   channel 7 modulator     snare   channel 7 carrier
+    //   tom     channel 8 modulator     cymbal  channel 8 carrier
+    enum rhythm_voice =
+        | bass_drum
+        | snare
+        | tom
+        | cymbal
+        | hihat
 
     // Envelope range. 9-bit counter, units of 0.1875 dB → 96 dB max.
     let env_max = 511
@@ -210,6 +233,20 @@ module opl2 =
         dam: bool        // tremolo depth (false=1.0 dB, true=4.8 dB)
         dvb: bool        // vibrato depth (false=±7c, true=±14c)
 
+        // ---- Rhythm mode ----
+        rhythm: bool     // 0xBD bit 5
+        rhythm_keys: i32 // shadow of 0xBD bits 4..0, for edge detection
+        // 23-bit LFSR, the chip's noise source. Free-running: it advances
+        // every sample whether or not rhythm mode is on, as the hardware's
+        // does, so enabling rhythm mode mid-tune does not start it from a
+        // fixed state and make every kit sound identical from the top.
+        noise: u64
+        // The cymbal's phase bits, kept because the hi-hat's phase depends on
+        // them and is generated first — so it reads the previous sample's,
+        // exactly as the hardware's slot ordering makes it.
+        rm_tc_bit3: i32
+        rm_tc_bit5: i32
+
         // ---- Precomputed tables ----
         // First-quadrant log-sin attenuation in fine units. Each unit
         // is 1/16 of an env unit = 0.01172 dB; logsin_table[i] is the
@@ -260,6 +297,10 @@ module opl2 =
             c.op_mult[i] = 1
             c.op_env[i] = env_max
             c.op_stage[i] = envelope_stage.off
+        // The noise LFSR must not start at zero — zero is a fixed point and
+        // the register would never leave it, silencing the snare, cymbal and
+        // hi-hat for the life of the chip.
+        c.noise = 1u64
         let pi = 3.14159265358979323846
         // First-quadrant log-sin in 1/16 env units (0.01172 dB per
         // unit). See the field comment for the chip-precision rationale.
@@ -495,6 +536,18 @@ module opl2 =
     // Register write
     // ============================================================
 
+    // Key one rhythm operator on a rising edge and release it on a falling
+    // one. Key-on resets the phase and restarts the attack but leaves the
+    // envelope where it is, the same as a channel key-on — a drum retriggered
+    // faster than its own release should not restart from silence.
+    private let rhythm_gate = (c: chip*, op: i32, was: bool, now: bool) ->
+        if now && !was then
+            c.op_stage[op] = envelope_stage.attack
+            c.op_phase[op] = 0.0
+        if !now && was then
+            if c.op_stage[op] != envelope_stage.off then
+                c.op_stage[op] = envelope_stage.release
+
     // Write one OPL2 register, exactly as software wrote the hardware port:
     // `reg` is the register number and `val` its byte. This is the chip's
     // whole control surface — load_instrument, note_on, and note_off are
@@ -563,7 +616,11 @@ module opl2 =
             c.ch_fnum[ci] = (c.ch_fnum[ci] & 0xFF) | ((val & 3) << 8)
             c.ch_block[ci] = (val >> 2) & 7
             refresh_channel_ops(c, ci)
-            let new_key = (val & 32) != 0
+            // In rhythm mode channels 6..8 are the percussion voices and are
+            // keyed through 0xBD, so the key bit here is not theirs to obey.
+            // Their fnum and block still are — that is how a driver tunes the
+            // tom and the hi-hat.
+            let new_key = (val & 32) != 0 && !(c.rhythm && ci >= 6)
             if new_key && !c.ch_key[ci] then
                 // Key-on: reset phase and start attack. DON'T reset
                 // env — real OPL2 preserves it, which matters for
@@ -585,11 +642,42 @@ module opl2 =
         if ch_base == 0xC0 && ci < 9 then
             c.ch_fb[ci] = (val >> 1) & 7
             c.ch_add[ci] = (val & 1) != 0
-        // 0xBD: LFO depths + rhythm mode. We honor DAM and DVB; rhythm
-        // mode (bit 5) is unused by Wolf3D.
+        // 0xBD: LFO depths, rhythm-mode enable, and the five percussion
+        // key bits. The key bits are edge-triggered exactly like a
+        // channel's: a bit that was clear and is now set articulates that
+        // drum, and one that was set and is now clear releases it.
         if reg == 0xBD then
             c.dam = (val & 128) != 0
             c.dvb = (val & 64) != 0
+            let on = (val & 32) != 0
+            if !on && c.rhythm then
+                // Leaving rhythm mode hands channels 7 and 8 back as melodic
+                // voices. Silence their operators on the way out: what is
+                // sounding is a drum, and letting it ring under whatever the
+                // channel is programmed to next is a click at best.
+                for op in 14..18 do
+                    c.op_stage[op] = envelope_stage.off
+                    c.op_env[op] = env_max
+                c.rhythm_keys = 0
+            c.rhythm = on
+            if on then
+                let keys = val & 31
+                let prev = c.rhythm_keys
+                let bd_now = (keys & 16) != 0
+                let bd_was = (prev & 16) != 0
+                // The bass drum is a two-operator channel, so both of its
+                // operators key together and its feedback history resets
+                // with them — the same thing a 0xB0 key-on does.
+                rhythm_gate(c, 12, bd_was, bd_now)
+                rhythm_gate(c, 13, bd_was, bd_now)
+                if bd_now && !bd_was then
+                    c.ch_prev0[6] = 0
+                    c.ch_prev1[6] = 0
+                rhythm_gate(c, 15, (prev & 8) != 0, (keys & 8) != 0)   // snare
+                rhythm_gate(c, 16, (prev & 4) != 0, (keys & 4) != 0)   // tom
+                rhythm_gate(c, 17, (prev & 2) != 0, (keys & 2) != 0)   // cymbal
+                rhythm_gate(c, 14, (prev & 1) != 0, (keys & 1) != 0)   // hi-hat
+                c.rhythm_keys = keys
         return
 
     // ============================================================
@@ -619,7 +707,13 @@ module opl2 =
     // quarter and may force the sign positive (abs-sine).
     let wave_sample = (c: chip*, phase: f64, wf: i32, total_atten: i32) ->
         let p = phase - math.floor(phase)
-        let idx10 = (i32) (p * 1024.0) & 1023
+        wave_at_index(c, (i32) (p * 1024.0) & 1023, wf, total_atten)
+
+    // The same, from a phase index that has already been computed. Rhythm
+    // mode needs this: the snare, cymbal and hi-hat do not read their own
+    // phase accumulator at all, they synthesise a phase index out of noise
+    // and a handful of bits borrowed from two other operators.
+    let wave_at_index = (c: chip*, idx10: i32, wf: i32, total_atten: i32) ->
         let half = (idx10 >> 9) & 1
         let quarter = (idx10 >> 8) & 1
         let idx = idx10 & 255
@@ -639,6 +733,86 @@ module opl2 =
             let amp = if total_fine >= 16384 || total_fine < 0 then 0
                 else c.gain_table[total_fine]
             if positive then amp else 0 - amp
+
+    // Advance one operator's phase by a sample and return its 10-bit phase
+    // index. `ch` supplies fnum and block, because an operator's frequency is
+    // its channel's times its own MULT.
+    private let step_op = (c: chip*, op: i32, ch: i32, vib_mul: f64) ->
+        let base_freq = (f64) c.ch_fnum[ch] * c.block_scale[c.ch_block[ch]]
+            * 49716.0 / 524288.0
+        let v = if c.op_vib[op] then vib_mul else 1.0
+        let f = base_freq * mult_val(c.op_mult[op]) * v
+        c.op_phase[op] = c.op_phase[op] + f / c.rate
+        if c.op_phase[op] >= 1.0 then
+            c.op_phase[op] = c.op_phase[op] - math.floor(c.op_phase[op])
+        (i32) (c.op_phase[op] * 1024.0) & 1023
+
+    private let op_atten = (c: chip*, op: i32, am_atten: i32) ->
+        c.op_env[op] + c.op_tl[op] * 4 + c.op_ksl_atten[op]
+            + (if c.op_am[op] then am_atten else 0)
+
+    // The four single-operator rhythm voices, summed. Channel 7's two
+    // operators are the hi-hat and the snare and channel 8's are the tom and
+    // the cymbal; none of them modulates anything, so each reaches the output
+    // on its own.
+    //
+    // Three of the four do not read their own phase accumulator to make
+    // sound. The snare, cymbal and hi-hat build a phase index out of the
+    // noise register and a few bits borrowed from the hi-hat's and cymbal's
+    // accumulators, which is the OPL2's entire answer to "how do you make a
+    // noise on an FM chip". The accumulators still advance — they are the
+    // bit source — and tuning channels 7 and 8 still changes the sound,
+    // which is why an AdLib driver sets their fnum even for the hi-hat.
+    private let rhythm_sample = (c: chip*, am_atten: i32, vib_mul: f64) ->
+        let hh = 14
+        let sd = 15
+        let tt = 16
+        let tc = 17
+        for op in 14..18 do
+            env_advance(c, op)
+        let hh_idx = step_op(c, hh, 7, vib_mul)
+        ignore step_op(c, sd, 7, vib_mul)
+        let tt_idx = step_op(c, tt, 8, vib_mul)
+        let tc_idx = step_op(c, tc, 8, vib_mul)
+
+        let hh_bit2 = (hh_idx >> 2) & 1
+        let hh_bit3 = (hh_idx >> 3) & 1
+        let hh_bit7 = (hh_idx >> 7) & 1
+        let hh_bit8 = (hh_idx >> 8) & 1
+        // Three exclusive-ors folded together, mixing the hi-hat's phase with
+        // the cymbal's. This is what makes both of them inharmonic rather than
+        // merely high: the metal in a cymbal is not a pitch. The cymbal bits
+        // are last sample's, because the hi-hat is generated first — the
+        // hardware's slot order, and audible enough to be worth keeping.
+        let rm_xor = (hh_bit2 ^ hh_bit7) | (hh_bit3 ^ c.rm_tc_bit5)
+            | (c.rm_tc_bit3 ^ c.rm_tc_bit5)
+        let n_bit = (i32) (c.noise & 1u64)
+
+        let mut sum = 0i32
+        // Hi-hat: one of two phase indices, chosen by noise.
+        if c.op_stage[hh] != envelope_stage.off then
+            let idx = (rm_xor << 9)
+                | (if (rm_xor ^ n_bit) != 0 then 0xD0 else 0x34)
+            sum = sum + wave_at_index(c, idx, c.op_wf[hh],
+                op_atten(c, hh, am_atten))
+        // Snare: one bit of the hi-hat's phase, one bit of noise.
+        if c.op_stage[sd] != envelope_stage.off then
+            let idx = (hh_bit8 << 9) | ((hh_bit8 ^ n_bit) << 8)
+            sum = sum + wave_at_index(c, idx, c.op_wf[sd],
+                op_atten(c, sd, am_atten))
+        // Tom-tom: an ordinary pitched operator. The only one of the four
+        // that plays a note, which is why a kit's toms are tuned by writing
+        // channel 8's fnum.
+        if c.op_stage[tt] != envelope_stage.off then
+            sum = sum + wave_at_index(c, tt_idx, c.op_wf[tt],
+                op_atten(c, tt, am_atten))
+        // Cymbal: the same fold as the hi-hat, half a cycle along.
+        if c.op_stage[tc] != envelope_stage.off then
+            sum = sum + wave_at_index(c, (rm_xor << 9) | 0x80, c.op_wf[tc],
+                op_atten(c, tc, am_atten))
+        c.rm_tc_bit3 = (tc_idx >> 3) & 1
+        c.rm_tc_bit5 = (tc_idx >> 5) & 1
+        sum
 
     // Produce one output sample. Advances the global counter, both
     // LFOs, and every active channel's envelopes and phase generators.
@@ -667,8 +841,19 @@ module opl2 =
         let vib_cents = if c.dvb then 0.00811 else 0.00405
         let vib_mul = 1.0 + math.sin(c.lfo_vib_phase * two_pi) * vib_cents
 
+        // The noise register runs free, one step per sample, whether or not
+        // rhythm mode is on. 23-bit LFSR; the xor constant is the tap set.
+        if (c.noise & 1u64) != 0u64 then
+            c.noise = c.noise ^ 0x800302u64
+        c.noise = c.noise >> 1u64
+
         let mut sum = 0i32
         for ch in 0..9 do
+            // In rhythm mode channels 7 and 8 stop being two-operator voices
+            // — their four operators are four separate drums — so they leave
+            // this loop entirely. Channel 6 stays: the bass drum *is* an
+            // ordinary FM voice, only keyed from somewhere else.
+            if c.rhythm && ch >= 7 then continue
             let mi = ch * 2
             let ci = ch * 2 + 1
             // Skip channels with both ops idle — no audible output.
@@ -741,6 +926,8 @@ module opl2 =
                 let cout = wave_sample(c, c.op_phase[ci] + fm_offset,
                     c.op_wf[ci], c_total_atten)
                 sum = sum + cout
+        if c.rhythm then
+            sum = sum + rhythm_sample(c, am_atten, vib_mul)
         // Scale the per-channel sum into mix-buffer units. No per-chip
         // clamp here: the chip is allowed to produce a wide i32 that
         // the i32 mix buffer accumulates freely; the mixer's
@@ -822,6 +1009,78 @@ module opl2 =
         write(c, 0xB0 + channel,
             (if c.ch_key[channel] then 32 else 0)
             | ((block & 7) << 2) | ((fnum >> 8) & 3))
+
+    // ============================================================
+    // Rhythm mode
+    // ============================================================
+
+    // Turn rhythm mode on or off. On, channels 6, 7 and 8 stop being melodic
+    // voices and become five drums — so a caller's melodic pool drops to
+    // channels 0..5 — and the snare, cymbal and hi-hat gain the chip's noise
+    // generator, which is the only one it has. Off, the three channels come
+    // back and their operators are silenced on the way rather than left
+    // ringing into whatever is programmed next.
+    //
+    // ```fc
+    // opl2.rhythm_mode(c, true)
+    // opl2.load_instrument(c, 6, ...)                 // the bass drum
+    // opl2.load_rhythm_op(c, opl2.rhythm_voice.snare, ...)
+    // opl2.set_pitch(c, 7, block, fnum)               // tunes hi-hat + snare
+    // opl2.rhythm_strike(c, opl2.rhythm_voice.snare)
+    // ```
+    let rhythm_mode = (c: chip*, on: bool) ->
+        write(c, 0xBD, (if c.dam then 128 else 0) | (if c.dvb then 64 else 0)
+            | (if on then 32 else 0) | (if on then c.rhythm_keys else 0))
+
+    // The 0xBD key bit for one voice.
+    private let rhythm_bit = (v: rhythm_voice) ->
+        match v with
+        | bass_drum -> 16
+        | snare -> 8
+        | tom -> 4
+        | cymbal -> 2
+        | hihat -> 1
+
+    private let rhythm_write = (c: chip*, keys: i32) ->
+        write(c, 0xBD, (if c.dam then 128 else 0) | (if c.dvb then 64 else 0)
+            | (if c.rhythm then 32 else 0) | keys)
+
+    // Articulate one drum. The key bit is dropped and re-raised, because the
+    // chip starts an envelope on the bit's *rising* edge — striking a drum
+    // that is already sounding would otherwise do nothing at all.
+    let rhythm_strike = (c: chip*, v: rhythm_voice) ->
+        let b = rhythm_bit(v)
+        if (c.rhythm_keys & b) != 0 then rhythm_write(c, c.rhythm_keys & (0 - b - 1))
+        rhythm_write(c, c.rhythm_keys | b)
+
+    // Let one drum go. Only the tom and the bass drum have much of a release
+    // to hear; the noise voices are usually programmed to die on their own.
+    let rhythm_release = (c: chip*, v: rhythm_voice) ->
+        rhythm_write(c, c.rhythm_keys & (0 - rhythm_bit(v) - 1))
+
+    // Register offset of the operator a rhythm voice lives on. The bass drum
+    // is a whole two-operator channel, so it is programmed with
+    // `load_instrument(c, 6, …)` and this returns its modulator.
+    let rhythm_op_offset = (v: rhythm_voice) ->
+        match v with
+        | bass_drum -> 0x10      // channel 6 modulator
+        | hihat -> 0x11          // channel 7 modulator
+        | tom -> 0x12            // channel 8 modulator
+        | snare -> 0x14          // channel 7 carrier
+        | cymbal -> 0x15         // channel 8 carrier
+
+    // Program one single-operator rhythm voice: the five register bytes an
+    // AdLib instrument carries per operator. Not for the bass drum, which
+    // has two operators and takes a whole instrument.
+    let load_rhythm_op = (c: chip*, v: rhythm_voice,
+                          op_char: i32, op_scale: i32, op_atk: i32,
+                          op_sus: i32, op_wave: i32) ->
+        let o = rhythm_op_offset(v)
+        write(c, 0x20 + o, op_char)
+        write(c, 0x40 + o, op_scale)
+        write(c, 0x60 + o, op_atk)
+        write(c, 0x80 + o, op_sus)
+        write(c, 0xE0 + o, op_wave)
 
     // Whether both of a channel's operators have finished releasing, so
     // reprogramming it cannot cut off an audible note. A voice allocator

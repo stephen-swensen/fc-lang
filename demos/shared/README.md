@@ -15,7 +15,7 @@ can drive `opl2` and the platform layer with no import lines of its own.
 |---|---|---|
 | `sdl2.fc` | SDL2 bindings (`module sdl2`) | SDL2 headers + `-lSDL2` |
 | `raylib.fc` | raylib bindings (`module raylib`) | raylib source, fetched and built by `demos/fuzzel-fobble/run-raylib.sh` into the gitignored `raylib/` |
-| `opl2.fc` | OPL2 / YM3812 FM chip emulator (`module opl2`) | `stdlib/math.fc` |
+| `opl2.fc` | OPL2 / YM3812 FM chip emulator, incl. rhythm mode (`module opl2`) | `stdlib/math.fc` |
 | `opl_midi.fc` | Standard MIDI File parser and General MIDI player (`module opl_midi`) | `opl2.fc`, `stdlib/math.fc` — **no I/O** |
 | `opl_bank_gm.fc` | A hand-authored General MIDI instrument bank (`module opl_bank_gm`) | `opl_midi.fc` |
 | `opl_audio.fc` | Game audio engine built on the chip (`module opl_audio`, `module spsc`) | `opl2.fc`, `opl_midi.fc`, `stdlib/math.fc` — **no platform library** |
@@ -56,6 +56,31 @@ Music is a **Standard MIDI File**, played by `opl_midi.fc` through the
 instrument bank in `opl_bank_gm.fc`. Effects are a small bespoke format — a
 bank of instruments and scripts of `(note, ticks)` pairs — because an effect is
 a one-shot with tight timing rather than a piece of music.
+
+### Drums: rhythm mode
+
+The OPL2 has exactly one noise source, and it is not a register you can point
+a melodic voice at — it is **rhythm mode**, which turns channels 6, 7 and 8
+into five percussion voices (bass drum, snare, tom, cymbal, hi-hat) and drives
+three of them from a 23-bit noise LFSR. Faking a drum kit on melodic voices
+instead, with big inharmonic frequency ratios, gets you a dense *harmonic*
+hash rather than noise: measured spectral flatness 0.49 against rhythm mode's
+0.81 for a snare, where 1.0 is white noise.
+
+`opl_midi` turns it on by itself, deciding once at `init` from the song and
+the bank together — on if the bank has a kit and the song plays a note it
+covers. There is no knob because there is no interesting way to answer it
+wrong. It costs three melodic channels, and pays for them immediately: the
+drums stop competing for voices at all, so a beat of kick and hi-hat that used
+to occupy two of nine voices now occupies none of six.
+
+The mapping is a **hybrid, not a switch**. Rhythm mode does the core kit very
+well and everything else not at all — one hi-hat, no cowbell, no conga, no
+tambourine — so the bank's `rhythm_map` names only the notes it does well
+(kick, snare, six toms, both hats, two crashes) and every other percussion
+note keeps its melodic voice. Two map entries may share one operator with
+different envelopes, which is how open and closed hi-hats differ on a chip
+with a single hi-hat.
 
 The engine is backend-agnostic, and literally so: `opl_audio.fc` names no
 platform library, contains no `#if`, and reads no flag. Everything about

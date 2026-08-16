@@ -927,3 +927,114 @@ Against the rest of the mix in their own strongest band, the drums go from
 - Loop seam joins on a step of 22 against 7240 for a typical busy bar.
 - Every demo and both fuzzel-fobble backends compile, SDL2 links, `make check`
   green at 2362 passed / 0 failed / 4 skipped on gcc and clang.
+
+---
+
+## 16. Rhythm mode
+
+The drums were still hard to hear at low volume, which turned out to be the
+useful detail. Two findings, one of which corrected §15.
+
+**Why "at low volume" was the clue.** Each part's energy, flat against
+A-weighted (roughly the ear near 40 phon):
+
+| Part | flat | A-weighted | loss |
+| --- | ---: | ---: | ---: |
+| Melody | 128.8 | 129.2 | **+0.4 dB** |
+| Harpsichord | 118.3 | 118.2 | −0.1 |
+| Bass | 122.9 | 118.4 | −4.4 |
+| Harmony | 120.9 | 114.6 | −6.3 |
+| **Drums** | 119.8 | 111.5 | **−8.3 dB** |
+
+A kit's energy sits at both extremes — kick at 60–100 Hz, noise voices at
+10–11 kHz — which is exactly where the ear's sensitivity collapses first as
+level drops. The music box lives at 2–4 kHz and loses nothing. So the drums
+were ~9 dB further under the melody than the flat numbers said, and no amount
+of TL was going to fix a *spectrum* problem.
+
+**§15 was wrong about the noise voices.** It said the OPL2 has no noise
+generator and the 8–12 dB deficit was inherent. It has one: **rhythm mode**,
+register 0xBD bit 5, which `opl2.fc` had never implemented — its own header
+said so ("not implemented — unused by Wolf3D"). It was inherent to the subset
+of the chip we emulated, not to the chip.
+
+### What was built
+
+`opl2.fc` gains rhythm mode: a 23-bit noise LFSR, the five percussion voices
+on channels 6–8, and the phase generation for the three noise-driven ones —
+the snare, cymbal and hi-hat do not read their own phase accumulator to make
+sound at all, but fold a handful of bits from two others together with the
+noise bit. The hi-hat reads the cymbal's bits from the *previous* sample,
+because the hardware generates it first, and that ordering is audible enough
+to keep. Public API is `rhythm_mode`, `rhythm_strike`, `rhythm_release`,
+`load_rhythm_op`.
+
+`opl_midi.fc` routes percussion to it. `bank` gains `rhythm` (the voices) and
+`rhythm_map` (note → voice, −1 to fall through), and the player decides once at
+`init` from the song and the bank together — no knob, because there is no
+interesting way to answer it wrong.
+
+**The mapping is a hybrid, and that is the design.** Rhythm mode does the core
+kit very well and everything else not at all: one hi-hat, no cowbell, conga,
+tambourine or woodblock. So `rhythm_map` names only what it does well and
+every other percussion note keeps its melodic voice. Two entries may share one
+operator with different envelopes, which is how the open and closed hi-hats
+differ on a chip with one hi-hat — the alternative, leaving the open hat
+melodic, left it 9 dB under the rest of the kit with nowhere to go.
+
+Measured, struck through the real player path:
+
+| | flatness (1.0 = white) | length | level |
+| --- | ---: | ---: | ---: |
+| Snare, faked on a melodic voice | 0.49 | 111 ms | — |
+| **Snare, rhythm mode** | **0.81** | 111 ms | −29.5 dBFS |
+| Hi-hat, faked | 0.49 | — | — |
+| **Hi-hat, rhythm mode** | **0.74** | 55 ms | −29.5 |
+| Open hi-hat (same operator) | 0.75 | 443 ms | −29.5 |
+| Toms, three pitches | 0.02 | 330 ms | −29.5 |
+| Crash | 0.37 | 996 ms | −29.2 |
+
+The whole kit spans **0.4 dB** across its six voices — `bank_probe` now probes
+the rhythm section too, under the same conditions as a melodic patch, so the
+two are directly comparable.
+
+**It costs three melodic channels and immediately pays for them.** A beat of
+kick and hi-hat used to occupy two of nine voices and now occupies none of
+six. The minuet renders with **0 voice steals** on six voices, as it did on
+nine.
+
+### The result
+
+Drums against melody at a quiet listening level:
+
+| | |
+| --- | ---: |
+| Faked kit, hi-hat at velocity 44 | ≈ −30 dB |
+| Faked kit, relevelled (§15) | −22.5 |
+| **Rhythm mode + velocities 104–120** | **−15.0** |
+
+The harmony sits at −14.6 dB by the same measure, so the drums are now level
+with a part that reads clearly.
+
+### Verification
+
+- Rhythm mode engages only when it should: **on** (6 melodic) for the minuet,
+  **off** (9 melodic) with the drum track removed, **off** for a bank loaded
+  from a file, which has no rhythm section. `midi_render` reports which.
+- 1812 events / 7105 bytes validate against the independent SMF reader, peak
+  seven simultaneous notes, **0 steals**, loop seam joins on a step of 22.
+- Every demo compiles, SDL2 links, `make check` green at 2362 / 0 / 4 skipped.
+- `wolf-fc` is deliberately **untouched** pending confirmation.
+
+### Found on the way, not fixed
+
+**The bank file loaders decode the wrong field order.** `patch_at` reads five
+consecutive bytes per operator, but neither format is laid out that way: IBK
+and SBI interleave the two operators (mod, car, mod, car, …, stride 2) while
+GENMIDI groups six bytes per operator in the order char/attack/sustain/
+waveform/KSL/level. The per-format *offsets* passed to `patch_at` are right;
+the field order inside it matches neither. A synthetic `.ibk` renders silent
+because the misalignment lands 0x00 in the carrier's attack-rate nibble.
+Confirmed pre-existing — the same file is silent at `HEAD` — and untouched
+here. Fixing it wants a real `.op2` and `.ibk` to validate against, since
+guessing at layouts is what produced the bug.

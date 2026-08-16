@@ -525,14 +525,28 @@ it can be edited rather than in the player:
 | Harmony | −27 | 78% |
 | Bass | −29 | 77% |
 | Harpsichord | −33 | 32% |
-| Drums | −35 | 3% |
+| Drums | −34 | 3% |
 
-The drums used to sit at −42, which is inaudible, and the cause was in this
-file rather than in the kit: the hi-hat was written at **velocity 44**, and 44
-on `opl_midi`'s velocity curve is 12.75 dB of attenuation applied to the
-quietest voice in the bank. A part that should sit low in the mix is written
-low in the *mix* — that is what CC7 is for — not by throttling velocity into
-the floor.
+The drums took three goes. They were at −42 dBFS, which is inaudible, for two
+independent reasons: this file wrote the hi-hat at **velocity 44** — 12.75 dB
+of attenuation on `opl_midi`'s curve, applied to the quietest voice in the
+bank — and the kit itself was faked on melodic voices, which on an OPL2 means
+a dense harmonic hash rather than noise. The velocities are now 104–120, and
+the kit comes from the chip's **rhythm mode**, whose snare and hats are driven
+by a real noise generator.
+
+The measure that matters here is not the flat level but the A-weighted one,
+because the complaint was that the drums vanished *at low volume* — and that
+is exactly what a kit whose energy sits at both frequency extremes does as the
+ear's sensitivity narrows. Against the melody, at a quiet listening level:
+
+| | drums vs melody |
+|---|---:|
+| Faked kit, velocity 44 | −30 dB |
+| Faked kit, relevelled | −22.5 |
+| **Rhythm mode, this file** | **−15.0** |
+
+For scale, the harmony sits at −14.6 dB by the same measure.
 
 Six tracks in SMF format 1, five sounding channels, and at most seven
 simultaneous notes. It steals zero voices, which is another way of saying the

@@ -69,14 +69,22 @@
 // a couple of decibels under the melodic voices, and the long metal — crash,
 // ride, open hat — three under that again.
 //
-// The exception worth knowing: the noise voices (snare, hats, cymbals, claps)
-// are 8–12 dB quieter than everything else and cannot be brought up. They make
-// their noise with a large inharmonic MULT on a pulse-sine with feedback,
-// which spreads their energy thinly across the whole spectrum, and their
-// carriers are already at TL 0. The OPL2 has no noise generator; this is what
-// it costs. Raising their modulation depth buys 2 dB, moving them down four
-// octaves buys 4 dB, and neither is worth the character it spends — both were
-// tried and measured.
+// The exception worth knowing: the melodic-voice noise fakes (snare, hats,
+// cymbals, claps, patches 44–59) are 8–12 dB quieter than everything else and
+// cannot be brought up. They make their noise with a large inharmonic MULT on
+// a pulse-sine with feedback, which spreads their energy thinly across the
+// whole spectrum, and their carriers are already at TL 0. Raising their
+// modulation depth buys 2 dB, moving them down four octaves buys 4 dB, and
+// neither is worth the character it spends — both were tried and measured.
+//
+// The real answer is the `rhythm_kit` below, and it is not a level fix at all:
+// the OPL2 *does* have a noise generator, in rhythm mode, and a voice driven
+// by it is noise rather than an impression of noise. Measured flatness 0.81
+// against the fake's 0.49 for a snare, 1.0 being white. The five rhythm
+// voices are level-matched to within 0.4 dB of each other and sit two
+// decibels above the melodic drum median. What stays on melodic voices is
+// what rhythm mode has no voice for — congas, cowbell, tambourine, woodblock
+// — and those are the quiet ones the paragraph above is about.
 //
 // ------------------------------------------------------------------
 // How complete this is
@@ -204,6 +212,78 @@ module opl_bank_gm =
         71, ptick,      72, ptick,      73, ptick,      74, ptick,
         75, woodblk,    76, woodblk,    77, woodblk,    78, ptick,
         79, ptick,      80, ptick,      81, ptick }
+
+    // ============================================================
+    // Rhythm-mode kit
+    // ============================================================
+
+    // Which of rhythm mode's five voices each percussion note plays on, as
+    // (note, voice) pairs. Voices are 0 = bass drum, 1 = snare, 2 = tom,
+    // 3 = cymbal, 4 = hi-hat, matching the order of `rhythm_kit` below.
+    //
+    // Deliberately short. Rhythm mode does the core kit with the chip's real
+    // noise generator and does nothing else at all: there is one hi-hat, so
+    // routing the open hat here would make it identical to the closed one,
+    // and there is no cowbell, conga, tambourine or woodblock whatever.
+    // Every note not named here keeps the melodic voice it had, which is why
+    // the two paths coexist instead of competing.
+    private let rhythm_notes = i32[30] {
+        35, 0,   36, 0,                         // bass drum
+        38, 1,   40, 1,                         // snare
+        41, 2,   43, 2,   45, 2,                // toms, low to high
+        47, 2,   48, 2,   50, 2,
+        42, 4,   44, 4,                         // closed and pedal hi-hat
+        46, 5,                                  // open hi-hat: same operator
+        49, 3,   57, 3 }                        // crash 1 and 2
+
+    // The five voices themselves, in voice order. Four of them are single
+    // operators and use only the modulator half of a `patch`; the bass drum
+    // is a whole two-operator channel and uses all of it.
+    //
+    // Every one has SL 0 — the length is in RR, per the rule above — and
+    // waveform 0. A rhythm voice does not need a clever waveform to sound
+    // noisy, because its noise does not come from the waveform: the snare,
+    // cymbal and hi-hat get theirs from the chip's noise register, which is
+    // the whole reason to be here. Measured spectral flatness against the
+    // melodic-voice fakes they replace: snare 0.49 -> 0.81, hi-hat
+    // 0.49 -> 0.72, where 1.0 is white noise.
+    private let rhythm_kit = () ->
+        alloc(opl_midi.patch[6] {
+            // Bass drum. A 0.5x pair with feedback and a soft modulator
+            // attack — the thump is the envelope, since the chip cannot
+            // sweep pitch down the way a real kick does.
+            opl_midi.patch {
+                m_char = 0x00, m_scale = 0x0A, m_atk = 0xA8, m_sus = 0x08, m_wave = 0x00,
+                c_char = 0x00, c_scale = 0x00, c_atk = 0xF8, c_sus = 0x07, c_wave = 0x00,
+                n_conn = 0x0C, fixed_note = 36 },
+            // Snare. Its noise is the register's; MULT 12 only decides how
+            // much tone sits under it.
+            opl_midi.patch {
+                m_char = 0x0C, m_scale = 0x00, m_atk = 0xF8, m_sus = 0x08, m_wave = 0x00,
+                n_conn = 0x00 },
+            // Tom. The one rhythm voice with a pitch — `strike_rhythm`
+            // retunes channel 8 per note, so General MIDI's six toms really
+            // are six pitches. An octave down puts them where a tom lives.
+            opl_midi.patch {
+                m_char = 0x02, m_scale = 0x00, m_atk = 0xF8, m_sus = 0x07, m_wave = 0x00,
+                n_conn = 0x00, transpose = -12, fixed_note = 48 },
+            // Crash. The long one: RR 5 is about a second and a half.
+            opl_midi.patch {
+                m_char = 0x01, m_scale = 0x00, m_atk = 0xF8, m_sus = 0x05, m_wave = 0x00,
+                n_conn = 0x00 },
+            // Closed hi-hat. Short, and its `fixed_note` tunes channel 7 for
+            // the snare as well as itself.
+            opl_midi.patch {
+                m_char = 0x01, m_scale = 0x00, m_atk = 0xF8, m_sus = 0x09, m_wave = 0x00,
+                n_conn = 0x00, fixed_note = 84 },
+            // Open hi-hat: the closed one's operator with a release six
+            // times longer. Rhythm mode has a single hi-hat, so this is the
+            // only way the two can differ — and the alternative, leaving the
+            // open hat on a melodic voice, left it nine decibels under the
+            // rest of the kit with nowhere to go.
+            opl_midi.patch {
+                m_char = 0x01, m_scale = 0x00, m_atk = 0xF8, m_sus = 0x06, m_wave = 0x00,
+                n_conn = 0x00, fixed_note = 84 } })!
 
     // ============================================================
     // Program map
@@ -684,4 +764,13 @@ module opl_bank_gm =
             drm[i] = -1
         for i in 0..(drum_map.len / 2i64) do
             drm[drum_map[i * 2i64]] = drum_map[i * 2i64 + 1i64]
-        opl_midi.bank { name = "fc-gm", patches = ps, melodic = mel, drums = drm }
+
+        let rk = rhythm_kit()
+        let rmap = alloc(i32[128] {})!
+        for i in 0..128 do
+            rmap[i] = -1
+        for i in 0..(rhythm_notes.len / 2i64) do
+            rmap[rhythm_notes[i * 2i64]] = rhythm_notes[i * 2i64 + 1i64]
+
+        opl_midi.bank { name = "fc-gm", patches = ps, melodic = mel, drums = drm,
+                        rhythm = rk, rhythm_map = rmap }

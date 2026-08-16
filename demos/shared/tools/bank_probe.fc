@@ -84,6 +84,47 @@ let render = (kit: opl_midi.bank, pi: i32, note: i32, buf: i16[], frames: i32,
         buf[i] = (i16) opl2.sample(c)
     free(c)
 
+// The rhythm-mode voices, in bank order. Entry 5 — where a bank has one — is
+// a second envelope on the hi-hat's operator, which is how open and closed
+// hats differ when the chip has only one hi-hat.
+let rhythm_voice_of = (i: i32) ->
+    if i == 0 then opl2.rhythm_voice.bass_drum
+    else if i == 1 then opl2.rhythm_voice.snare
+    else if i == 2 then opl2.rhythm_voice.tom
+    else if i == 3 then opl2.rhythm_voice.cymbal
+    else opl2.rhythm_voice.hihat
+
+// Render one rhythm voice. Same conditions as a melodic patch — struck once
+// at full level, left to decay — so the two are directly comparable, which is
+// the point: a kit that measures 10 dB under the instruments is a kit nobody
+// will hear.
+let render_rhythm = (kit: opl_midi.bank, i: i32, buf: i16[], frames: i32) ->
+    let c = opl2.init((f64) rate)
+    opl2.rhythm_mode(c, true)
+    let ins = kit.rhythm[i]
+    if i == 0 then
+        opl2.load_instrument(c, 6,
+            ins.m_char, ins.c_char, ins.m_scale, ins.c_scale,
+            ins.m_atk,  ins.c_atk,  ins.m_sus,   ins.c_sus,
+            ins.m_wave, ins.c_wave, ins.n_conn)
+    else
+        opl2.load_rhythm_op(c, rhythm_voice_of(i),
+            ins.m_char, ins.m_scale, ins.m_atk, ins.m_sus, ins.m_wave)
+    // Channels 6, 7 and 8 carry the pitches. Only the bass drum, hi-hat and
+    // tom entries name one; the snare shares channel 7 and the cymbal shares
+    // channel 8.
+    let n = if ins.fixed_note > 0 then ins.fixed_note
+            else if i == 1 then 84
+            else if i == 3 then 48
+            else 60
+    let ch = if i == 0 then 6 else if i == 1 || i >= 4 then 7 else 8
+    let { blk, fnv } = pitch_of(n)
+    opl2.set_pitch(c, ch, blk, fnv)
+    opl2.rhythm_strike(c, rhythm_voice_of(i))
+    for k in 0..frames do
+        buf[k] = (i16) opl2.sample(c)
+    free(c)
+
 let peak_of = (buf: i16[], frames: i32) ->
     let mut peak = 0
     for i in 0..frames do
@@ -187,6 +228,20 @@ let main = (args: str[]) ->
             mel[nmel] = db
             nmel = nmel + 1i64
 
+    let rhy = alloc(f64[16] {})!
+    let mut nrhy = 0i64
+    if kit.rhythm.len > 0i64 then
+        let labels = const str[6] {
+            "bass drum", "snare", "tom", "cymbal", "hi-hat", "hi-hat (open)" }
+        io.write("\n  rhythm mode\n", stdout)
+        for i in 0..(i32) kit.rhythm.len do
+            render_rhythm(kit, i, buf, frames)
+            let db = loudness_of(buf, frames)
+            let len = span_of(buf, frames, 32) * 1000 / rate
+            io.write(alloca("  %s{if i < 6 then labels[i] else "?"}  %.1f{db} dBFS  %d{len} ms  %d{peak_of(buf, frames)}\n"), stdout)
+            rhy[nrhy] = db
+            nrhy = nrhy + 1i64
+
     io.write("\n", stdout)
     // Medians first: `summarise` sorts in place, so the per-patch arrays above
     // are the only thing still indexed by patch number after this.
@@ -196,6 +251,7 @@ let main = (args: str[]) ->
     let drm_med = if ndrm > 0i64 then drm[ndrm / 2i64] else 0.0
     summarise("melodic", mel, nmel)
     summarise("drums  ", drm, ndrm)
+    summarise("rhythm ", rhy, nrhy)
 
     let mut flagged = 0
     for pi in 0..count do
@@ -212,6 +268,7 @@ let main = (args: str[]) ->
         io.write("\nUsual causes, in the order worth checking: a sustain level above 2 on\na voice that decays on its own (SL is a level, not a rate — the note\nfalls that far as fast as DR allows, before RR is consulted at all, so\nput the length in RR); then carrier TL. If the carrier is already at\nTL 0 the level is spent, and what is left is the envelope or the\nwaveform — a half-sine carrier costs about 3 dB, and a large\ninharmonic MULT on a pulse-sine spreads its energy so thinly that no\namount of TL brings it back.\n", stdout)
     free(mel)
     free(drm)
+    free(rhy)
     free(db_of)
     free(sl_of)
     free(buf)
