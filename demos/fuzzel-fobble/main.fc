@@ -48,14 +48,23 @@ import pcg_random from std::random
 // working directory, which the run scripts set to the repository root.
 let default_music = "demos/fuzzel-fobble/music/minuet.mid"
 
-// Read and parse the song, and build a player over the built-in GM bank.
+// The value written after `flag` on the command line, if it is there.
+let arg_after = (args: str[], flag: const str) ->
+    let mut i = 1i64
+    loop
+        if i + 1i64 >= args.len then break
+        if args[i] == flag then return some(args[i + 1i64])
+        i = i + 1i64
+    none(str)
+
+// Read and parse the song, and build a player over `kit`.
 //
 // Every failure here is one somebody experimenting with their own files will
 // meet — a path that doesn't exist, a truncated download, a format 2 file —
 // so each one says which it was. The caller runs the game either way: the
 // music player is the only thing that needs a song, and sound effects live on
 // the other chip entirely.
-let load_music = (path: const str, rate: i32) ->
+let load_music = (path: const str, rate: i32, kit: opl_midi.bank) ->
     let bytes = match io.read_all(path) with
                 | ok(b) -> b
                 | err(e) ->
@@ -74,7 +83,37 @@ let load_music = (path: const str, rate: i32) ->
                    io.write(alloca("Music: %s{path} is not a MIDI file this can play\n"), stdout)
                    return none(opl_midi.player*)
     io.write(alloca("Music: %s{path}\n"), stdout)
-    some(opl_midi.init(rate, tune, opl_bank_gm.make()))
+    some(opl_midi.init(rate, tune, kit))
+
+// `--bank <path>` swaps the instruments the way `--music` swaps the tune: a
+// `.op2`, `.ibk` or `.sbi` file in place of the built-in General MIDI bank.
+// Hearing the same piece through somebody else's instruments is the fastest
+// way to judge either the bank or the player, and neither is worth a rebuild.
+//
+// A bank that will not load is not worth losing the music over, so it says
+// which way it failed and carries on with the built-in one. Note that a bank
+// read from a file has no rhythm section — none of the three formats can
+// describe one — so its drums play on melodic voices and the chip's noise
+// generator goes unused.
+let load_bank_file = (path: const str) ->
+    let bytes = match io.read_all(path) with
+                | ok(b) -> b
+                | err(e) ->
+                    io.write(alloca("Bank: cannot read %s{path}\n"), stdout)
+                    return opl_bank_gm.make()
+    defer free(bytes)
+    match opl_midi.load_bank(bytes) with
+    | ok(k) ->
+        io.write(alloca("Bank: %s{path} — %s{k.name}, %d{(i32) k.patches.len} voices\n"), stdout)
+        k
+    | err(e) ->
+        io.write(alloca("Bank: %s{path} is not a .op2, .ibk or .sbi bank\n"), stdout)
+        opl_bank_gm.make()
+
+let open_bank = (args: str[]) ->
+    match arg_after(args, "--bank") with
+    | some(path) -> load_bank_file(path)
+    | none -> opl_bank_gm.make()
 
 // `--music <path>` picks a different Standard MIDI File. Swapping the tune is
 // the point of shipping it as a file rather than compiling it in, so it is a
@@ -83,17 +122,10 @@ let load_music = (path: const str, rate: i32) ->
 // The path is handed straight to `load_music` from whichever branch found it,
 // rather than being bound to a name first: an argument is a `str` and the
 // default is a `const str`, and the call is where the two meet.
-let open_music = (args: str[], rate: i32) ->
-    let mut i = 1i64
-    let mut idx = 0i64
-    loop
-        if i + 1i64 >= args.len then break
-        if args[i] == "--music" then
-            idx = i + 1i64
-            break
-        i = i + 1i64
-    if idx > 0i64 then load_music(args[idx], rate)
-    else load_music(default_music, rate)
+let open_music = (args: str[], rate: i32, kit: opl_midi.bank) ->
+    match arg_after(args, "--music") with
+    | some(path) -> load_music(path, rate, kit)
+    | none -> load_music(default_music, rate, kit)
 
 let main = (args: str[]) ->
 #if backend != "sdl2" && backend != "raylib"
@@ -138,14 +170,15 @@ let main = (args: str[]) ->
     // General MIDI bank — so a player can drop another one in with `--music`
     // and hear the OPL2 make what it can of it. A file that will not load
     // costs the music and nothing else; the effects are on their own chip.
-    let music = match open_music(args, 44100) with
+    let kit = open_bank(args)
+    let music = match open_music(args, 44100, kit) with
                 | some(p) -> p
                 | none ->
                     io.write("Audio: running without music\n", stdout)
                     opl_midi.init(44100,
                         opl_midi.song { events = alloc(opl_midi.event[0] {})!,
                                         division = 480, length = 0 },
-                        opl_bank_gm.make())
+                        kit)
     let s = snd.init(44100, music)
     if !gfx.audio_start(s) then
         io.write("Audio: device open failed - running silent\n", stdout)
