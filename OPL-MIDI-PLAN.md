@@ -1119,7 +1119,149 @@ plausible levels and lengths.
 - **GENMIDI's second voice.** The double-voice extension spends two of nine
   channels on one note; 70 of the 175 records declare one. Unchanged, and the
   fine-tune byte that detunes it stays unread for the same reason.
+  *(Done in §18.)*
 - **IBK's percussion fields.** Bytes 11 and 13 say which of the chip's rhythm
   voices an instrument belongs on — which we now support. But a file bank's
   `rhythm` section is empty, so there is nowhere to put them yet. Wiring the
   two together is a real feature, not a loader fix.
+
+## 18. WOPL, and dual voice
+
+Two things came out of asking whether any bank format can drive the chip's
+rhythm voices. One can — and separately, the two formats that *do* see wide use
+both describe a doubled voice we were throwing away.
+
+### Which formats can reach the rhythm voices
+
+| format | rhythm voices | dual voice |
+|---|---|---|
+| `.op2` (GENMIDI) | **no** — DMX never touches register 0xBD; its "percussion" is 47 melodic voices at fixed pitch | yes, flag 0x04 |
+| `.ibk` / `.sbi` | nominally — a percussion-voice byte, numbering undocumented, zero in every real file to hand | no |
+| AdLib `.bnk` | nominally — an `iPercussive` flag and a voice number, numbering undocumented | no |
+| **`.wopl`** | **yes** — a documented 3-bit field naming bass drum, snare, tom, cymbal or hi-hat | yes, "pseudo-4-op" |
+
+So WOPL is the answer, and it is now the fourth loader.
+
+### What WOPL costs to read
+
+It is a modern format and does three things none of the DOS-era ones do, each
+of which reads fine and sounds wrong if missed:
+
+- **Big-endian** multi-byte fields — except the version, which is little.
+- **Carrier-first operators.** `WOPL_OP_CARRIER1 = 0`, `MODULATOR1 = 1`. Every
+  other format here puts the modulator first. This is the same class of bug as
+  §17 and was pinned to the reference reader before a line was written.
+- **Version-dependent instrument size**, 62 bytes or 66 since version 3. A
+  version past 3 is refused rather than guessed at, because every revision so
+  far changed that size — reading a newer file with these offsets would not
+  fail, it would quietly play the wrong bytes.
+
+It is an OPL3 format, so some things are given up on purpose: a true
+four-operator instrument falls back to its first two operators, only bank 0 of
+each kind is read (the rest are the GS/XG variations a bank-select would pick,
+and we have no bank select), and the velocity offset and sounding delays are
+read past.
+
+Rhythm voices need one more move. Four of the five are a single operator, and
+*which* operator depends on the drum: the snare and cymbal are carriers on the
+chip and sit in the carrier slot, the hi-hat and tom are modulators and sit in
+the modulator slot. The bank keeps a single-operator voice in the modulator
+half whichever it came from, so two of the five move across. That was read off
+a real file rather than assumed — the silent operator in each entry is the
+`00 3f 00 f0 00` filler, and it is in the other slot exactly as predicted.
+
+### Dual voice
+
+`.op2` and `.wopl` both describe instruments that sound as **two** 2-operator
+voices at once, slightly detuned. That is most of why DMXOPL sounds thick, and
+we were playing one half of it: 70 of GENMIDI's 175 records and 145 of
+DMXOPL3's 256 declare a second voice.
+
+A second voice is now an ordinary extra entry in `patches` that the primary
+points at, appended after every primary so index 0 stays free to mean "none".
+The detune rides on that second patch, in the 1/32-semitone unit both formats
+already use — their arithmetic turns out to be identical once GENMIDI's
+unsigned-128 neutral is re-centred on WOPL's signed 0.
+
+The player needed less than expected, because its per-voice loops already walk
+by (channel, note): give both halves the same channel and note and note-off,
+pedal, bend and volume find them both. Three changes carried it:
+
+1. `key_voice` split out of `start_note`, since it now happens twice.
+2. `stop_note` releases *every* voice matching the note, not the first.
+3. Two allocation rules — **a doubling only ever takes a free voice**, and
+   when everything is busy **a doubling is the first thing taken back**.
+
+That second pair is what makes the feature affordable on nine voices, and it
+is what the reference player does too (it prefers voices whose
+`current_instr_voice != 0`). Measured on the minuet, full length:
+
+| bank | voice steals before | after |
+|---|---|---|
+| `GENMIDI.op2` | 27 | **0** |
+| `DMXOPL3.wopl` | 88 | **0** |
+
+No note is lost in either. A thinned doubling absorbs the pressure instead,
+which is why `steals` deliberately does not count one — it answers "did this
+piece lose notes", and it did not.
+
+### Verifying it
+
+The independent Python decoder from §17 grew a WOPL reader, again written from
+the format tables and the reference reader's field list rather than from the FC
+source. **All nine files agree to the byte** — four formats, both WOPL
+instrument sizes, every patch, both dual-voice chains, the rhythm section and
+all three index maps.
+
+Then a round trip that needs no external file and no trust at all: the built-in
+`fc-gm` bank, rhythm kit and all, written out as a `.wopl` and loaded back. The
+minuet rendered through it is **bit-identical to the built-in bank across all
+96 seconds**, at both instrument sizes. That exercises rhythm mode, transposes,
+fixed notes and the whole percussion map in one comparison with an exact
+expected answer.
+
+Robustness, since a bank is untrusted data: 36 truncated, over-sized and
+randomly corrupted files, plus all four formats, under ASan and UBSan with leak
+detection — no crash, no leak, no undefined behaviour, and the malformed
+headers are refused rather than half-read.
+
+### The honest result
+
+**No WOPL bank in circulation actually uses the rhythm bits.** DMXOPL3 does
+not; neither do the Nguyen/Wohlstand GM bank, Mobilnik, or either OPL3BankEditor
+test bank. Only the editor's synthetic `example.wopl` sets them.
+
+Not, as it turns out, because the channels are dear. OPL3 keeps register 0xBD
+in its first register set only, so rhythm mode still takes channels 6–8 of the
+lower nine and leaves the upper nine untouched: three of eighteen, a *cheaper*
+toll than the three of nine an OPL2 pays. The reasons are about what the mode
+can express:
+
+- **It covers five sounds.** General MIDI percussion is 47 notes and DMXOPL3
+  fills all 128 of its percussion slots with real data. A GM bank needs the
+  melodic path for the other hundred-odd whatever it does, and once that path
+  exists, routing five notes down a second one buys a seam between the five
+  and the rest.
+- **One of each.** One hi-hat means open and closed are the same voice — the
+  exact fidelity we lose exporting our own kit, where the bank's sixth slot
+  collapses onto its fifth.
+- **The pairs share a channel's pitch.** Hi-hat with snare on channel 7, tom
+  with cymbal on channel 8. They cannot be tuned independently, and tuning the
+  tom detunes the cymbal as a side effect.
+- **Four of the five are one operator** — one waveform through one envelope,
+  no FM at all. On a chip that offers four-operator instruments, a drum on a
+  melodic channel can be much more.
+
+Which leaves the one thing rhythm mode has that nothing else does: the noise
+generator. That is not a matter of degree — it is the chip's only true noise
+source, worth 0.49 → 0.81 spectral flatness on the snare when we measured it in
+§16, and no quantity of channels substitutes for it. So "no reason" would be
+too strong. The trade reverses depending on where you stand: a general-purpose
+OPL3 player wants coverage and independence and can afford melodic drums, while
+we are on nine voices with drums on nearly every beat, which is precisely where
+the five fused voices pay.
+
+So the feature reads a thing nobody writes — which is worth knowing and does
+not make it wrong. Our own bank can now be exported to a file and keep its
+kit, a `.wopl` from an OPL2-era tool would arrive with one, and the code is
+there when a bank does. What a downloaded bank gains today is dual voice.

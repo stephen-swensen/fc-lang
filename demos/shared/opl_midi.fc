@@ -56,8 +56,8 @@ import math from std::
 // The parser takes bytes rather than a path and this module imports no I/O, so
 // a song can come off disk, out of a static array, or over a socket. The bank
 // is a plain value: `opl_bank_gm.fc` supplies one as source data and
-// `load_bank` reads the legacy `.op2` / `.ibk` / `.sbi` formats into the same
-// type, so a program can ship a bank, load one, or offer both.
+// `load_bank` reads the `.op2` / `.wopl` / `.ibk` / `.sbi` formats into the
+// same type, so a program can ship a bank, load one, or offer both.
 //
 // ```fc
 // let tune = opl_midi.parse(bytes)?
@@ -181,8 +181,32 @@ module opl_midi =
         // has ever named it, so nothing is given up.
         fixed_note: i32
 
-    // A whole instrument set: the distinct voices, and two tables that index
+        // A dual-voice instrument: the index in `patches` of a second voice
+        // sounded alongside this one, slightly detuned, for a thickness two
+        // operators cannot reach. 0 means the ordinary single voice.
+        //
+        // Zero is the sentinel here for the same reason it is for
+        // `fixed_note` — a zeroed `patch` must be a valid plain one — and it
+        // costs nothing because a loader appends second voices after every
+        // primary, so a second voice is never index 0. `bank_from_wopl` and
+        // `load_genmidi` are the two that build them.
+        //
+        // It costs a whole extra chip channel per sounding note, which is why
+        // the player gives one up only when a voice is free (see `start_note`).
+        second: i32
+        // Detune, in 1/32 of a semitone, applied to this patch's pitch. Only a
+        // second voice has one — detuning both halves would just transpose the
+        // note. The odd unit is the one both formats that carry the field
+        // already use, so neither needs converting.
+        detune: i32
+
+    // A whole instrument set: the distinct patches, and two tables that index
     // them by MIDI meaning.
+    //
+    // "Patch" throughout, never "voice": a patch is a written description of how
+    // to program a channel, and a voice is a channel with a note on it. One
+    // patch is played by any number of voices over a piece, and a dual-voice
+    // patch takes two at once.
     //
     // The indirection is what keeps 128 GM programs from meaning 128
     // hand-authored patches. A bank collapses each GM family onto a handful of
@@ -571,6 +595,9 @@ module opl_midi =
     let load_bank = (bytes: const u8[]) ->
         let mut r = make_reader(bytes)
         if tag_is(&r, "#OPL_II#") then load_genmidi(bytes)
+        // The magic is "WOPL3-BANK" and a terminating zero; ten characters
+        // pick it out, and the loader checks the rest of the header anyway.
+        else if tag_is(&r, "WOPL3-BANK") then load_wopl(bytes)
         else if tag_is(&r, "IBK\x1A") then load_ibk(bytes)
         else if tag_is(&r, "SBI\x1A") then
             match load_sbi(bytes) with
@@ -630,11 +657,30 @@ module opl_midi =
         let raw = (i32) bytes[off]
         if raw >= 128 then raw - 256 else raw
 
-    // An empty rhythm section, for the file formats. None of `.op2`, `.ibk`
-    // or `.sbi` has anywhere to describe one, so a bank read from a file plays
-    // its whole kit on melodic voices — correctly, just without the chip's
-    // noise generator. Allocated rather than left null so that `free_bank`
-    // needs no special case.
+    // WOPL is big-endian for its multi-byte numbers, alone among these
+    // formats — it was written long after the DOS-era ones and did not
+    // inherit their habits.
+    private let u16be_at = (bytes: const u8[], off: i64) ->
+        ((i32) bytes[off] << 8) | (i32) bytes[off + 1i64]
+
+    private let s16be_at = (bytes: const u8[], off: i64) ->
+        let raw = u16be_at(bytes, off)
+        if raw >= 32768 then raw - 65536 else raw
+
+    // A second voice's detune, in the 1/32-semitone units `patch.detune`
+    // keeps. Takes the file's value already centred on zero — WOPL stores a
+    // signed byte and needs no adjusting, GENMIDI an unsigned one whose
+    // neutral is 128, so its caller subtracts that first. Past the centring
+    // the two formats compute the same thing, and this is that computation,
+    // integer truncation included: half a unit is a fifth of a cent.
+    private let detune_units = (centred: i32) ->
+        ((centred + 128) >> 1) - 64
+
+    // An empty rhythm section. `.op2`, `.ibk` and `.sbi` have nowhere to
+    // describe one at all, and a `.wopl` need not use the fields it has, so
+    // such a bank plays its whole kit on melodic voices — correctly, just
+    // without the chip's noise generator. Allocated rather than left null so
+    // that `free_bank` needs no special case.
     private let no_rhythm = () -> alloc(patch[0] {})!
     private let no_rhythm_map = () ->
         let m = alloc(i32[128] {})!
@@ -661,17 +707,23 @@ module opl_midi =
     // 32 bytes each, which we don't need.
     //
     // A record is a flags word, a fine-tune byte, a note byte, and then two
-    // 16-byte voices. Only the first voice is used here: the second is
-    // GENMIDI's double-voice extension, which spends two of the nine channels
-    // on one note and is a poor trade at this polyphony. (Fine tuning is the
-    // detune between the two, so it goes unread for the same reason.)
+    // 16-byte voices. The second voice sounds alongside the first when the
+    // record asks for it — flag 0x04 — detuned by the fine-tune byte; those
+    // records become dual-voice patches, the second half appended after all
+    // 175 primaries.
     let load_genmidi = (bytes: const u8[]) ->
         if bytes.len < 8i64 + 175i64 * 36i64 then err(bank, smf.bad_bank)
         else
             let mut r = make_reader(bytes)
-            let ps = alloc(patch[175] {})!
+            // Count the double voices first so the array can be sized once.
+            let mut extra = 0
+            for i in 0..175 do
+                if ((i32) bytes[8i64 + (i64) i * 36i64] & 4) != 0 then
+                    extra = extra + 1
+            let ps = alloc(patch[175i64 + (i64) extra] {})!
             let mel = alloc(i32[128] {})!
             let drm = alloc(i32[128] {})!
+            let mut nx = 175
             for i in 0..175 do
                 let rec = 8i64 + (i64) i * 36i64
                 let flags = (i32) bytes[rec] | ((i32) bytes[rec + 1i64] << 8)
@@ -686,6 +738,17 @@ module opl_midi =
                     pt.fixed_note = note
                 else
                     pt.transpose = s16_at(bytes, v + 14i64)
+                if (flags & 4) != 0 then
+                    let v2 = rec + 20i64  // second voice: the next 16 bytes
+                    let mut p2 = patch_genmidi(&r, v2)
+                    p2.fixed_note = pt.fixed_note
+                    if (flags & 1) == 0 then
+                        p2.transpose = s16_at(bytes, v2 + 14i64)
+                    // Fine tuning is unsigned with 128 for "no detune".
+                    p2.detune = detune_units((i32) bytes[rec + 2i64] - 128)
+                    ps[nx] = p2
+                    pt.second = nx
+                    nx = nx + 1
                 ps[i] = pt
             for i in 0..128 do
                 mel[i] = i
@@ -730,6 +793,173 @@ module opl_midi =
             let mut r = make_reader(bytes)
             ok(patch_interleaved(&r, 36i64))
 
+    // ------------------------------------------------------------
+    // WOPL
+    // ------------------------------------------------------------
+    //
+    // The modern one, from the OPL3BankEditor / libADLMIDI family, and the
+    // only format here that can say *which* of the chip's rhythm voices an
+    // instrument is. That makes it the one a bank can be dropped in as and
+    // still get a real drum kit off the noise generator rather than an
+    // impression of one played on melodic voices.
+    //
+    // It is an OPL3 format and we are an OPL2, so two things are given up
+    // deliberately. A true four-operator instrument has no OPL2 equivalent
+    // and falls back to its first two operators. Only bank 0 of each kind is
+    // read — the extra melodic and percussion banks are the GS and XG
+    // variations a bank-select would choose between, and we have no bank
+    // select. Two more fields are read and ignored for want of anywhere to
+    // put them: the per-instrument velocity offset, and the sounding delays.
+    //
+    // Byte order is big-endian, and the operators are stored **carrier
+    // first** — the reverse of `.sbi` and `.ibk`. Both are the kind of thing
+    // that reads fine and sounds wrong, so both are pinned to the reference
+    // reader (`WOPL_parseInstrument`, and the WOPL_OP_* constants beside it).
+
+    // Whether an instrument sounds as two 2-operator voices at once. The
+    // reference reader tests both bits: 4-op *and* pseudo-4-op means two
+    // paired voices, 4-op alone means a true OPL3 four-operator instrument,
+    // which is not something this chip can do.
+    private let wopl_is_dual = (flags: i32) -> (flags & 1) != 0 && (flags & 2) != 0
+
+    // One of the two voices in a WOPL instrument, as a patch. Voice 1 is
+    // operators 0 (carrier) and 1 (modulator) with the first feedback byte;
+    // voice 2 is operators 2 and 3 with the second. Within an operator the
+    // five bytes run char, level, attack, sustain, waveform — the same order
+    // this struct keeps them in.
+    private let wopl_voice = (bytes: const u8[], o: i64, second: bool) ->
+        let car = o + 42i64 + (if second then 10i64 else 0i64)
+        let mo = car + 5i64
+        patch {
+            m_char  = (i32) bytes[mo],        m_scale = (i32) bytes[mo + 1i64],
+            m_atk   = (i32) bytes[mo + 2i64], m_sus   = (i32) bytes[mo + 3i64],
+            m_wave  = (i32) bytes[mo + 4i64],
+            c_char  = (i32) bytes[car],       c_scale = (i32) bytes[car + 1i64],
+            c_atk   = (i32) bytes[car + 2i64], c_sus  = (i32) bytes[car + 3i64],
+            c_wave  = (i32) bytes[car + 4i64],
+            n_conn  = (i32) bytes[o + 40i64 + (if second then 1i64 else 0i64)],
+            transpose = 0, fixed_note = 0, second = 0, detune = 0 }
+
+    // Which of the bank's five rhythm slots an instrument claims, or -1 for a
+    // melodic one. The file's three-bit code counts from 1; the bank's slots
+    // are the order `rhythm` documents.
+    private let wopl_rhythm_slot = (flags: i32) ->
+        let k = (flags >> 3) & 7
+        if k == 1 then 0                // bass drum
+        else if k == 2 then 1           // snare
+        else if k == 3 then 2           // tom
+        else if k == 4 then 3           // cymbal
+        else if k == 5 then 4           // hi-hat
+        else -1
+
+    // A rhythm voice as the bank wants it. Four of the five are one operator,
+    // and the bank keeps that operator in the modulator half whichever half
+    // the chip takes it from — so the snare and the cymbal, which are
+    // carriers on the chip and sit in the carrier slot in the file, move
+    // across. The bass drum is a whole channel and stays as it is.
+    private let wopl_rhythm_patch = (bytes: const u8[], o: i64, slot: i32) ->
+        let mut pt = wopl_voice(bytes, o, false)
+        if slot == 1 || slot == 3 then
+            pt.m_char = pt.c_char
+            pt.m_scale = pt.c_scale
+            pt.m_atk = pt.c_atk
+            pt.m_sus = pt.c_sus
+            pt.m_wave = pt.c_wave
+        pt.fixed_note = (i32) bytes[o + 38i64]
+        pt.transpose = s16be_at(bytes, o + 32i64)
+        pt
+
+    // A melodic or percussion entry's primary voice.
+    private let wopl_patch = (bytes: const u8[], o: i64, is_perc: bool) ->
+        let flags = (i32) bytes[o + 39i64]
+        let key = (i32) bytes[o + 38i64]
+        let mut pt = wopl_voice(bytes, o, false)
+        pt.transpose = s16be_at(bytes, o + 32i64)
+        // A percussion entry's key number is the pitch it always sounds, and
+        // a melodic one can ask for the same treatment with the fixed flag.
+        if (flags & 0x40) != 0 || (is_perc && key > 0) then pt.fixed_note = key
+        pt
+
+    let load_wopl = (bytes: const u8[]) ->
+        if bytes.len < 19i64 then err(bank, smf.bad_bank)
+        else
+            // Version is the one little-endian field in the file.
+            let version = (i32) bytes[11i64] | ((i32) bytes[12i64] << 8)
+            let mbanks = u16be_at(bytes, 13i64)
+            let pbanks = u16be_at(bytes, 15i64)
+            let ins_size = if version >= 3 then 66i64 else 62i64
+            let meta = if version >= 2 then 34i64 * (i64) (mbanks + pbanks)
+                       else 0i64
+            let data = 19i64 + meta
+            let banks = (i64) mbanks + (i64) pbanks
+            // A version past the last one known is refused rather than
+            // guessed at: every revision so far has changed the size of an
+            // instrument, so reading a newer file with these offsets would
+            // not fail, it would quietly play the wrong bytes.
+            if version > 3 || mbanks < 1 || pbanks < 1
+                    || bytes.len < data + ins_size * 128i64 * banks then
+                err(bank, smf.bad_bank)
+            else ok(bank_from_wopl(bytes, data, ins_size, (i64) mbanks))
+
+    // Both banks are 128 entries, so a patch index is the melodic program
+    // itself, or 128 plus the percussion note. Second voices come after.
+    private let bank_from_wopl = (bytes: const u8[], data: i64, ins_size: i64,
+                                  mbanks: i64) ->
+        let per_base = data + ins_size * 128i64 * mbanks
+        let entry = (i: i32) ->
+            if i < 128 then data + (i64) i * ins_size
+            else per_base + (i64) (i - 128) * ins_size
+        let mut extra = 0
+        for i in 0..256 do
+            if wopl_is_dual((i32) bytes[entry(i) + 39i64]) then
+                extra = extra + 1
+        let ps = alloc(patch[256i64 + (i64) extra] {})!
+        let mel = alloc(i32[128] {})!
+        let drm = alloc(i32[128] {})!
+        let rmap = alloc(i32[128] {})!
+        let rh = alloc(patch[5] {})!
+        for i in 0..128 do
+            mel[i] = i
+            drm[i] = 128 + i
+            rmap[i] = -1
+        let mut nx = 256
+        let mut filled = 0      // bit per rhythm slot already claimed
+        for i in 0..256 do
+            let o = entry(i)
+            let is_perc = i >= 128
+            let flags = (i32) bytes[o + 39i64]
+            let mut pt = wopl_patch(bytes, o, is_perc)
+            if wopl_is_dual(flags) then
+                let mut p2 = wopl_voice(bytes, o, true)
+                p2.transpose = s16be_at(bytes, o + 34i64)
+                p2.fixed_note = pt.fixed_note
+                // Already centred on zero: WOPL's detune is a signed byte.
+                p2.detune = detune_units(s8_at(bytes, o + 37i64))
+                ps[nx] = p2
+                pt.second = nx
+                nx = nx + 1
+            ps[i] = pt
+            // Only the percussion bank's entries can claim a rhythm voice,
+            // and the first claimant of each wins: the chip has one snare
+            // however many notes ask for one, and a note that asks maps to it.
+            if is_perc then
+                let slot = wopl_rhythm_slot(flags)
+                if slot >= 0 then
+                    rmap[i - 128] = slot
+                    if (filled & (1 << slot)) == 0 then
+                        rh[slot] = wopl_rhythm_patch(bytes, o, slot)
+                        filled = filled | (1 << slot)
+        // A bank with no rhythm instruments gets the empty section the other
+        // formats get, so the player stays in nine-voice melodic mode.
+        if filled != 0 then
+            bank { name = "wopl", patches = ps, melodic = mel, drums = drm,
+                   rhythm = rh, rhythm_map = rmap }
+        else
+            free(rh)
+            free(rmap)
+            bank { name = "wopl", patches = ps, melodic = mel, drums = drm,
+                   rhythm = no_rhythm(), rhythm_map = no_rhythm_map() }
+
     // Release a bank that came from one of the `load_*` readers. A bank
     // written as source data is not heap-allocated and must not be passed here.
     let free_bank = (b: bank) ->
@@ -768,6 +998,10 @@ module opl_midi =
         keyed: bool
         held: bool          // note-off arrived, but the sustain pedal is down
         serial: u32         // allocation order, for oldest-first stealing
+        // The second half of a dual-voice instrument. Worth knowing because
+        // it is the first thing to give up when a voice is needed: losing a
+        // doubling thins one note, losing a primary silences one.
+        doubling: bool
 
     // A song, a bank, a chip, and the state that maps one onto the others.
     //
@@ -877,12 +1111,15 @@ module opl_midi =
     private let voice_pitch = (p: player*, v: i32) ->
         let vc = p.voices[v]
         let ins = p.kit.patches[vc.patch]
+        // Zero on every voice but the second of a dual-voice pair, where it is
+        // the whole point: the two sound the same note a few cents apart.
+        let det = (f64) ins.detune / 32.0
         if ins.fixed_note > 0 then
-            block_fnum(freq_of((f64) ins.fixed_note + (f64) ins.transpose))
+            block_fnum(freq_of((f64) ins.fixed_note + (f64) ins.transpose + det))
         else
             let ch = p.channels[vc.midi_ch]
             let semis = (f64) ch.bend * (f64) ch.bend_range / 8192.0
-            block_fnum(freq_of((f64) vc.note + (f64) ins.transpose + semis))
+            block_fnum(freq_of((f64) vc.note + (f64) ins.transpose + semis + det))
 
     // ============================================================
     // Level
@@ -950,6 +1187,18 @@ module opl_midi =
                     best = v
                     oldest = p.voices[v].serial
         if best >= 0 then return best
+        // Everything is sounding, so something has to go. A doubling goes
+        // first, and its loss is not counted a steal: thinning one note is
+        // the degradation dual-voice is designed to take, and `steals` is
+        // meant to answer "did this piece lose notes", which it did not.
+        let mut bd = -1
+        let mut od = 0u32
+        for v in 0..p.vmax do
+            if p.voices[v].doubling then
+                if bd < 0 || p.voices[v].serial < od then
+                    bd = v
+                    od = p.voices[v].serial
+        if bd >= 0 then return bd
         p.steals = p.steals + 1u32
         let mut b2 = 0
         let mut o2 = p.voices[0].serial
@@ -958,6 +1207,24 @@ module opl_midi =
                 b2 = v
                 o2 = p.voices[v].serial
         b2
+
+    // A voice that is genuinely free, or -1 — `alloc_voice`'s two polite
+    // tiers without the third, plus a voice to skip because the caller has
+    // just keyed it. This is what a second voice is allowed to take: doubling
+    // an instrument is worth a voice nobody wants and never worth silencing a
+    // note somebody is listening to.
+    private let alloc_voice_free = (p: player*, avoid: i32) ->
+        for v in 0..p.vmax do
+            if v != avoid && !p.voices[v].keyed && opl2.channel_idle(p.chip, v) then
+                return v
+        let mut best = -1
+        let mut oldest = 0u32
+        for v in 0..p.vmax do
+            if v != avoid && !p.voices[v].keyed then
+                if best < 0 || p.voices[v].serial < oldest then
+                    best = v
+                    oldest = p.voices[v].serial
+        best
 
     // Release any voice already sounding this note on this channel, outright
     // rather than through `stop_note` — which under a held sustain pedal
@@ -1074,16 +1341,10 @@ module opl_midi =
                 | _ -> void()
             want
 
-    private let start_note = (p: player*, ch: i32, note: i32, vel: i32) ->
-        if ch < 0 || ch > 15 || note < 0 || note > 127 then return
-        let rv = if ch == 9 then rhythm_for(p, note) else -1
-        if rv >= 0 then
-            strike_rhythm(p, rv, note, vel)
-            return
-        let pi = patch_for(p, ch, note)
-        if pi < 0 then return
-        release_note(p, ch, note)
-        let v = alloc_voice(p)
+    // Program one chip channel with a patch and key it. Split out from
+    // `start_note` because a dual-voice instrument does all of this twice.
+    private let key_voice = (p: player*, v: i32, ch: i32, note: i32,
+                             pi: i32, vel: i32, doubling: bool) ->
         // Release whatever this voice was still ringing out *before*
         // reprogramming it: changing an operator's level or waveform under a
         // sounding note is an audible click.
@@ -1101,15 +1362,38 @@ module opl_midi =
         p.voices[v].keyed = true
         p.voices[v].held = false
         p.voices[v].serial = p.serial
+        p.voices[v].doubling = doubling
         apply_level(p, v)
         let { blk, fnv } = voice_pitch(p, v)
         opl2.note_on(p.chip, v, blk, fnv)
+
+    private let start_note = (p: player*, ch: i32, note: i32, vel: i32) ->
+        if ch < 0 || ch > 15 || note < 0 || note > 127 then return
+        let rv = if ch == 9 then rhythm_for(p, note) else -1
+        if rv >= 0 then
+            strike_rhythm(p, rv, note, vel)
+            return
+        let pi = patch_for(p, ch, note)
+        if pi < 0 then return
+        release_note(p, ch, note)
+        let v = alloc_voice(p)
+        key_voice(p, v, ch, note, pi, vel, false)
+        // The second half of a dual-voice instrument, if there is one and the
+        // chip can spare a channel. Both halves carry the same channel and
+        // note, which is all it takes for note-off, pedal, bend and volume to
+        // find them both — they walk the voices by (channel, note) already.
+        let pi2 = p.kit.patches[pi].second
+        if pi2 > 0 && (i64) pi2 < p.kit.patches.len then
+            let v2 = alloc_voice_free(p, v)
+            if v2 >= 0 then key_voice(p, v2, ch, note, pi2, vel, true)
 
     private let stop_note = (p: player*, ch: i32, note: i32) ->
         let rv = if ch == 9 then rhythm_for(p, note) else -1
         if rv >= 0 then
             opl2.rhythm_release(p.chip, rhythm_voice_of(rv))
             return
+        // Every voice sounding this note, not just the first: a dual-voice
+        // instrument put two of them there, and one note-off ends both.
         for v in 0..9 do
             if p.voices[v].keyed && p.voices[v].midi_ch == ch
                     && p.voices[v].note == note then
@@ -1120,7 +1404,6 @@ module opl_midi =
                     opl2.note_off(p.chip, v)
                     p.voices[v].keyed = false
                     p.voices[v].held = false
-                return
 
     // Let go of everything the pedal was holding on one channel.
     private let release_held = (p: player*, ch: i32) ->

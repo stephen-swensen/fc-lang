@@ -10,7 +10,7 @@
 //
 // `seconds` defaults to the song's own length, so a piece renders exactly once
 // through unless told otherwise; ask for longer and looping shows you the
-// wrap. A fourth argument loads a `.op2`, `.ibk` or `.sbi` bank in place of
+// wrap. A fourth argument loads a `.op2`, `.wopl`, `.ibk` or `.sbi` bank in place of
 // the built-in one, which is how two banks get compared on the same piece.
 //
 // Levels are reported, not managed. A game mixes this against sound effects
@@ -194,7 +194,7 @@ let main = (args: str[]) ->
     // together, so reporting it beats guessing: it is the difference between
     // nine melodic voices and six, and between a drum kit made of noise and
     // one made of an impression of noise.
-    io.write(alloca("bank %s{kit.name}: %d{(i32) kit.patches.len} voices, rhythm mode %s{if p.use_rhythm then "on" else "off"} (%d{p.vmax} melodic)\n"), stdout)
+    io.write(alloca("bank %s{kit.name}: %d{(i32) kit.patches.len} instruments, rhythm mode %s{if p.use_rhythm then "on" else "off"} (%d{p.vmax} melodic voices)\n"), stdout)
     io.write(alloca("rendered %d{frames} frames (%.2f{secs} s) at %d{rate} Hz to %s{out_path}\n"), stdout)
     io.write(alloca("peak %d{peak} of 32767, %d{clipped} clipped samples, %d{(i32) p.steals} voice steals\n"), stdout)
     0

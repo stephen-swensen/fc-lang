@@ -49,11 +49,19 @@ import pcg_random from std::random
 let default_music = "demos/fuzzel-fobble/music/minuet.mid"
 
 // The value written after `flag` on the command line, if it is there.
+//
+// A flag written with nothing after it says so rather than being ignored in
+// silence. It means the path never reached the program — a shell that wrapped
+// the line, most often — and the failure is otherwise invisible: the game
+// starts, plays perfectly, and quietly uses the default it was told not to.
 let arg_after = (args: str[], flag: const str) ->
     let mut i = 1i64
     loop
-        if i + 1i64 >= args.len then break
-        if args[i] == flag then return some(args[i + 1i64])
+        if i >= args.len then break
+        if args[i] == flag then
+            if i + 1i64 < args.len then return some(args[i + 1i64])
+            io.write(alloca("%s{flag} needs a path after it — ignored\n"), stdout)
+            break
         i = i + 1i64
     none(str)
 
@@ -86,15 +94,17 @@ let load_music = (path: const str, rate: i32, kit: opl_midi.bank) ->
     some(opl_midi.init(rate, tune, kit))
 
 // `--bank <path>` swaps the instruments the way `--music` swaps the tune: a
-// `.op2`, `.ibk` or `.sbi` file in place of the built-in General MIDI bank.
-// Hearing the same piece through somebody else's instruments is the fastest
-// way to judge either the bank or the player, and neither is worth a rebuild.
+// `.op2`, `.wopl`, `.ibk` or `.sbi` file in place of the built-in General MIDI
+// bank. Hearing the same piece through somebody else's instruments is the
+// fastest way to judge either the bank or the player, and neither is worth a
+// rebuild.
 //
 // A bank that will not load is not worth losing the music over, so it says
-// which way it failed and carries on with the built-in one. Note that a bank
-// read from a file has no rhythm section — none of the three formats can
-// describe one — so its drums play on melodic voices and the chip's noise
-// generator goes unused.
+// which way it failed and carries on with the built-in one.
+//
+// Only `.wopl` can describe a drum kit for the chip's rhythm voices, and few
+// do. A bank without one still plays its whole kit, on melodic voices, and
+// `midi_render` is the quickest way to see which you have.
 let load_bank_file = (path: const str) ->
     let bytes = match io.read_all(path) with
                 | ok(b) -> b
@@ -104,10 +114,10 @@ let load_bank_file = (path: const str) ->
     defer free(bytes)
     match opl_midi.load_bank(bytes) with
     | ok(k) ->
-        io.write(alloca("Bank: %s{path} — %s{k.name}, %d{(i32) k.patches.len} voices\n"), stdout)
+        io.write(alloca("Bank: %s{path} — %s{k.name}, %d{(i32) k.patches.len} instruments\n"), stdout)
         k
     | err(e) ->
-        io.write(alloca("Bank: %s{path} is not a .op2, .ibk or .sbi bank\n"), stdout)
+        io.write(alloca("Bank: %s{path} is not a .op2, .wopl, .ibk or .sbi bank\n"), stdout)
         opl_bank_gm.make()
 
 let open_bank = (args: str[]) ->

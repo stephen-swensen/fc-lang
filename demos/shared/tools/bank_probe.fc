@@ -4,7 +4,7 @@
 //     bank_probe [bank-file]
 //
 // With no argument it probes the built-in `opl_bank_gm`; with a `.op2`,
-// `.ibk` or `.sbi` it probes that instead, which is how a downloaded bank
+// `.wopl`, `.ibk` or `.sbi` it probes that instead, which is how a downloaded bank
 // gets compared against this one before you trust it with your music.
 //
 // ------------------------------------------------------------------
@@ -206,7 +206,7 @@ let main = (args: str[]) ->
     let mut nmel = 0i64
     let mut ndrm = 0i64
 
-    io.write(alloca("bank %s{kit.name}: %d{count} voices\n\n"), stdout)
+    io.write(alloca("bank %s{kit.name}: %d{count} instruments\n\n"), stdout)
     io.write("  idx  kind   loudness   length    peak   SL\n", stdout)
     for pi in 0..count do
         let ins = kit.patches[pi]
