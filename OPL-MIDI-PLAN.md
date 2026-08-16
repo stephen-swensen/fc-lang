@@ -1038,3 +1038,88 @@ because the misalignment lands 0x00 in the carrier's attack-rate nibble.
 Confirmed pre-existing — the same file is silent at `HEAD` — and untouched
 here. Fixing it wants a real `.op2` and `.ibk` to validate against, since
 guessing at layouts is what produced the bug.
+
+*Fixed in §17.*
+
+## 17. The bank file loaders
+
+The three legacy formats were read by one helper, `patch_at`, taking the two
+operators' start offsets and the offset of the shared byte. That shape encodes
+an assumption — that an operator's five register bytes are consecutive and in
+one fixed order — and the assumption is false in all three formats. The
+offsets handed to it were right, which is what made the bug survive review:
+the call sites looked format-aware.
+
+What the formats actually do, from the published tables rather than from the
+code:
+
+| | operator layout | order within an operator |
+|---|---|---|
+| `.sbi`, `.ibk` | **interleaved**, stride 2 | char, scale, attack, sustain, wave |
+| `.op2` | **grouped**, 6 bytes each, shared byte between | char, attack, sustain, wave, **KSL, level** |
+
+GENMIDI has a third difference the old helper had no way to express: it splits
+the 0x40 register across *two* bytes — key scale level in the top two bits of
+one, output level in the low six of the next — so reading it means
+recombining, `(scale & 0xC0) | (level & 0x3F)`. And its record header is two
+bytes shorter than the old code assumed: flags (u16), fine tune, note, then
+the voice at +4, not +6.
+
+So `patch_at` is gone, replaced by `patch_interleaved` and `patch_genmidi`.
+Adjacent corrections that fell out of reading the tables properly:
+
+- **Fixed pitch comes from the flags word**, bit 0, not from "is this a
+  percussion record". 47 percussion records carry it — and so do two melodic
+  ones, which the old rule could never have caught.
+- **The note offset is a signed 16-bit**, not a signed 8-bit, and it is read
+  from the first voice (+14), which under the old +6 base was landing in
+  voice 2.
+- **IBK's transpose** (byte 12, signed) was being ignored; it is honoured now.
+- **`tag_is` takes its length from the tag**, so GENMIDI's magic is checked as
+  the full `#OPL_II#` rather than the first four bytes.
+- **`.sbi`'s minimum is 47 bytes**, not 52 — the trailing five are optional
+  and some files in circulation omit them.
+
+### Verifying it without trusting either side
+
+Two real, freely-licensed files were used as inputs — DMXOPL's `GENMIDI.op2`
+(MIT, and original work rather than a game rip) and the AdLib Tracker 2
+example `$gmopl.ibk` and `.sbi` set. Neither is committed: they are test
+inputs, and the point of `opl_bank_gm.fc` is that this tree ships no borrowed
+bank.
+
+A decoder written independently in Python, from the format tables and not from
+the FC source, emits the same per-patch numbers the loader does. All five
+files agree to the byte across every field, every patch, and both index maps —
+432 lines for the `.op2`, 385 for the `.ibk`.
+
+Agreement between two implementations only proves they share an
+understanding, so the load-bearing check is a third one that consults neither:
+**the OPL2's 0xE0 waveform register uses two bits, so a correctly-parsed
+waveform byte is always 0–3.**
+
+| | waveform ≤ 3 | connection byte legal | mean carrier TL |
+|---|---|---|---|
+| `$gmopl.ibk`, corrected | **128/128** | 128/128 | 0.8 |
+| `$gmopl.ibk`, as-was | 0/128 | 128/128 | 16.4 |
+| `GENMIDI.op2`, corrected | **175/175** | 175/175 | 1.6 |
+| `GENMIDI.op2`, as-was | 24/175 | 11/175 | 0.7 |
+
+Nothing about that table depends on the loader being right about anything; it
+only asks whether the bytes land where a chip register could accept them.
+
+End to end, rendering the minuet through each bank: DMXOPL went from **peak 0
+— digital silence — to −17.0 dBFS at 100% duty**, `$gmopl.ibk` to −18.0, and a
+single-patch `.sbi` to −36.7 (quieter as it should be: one plucked voice
+playing every part). `bank_probe` reports all 175 DMXOPL patches sounding with
+plausible levels and lengths.
+
+### Left undone, deliberately
+
+- **GENMIDI's second voice.** The double-voice extension spends two of nine
+  channels on one note; 70 of the 175 records declare one. Unchanged, and the
+  fine-tune byte that detunes it stays unread for the same reason.
+- **IBK's percussion fields.** Bytes 11 and 13 say which of the chip's rhythm
+  voices an instrument belongs on — which we now support. But a file bank's
+  `rhythm` section is empty, so there is nowhere to put them yet. Wiring the
+  two together is a real feature, not a loader fix.

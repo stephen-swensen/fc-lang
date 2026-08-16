@@ -299,13 +299,15 @@ module opl_midi =
                 break
         v
 
-    // Whether the four bytes at the cursor spell `tag`. Consumes nothing.
+    // Whether the bytes at the cursor spell `tag`. Consumes nothing. The
+    // length comes from the tag, so a magic longer than the usual four-byte
+    // chunk id (GENMIDI's eight) is checked in full rather than by prefix.
     private let tag_is = (r: reader*, tag: const str) ->
-        if r.pos + 4i64 > r.data.len then false
+        if r.pos + tag.len > r.data.len then false
         else
             let mut same = true
-            for i in 0..4 do
-                if r.data[r.pos + (i64) i] != tag[(i64) i] then same = false
+            for i in 0i64..tag.len do
+                if r.data[r.pos + i] != tag[i] then same = false
             same
 
     // ============================================================
@@ -555,8 +557,12 @@ module opl_midi =
     // Bank files
     // ============================================================
 
-    // Read a bank file, whichever of the three legacy formats it is. They all
-    // reduce to the same eleven register bytes; only the wrapping differs.
+    // Read a bank file, whichever of the three legacy formats it is. All three
+    // describe an instrument with the same eleven register bytes, but they
+    // agree on nothing beyond that: `.sbi` and `.ibk` interleave the two
+    // operators, GENMIDI groups them, orders each operator's bytes
+    // differently, and splits one register across two bytes. So each gets its
+    // own reader — see `patch_interleaved` and `patch_genmidi`.
     //
     // A caution rather than a limitation: most bank files in circulation were
     // extracted from commercial games and their redistribution terms are
@@ -564,7 +570,7 @@ module opl_midi =
     // one, which is why `opl_bank_gm.fc` exists.
     let load_bank = (bytes: const u8[]) ->
         let mut r = make_reader(bytes)
-        if tag_is(&r, "#OPL") then load_genmidi(bytes)
+        if tag_is(&r, "#OPL_II#") then load_genmidi(bytes)
         else if tag_is(&r, "IBK\x1A") then load_ibk(bytes)
         else if tag_is(&r, "SBI\x1A") then
             match load_sbi(bytes) with
@@ -572,20 +578,57 @@ module opl_midi =
             | err(e) -> err(bank, e)
         else err(bank, smf.bad_bank)
 
-    // The eleven register bytes as GENMIDI and IBK both lay them out: the
-    // modulator's five, the carrier's five, and the feedback/connection byte.
-    // GENMIDI puts the shared byte between the two operators, IBK puts both
-    // operators first — so the offsets differ but the fields do not.
-    private let patch_at = (r: reader*, m0: i64, c0: i64, conn: i64) ->
+    // The two formats disagree about how eleven register bytes are arranged,
+    // and the disagreement is total — neither the grouping nor the order
+    // within a group is shared — so each gets its own reader rather than one
+    // parameterised by offsets.
+    //
+    // `.sbi` and `.ibk` interleave: the pair of bytes for one register, then
+    // the pair for the next, modulator first, with the shared
+    // feedback/connection byte last.
+    //
+    //     char char scale scale atk atk sus sus wave wave conn
+    private let patch_interleaved = (r: reader*, v: i64) ->
         patch {
-            m_char  = (i32) r.data[m0],      m_scale = (i32) r.data[m0 + 1i64],
-            m_atk   = (i32) r.data[m0 + 2i64], m_sus = (i32) r.data[m0 + 3i64],
-            m_wave  = (i32) r.data[m0 + 4i64],
-            c_char  = (i32) r.data[c0],      c_scale = (i32) r.data[c0 + 1i64],
-            c_atk   = (i32) r.data[c0 + 2i64], c_sus = (i32) r.data[c0 + 3i64],
-            c_wave  = (i32) r.data[c0 + 4i64],
-            n_conn  = (i32) r.data[conn],
+            m_char  = (i32) r.data[v],        c_char  = (i32) r.data[v + 1i64],
+            m_scale = (i32) r.data[v + 2i64], c_scale = (i32) r.data[v + 3i64],
+            m_atk   = (i32) r.data[v + 4i64], c_atk   = (i32) r.data[v + 5i64],
+            m_sus   = (i32) r.data[v + 6i64], c_sus   = (i32) r.data[v + 7i64],
+            m_wave  = (i32) r.data[v + 8i64], c_wave  = (i32) r.data[v + 9i64],
+            n_conn  = (i32) r.data[v + 10i64],
             transpose = 0, fixed_note = 0 }
+
+    // GENMIDI groups instead — six bytes per operator with the shared byte
+    // between them — and orders those six differently again, ending with the
+    // 0x40 register split across two bytes: key scale level in the top two
+    // bits of one, output level in the low six of the next.
+    //
+    //     char atk sus wave scale level | conn | (the same six for the carrier)
+    private let genmidi_op40 = (r: reader*, o: i64) ->
+        ((i32) r.data[o + 4i64] & 0xC0) | ((i32) r.data[o + 5i64] & 0x3F)
+
+    private let patch_genmidi = (r: reader*, v: i64) ->
+        let c = v + 7i64
+        patch {
+            m_char  = (i32) r.data[v],
+            m_atk   = (i32) r.data[v + 1i64], m_sus = (i32) r.data[v + 2i64],
+            m_wave  = (i32) r.data[v + 3i64], m_scale = genmidi_op40(r, v),
+            c_char  = (i32) r.data[c],
+            c_atk   = (i32) r.data[c + 1i64], c_sus = (i32) r.data[c + 2i64],
+            c_wave  = (i32) r.data[c + 3i64], c_scale = genmidi_op40(r, c),
+            n_conn  = (i32) r.data[v + 6i64],
+            transpose = 0, fixed_note = 0 }
+
+    // Note offsets are the one thing in these formats that can be negative,
+    // and the two that carry one disagree about its width: GENMIDI stores a
+    // signed 16-bit little-endian, IBK a signed byte.
+    private let s16_at = (bytes: const u8[], off: i64) ->
+        let raw = (i32) bytes[off] | ((i32) bytes[off + 1i64] << 8)
+        if raw >= 32768 then raw - 65536 else raw
+
+    private let s8_at = (bytes: const u8[], off: i64) ->
+        let raw = (i32) bytes[off]
+        if raw >= 128 then raw - 256 else raw
 
     // An empty rhythm section, for the file formats. None of `.op2`, `.ibk`
     // or `.sbi` has anywhere to describe one, so a bank read from a file plays
@@ -617,10 +660,11 @@ module opl_midi =
     // followed by 47 percussion voices for notes 35..81 — then 175 names of
     // 32 bytes each, which we don't need.
     //
-    // Each record is a flags word, two fine-tune bytes, a fixed-note byte and
-    // then two 16-byte voices. Only the first voice is used here: the second
-    // is GENMIDI's double-voice extension, which spends two of the nine
-    // channels on one note and is a poor trade at this polyphony.
+    // A record is a flags word, a fine-tune byte, a note byte, and then two
+    // 16-byte voices. Only the first voice is used here: the second is
+    // GENMIDI's double-voice extension, which spends two of the nine channels
+    // on one note and is a poor trade at this polyphony. (Fine tuning is the
+    // detune between the two, so it goes unread for the same reason.)
     let load_genmidi = (bytes: const u8[]) ->
         if bytes.len < 8i64 + 175i64 * 36i64 then err(bank, smf.bad_bank)
         else
@@ -630,15 +674,18 @@ module opl_midi =
             let drm = alloc(i32[128] {})!
             for i in 0..175 do
                 let rec = 8i64 + (i64) i * 36i64
-                // Byte 4 of the record is the fixed note; it is meaningful
-                // only for the percussion entries, and zero elsewhere.
-                let fixed = (i32) bytes[rec + 4i64]
-                let v = rec + 6i64        // first voice: 16 bytes from here
-                let mut pt = patch_at(&r, v, v + 7i64, v + 6i64)
-                // Byte 14 of a voice is its note offset, signed.
-                let raw_t = (i32) bytes[v + 14i64]
-                pt.transpose = if raw_t >= 128 then raw_t - 256 else raw_t
-                pt.fixed_note = if i >= 128 && fixed > 0 then fixed else 0
+                let flags = (i32) bytes[rec] | ((i32) bytes[rec + 1i64] << 8)
+                // The note byte carries the pitch of a fixed-pitch voice —
+                // every percussion entry, and the odd melodic sound effect.
+                let note = (i32) bytes[rec + 3i64]
+                let v = rec + 4i64        // first voice: 16 bytes from here
+                let mut pt = patch_genmidi(&r, v)
+                if (flags & 1) != 0 then
+                    // Fixed pitch: the note offset is meaningless and DMX
+                    // ignores it, so it stays out of `transpose`.
+                    pt.fixed_note = note
+                else
+                    pt.transpose = s16_at(bytes, v + 14i64)
                 ps[i] = pt
             for i in 0..128 do
                 mel[i] = i
@@ -650,6 +697,11 @@ module opl_midi =
     // `.ibk`: a four-byte magic, 128 sixteen-byte instruments, then 128 names
     // of nine bytes. Melodic only — a caller wanting drums keeps the ones from
     // whatever bank it started with.
+    //
+    // Past the eleven register bytes an instrument carries a transpose, which
+    // we honour, and two fields describing how to play it on the chip's own
+    // rhythm voices, which we don't: a file bank's `rhythm` section is empty
+    // (see `no_rhythm`), so there is nowhere yet to put them.
     let load_ibk = (bytes: const u8[]) ->
         if bytes.len < 4i64 + 128i64 * 16i64 then err(bank, smf.bad_bank)
         else
@@ -659,19 +711,24 @@ module opl_midi =
             let drm = alloc(i32[128] {})!
             for i in 0..128 do
                 let v = 4i64 + (i64) i * 16i64
-                ps[i] = patch_at(&r, v, v + 1i64, v + 10i64)
+                let mut pt = patch_interleaved(&r, v)
+                pt.transpose = s8_at(bytes, v + 12i64)
+                ps[i] = pt
                 mel[i] = i
                 drm[i] = -1
             ok(bank { name = "ibk", patches = ps, melodic = mel, drums = drm,
                       rhythm = no_rhythm(), rhythm_map = no_rhythm_map() })
 
-    // `.sbi`: a four-byte magic, a 32-byte name, and one instrument's sixteen
-    // register bytes. One patch, not a bank — the caller decides where it goes.
+    // `.sbi`: a four-byte magic, a 32-byte name, and one instrument laid out
+    // exactly as an `.ibk` entry is. One patch, not a bank — the caller
+    // decides where it goes. The five bytes past the eleven are sometimes
+    // absent, so 47 bytes is the real minimum and the nominal 52 is not
+    // required.
     let load_sbi = (bytes: const u8[]) ->
-        if bytes.len < 52i64 then err(patch, smf.bad_bank)
+        if bytes.len < 47i64 then err(patch, smf.bad_bank)
         else
             let mut r = make_reader(bytes)
-            ok(patch_at(&r, 36i64, 37i64, 46i64))
+            ok(patch_interleaved(&r, 36i64))
 
     // Release a bank that came from one of the `load_*` readers. A bank
     // written as source data is not heap-allocated and must not be passed here.
