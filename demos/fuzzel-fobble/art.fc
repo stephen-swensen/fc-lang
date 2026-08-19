@@ -481,12 +481,17 @@ module art =
         draw_text((const str) left_str, rx, 440, 4, 200u8, 220u8, 255u8)
 
         // --- Right panel: controls ---
-        draw_text("ARROWS AIM", rx, 520, 2, 100u8, 120u8, 170u8)
-        draw_text("SPACE FIRE", rx, 546, 2, 100u8, 120u8, 170u8)
-        draw_text("TAB SWAP", rx, 572, 2, 100u8, 120u8, 170u8)
-        draw_text("P PAUSE", rx, 598, 2, 100u8, 120u8, 170u8)
-        draw_text("S MARKS", rx, 624, 2, 100u8, 120u8, 170u8)
-        draw_text("ESC QUIT", rx, 650, 2, 100u8, 120u8, 170u8)
+        // Eight lines where there were six, so the block starts higher and
+        // steps a little tighter. The two save lines carry their `+N` because
+        // "S SAVE" would read as a key that saves on its own.
+        draw_text("ARROWS AIM", rx, 478, 2, 100u8, 120u8, 170u8)
+        draw_text("SPACE FIRE", rx, 503, 2, 100u8, 120u8, 170u8)
+        draw_text("TAB SWAP", rx, 528, 2, 100u8, 120u8, 170u8)
+        draw_text("P PAUSE", rx, 553, 2, 100u8, 120u8, 170u8)
+        draw_text("K MARKS", rx, 578, 2, 100u8, 120u8, 170u8)
+        draw_text("S+N SAVE", rx, 603, 2, 100u8, 120u8, 170u8)
+        draw_text("L+N LOAD", rx, 628, 2, 100u8, 120u8, 170u8)
+        draw_text("ESC QUIT", rx, 653, 2, 100u8, 120u8, 170u8)
 
     // ============================================================
     // Overlays
@@ -516,6 +521,69 @@ module art =
     let draw_paused = () ->
         gfx.fill(field_x0, 300, field_x1 - field_x0, 120, 0u8, 0u8, 0u8, 190u8)
         draw_text_centered("PAUSED", 640, 330, 7, 255u8, 255u8, 255u8)
+
+    // The slot prompt: nine boxes, the filled ones lit, and a digit under
+    // each. "Which slot" is a question with nine visible answers, and drawing
+    // which of them already hold a game is the whole difference between
+    // filling a slot and writing over one.
+    //
+    // It sits below the PAUSED band on purpose — saving from a paused board is
+    // the common case, and a prompt that covered the word would look like it
+    // had replaced the pause rather than joined it.
+    let draw_slot_prompt = (w: world*) ->
+        let title = match w.game.prompt with
+                    | idle -> return
+                    | saving -> "SAVE TO SLOT"
+                    | loading -> "LOAD FROM SLOT"
+        gfx.fill(field_x0, 430, field_x1 - field_x0, 132, 0u8, 0u8, 0u8, 205u8)
+        draw_text_centered(title, 640, 444, 4, 255u8, 255u8, 255u8)
+
+        let box = 44
+        let step = 52
+        let x0 = 640 - (save_slots * step - (step - box)) / 2
+        for i in 0..save_slots do
+            let x = x0 + i * step
+            let used = (w.game.slot_bits >> i) & 1 == 1
+            if used then
+                gfx.fill(x, 486, box, box, 70u8, 110u8, 180u8, 255u8)
+                gfx.fill(x + 3, 489, box - 6, box - 6, 26u8, 40u8, 76u8, 255u8)
+            else
+                gfx.fill(x, 486, box, box, 44u8, 52u8, 78u8, 255u8)
+                gfx.fill(x + 3, 489, box - 6, box - 6, 16u8, 19u8, 36u8, 255u8)
+            let d = "%d{i + 1}"
+            let g = if used then 235 else 130
+            draw_text_centered((const str) d, x + box / 2, 495, 4,
+                               (u8) g, (u8) g, (u8) g)
+
+        // Not ESC: ESC quits this game, and a prompt that advertised it as the
+        // way out would be advertising the way out of the whole program.
+        draw_text_centered("ANY OTHER KEY CANCELS", 640, 542, 2,
+                           110u8, 130u8, 180u8)
+
+    // What the last save or load did. Two seconds and gone: a board that comes
+    // back looking identical either way needs telling, and then needs to stop
+    // saying it.
+    let draw_slot_msg = (w: world*) ->
+        if w.game.msg_timer <= 0 then
+            return
+        gfx.fill(field_x0, 452, field_x1 - field_x0, 44, 0u8, 0u8, 0u8, 190u8)
+        match w.game.msg with
+        | quiet -> return
+        | saved ->
+            let t = "SAVED SLOT %d{w.game.msg_slot}"
+            draw_text_centered((const str) t, 640, 464, 4, 140u8, 255u8, 180u8)
+        | loaded ->
+            let t = "LOADED SLOT %d{w.game.msg_slot}"
+            draw_text_centered((const str) t, 640, 464, 4, 140u8, 255u8, 180u8)
+        | empty_slot ->
+            let t = "SLOT %d{w.game.msg_slot} IS EMPTY"
+            draw_text_centered((const str) t, 640, 464, 4, 255u8, 200u8, 90u8)
+        | broken ->
+            let t = "SLOT %d{w.game.msg_slot} WOULD NOT READ"
+            draw_text_centered((const str) t, 640, 464, 4, 255u8, 120u8, 110u8)
+        | nothing_to_save ->
+            draw_text_centered("NOTHING TO SAVE YET", 640, 464, 4,
+                               255u8, 200u8, 90u8)
 
     let draw_level_clear = (w: world*) ->
         gfx.fill(field_x0, 280, field_x1 - field_x0, 180, 0u8, 0u8, 0u8, 190u8)
@@ -593,6 +661,12 @@ module art =
         | level_clear -> draw_level_clear(w)
         | game_over -> draw_game_over(w)
         | _ -> void()
+
+        // Over every one of them, the splash included: loading a game is
+        // exactly what the splash is for, and a prompt the title screen
+        // painted over would be a prompt you could not answer.
+        draw_slot_prompt(w)
+        draw_slot_msg(w)
 
         gfx.frame_end()
 

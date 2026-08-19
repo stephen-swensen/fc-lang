@@ -122,10 +122,17 @@ module raylib from "raylib.h" =
     extern KEY_X as key_x: i32
     extern KEY_Y as key_y: i32
     extern KEY_Z as key_z: i32
+    extern KEY_K as key_k: i32
+    extern KEY_L as key_l: i32
     extern KEY_ONE as key_1: i32
     extern KEY_TWO as key_2: i32
     extern KEY_THREE as key_3: i32
     extern KEY_FOUR as key_4: i32
+    extern KEY_FIVE as key_5: i32
+    extern KEY_SIX as key_6: i32
+    extern KEY_SEVEN as key_7: i32
+    extern KEY_EIGHT as key_8: i32
+    extern KEY_NINE as key_9: i32
 
     // --- Lifecycle ---
     // init_window creates the window, the GL context and the 2D renderer in

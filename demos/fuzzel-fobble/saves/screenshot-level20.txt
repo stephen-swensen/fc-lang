@@ -1,0 +1,40 @@
+// Fuzzel Fobble saved game, slot 1.
+// Blank lines and // lines are ignored. The 14 `row` lines
+// are the raft from the ceiling down, 12 cells each:
+// -1 empty, 0-5 colour, 6 star, 7 stone.
+//
+// Written by hand rather than by the game: this is the level 20
+// board from the screenshot that the save feature was built for,
+// read back off the pixels a bubble at a time. Everything the HUD
+// showed is here; the generator state is arbitrary, since a
+// screenshot cannot say what the next bubble was going to be.
+fuzzel-fobble-save 1
+level 20
+score 1599614
+shots_fired 1468
+shots_left 10
+drop_interval 10
+row_parity 0
+angle 0.0
+cur 2
+next 4
+idle 0
+level_frames 120
+bonus_paid 0
+phase paused
+shot 0 0.0 0.0 0.0 0.0 0
+rng 2235526118 1955724955 0 3
+row 3 4 3 0 3 0 0 0 6 2 6 3
+row 1 5 5 5 5 5 0 0 4 4 4 -1
+row 2 2 2 2 2 1 5 5 5 3 3 5
+row 5 5 2 3 5 5 6 5 5 0 4 -1
+row 5 5 2 2 2 3 6 4 4 4 7 4
+row 2 2 7 1 1 5 7 2 2 4 4 -1
+row 3 3 3 7 3 1 7 2 1 1 3 3
+row 0 -1 1 -1 1 1 1 1 1 -1 -1 -1
+row -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+row -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+row -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+row -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+row -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+row -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1

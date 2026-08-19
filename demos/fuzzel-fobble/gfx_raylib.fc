@@ -140,6 +140,12 @@ module gfx =
     // that is not a distinction a player can make, and this game has no
     // rhythm input, so the trade is free here — it would not be in a
     // fighting game.
+    // The slot digits. Not actions: they carry a number rather than a bit,
+    // and a key that means "3" has nothing to hold — see `digit` in plat.fc.
+    private let latch_digit = (inp: input*, key: i32, digit: i32) ->
+        if raylib.is_key_pressed(key) then
+            inp.digit = digit
+
     let pump = (inp: input*) ->
         // Window close and the ESC key both land here — ESC is raylib's
         // default exit key — so this one call is the SDL2 backend's quit
@@ -156,6 +162,7 @@ module gfx =
 
         inp.held = 0
         inp.tapped = 0
+        inp.digit = 0
         latch(inp, raylib.key_left,  plat.aim_left)
         latch(inp, raylib.key_a,     plat.aim_left)
         latch(inp, raylib.key_right, plat.aim_right)
@@ -164,9 +171,20 @@ module gfx =
         latch(inp, raylib.key_enter, plat.start)
         latch(inp, raylib.key_tab,   plat.swap)
         latch(inp, raylib.key_p,     plat.pause)
-        latch(inp, raylib.key_s,     plat.symbols)
+        latch(inp, raylib.key_k,     plat.symbols)
         latch(inp, raylib.key_m,     plat.mute)
         latch(inp, raylib.key_c,     plat.clear_best)
+        latch(inp, raylib.key_s,     plat.save)
+        latch(inp, raylib.key_l,     plat.load)
+        latch_digit(inp, raylib.key_1, 1)
+        latch_digit(inp, raylib.key_2, 2)
+        latch_digit(inp, raylib.key_3, 3)
+        latch_digit(inp, raylib.key_4, 4)
+        latch_digit(inp, raylib.key_5, 5)
+        latch_digit(inp, raylib.key_6, 6)
+        latch_digit(inp, raylib.key_7, 7)
+        latch_digit(inp, raylib.key_8, 8)
+        latch_digit(inp, raylib.key_9, 9)
 
     // ============================================================
     // Frame

@@ -83,10 +83,17 @@ module sdl2 from "SDL2/SDL.h" =
     extern SDLK_TAB as key_tab: i32
     extern SDLK_LALT as key_lalt: i32
     extern SDLK_LCTRL as key_lctrl: i32
+    extern SDLK_k as key_k: i32
+    extern SDLK_l as key_l: i32
     extern SDLK_1 as key_1: i32
     extern SDLK_2 as key_2: i32
     extern SDLK_3 as key_3: i32
     extern SDLK_4 as key_4: i32
+    extern SDLK_5 as key_5: i32
+    extern SDLK_6 as key_6: i32
+    extern SDLK_7 as key_7: i32
+    extern SDLK_8 as key_8: i32
+    extern SDLK_9 as key_9: i32
 
     // --- Lifecycle ---
     extern SDL_Init as init: (u32) -> i32

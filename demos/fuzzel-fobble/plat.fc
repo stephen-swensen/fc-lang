@@ -31,6 +31,15 @@ struct input =
     held: i32
     tapped: i32
 
+    // The digit key 1-9 that went down this frame, or 0 for none. Saving and
+    // loading ask "which slot", and the answer is a number: nine more action
+    // bits would say the same thing at nine times the width and every reader
+    // would have to turn them back into one anyway.
+    //
+    // A tap and never a hold. A digit held down repeating into nine saves is
+    // nobody's intention.
+    digit: i32
+
 module plat =
     // The actions. A backend maps its own key codes onto these; nothing
     // downstream ever learns which key it was.
@@ -43,6 +52,8 @@ module plat =
     let symbols    = 64
     let mute       = 128
     let clear_best = 256
+    let save       = 512
+    let load       = 1024
 
     // Is this action being held? / did it go down this frame?
     let down = (inp: const input*, action: i32) -> inp.held & action != 0
@@ -67,7 +78,7 @@ module plat =
 //
 //   Frame
 //     pump(inp: input*)                 Fill `inp` for this frame: quit,
-//                                       held, tapped. Also where a backend
+//                                       held, tapped, digit. Also where a backend
 //                                       handles what is its own business and
 //                                       not the game's — F11, for one.
 //     frame_begin(cr, cg, cb)           Start a frame; clear to that colour.

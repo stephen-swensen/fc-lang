@@ -35,6 +35,25 @@ union game_phase =
     | level_clear
     | game_over
 
+// What the save/load key is waiting for. `S` and `L` arm the prompt; the
+// digit that follows answers it, and anything else cancels it.
+union slot_prompt =
+    | idle
+    | saving
+    | loading
+
+// The last thing a save or a load did, flashed under the board for a couple
+// of seconds and then gone. A board that comes back looking identical either
+// way needs telling: silence after a keystroke reads as a key that did
+// nothing.
+union slot_msg =
+    | quiet
+    | saved
+    | loaded
+    | empty_slot
+    | broken
+    | nothing_to_save
+
 // The bubble in flight. There is only ever one.
 struct shot =
     x: f64
@@ -103,6 +122,17 @@ struct game_state =
     popup_val: i32
     popup_x: i32
     popup_y: i32
+
+    // Saved games. The prompt is a mode, and a mode with no clock on it is a
+    // trap — so it carries the frames it has left. `slot_bits` is which slots
+    // held a file when the prompt was armed, one bit each, so the prompt can
+    // draw the difference between overwriting and filling.
+    prompt: slot_prompt
+    prompt_timer: i32
+    slot_bits: i32
+    msg: slot_msg
+    msg_slot: i32
+    msg_timer: i32
 
 // ============================================================
 // World — every mutable scrap of gameplay state, born in `create` and
@@ -259,6 +289,7 @@ module game =
 
     let imin = (a: i32, b: i32) -> if a < b then a else b
     let imax = (a: i32, b: i32) -> if a > b then a else b
+    let fclamp = (v: f64, lo: f64, hi: f64) -> if v < lo then lo else if v > hi then hi else v
     let deg2rad = (d: f64) -> d * math.pi / 180.0
 
     // ============================================================
@@ -1030,6 +1061,385 @@ module game =
             | err(_) -> return
         | none -> return
 
+
+    // ============================================================
+    // Saved games
+    //
+    // Nine slots: `S` then a digit writes one, `L` then a digit reads one
+    // back. Two keystrokes and no menu — a save is something you reach for in
+    // the middle of a turn, and a game that stops to draw a file browser has
+    // already cost you the turn.
+    //
+    // The prefix key arms a prompt that lasts a few seconds and is answered
+    // by a digit; anything else on the keyboard answers it with "not now".
+    // The colour marks moved off `S` to `K` to make room: a sequence whose
+    // first key also does something on its own is a sequence that fires a
+    // side effect every time you begin one.
+    //
+    // The files sit in the same `~/.fuzzel-fobble` the high score does, one
+    // per slot.
+    // ============================================================
+
+    let save_slots = 9
+
+    // Frames the prompt waits for its digit, and frames the result of a save
+    // or a load stays up: four seconds and two and a half, at 60 Hz.
+    let prompt_frames = 240
+    let msg_frames = 150
+
+    // Every save file opens with these two, and a load that does not find
+    // them there stops. The version is the whole of the compatibility story —
+    // a file written by a build whose format differs is refused rather than
+    // guessed at, because a half-understood board is worse than no board.
+    private let save_magic = "fuzzel-fobble-save"
+    private let save_version = 1
+
+    // Words read from one line. Thirteen is the longest line the writer emits
+    // (`row` and its twelve cells); the rest is slack for a hand edit.
+    private let max_fields = 16
+
+    // The file a slot lives in. Heap rather than the stack an interpolated
+    // string would give it: `scan_slots` builds nine of these in a loop, and
+    // a loop that grows the frame it runs in is how a stack allocation goes
+    // wrong.
+    private let slot_path = (hd: const str, slot: i32) ->
+        alloc("%s{hd}/.fuzzel-fobble/save%d{slot}.txt")!
+
+    // Which slots hold a file, one bit each. Read when the prompt is armed
+    // rather than every frame: nine questions to the filesystem is nothing at
+    // a keypress and rude sixty times a second.
+    private let scan_slots = () ->
+        match sys.home_dir() with
+        | some(hd) ->
+            let mut bits = 0
+            for i in 0..save_slots do
+                let path = slot_path(hd, i + 1)
+                if io.exists(path) then
+                    bits = bits | (1 << i)
+                free(path)
+            bits
+        | none -> 0
+
+    // The words of a line, at most `out.len` of them, and how many there
+    // were. Splitting on a single space alone would make "a  b" three fields
+    // with an empty one in the middle, and a file somebody has lined up by
+    // hand is exactly where that happens.
+    private let words = (line: const str, out: str[]) ->
+        let parts = text.split(line, " ")
+        defer free(parts)
+        let mut n = 0i64
+        for i in 0..parts.len do
+            let p = text.trim(parts[i])
+            if p.len > 0i64 && n < out.len then
+                out[n] = (str) p
+                n = n + 1i64
+        n
+
+    // Field `i` of a parsed line as a number, or a flagged failure. A save
+    // file is somebody else's output — an older build's, a hand edit's, half
+    // of one — so every field is a question, and `bad` is where the answers
+    // that were not numbers collect. One flag for the whole parse: the load
+    // is refused as a unit, so which field failed is not a distinction the
+    // caller can act on.
+    private let int_at = (f: str[], n: i64, i: i64, bad: bool*) ->
+        if i >= n then
+            *bad = true
+            return 0
+        match text.parse_i32(f[i]) with
+        | ok(v) -> v
+        | err(_) ->
+            *bad = true
+            0
+
+    private let i64_at = (f: str[], n: i64, i: i64, bad: bool*) ->
+        if i >= n then
+            *bad = true
+            return 0i64
+        match text.parse_i64(f[i]) with
+        | ok(v) -> v
+        | err(_) ->
+            *bad = true
+            0i64
+
+    private let f64_at = (f: str[], n: i64, i: i64, bad: bool*) ->
+        if i >= n then
+            *bad = true
+            return 0.0
+        match text.parse_f64(f[i]) with
+        | ok(v) -> v
+        | err(_) ->
+            *bad = true
+            0.0
+
+    // Writes the board and the run out.
+    //
+    // Text, one fact per line. The whole state is a dozen numbers and a
+    // fourteen-line grid, so the terse binary that could replace it would buy
+    // nothing but opacity — where a text file can be read, diffed, mailed to
+    // somebody with a bug report, and repaired by hand.
+    private let write_save = (w: world*, r: const pcg_random*, slot: i32, fp: any*) ->
+        io.write("// Fuzzel Fobble saved game, slot %d{slot}.\n", fp)
+        io.write("// Blank lines and // lines are ignored. The 14 `row` lines\n", fp)
+        io.write("// are the raft from the ceiling down, 12 cells each:\n", fp)
+        io.write("// -1 empty, 0-5 colour, 6 star, 7 stone.\n", fp)
+        // Two calls rather than one interpolation: `%s` of a string whose
+        // length is not a compile-time fact needs a buffer sized for it, and
+        // there is nothing to size here that writing it out directly doesn't
+        // already do.
+        io.write(save_magic, fp)
+        io.write(" %d{save_version}\n", fp)
+        io.write("level %d{w.game.level}\n", fp)
+        io.write("score %d{w.game.score}\n", fp)
+        io.write("shots_fired %d{w.game.shots_fired}\n", fp)
+        io.write("shots_left %d{w.game.shots_left}\n", fp)
+        io.write("drop_interval %d{w.game.drop_interval}\n", fp)
+        io.write("row_parity %d{w.game.row_parity}\n", fp)
+        // Seventeen digits, which is what it takes for a double to survive
+        // the round trip through decimal. The angle and the shot are the only
+        // floats in the file, and a save that came back a millionth of a
+        // degree out would be a save that quietly resumed a *different* game
+        // — the one place this format could lose information and the cheapest
+        // possible place to not lose it.
+        io.write("angle %.17f{w.game.angle}\n", fp)
+        io.write("cur %d{w.game.cur_color}\n", fp)
+        io.write("next %d{w.game.next_color}\n", fp)
+        io.write("idle %d{w.game.idle_timer}\n", fp)
+        io.write("level_frames %d{w.game.level_frames}\n", fp)
+        io.write("bonus_paid %d{w.game.bonus_paid}\n", fp)
+        match w.game.phase with
+        | paused -> io.write("phase paused\n", fp)
+        | _ -> io.write("phase playing\n", fp)
+        let flying = if w.shot.active then 1 else 0
+        io.write("shot %d{flying} %.17f{w.shot.x} %.17f{w.shot.y}", fp)
+        io.write(" %.17f{w.shot.vx} %.17f{w.shot.vy} %d{w.shot.color}\n", fp)
+        // The generator too, so a resumed game deals the bubbles the saved one
+        // was about to. In halves because the state is a u64 and the read back
+        // is an i64 parse: the top half of a u64 has nowhere to land in a
+        // signed 64-bit number.
+        io.write("rng %d{(i64) (r.state >> 32)} %d{(i64) (r.state & 4294967295u64)}", fp)
+        io.write(" %d{(i64) (r.inc >> 32)} %d{(i64) (r.inc & 4294967295u64)}\n", fp)
+        // The raft, a line per row, whatever the row's width: the slot past
+        // the end of a narrow row is dead storage the grid carries anyway, and
+        // writing it keeps every line the same shape.
+        for row in 0..grid_rows do
+            io.write("row", fp)
+            for col in 0..grid_cols do
+                io.write(" %d{w.grid[cell_index(row, col)]}", fp)
+            io.write("\n", fp)
+
+    private let save_game = (w: world*, r: const pcg_random*, slot: i32) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            ignore io.ensure_dir(alloca("%s{hd}/.fuzzel-fobble"))  // shared with highscore.txt
+            let path = slot_path(hd, slot)
+            defer free(path)
+            match io.open(path, "w") with
+            | ok(fp) ->
+                write_save(w, r, slot, fp)
+                // The one close in this file worth looking at. A full disk is
+                // reported here and nowhere earlier, and the alternative is
+                // telling the player the game is saved while the tail of it
+                // never left the buffer.
+                match io.close(fp) with
+                | ok -> slot_msg.saved
+                | err(_) -> slot_msg.broken
+            | err(_) -> slot_msg.broken
+        | none -> slot_msg.broken
+
+    // Is this a value the launcher can hold? Colours and the metal shot, and
+    // nothing else — a file that says the chamber holds a stone is a file
+    // that would put a bubble on the board no shot could ever have made.
+    private let launchable = (v: i32) -> is_color(v) || v == shot_metal
+
+    // Reads a file into the world.
+    //
+    // Nothing on screen changes unless the whole of it parsed. A save from a
+    // build that wrote a different format, or one a full disk cut in half,
+    // must not leave a board carrying three rows of somebody else's game — so
+    // the parse fills scratch of its own, and the copy at the end is the only
+    // thing here that can change what you are looking at.
+    private let apply_save = (w: world*, r: pcg_random*, s: opl_audio.audio*,
+                              src: const str) ->
+        let g = alloc(i32[grid_cells] { })!
+        defer free(g)
+        let mut st = default(game_state)
+        let mut sh = default(shot)
+        // The generator starts as the live one, so a file that leaves the
+        // `rng` line out keeps playing with the generator it was loaded into.
+        // Every other field's default is a zero the checks below judge; this
+        // one's honest default is "carry on".
+        let mut rs = *r
+        let mut bad = false
+        let mut seen = false
+        let mut hold = false
+        let mut rows = 0
+
+        let lines = text.split(src, "\n")
+        defer free(lines)
+        for li in 0..lines.len do
+            let line = text.trim(lines[li])
+            if line.len == 0i64 || text.starts_with(line, "//") then
+                continue
+            let mut f = str[max_fields] { }
+            let n = words(line, f)
+            if n == 0i64 then
+                continue
+            let key = f[0]
+
+            // The first line that is not a comment has to say what the file is
+            // and which format it is in. Anything else is not a save file, and
+            // reading on would be reading a file that happens to have the word
+            // `level` in it.
+            if !seen then
+                if key == save_magic && int_at(f, n, 1i64, &bad) == save_version then
+                    seen = true
+                else
+                    bad = true
+                    break
+            else if key == "level" then st.level = int_at(f, n, 1i64, &bad)
+            else if key == "score" then st.score = int_at(f, n, 1i64, &bad)
+            else if key == "shots_fired" then st.shots_fired = int_at(f, n, 1i64, &bad)
+            else if key == "shots_left" then st.shots_left = int_at(f, n, 1i64, &bad)
+            else if key == "drop_interval" then st.drop_interval = int_at(f, n, 1i64, &bad)
+            else if key == "row_parity" then st.row_parity = int_at(f, n, 1i64, &bad)
+            else if key == "angle" then st.angle = f64_at(f, n, 1i64, &bad)
+            else if key == "cur" then st.cur_color = int_at(f, n, 1i64, &bad)
+            else if key == "next" then st.next_color = int_at(f, n, 1i64, &bad)
+            else if key == "idle" then st.idle_timer = int_at(f, n, 1i64, &bad)
+            else if key == "level_frames" then st.level_frames = int_at(f, n, 1i64, &bad)
+            else if key == "bonus_paid" then st.bonus_paid = int_at(f, n, 1i64, &bad)
+            else if key == "phase" then
+                hold = n > 1i64 && f[1] == "paused"
+            else if key == "shot" then
+                sh.active = int_at(f, n, 1i64, &bad) != 0
+                sh.x = f64_at(f, n, 2i64, &bad)
+                sh.y = f64_at(f, n, 3i64, &bad)
+                sh.vx = f64_at(f, n, 4i64, &bad)
+                sh.vy = f64_at(f, n, 5i64, &bad)
+                sh.color = int_at(f, n, 6i64, &bad)
+            else if key == "rng" then
+                let sh_hi = i64_at(f, n, 1i64, &bad)
+                let sh_lo = i64_at(f, n, 2i64, &bad)
+                let in_hi = i64_at(f, n, 3i64, &bad)
+                let in_lo = i64_at(f, n, 4i64, &bad)
+                rs.state = ((u64) sh_hi << 32) | (u64) sh_lo
+                rs.inc = ((u64) in_hi << 32) | (u64) in_lo
+            else if key == "row" then
+                if rows >= grid_rows then
+                    bad = true
+                else
+                    for col in 0..grid_cols do
+                        g[cell_index(rows, col)] = int_at(f, n, (i64) col + 1i64, &bad)
+                    rows = rows + 1
+            else
+                // A key this build does not know. Within one format version
+                // there is no such thing, so it is a damaged file rather than
+                // a newer one, and the load is refused on it.
+                bad = true
+
+        if bad || !seen || rows != grid_rows then
+            return slot_msg.broken
+
+        // What a file can say that the game cannot survive. These are not
+        // paranoia about a corrupt disk so much as about a hand edit: the
+        // format invites one, and an out-of-range cell would have the palette
+        // and the flood fills reading a value neither has a case for.
+        if st.level < 1 || st.shots_left < 0 || st.drop_interval < 1 then
+            return slot_msg.broken
+        if st.row_parity < 0 || st.row_parity > 1 then
+            return slot_msg.broken
+        if !launchable(st.cur_color) || !launchable(st.next_color) then
+            return slot_msg.broken
+        if sh.active && !launchable(sh.color) then
+            return slot_msg.broken
+        if rs.inc % 2u64 == 0u64 then
+            // PCG's increment is odd by construction, so an even one is a
+            // hand edit that got the halves the wrong way round rather than
+            // anything this program ever wrote.
+            return slot_msg.broken
+        for i in 0..grid_cells do
+            if g[i] < -1 || g[i] > cell_stone then
+                return slot_msg.broken
+
+        // ---- Commit ----
+        // Whether the tune is already running is a question about the phase
+        // being left, so it is asked before anything is overwritten.
+        let was_live = match w.game.phase with
+                       | splash -> false
+                       | game_over -> false
+                       | _ -> true
+
+        for i in 0..grid_cells do
+            w.grid[i] = g[i]
+        clear_particles(w)
+        clear_fallers(w)
+
+        // Field by field rather than a struct copy: the state that is not in
+        // the file keeps its live value. The best score belongs to the machine
+        // rather than to the save, and the colour marks are how this player
+        // wants to see a board, not how whoever wrote the file did.
+        w.game.level = st.level
+        w.game.score = st.score
+        w.game.shots_fired = st.shots_fired
+        w.game.shots_left = st.shots_left
+        w.game.drop_interval = st.drop_interval
+        w.game.row_parity = st.row_parity
+        w.game.angle = fclamp(st.angle, -aim_limit, aim_limit)
+        w.game.cur_color = st.cur_color
+        w.game.next_color = st.next_color
+        w.game.idle_timer = st.idle_timer
+        w.game.level_frames = st.level_frames
+        w.game.bonus_paid = st.bonus_paid
+        w.game.new_high = false
+        w.game.popup_timer = 0
+        w.game.phase_timer = 0
+        w.game.phase = if hold then game_phase.paused else game_phase.playing
+        w.shot = sh
+        *r = rs
+
+        // The tune. A load out of the splash or a game over starts it; a load
+        // into a paused board holds it exactly where the pause key would, and
+        // one into a live board makes sure it is not still held from a pause
+        // the file has just replaced.
+        if !was_live then
+            opl_audio.music_begin(s)
+        if hold then
+            opl_audio.music_hold(s)
+        else
+            opl_audio.music_unhold(s)
+        slot_msg.loaded
+
+    private let load_game = (w: world*, r: pcg_random*, s: opl_audio.audio*,
+                             slot: i32) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            let path = slot_path(hd, slot)
+            defer free(path)
+            // An empty slot and an unreadable one are different news, and the
+            // player can do something about exactly one of them.
+            if !io.exists(path) then
+                return slot_msg.empty_slot
+            match io.read_all(path) with
+            | ok(bytes) ->
+                defer free(bytes)
+                apply_save(w, r, s, (const str) bytes)
+            | err(_) -> slot_msg.broken
+        | none -> slot_msg.broken
+
+    // Arming the prompt reads the slots once and clears whatever the last
+    // save or load had to say — the question replaces the answer.
+    private let arm_prompt = (w: world*, p: slot_prompt) ->
+        w.game.prompt = p
+        w.game.prompt_timer = prompt_frames
+        w.game.slot_bits = scan_slots()
+        w.game.msg_timer = 0
+
+    private let flash = (w: world*, m: slot_msg, slot: i32) ->
+        w.game.prompt = slot_prompt.idle
+        w.game.msg = m
+        w.game.msg_slot = slot
+        w.game.msg_timer = msg_frames
+
     // ============================================================
     // The world, and one frame of it
     //
@@ -1127,6 +1537,34 @@ module game =
                 | none -> void()
             | _ -> void()
 
+        // Saving is offered where there is a game to save — a splash has no
+        // board and a game over has nothing left to resume. Loading is offered
+        // everywhere, because coming back to a saved game is exactly what the
+        // splash is for.
+        if plat.tap(inp, plat.save) then
+            match w.game.phase with
+            | playing -> arm_prompt(w, slot_prompt.saving)
+            | paused -> arm_prompt(w, slot_prompt.saving)
+            | _ -> flash(w, slot_msg.nothing_to_save, 0)
+
+        if plat.tap(inp, plat.load) then
+            arm_prompt(w, slot_prompt.loading)
+
+        // The digit that answers the prompt. Outside a prompt a digit means
+        // nothing at all, which is what makes the prefix worth having: no
+        // stray keypress can write over a slot.
+        if inp.digit > 0 then
+            match w.game.prompt with
+            | saving -> flash(w, save_game(w, rng, inp.digit), inp.digit)
+            | loading -> flash(w, load_game(w, rng, s, inp.digit), inp.digit)
+            | idle -> void()
+
+        // Every other key answers the prompt with "not now": a player who has
+        // reached for the launcher has stopped thinking about slots. The mask
+        // is the two prefix keys, which mean "that one, actually" instead.
+        if inp.tapped & ~(plat.save | plat.load) != 0 then
+            w.game.prompt = slot_prompt.idle
+
         // --------- What the world does about it ---------
         // The decoration runs in every phase, splash included: a paused
         // board that freezes solid looks broken rather than paused.
@@ -1135,6 +1573,16 @@ module game =
         update_fallers(w)
         if w.game.popup_timer > 0 then
             w.game.popup_timer = w.game.popup_timer - 1
+
+        // An armed prompt lapses on its own. A mode you can leave the game
+        // sitting in is a mode that eats the next digit somebody types a
+        // minute later.
+        if w.game.prompt_timer > 0 then
+            w.game.prompt_timer = w.game.prompt_timer - 1
+            if w.game.prompt_timer == 0 then
+                w.game.prompt = slot_prompt.idle
+        if w.game.msg_timer > 0 then
+            w.game.msg_timer = w.game.msg_timer - 1
 
         match w.game.phase with
         | playing ->

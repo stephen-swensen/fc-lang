@@ -54,7 +54,8 @@ played it. Paths are relative to the repository root, which the run scripts
 change to. A file that will not load costs the music and nothing else — the
 game says which way it failed and runs on, with effects intact.
 
-Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`).
+Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`) and
+the nine saved games next to it.
 
 ## Controls
 
@@ -65,11 +66,68 @@ Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`).
 | ENTER | Start / restart |
 | TAB | Swap the loaded bubble with the next one |
 | P | Pause |
-| S | Toggle the colour marks (off by default) |
+| K | Toggle the colour marks (off by default) |
 | M | Mute / unmute the music |
+| S then 1-9 | Save the game to that slot |
+| L then 1-9 | Load the game in that slot |
 | F11 | Toggle fullscreen |
 | ESC | Quit |
 | C (splash only) | Clear best score |
+
+## Saved games
+
+Nine slots, in `~/.fuzzel-fobble/save1.txt` through `save9.txt`.
+
+`S` arms a prompt showing which slots already hold a game; the digit that
+follows writes one. `L` does the same for reading one back. Two keystrokes and
+no menu: a save is something you reach for in the middle of a turn, and a game
+that stopped to draw a file browser would have cost you the turn. The prompt
+lapses after four seconds, and any key that is not a digit cancels it —
+including the launcher keys, since a player who has reached for the launcher
+has stopped thinking about slots. (That is also why the colour marks moved off
+`S` to `K`: a sequence whose first key does something on its own fires a side
+effect every time you begin one.)
+
+Saving needs a game to save, so it is offered while playing or paused and
+nowhere else. Loading is offered everywhere, the splash included — coming back
+to a saved game is exactly what a title screen is for. A game saved while
+paused comes back paused.
+
+The file is text, one fact per line:
+
+```
+fuzzel-fobble-save 1
+level 20
+score 1599614
+...
+row 3 4 3 0 3 0 0 0 6 2 6 3
+row 1 5 5 5 5 5 0 0 4 4 4 -1
+```
+
+The fourteen `row` lines are the raft from the ceiling down, twelve cells each:
+`-1` empty, `0`-`5` a colour, `6` a star, `7` a stone. (A narrow row uses
+eleven of the twelve; the last is dead storage the grid carries anyway.) The
+whole state is a dozen numbers and that grid, so the terse binary that could
+replace it would buy nothing but opacity — where a text file can be read,
+diffed, mailed with a bug report, and repaired by hand. The two floats (the
+aim angle and any shot in flight) are written to seventeen digits, which is
+what it takes for a double to survive the round trip: a save that came back a
+millionth of a degree out would quietly resume a *different* game.
+
+The generator's state goes in the file too, so a resumed game deals the
+bubbles the saved one was about to. A hand-written file can leave that line out
+and keep whatever generator it is loaded into; every other missing line reads
+as zero, which the checks below mostly reject.
+
+Loading is all-or-nothing. The parse fills scratch of its own and copies into
+the world only if the whole file checked out, so a save from a build that wrote
+a different format — the first line carries a format version — or one a full
+disk cut in half leaves the board you were looking at exactly as it was, and
+says so on screen.
+
+`saves/screenshot-level20.txt` is a hand-written one: the level 20 board this
+feature was built against, read back off a screenshot a bubble at a time. Copy
+it over `~/.fuzzel-fobble/save1.txt` and press `L` then `1`.
 
 ## Rules
 
@@ -99,7 +157,8 @@ Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`).
 - **The aim guide only runs on level 1.** It draws the bounce for you while
   the geometry is new; after that, reading the angle is the skill. The
   `CLEAR.` screen tells you it is going.
-- Best score persists to `~/.fuzzel-fobble/highscore.txt`.
+- Best score persists to `~/.fuzzel-fobble/highscore.txt`; games persist to
+  `~/.fuzzel-fobble/save<N>.txt`, one per slot.
 
 ## Special bubbles
 
@@ -681,7 +740,14 @@ numbers are this demo's own.
   `alloc(faller[max_fallers] { })!`; `alloc` zero-fills, so the inline
   `game_state` and `shot` fields start clean.
 - **Union types for game phases** — `splash`, `playing`, `paused`,
-  `level_clear`, `game_over`, dispatched with `match`.
+  `level_clear`, `game_over`, dispatched with `match`. The save prompt and the
+  message it leaves behind are two more of them, so "which mode is this" is
+  always a `match` over named states rather than an integer with a comment.
+- **`std::io` and `std::text` on a real file format** — `io.read_all`,
+  `io.exists`, `io.ensure_dir`, `text.split` and the strict `text.parse_*`
+  family write and read the saved games. Every parsed field is a `T!` the
+  reader has to answer for, which is what makes a refused load a refused load
+  rather than half a board.
 - **Extern structs and functions** for C interop via `demos/shared/sdl2.fc` and
   `demos/shared/raylib.fc` — including raylib's by-value struct arguments and
   returns.

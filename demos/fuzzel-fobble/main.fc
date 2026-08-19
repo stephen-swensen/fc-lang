@@ -154,11 +154,14 @@ let main = (args: str[]) ->
     io.write("  ENTER       Start / restart\n", stdout)
     io.write("  TAB         Swap current and next bubble\n", stdout)
     io.write("  P           Pause\n", stdout)
-    io.write("  S           Toggle colour marks\n", stdout)
+    io.write("  K           Toggle colour marks\n", stdout)
     io.write("  M           Mute / unmute the music\n", stdout)
+    io.write("  S then 1-9  Save the game to that slot\n", stdout)
+    io.write("  L then 1-9  Load the game in that slot\n", stdout)
     io.write("  F11         Toggle fullscreen\n", stdout)
     io.write("  ESC         Quit\n", stdout)
     io.write("  C (splash)  Clear best score\n\n", stdout)
+    io.write("Saved games live in ~/.fuzzel-fobble/save<N>.txt\n\n", stdout)
 
     gfx.open(game.logical_w, game.logical_h, c"Fuzzel Fobble")
 

@@ -106,9 +106,26 @@ module gfx =
         else if k == sdl2.key_return then plat.start
         else if k == sdl2.key_tab then plat.swap
         else if k == sdl2.key_p then plat.pause
-        else if k == sdl2.key_s then plat.symbols
+        else if k == sdl2.key_k then plat.symbols
         else if k == sdl2.key_m then plat.mute
         else if k == sdl2.key_c then plat.clear_best
+        else if k == sdl2.key_s then plat.save
+        else if k == sdl2.key_l then plat.load
+        else 0
+
+    // The slot digits. Not actions: they carry a number the game reads
+    // directly, and a key that means "3" has nothing to hold — see `digit`
+    // in plat.fc.
+    private let digit_for = (k: i32) ->
+        if k == sdl2.key_1 then 1
+        else if k == sdl2.key_2 then 2
+        else if k == sdl2.key_3 then 3
+        else if k == sdl2.key_4 then 4
+        else if k == sdl2.key_5 then 5
+        else if k == sdl2.key_6 then 6
+        else if k == sdl2.key_7 then 7
+        else if k == sdl2.key_8 then 8
+        else if k == sdl2.key_9 then 9
         else 0
 
     // Fake fullscreen: a borderless window sized to the display bounds.
@@ -141,6 +158,7 @@ module gfx =
     // `tapped` is rebuilt from scratch every frame.
     let pump = (inp: input*) ->
         inp.tapped = 0
+        inp.digit = 0
         let mut event = default(sdl_event)
         let mut events_left = 256
         loop
@@ -160,6 +178,12 @@ module gfx =
                     let a = action_for(k)
                     inp.held = inp.held | a
                     inp.tapped = inp.tapped | a
+                    // Last digit wins, which only matters if two arrived in
+                    // one frame — and then the second is the one the player
+                    // is still looking at.
+                    let d = digit_for(k)
+                    if d != 0 then
+                        inp.digit = d
                     if k == sdl2.key_escape then
                         inp.quit = true
                     if k == sdl2.key_f11 then
