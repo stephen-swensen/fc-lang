@@ -364,14 +364,26 @@ module opl_bank_gm =
         // patch was — its centroid at C2 was 128 Hz against the real 548.
         //
         // Modulation index therefore has to fall steeply with pitch, which is
-        // `m_scale`'s KSL at its maximum 6 dB/octave over TL 0 — every dB the
+        // `m_scale`'s KSL at its maximum 6 dB/octave — nearly every dB the
         // chip has, spent in the bass and taken away going up. That alone is
-        // not enough index down there, so the modulator also runs at **MULT 3
-        // on the abs-sine wave**: both multiply the reach of whatever level
-        // KSL has left, so both lift the bass hard and the treble not at all,
-        // where a plain louder modulator would lift everything. Measured, the
+        // not enough index down there, so the modulator also runs at **MULT
+        // 3**: a multiplier scales the reach of whatever level KSL has left,
+        // so it lifts the bass hard and the treble not at all, where simply
+        // turning the modulator up lifts everything equally. Measured, the
         // pair tracks the real centroid within a fifth of an octave at every
         // C from C2 to C6.
+        //
+        // **A ratio buys that reach with gaps, and the gaps are the whole
+        // reason `m_wave` is a plain sine.** Sidebands land at the carrier
+        // plus and minus multiples of the modulator, so 3:1 fills every
+        // harmonic except multiples of three — a small colour. The abs-sine
+        // wave tried here first doubles the modulator's own frequency, making
+        // the effective ratio 6:1, and a bass note then arrives as partials
+        // 1, 5, 7, 11, 13, 17 and nothing else: six widely spaced partials is
+        // not a piano, it is the recipe for a bell, and it read as metal on
+        // the low notes. A plain sine puts thirteen partials there instead,
+        // against the real note's fifteen, and drops the energy ceiling from
+        // 1244 Hz to 856 where the recording's is 996.
         //
         // **A piano darkens far less than it seems to.** The centroid falls
         // by a factor of about 1.5 over the first tenth of a second and then
@@ -406,7 +418,7 @@ module opl_bank_gm =
         // own waveform and multiplier already supply the harmonics, and FB
         // above 6 tips the bass into noise rather than brightness.
         opl_midi.patch {
-            m_char = 0x33, m_scale = 0xC0, m_atk = 0xF6, m_sus = 0x26, m_wave = 0x02,
+            m_char = 0x33, m_scale = 0xC2, m_atk = 0xF6, m_sus = 0x26, m_wave = 0x00,
             c_char = 0x11, c_scale = 0x00, c_atk = 0xF4, c_sus = 0x03, c_wave = 0x00,
             n_conn = 0x00 },
         // Electric piano. 2:1 and a half-sine modulator give the tine its

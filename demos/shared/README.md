@@ -635,10 +635,20 @@ curve, and it is what separates a piano from a synthesiser playing the same
 notes. Miss it and the bottom octave comes out as a plucked bass guitar.
 
 On a two-operator voice that means the modulation index must fall steeply with
-pitch: KSL at its maximum 6 dB/octave over TL 0, plus a modulator at MULT 3 on
-the abs-sine wave, because a multiplier and a richer wave both multiply the
-reach of whatever level KSL has left — they lift the bass hard and the treble
-not at all, where simply turning the modulator up lifts everything equally.
+pitch: KSL at its maximum 6 dB/octave, plus a modulator at MULT 3, because a
+multiplier scales the reach of whatever level KSL has left — it lifts the bass
+hard and the treble not at all, where simply turning the modulator up lifts
+everything equally.
+
+**But a ratio buys reach with gaps.** Sidebands land at the carrier plus and
+minus multiples of the modulator, so 3:1 fills every harmonic except multiples
+of three. Take the same reach from a richer modulator *waveform* instead and
+the gaps get much worse: abs-sine doubles the modulator's own frequency, so the
+effective ratio is 6:1 and a bass note arrives as partials 1, 5, 7, 11, 13, 17
+and nothing else. Six widely spaced partials is not a piano, it is the standard
+recipe for a bell — and it sounded like one. Sparse-and-high and dense-and-low
+are both wrong; what a piano wants is dense *and* high, and on two operators
+the multiplier is the only one of the two knobs that does not cost density.
 
 **And a piano darkens much less than it seems to** — a factor of about 1.5 in
 the first tenth of a second, then it holds. What the ear reads as the note
