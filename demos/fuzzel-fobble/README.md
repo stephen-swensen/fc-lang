@@ -669,17 +669,20 @@ the notes and leaves the instrument to whoever plays the file, so every channel
 sits on General MIDI program 0 and the whole book arrives on the bank's acoustic
 piano. Only the Goldberg Aria asks for anything (program 6, harpsichord, both
 hands), and it means it. So the notebook is, in effect, one long audition of a
-single patch — which is how it came out that the patch was wrong: it decayed
-0.9 dB in half a second and never darkened, which is a plucked string, not a
-struck one. `demos/shared/opl_bank_gm.fc` has the rewrite and the reasoning.
+single patch — which is how it came out that the patch was wrong twice over: it
+decayed 0.9 dB in half a second, and once that was fixed its bass was a pure
+low sine where a real piano's is its eighth partial. It is now measured against
+recordings of a real grand rather than reasoned about;
+`demos/shared/opl_bank_gm.fc` has the numbers.
 
 **Levels are reported, not managed** — the same rule the bank probe follows.
 Measured end to end, the game's own minuet is −20.2 dBFS and the notebook now
-runs about −16 to −21, so the book sits within some 4 dB of the tune the mix
-was balanced against. It used to run −13.3 to −17.7, and closing that gap was
-not a trim: a piano that holds every note at full level until the next one
-lands is simply louder than one that decays, and fixing the patch took 0.8 to
-4.3 dB off the pieces that use it — a median of 3.2. The Goldberg Aria is the one outlier left at −35.3 dBFS,
+runs −18.2 to −23.1, so the book brackets the tune the mix was balanced
+against — 2 dB over it at the loudest, 3 under at the quietest. It used to run
+−13.3 to −17.7, uniformly hotter, and closing that gap was not a trim: a piano
+that holds every note at full level until the next one lands is simply louder
+than one that decays, and fixing the patch took 2 to 6 dB off every piece that
+uses it. The Goldberg Aria is the one outlier left at −35.3 dBFS,
 because it is sparse and slow and its harpsichord is the quietest patch in the
 bank. Nothing corrects for that. The minuet's balance lives in its own CC7
 volumes because it is ours to edit; a downloaded file's does not, and inventing

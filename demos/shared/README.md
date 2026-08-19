@@ -620,20 +620,40 @@ rest of its kit. Length belongs in RR. And **patches have to be level-matched,
 because velocity cannot do it for them**: this bank's melodic voices once
 spanned 23 dB at the same velocity, and now sit inside about 4 dB.
 
-A third came later, from the acoustic piano — program 0, and so the voice every
-file that names no instrument arrives on. **A struck string darkens as it
-decays**, and on a two-operator pair that means the modulator's envelope has to
-fall faster than the carrier's: the high partials the hammer put there die away
-long before the fundamental does. Give both operators the same envelope and you
-have built a plucked instrument, which is why an unlabelled MIDI file used to
-come out of this bank sounding like a harpsichord. The fix is a *sustaining*
-modulator (EGT set) over a percussive carrier — brightness drops 14 dB in half
-a second and then holds at a floor, rather than collapsing to a sine — plus KSR
-on both, which is what makes the bass ring four times longer than the treble.
-It is also worth knowing that this shows up in a mix rather than in a meter:
-twenty Bach engravings rendered 0.8 to 4.3 dB quieter afterwards (median 3.2),
-because a note that never decays is a note still at full level when the next
-one lands.
+A third came from the acoustic piano — program 0, and so the voice every file
+that names no instrument arrives on. It was reasoned out from first principles
+twice and wrong both times; what fixed it was measuring a real one. The
+University of Iowa publishes single grand-piano notes struck ff and left to
+decay, and analysing C2 through C6 of them gives a target no amount of
+reasoning about FM had produced:
+
+**A piano's spectral centre of gravity is roughly constant in hertz across the
+keyboard** — around 500 Hz from C2 to C5 — rather than constant in harmonics.
+A bass note is therefore its *eighth* partial, with the fundamental 21 dB down,
+and a treble note is very nearly a sine. That is the soundboard's radiation
+curve, and it is what separates a piano from a synthesiser playing the same
+notes. Miss it and the bottom octave comes out as a plucked bass guitar.
+
+On a two-operator voice that means the modulation index must fall steeply with
+pitch: KSL at its maximum 6 dB/octave over TL 0, plus a modulator at MULT 3 on
+the abs-sine wave, because a multiplier and a richer wave both multiply the
+reach of whatever level KSL has left — they lift the bass hard and the treble
+not at all, where simply turning the modulator up lifts everything equally.
+
+**And a piano darkens much less than it seems to** — a factor of about 1.5 in
+the first tenth of a second, then it holds. What the ear reads as the note
+closing is mostly the amplitude decay. An earlier attempt collapsed the
+brightness 18 dB, which leaves a sine: a flute, not a piano.
+
+Two things the chip cannot do, both measured before being given up: the real
+double decay (fast to −20 dB, then very slow) costs 2 to 9 dB of level that a
+carrier already at TL 0 has no way to earn back; and a real decay spans a
+factor of 6.5 from C2 to C6 where one KSR bit buys 3.9, so the rate is chosen
+for the register the music is actually in.
+
+All of this shows up in a mix rather than on a meter: twenty-one Bach
+engravings came out 2 to 6 dB quieter afterwards, because a note that never
+decays is a note still at full level when the next one lands.
 
 It reports levels rather than managing them. A game mixes this against effects
 and puts a soft knee after the sum; a tool that quietly did the same would hide

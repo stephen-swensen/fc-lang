@@ -344,57 +344,71 @@ module opl_bank_gm =
         // Acoustic piano — the patch every file that names no instrument
         // arrives on, so it carries more music than any other here.
         //
-        // A struck string does two things at once, and a piano is the
-        // instrument where both are obvious. It *decays*, from the moment the
-        // hammer leaves it. And it *darkens* while it decays: the high
-        // partials the hammer put there die away far faster than the
-        // fundamental, so the note starts bright and ends round. An
-        // instrument that decays without darkening is a plucked one — which
-        // is exactly what this patch used to be, and why an unlabelled MIDI
-        // file came out sounding like a harpsichord.
+        // This one is measured against the real thing rather than reasoned
+        // out. The University of Iowa's freely published instrument samples
+        // include single grand-piano notes struck ff and left to decay, and
+        // C2 through C6 of those were analysed frame by frame for where their
+        // energy sits and how it leaves. Two facts came out of it, and this
+        // patch is mostly those two facts.
         //
-        // Each half of the pair answers one of those:
+        // **A piano's spectral centre of gravity barely moves across the
+        // keyboard.** It sits near 500 Hz at C2, 580 at C3, 400 at C4, 620 at
+        // C5, 1050 at C6 — near-constant in *hertz*, not in harmonics. So a
+        // bass note is its eighth partial with the fundamental 21 dB down
+        // (which is why a piano's bottom octave still has a pitch on a
+        // speaker that cannot reproduce 65 Hz), while a treble note is very
+        // nearly a sine. That is the soundboard's radiation, and it is the
+        // difference between a piano and a synthesiser playing the same
+        // notes: get it wrong in the bass and what comes out is a plucked
+        // bass guitar, which is exactly what the previous version of this
+        // patch was — its centroid at C2 was 128 Hz against the real 548.
         //
-        //   The **carrier** is percussive (EGT clear) and plainly
-        //     exponential — SL 0 and the length in RR, per the sustain-level
-        //     rule above. At C4 it is 20 dB down after 1.3 s. The old patch
-        //     was 0.9 dB down after half a second, which is not a decay at
-        //     all: a note held its level until the key came up, and a piece
-        //     of two-part counterpoint turned into a drone.
-        //   The **modulator** is the one operator here that *sustains*
-        //     (EGT set), which looks backwards and is the whole trick. It
-        //     attacks to a deep index, falls 18 dB in about 150 ms, and then
-        //     holds — so brightness drops sharply and settles at a floor
-        //     rather than collapsing to a sine. Measured across harmonics
-        //     3-8 against the fundamental, the note darkens 14 dB in half a
-        //     second and stays there. Let the modulator decay to nothing
-        //     instead (EGT clear on both) and the tail is a pure tone, which
-        //     reads as a flute rather than a piano.
+        // Modulation index therefore has to fall steeply with pitch, which is
+        // `m_scale`'s KSL at its maximum 6 dB/octave over TL 0 — every dB the
+        // chip has, spent in the bass and taken away going up. That alone is
+        // not enough index down there, so the modulator also runs at **MULT 3
+        // on the abs-sine wave**: both multiply the reach of whatever level
+        // KSL has left, so both lift the bass hard and the treble not at all,
+        // where a plain louder modulator would lift everything. Measured, the
+        // pair tracks the real centroid within a fifth of an octave at every
+        // C from C2 to C6.
         //
-        // **KSR on both** is what gives the keyboard its shape: envelope
-        // rates scale with the key, so C2 rings for 2.8 s, C4 for 1.3 s and
-        // C6 for 0.7 s — a bass:treble ratio of four, against the old
-        // patch's 1.2. A real grand is steeper still, but one bit of key
-        // scaling cannot buy more, and four is the difference between a
-        // keyboard and a rank of identical pipes.
+        // **A piano darkens far less than it seems to.** The centroid falls
+        // by a factor of about 1.5 over the first tenth of a second and then
+        // holds; what the ear reads as the note "closing" is mostly the
+        // amplitude decay. So the modulator sustains (EGT set, unusual for
+        // the operator that is not the one you hear) and decays only 6 dB to
+        // a floor. An earlier attempt at this patch collapsed it 18 dB, which
+        // leaves a sine — a flute, not a piano.
         //
-        // Feedback comes down from 5 to 4. Feedback is not enveloped, so on
-        // the old patch it was a sawtooth held for the length of the note;
-        // the strike's bite now comes from the modulator's own attack, which
-        // goes away like a hammer does.
+        // The carrier is percussive and plainly exponential: SL 0 with the
+        // length in RR, per the sustain-level rule above. RR 3 puts C4 at
+        // -20 dB in 0.71 s, which is the recording's figure exactly, and KSR
+        // on both operators spreads that from 1.4 s at C2 to 0.36 s at C6.
         //
-        // Two things were measured and rejected. A **two-stage carrier** —
-        // fast prompt decay to SL, slow aftersound on RR, which is what a
-        // real string does — costs 8 dB of everything for it, exactly as
-        // rule 1 above predicts. And a **detuned second voice** for the
-        // unison shimmer of two or three strings: a real grand's unisons sit
-        // within a cent or so, which at C4 is a beat once every two seconds
-        // — slower than the note lasts. Detune it far enough to hear and you
-        // have written the honky-tonk two programs along.
+        // Two things the chip cannot do, both measured before being given up:
+        //
+        //   A real piano decays *twice* — fast to about -20 dB, then very
+        //     slowly, so C4 needs 0.71 s to lose 20 dB and another 2.5 s to
+        //     lose the next 10. That is what SL and a slow RR describe, and
+        //     every setting of them costs 2 to 9 dB of the note, because the
+        //     carrier is already at TL 0 and there is nothing to buy the
+        //     level back with. Rule 1 above, arrived at from the other end.
+        //   Its decay spans a factor of 6.5 from C2 to C6; one KSR bit buys
+        //     3.9. So the rate is chosen for where the music actually is —
+        //     counting the notebook's 4056 note-ons, 90% of them fall in
+        //     C3-C5 — which lands C4 exact, C5 within a sixth of an octave,
+        //     and leaves C2 short. Erring short is the safe direction: a
+        //     tail that outlasts the next note is the drone this patch used
+        //     to be.
+        //
+        // Feedback is 0 because it measures as nothing here: the modulator's
+        // own waveform and multiplier already supply the harmonics, and FB
+        // above 6 tips the bass into noise rather than brightness.
         opl_midi.patch {
-            m_char = 0x31, m_scale = 0x46, m_atk = 0xF6, m_sus = 0x66, m_wave = 0x00,
-            c_char = 0x11, c_scale = 0x00, c_atk = 0xF4, c_sus = 0x02, c_wave = 0x00,
-            n_conn = 0x08 },
+            m_char = 0x33, m_scale = 0xC0, m_atk = 0xF6, m_sus = 0x26, m_wave = 0x02,
+            c_char = 0x11, c_scale = 0x00, c_atk = 0xF4, c_sus = 0x03, c_wave = 0x00,
+            n_conn = 0x00 },
         // Electric piano. 2:1 and a half-sine modulator give the tine its
         // hollow knock; slower attack and a longer tail than the acoustic.
         opl_midi.patch {
