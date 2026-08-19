@@ -145,9 +145,9 @@ module spsc =
 // ```
 //
 // Everything the game thread may call is in "The game thread's API" below —
-// play, music_begin, music_end, music_hold, music_unhold, music_toggle_mute,
-// music_muted. Nothing else on `audio` is safe to touch once a device is
-// running.
+// play, set_playlist, music_select, music_begin, music_end, music_hold,
+// music_unhold, music_toggle_mute, music_muted. Nothing else on `audio` is
+// safe to touch once a device is running.
 //
 // There is deliberately no close or destroy — see `shutdown_note` at the
 // bottom of this file for why leaving the device open is the robust choice.
@@ -263,6 +263,7 @@ module opl_audio =
         | music_pause       // hold where it is
         | music_resume
         | music_set_mute    // arg: 1 = muted
+        | music_select      // arg: index into `playlist`
 
     // One posted command: the op and its single i32 argument — a sound id
     // for play_sound, 1 or 0 for music_set_mute, unused otherwise. Small and
@@ -293,6 +294,17 @@ module opl_audio =
         music_want: bool        // the game wants music here
         music_mute: bool        // the player asked for silence
         music_live: bool        // what the two above add up to
+
+        // The songs `music_select` may choose between, in the order the game
+        // means to play them. Empty unless a game sets one, which is the
+        // one-tune case: the player already holds its song and nothing here
+        // ever needs to name a second.
+        //
+        // The slice and every song in it belong to the caller and must
+        // outlive the device. Set it before the device opens and never
+        // again — from that moment it is read from the callback thread, and
+        // `set_playlist` is the game thread's last chance to touch it.
+        playlist: opl_midi.song[]
 
         // Effect voices
         sfx_accum: f64
@@ -418,6 +430,18 @@ module opl_audio =
         | music_set_mute ->
             a.music_mute = c.arg != 0
             sync_music(a)
+        // Change the tune under the player. An index the playlist does not
+        // have is ignored rather than silencing the music: it means the game
+        // counted its levels past the end of its own list, and the tune that
+        // is already playing is a better answer than none.
+        | music_select ->
+            if c.arg >= 0 && (i64) c.arg < a.playlist.len then
+                opl_midi.set_song(a.music, a.playlist[c.arg])
+                // The same rule music_start follows: the new song plays if
+                // the music is live, and waits at its first event if it is
+                // muted or held, so unmuting opens the piece rather than
+                // dropping into the middle of it.
+                if a.music_live then opl_midi.start(a.music)
 
     // Apply every pending game-thread request. The single place any of the
     // state above is mutated, and it runs on one thread.
@@ -460,6 +484,14 @@ module opl_audio =
     let play = (a: audio*, id: i32) -> post(a, op.play_sound, id)
 
     // Start the tune from the top.
+    // Hand the engine the songs it may switch between. Before the device
+    // opens — see `playlist`.
+    let set_playlist = (a: audio*, songs: opl_midi.song[]) ->
+        a.playlist = songs
+
+    // Play playlist entry `index`, from the top. Out of range does nothing.
+    let music_select = (a: audio*, index: i32) -> post(a, op.music_select, index)
+
     let music_begin = (a: audio*) -> post(a, op.music_start, 0)
 
     // Stop it, and rewind so the next run opens on the first bar.

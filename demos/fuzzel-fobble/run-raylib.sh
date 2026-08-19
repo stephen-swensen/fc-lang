@@ -114,6 +114,16 @@ if [ ! -f "$LIB" ]; then
     ar rcs "$LIB" "$OBJDIR"/*.o
 fi
 
+# --- Music ------------------------------------------------------------------
+# The music. fetch-music.sh downloads the Notebook for Anna Magdalena Bach
+# into music/notebook/ (gitignored, ~270 KB) so that each level plays the next
+# piece of it. Entirely optional, and its failure is not this script's: with
+# no network the game plays its own minuet on every level, which is what it
+# did before the notebook existed. Set FF_NO_MUSIC_FETCH=1 to skip it.
+if [ -z "${FF_NO_MUSIC_FETCH:-}" ]; then
+    demos/fuzzel-fobble/fetch-music.sh || true
+fi
+
 # --- Build and run the demo -------------------------------------------------
 make -s
 FCC="$(make -s print-bin)"

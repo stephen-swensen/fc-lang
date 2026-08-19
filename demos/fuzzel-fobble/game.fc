@@ -156,6 +156,21 @@ struct world =
     shot: shot
     game: game_state
 
+    // The name of the piece the *next* level will play, for the level-clear
+    // banner to announce. Written by main.fc, which owns the playlist, and
+    // never read here: which tune is playing is not a rule of the game.
+    //
+    // It sits on `world` rather than in `game_state` on purpose. `game_state`
+    // is what a save file is — every field in it is written out and read
+    // back — and a tune belongs to the run in front of you, not to the
+    // position you saved. Empty until main.fc says otherwise, and an empty
+    // one draws nothing.
+    //
+    // `const str` so that a literal and a title read out of the playlist are
+    // the same type here: nothing writes through this, and the two sources
+    // otherwise disagree.
+    next_tune: const str
+
 module game =
     // ============================================================
     // Constants

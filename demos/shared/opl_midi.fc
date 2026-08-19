@@ -1326,9 +1326,12 @@ module opl_midi =
         opl2.rhythm_strike(p.chip, rhythm_voice_of(rv))
 
     // Whether this song has any percussion the bank's rhythm section covers.
-    // Deciding once, up front, is what keeps the melodic voice count fixed for
-    // the length of the piece: a player that switched modes mid-song would
-    // have to steal three sounding voices to do it.
+    // Asked once per song, and never again while one is playing: that is what
+    // keeps the melodic voice count fixed for the length of a piece, since a
+    // player that switched modes mid-song would have to steal three sounding
+    // voices to do it. A song *change* is not mid-song — `bind_song` silences
+    // the chip first, so there is nothing left to steal from — which is why
+    // the question lives here rather than inline in `init`.
     private let wants_rhythm = (tune: song, kit: bank) ->
         if kit.rhythm.len < 5i64 || kit.rhythm_map.len < 128i64 then false
         else
@@ -1575,6 +1578,37 @@ module opl_midi =
     // The caller's API
     // ============================================================
 
+    // Put a song under a player: everything that depends on *which* song it
+    // is, and nothing that doesn't. Both the first song and every later one
+    // come through here, so a swap cannot forget a step the first one took.
+    //
+    // The order is the whole content of this function. The old song is
+    // silenced *before* `use_rhythm` moves, because dropping the rhythm keys
+    // is only reachable while rhythm mode still owns voices 6..8 — flip the
+    // mode first and a drum left keyed stays keyed, its bit already high, and
+    // `rhythm_strike` never finds the rising edge it needs again. Then the
+    // chip is told the new mode, and `rewind` silences a second time under
+    // it, which is also what reprograms the kit.
+    //
+    // `to_next` is zeroed after the rewind rather than left holding the first
+    // event's tick, so a song opens on its first note instead of playing the
+    // leading rest its notation happens to carry. `start` and `stop` do the
+    // same, and this is the third place that rule has to hold.
+    private let bind_song = (p: player*, tune: song) ->
+        silence(p)
+        p.tune = tune
+        // Rhythm mode: on if the bank has a kit and the song plays something
+        // it covers. It is not a knob because there is no interesting way to
+        // answer it wrong — a song with no percussion gains nothing and would
+        // lose three voices, and a song with percussion gains the chip's only
+        // noise generator *and* stops its drums competing for melodic voices
+        // at all.
+        p.use_rhythm = wants_rhythm(tune, p.kit)
+        p.vmax = if p.use_rhythm then 6 else 9
+        opl2.rhythm_mode(p.chip, p.use_rhythm)
+        rewind(p)
+        p.to_next = 0.0
+
     // Build a player over a parsed song and a bank. The song and the bank
     // belong to the caller and must outlive the player; the chip does not —
     // it is created here and reachable as `p.chip` for sampling.
@@ -1582,19 +1616,9 @@ module opl_midi =
         let p = alloc(player)!
         p.chip = opl2.init((f64) rate)
         p.rate = rate
-        p.tune = tune
         p.kit = kit
         p.us_quarter = 500000
         p.looping = true
-        // Rhythm mode is decided here and never again: on if the bank has a
-        // kit and the song plays something it covers. It is not a knob
-        // because there is no interesting way to answer it wrong — a song
-        // with no percussion gains nothing and would lose three voices, and
-        // a song with percussion gains the chip's only noise generator *and*
-        // stops its drums competing for melodic voices at all.
-        p.use_rhythm = wants_rhythm(tune, kit)
-        p.vmax = if p.use_rhythm then 6 else 9
-        if p.use_rhythm then setup_rhythm(p)
         // Velocity index to total-level offset. TL is attenuation in 0.75 dB
         // steps counting down from 0, so a linear 0..1 level becomes
         // -20*log10(level)/0.75 steps of attenuation. Index 0 is silence
@@ -1604,8 +1628,10 @@ module opl_midi =
             else
                 let db = 0.0 - 20.0 * math.log10((f64) i / 127.0)
                 p.vel_tl[i] = clamp((i32) (db / 0.75 + 0.5), 0, 63)
-        rewind(p)
-        p.to_next = 0.0
+        // Last, because it is the step that touches the chip: the table above
+        // is what a note-on reads, and binding a song is what makes note-ons
+        // possible.
+        bind_song(p, tune)
         p
 
     // Release a player and the chip it owns. Its song and bank are the
@@ -1629,6 +1655,24 @@ module opl_midi =
         p.playing = false
         rewind(p)
         p.to_next = 0.0
+
+    // Play a different song on this player, stopped at its first event — the
+    // caller says when it sounds, exactly as after `stop`.
+    //
+    // One player, many songs, because the expensive half of a player is the
+    // chip it owns: 68 KB of emulator state against a song's few thousand
+    // events. A game with a piece per level wants a playlist, not a rack of
+    // synthesisers, and this is what lets it have one. The bank does not
+    // change — a swap re-reads it, so the new song's instruments come from
+    // the same place the old one's did.
+    //
+    // Everything a song decides is re-decided, rhythm mode included. Safe
+    // *only* at a song boundary, which is what this is: the chip is silenced
+    // on the way in, so the voice count can move without a sounding note
+    // losing its voice underneath it.
+    let set_song = (p: player*, tune: song) ->
+        p.playing = false
+        bind_song(p, tune)
 
     // Hold where it is. Notes are keyed off so nothing hangs through the
     // pause, but the position is kept, so `resume` picks up mid-phrase.

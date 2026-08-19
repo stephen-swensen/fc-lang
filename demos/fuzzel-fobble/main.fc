@@ -42,11 +42,20 @@ import opl_midi from shared::
 import opl_bank_gm from shared::
 import io from std::
 import sys from std::
+import text from std::
 import pcg_random from std::random
 
 // Where the music comes from when `--music` doesn't say. Relative to the
 // working directory, which the run scripts set to the repository root.
 let default_music = "demos/fuzzel-fobble/music/minuet.mid"
+
+// And where the rest of the music comes from, when there is any. The run
+// scripts call fetch-music.sh, which downloads twenty pieces of the *Notebook
+// for Anna Magdalena Bach* from the Mutopia Project into this directory and
+// writes a playlist.txt naming them. Nothing there is committed and nothing
+// there is required: with the directory absent the game plays its own minuet
+// on every level, which is what it did before any of this existed.
+let default_notebook = "demos/fuzzel-fobble/music/notebook"
 
 // The value written after `flag` on the command line, if it is there.
 //
@@ -65,33 +74,148 @@ let arg_after = (args: str[], flag: const str) ->
         i = i + 1i64
     none(str)
 
-// Read and parse the song, and build a player over `kit`.
+// Read and parse one Standard MIDI File.
 //
 // Every failure here is one somebody experimenting with their own files will
 // meet — a path that doesn't exist, a truncated download, a format 2 file —
 // so each one says which it was. The caller runs the game either way: the
 // music player is the only thing that needs a song, and sound effects live on
 // the other chip entirely.
-let load_music = (path: const str, rate: i32, kit: opl_midi.bank) ->
+//
+// The returned song owns its events; the bytes it was decoded from do not
+// outlive this call.
+let load_song = (path: const str) ->
     let bytes = match io.read_all(path) with
                 | ok(b) -> b
                 | err(e) ->
                     io.write(alloca("Music: cannot read %s{path}\n"), stdout)
-                    return none(opl_midi.player*)
+                    return none(opl_midi.song)
     defer free(bytes)
-    let tune = match opl_midi.parse(bytes) with
-               | ok(s) -> s
-               | err(opl_midi.smf.unsupported_format) ->
-                   io.write(alloca("Music: %s{path} is an SMF format 2 file (independent pieces, not one song)\n"), stdout)
-                   return none(opl_midi.player*)
-               | err(opl_midi.smf.truncated) ->
-                   io.write(alloca("Music: %s{path} is truncated — an incomplete copy?\n"), stdout)
-                   return none(opl_midi.player*)
-               | err(e) ->
-                   io.write(alloca("Music: %s{path} is not a MIDI file this can play\n"), stdout)
-                   return none(opl_midi.player*)
-    io.write(alloca("Music: %s{path}\n"), stdout)
-    some(opl_midi.init(rate, tune, kit))
+    match opl_midi.parse(bytes) with
+    | ok(s) -> some(s)
+    | err(opl_midi.smf.unsupported_format) ->
+        io.write(alloca("Music: %s{path} is an SMF format 2 file (independent pieces, not one song)\n"), stdout)
+        none(opl_midi.song)
+    | err(opl_midi.smf.truncated) ->
+        io.write(alloca("Music: %s{path} is truncated — an incomplete copy?\n"), stdout)
+        none(opl_midi.song)
+    | err(e) ->
+        io.write(alloca("Music: %s{path} is not a MIDI file this can play\n"), stdout)
+        none(opl_midi.song)
+
+// The music of a whole run: the songs in the order the levels play them, and
+// what each is called on screen.
+//
+// Two parallel arrays rather than one array of pairs because the engine wants
+// exactly the songs — `opl_audio.set_playlist` takes an `opl_midi.song[]` and
+// has no business knowing that this game gave them names.
+struct playlist =
+    songs: opl_midi.song[]
+    titles: str[]
+
+// Read the notebook fetch-music.sh leaves in `dir`, with `first` at the head
+// of it.
+//
+// `playlist.txt` is the authority on what is there and in what order — one
+// line per piece, `file|notebook number|title` — rather than the directory
+// itself. That is not only because FC's stdlib has no directory read: the
+// order is the notebook's, which no filesystem knows, and a manifest written
+// after each download is also what keeps a half-finished fetch from naming a
+// file that isn't on disk.
+//
+// A missing manifest is the ordinary first-run case with no network, and it
+// is not an error. What comes back is then the one song it was given, which
+// is a playlist too — every level plays it, which is what the game did before
+// there was anything else to play.
+let load_notebook = (dir: const str, first: opl_midi.song, first_title: const str) ->
+    let manifest = alloca("%s{dir}/playlist.txt")
+    let src = match io.read_all((const str) manifest) with
+              | ok(b) -> b
+              | err(e) ->
+                  // Said rather than passed over in silence: the run scripts
+                  // fetch this, so a player who has one and is looking at a
+                  // game that does not needs to be told which of the two it
+                  // is. Not an error — a first run with no network reaches
+                  // here, and the game is complete without it.
+                  io.write(alloca("Music: no notebook in %s{default_notebook} — the minuet plays every level (run fetch-music.sh)\n"), stdout)
+                  return playlist { songs = alloc(opl_midi.song[1] { first })!,
+                                    titles = alloc(str[1] { text.copy(first_title) })! }
+
+    // `src` is deliberately never freed. `text.split` hands back slices of it
+    // rather than copies, so the titles below *are* this buffer, and they are
+    // drawn for as long as the game runs. The playlist is program-lifetime
+    // data and so is the text behind it.
+    let lines = text.split((const str) src, "\n")
+    defer free(lines)
+
+    // One more than the manifest can hold: entry 0 is the game's own tune.
+    let songs = alloc(opl_midi.song[lines.len + 1i64] {})!
+    let titles = alloc(str[lines.len + 1i64] {})!
+    songs[0] = first
+    // `text.copy` because the two sources of a title do not agree on type:
+    // a literal is a `const str` and `text.split` yields `str`. Copying the
+    // one literal is cheaper to read than laundering const on it, and this
+    // array outlives nothing it would have to be freed against.
+    titles[0] = text.copy(first_title)
+    let mut n = 1i64
+
+    for li in 0i64..lines.len do
+        let line = text.trim(lines[li])
+        if line.len == 0i64 then
+            continue
+        let fields = text.split(line, "|")
+        defer free(fields)
+        if fields.len < 3i64 then
+            continue
+        // Heap rather than `alloca`: this is inside a loop, and stack
+        // allocations in a loop are not released until the function returns.
+        let path = alloc("%s{dir}/%s{fields[0]}")!
+        defer free(path)
+        // A piece that will not load drops out of the playlist and the levels
+        // close up over it, exactly as one that would not download does.
+        match load_song((const str) path) with
+        | some(sg) ->
+            songs[n] = sg
+            titles[n] = fields[2]
+            n = n + 1i64
+        | none -> void()
+
+    io.write(alloca("Music: %d{(i32) n - 1} pieces of the Anna Magdalena notebook, one per level\n"), stdout)
+    playlist { songs = songs[0i64..n], titles = titles[0i64..n] }
+
+// Which playlist entry level `level` plays. Level 1 is entry 0 — the game's
+// own minuet — and the notebook follows it in the notebook's order.
+//
+// It wraps rather than stopping: a run long enough to reach the end of the
+// book starts it again, which is a better answer than silence and the only
+// other one available.
+let tune_for_level = (pl: playlist, level: i32) ->
+    if pl.songs.len <= 0i64 then 0i64
+    else
+        let i = (i64) level - 1i64
+        if i < 0i64 then 0i64 else i % pl.songs.len
+
+// Say what is playing, in the two places that say it: the window title, and
+// — one level ahead — the level-clear banner, where the next piece is the
+// reward for having cleared this one.
+//
+// Both go quiet when there is nothing to say. A one-entry playlist means the
+// next level brings the same tune this one has, which is not news and does
+// not belong on a banner announcing a reward; `--music` goes further and
+// leaves the entry unnamed, because the person who passed a path already
+// knows what they passed. An empty `next_tune` draws nothing.
+let announce = (w: world*, pl: playlist, level: i32) ->
+    let here = tune_for_level(pl, level)
+    let next = tune_for_level(pl, level + 1)
+    let now = pl.titles[here]
+    if now.len > 0i64 then
+        gfx.set_title(c"Fuzzel Fobble - Level %d{level} - %.48s{now}")
+    else
+        gfx.set_title(c"Fuzzel Fobble - Level %d{level}")
+    if next == here then
+        w.next_tune = ""
+    else
+        w.next_tune = pl.titles[next]
 
 // `--bank <path>` swaps the instruments the way `--music` swaps the tune: a
 // `.op2`, `.wopl`, `.ibk` or `.sbi` file in place of the built-in General MIDI
@@ -125,17 +249,37 @@ let open_bank = (args: str[]) ->
     | some(path) -> load_bank_file(path)
     | none -> opl_bank_gm.make()
 
-// `--music <path>` picks a different Standard MIDI File. Swapping the tune is
-// the point of shipping it as a file rather than compiling it in, so it is a
-// command-line argument and not a rebuild.
+// The music for a whole run, as a playlist.
 //
-// The path is handed straight to `load_music` from whichever branch found it,
-// rather than being bound to a name first: an argument is a `str` and the
-// default is a `const str`, and the call is where the two meet.
-let open_music = (args: str[], rate: i32, kit: opl_midi.bank) ->
+// `--music <path>` picks a different Standard MIDI File, and it means *that
+// file* — it pins the music to one piece and the notebook stays out of it.
+// Anything else would be a nasty surprise for the reason the flag exists:
+// somebody testing their own MIDI does not want Bach at level 2.
+//
+// Without it, entry 0 is the game's own minuet and the rest is whatever
+// fetch-music.sh managed to download. Swapping the tune is the point of
+// shipping it as a file rather than compiling it in, which is why both the
+// flag and the notebook are files on disk and neither is a rebuild.
+//
+// An empty playlist is the one thing the caller must be ready for: it means
+// no song loaded at all, and the game runs without music.
+let open_music = (args: str[]) ->
     match arg_after(args, "--music") with
-    | some(path) -> load_music(path, rate, kit)
-    | none -> load_music(default_music, rate, kit)
+    | some(path) ->
+        match load_song(path) with
+        | some(sg) ->
+            io.write(alloca("Music: %s{path}\n"), stdout)
+            playlist { songs = alloc(opl_midi.song[1] { sg })!,
+                       titles = alloc(str[1] { text.copy("") })! }
+        | none -> playlist { songs = alloc(opl_midi.song[0] {})!,
+                             titles = alloc(str[0] {})! }
+    | none ->
+        match load_song(default_music) with
+        | some(sg) ->
+            io.write(alloca("Music: %s{default_music}\n"), stdout)
+            load_notebook(default_notebook, sg, "MINUET IN G - BWV ANH. 114")
+        | none -> playlist { songs = alloc(opl_midi.song[0] {})!,
+                             titles = alloc(str[0] {})! }
 
 let main = (args: str[]) ->
 #if backend != "sdl2" && backend != "raylib"
@@ -184,21 +328,34 @@ let main = (args: str[]) ->
     // and hear the OPL2 make what it can of it. A file that will not load
     // costs the music and nothing else; the effects are on their own chip.
     let kit = open_bank(args)
-    let music = match open_music(args, 44100, kit) with
-                | some(p) -> p
-                | none ->
+    let pl = open_music(args)
+    // One player for the whole playlist, not one per piece. The expensive
+    // half of a player is the emulated chip it owns — 68 KB of it — and a
+    // rack of twenty would be a rack of twenty chips to hear one at a time.
+    // `opl_audio.music_select` moves the song under this one instead.
+    let first = if pl.songs.len > 0i64 then pl.songs[0]
+                else
                     io.write("Audio: running without music\n", stdout)
-                    opl_midi.init(44100,
-                        opl_midi.song { events = alloc(opl_midi.event[0] {})!,
-                                        division = 480, length = 0 },
-                        kit)
-    let s = snd.init(44100, music)
+                    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+                                    division = 480, length = 0 }
+    let s = snd.init(44100, opl_midi.init(44100, first, kit))
+    // Before the device opens, which is the last moment this thread may touch
+    // the playlist: from here it is the audio callback's.
+    opl_audio.set_playlist(s, pl.songs)
     if !gfx.audio_start(s) then
         io.write("Audio: device open failed - running silent\n", stdout)
     opl_audio.music_begin(s)
 
     let mut inp = default(input)
     let mut frame = 0
+
+    // Which playlist entry is sounding. Kept because the level picks the
+    // piece but only a *change* of piece is worth posting: with no notebook
+    // fetched every level picks entry 0, and re-posting it would restart the
+    // minuet at every level instead of letting it play through.
+    let mut tune_now = 0i64
+    if pl.titles.len > 0i64 then
+        announce(w, pl, w.game.level)
 
     loop
         gfx.pump(&inp)
@@ -207,11 +364,17 @@ let main = (args: str[]) ->
 
         // The title carries the level, which is a window fact rather than a
         // game one — so main watches for the change instead of game.step
-        // reaching out to set it.
+        // reaching out to set it. The music is the same shape of fact, and
+        // the same watch catches every way the level can move: cleared,
+        // restarted, or loaded out of a save slot.
         let was = w.game.level
         game.step(w, &inp, &rng, s)
-        if w.game.level != was then
-            gfx.set_title(c"Fuzzel Fobble - Level %d{w.game.level}")
+        if w.game.level != was && pl.titles.len > 0i64 then
+            let want = tune_for_level(pl, w.game.level)
+            if want != tune_now then
+                tune_now = want
+                opl_audio.music_select(s, (i32) want)
+            announce(w, pl, w.game.level)
 
         art.render(w, frame)
 

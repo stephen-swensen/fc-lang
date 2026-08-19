@@ -31,3 +31,8 @@ Thumbs.db
 # Vendored raylib source + build, fetched on demand by
 # demos/fuzzel-fobble/run-raylib.sh. Never committed.
 /demos/shared/raylib/
+
+# The Notebook for Anna Magdalena Bach, fetched on demand by
+# demos/fuzzel-fobble/fetch-music.sh. Never committed — the game ships one
+# tune (music/minuet.mid, ours) and downloads the rest of the book if it can.
+/demos/fuzzel-fobble/music/notebook/

@@ -213,6 +213,8 @@ the audio thread.
 | `init(rate, bank, player, music_gain, sfx_gain) -> audio*` | Build the engine over an effect bank and an `opl_midi.player*`. No device yet; the engine takes the player over from here. |
 | *(the device's `opl_dev.start`)* | Open the device and start the callback. `false` = no audio device. Lives in the device file, not here — see [Supplying a device](#supplying-a-device). |
 | `play(a, id)` | Fire effect `id` on the next voice by rotation. |
+| `set_playlist(a, songs)` | Hand the engine the songs `music_select` may choose between. **Before the device opens** — after that the slice is the audio thread's. |
+| `music_select(a, i)` | Put playlist entry `i` under the player, from the top. Out of range does nothing, so a game whose levels outrun its playlist keeps the tune it has. |
 | `music_begin(a)` | Start the tune from the top. |
 | `music_end(a)` | Stop it and rewind, so the next `music_begin` opens on the first event. |
 | `music_hold(a)` / `music_unhold(a)` | Pause mid-phrase and resume there. |
@@ -223,6 +225,18 @@ the audio thread.
 `music_end` and `music_hold` are different on purpose: a run ending should
 rewind, a pause menu should not. The mute switch is tracked separately again,
 so the game's stop/start and the player's mute can never undo each other.
+
+`music_select` is a playlist, not a second player. One `opl_midi.player`
+carries every song a game has, because the expensive half of a player is the
+emulated chip it owns — 68 KB of state against a song's few thousand events —
+and a game with a piece per level wants a playlist, not a rack of
+synthesisers. Underneath it is `opl_midi.set_song`, which re-decides
+everything a song decides, rhythm mode included, and is safe *only* at a song
+boundary: the chip is silenced on the way in, so the melodic voice count can
+move from nine to six without a sounding note losing its voice underneath it.
+A selected song obeys the same rule `music_begin` does — it plays if the music
+is live, and waits at its first event if it is held or muted, so unmuting
+opens the piece rather than dropping into the middle of it.
 
 ## Threading contract
 

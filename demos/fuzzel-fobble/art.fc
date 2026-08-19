@@ -586,16 +586,24 @@ module art =
                                255u8, 200u8, 90u8)
 
     let draw_level_clear = (w: world*) ->
-        gfx.fill(field_x0, 280, field_x1 - field_x0, 180, 0u8, 0u8, 0u8, 190u8)
+        gfx.fill(field_x0, 280, field_x1 - field_x0, 200, 0u8, 0u8, 0u8, 190u8)
         draw_text_centered("CLEAR.", 640, 310, 8, 130u8, 255u8, 180u8)
         if w.game.bonus_paid > 0 then
             let b = "SPEED BONUS %d{w.game.bonus_paid}"
             draw_text_centered((const str) b, 640, 372, 3, 255u8, 200u8, 90u8)
         let nxt = "LEVEL %d{w.game.level + 1}"
         draw_text_centered((const str) nxt, 640, 408, 4, 255u8, 255u8, 255u8)
+        // What the next level brings, which is a piece of music: clearing a
+        // level is how the Notebook for Anna Magdalena Bach is unlocked, one
+        // number at a time. Blank when main.fc has no playlist to name — the
+        // line is the reward, and there is nothing to reward with when the
+        // whole run is one minuet.
+        if w.next_tune.len > 0i64 then
+            draw_text_centered((const str) w.next_tune, 640, 438, 2,
+                               150u8, 190u8, 240u8)
         // Losing the guide without warning reads as a glitch rather than a rule.
         if w.game.level == guide_levels then
-            draw_text_centered("AIM GUIDE OFF FROM HERE", 640, 436, 2,
+            draw_text_centered("AIM GUIDE OFF FROM HERE", 640, 456, 2,
                                255u8, 180u8, 90u8)
 
     let draw_game_over = (w: world*) ->
