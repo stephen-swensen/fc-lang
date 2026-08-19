@@ -22,16 +22,18 @@
 # on the page. For an OPL2 that is the good case — what arrives is the notes,
 # and the chip is what makes them a sound.
 #
-# Twenty of the notebook's forty-two entries are there, listed below in the
-# notebook's own order. Nineteen are marked Public Domain; two are Creative
-# Commons Attribution-ShareAlike, credited in the CREDITS file this writes.
-# Neither licence is strained by any of this: the files are downloaded by the
-# person running the game, onto their own machine, and never redistributed.
+# Twenty-one of the notebook's forty-two entries are here. Nineteen are marked
+# Public Domain; two are Creative Commons Attribution-ShareAlike, credited in
+# the CREDITS file this writes. Neither licence is strained by any of this:
+# the files are downloaded by the person running the game, onto their own
+# machine, and never redistributed.
 #
-# No. 4 — the Minuet in G, BWV Anh. 114 — is deliberately *not* fetched. The
-# game brings its own, arranged across five channels in tools/mkmid.fc, and it
-# is level 1. Hearing the plain engraving of it again at level 2 would be a
-# worse start than any of the pieces below.
+# The order is the notebook's, and the levels play it straight through from
+# the top, wrapping when a run outlasts the book. No. 4 — the Minuet in G,
+# BWV Anh. 114 — is in it at its own place like everything else. The game's
+# five-channel arrangement of that same piece, in tools/mkmid.fc, is the title
+# screen's and the fallback when this script has nothing to offer; it is not a
+# level's, so the two never displace each other.
 set -u
 
 cd "$(dirname "$0")"
@@ -46,12 +48,14 @@ FORCE=""
 # is a 3x5 grid of A-Z, 0-9 and five punctuation marks — the display is part
 # of the data, so the mangling happens here rather than in the game.
 #
-# Numbers 13 and 34+ are why the count is twenty rather than the notebook's
-# forty-two: entry 13 is two settings and gets two lines, and most of what is
-# missing is either music Mutopia has not typeset or the vocal half of the
-# book, which is a voice and a figured bass rather than a keyboard piece.
+# Numbers 13 and 34+ are why the count is twenty-one rather than the
+# notebook's forty-two: entry 13 is two settings and gets two lines, and most
+# of what is missing is either music Mutopia has not typeset or the vocal half
+# of the book, which is a voice and a figured bass rather than a keyboard
+# piece.
 PIECES=(
     "03|BWVAnh113/anna-magdalena-03|MINUET IN F - BWV ANH. 113"
+    "04|BWVAnh114/anna-magdalena-04|MINUET IN G - BWV ANH. 114"
     "05|BWVAnh115/anna-magdalena-05|MINUET IN G MINOR - BWV ANH. 115"
     "07|BWVAnh116/anna-magdalena-07|MINUET IN G - BWV ANH. 116"
     "08|BWVAnh117b/BWV-117b|POLONAISE IN F - BWV ANH. 117B"
@@ -111,6 +115,11 @@ for entry in "${PIECES[@]}"; do
         if fetch "$DEST/$file.part" "$BASE/$path/$(basename "$path").mid" 2>/dev/null; then
             mv -f "$DEST/$file.part" "$DEST/$file"
             fetched=$((fetched + 1))
+        elif [ -s "$DEST/$file" ]; then
+            # A --force re-fetch that did not come back, over a copy that is
+            # already here and good. Keep the copy: losing a working playlist
+            # to a flaky network would be a worse answer than an old file.
+            rm -f "$DEST/$file.part"
         else
             # A piece that will not download costs that piece and nothing
             # else: it drops out of the playlist and the levels close up.
@@ -126,6 +135,24 @@ for entry in "${PIECES[@]}"; do
     got=$((got + 1))
 done
 
+# Sweep whatever this directory holds that the list above no longer names.
+# The NN- prefix is a position in the playing order rather than a property of
+# the piece, so reordering PIECES renames every file after the change and the
+# old names would otherwise sit here forever — downloaded, unplayed, and
+# indistinguishable from the ones in use. Only .mid files directly in the
+# cache directory are considered, and only ones the run just now did not
+# write. It is skipped outright when this run manifested nothing, so a total
+# network failure cannot mistake "downloaded none" for "these are all stale"
+# and empty the cache.
+if [ "$got" -gt 0 ]; then
+    for old in "$DEST"/*.mid; do
+        [ -e "$old" ] || continue
+        if ! cut -d'|' -f1 "$MANIFEST.tmp" | grep -qxF -- "$(basename "$old")"; then
+            rm -f "$old"
+        fi
+    done
+fi
+
 mv -f "$MANIFEST.tmp" "$MANIFEST"
 
 cat > "$DEST/CREDITS" <<'CREDITS'
@@ -139,7 +166,7 @@ The music is from the Notebook for Anna Magdalena Bach (1725), which is public
 domain. The editions are Mutopia's, typeset in LilyPond and published with the
 MIDI rendering these files are. Their typesetters:
 
-    Allen Garvin        BWV Anh. 113, 115, 116, 126; BWV 515
+    Allen Garvin        BWV Anh. 113, 114, 115, 116, 126; BWV 515
     Steven McDougall    BWV Anh. 117b, 118, 119, 120, 121, 127, 128;
                         BWV 510, 511, 512, 516, 691
     Shamim Mohamed      BWV 508
@@ -152,8 +179,10 @@ ask for the credit given above:
     BWV Anh. 131 (Air)          CC Attribution-ShareAlike 2.5
     BWV 988/1 (Aria)            CC Attribution-ShareAlike 3.0
 
-The Minuet in G, BWV Anh. 114, is not here. The game ships its own arrangement
-of it in music/minuet.mid, written in demos/fuzzel-fobble/tools/mkmid.fc.
+The Minuet in G, BWV Anh. 114, is here twice over. This directory has
+Mutopia's engraving of it, in its own place in the book; the game's own
+five-channel arrangement of the same piece is committed as music/minuet.mid,
+written in demos/fuzzel-fobble/tools/mkmid.fc, and plays on the title screen.
 CREDITS
 
 if [ "$fetched" -gt 0 ]; then

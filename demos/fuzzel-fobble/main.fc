@@ -113,8 +113,8 @@ struct playlist =
     songs: opl_midi.song[]
     titles: str[]
 
-// Read the notebook fetch-music.sh leaves in `dir`, with `first` at the head
-// of it.
+// Read the notebook fetch-music.sh leaves in `dir`, with `first` — the
+// game's own tune, which the title screen plays — at the head of it.
 //
 // `playlist.txt` is the authority on what is there and in what order — one
 // line per piece, `file|notebook number|title` — rather than the directory
@@ -183,17 +183,35 @@ let load_notebook = (dir: const str, first: opl_midi.song, first_title: const st
     io.write(alloca("Music: %d{(i32) n - 1} pieces of the Anna Magdalena notebook, one per level\n"), stdout)
     playlist { songs = songs[0i64..n], titles = titles[0i64..n] }
 
-// Which playlist entry level `level` plays. Level 1 is entry 0 — the game's
-// own minuet — and the notebook follows it in the notebook's order.
+// Which playlist entry level `level` plays.
+//
+// Entry 0 is the game's own five-channel arrangement of the minuet, and it
+// belongs to the title screen — so the levels take the notebook behind it,
+// straight through from the top in the book's own order. Level 1 is entry 1.
 //
 // It wraps rather than stopping: a run long enough to reach the end of the
 // book starts it again, which is a better answer than silence and the only
 // other one available.
+//
+// A one-entry playlist is every playlist with no notebook behind it — the
+// `--music` case, and the ordinary case of a machine that has never fetched
+// one. Then entry 0 is all there is, every level plays it, and the game
+// sounds exactly as it did before the notebook existed.
 let tune_for_level = (pl: playlist, level: i32) ->
-    if pl.songs.len <= 0i64 then 0i64
+    if pl.songs.len <= 1i64 then 0i64
     else
         let i = (i64) level - 1i64
-        if i < 0i64 then 0i64 else i % pl.songs.len
+        1i64 + (if i < 0i64 then 0i64 else i % (pl.songs.len - 1i64))
+
+// And which entry should be sounding *now* — the same thing everywhere
+// except the title screen, which is the one place the game's own arrangement
+// plays. Phase rather than level, because the splash sits on level 1 and a
+// run starting off it never moves the number, so watching the level alone
+// would miss the one transition that always happens.
+let tune_for = (pl: playlist, phase: game_phase, level: i32) ->
+    match phase with
+    | splash -> 0i64
+    | _ -> tune_for_level(pl, level)
 
 // Say what is playing, in the two places that say it: the window title, and
 // — one level ahead — the level-clear banner, where the next piece is the
@@ -204,9 +222,14 @@ let tune_for_level = (pl: playlist, level: i32) ->
 // not belong on a banner announcing a reward; `--music` goes further and
 // leaves the entry unnamed, because the person who passed a path already
 // knows what they passed. An empty `next_tune` draws nothing.
-let announce = (w: world*, pl: playlist, level: i32) ->
-    let here = tune_for_level(pl, level)
-    let next = tune_for_level(pl, level + 1)
+let announce = (w: world*, pl: playlist, phase: game_phase, level: i32) ->
+    let here = tune_for(pl, phase, level)
+    // The piece the *next* level plays. Entry 0 is the title screen, where
+    // nothing has been cleared yet and the level in front of you is this one
+    // — and it is also the whole of a playlist with no notebook, where the
+    // two come out equal and nothing is announced either way.
+    let next = if here == 0i64 then tune_for_level(pl, level)
+               else tune_for_level(pl, level + 1)
     let now = pl.titles[here]
     if now.len > 0i64 then
         gfx.set_title(c"Fuzzel Fobble - Level %d{level} - %.48s{now}")
@@ -256,8 +279,9 @@ let open_bank = (args: str[]) ->
 // Anything else would be a nasty surprise for the reason the flag exists:
 // somebody testing their own MIDI does not want Bach at level 2.
 //
-// Without it, entry 0 is the game's own minuet and the rest is whatever
-// fetch-music.sh managed to download. Swapping the tune is the point of
+// Without it, entry 0 is the game's own minuet, which the title screen
+// plays, and the levels take whatever fetch-music.sh managed to download.
+// Swapping the tune is the point of
 // shipping it as a file rather than compiling it in, which is why both the
 // flag and the notebook are files on disk and neither is a rebuild.
 //
@@ -349,13 +373,19 @@ let main = (args: str[]) ->
     let mut inp = default(input)
     let mut frame = 0
 
-    // Which playlist entry is sounding. Kept because the level picks the
-    // piece but only a *change* of piece is worth posting: with no notebook
-    // fetched every level picks entry 0, and re-posting it would restart the
-    // minuet at every level instead of letting it play through.
-    let mut tune_now = 0i64
+    // What is sounding, and what the window last said. Both are watched
+    // rather than pushed: main is the only place a phase and a level number
+    // become a song and a window title, and watching for the change catches
+    // every way they can move — a board cleared, a run restarted, a slot
+    // loaded, or the title screen simply giving way to level 1.
+    //
+    // Only a *change* of piece is posted. With no notebook fetched every
+    // level picks entry 0, and re-posting it would restart the minuet at
+    // every level instead of letting it play through.
+    let mut tune_now = tune_for(pl, w.game.phase, w.game.level)
+    let mut level_now = w.game.level
     if pl.titles.len > 0i64 then
-        announce(w, pl, w.game.level)
+        announce(w, pl, w.game.phase, w.game.level)
 
     loop
         gfx.pump(&inp)
@@ -364,17 +394,21 @@ let main = (args: str[]) ->
 
         // The title carries the level, which is a window fact rather than a
         // game one — so main watches for the change instead of game.step
-        // reaching out to set it. The music is the same shape of fact, and
-        // the same watch catches every way the level can move: cleared,
-        // restarted, or loaded out of a save slot.
-        let was = w.game.level
+        // reaching out to set it. The music is the same shape of fact.
         game.step(w, &inp, &rng, s)
-        if w.game.level != was && pl.titles.len > 0i64 then
-            let want = tune_for_level(pl, w.game.level)
+        if pl.titles.len > 0i64 then
+            let want = tune_for(pl, w.game.phase, w.game.level)
+            // Posted after game.step rather than before, so the swap lands
+            // behind whatever that frame already asked for — `start_run`
+            // posts a music_start of its own, and a select arriving after it
+            // is what makes level 1 open on the notebook's minuet instead of
+            // the title screen's.
             if want != tune_now then
-                tune_now = want
                 opl_audio.music_select(s, (i32) want)
-            announce(w, pl, w.game.level)
+            if want != tune_now || w.game.level != level_now then
+                announce(w, pl, w.game.phase, w.game.level)
+            tune_now = want
+            level_now = w.game.level
 
         art.render(w, frame)
 

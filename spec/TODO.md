@@ -503,6 +503,75 @@ unreachable-code detection, would make this *more* silent, not less; not pursued
 
 ---
 
+## BUG: `const T[N] { … }` builds a type no annotation can name — OPEN
+
+Found 2026-08-19 while writing a `str[]` of playlist titles in
+`demos/fuzzel-fobble/main.fc`. Nothing in the tree uses the form, so nothing is broken
+today; the demo worked around it with a plain `str[]` and `text.copy`.
+
+§Slices & Strings → Allocation specifies both the form and the reason it exists:
+
+> The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is
+> the spelling a slice of string literals takes, since a string literal is a `const str`
+> and does not narrow to `str`.
+
+The literal parses and emits. What it cannot do is reach anywhere `const str[]` is
+written — parameter, struct field, stack or heap:
+
+```fc
+let take = (s: const str[]) -> (i32) s.len
+let main = (args: str[]) ->
+    take(const str[3] { "a", "bc", "def" })     // the spec's own example
+```
+
+```
+error: argument 1: expected const str[], got const str[]
+```
+
+**One token sequence, two parses.** `const` in an *annotation* is a prefix over the whole
+type that follows (`parse_type`, `src/parser.c`): `const str[]` parses `str[]` first, and
+`apply_const` then sets `is_const` on the **outer slice**. `const` in a *slice literal*
+(`case TOK_CONST` → `at_slice_literal` → `parse_type`) is handed only `const str` — the
+`[` after it is followed by an integer rather than `]`, so the type-suffix loop stops
+before it — and `parse_array_lit_body` builds a non-const slice whose **element** is
+const. Two different `Type` trees; one C representation (`fc_slice_fc_str` for both); and
+`type_name` renders both `const str[]`, which is where the unreadable diagnostic comes
+from. That second half is separable and worth fixing either way: a diagnostic that prints
+one spelling for two types cannot be right.
+
+The difference is observable — writes. `a[0] = "z"` compiles on the literal's type and is
+rejected on the annotation's ("cannot assign through const pointer/slice"), for the same
+binding form.
+
+Three symptoms, one cause:
+
+1. The spec's documented spelling is unusable in every annotated position.
+2. It breaks monotonicity: `str[]` widens to `const str[]` and is accepted, while the
+   strictly *more* const literal is rejected. Adding const to a value takes it from
+   legal to illegal.
+3. `alloc(const str[n] { })` with a runtime `n` reports "slice literal length must be a
+   compile-time constant", while `alloc(str[n] { })` is fine — the const spelling never
+   reaches `alloc`'s runtime-length path.
+
+Not `str`-specific: `const i32*[2] { &a, &b }` fails identically against `const i32*[]`.
+An explicit `(const str[])` cast is accepted and emits a no-op C cast, which is both the
+workaround and the proof that the two types are one at the machine.
+
+**The repair is a design decision, not just a fix.** §Deep const gives a slice one const
+knob, not two — "the element type of a `const T[]` carries the restriction" — so under
+the spec there is a single type here and the literal must simply produce it. But the type
+the literal accidentally builds is the *useful* one for the case that found this:
+allocate an array of string-literal slots and fill them in. Collapse the two and
+`const str[N] { … }` yields a read-only slice, so the exhaustive-element form in the spec
+still works while a fillable array of `const str` becomes unspellable — you would build
+it as `str[]` and cast, which is what fuzzel-fobble does. Worth settling before touching
+the parser: either the spec's one-knob model holds and the literal is repaired to match,
+or FC admits `const` on an element position as distinct from `const` on the slice, in
+which case the annotation grammar needs a spelling for it and `type_name` needs to tell
+them apart.
+
+---
+
 ## Editor / LSP server (`fcc --lsp`)
 
 Architecture lives in `CLAUDE.md` → "Editor integration"; this section is the

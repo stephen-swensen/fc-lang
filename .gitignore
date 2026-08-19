@@ -32,6 +32,12 @@ Thumbs.db
 # demos/fuzzel-fobble/run-raylib.sh. Never committed.
 /demos/shared/raylib/
 
+# Borrowed OPL instrument banks, for listening tests only. Not fetched by
+# anything and never committed: nearly every bank in circulation was extracted
+# from a commercial game and carries attribution terms this repo would then
+# have to honour. demos/shared/opl_bank_gm.fc is the one that ships.
+/demos/shared/banks/
+
 # The Notebook for Anna Magdalena Bach, fetched on demand by
 # demos/fuzzel-fobble/fetch-music.sh. Never committed — the game ships one
 # tune (music/minuet.mid, ours) and downloads the rest of the book if it can.

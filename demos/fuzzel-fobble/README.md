@@ -624,10 +624,9 @@ editable as music rather than as bytes, and its provenance is unambiguous.
 The minuet is number 4 of forty-two. Clearing a level gets you the next piece
 of the book it came from.
 
-`fetch-music.sh` downloads twenty pieces of the *Notebook for Anna Magdalena
-Bach* from the [Mutopia Project](https://www.mutopiaproject.org/) into
-`music/notebook/` — about 270 KB, in the notebook's own order, with a
-`playlist.txt` naming them. Both run scripts call it before building. Nothing
+`fetch-music.sh` downloads twenty-one pieces of the *Notebook for Anna
+Magdalena Bach* from the [Mutopia Project](https://www.mutopiaproject.org/)
+into `music/notebook/` — about 280 KB, with a `playlist.txt` naming them. Both run scripts call it before building. Nothing
 it downloads is committed, and nothing it downloads is required: with no
 network the game plays its own minuet on every level, which is what it did
 before any of this existed. It is the same bargain `run-raylib.sh` makes with
@@ -637,37 +636,55 @@ run to one file and leaves the notebook out of it.
 Mutopia's MIDI is a by-product of engraving a score rather than a performance —
 no dynamics, no rubato, two or three tracks of exactly what is on the page.
 For an OPL2 that is the good case: what arrives is the notes, and the chip is
-what makes them a sound. Nineteen of the twenty are public domain; the Air
+what makes them a sound. Nineteen of the twenty-one are public domain; the Air
 (Anh. 131) and the Goldberg Aria are CC Attribution-ShareAlike, and the
 `CREDITS` file written beside them names every typesetter.
 
-Number 4 is deliberately not among the twenty. The game brings its own.
+**The game's own minuet is the title screen's, and the fallback.** It is not a
+level's tune, so the notebook is free to play straight through from the top:
+level *n* is notebook piece *n*, in the book's own order, and a run long enough
+to reach the end starts it again — the wrap goes back to piece 1 rather than to
+the splash. Number 4 is in the book at its own place like everything else, so
+the two readings of that minuet do meet, eventually, four levels apart.
 
-**Where it shows.** Level 1 is the minuet; level *n* is notebook piece *n*−1,
-and a run long enough to reach the end starts the book again. The window title
-carries the piece, and the level-clear banner names the one you have just
-earned — the reveal is the point, so it is the last line before the next level
-builds. A save file does not record any of this: which tune is playing belongs
-to the run in front of you, not to the position you saved, so loading slot 3
-picks up whatever piece level 3 plays.
+With no notebook there is only the one entry and every level plays it, which is
+what the game did before any of this existed.
 
-**One player, twenty-one songs.** The expensive half of a MIDI player is the
+**Where it shows.** The window title carries the piece, and the level-clear
+banner names the one you have just earned — the reveal is the point, so it is
+the last line before the next level builds. A save file does not record any of
+this: which tune is playing belongs to the run in front of you, not to the
+position you saved, so loading slot 3 picks up whatever piece level 3 plays.
+
+**One player, twenty-two songs.** The expensive half of a MIDI player is the
 emulated chip it owns — 68 KB against a song's few thousand events — so a rack
-of twenty-one players would be a rack of twenty-one chips to hear one at a
+of twenty-two players would be a rack of twenty-two chips to hear one at a
 time. `opl_midi.set_song` moves the song under the one player instead, and
 `opl_audio.music_select` is how a level change asks for it: an index across
 the same lock-free ring every other sound command crosses, so the game thread
 still never touches the player.
 
+**Nineteen of the twenty-one carry no program change at all.** LilyPond emits
+the notes and leaves the instrument to whoever plays the file, so every channel
+sits on General MIDI program 0 and the whole book arrives on the bank's acoustic
+piano. Only the Goldberg Aria asks for anything (program 6, harpsichord, both
+hands), and it means it. So the notebook is, in effect, one long audition of a
+single patch — which is how it came out that the patch was wrong: it decayed
+0.9 dB in half a second and never darkened, which is a plucked string, not a
+struck one. `demos/shared/opl_bank_gm.fc` has the rewrite and the reasoning.
+
 **Levels are reported, not managed** — the same rule the bank probe follows.
-Measured end to end, the game's own minuet is −20.3 dBFS and the notebook runs
-−17.7 to −13.4, so most pieces arrive 3 to 7 dB hotter than the tune the mix
-was balanced against. The Goldberg Aria is the other way: −35.3 dBFS, because
-it is sparse and slow and its harpsichord is the quietest patch in the bank.
-Nothing here corrects for that. The minuet's balance lives in its own CC7
+Measured end to end, the game's own minuet is −20.2 dBFS and the notebook now
+runs about −16 to −21, so the book sits within some 4 dB of the tune the mix
+was balanced against. It used to run −13.3 to −17.7, and closing that gap was
+not a trim: a piano that holds every note at full level until the next one
+lands is simply louder than one that decays, and fixing the patch took 0.8 to
+4.3 dB off the pieces that use it — a median of 3.2. The Goldberg Aria is the one outlier left at −35.3 dBFS,
+because it is sparse and slow and its harpsichord is the quietest patch in the
+bank. Nothing corrects for that. The minuet's balance lives in its own CC7
 volumes because it is ours to edit; a downloaded file's does not, and inventing
-a trim for someone else's engraving would be the player managing a level it
-was told not to.
+a trim for someone else's engraving would be the player managing a level it was
+told not to.
 
 ### Effects
 

@@ -524,6 +524,12 @@ redistribution terms are unclear. Loading one a user supplies is a different
 thing from shipping one, which is why `opl_bank_gm.fc` is written out by hand
 and checked in.
 
+`banks/` is where a borrowed one goes while you listen to it. The directory is
+gitignored for the reason above, so it is empty in a fresh clone and every tool
+that reads a bank — both demos' `--bank`, `midi_render`, `bank_probe` — takes a
+path, so nothing depends on it existing. Put a `README` beside whatever you drop
+in naming the licence you got it under.
+
 ### Driving the player
 
 ```fc
@@ -602,7 +608,7 @@ can be compared against the built-in one before you trust it with your music.
 /tmp/bp
   bank fc-gm: 60 voices
   ...
-  melodic: 44 patches, median -21.7 dBFS, middle 80% spans 4.3 dB
+  melodic: 44 patches, median -21.7 dBFS, middle 80% spans 4.6 dB
   drums  : 16 patches, median -26.9 dBFS, middle 80% spans 8.8 dB
 ```
 
@@ -613,6 +619,21 @@ away 33 dB in ten milliseconds and left a hi-hat that measured 24 dB under the
 rest of its kit. Length belongs in RR. And **patches have to be level-matched,
 because velocity cannot do it for them**: this bank's melodic voices once
 spanned 23 dB at the same velocity, and now sit inside about 4 dB.
+
+A third came later, from the acoustic piano — program 0, and so the voice every
+file that names no instrument arrives on. **A struck string darkens as it
+decays**, and on a two-operator pair that means the modulator's envelope has to
+fall faster than the carrier's: the high partials the hammer put there die away
+long before the fundamental does. Give both operators the same envelope and you
+have built a plucked instrument, which is why an unlabelled MIDI file used to
+come out of this bank sounding like a harpsichord. The fix is a *sustaining*
+modulator (EGT set) over a percussive carrier — brightness drops 14 dB in half
+a second and then holds at a floor, rather than collapsing to a sine — plus KSR
+on both, which is what makes the bass ring four times longer than the treble.
+It is also worth knowing that this shows up in a mix rather than in a meter:
+twenty Bach engravings rendered 0.8 to 4.3 dB quieter afterwards (median 3.2),
+because a note that never decays is a note still at full level when the next
+one lands.
 
 It reports levels rather than managing them. A game mixes this against effects
 and puts a soft knee after the sum; a tool that quietly did the same would hide
