@@ -168,12 +168,16 @@ Three of them, arriving as you go:
 |---|---|---|
 | **Star** (gold star on white) | on the board, from level 2 | Land any colour against it and **every bubble of that colour** goes, wherever it is on the board — adjacency doesn't matter. The star goes too. |
 | **Stone** (grey faceted hexagon) | on the board, from level 3 | Indestructible. It never pops, not to a match and not to a metal shot. The only way to be rid of it is to **cut it loose** and let it fall. |
-| **Metal** (chrome) | loaded into the launcher, from level 2 | Doesn't stick to anything. It **ploughs straight up through the raft**, popping everything it touches, and leaves at the ceiling. Stones shrug it off. |
+| **Metal** (chrome) | loaded into the launcher, from level 2 | Doesn't stick to anything. It **ploughs straight up through the raft**, popping everything it touches, and leaves at the ceiling. Stones shrug it off — it strikes sparks and a grating scrape off them and carries straight on through. |
 
 A star is worth aiming *at* rather than around — it is the one shot that
 ignores the three-of-a-colour rule entirely. A stone is the opposite: it
 can't be removed directly, so it turns into an anchor you have to plan
-around, and cutting a stone loose is the only way it ever leaves.
+around, and cutting a stone loose is the only way it ever leaves. The
+sparks and the scrape off a metal shot are the game saying so: the one
+shot that clears anything in front of it strikes off a stone and keeps
+going, and you can see and hear that it did rather than being left
+wondering whether the hit missed.
 
 Stones never appear in the ceiling row. One there could never be cut loose,
 and a board you can't finish isn't a hard board, it's a broken one — so the
@@ -198,7 +202,7 @@ Six files, in four layers:
 | `gfx_raylib.fc` | 101 | `module gfx` on raylib. |
 | `game.fc` | 792 | The rules. No pixels, no keys, no library. |
 | `art.fc` | 410 | The look, drawn on `gfx`'s four primitives. |
-| `sound.fc` | 93 | Nine effect instruments and nine effect scripts. |
+| `sound.fc` | 93 | Ten effect instruments and ten effect scripts. |
 | `main.fc` | 88 | Loads the music, hands the pieces to each other, and loops. |
 
 Everything but the backend is shared, byte for byte: **1399 lines of game
@@ -535,7 +539,7 @@ project, which uses it to play Wolfenstein 3D's own IMF music).
 `demos/shared/opl_bank_gm.fc` is the hand-authored General MIDI instrument
 bank it plays them through, `demos/shared/opl_audio.fc` is the reusable engine
 that mixes everything and talks to the device, and `sound.fc` is this game's
-effects — nine instruments and nine scripts.
+effects — ten instruments and ten scripts.
 
 ### The music
 

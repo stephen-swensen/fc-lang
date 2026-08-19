@@ -2,7 +2,7 @@
 //
 // The engine is demos/shared/opl_audio.fc (OPL2 voices, an effect bank, and
 // the audio callback); the chip it plays through is demos/shared/opl2.fc.
-// This file is only the effects: nine instruments and nine scripts.
+// This file is only the effects: ten instruments and ten scripts.
 //
 // The music is not here any more. It is a Standard MIDI File in music/,
 // played by demos/shared/opl_midi.fc through the instrument bank in
@@ -46,8 +46,9 @@ module snd =
     private let i_descend = 6
     private let i_fanfare = 7
     private let i_reed    = 8
+    private let i_grind   = 9
 
-    private let instruments = opl_audio.instrument[9] {
+    private let instruments = opl_audio.instrument[10] {
         // Launch: 4:1 with deep modulation and feedback — the buzzy,
         // hollow "fwip" of something spat out of a tube. Gone in 150 ms;
         // the shot is on screen for a second and a half, and a launch
@@ -112,7 +113,34 @@ module snd =
         opl_audio.instrument {
             m_char = 0x21, m_scale = 0x1A, m_atk = 0x94, m_sus = 0x05, m_wave = 0x00,
             c_char = 0x21, c_scale = 0x03, c_atk = 0x93, c_sus = 0x06, c_wave = 0x00,
-            n_conn = 0x06 }
+            n_conn = 0x06 },
+        // Metal on stone: a scrape rather than a note. Maximum feedback (FB 7)
+        // drives the modulator into chaos, which is as close to noise as a
+        // melodic OPL2 voice gets — the chip's only true noise source is in
+        // rhythm mode, which the effect voices don't use. A 15:1 ratio then
+        // puts the sidebands nowhere near a harmonic series, and pulse-sine on
+        // the modulator adds the harsh odd harmonics a sine would round off.
+        // The carrier's own MULT is 4, not the 1 every other voice here uses,
+        // and that is what buys the inharmonicity: FM puts sidebands at
+        // carrier +/- n*modulator, so 1:15 lands them on 1, 14, 16, 29 - whole
+        // multiples of the fundamental, i.e. a harmonic series after all.
+        // Against a carrier of 4 the same sidebands land on 4, 11, 19, 26,
+        // which read against that fundamental as 1, 2.75, 4.75, 6.5. Nothing
+        // there is a whole multiple of anything, which is the clang.
+        // Deep modulation (modulator TL 0, i.e. as deep as the chip goes) is the
+        // whole character here; back it off and this collapses into an ordinary
+        // buzz.
+        //
+        // The carrier stays on wave 0 like every voice above it, and that is
+        // not a stylistic choice: OPL2 waveforms 1-3 are all unipolar (the
+        // negative half is zeroed, folded, or gated away), so one on a *carrier*
+        // rectifies the voice's output and what you hear is a DC thud rather
+        // than a note. On a modulator the same wave shapes phase, not output,
+        // which is where it belongs.
+        opl_audio.instrument {
+            m_char = 0x0E, m_scale = 0x00, m_atk = 0xF2, m_sus = 0x6A, m_wave = 0x03,
+            c_char = 0x04, c_scale = 0x04, c_atk = 0xF4, c_sus = 0x4A, c_wave = 0x00,
+            n_conn = 0x0E }
     }
 
     // ============================================================
@@ -129,7 +157,8 @@ module snd =
     let sfx_descend = 6
     let sfx_clear   = 7
     let sfx_over    = 8
-    let sfx_count   = 9
+    let sfx_grind   = 9
+    let sfx_count   = 10
 
     // Effects tick at 140 Hz — the AdLib driver rate, and about as fine as
     // a pitch sweep needs before the steps stop being audible.
@@ -139,7 +168,7 @@ module snd =
     // is `octave * 12 + semitone` and 48 is middle C. The table below
     // slices this up; the step counts in the two must agree, which is why
     // each script sits on its own line here in the same order.
-    private let script = i32[66] {
+    private let script = i32[98] {
         72,1, 79,1, 84,3,                                       // shoot     3
         64,3,                                                   // bounce    1
         50,2, 45,3,                                             // stick     2
@@ -148,10 +177,12 @@ module snd =
         67,1, 72,1, 76,1, 79,1, 76,1, 79,1, 83,6,               // star      7
         40,3, 36,4, 31,7,                                       // descend   3
         60,10, 64,10, 67,10, 72,34,                             // clear     4
-        55,18, 52,18, 48,22, 43,46                              // over      4
+        55,18, 52,18, 48,22, 43,46,                             // over      4
+        72,1, 65,1, 69,1, 62,1, 66,1, 59,1, 63,1, 56,1,         // grind    16
+        60,1, 53,1, 57,1, 50,1, 54,1, 48,1, 52,1, 46,4
     }
 
-    private let sounds = opl_audio.sound[9] {
+    private let sounds = opl_audio.sound[10] {
         opl_audio.sound { instr = i_shoot,   first = 0,  steps = 3 },
         opl_audio.sound { instr = i_bounce,  first = 3,  steps = 1 },
         opl_audio.sound { instr = i_stick,   first = 4,  steps = 2 },
@@ -160,7 +191,12 @@ module snd =
         opl_audio.sound { instr = i_star,    first = 15, steps = 7 },
         opl_audio.sound { instr = i_descend, first = 22, steps = 3 },
         opl_audio.sound { instr = i_fanfare, first = 25, steps = 4 },
-        opl_audio.sound { instr = i_reed,    first = 29, steps = 4 }
+        opl_audio.sound { instr = i_reed,    first = 29, steps = 4 },
+        // Sixteen steps rather than one note: each step re-keys the voice, so
+        // the rasp is the re-attacks. They also walk downward in a jagged
+        // zig-zag, two steps down for one back up, which is what turns a flat
+        // buzz into something dragging its way down the face of the stone.
+        opl_audio.sound { instr = i_grind,   first = 33, steps = 16 }
     }
 
     // ============================================================

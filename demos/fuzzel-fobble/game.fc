@@ -228,7 +228,12 @@ module game =
     let guide_dot_every = 9
 
     let max_fallers = 96
-    let max_particles = 256
+    // A metal shot up a column of stones is what sets this: seven stones is the
+    // most a board can put in one column, each throwing 26, and the colours it
+    // pops on the way add 12 apiece. 256 was comfortable when a stone threw
+    // nothing; it is not any more, and `spawn_burst` thins a shower silently
+    // when the pool is dry rather than telling anyone.
+    let max_particles = 384
     let max_drifters = 40
 
     let num_colors = 6
@@ -450,14 +455,17 @@ module game =
     // Particles
     // ============================================================
 
+    // `speed_scale` multiplies the ejection speed; 1.0 is the ordinary puff a
+    // pop or a wall tick wants. It is a parameter rather than a second burst
+    // function because the two would drift the moment either gained a field.
     let spawn_burst = (w: world*, rng: pcg_random*, cx: f64, cy: f64, count: i32,
-                       cr: u8, cg: u8, cb: u8) ->
+                       cr: u8, cg: u8, cb: u8, speed_scale: f64) ->
         let mut spawned = 0
         for i in 0..max_particles do
             if spawned >= count then break
             if w.particles[i].life <= 0 then
                 let angle = pcg_random.next_f64(rng) * 6.2831853
-                let speed = 1.0 + pcg_random.next_f64(rng) * 4.5
+                let speed = (1.0 + pcg_random.next_f64(rng) * 4.5) * speed_scale
                 w.particles[i].x = cx
                 w.particles[i].y = cy
                 w.particles[i].vx = math.cos(angle) * speed
@@ -610,7 +618,7 @@ module game =
                     let c = w.grid[ci]
                     let { cx, cy } = cell_center(w, row, col)
                     let { pr, pg, pb } = cell_rgb(c)
-                    spawn_burst(w, rng, cx, cy, 12, pr, pg, pb)
+                    spawn_burst(w, rng, cx, cy, 12, pr, pg, pb, 1.0)
                     w.grid[ci] = -1
                     popped = popped + 1
         popped
@@ -896,22 +904,56 @@ module game =
 
     // Everything the metal shot is currently touching, gone. Stones shrug it
     // off — indestructible has to mean indestructible or it means nothing — so
-    // the metal passes through them without either one stopping.
-    let metal_smash = (w: world*, rng: pcg_random*, x: f64, y: f64) ->
+    // the metal passes through them without either one stopping. It does not
+    // pass *silently*, though: steel on stone strikes sparks and grates, hot
+    // amber on a board whose greys are all cold and a rasp against a bank of
+    // otherwise tuned effects, so a stone reads as shrugging the hit off rather
+    // than as a collision the game failed to notice.
+    //
+    // The sparks fly on the crossing — the one substep where the shot's centre
+    // passes the stone's — and not on the overlap, which lasts some thirty
+    // substeps and would give thirty showers and thirty clanks. That test fires
+    // once only because a metal shot climbs monotonically: `vy` is set negative
+    // at launch and nothing but `vx` is ever touched again.
+    let metal_smash = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
+                       prev_y: f64, x: f64, y: f64) ->
         let mut popped = 0
+        let mut struck = false
         for row in 0..grid_rows do
             let rc = row_cols(w, row)
             for col in 0..rc do
                 let ci = cell_index(row, col)
-                if w.grid[ci] >= 0 && w.grid[ci] != cell_stone then
-                    let { cx, cy } = cell_center(w, row, col)
-                    let dx = x - cx
-                    let dy = y - cy
-                    if dx * dx + dy * dy < smash_d2 then
-                        let { pr, pg, pb } = cell_rgb(w.grid[ci])
-                        spawn_burst(w, rng, cx, cy, 12, pr, pg, pb)
-                        w.grid[ci] = -1
-                        popped = popped + 1
+                if w.grid[ci] < 0 then
+                    continue
+                let { cx, cy } = cell_center(w, row, col)
+                let dx = x - cx
+                let dy = y - cy
+                if dx * dx + dy * dy >= smash_d2 then
+                    continue
+                if w.grid[ci] == cell_stone then
+                    // Level centres at the crossing, so the contact is on the
+                    // line between them. Spawning there rather than at `cx, cy`
+                    // is what makes the sparks look struck off the facet
+                    // instead of emitted from inside the stone.
+                    if prev_y >= cy && y < cy then
+                        // Two layers, because one colour at one speed reads as
+                        // a puff: a tight white-hot core sitting on the contact
+                        // and a wide amber spray thrown clear of it. Hot in the
+                        // middle and cooler at the edges is what a struck spark
+                        // looks like, and it is the only way to get that out of
+                        // particles whose colour is fixed for their whole life.
+                        let hx = (x + cx) * 0.5
+                        let hy = (y + cy) * 0.5
+                        spawn_burst(w, rng, hx, hy, 18, 255u8, 176u8, 64u8, 2.2)
+                        spawn_burst(w, rng, hx, hy, 8, 255u8, 244u8, 210u8, 1.0)
+                        struck = true
+                else
+                    let { pr, pg, pb } = cell_rgb(w.grid[ci])
+                    spawn_burst(w, rng, cx, cy, 12, pr, pg, pb, 1.0)
+                    w.grid[ci] = -1
+                    popped = popped + 1
+        if struck then
+            opl_audio.play(s, snd.sfx_grind)
         popped
 
     // The metal shot's whole flight: it never settles, so it is resolved when it
@@ -920,6 +962,7 @@ module game =
         let mut gained = 0
         for step in 0..shot_substeps do
             if !w.shot.active then break
+            let prev_y = w.shot.y
             w.shot.x = w.shot.x + w.shot.vx
             w.shot.y = w.shot.y + w.shot.vy
 
@@ -928,15 +971,15 @@ module game =
             if w.shot.x < left then
                 w.shot.x = left
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+                spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
             if w.shot.x > right then
                 w.shot.x = right
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+                spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
 
-            let popped = metal_smash(w, rng, w.shot.x, w.shot.y)
+            let popped = metal_smash(w, rng, s, prev_y, w.shot.x, w.shot.y)
             if popped > 0 then
                 gained = gained + popped * 10
                 opl_audio.play(s, snd.sfx_pop)
@@ -969,12 +1012,12 @@ module game =
             if w.shot.x < left then
                 w.shot.x = left
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+                spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
             if w.shot.x > right then
                 w.shot.x = right
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8)
+                spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
 
             if w.shot.y - (f64) bubble_r <= (f64) ceiling_y then
